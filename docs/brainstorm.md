@@ -3,6 +3,7 @@
 - Status: brainstorm only. This is not a design, not a plan, and has no code.
 - Date: 2026-10-10
 - Purpose: find out what is possible, what is feasible, where current tools fall short, and which engineering ideas could make AegisTARA stand out. It also works as a map for learning Rust.
+- Update: first decisions are made. See [decisions.md](decisions.md), [direction-v1.md](direction-v1.md), and [ai-backlog.md](ai-backlog.md). Where they differ from this brainstorm, they win.
 
 Each idea has a tag:
 
@@ -399,7 +400,7 @@ Store the DAG. Compute on demand:
 | Deployment | Storage |
 |---|---|
 | Desktop, single user | One file per project. SQLite (`rusqlite`) or a pure Rust embedded store (`redb`). An encrypted, portable `.aegis` file. Easy to back up, delete, or send through an approved channel. |
-| Team or enterprise server | PostgreSQL for op log, metadata, permissions, and indexes. Blobs in Postgres or S3-compatible object storage (Garage is a Rust S3-compatible store, if you want all Rust). |
+| Team or enterprise server | PostgreSQL for op log, metadata, permissions, and indexes. Blobs in Postgres or the cloud provider's S3-compatible object storage. (Avoid Garage and MinIO: both are AGPL, see decision D5.) |
 | Search | `tantivy` (Rust full-text search) over catalogs and projects |
 | Portfolio analytics | Apache DataFusion or Polars over Parquet exports. Example: "top risks across all 40 vehicle programs". |
 

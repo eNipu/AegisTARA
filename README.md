@@ -1,15 +1,18 @@
 # AegisTARA
 
-A learning project: a client-server Threat Analysis and Risk Assessment (TARA) tool, written fully in Rust.
+A learning project: a Threat Analysis and Risk Assessment (TARA) tool, written fully in Rust.
 
-Goals:
+- A native desktop client talks to a server that each customer company hosts in its own cloud.
+- Users log in with their company credentials.
+- Automotive first (ISO/SAE 21434, UN R155). Other methodologies come later as data packs.
+- Visual attack trees with feasibility scoring, explain-why for every number, versions and baselines, and executive reports.
+- AI features are planned in the backlog.
 
-- Support many methodologies (ISO/SAE 21434, IEC 62443, MITRE catalogs, STRIDE, and others) as data, not code.
-- Visual attack tree and attack path editing with feasibility scoring.
-- Compose component TARAs into system TARAs (for example, ECU to vehicle).
-- Executive reports.
-- Secure by design, because the data is sensitive.
+Status: direction set. No code yet.
 
-Status: brainstorm. No code yet.
+## Documents
 
-Start here: [docs/brainstorm.md](docs/brainstorm.md)
+1. [docs/decisions.md](docs/decisions.md): decisions made so far. Start here.
+2. [docs/direction-v1.md](docs/direction-v1.md): desktop client, customer-hosted server, login, v1 scope.
+3. [docs/ai-backlog.md](docs/ai-backlog.md): how AI features fit, and in which order.
+4. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
