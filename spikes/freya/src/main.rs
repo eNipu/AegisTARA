@@ -18,7 +18,6 @@ const EDGE: (u8, u8, u8) = (0x9A, 0xA3, 0xB2);
 const TEXT: (u8, u8, u8) = (0x1F, 0x24, 0x30);
 const MUTED: (u8, u8, u8) = (0x8A, 0x91, 0x9E);
 const POP_W: f32 = 380.0;
-const POP_H: f32 = 560.0;
 
 /// `DEBUG_INPUT=1` prints menu and key events, for the headless tests.
 fn trace(msg: impl FnOnce() -> String) {
@@ -28,7 +27,10 @@ fn trace(msg: impl FnOnce() -> String) {
     }
 }
 
+static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
 fn main() {
+    START.get_or_init(Instant::now);
     if std::env::var("RUST_LOG").is_ok() {
         tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     }
@@ -36,7 +38,7 @@ fn main() {
         LaunchConfig::new().with_plugin(RendererLog).with_window(
             WindowConfig::new(app)
                 .with_size(WINDOW_W as f64, WINDOW_H as f64)
-                .with_title("AegisTARA spike - freya")
+                .with_title("AegisTARA spike - Freya")
                 .with_background(BG),
         ),
     )
@@ -55,6 +57,8 @@ impl FreyaPlugin for RendererLog {
             if std::env::var("NO_X11_FOCUS").is_err() {
                 x11_focus_if_no_wm(window);
             }
+            #[cfg(not(target_os = "linux"))]
+            let _ = window;
         }
     }
 }
@@ -166,17 +170,28 @@ struct Ctx {
     view: State<View>,
     selected: State<Option<String>>,
     menu: State<Option<MenuReq>>,
-    skip_close: State<bool>,
     draft: State<Option<Draft>>,
     rationale: State<String>,
+    /// Measured popover height, for clamping it inside the window.
+    pop_h: State<f32>,
+    /// Keyboard glue: move focus to the first item of the group that just got focus.
+    pending_inside: State<bool>,
+}
+
+/// Freya applies only the last focus request per frame, so multi-step moves need a frame in between.
+fn focus(strategy: AccessibilityFocusStrategy) {
+    Platform::get().send(UserEvent::FocusAccessibilityNode(strategy));
 }
 
 impl Ctx {
-    fn open_menu(mut self, node: String, x: f32, y: f32, from_mouse: bool) {
+    fn open_menu(mut self, node: String, x: f32, y: f32, how: &str) {
+        println!("MENU_OPEN {node} {how} {x:.0} {y:.0}");
         let seq = self.menu.peek().as_ref().map_or(0, |m| m.seq + 1);
         self.selected.set(Some(node.clone()));
-        self.skip_close.set(from_mouse);
+        self.draft.set(None);
         self.menu.set(Some(MenuReq { node, x, y, seq }));
+        // Give the new menu keyboard focus (its container), so the first Down lands on the first item.
+        focus(AccessibilityFocusStrategy::Forward(AccessibilityFocusMovement::OutsideGroup));
     }
     fn close_menu(mut self) {
         self.menu.set(None);
@@ -187,9 +202,10 @@ impl Ctx {
             let n = model.node(node).expect("node");
             (n.factors.clone(), n.rationale.clone())
         };
+        println!("EDITOR_OPEN {node}");
         self.rationale.set(rationale);
-        self.draft.set(Some(Draft { node: node.to_string(), levels }));
         self.close_menu();
+        self.draft.set(Some(Draft { node: node.to_string(), levels }));
     }
     fn apply(mut self, change: impl FnOnce(&mut Model) -> Result<(), String>) {
         trace(|| "menu action".into());
@@ -212,10 +228,19 @@ fn app() -> impl IntoElement {
         view: use_state(|| View { pan_x: 0.0, pan_y: 0.0, zoom: 1.0 }),
         selected: use_state(|| None),
         menu: use_state(|| None),
-        skip_close: use_state(|| false),
         draft: use_state(|| None),
         rationale: use_state(String::new),
+        pop_h: use_state(|| 480.0),
+        pending_inside: use_state(|| false),
     };
+    use_side_effect(move || {
+        let _ = Platform::get().focused_accessibility_id.read();
+        let mut pending = ctx.pending_inside;
+        if *pending.peek() {
+            pending.set(false);
+            focus(AccessibilityFocusStrategy::Forward(AccessibilityFocusMovement::InsideGroup));
+        }
+    });
     let mut drag = use_state(|| None::<Drag>);
     let scene = use_hook(|| Rc::new(RefCell::new(Scene::default())));
     let frame = use_hook(|| Rc::new(std::cell::Cell::new(0u64)));
@@ -237,6 +262,10 @@ fn app() -> impl IntoElement {
         if perf {
             println!("DRAW {:.2}ms nodes={drawn}", t0.elapsed().as_secs_f64() * 1000.0);
         }
+        thread_local!(static FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(true) });
+        if FIRST.with(|f| f.replace(false)) {
+            println!("FIRST_FRAME {:.3}s nodes_drawn={drawn}", START.get().unwrap().elapsed().as_secs_f64());
+        }
     }))
     .key(frame.get())
     .width(Size::fill())
@@ -250,6 +279,7 @@ fn app() -> impl IntoElement {
             trace(|| format!("canvas down {:?} {x} {y} {hit:?}", e.button));
             match (e.button, hit) {
                 (Some(MouseButton::Left), Some(id)) => {
+                    println!("SELECT {id}");
                     let mut sel = ctx.selected;
                     sel.set(Some(id));
                 }
@@ -263,8 +293,8 @@ fn app() -> impl IntoElement {
             }
         }
     })
-    // Open on release (like Windows): opening on press leaves the release pending,
-    // which arrives after the menu mounted and breaks the next press on a menu item.
+    // Open on release (like Windows). If the menu opened on press, the release would reach the new
+    // Menu's global-press handler and close it again (ContextMenuViewer skips its first close for this).
     .on_mouse_up({
         let scene = scene.clone();
         move |e: Event<MouseEventData>| {
@@ -275,18 +305,22 @@ fn app() -> impl IntoElement {
             let hit = scene.borrow().hit(v, e.element_location.x as f32, e.element_location.y as f32).map(|p| p.id.clone());
             trace(|| format!("canvas up {:?} {hit:?}", e.button));
             match hit {
-                Some(id) => ctx.open_menu(id, e.global_location.x as f32, e.global_location.y as f32, false),
+                Some(id) => ctx.open_menu(id, e.global_location.x as f32, e.global_location.y as f32, "mouse"),
                 None => ctx.close_menu(),
             }
         }
     })
     .on_wheel(move |e: Event<WheelEventData>| {
+        if e.delta_y == 0.0 {
+            return;
+        }
         let mut view = ctx.view;
         let v = *view.peek();
         let factor = if e.delta_y > 0.0 { 1.1 } else { 1.0 / 1.1 };
         let zoom = (v.zoom * factor).clamp(0.2, 3.0);
         let (sx, sy) = (e.element_location.x as f32, e.element_location.y as f32);
         let (wx, wy) = ((sx - v.pan_x) / v.zoom, (sy - v.pan_y) / v.zoom);
+        println!("ZOOM {zoom:.3}");
         view.set(View { pan_x: sx - wx * zoom, pan_y: sy - wy * zoom, zoom });
     });
 
@@ -302,19 +336,13 @@ fn app() -> impl IntoElement {
 
     let menu_el = ctx.menu.read().clone().map(|req| {
         let menu = build_menu(ctx, &model.read(), &req.node);
-        let mut skip = ctx.skip_close;
+        // Same placement as the built-in ContextMenuViewer, but at a point we choose,
+        // so the keyboard path can open the menu at the node instead of the mouse cursor.
         rect()
             .key(req.seq)
             .layer(Layer::Overlay)
             .position(Position::new_global().left(req.x).top(req.y))
-            .child(menu.on_close(move |_| {
-                trace(|| format!("menu on_close skip={}", *skip.peek()));
-                if *skip.peek() {
-                    skip.set(false);
-                } else {
-                    ctx.close_menu();
-                }
-            }))
+            .child(menu.on_close(move |_| ctx.close_menu()))
     });
 
     let popover_el = ctx.draft.read().clone().and_then(|d| {
@@ -324,7 +352,7 @@ fn app() -> impl IntoElement {
         if px + POP_W > root.width - 8.0 {
             px = (x - POP_W - 12.0).max(8.0);
         }
-        let py = y.min(root.height - STATUS_H - POP_H - 8.0).max(8.0);
+        let py = y.min(root.height - STATUS_H - *ctx.pop_h.read() - 8.0).max(8.0);
         Some(popover(ctx, &model.read(), d, px, py))
     });
 
@@ -342,10 +370,11 @@ fn app() -> impl IntoElement {
                 view.set(View { pan_x: d.pan_x + (p.x - d.x) as f32, pan_y: d.pan_y + (p.y - d.y) as f32, zoom });
             }
         })
-        .on_global_pointer_down(move |e: Event<PointerEventData>| trace(|| format!("global down {:?}", e.button())))
         .on_global_pointer_press(move |e: Event<PointerEventData>| {
             trace(|| format!("global press {:?}", e.button()));
             if drag.peek().is_some() {
+                let v = *ctx.view.peek();
+                println!("PAN {:.0} {:.0}", v.pan_x, v.pan_y);
                 drag.set(None);
             }
         })
@@ -380,20 +409,23 @@ fn on_key(ctx: Ctx, scene: &Rc<RefCell<Scene>>, e: &KeyboardEventData) {
         Key::Named(NamedKey::F10) if shift => open_for_selection(ctx, scene),
         Key::Named(NamedKey::ContextMenu) => open_for_selection(ctx, scene),
         Key::Named(NamedKey::Escape) if popover_open && !menu_open => {
+            println!("EDITOR_CANCEL escape");
             let mut draft = ctx.draft;
             draft.set(None);
         }
         Key::Named(NamedKey::ArrowDown | NamedKey::ArrowUp) if menu_open => {
-            // Built-in arrows only move inside the focused group. Move focus into the menu first.
-            let platform = Platform::get();
-            if platform.focused_accessibility_node.peek().member_of().is_none() {
-                platform.send(UserEvent::FocusAccessibilityNode(AccessibilityFocusStrategy::Forward(
-                    AccessibilityFocusMovement::OutsideGroup,
-                )));
-                platform.send(UserEvent::FocusAccessibilityNode(AccessibilityFocusStrategy::Forward(
-                    AccessibilityFocusMovement::InsideGroup,
-                )));
+            // Up/Down are built in, but only move inside the focused group. If focus left the menu
+            // (for example after Escape closed a submenu), focus the menu container again.
+            if Platform::get().focused_accessibility_node.peek().member_of().is_none() {
+                focus(AccessibilityFocusStrategy::Forward(AccessibilityFocusMovement::OutsideGroup));
             }
+        }
+        Key::Named(NamedKey::ArrowRight) if menu_open => {
+            // Enter opens a submenu (built in). Right moves into the open submenu, which is the last
+            // menu group in tree order: focus its container now, its first item next frame.
+            let mut pending = ctx.pending_inside;
+            pending.set(true);
+            focus(AccessibilityFocusStrategy::Backward(AccessibilityFocusMovement::OutsideGroup));
         }
         _ if ctrl && e.code == Code::KeyZ && !popover_open => {
             let mut model = ctx.model;
@@ -409,7 +441,7 @@ fn open_for_selection(ctx: Ctx, scene: &Rc<RefCell<Scene>>) {
     let Some(id) = ctx.selected.peek().clone() else { return };
     let v = *ctx.view.peek();
     if let Some((x, y, w, h)) = scene.borrow().screen_rect(v, &id) {
-        ctx.open_menu(id, x + w * 0.3, y + h - 6.0, false);
+        ctx.open_menu(id, x + w * 0.3, y + h - 6.0, "keyboard");
     }
 }
 
@@ -421,10 +453,31 @@ fn separator() -> Element {
     rect().width(Size::fill_minimum()).height(Size::px(1.0)).margin((4.0, 0.0)).background(BORDER).into()
 }
 
-/// One menu row. Read-only rows are greyed and have no press handler (MenuItem has no `disabled`).
+/// Disabled rows (MenuItem has no `disabled`): greyed text, and a press handler that only calls
+/// `prevent_default`, which cancels the global press that would otherwise close the menu.
+fn ignore_press(e: Event<PressEventData>) {
+    e.prevent_default();
+}
+
+/// One menu row.
 fn item(text: &str, enabled: bool, on_press: impl FnMut(Event<PressEventData>) + 'static) -> Element {
     let row = label().text(text.to_string()).color(if enabled { TEXT } else { MUTED });
-    if enabled { MenuButton::new().on_press(on_press).child(row).into() } else { MenuButton::new().child(row).into() }
+    let button = MenuButton::new().child(row);
+    if enabled { button.on_press(on_press).into() } else { button.on_press(ignore_press).into() }
+}
+
+/// A radio-style row: built-in `MenuItem::selected` highlight plus a drawn mark. The built-in
+/// `RadioItem` is always focusable, which adds a stray Tab/arrow stop inside the menu row.
+fn radio(selected: bool, text: &str, value: Option<u32>, enabled: bool, on_press: impl FnMut(Event<PressEventData>) + 'static) -> Element {
+    let row = rect()
+        .horizontal()
+        .cross_align(Alignment::center())
+        .spacing(8.0)
+        .child(label().text(if selected { "●" } else { "○" }).color(if enabled { ACCENT } else { MUTED }))
+        .child(label().text(text.to_string()).width(Size::px(140.0)).color(if enabled { TEXT } else { MUTED }))
+        .maybe_child(value.map(|v| muted(v.to_string())));
+    let item = MenuItem::new().selected(selected).child(row);
+    if enabled { item.on_press(on_press).into() } else { item.on_press(ignore_press).into() }
 }
 
 fn build_menu(ctx: Ctx, model: &Model, id: &str) -> Menu {
@@ -442,24 +495,8 @@ fn build_menu(ctx: Ctx, model: &Model, id: &str) -> Menu {
             let current = model.level_of(id, &f.id).unwrap_or_default().to_string();
             let current_label = f.levels.iter().find(|l| l.id == current).map(|l| l.label.clone()).unwrap_or_default();
             let levels = f.levels.iter().map(|l| {
-                let selected = l.id == current;
-                let row = rect()
-                    .horizontal()
-                    .cross_align(Alignment::center())
-                    .spacing(8.0)
-                    .child(label().text(if selected { "●" } else { "○" }))
-                    .child(label().text(l.label.clone()).width(Size::px(140.0)).color(if ro { MUTED } else { TEXT }))
-                    .child(muted(l.value.to_string()))
-                    .on_press(|_| trace(|| "row press".into()))
-                    .on_pointer_down(|_| trace(|| "row pointer down".into()))
-                    .on_mouse_up(|_| trace(|| "row mouse up".into()));
                 let (nid, fid, lid) = (id.to_string(), f.id.clone(), l.id.clone());
-                let item = MenuItem::new().selected(selected).child(row);
-                if ro {
-                    item.into()
-                } else {
-                    item.on_press(move |_| ctx.apply(|m| m.set_factor(&nid, &fid, &lid))).into()
-                }
+                radio(l.id == current, &l.label, Some(l.value), !ro, move |_| ctx.apply(|m| m.set_factor(&nid, &fid, &lid)))
             });
             menu = menu.child(
                 SubMenu::new()
@@ -478,14 +515,7 @@ fn build_menu(ctx: Ctx, model: &Model, id: &str) -> Menu {
     } else {
         let kinds = [Kind::And, Kind::Or].map(|k| {
             let nid = id.to_string();
-            let row = rect()
-                .horizontal()
-                .cross_align(Alignment::center())
-                .spacing(8.0)
-                .child(RadioItem::new().selected(node.kind == k).size(14.0))
-                .child(label().text(k.label()).color(if ro { MUTED } else { TEXT }));
-            let item = MenuItem::new().selected(node.kind == k).child(row);
-            if ro { item.into() } else { item.on_press(move |_| ctx.apply(|m| m.set_kind(&nid, k))).into() }
+            radio(node.kind == k, k.label(), None, !ro, move |_| ctx.apply(|m| m.set_kind(&nid, k)))
         });
         menu = menu.child(
             SubMenu::new()
@@ -525,6 +555,9 @@ fn popover(ctx: Ctx, model: &Model, d: Draft, x: f32, y: f32) -> Element {
                 .on_press(move |_| {
                     if let Some(d) = draft.write().as_mut() {
                         d.levels.insert(fid.clone(), lid.clone());
+                        let model = ctx.model.peek();
+                        let (ap, ri) = model.preview(&d.levels);
+                        println!("PREVIEW {ap} {}", model.pack().ratings[ri].label);
                     }
                 })
                 .child(format!("{} ({})", l.label, l.value))
@@ -541,9 +574,11 @@ fn popover(ctx: Ctx, model: &Model, d: Draft, x: f32, y: f32) -> Element {
     let node_id = d.node.clone();
     let levels = d.levels.clone();
     let mut draft = ctx.draft;
+    let mut pop_h = ctx.pop_h;
     rect()
         .layer(Layer::Overlay)
         .position(Position::new_global().left(x).top(y))
+        .on_sized(move |e: Event<SizedEventData>| pop_h.set_if_modified(e.area.height()))
         .width(Size::px(POP_W))
         .padding(14.0)
         .spacing(8.0)
@@ -577,9 +612,13 @@ fn popover(ctx: Ctx, model: &Model, d: Draft, x: f32, y: f32) -> Element {
                 .width(Size::fill())
                 .main_align(Alignment::end())
                 .spacing(8.0)
-                .child(Button::new().on_press(move |_| draft.set(None)).child("Cancel"))
+                .child(Button::new().on_press(move |_| {
+                    println!("EDITOR_CANCEL");
+                    draft.set(None);
+                }).child("Cancel"))
                 .child(Button::new().filled().on_press(move |_| {
                     let text = ctx.rationale.peek().clone();
+                    println!("EDITOR_OK {node_id} rationale={text:?}");
                     ctx.apply(|m| m.set_factors(&node_id, levels.clone(), text));
                     draft.set(None);
                 }).child("OK")),
@@ -658,6 +697,7 @@ impl Component for RationaleEditor {
                 paragraph()
                     .holder(holder.read().clone())
                     .width(Size::fill())
+                    .height(Size::fill())
                     .cursor_index(cursor)
                     .cursor_color(TEXT)
                     .highlights(selection.map(|h| vec![h]))
