@@ -1,0 +1,37 @@
+# 10: click s2, Shift+F10, Down, Right; Menu key; keyboard-only Gate type = AND on g3
+sleep 4
+click 1 830 170
+sleep 0.5
+key shift+F10
+sleep 1
+shot kb1
+key Down
+sleep 0.4
+shot kb2
+key Right
+sleep 0.8
+shot 10_keyboard_menu
+key Escape
+sleep 0.4
+shot kb3
+key Escape
+sleep 0.5
+shot kb4
+key Menu
+sleep 1
+shot 10b_menukey
+key Escape
+sleep 0.5
+click 1 500 768
+sleep 0.3
+key shift+F10
+sleep 1
+key Down
+key Right
+sleep 0.6
+key Down
+sleep 0.3
+shot kb5
+key Return
+sleep 1
+shot kb6
