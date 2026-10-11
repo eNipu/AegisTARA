@@ -49,7 +49,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Date:** 2026-10-10
 - **Decision:** AegisTARA is closed source for now. It may use open source libraries with permissive licenses.
 - **Allowed:** MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0, BSL-1.0, CC0-1.0, MIT-0, OFL-1.1 (fonts).
-- **Review first:** MPL-2.0, Slint royalty-free license, any AI model license, any data catalog license.
+- **Review first:** MPL-2.0, Slint royalty-free license (chosen in D7, needs your approval), any AI model license, any data catalog license.
 - **Not allowed:** GPL, LGPL, AGPL, SSPL, Business Source License, Commons Clause, non-commercial licenses.
 - **Enforcement:** `cargo-deny` in CI. `cargo-about` generates the third-party notices shown in the About dialog.
 - **Correction to the brainstorm:** Garage and MinIO are AGPL. Do not use them. Use the cloud provider's object storage or PostgreSQL.
@@ -61,7 +61,16 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Principle:** AI proposes. The engine computes. A human decides.
 - **Details:** [ai-backlog.md](ai-backlog.md)
 
+## D7. Desktop UI toolkit: Slint
+
+- **Date:** 2026-10-11
+- **Decision:** Build the desktop client with Slint (1.x, Rust API, `.slint` markup).
+- **Why:** In a five-way spike, all toolkits could do right-click editing of feasibility values. Slint did it with built-in menus and widgets, has a stable 1.x API, and renders fully on a CPU-only renderer for users on remote desktops. Details: [spikes/RESULTS.md](../spikes/RESULTS.md).
+- **Condition:** use Slint under its Royalty-free License 2.0. This requires an "About Slint" notice in the app and a Slint badge on the download page. If that is not acceptable, buy the commercial license or switch to iced (MIT), the tested fallback.
+- **Before locking:** run the Slint spike on a real Windows laptop and over RDP or Citrix.
+- **Replaces:** the earlier lead pick of iced in direction-v1.md section 4.
+
 ## Open
 
 - Confirm D4 interpretation.
-- UI toolkit: run the spike in [direction-v1.md](direction-v1.md#4-desktop-ui-toolkit), then record the result here.
+- Accept or reject the Slint attribution condition (D7).

@@ -10,7 +10,7 @@
 2. **Same engine on both sides:** the desktop embeds the same risk engine for instant feedback. The server recomputes and stores the official result.
 3. **Login:** company single sign-on (OIDC) through the system browser, once. Tokens live in the OS keychain and are bound to the device.
 4. **Editing:** one editor per project at a time (an edit lock). Others watch live, read-only. Every change is an operation, so real-time co-editing can come later.
-5. **UI toolkit:** iced is the lead candidate, GPUI is the challenger. A one-week spike for each decides.
+5. **UI toolkit:** Slint, chosen after a five-toolkit spike (see [spikes/RESULTS.md](../spikes/RESULTS.md)). iced is the fallback.
 6. **Canvas trick:** the canvas engine produces a toolkit-neutral "display list". The same drawing goes to the screen and to SVG for PDF reports.
 7. **Automotive v1:** the full ISO/SAE 21434 TARA flow for one item, UN R155 Annex 5 mapping, attack trees, explain-why, baselines, and a PDF report.
 8. **Deployment:** one server container, PostgreSQL, the company identity provider, and a signed license file. No phone-home.
@@ -83,6 +83,8 @@ flowchart LR
 ---
 
 ## 4. Desktop UI toolkit
+
+> **Update 2026-10-11:** the spike is done. Slint was chosen (decision D7). See [spikes/RESULTS.md](../spikes/RESULTS.md). The text below is the original pre-spike analysis.
 
 Tauri was left out on purpose. It is a desktop app, but it draws its UI with a web view.
 If web technology inside a desktop app is acceptable, Tauri would make the UI faster to build. Tell me if that changes your mind.
