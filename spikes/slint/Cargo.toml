@@ -20,6 +20,10 @@ slint = { version = "=1.18.1", default-features = false, features = [
     "accessibility",
 ] }
 
+# Linux only: probe for the OpenGL libraries at startup (see `pick_renderer` in main.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
+
 [build-dependencies]
 slint-build = "=1.18.1"
 

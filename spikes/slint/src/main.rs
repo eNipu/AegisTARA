@@ -189,8 +189,29 @@ fn update_preview(app: &App, ui: &AppWindow) {
     bridge.set_editor_preview_color(Color::from_rgb_u8(r, g, b));
 }
 
+/// Slint's winit backend falls back to another renderer only if creating the renderer object
+/// fails. If OpenGL is missing, femtovg fails later, at window creation, and the window stays
+/// black. So on Linux probe for the GL libraries first and pick the software renderer without
+/// them. `SLINT_BACKEND` (for example `winit-software`) always wins.
+fn pick_renderer() {
+    if std::env::var_os("SLINT_BACKEND").is_some() {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: loading system GL libraries runs only their initializers.
+        let gl = ["libEGL.so.1", "libGL.so.1"].iter().any(|l| unsafe { libloading::Library::new(l) }.is_ok());
+        if !gl {
+            println!("RENDERER no OpenGL library found, selecting the software renderer");
+            let sel = slint::BackendSelector::new().backend_name("winit".into()).renderer_name("software".into());
+            report(sel.select().map_err(|e| e.to_string()));
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
+    pick_renderer();
     let model = Model::load_default()?;
     model.log_layout(0.0, 0.0);
     model.log_results();
