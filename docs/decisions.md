@@ -70,6 +70,13 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Before locking:** run the Slint spike on a real Windows laptop and over RDP or Citrix.
 - **Replaces:** the earlier lead pick of iced in direction-v1.md section 4.
 
+## D8. Engineering standards are requirements
+
+- **Date:** 2026-10-15
+- **Decision:** All production code follows [engineering-standards.md](engineering-standards.md): performance budgets, data structure and algorithm rules, resource limits, concurrency rules, testing and measurement, and learning practices.
+- **Why:** AegisTARA is both a product and a way to learn software engineering. Large attack graphs need efficient data layout and incremental algorithms from the start, and every choice should be measured and explained.
+- **Consequence:** Spike code is not promoted to production. Budgets are checked by benchmarks in CI. Every non-trivial choice gets a decision record with numbers.
+
 ## Open
 
 - Confirm D4 interpretation.

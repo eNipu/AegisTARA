@@ -15,4 +15,6 @@ Status: direction set. No code yet.
 1. [docs/decisions.md](docs/decisions.md): decisions made so far. Start here.
 2. [docs/direction-v1.md](docs/direction-v1.md): desktop client, customer-hosted server, login, v1 scope.
 3. [docs/ai-backlog.md](docs/ai-backlog.md): how AI features fit, and in which order.
-4. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
+4. [docs/engineering-standards.md](docs/engineering-standards.md): coding requirements for performance, data structures, algorithms, and learning.
+5. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
+6. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
