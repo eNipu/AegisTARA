@@ -17,7 +17,7 @@ config="$repo_root/deny.toml"
 
 if ! command -v cargo-deny >/dev/null 2>&1; then
     echo "error: cargo-deny is not installed." >&2
-    echo "install it with: cargo install cargo-deny --version 0.19.9 --locked" >&2
+    echo "install it with: cargo install cargo-deny --version 0.20.2 --locked" >&2
     exit 127
 fi
 
@@ -26,7 +26,9 @@ if [ "$#" -eq 0 ]; then
 fi
 
 log=$(mktemp "${TMPDIR:-/tmp}/deny.XXXXXX")
-trap 'rm -f "$log"' EXIT INT TERM
+trap 'rm -f "$log"' EXIT
+# Stop on Ctrl-C or TERM instead of moving on to the next case.
+trap 'rm -f "$log"; exit 130' INT TERM
 
 failed=0
 checked=0
@@ -35,7 +37,7 @@ for manifest in "$repo_root"/crates/*/Cargo.toml; do
     [ -f "$manifest" ] || continue
     crate=$(basename "$(dirname "$manifest")")
     checked=$((checked + 1))
-    if cargo deny --manifest-path "$manifest" check --config "$config" "$@" >"$log" 2>&1; then
+    if cargo deny --manifest-path "$manifest" --config "$config" check "$@" >"$log" 2>&1; then
         echo "ok    $crate"
     else
         echo "FAIL  $crate"
@@ -50,6 +52,12 @@ if [ "$checked" -eq 0 ]; then
 fi
 
 if [ "$failed" -ne 0 ]; then
-    echo "$failed of $checked crate(s) failed: $*" >&2
+    echo "$failed of $checked crate(s) failed: $*"
+    case " $* " in
+        *" advisories "*)
+            echo "note: advisories fetch the RustSec database; if the report shows a"
+            echo "      network error, rerun offline with: scripts/deny.sh licenses bans sources"
+            ;;
+    esac
     exit 1
 fi
