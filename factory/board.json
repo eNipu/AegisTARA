@@ -1,6 +1,43 @@
-{ "jobs": [ {
-  "id": "001-aegis-model", "title": "aegis-model crate: arena attack tree with typed IDs", "branch": "factory/001-aegis-model",
-  "stage": "merged", "round": 1,
-  "reviews": { "security": "PASS", "ux": "PASS", "ui": "PASS", "code": "PASS" },
-  "history": [], "decision": "ESCALATE", "updated": "2026-10-18T22:27:50Z"
-} ] }
+{
+  "jobs": [
+    {
+      "id": "001-aegis-model",
+      "title": "aegis-model crate: arena attack tree with typed IDs",
+      "branch": "factory/001-aegis-model",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "ESCALATE",
+      "updated": "2026-10-18T22:27:50Z"
+    },
+    {
+      "id": "002-cycle-detection",
+      "title": "Cycle detection with Kahn's algorithm",
+      "branch": "factory/002-cycle-detection",
+      "stage": "merged",
+      "round": 2,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [
+        {
+          "security": "PASS",
+          "ux": "PASS",
+          "ui": "PASS",
+          "code": "PASS"
+        }
+      ],
+      "decision": "APPROVE",
+      "updated": "2026-10-18T23:14:40Z"
+    }
+  ]
+}
