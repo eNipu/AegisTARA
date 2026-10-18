@@ -1,0 +1,14 @@
+sleep 7
+shot 01_initial
+click 3 830 538
+sleep 1.2
+move 880 642
+sleep 1.2
+shot 03_submenu
+click 1 1065 641
+sleep 1.2
+click 3 830 538
+sleep 1.2
+click 1 880 674
+sleep 1.5
+shot 06_popover

@@ -1,0 +1,38 @@
+{
+  "id": "g0", "kind": "or", "name": "Unintended braking via spoofed brake request",
+  "children": [
+    {
+      "id": "g1", "kind": "and", "name": "Remote via telematics unit",
+      "children": [
+        { "id": "s1", "kind": "step", "name": "Exploit cellular modem firmware",
+          "factors": { "elapsed_time": "le_1m", "expertise": "expert", "knowledge": "restricted", "window": "unlimited", "equipment": "specialized" } },
+        { "id": "s2", "kind": "step", "name": "Pivot from TCU to CAN-1",
+          "factors": { "elapsed_time": "le_1w", "expertise": "proficient", "knowledge": "confidential", "window": "easy", "equipment": "standard" } },
+        { "id": "s3", "kind": "step", "name": "Bypass gateway routing filter",
+          "factors": { "elapsed_time": "le_1m", "expertise": "expert", "knowledge": "confidential", "window": "moderate", "equipment": "specialized" } },
+        { "id": "s4", "kind": "step", "name": "Spoof brake request on CAN-2",
+          "factors": { "elapsed_time": "le_1d", "expertise": "proficient", "knowledge": "restricted", "window": "easy", "equipment": "standard" } }
+      ]
+    },
+    {
+      "id": "g2", "kind": "and", "name": "Physical via OBD port",
+      "children": [
+        { "id": "s5", "kind": "step", "name": "Gain access to OBD port",
+          "factors": { "elapsed_time": "le_1d", "expertise": "layman", "knowledge": "public", "window": "moderate", "equipment": "standard" } },
+        { "id": "s6", "kind": "step", "name": "Open diagnostic session",
+          "factors": { "elapsed_time": "le_1w", "expertise": "proficient", "knowledge": "restricted", "window": "moderate", "equipment": "specialized" } },
+        { "id": "s7", "kind": "step", "name": "Send spoofed brake request",
+          "factors": { "elapsed_time": "le_1d", "expertise": "proficient", "knowledge": "restricted", "window": "easy", "equipment": "standard" } }
+      ]
+    },
+    {
+      "id": "g3", "kind": "or", "name": "Malicious ECU software update",
+      "children": [
+        { "id": "s8", "kind": "step", "name": "Compromise supplier build server",
+          "factors": { "elapsed_time": "gt_6m", "expertise": "multiple_experts", "knowledge": "strictly_confidential", "window": "difficult", "equipment": "bespoke" } },
+        { "id": "s9", "kind": "step", "name": "Bypass OTA signature check",
+          "factors": { "elapsed_time": "le_6m", "expertise": "expert", "knowledge": "confidential", "window": "moderate", "equipment": "specialized" } }
+      ]
+    }
+  ]
+}

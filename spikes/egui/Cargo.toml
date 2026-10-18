@@ -1,0 +1,23 @@
+[package]
+name = "aegis-spike-egui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "AegisTARA UI toolkit spike: customizable attack nodes with egui/eframe"
+
+[dependencies]
+spike-model = { path = "../spike-model" }
+# Exact pins: every egui 0.x minor release breaks the API.
+eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "default_fonts", "wgpu", "glow", "x11", "wayland"] }
+egui = "=0.36.2"
+# Same winit as eframe uses; only needed to catch the Menu key, which egui-winit drops.
+winit = { version = "=0.30.13", default-features = false }
+log = "0.4"
+env_logger = "0.11"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Only for the headless test harness: with no window manager, X input focus must be set by hand.
+raw-window-handle = "0.6"
+x11rb = "0.13"
+
+# Profiles are left at the defaults on purpose, to reuse the warm build cache of the research probe.

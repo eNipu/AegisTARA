@@ -1,0 +1,44 @@
+# 14: right-click s9 near the bottom (menu, then Equipment submenu via keyboard); add/delete a child step; 11: 3 wheel notches + drag
+sleep 4
+click 3 830 814
+sleep 1
+shot 14_edge_menu
+key Down
+key Down
+key Down
+key Down
+key Down
+key Right
+sleep 0.8
+shot 14_edge
+key Escape
+sleep 0.3
+key Escape
+sleep 0.5
+click 3 500 216
+sleep 1
+move 560 250
+sleep 0.3
+move 560 268
+sleep 0.4
+click 1 560 268
+sleep 1
+shot c_added
+click 3 830 446
+sleep 1
+shot c_n1menu
+move 900 676
+sleep 0.4
+click 1 900 676
+sleep 1
+shot c_deleted
+scroll up 830 538 3
+sleep 1
+drag 1250 150 950 100
+sleep 1
+shot 11_zoom_pan
+click 3 530 488
+sleep 1
+shot c_zoom_menu
+key Escape
+sleep 0.3

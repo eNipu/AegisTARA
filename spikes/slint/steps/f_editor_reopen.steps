@@ -1,0 +1,48 @@
+# Editor: menu at the right edge (s1), Cancel resets, reopen shows fresh values, Escape cancels, editor for s2
+sleep 4
+click 3 950 78
+sleep 1
+key Down
+key Down
+key Down
+key Down
+key Down
+key Right
+sleep 1
+shot d_right_edge
+key Escape
+sleep 0.3
+key Escape
+sleep 0.3
+click 3 830 538
+sleep 1
+move 900 727
+sleep 0.4
+click 1 900 727
+sleep 1.5
+click 1 1240 503
+sleep 1
+click 1 1240 506
+sleep 1
+click 1 1160 750
+type draft
+sleep 0.3
+click 1 1253 819
+sleep 1
+click 3 830 538
+sleep 1
+move 900 727
+sleep 0.4
+click 1 900 727
+sleep 1.5
+shot d_reopen
+key Escape
+sleep 1
+shot d_after_escape
+click 3 830 170
+sleep 1
+move 900 359
+sleep 0.4
+click 1 900 359
+sleep 1.5
+shot d_s2_editor

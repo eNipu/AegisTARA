@@ -1,0 +1,19 @@
+[package]
+name = "aegis-spike-gpui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "AegisTARA UI toolkit spike: customizable attack nodes with GPUI via gpui-kit"
+license = "LicenseRef-Proprietary"
+
+[dependencies]
+# One facade crate: pulls gpui-component, gpui-base, gpui-kit-assets and the
+# gpui-pre-* =0.3.8 snapshot crates from crates.io. Upgrade it as a whole.
+gpui-kit = "=0.7.1"
+spike-model = { path = "../spike-model" }
+env_logger = "0.11"
+log = "0.4"
+
+# Same settings as the research probe, so the warm build cache is reused.
+[profile.dev]
+debug = 0

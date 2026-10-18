@@ -1,0 +1,27 @@
+# 12: run with READONLY=1. Right-click s1, hover Equipment, click a greyed level and Edit feasibility (both must do nothing), Ctrl+Z
+sleep 4
+click 3 830 78
+sleep 1
+shot 12_readonly_menu
+move 880 226
+sleep 0.3
+move 900 226
+sleep 1
+shot 12_readonly
+move 1050 228
+sleep 0.3
+click 1 1175 231
+sleep 1
+key Escape
+sleep 0.3
+key Escape
+sleep 0.3
+click 3 830 78
+sleep 1
+click 1 900 267
+sleep 1
+shot 12c
+key Escape
+sleep 0.3
+key ctrl+z
+sleep 0.5
