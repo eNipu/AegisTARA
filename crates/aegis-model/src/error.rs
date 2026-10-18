@@ -14,7 +14,7 @@ use crate::id::{NodeId, NodeIdx};
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ModelError {
-    /// The UUID is well formed but is not an RFC 9562 version 7 UUID.
+    /// The UUID is well-formed but is not an RFC 9562 version 7 UUID.
     #[error("UUID is not version 7")]
     NotVersion7,
     /// The text is not a valid UUID.
