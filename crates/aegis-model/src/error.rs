@@ -37,49 +37,99 @@ pub enum ModelError {
     CapacityExceeded,
     /// The gate already has this node as a child; a gate holds each child at
     /// most once.
-    #[error("node index {} is already a child of node index {}", .child.index(), .parent.index())]
+    ///
+    /// Carries stable public IDs, which stay valid across reloads and in
+    /// logs. Errors never contain labels (customer data).
+    #[error("node {child} is already a child of node {parent}")]
     DuplicateEdge {
         /// The gate that already has the edge.
-        parent: NodeIdx,
+        parent: NodeId,
         /// The child that is already linked.
-        child: NodeIdx,
+        child: NodeId,
     },
-    /// The tree contains a cycle, so it has no topological order.
+    /// [`AttackTree::link`](crate::AttackTree::link) refused an edge because
+    /// `parent` is reachable from `child`, so the new edge would close a
+    /// cycle.
     ///
-    /// The path lists the nodes of one cycle in edge order: `path[i]` has
-    /// `path[i + 1]` as a child, and the last node has `path[0]` as a child.
-    /// It is non-empty, has no repeats, and starts with its smallest index.
-    /// Use [`AttackTree::id_of`](crate::AttackTree::id_of) to turn the
-    /// indices into public IDs.
+    /// `path` is the existing chain from `child` down to `parent` in edge
+    /// order (`path[0] == child`, last element `== parent`); the new edge
+    /// `parent -> child` would close it. A self-link gives `path == [child]`.
     ///
     /// ```
     /// use aegis_model::{AttackTree, GateKind, ModelError, Node, NodeId};
     ///
     /// # fn main() -> Result<(), ModelError> {
-    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
-    /// let g = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::And, "g"))?;
-    /// tree.link(g, tree.root())?;
-    /// let err = tree.topological_order().err();
-    /// assert_eq!(err, Some(ModelError::Cycle(vec![tree.root(), g])));
+    /// let root_id = NodeId::new_v7();
+    /// let g_id = NodeId::new_v7();
+    /// let mut tree = AttackTree::new(root_id, Node::gate(GateKind::Or, "root"))?;
+    /// let g = tree.add_child(tree.root(), g_id, Node::gate(GateKind::And, "g"))?;
+    /// let err = tree.link(g, tree.root()).err();
     /// assert_eq!(
-    ///     err.map(|e| e.to_string()).as_deref(),
-    ///     Some("cycle in attack tree: 0 -> 1 -> 0"),
+    ///     err,
+    ///     Some(ModelError::WouldCreateCycle {
+    ///         parent: g_id,
+    ///         child: root_id,
+    ///         path: vec![root_id, g_id],
+    ///     }),
+    /// );
+    /// let text = err.map(|e| e.to_string()).unwrap_or_default();
+    /// assert_eq!(
+    ///     text,
+    ///     format!(
+    ///         "linking node {root_id} under node {g_id} would create a cycle: \
+    ///          {g_id} -> {root_id} -> {g_id}"
+    ///     ),
     /// );
     /// # Ok(())
     /// # }
     /// ```
-    #[error("cycle in attack tree: {}", cycle_text(.0))]
-    Cycle(Vec<NodeIdx>),
+    #[error(
+        "linking node {child} under node {parent} would create a cycle: {parent} -> {}",
+        path_text(path, false)
+    )]
+    WouldCreateCycle {
+        /// The gate that was to receive the new child.
+        parent: NodeId,
+        /// The node that was to be linked.
+        child: NodeId,
+        /// Existing path from `child` down to `parent`, both included.
+        path: Vec<NodeId>,
+    },
+    /// The graph contains a cycle, so it has no topological order.
+    ///
+    /// [`AttackTree::link`](crate::AttackTree::link) rejects cycles, so this
+    /// is a defense-in-depth check before evaluation and is not expected
+    /// from a tree built through the public API.
+    ///
+    /// The path lists the public IDs of one cycle in edge order: `path[i]`
+    /// has `path[i + 1]` as a child, and the last node has `path[0]` as a
+    /// child. It is non-empty, has no repeats, and starts with the node of
+    /// smallest internal index, so the same tree always reports the same
+    /// path. Display repeats the first ID at the end.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, NodeId};
+    ///
+    /// let (a, b) = (NodeId::new_v7(), NodeId::new_v7());
+    /// assert_eq!(
+    ///     ModelError::Cycle(vec![a, b]).to_string(),
+    ///     format!("cycle in attack tree: {a} -> {b} -> {a}"),
+    /// );
+    /// ```
+    #[error("cycle in attack tree: {}", path_text(.0, true))]
+    Cycle(Vec<NodeId>),
 }
 
-/// Formats a cycle path as `i0 -> i1 -> ... -> i0`. Time O(path length).
-fn cycle_text(path: &[NodeIdx]) -> String {
+/// Formats IDs as `a -> b -> c`; with `close`, the first ID is repeated at
+/// the end. Time O(path length).
+fn path_text(path: &[NodeId], close: bool) -> String {
+    let closing = if close { path.first() } else { None };
     let mut out = String::new();
-    for n in path.iter().chain(path.first()) {
+    for n in path.iter().chain(closing) {
         if !out.is_empty() {
             out.push_str(" -> ");
         }
-        out.push_str(&n.index().to_string());
+        out.push_str(&n.to_string());
     }
     out
 }
