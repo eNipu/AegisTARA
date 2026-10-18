@@ -55,7 +55,7 @@ fn check(tree: &AttackTree, inserted: &[NodeId]) -> Result<(), TestCaseError> {
         prop_assert_eq!(tree.id_of(idx), Some(id));
         prop_assert_eq!(tree.get(idx), Some(node));
         // Parent links.
-        match tree.parent(idx) {
+        match tree.owner(idx) {
             None => prop_assert_eq!(idx, tree.root()),
             Some(p) => {
                 prop_assert_ne!(idx, tree.root());
@@ -65,7 +65,7 @@ fn check(tree: &AttackTree, inserted: &[NodeId]) -> Result<(), TestCaseError> {
             }
         }
         for c in tree.children(idx) {
-            prop_assert_eq!(tree.parent(*c), Some(idx));
+            prop_assert_eq!(tree.owner(*c), Some(idx));
         }
         seen_children += tree.children(idx).len();
     }
@@ -103,7 +103,7 @@ proptest! {
                     prop_assert!(!parent_is_step);
                     prop_assert!(ids.insert(id), "a duplicate ID was accepted");
                     prop_assert_eq!(idx.index(), before_len);
-                    prop_assert_eq!(tree.parent(idx), Some(parent));
+                    prop_assert_eq!(tree.owner(idx), Some(parent));
                     prop_assert_eq!(tree.children(parent).last(), Some(&idx));
                     inserted.push(id);
                 }

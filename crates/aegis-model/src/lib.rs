@@ -7,10 +7,13 @@
 //! public ID cost O(1) expected time.
 //!
 //! A subtree can be shared between gates with [`AttackTree::link`], which
-//! turns the tree into a directed graph that may contain cycles.
-//! [`AttackTree::topological_order`] orders all nodes parents-first in
-//! O(V + E), or reports one cycle as [`ModelError::Cycle`]; call it before
-//! evaluating.
+//! turns the tree into a directed acyclic graph (DAG). `link` rejects an edge
+//! that would close a cycle ([`ModelError::WouldCreateCycle`]), so the model
+//! is always a DAG. [`AttackTree::topological_order`] orders all nodes
+//! parents-first in O(V + E) for evaluation, and re-checks for cycles as
+//! defense in depth. A node has one [`owner`](AttackTree::owner) and may have
+//! more [`parents`](AttackTree::parents). Errors name nodes by their stable
+//! [`NodeId`], never by label.
 //!
 //! See `docs/adr/0001-arena-and-typed-ids.md` for why the model is built this
 //! way, and `docs/adr/0002-dag-links-and-cycle-detection.md` for links and
@@ -27,7 +30,7 @@
 //! let step = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("Relay key fob"))?;
 //!
 //! assert_eq!(tree.len(), 2);
-//! assert_eq!(tree.parent(step), Some(tree.root()));
+//! assert_eq!(tree.owner(step), Some(tree.root()));
 //! assert_eq!(tree.idx_of(&root_id), Some(tree.root()));
 //! # Ok(())
 //! # }
