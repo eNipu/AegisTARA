@@ -1,0 +1,8 @@
+[package]
+name = "fixture-ok-or"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dep-ok-or = { path = "../deps/ok-or" }
