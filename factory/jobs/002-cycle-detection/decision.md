@@ -1,0 +1,5 @@
+APPROVE
+The spec's three open questions were answered by the owner in rework.md (Rework 1): `link` rejects cycles, errors carry `NodeId`s, and `parent()` becomes `owner()` plus a new `parents()`. Round 2 applies all three, and ADR 0002 is now "accepted" with the owner's reasons.
+The diff matches spec plus rework. The 8 files are all in `crates/aegis-model` and `docs/adr/`. `NotAGate` and `UnknownNode` are unchanged as asked. The only breaking change is renaming `parent` to `owner`, which the owner requested.
+All four round-2 reviews pass. The one non-blocking note, a zeroed O(V) visited buffer allocated on every `link`, is documented and is fine at 100k nodes. Bulk import has a named upgrade path in the ADR.
+Nothing in the diff touches auth, crypto, licensing, `unsafe`, dependencies (no Cargo.toml change), `docs/decisions.md`, or `docs/engineering-standards.md`. fmt, clippy -D warnings, and the full test suite pass, including the 100k-node chain tests that check iterative code does not overflow the stack.
