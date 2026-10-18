@@ -1,0 +1,427 @@
+// AegisTARA UI spike, Slint. All factor, level, label, value and rating color data comes
+// from Rust (which reads the pack at runtime). The only fixed strings here are verbs.
+import { Button, ComboBox, TextEdit, AboutSlint } from "std-widgets.slint";
+
+export struct FactorView {
+    label: string,
+    // One menu/ComboBox title per level: "<label>  (<value>)".
+    titles: [string],
+}
+
+export struct NodeView {
+    id: string,
+    name: string,
+    chip: string, // AND / OR (from Kind::label), empty for steps
+    is-root: bool,
+    kind-index: int, // index into Bridge.gate-kinds, -1 for steps
+    x: length, // world coordinates from layout()
+    y: length,
+    w: length,
+    h: length,
+    badge: string,
+    badge-color: color,
+    levels: [int], // current level index per factor; empty for gates
+    selected: bool,
+}
+
+export global Bridge {
+    in property <[FactorView]> factors;
+    in property <[string]> gate-kinds;
+    in property <bool> read-only;
+    in property <float> zoom: 1.0;
+    in property <length> pan-x;
+    in property <length> pan-y;
+    in property <int> menu-request; // bumped by Rust to open the selected node's menu
+    // Edit popover state
+    in property <string> editor-title;
+    in property <[int]> editor-levels;
+    in property <string> editor-rationale;
+    in property <string> editor-preview;
+    in property <color> editor-preview-color;
+    in property <length> editor-x;
+    in property <length> editor-y;
+
+    callback select(id: string);
+    callback set-factor(id: string, factor: int, level: int);
+    callback set-kind(id: string, kind: int);
+    callback add-child(id: string);
+    callback delete-node(id: string);
+    callback edit(id: string);
+    callback editor-level(factor: int, level: int);
+    callback editor-ok(rationale: string);
+    callback editor-cancel();
+    callback undo();
+    callback keyboard-menu();
+    callback menu-opened(id: string);
+    callback pan-to(x: length, y: length);
+    callback zoom-at(x: length, y: length, delta: length);
+}
+
+component Pill inherits Rectangle {
+    in property <string> text;
+    in property <float> scale: 1.0;
+    in property <color> fg: white;
+    height: 20px * root.scale;
+    width: label.preferred-width + 16px * root.scale;
+    border-radius: self.height / 2;
+    label := Text {
+        text: root.text;
+        color: root.fg;
+        font-size: 12px * root.scale;
+        font-weight: 600;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+component NodeItem inherits Rectangle {
+    in property <NodeView> n;
+    callback focus-canvas();
+    property <float> scale: Bridge.zoom;
+    property <int> menu-request: Bridge.menu-request;
+    property <bool> detail: root.scale >= 0.45; // level of detail: text only when readable
+    x: n.x * root.scale + Bridge.pan-x;
+    y: n.y * root.scale + Bridge.pan-y;
+    width: n.w * root.scale;
+    height: n.h * root.scale;
+    background: white;
+    border-radius: 8px * root.scale;
+    border-width: n.selected ? 2px : 1px;
+    border-color: n.selected ? #3D6DE8 : #D0D4DC;
+    accessible-role: list-item;
+    accessible-label: (n.chip != "" ? n.chip + " " : "") + n.name + ": " + n.badge;
+    accessible-item-selectable: true;
+    accessible-item-selected: n.selected;
+    accessible-action-default => { Bridge.select(n.id); }
+
+    if detail : Text {
+        x: 12px * root.scale;
+        y: 10px * root.scale;
+        width: parent.width - (n.chip != "" ? 64px : 24px) * root.scale;
+        text: n.name;
+        font-size: 14px * root.scale;
+        color: #1F2430;
+        overflow: elide;
+    }
+    if detail && n.chip != "" : Pill {
+        x: parent.width - self.width - 10px * root.scale;
+        y: 9px * root.scale;
+        scale: root.scale;
+        text: n.chip;
+        fg: #3A4252;
+        background: #EEF1F6;
+        border-width: 1px;
+        border-color: #D0D4DC;
+    }
+    if detail : Pill {
+        x: 12px * root.scale;
+        y: parent.height - self.height - 12px * root.scale;
+        scale: root.scale;
+        text: n.badge;
+        background: n.badge-color;
+    }
+    if !detail : Rectangle { // zoomed far out: a strip in the rating color
+        x: 4px; y: parent.height - 8px * root.scale - 4px;
+        width: parent.width - 8px; height: 8px * root.scale + 2px;
+        background: n.badge-color;
+    }
+
+    menu := ContextMenuArea {
+        Menu {
+            // Steps: one submenu per factor, one item per level, the current level checked.
+            for level[fi] in n.levels : Menu {
+                title: Bridge.factors[fi].label;
+                for title[li] in Bridge.factors[fi].titles : MenuItem {
+                    title: title;
+                    // `checkable` is needed for the native (muda) menus on Windows and macOS to show
+                    // the check. Choosing an item toggles `checked` and drops this binding, which is
+                    // harmless: the menu tree is instantiated fresh on every show().
+                    checkable: true;
+                    checked: level == li;
+                    enabled: !Bridge.read-only;
+                    activated => { Bridge.set-factor(n.id, fi, li); }
+                }
+            }
+            if n.chip != "" : Menu {
+                title: "Gate type";
+                for kind[ki] in Bridge.gate-kinds : MenuItem {
+                    title: kind;
+                    checkable: true;
+                    checked: n.kind-index == ki;
+                    enabled: !Bridge.read-only;
+                    activated => { Bridge.set-kind(n.id, ki); }
+                }
+            }
+            if n.chip != "" : MenuItem {
+                title: "Add child step";
+                enabled: !Bridge.read-only;
+                activated => { Bridge.add-child(n.id); }
+            }
+            if n.chip == "" : MenuSeparator { }
+            if n.chip == "" : MenuItem {
+                title: "Edit feasibility…";
+                enabled: !Bridge.read-only;
+                activated => { Bridge.edit(n.id); }
+            }
+            if !n.is-root : MenuSeparator { }
+            if !n.is-root : MenuItem {
+                title: "Delete";
+                enabled: !Bridge.read-only;
+                activated => { Bridge.delete-node(n.id); }
+            }
+        }
+    }
+
+    // Covers the node, so it also receives the right press; it opens the built-in menu itself,
+    // which lets a right-click select the node too.
+    TouchArea {
+        clicked => {
+            Bridge.select(n.id);
+            root.focus-canvas();
+        }
+        pointer-event(e) => {
+            if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                Bridge.select(n.id);
+                root.focus-canvas();
+                Bridge.menu-opened(n.id);
+                menu.show({ x: self.mouse-x, y: self.mouse-y });
+            }
+        }
+    }
+
+    // Shift+F10 / Menu key: Rust bumps menu-request, the selected node opens its menu.
+    changed menu-request => {
+        if n.selected {
+            Bridge.menu-opened(n.id);
+            menu.show({ x: 16px * root.scale, y: root.height - 4px });
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "AegisTARA spike - Slint";
+    width: 1400px;
+    height: 900px;
+    background: #F6F7F9;
+    default-font-size: 13px;
+    in property <[NodeView]> nodes;
+    in property <string> edges; // SVG path commands in window coordinates
+    in property <string> status;
+    forward-focus: canvas-keys;
+
+    public function open-editor() {
+        editor.show();
+    }
+    // Menus restore focus when they close, but not after an item in a submenu was chosen.
+    public function focus-canvas() {
+        canvas-keys.focus();
+    }
+    public function close-editor() {
+        editor.close();
+        canvas-keys.focus();
+    }
+
+    canvas-keys := FocusScope {
+        KeyBinding {
+            keys: @keys(Control + Z);
+            activated => { Bridge.undo(); }
+        }
+        KeyBinding {
+            keys: @keys(Shift + F10);
+            activated => { Bridge.keyboard-menu(); }
+        }
+        key-pressed(e) => {
+            if e.text == Key.Menu {
+                Bridge.keyboard-menu();
+                return accept;
+            }
+            reject
+        }
+
+        // Empty canvas: drag pans, wheel zooms around the cursor, click clears the selection.
+        TouchArea {
+            property <length> start-x;
+            property <length> start-y;
+            property <bool> dragged;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                    self.start-x = Bridge.pan-x;
+                    self.start-y = Bridge.pan-y;
+                    self.dragged = false;
+                    canvas-keys.focus();
+                }
+            }
+            moved => {
+                if abs(self.mouse-x - self.pressed-x) + abs(self.mouse-y - self.pressed-y) > 3px {
+                    self.dragged = true;
+                }
+                if self.dragged {
+                    Bridge.pan-to(self.start-x + self.mouse-x - self.pressed-x, self.start-y + self.mouse-y - self.pressed-y);
+                }
+            }
+            clicked => {
+                if !self.dragged {
+                    Bridge.select("");
+                }
+            }
+            scroll-event(e) => {
+                if e.delta-y != 0 {
+                    Bridge.zoom-at(self.mouse-x, self.mouse-y, e.delta-y);
+                }
+                accept
+            }
+        }
+
+        Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: self.width / 1px;
+            viewbox-height: self.height / 1px;
+            commands: root.edges;
+            stroke: #9AA3B2;
+            stroke-width: 1.5px;
+        }
+
+        for node in root.nodes : NodeItem {
+            n: node;
+            focus-canvas => { canvas-keys.focus(); }
+        }
+
+        // Status bar (24 px)
+        Rectangle {
+            y: parent.height - 24px;
+            height: 24px;
+            background: #EBEDF1;
+            border-width: 0;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 6px;
+                spacing: 8px;
+                Text {
+                    text: root.status;
+                    color: #3A4252;
+                    vertical-alignment: center;
+                    font-size: 12px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                about-link := TouchArea {
+                    width: about-text.preferred-width + 12px;
+                    mouse-cursor: pointer;
+                    clicked => { about.show(); }
+                    about-text := Text {
+                        text: "About Slint";
+                        color: #3D6DE8;
+                        vertical-alignment: center;
+                        font-size: 12px;
+                    }
+                }
+            }
+        }
+    }
+
+    // Edit feasibility popover, anchored next to the node by Rust (editor-x / editor-y).
+    editor := PopupWindow {
+        x: Bridge.editor-x;
+        y: Bridge.editor-y;
+        width: 380px;
+        close-policy: PopupClosePolicy.no-auto-close;
+
+        Rectangle {
+            background: white;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #D0D4DC;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000030;
+            drop-shadow-offset-y: 3px;
+
+            FocusScope {
+                init => { self.focus(); } // so Escape works before anything in the panel was clicked
+                key-pressed(e) => {
+                    if e.text == Key.Escape {
+                        Bridge.editor-cancel();
+                        return accept;
+                    }
+                    reject
+                }
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 8px;
+                    Text {
+                        text: Bridge.editor-title;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: #1F2430;
+                        overflow: elide;
+                    }
+                    for factor[fi] in Bridge.factors : HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            width: 150px;
+                            text: factor.label;
+                            vertical-alignment: center;
+                            color: #3A4252;
+                        }
+                        ComboBox {
+                            model: factor.titles;
+                            current-index: Bridge.editor-levels[fi];
+                            enabled: !Bridge.read-only;
+                            selected => { Bridge.editor-level(fi, self.current-index); }
+                        }
+                    }
+                    Text {
+                        text: "Rationale";
+                        color: #3A4252;
+                    }
+                    rationale := TextEdit {
+                        height: 84px;
+                        text: Bridge.editor-rationale;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: space-between;
+                        VerticalLayout {
+                            alignment: center;
+                            Pill {
+                                text: Bridge.editor-preview;
+                                background: Bridge.editor-preview-color;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Cancel";
+                                clicked => { Bridge.editor-cancel(); }
+                            }
+                            Button {
+                                text: "OK";
+                                primary: true;
+                                enabled: !Bridge.read-only;
+                                clicked => { Bridge.editor-ok(rationale.text); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Slint Royalty-free license 2.0: the AboutSlint attribution must be shown in an About dialog.
+    about := PopupWindow {
+        x: root.width - 360px;
+        y: root.height - 260px;
+        width: 340px;
+        close-policy: PopupClosePolicy.close-on-click-outside;
+        Rectangle {
+            background: white;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #D0D4DC;
+            VerticalLayout {
+                padding: 12px;
+                AboutSlint { }
+            }
+        }
+    }
+}

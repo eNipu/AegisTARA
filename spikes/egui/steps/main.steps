@@ -1,0 +1,110 @@
+# F1 canvas
+sleep 6
+shot 01_initial
+# F2 right-click s6
+click 3 830 538
+sleep 1.2
+shot 02_menu
+# F3 hover Equipment -> data-driven submenu with radio levels
+move 880 642
+sleep 1.2
+shot 03_submenu
+# choose Standard -> F4 live update (s6, g2, g0 = 11 High)
+click 1 1065 641
+sleep 1.2
+shot 04_changed
+# F10 Ctrl+Z
+key ctrl+z
+sleep 1.2
+shot 05_undo
+# F6 popover from the menu
+click 3 830 538
+sleep 1.2
+click 1 880 674
+sleep 1.5
+shot 06_popover
+# Elapsed time combo -> <= 1 day
+click 1 1220 572
+sleep 1.0
+click 1 1180 601
+sleep 0.8
+# F12 rationale: type, Ctrl+Left, insert, Home, Shift+Ctrl+Right selects a word
+click 1 1140 752
+sleep 0.5
+type Needs OBD access
+key ctrl+Left
+type physical
+key space
+sleep 0.3
+key Home
+key shift+ctrl+Right
+sleep 0.8
+shot 07_popover_edited
+key End
+sleep 0.3
+# OK -> set_factors (s6, g2, g0 = 14 Medium)
+click 1 1216 809
+sleep 1.2
+shot 08_after_ok
+# F5 gate menu on g3, hover Gate type, choose AND (g3 = 55 Very low, root unchanged)
+click 3 500 768
+sleep 1.2
+move 540 783
+sleep 1.2
+shot 09_gate_menu
+click 1 640 784
+sleep 1.2
+shot 09b_gate_and
+key ctrl+z
+sleep 0.8
+# F8 keyboard: select s2, Shift+F10, Down x4, Right, Down, Enter (s2 Equipment = Specialized)
+click 1 830 170
+sleep 0.5
+key shift+F10
+sleep 1.2
+shot 10_keyboard_menu
+key Down
+sleep 0.3
+key Down
+sleep 0.3
+key Down
+sleep 0.3
+key Down
+sleep 0.3
+key Right
+sleep 0.8
+key Down
+sleep 0.5
+shot 10b_keyboard_submenu
+key Return
+sleep 1.0
+shot 10c_after_keyboard_pick
+# Escape closes
+key shift+F10
+sleep 1.0
+key Escape
+sleep 0.8
+shot 10d_escape
+# Menu (Apps) key opens the same menu
+key Menu
+sleep 1.2
+shot 10e_menu_key
+key Escape
+sleep 0.5
+key ctrl+z
+sleep 0.8
+# F7 zoom in around s6 (3 wheel steps), then drag empty canvas to pan
+scroll up 830 538 3
+sleep 1.0
+drag 1250 120 1100 60
+sleep 1.0
+shot 11_zoom_pan
+# the menu still works on the transformed node
+click 3 680 478
+sleep 1.2
+shot 11b_zoomed_menu
+key Escape
+sleep 0.5
+scroll down 700 450 8
+sleep 1.0
+shot 11c_zoom_out

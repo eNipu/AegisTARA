@@ -1,0 +1,38 @@
+sleep 6
+# 14: right-click s9 near the bottom edge; the menu flips up
+click 3 830 814
+sleep 1.2
+shot 14_edge
+move 880 706
+sleep 1.2
+shot 14c_edge_submenu
+click 1 880 738
+sleep 1.5
+shot 14b_edge_popover
+key Escape
+sleep 0.8
+# F5: add a child step under g2, then delete it with the keyboard menu
+click 3 500 538
+sleep 1.2
+shot 15_gate_menu_g2
+click 1 540 576
+sleep 1.2
+shot 16_added
+key shift+F10
+sleep 1.2
+key Down
+sleep 0.3
+key Down
+sleep 0.3
+key Down
+sleep 0.3
+key Down
+sleep 0.3
+key Down
+sleep 0.3
+key Down
+sleep 0.5
+shot 17_delete_focused
+key Return
+sleep 1.2
+shot 18_deleted

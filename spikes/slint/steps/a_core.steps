@@ -1,0 +1,61 @@
+# 01-09: menu, submenu, Equipment = Standard, Ctrl+Z, popover (Elapsed time = 1 day, rationale with selection), OK, gate menu, Gate type = AND
+sleep 4
+shot 01_initial
+click 3 830 538
+sleep 1
+shot 02_menu
+move 880 686
+sleep 0.3
+move 900 686
+sleep 1.2
+shot 03_submenu
+move 1050 688
+sleep 0.3
+move 1175 691
+sleep 0.5
+click 1 1175 691
+sleep 1.2
+shot 04_changed
+key ctrl+z
+sleep 1
+shot 05_undo
+click 3 830 538
+sleep 1
+move 900 727
+sleep 0.5
+click 1 900 727
+sleep 1.5
+shot 06_popover
+click 1 1240 503
+sleep 1
+click 1 1240 506
+sleep 1
+click 1 1160 750
+sleep 0.5
+type Needs only a laptop
+key ctrl+Left
+key ctrl+shift+Right
+sleep 0.6
+shot 07a_selection
+type cheap laptop
+key Return
+type and an OBD dongle
+sleep 0.6
+shot 07_popover_edited
+click 1 1316 819
+sleep 1.2
+shot 08_after_ok
+click 3 500 768
+sleep 1
+move 560 790
+sleep 0.3
+move 570 790
+sleep 1.2
+shot 09_gate_menu
+move 700 790
+sleep 0.3
+move 830 793
+sleep 0.5
+click 1 830 793
+sleep 1.2
+shot 09b_gate_and

@@ -1,0 +1,63 @@
+{
+  "name": "Attack potential (spike example values)",
+  "note": "Example values in the style of the Common Criteria CEM attack potential tables. For the UI spike only.",
+  "factors": [
+    {
+      "id": "elapsed_time",
+      "label": "Elapsed time",
+      "levels": [
+        { "id": "le_1d", "label": "≤ 1 day", "value": 0 },
+        { "id": "le_1w", "label": "≤ 1 week", "value": 1 },
+        { "id": "le_1m", "label": "≤ 1 month", "value": 4 },
+        { "id": "le_6m", "label": "≤ 6 months", "value": 17 },
+        { "id": "gt_6m", "label": "> 6 months", "value": 19 }
+      ]
+    },
+    {
+      "id": "expertise",
+      "label": "Specialist expertise",
+      "levels": [
+        { "id": "layman", "label": "Layman", "value": 0 },
+        { "id": "proficient", "label": "Proficient", "value": 3 },
+        { "id": "expert", "label": "Expert", "value": 6 },
+        { "id": "multiple_experts", "label": "Multiple experts", "value": 8 }
+      ]
+    },
+    {
+      "id": "knowledge",
+      "label": "Knowledge of the item",
+      "levels": [
+        { "id": "public", "label": "Public", "value": 0 },
+        { "id": "restricted", "label": "Restricted", "value": 3 },
+        { "id": "confidential", "label": "Confidential", "value": 7 },
+        { "id": "strictly_confidential", "label": "Strictly confidential", "value": 11 }
+      ]
+    },
+    {
+      "id": "window",
+      "label": "Window of opportunity",
+      "levels": [
+        { "id": "unlimited", "label": "Unlimited", "value": 0 },
+        { "id": "easy", "label": "Easy", "value": 1 },
+        { "id": "moderate", "label": "Moderate", "value": 4 },
+        { "id": "difficult", "label": "Difficult", "value": 10 }
+      ]
+    },
+    {
+      "id": "equipment",
+      "label": "Equipment",
+      "levels": [
+        { "id": "standard", "label": "Standard", "value": 0 },
+        { "id": "specialized", "label": "Specialized", "value": 4 },
+        { "id": "bespoke", "label": "Bespoke", "value": 7 },
+        { "id": "multiple_bespoke", "label": "Multiple bespoke", "value": 9 }
+      ]
+    }
+  ],
+  "ratings": [
+    { "label": "High", "min": 0, "max": 13, "color": "#D64545" },
+    { "label": "Medium", "min": 14, "max": 19, "color": "#E8A33D" },
+    { "label": "Low", "min": 20, "max": 24, "color": "#3D8BE8" },
+    { "label": "Very low", "min": 25, "max": 9999, "color": "#3DAA6A" }
+  ]
+}

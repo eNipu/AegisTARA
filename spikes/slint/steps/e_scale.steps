@@ -1,0 +1,30 @@
+# 13: run with NODES=2000. Zoom out around the top left, drag up, right-click generated step f16, Equipment = Standard by keyboard, zoom far out
+sleep 6
+shot sc_initial
+scroll down 100 100 4
+sleep 2
+drag 1300 800 1300 100
+sleep 2
+shot sc_pan
+click 3 595 463
+sleep 1.5
+key Down
+key Down
+key Down
+key Down
+key Down
+key Right
+sleep 1
+shot 13_scale
+key Down
+key Return
+sleep 2
+shot sc_changed
+scroll down 700 450 10
+sleep 2
+shot sc_far
+click 3 600 450
+sleep 1.5
+shot sc_far_menu
+key Escape
+sleep 0.5
