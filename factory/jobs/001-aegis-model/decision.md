@@ -1,0 +1,5 @@
+ESCALATE
+Why: the spec has three open questions that it says the approver must confirm. The builder settled them by assuming answers, and those answers now shape the codebase: the crate path `crates/aegis-model/` (standalone, no workspace), `link` moved to job 002, and steps that carry only a label.
+Otherwise the build looks clean. All four reviewers passed with no blocking findings, AC1-AC12 are met, the checks pass, there is no `unsafe` and `spikes/` is unchanged. The new dependencies (uuid, thiserror, proptest) are MIT/Apache, and docs/decisions.md and engineering-standards.md are untouched.
+One small difference from the spec: the arena holds u32::MAX+1 nodes before CapacityExceeded, where the spec says "more than u32::MAX". build.md and review-code disclose this, and it is harmless.
+Question for the human: do you confirm (1) the crate lives at `crates/aegis-model/` as a standalone crate with no workspace yet, (2) `link`/DAG edges and cycle detection are left to job 002, and (3) steps carry only a label for now? If all three are yes, this can merge as is.
