@@ -1,0 +1,6 @@
+{ "jobs": [ {
+  "id": "001-aegis-model", "title": "aegis-model crate: arena attack tree with typed IDs", "branch": "factory/001-aegis-model",
+  "stage": "merged", "round": 1,
+  "reviews": { "security": "PASS", "ux": "PASS", "ui": "PASS", "code": "PASS" },
+  "history": [], "decision": "ESCALATE", "updated": "2026-10-18T22:27:50Z"
+} ] }
