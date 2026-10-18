@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Board</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1d1d1b; --muted: #77776f; --line: #e3e3de;
+    --pass: #2f8f5b; --changes: #c4572b; --pending: #c9c9c2; --human: #b8860b; --human-bg: #fff6dc;
+    --accent: #3b5bdb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --panel: #1f1f1d; --ink: #ecece6; --muted: #9a9a91; --line: #33332f;
+      --pass: #4cbb7f; --changes: #e57a4c; --pending: #4a4a45; --human: #e0b341; --human-bg: #2e2714;
+      --accent: #7c95f0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 20px 16px 8px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  #status { color: var(--muted); font-size: 12px; }
+  #alert { margin-left: auto; color: var(--human); font-weight: 600; font-size: 13px; }
+  .board { display: grid; grid-template-columns: repeat(6, minmax(190px, 1fr)); gap: 12px;
+    padding: 8px 16px 24px; overflow-x: auto; }
+  .col h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+    margin: 0 0 8px; display: flex; justify-content: space-between; }
+  .col.human h2 { color: var(--human); }
+  .col .stack { display: flex; flex-direction: column; gap: 8px; min-height: 60px;
+    border-radius: 10px; padding: 6px; background: color-mix(in srgb, var(--line) 35%, transparent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+    cursor: pointer; text-align: left; color: inherit; font: inherit; width: 100%; }
+  .card:hover, .card:focus-visible { border-color: var(--accent); outline: none; }
+  .card.human { border: 1.5px solid var(--human); background: var(--human-bg); }
+  .card .id { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .card .title { margin: 2px 0 6px; }
+  .card .branch { color: var(--muted); font: 11px ui-monospace, Menlo, monospace; }
+  .rounds { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .round { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+  .round b { width: 22px; font-weight: 500; }
+  .chip { padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600;
+    background: var(--pending); color: var(--ink); }
+  .chip.PASS { background: var(--pass); color: #fff; }
+  .chip.CHANGES { background: var(--changes); color: #fff; }
+  .decision { margin-top: 6px; font-size: 11px; font-weight: 600; }
+  .empty { color: var(--muted); padding: 40px 16px; text-align: center; }
+  dialog { border: none; padding: 0; width: min(860px, 100vw - 32px); max-height: 88vh;
+    background: var(--panel); color: var(--ink); border-radius: 12px; }
+  dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+  .dlg-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .dlg-head h3 { margin: 0; font-size: 15px; flex: 1; }
+  .dlg-head button { background: none; border: 1px solid var(--line); color: inherit; border-radius: 6px;
+    padding: 2px 10px; cursor: pointer; }
+  .tabs { display: flex; gap: 4px; padding: 8px 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  .tabs button { font: 12px ui-monospace, Menlo, monospace; background: none; color: var(--muted);
+    border: 1px solid transparent; border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-color: var(--line); background: var(--bg); }
+  pre { margin: 0; padding: 16px; white-space: pre-wrap; word-break: break-word; overflow: auto;
+    max-height: calc(88vh - 110px); font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Software factory</h1>
+  <span id="status">loading…</span>
+  <span id="alert"></span>
+</header>
+<main class="board" id="board"></main>
+<div class="empty" id="empty" hidden>No jobs yet. Run <code>/factory &lt;feature&gt;</code> or <code>/factory next</code>.</div>
+
+<dialog id="dlg">
+  <div class="dlg-head"><h3 id="dlg-title"></h3><button onclick="dlg.close()">Close</button></div>
+  <div class="tabs" id="tabs" role="tablist"></div>
+  <pre id="doc"></pre>
+</dialog>
+
+<script>
+const STAGES = [
+  ["spec", "Spec"], ["build", "Build"], ["review", "Review"],
+  ["approve", "Approve"], ["merged", "Merged"], ["needs-human", "Needs human"],
+];
+const KINDS = ["security", "ux", "ui", "code"];
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let jobs = [];
+
+function chips(r) {
+  return KINDS.map(k => `<span class="chip ${esc(r?.[k])}" title="${k}: ${esc(r?.[k] || "pending")}">${k}</span>`).join("");
+}
+
+function card(j) {
+  const rows = [...(j.history || []), ...(j.reviews && j.round ? [j.reviews] : [])]
+    .map((r, i) => `<div class="round"><b>R${i + 1}</b>${chips(r)}</div>`).join("");
+  return `<button class="card ${j.stage === "needs-human" ? "human" : ""}" data-id="${esc(j.id)}">
+    <div class="id">${esc(j.id)}</div>
+    <div class="title">${esc(j.title)}</div>
+    <div class="branch">${esc(j.branch)}</div>
+    ${rows ? `<div class="rounds">${rows}</div>` : ""}
+    ${j.decision ? `<div class="decision">${esc(j.decision)}</div>` : ""}
+  </button>`;
+}
+
+function render() {
+  document.getElementById("board").innerHTML = STAGES.map(([key, label]) => {
+    const list = jobs.filter(j => j.stage === key);
+    return `<section class="col ${key === "needs-human" ? "human" : ""}">
+      <h2><span>${label}</span><span>${list.length}</span></h2>
+      <div class="stack">${list.map(card).join("")}</div></section>`;
+  }).join("");
+  document.getElementById("empty").hidden = jobs.length > 0;
+  const n = jobs.filter(j => j.stage === "needs-human").length;
+  document.getElementById("alert").textContent = n ? `${n} job${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} a human` : "";
+}
+
+async function poll() {
+  try {
+    const res = await fetch("board.json", { cache: "no-store" });
+    jobs = (await res.json()).jobs || [];
+    render();
+    document.getElementById("status").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById("status").textContent = "can't read board.json (serve this folder with python3 -m http.server)";
+  }
+}
+
+// ponytail: guesses file names from the board and skips 404s, no directory listing needed
+function filesFor(j) {
+  const f = ["spec.md", "build.md", "rework.md"];
+  for (let r = 1; r <= (j.round || 0); r++) KINDS.forEach(k => f.push(`round-${r}/review-${k}.md`));
+  return [...f, "decision.md"];
+}
+
+async function openJob(id) {
+  const j = jobs.find(x => x.id === id);
+  if (!j) return;
+  document.getElementById("dlg-title").textContent = `${j.id} · ${j.title || ""}`;
+  const tabs = document.getElementById("tabs"), doc = document.getElementById("doc");
+  tabs.innerHTML = ""; doc.textContent = "loading…";
+  dlg.showModal();
+  const found = (await Promise.all(filesFor(j).map(async p => {
+    const r = await fetch(`jobs/${encodeURIComponent(j.id)}/${p}`, { cache: "no-store" }).catch(() => null);
+    return r && r.ok ? [p, await r.text()] : null;
+  }))).filter(Boolean);
+  if (!found.length) { doc.textContent = "No files yet."; return; }
+  const show = i => {
+    [...tabs.children].forEach((b, k) => b.setAttribute("aria-selected", k === i));
+    doc.textContent = found[i][1];
+  };
+  found.forEach(([p], i) => {
+    const b = document.createElement("button");
+    b.role = "tab"; b.textContent = p; b.onclick = () => show(i);
+    tabs.appendChild(b);
+  });
+  show(0);
+}
+
+const dlg = document.getElementById("dlg");
+document.getElementById("board").addEventListener("click", e => {
+  const c = e.target.closest(".card");
+  if (c) openJob(c.dataset.id);
+});
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>
