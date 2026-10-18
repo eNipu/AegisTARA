@@ -22,12 +22,14 @@ config="$here/../../deny.toml"
 
 if ! command -v cargo-deny >/dev/null 2>&1; then
     echo "error: cargo-deny is not installed." >&2
-    echo "install it with: cargo install cargo-deny --version 0.19.9 --locked" >&2
+    echo "install it with: cargo install cargo-deny --version 0.20.2 --locked" >&2
     exit 127
 fi
 
 log=$(mktemp "${TMPDIR:-/tmp}/deny-fixture.XXXXXX")
-trap 'rm -f "$log"' EXIT INT TERM
+trap 'rm -f "$log"' EXIT
+# Stop on Ctrl-C or TERM instead of moving on to the next case.
+trap 'rm -f "$log"; exit 130' INT TERM
 
 mismatches=0
 total=0
@@ -35,7 +37,7 @@ total=0
 while read -r case expected; do
     [ -n "$case" ] || continue
     total=$((total + 1))
-    if cargo deny --manifest-path "$here/$case/Cargo.toml" check --config "$config" licenses >"$log" 2>&1; then
+    if cargo deny --manifest-path "$here/$case/Cargo.toml" --config "$config" check licenses >"$log" 2>&1; then
         actual=pass
     elif grep -q 'error\[rejected\]' "$log"; then
         # Count a failure only when cargo-deny rejected a license, so a broken

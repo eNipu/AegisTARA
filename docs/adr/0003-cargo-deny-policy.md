@@ -1,10 +1,33 @@
 # ADR 0003: cargo-deny license and supply chain policy
 
-- Status: accepted (job 003-cargo-deny)
+- Status: accepted (job 003-cargo-deny, rework 1: owner accepted open
+  questions 1-3 and the extra `deny.toml` keys, and asked for cargo-deny 0.20.x)
 - Date: 2026-10-19
 - Scope: every crate under `crates/` (production code). `spikes/` is not checked.
 - Rules: D5 in `docs/decisions.md`, Q7 in `docs/engineering-standards.md`
-- Tool: cargo-deny 0.19.9 (`cargo install cargo-deny --version 0.19.9 --locked`)
+- Tool: cargo-deny 0.20.2 (`cargo install cargo-deny --version 0.20.2 --locked`)
+
+## Accepted open questions
+
+The spec left four questions open. The owner answered them in rework 1:
+
+1. **CI workflow: later.** This job adds the policy and `scripts/deny.sh`,
+   the single entry point CI will call. It adds no workflow file. CI comes
+   with the workspace skeleton (direction-v1, section 13 step 4).
+2. **OFL-1.1: allowed globally.** cargo-deny cannot limit an allow entry to
+   font crates, so OFL-1.1 is on the allow list for every crate (Decision 1).
+   A non-font crate under OFL-1.1 should be questioned in review.
+3. **`spikes/` is not checked.** Spike code is not production (L3). The Slint
+   royalty-free license stays unapproved (D7). It must pass review before Slint
+   can enter `crates/`.
+4. **Advisories need the network.** This was not a decision, only how results
+   are recorded. A new advisory is reported in the build log, not fixed in this
+   job, and `[advisories] ignore` stays empty. `scripts/deny.sh licenses bans
+   sources` is the offline subset.
+
+The extra `deny.toml` keys beyond the spec sketch
+(`unused-allowed-license = "allow"` and `multiple-versions-include-dev =
+true`) were also accepted. See Decisions 1 and 2.
 
 ## Context
 
@@ -51,7 +74,7 @@ the build with no fix available on our side; `allow` would hide new
 duplicates. `warn` keeps them visible in every run. All three duplicates enter through
 the `proptest` dev-dependency, and cargo-deny skips dev-dependencies in the
 duplicate check by default, so `multiple-versions-include-dev = true` is set;
-without it the warnings would not appear at all. With it, cargo-deny 0.19.9
+without it the warnings would not appear at all. With it, cargo-deny 0.20.2
 warns about `getrandom` and `r-efi`. `syn` 2 and 3 are both in `Cargo.lock`
 (syn 2 only through the `zerocopy-derive` proc-macro under proptest) but
 cargo-deny does not report that pair; it is harmless either way. Revisit when the workspace
@@ -72,6 +95,14 @@ free of `LicenseRef-*`.
 Consequence for the fixtures: the dependency crates in
 `tools/deny-fixtures/deps/` do not set `publish = false`, otherwise they would
 be skipped and every case would pass.
+
+Known gap: `private.ignore` skips *every* `publish = false` crate in the graph,
+not only ours. A vendored path dependency marked `publish = false` would
+escape the license check. Today the only path crates are ours, and
+`[sources]` blocks unknown registries and git, so the risk is low. When a
+workspace or vendored code arrives, either narrow the skip (`ignore-sources`
+or naming the crates) or adopt a review rule that vendored crates must keep
+`publish` unset.
 
 ## Decision 4: an exception names the crate and version
 
@@ -96,12 +127,19 @@ reviewed, never silenced without a record.
 
 ## Tool version
 
-Pinned to cargo-deny **0.19.9**, the newest release whose `check` subcommand
-still takes `--config`. In 0.20.x, `--config` moved to the top level
-(`cargo deny --config deny.toml check`) and `check --config` is rejected.
-Moving to 0.20 means changing `scripts/deny.sh`, `tools/deny-fixtures/run.sh`
-and the README together. The config uses the current format and prints no
-deprecation warnings under 0.19.9.
+Pinned to cargo-deny **0.20.2** (the current release, installed with
+`--locked`). In 0.20, `--config` is a top-level option and must come before
+the subcommand:
+
+```sh
+cargo deny --manifest-path crates/<crate>/Cargo.toml --config deny.toml check [CHECK...]
+```
+
+`check --config` (the 0.19 and earlier form) is rejected with "unexpected
+argument". `scripts/deny.sh`, `tools/deny-fixtures/run.sh` and the README all
+use the 0.20 form. Upgrading cargo-deny means checking this flag layout again.
+The config uses the current format and prints no deprecation warnings under
+0.20.2.
 
 ## Numbers
 

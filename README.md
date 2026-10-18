@@ -25,10 +25,10 @@ Production crates (`crates/*`) must pass the `cargo-deny` policy in
 [`deny.toml`](deny.toml) (decision D5, standard Q7): licenses, advisories,
 bans, and sources. Rationale: [docs/adr/0003-cargo-deny-policy.md](docs/adr/0003-cargo-deny-policy.md).
 
-Install the pinned version (cargo-deny 0.19.9):
+Install the pinned version (cargo-deny 0.20.2):
 
 ```sh
-cargo install cargo-deny --version 0.19.9 --locked
+cargo install cargo-deny --version 0.20.2 --locked
 ```
 
 Run it from the repo root:
@@ -37,6 +37,9 @@ Run it from the repo root:
 scripts/deny.sh                          # all checks, every crate (fetches the advisory database)
 scripts/deny.sh licenses bans sources    # offline
 tools/deny-fixtures/run.sh               # proves the policy rejects what D5 forbids
+
+# one crate by hand (cargo-deny 0.20: --config goes before `check`)
+cargo deny --manifest-path crates/aegis-model/Cargo.toml --config deny.toml check
 ```
 
 Only the 11 licenses allowed by D5 pass. To accept a "review first" license

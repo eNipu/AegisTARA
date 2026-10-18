@@ -1,5 +1,5 @@
 # cargo-deny policy for AegisTARA production crates (decision D5, standard Q7).
-# Pinned tool: cargo-deny 0.19.9 (`cargo install cargo-deny --version 0.19.9 --locked`).
+# Pinned tool: cargo-deny 0.20.2 (`cargo install cargo-deny --version 0.20.2 --locked`).
 # Rationale: docs/adr/0003-cargo-deny-policy.md
 # Run all crates: scripts/deny.sh
 
