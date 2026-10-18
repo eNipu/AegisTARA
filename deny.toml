@@ -1,0 +1,61 @@
+# cargo-deny policy for AegisTARA production crates (decision D5, standard Q7).
+# Pinned tool: cargo-deny 0.19.9 (`cargo install cargo-deny --version 0.19.9 --locked`).
+# Rationale: docs/adr/0003-cargo-deny-policy.md
+# Run all crates: scripts/deny.sh
+
+[graph]
+# Check optional dependencies too, so enabling a feature cannot pull in an
+# unchecked license.
+all-features = true
+
+[licenses]
+# Allow list only (D5). Anything not listed here fails, including licenses
+# nobody has thought of yet. Do not add a deny list.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MIT-0",
+    "OFL-1.1",
+]
+confidence-threshold = 0.93
+# The allow list is the D5 policy, not a list of what we use today, so an
+# entry no current dependency needs is expected and not worth a warning.
+unused-allowed-license = "allow"
+# Review-first licenses pass only through a per-crate exception that names the
+# crate and version, with a comment pointing to the approving decision, e.g.
+#   { crate = "name@1.2.3", allow = ["<SPDX-ID>"] },  # approved in D<N>
+exceptions = []
+
+[licenses.private]
+# Our own `publish = false` crates carry a proprietary license ref; skip them
+# rather than putting any license ref on the allow list (ADR 0003).
+ignore = true
+
+[advisories]
+yanked = "deny"
+# Keep empty. A new advisory is fixed or explicitly reviewed, not silenced.
+ignore = []
+
+[bans]
+# Warn, not deny: aegis-model already locks two versions of syn, getrandom and
+# r-efi through upstream crates we do not control (uuid, proptest).
+multiple-versions = "warn"
+# Those duplicates come in through the proptest dev-dependency, which the
+# duplicate check skips by default. Dev tools still enter our build machines,
+# so include them and keep the duplicates visible.
+multiple-versions-include-dev = true
+wildcards = "deny"
+# Path dependencies (fixtures, future workspace members) may omit a version.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

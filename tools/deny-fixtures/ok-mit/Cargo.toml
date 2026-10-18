@@ -1,0 +1,8 @@
+[package]
+name = "fixture-ok-mit"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dep-ok-mit = { path = "../deps/ok-mit" }
