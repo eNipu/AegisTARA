@@ -139,14 +139,20 @@ impl Node {
 /// `HashMap` (`SipHash`, because IDs come from untrusted files and network
 /// input) resolves a [`NodeId`] to its [`NodeIdx`].
 ///
-/// Nodes are only ever added, each one already attached to its parent, so
-/// the structure is always a tree and never has cycles.
+/// Nodes are added with [`add_child`](Self::add_child), each one attached to
+/// its *owning* parent. [`link`](Self::link) can then add an existing node as
+/// an extra child of another gate, to share a subtree. The structure is
+/// therefore a directed graph that may contain cycles (`link` does not reject
+/// them); call [`topological_order`](Self::topological_order) before
+/// evaluating, which reports a cycle as [`ModelError::Cycle`].
 ///
 /// Invariants, kept by every method:
 /// - `nodes`, `ids`, `parents`, and `by_id` all have the same length;
 /// - `by_id[ids[i]] == i` for every index `i`;
-/// - the root has no parent; every other node has exactly one parent and
-///   appears exactly once in that parent's children.
+/// - the root has no owning parent; every other node has exactly one owning
+///   parent and appears exactly once in that parent's children;
+/// - a node may also appear in other gates' children through `link`, at most
+///   once per gate; every child index refers to a node in this tree.
 ///
 /// ```
 /// use aegis_model::{AttackTree, GateKind, Node, NodeId};
@@ -268,6 +274,101 @@ impl AttackTree {
         Ok(idx)
     }
 
+    /// Adds the existing node `child` as the last child of the gate `parent`,
+    /// so the two gates share it (the tree becomes a DAG).
+    ///
+    /// The owning parent of `child` ([`parent`](Self::parent)) does not
+    /// change. `link` does **not** check for cycles: an edge that closes a
+    /// cycle, including a self-link, is accepted, and
+    /// [`topological_order`](Self::topological_order) reports it later. See
+    /// `docs/adr/0002-dag-links-and-cycle-detection.md`.
+    ///
+    /// Time O(k), k = number of children of `parent` (duplicate scan); space
+    /// O(1) amortized.
+    ///
+    /// # Errors
+    ///
+    /// Checked in this order; on any error the tree is unchanged:
+    /// - [`ModelError::UnknownNode`] if `parent` is not in this tree;
+    /// - [`ModelError::UnknownNode`] if `child` is not in this tree;
+    /// - [`ModelError::NotAGate`] if `parent` is a step;
+    /// - [`ModelError::DuplicateEdge`] if `child` is already a child of
+    ///   `parent`.
+    ///
+    /// ```
+    /// use aegis_model::{AttackTree, GateKind, ModelError, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::And, "root"))?;
+    /// let g1 = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::Or, "g1"))?;
+    /// let g2 = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::Or, "g2"))?;
+    /// let fob = tree.add_child(g1, NodeId::new_v7(), Node::step("obtain key fob"))?;
+    /// tree.link(g2, fob)?;
+    /// assert_eq!(tree.children(g2), &[fob]);
+    /// assert_eq!(tree.parent(fob), Some(g1));
+    /// assert_eq!(
+    ///     tree.link(g2, fob),
+    ///     Err(ModelError::DuplicateEdge { parent: g2, child: fob }),
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn link(&mut self, parent: NodeIdx, child: NodeIdx) -> Result<(), ModelError> {
+        let Some(parent_node) = self.nodes.get(parent.index()) else {
+            return Err(ModelError::UnknownNode(parent));
+        };
+        if child.index() >= self.nodes.len() {
+            return Err(ModelError::UnknownNode(child));
+        }
+        let Node::Gate { .. } = parent_node else {
+            return Err(ModelError::NotAGate(parent));
+        };
+        if parent_node.children().contains(&child) {
+            return Err(ModelError::DuplicateEdge { parent, child });
+        }
+        // All checks passed; the push below is the only change.
+        if let Some(Node::Gate { children, .. }) = self.nodes.get_mut(parent.index()) {
+            children.push(child);
+        }
+        Ok(())
+    }
+
+    /// Returns every node in topological order: for every edge
+    /// `parent -> child` (from [`add_child`](Self::add_child) or
+    /// [`link`](Self::link)), `parent` comes before `child`.
+    ///
+    /// Uses Kahn's algorithm, without recursion. The order is deterministic:
+    /// nodes with no incoming edge start the queue in ascending index (so the
+    /// root comes first unless something links to it), and children are
+    /// visited in their stored order.
+    ///
+    /// Time O(V + E), extra space O(V) plus the returned `Vec`.
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::Cycle`] with the nodes of one cycle, in edge order,
+    /// smallest index first, if the graph has a cycle.
+    ///
+    /// ```
+    /// use aegis_model::{AttackTree, GateKind, ModelError, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// let r = tree.root();
+    /// let g = tree.add_child(r, NodeId::new_v7(), Node::gate(GateKind::And, "g"))?;
+    /// let s = tree.add_child(r, NodeId::new_v7(), Node::step("s"))?;
+    /// tree.link(g, s)?;
+    /// assert_eq!(tree.topological_order()?, vec![r, g, s]);
+    ///
+    /// tree.link(g, r)?;
+    /// assert_eq!(tree.topological_order(), Err(ModelError::Cycle(vec![r, g])));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn topological_order(&self) -> Result<Vec<NodeIdx>, ModelError> {
+        crate::topo::topological_order(&self.nodes)
+    }
+
     /// Returns the index of the root node.
     ///
     /// Time O(1).
@@ -382,8 +483,10 @@ impl AttackTree {
         self.ids.get(idx.index()).copied()
     }
 
-    /// Returns the parent of `idx`, or `None` for the root and for indices
-    /// not in this tree.
+    /// Returns the owning parent of `idx` (the gate it was added under with
+    /// [`add_child`](Self::add_child)), or `None` for the root and for indices
+    /// not in this tree. Extra parents from [`link`](Self::link) are not
+    /// returned.
     ///
     /// Time O(1).
     ///
@@ -477,16 +580,13 @@ impl AttackTree {
                     }
                 }
             }
-            for c in self.nodes[i].children() {
-                if self
-                    .parents
-                    .get(c.index())
-                    .copied()
-                    .flatten()
-                    .map(NodeIdx::index)
-                    != Some(i)
-                {
-                    return Err(format!("child {} of {i} has another parent", c.index()));
+            let children = self.nodes[i].children();
+            for (k, c) in children.iter().enumerate() {
+                if c.index() >= n {
+                    return Err(format!("child {} of {i} is not in the tree", c.index()));
+                }
+                if children[..k].contains(c) {
+                    return Err(format!("child {} appears twice under {i}", c.index()));
                 }
             }
         }
@@ -830,5 +930,271 @@ mod large_tree {
             assert_eq!(tree.idx_of(id).map(NodeIdx::index), Some(i));
         }
         tree.check_invariants().expect("invariants");
+    }
+}
+
+#[cfg(test)]
+mod links {
+    use super::*;
+
+    fn new_tree() -> AttackTree {
+        AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root")).expect("root")
+    }
+
+    fn gate(tree: &mut AttackTree, parent: NodeIdx, label: &str) -> NodeIdx {
+        tree.add_child(parent, NodeId::new_v7(), Node::gate(GateKind::And, label))
+            .expect("gate")
+    }
+
+    fn step(tree: &mut AttackTree, parent: NodeIdx, label: &str) -> NodeIdx {
+        tree.add_child(parent, NodeId::new_v7(), Node::step(label))
+            .expect("step")
+    }
+
+    /// Children of every node, to show a failed call changed nothing.
+    fn edges(tree: &AttackTree) -> Vec<Vec<NodeIdx>> {
+        tree.iter()
+            .map(|(i, _, _)| tree.children(i).to_vec())
+            .collect()
+    }
+
+    /// Checks that `order` is a permutation of all nodes that respects every
+    /// edge.
+    fn assert_valid_order(tree: &AttackTree, order: &[NodeIdx]) {
+        assert_eq!(order.len(), tree.len());
+        let mut pos = vec![usize::MAX; tree.len()];
+        for (k, n) in order.iter().enumerate() {
+            assert_eq!(pos[n.index()], usize::MAX, "{} repeated", n.index());
+            pos[n.index()] = k;
+        }
+        for (p, _, node) in tree.iter() {
+            for c in node.children() {
+                assert!(
+                    pos[p.index()] < pos[c.index()],
+                    "{p:?} -> {c:?} out of order"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn link_shares_child() {
+        let mut tree = new_tree();
+        let r = tree.root();
+        let g1 = gate(&mut tree, r, "g1");
+        let g2 = gate(&mut tree, r, "g2");
+        let other = step(&mut tree, g2, "other");
+        let s = step(&mut tree, g1, "s");
+        assert_eq!(tree.link(g2, s), Ok(()));
+        assert_eq!(tree.children(g2), &[other, s]);
+        assert_eq!(tree.children(g2).last(), Some(&s));
+        assert_eq!(tree.children(g1), &[s]);
+        assert_eq!(tree.parent(s), Some(g1));
+        assert_eq!(tree.len(), 5);
+        tree.check_invariants().expect("invariants");
+    }
+
+    #[test]
+    fn link_errors() {
+        let mut tree = new_tree();
+        let r = tree.root();
+        let g = gate(&mut tree, r, "g");
+        let s = step(&mut tree, g, "s");
+        // An index valid only in a larger tree.
+        let mut big = new_tree();
+        let big_root = big.root();
+        let mut far = big_root;
+        for _ in 0..10 {
+            far = step(&mut big, big_root, "x");
+        }
+        let before_len = tree.len();
+        let before = edges(&tree);
+        let cases = [
+            ((far, s), ModelError::UnknownNode(far)),
+            // Both unknown: the parent is reported first.
+            ((far, far), ModelError::UnknownNode(far)),
+            ((g, far), ModelError::UnknownNode(far)),
+            // Step parent and unknown child: the child is reported first.
+            ((s, far), ModelError::UnknownNode(far)),
+            ((s, g), ModelError::NotAGate(s)),
+            ((s, s), ModelError::NotAGate(s)),
+            (
+                (g, s),
+                ModelError::DuplicateEdge {
+                    parent: g,
+                    child: s,
+                },
+            ),
+            (
+                (r, g),
+                ModelError::DuplicateEdge {
+                    parent: r,
+                    child: g,
+                },
+            ),
+        ];
+        for ((p, c), want) in cases {
+            assert_eq!(tree.link(p, c), Err(want), "link({p:?}, {c:?})");
+            assert_eq!(tree.len(), before_len);
+            assert_eq!(edges(&tree), before);
+            tree.check_invariants().expect("invariants");
+        }
+        // A linked edge is also a duplicate.
+        tree.link(r, s).expect("link");
+        let before = edges(&tree);
+        assert_eq!(
+            tree.link(r, s),
+            Err(ModelError::DuplicateEdge {
+                parent: r,
+                child: s
+            })
+        );
+        assert_eq!(edges(&tree), before);
+    }
+
+    #[test]
+    fn link_allows_cycle() {
+        let mut tree = new_tree();
+        let r = tree.root();
+        let g1 = gate(&mut tree, r, "g1");
+        let g2 = gate(&mut tree, g1, "g2");
+        assert_eq!(tree.link(g2, r), Ok(()));
+        assert_eq!(tree.link(g1, g1), Ok(()));
+        assert_eq!(tree.children(g2), &[r]);
+        assert_eq!(tree.children(g1), &[g2, g1]);
+        assert_eq!(tree.parent(r), None);
+        tree.check_invariants().expect("invariants");
+    }
+
+    #[test]
+    fn topo_order_acyclic() {
+        let mut tree = new_tree();
+        let r = tree.root();
+        let g1 = gate(&mut tree, r, "g1");
+        let g2 = gate(&mut tree, r, "g2");
+        let shared = gate(&mut tree, g1, "shared");
+        let leaf = step(&mut tree, shared, "leaf");
+        let s2 = step(&mut tree, g2, "s2");
+        tree.link(g2, shared).expect("link");
+        // A later gate linking an earlier node: g3 must still precede g1.
+        let g3 = gate(&mut tree, g2, "g3");
+        tree.link(g3, g1).expect("link");
+        tree.link(g3, leaf).expect("link");
+
+        let order = tree.topological_order().expect("acyclic");
+        assert_eq!(order.first(), Some(&r));
+        assert_valid_order(&tree, &order);
+        assert_eq!(order, vec![r, g2, s2, g3, g1, shared, leaf]);
+
+        // Single-node tree.
+        let one = new_tree();
+        assert_eq!(one.topological_order(), Ok(vec![one.root()]));
+    }
+
+    #[test]
+    fn cycle_self_link() {
+        let mut tree = new_tree();
+        let r = tree.root();
+        let a = gate(&mut tree, r, "a");
+        step(&mut tree, a, "below");
+        tree.link(a, a).expect("self-link");
+        assert_eq!(tree.topological_order(), Err(ModelError::Cycle(vec![a])));
+
+        let mut lone = new_tree();
+        let root = lone.root();
+        lone.link(root, root).expect("self-link");
+        assert_eq!(lone.topological_order(), Err(ModelError::Cycle(vec![root])));
+    }
+
+    #[test]
+    fn cycle_path_exact() {
+        let mut tree = new_tree();
+        let r = tree.root();
+        let g1 = gate(&mut tree, r, "g1");
+        let g2 = gate(&mut tree, g1, "g2");
+        let g3 = gate(&mut tree, g2, "g3");
+        // Nodes hanging below the cycle.
+        let below = gate(&mut tree, g3, "below");
+        step(&mut tree, below, "s1");
+        step(&mut tree, g2, "s2");
+        step(&mut tree, r, "s3");
+        tree.link(g3, g1).expect("link");
+        assert_eq!(
+            tree.topological_order(),
+            Err(ModelError::Cycle(vec![g1, g2, g3]))
+        );
+    }
+
+    #[test]
+    fn cycle_path_rotated_to_smallest() {
+        // The walk starts at the smallest remaining node, which lies below
+        // the cycle; the reported cycle still starts with its own smallest
+        // index.
+        let mut tree = new_tree();
+        let r = tree.root();
+        let a = gate(&mut tree, r, "a");
+        let b = gate(&mut tree, r, "b");
+        let c = gate(&mut tree, b, "c");
+        tree.link(c, a).expect("link");
+        tree.link(a, b).expect("link");
+        // Cycle: a -> b -> c -> a.
+        assert_eq!(
+            tree.topological_order(),
+            Err(ModelError::Cycle(vec![a, b, c]))
+        );
+    }
+
+    #[test]
+    fn topo_deterministic() {
+        let mut tree = new_tree();
+        let r = tree.root();
+        let g1 = gate(&mut tree, r, "g1");
+        let g2 = gate(&mut tree, r, "g2");
+        let s = step(&mut tree, g1, "s");
+        tree.link(g2, s).expect("link");
+        let first = tree.topological_order();
+        assert!(first.is_ok());
+        assert_eq!(tree.topological_order(), first);
+        assert_eq!(tree.clone().topological_order(), first);
+
+        tree.link(g2, g1).expect("link");
+        tree.link(g1, g2).expect("link");
+        let first = tree.topological_order();
+        assert!(first.is_err());
+        assert_eq!(tree.topological_order(), first);
+        assert_eq!(tree.clone().topological_order(), first);
+    }
+
+    #[test]
+    fn cycle_display() {
+        let mut tree = new_tree();
+        let mut nodes = vec![tree.root()];
+        for i in 0..8 {
+            let p = nodes[i];
+            nodes.push(gate(&mut tree, p, "g"));
+        }
+        let (n3, n4, n7) = (nodes[3], nodes[4], nodes[7]);
+        assert_eq!(
+            ModelError::Cycle(vec![n3, n7, n4]).to_string(),
+            "cycle in attack tree: 3 -> 7 -> 4 -> 3"
+        );
+        assert_eq!(
+            ModelError::Cycle(vec![n3]).to_string(),
+            "cycle in attack tree: 3 -> 3"
+        );
+        tree.link(n7, n3).expect("link");
+        let err = tree.topological_order().map(|o| o.len());
+        assert_eq!(
+            err.map_err(|e| e.to_string()),
+            Err("cycle in attack tree: 3 -> 4 -> 5 -> 6 -> 7 -> 3".to_owned())
+        );
+        assert_eq!(
+            ModelError::DuplicateEdge {
+                parent: n3,
+                child: n4
+            }
+            .to_string(),
+            "node index 4 is already a child of node index 3"
+        );
     }
 }
