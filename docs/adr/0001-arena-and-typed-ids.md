@@ -63,7 +63,9 @@ Nodes need two kinds of identity:
   repeated labels can be shared without copies (D5).
 - Nodes are only added, each already attached to its parent, so the structure
   is always a tree. Linking existing nodes (DAGs) and cycle detection are job
-  002.
+  002; see `0002-dag-links-and-cycle-detection.md`, which replaces the "always a
+  tree" property: after `link`, the structure is a directed acyclic graph, and
+  `parent()` becomes `owner()` plus `parents()`.
 
 ## Consequences
 
