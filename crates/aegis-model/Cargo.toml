@@ -12,4 +12,14 @@ thiserror = "2"
 uuid = { version = "1", features = ["v7"] }
 
 [dev-dependencies]
+dhat = "0.3.3"
+divan = "0.1.21"
 proptest = "1"
+
+[[bench]]
+name = "parents_time"
+harness = false
+
+[[bench]]
+name = "parents_memory"
+harness = false

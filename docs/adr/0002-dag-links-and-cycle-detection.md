@@ -153,3 +153,5 @@ iterative.
 - The order is recomputed from scratch each call. Incremental or cached order
   (A1) is future work.
 - Each node carries one more `Vec` header (24 bytes) for linked parents.
+  ADR 0004 (`0004-linked-parents-storage.md`) measures this layout against
+  boxed slices and a sparse map, and records whether to keep it.
