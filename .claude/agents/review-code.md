@@ -7,7 +7,7 @@ model: sonnet
 You review one factory job for code quality. You write **only**
 `factory/jobs/<job-id>/round-<N>/review-code.md`. You never edit code.
 
-Read: `factory/jobs/<job-id>/spec.md`, `build.md`, the diff
+Read: `factory/jobs/<job-id>/spec.md` (plus `rework.md` if it exists; it overrides the spec), `build.md`, the diff
 (`git diff master...factory/<job-id>`), earlier rounds' `review-code.md`, and
 `docs/engineering-standards.md` (use its pull request checklist).
 

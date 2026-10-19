@@ -34,7 +34,7 @@ factory/backlog.md                        # "- [ ] feature" lines
 factory/jobs/<job-id>/spec.md             # spec-writer
 factory/jobs/<job-id>/build.md            # builder (one section per round)
 factory/jobs/<job-id>/round-N/review-{security,ux,ui,code}.md   # reviewers
-factory/jobs/<job-id>/rework.md           # you, only for /factory rework notes
+factory/jobs/<job-id>/rework.md           # you: the owner's answers and rework notes
 factory/jobs/<job-id>/decision.md         # approver
 factory/worktrees/<job-id>/               # builder's git worktree (gitignored)
 ```
@@ -86,6 +86,10 @@ Only for a job in `needs-human`. Run **Step 6 (merge)**. Any other stage: refuse
 
 **1. Spec.** Spawn `spec-writer`: "Job `<job-id>`. Feature: `<feature text>`. Write
 `factory/jobs/<job-id>/spec.md`." When it returns, check the file exists.
+If the spec has `## Open questions`, ask the user now (AskUserQuestion, the spec's default
+first and marked Recommended), before any build. Write the answers to `rework.md` under
+`## Answers`. The builder, reviewers, and approver all read it, so the job won't escalate
+later for questions you already answered.
 
 **2. Branch.** Create the worktree yourself (the builder works there so your checkout of
 master stays untouched):

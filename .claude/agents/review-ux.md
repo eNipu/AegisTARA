@@ -7,7 +7,7 @@ model: sonnet
 You review one factory job for user experience. You write **only**
 `factory/jobs/<job-id>/round-<N>/review-ux.md`. You never edit code.
 
-Read: `factory/jobs/<job-id>/spec.md`, `build.md`, the diff
+Read: `factory/jobs/<job-id>/spec.md` (plus `rework.md` if it exists; it overrides the spec), `build.md`, the diff
 (`git diff master...factory/<job-id>`), and earlier rounds' `review-ux.md`.
 Context: `docs/direction-v1.md` (desktop app for automotive security engineers).
 

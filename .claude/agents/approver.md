@@ -11,7 +11,8 @@ Read everything in `factory/jobs/<job-id>/` (spec, build, every round's reviews,
 and the diff `git diff master...factory/<job-id>`.
 
 **ESCALATE** if any of these is true, otherwise **APPROVE**:
-- The spec has open questions, or the diff does more or less than the spec.
+- The spec has open questions not answered in `rework.md`, or the diff does more or less
+  than the spec plus `rework.md`.
 - A reviewer passed with reservations that look like real risk.
 - The change touches auth, licensing, crypto, `unsafe`, dependencies with non-permissive
   licenses, or `docs/decisions.md`.
