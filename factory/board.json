@@ -61,6 +61,22 @@
       ],
       "decision": "ESCALATE",
       "updated": "2026-10-19T08:09:42Z"
+    },
+    {
+      "id": "004-parents-storage-bench",
+      "title": "Benchmark linked-parents storage: Vec vs Box vs sparse map",
+      "branch": "factory/004-parents-storage-bench",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "ESCALATE",
+      "updated": "2026-10-19T09:34:33Z"
     }
   ]
 }
