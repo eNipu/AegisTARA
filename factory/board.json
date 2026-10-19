@@ -38,6 +38,29 @@
       ],
       "decision": "APPROVE",
       "updated": "2026-10-18T23:14:40Z"
+    },
+    {
+      "id": "003-cargo-deny",
+      "title": "cargo-deny license policy (D5)",
+      "branch": "factory/003-cargo-deny",
+      "stage": "merged",
+      "round": 2,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [
+        {
+          "security": "PASS",
+          "ux": "PASS",
+          "ui": "PASS",
+          "code": "PASS"
+        }
+      ],
+      "decision": "ESCALATE",
+      "updated": "2026-10-19T08:09:42Z"
     }
   ]
 }
