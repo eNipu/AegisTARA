@@ -1,0 +1,8 @@
+[package]
+name = "fixture-bad-slint"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dep-bad-slint = { path = "../deps/bad-slint" }

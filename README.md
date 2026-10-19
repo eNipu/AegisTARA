@@ -18,3 +18,40 @@ Status: direction set. No code yet.
 4. [docs/engineering-standards.md](docs/engineering-standards.md): coding requirements for performance, data structures, algorithms, and learning.
 5. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
 6. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
+
+## Dependency licenses
+
+Production crates (`crates/*`) must pass the `cargo-deny` policy in
+[`deny.toml`](deny.toml) (decision D5, standard Q7): licenses, advisories,
+bans, and sources. Rationale: [docs/adr/0003-cargo-deny-policy.md](docs/adr/0003-cargo-deny-policy.md).
+
+Install the pinned version (cargo-deny 0.20.2):
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+```
+
+Run it from the repo root:
+
+```sh
+scripts/deny.sh                          # all checks, every crate (fetches the advisory database)
+scripts/deny.sh licenses bans sources    # offline
+tools/deny-fixtures/run.sh               # proves the policy rejects what D5 forbids
+
+# one crate by hand (cargo-deny 0.20: --config goes before `check`)
+cargo deny --manifest-path crates/aegis-model/Cargo.toml --config deny.toml check
+```
+
+Only the 11 licenses allowed by D5 pass. To accept a "review first" license
+(for example MPL-2.0), first record the approval as a decision in
+`docs/decisions.md`, then add one exception per crate and version to
+`[licenses] exceptions` in `deny.toml`, with a comment naming that decision:
+
+```toml
+exceptions = [
+    # Approved in D<N>: <reason>.
+    { crate = "name@1.2.3", allow = ["MPL-2.0"] },
+]
+```
+
+Never widen `allow` for a review-first license, and never add a `deny` list.

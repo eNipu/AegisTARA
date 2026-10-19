@@ -25,3 +25,7 @@ rustc-ice-*.txt
 
 # Factory builder worktrees
 factory/worktrees/
+
+# cargo-deny fixtures: lock files and build output are generated per run
+tools/deny-fixtures/**/Cargo.lock
+tools/deny-fixtures/**/target/

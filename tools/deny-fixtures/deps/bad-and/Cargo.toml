@@ -1,0 +1,5 @@
+[package]
+name = "dep-bad-and"
+version = "0.0.0"
+edition = "2024"
+license = "MIT AND GPL-3.0-only"
