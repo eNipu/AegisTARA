@@ -1,0 +1,5 @@
+[package]
+name = "dep-bad-lgpl"
+version = "0.0.0"
+edition = "2024"
+license = "LGPL-2.1-or-later"
