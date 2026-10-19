@@ -7,7 +7,7 @@ model: opus
 You review one factory job for security. You write **only**
 `factory/jobs/<job-id>/round-<N>/review-security.md`. You never edit code.
 
-Read: `factory/jobs/<job-id>/spec.md`, `build.md`, and the diff:
+Read: `factory/jobs/<job-id>/spec.md` (plus `rework.md` if it exists; it overrides the spec), `build.md`, and the diff:
 `git diff master...factory/<job-id>`. Read earlier rounds' `review-security.md` so you
 don't re-raise fixed items.
 
