@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AegisTARA desktop design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* Tokens. Only flat fills and 1px lines: everything here must draw on Slint's software renderer
+   and survive RDP/Citrix compression. No shadows, gradients, blur, or translucency. */
+:root {
+  --sheet: #E9EDF0;      /* canvas: drafting film */
+  --panel: #FFFFFF;
+  --ink: #1D2733;        /* text and critical path */
+  --graphite: #5B6875;   /* secondary text, edges */
+  --rule: #C3CBD3;       /* borders */
+  --wash: #F3F5F7;       /* hover / sunken rows */
+  --accent: #5A3FC0;     /* selection, focus, what-if. Kept off the risk hues. */
+  --accent-wash: #ECE8FA;
+  /* default pack ratings (Okabe-Ito based); fills only, never behind text */
+  --r-high: #D55E00; --r-medium: #E69F00; --r-low: #56B4E9; --r-vlow: #009E73;
+  --mode: var(--ink); --mode-text: #FFFFFF;
+  --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+}
+:root[data-theme="dark"] {
+  --sheet: #151B21; --panel: #1E262E; --ink: #E4EAF0; --graphite: #9AA8B5;
+  --rule: #35424E; --wash: #252F38; --accent: #A894F2; --accent-wash: #2B2547;
+  --mode-text: #151B21;
+}
+[data-mode="readonly"] { --mode: var(--graphite); --mode-text: var(--panel); }
+[data-mode="whatif"]   { --mode: var(--accent);   --mode-text: var(--panel); }
+
+* { box-sizing: border-box; margin: 0; }
+body { background: #8A949E; font-family: var(--sans); color: var(--ink); padding: 16px; }
+:root[data-theme="dark"] body { background: #0A0E12; }
+
+.controls { display: flex; gap: 20px; align-items: center; color: #fff; font-size: 14px; margin-bottom: 12px; flex-wrap: wrap; }
+.controls fieldset { border: 0; padding: 0; display: flex; gap: 6px; align-items: center; }
+.controls legend { float: left; margin-right: 6px; }
+.controls button { font: inherit; padding: 4px 10px; border: 1px solid #fff; background: transparent; color: #fff; border-radius: 2px; cursor: pointer; }
+.controls button[aria-pressed="true"] { background: #fff; color: #1D2733; }
+
+.fit { transform-origin: 0 0; width: 1440px; }
+.window { width: 1440px; height: 880px; background: var(--panel); display: grid;
+  grid-template-rows: 28px 30px 48px 1fr 28px; border: 1px solid var(--rule); font-size: 14px; }
+
+/* edit-lock band: the mode is always visible (D4) */
+.band { background: var(--mode); color: var(--mode-text); display: flex; align-items: center; gap: 16px; padding: 0 12px; font-size: 13px; }
+.band .grow { flex: 1; }
+.band button { font: inherit; font-size: 13px; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 2px; padding: 1px 8px; cursor: pointer; }
+
+.menubar { display: flex; gap: 2px; padding: 0 6px; align-items: center; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.menubar span { padding: 4px 8px; }
+
+.header { display: flex; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--rule); }
+.header h1 { font-size: 16px; font-weight: 700; }
+.crumb { color: var(--graphite); }
+.header .grow { flex: 1; }
+.version { color: var(--graphite); font-size: 13px; }
+.btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 2px; border: 1px solid var(--rule); background: var(--panel); color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+.btn:focus-visible, .controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[data-mode="readonly"] .btn.edit { opacity: 1; color: var(--graphite); border-style: dashed; cursor: not-allowed; }
+
+.main { display: grid; grid-template-columns: 216px 1fr 372px; min-height: 0; }
+
+/* TARA flow rail: a real sequence (ISO/SAE 21434 clause 15), so numbering is earned */
+.rail { border-right: 1px solid var(--rule); padding: 12px 0; display: flex; flex-direction: column; }
+.rail h2 { font-size: 12px; font-weight: 600; color: var(--graphite); padding: 0 16px 8px; }
+.step { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px; align-items: baseline; padding: 7px 16px; border-left: 3px solid transparent; }
+.step .n { color: var(--graphite); font-variant-numeric: tabular-nums; }
+.step .count { color: var(--graphite); font-size: 12px; font-variant-numeric: tabular-nums; }
+.step.on { border-left-color: var(--ink); background: var(--wash); font-weight: 600; }
+.step .warn { color: var(--r-high); font-weight: 700; }
+.rail .spacer { flex: 1; }
+.legend { padding: 12px 16px; border-top: 1px solid var(--rule); font-size: 12px; color: var(--graphite); display: grid; gap: 6px; }
+.legend div { display: flex; align-items: center; gap: 8px; }
+.sw { width: 10px; height: 10px; flex: none; }
+
+/* canvas */
+.canvas { position: relative; background: var(--sheet); overflow: hidden; }
+.canvas svg { position: absolute; inset: 0; }
+.edge { fill: none; stroke: var(--graphite); stroke-width: 1.25; }
+.edge.crit { stroke: var(--ink); stroke-width: 3.5; }
+.gate { fill: var(--panel); stroke: var(--graphite); stroke-width: 1.5; }
+.gate.crit { stroke: var(--ink); stroke-width: 2.5; }
+.node { position: absolute; width: 210px; height: 60px; background: var(--panel); border: 1px solid var(--rule);
+  border-radius: 2px; padding: 5px 10px 0 16px; overflow: hidden; }
+.node::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--r); }
+.node .t { font-size: 13px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.node .m { position: absolute; left: 16px; right: 10px; bottom: 5px; display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+.node .score { font-weight: 700; font-variant-numeric: tabular-nums; }
+.node .score span { font-weight: 400; color: var(--graphite); margin-left: 4px; }
+.node .kind { color: var(--graphite); font-size: 12px; }
+.node.sel { border: 2px solid var(--accent); overflow: visible; }
+/* crop-mark selection ticks: readable without color, drawn as plain rectangles */
+.tick { position: absolute; width: 10px; height: 10px; border-color: var(--accent); border-style: solid; }
+.tick.tl { left: -7px; top: -7px; border-width: 2px 0 0 2px; }
+.tick.tr { right: -7px; top: -7px; border-width: 2px 2px 0 0; }
+.tick.bl { left: -7px; bottom: -7px; border-width: 0 0 2px 2px; }
+.tick.br { right: -7px; bottom: -7px; border-width: 0 2px 2px 0; }
+.cv-tools { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 6px; }
+.cv-tools .btn { padding: 3px 9px; }
+.cv-tools .btn[aria-pressed="true"] { border-color: var(--ink); font-weight: 600; }
+[data-mode="whatif"] .canvas { outline: 3px solid var(--accent); outline-offset: -3px; }
+
+/* inspector */
+.insp { border-left: 1px solid var(--rule); overflow: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.insp h2 { font-size: 17px; font-weight: 700; line-height: 1.3; }
+.insp .sub { color: var(--graphite); font-size: 13px; margin-top: 2px; }
+.result { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.result .big { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.why h3 { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+/* the derivation chain: each step explains the number above it */
+.d { position: relative; padding-left: 26px; padding-bottom: 10px; }
+.d::before { content: ""; position: absolute; left: 8px; top: 20px; bottom: 0; width: 2px; background: var(--ink); }
+.d:last-child::before { display: none; }
+.d .k { position: absolute; left: 0; top: 1px; width: 18px; height: 18px; border: 2px solid var(--ink); background: var(--panel);
+  font-size: 11px; font-weight: 700; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.d .claim { font-weight: 600; line-height: 1.35; }
+.d .rule { color: var(--graphite); font-size: 13px; margin: 2px 0 6px; }
+.d code { font-family: var(--mono); font-size: 12.5px; color: var(--ink); background: var(--wash); padding: 1px 5px; border: 1px solid var(--rule); border-radius: 2px; }
+.rows { display: grid; grid-template-columns: 1fr auto; font-size: 13px; border-top: 1px solid var(--rule); }
+.rows > * { padding: 3px 0; border-bottom: 1px solid var(--rule); }
+.rows .v { text-align: right; font-variant-numeric: tabular-nums; padding-left: 12px; }
+.rows .pick { font-weight: 700; }
+.rows .dim { color: var(--graphite); }
+.prov { font-size: 12px; color: var(--graphite); border-top: 1px solid var(--rule); padding-top: 10px; line-height: 1.5; }
+
+.status { border-top: 1px solid var(--rule); display: flex; align-items: center; gap: 18px; padding: 0 12px; font-size: 12px; color: var(--graphite); background: var(--wash); }
+.status .grow { flex: 1; }
+.status .prob { color: var(--ink); font-weight: 600; }
+.status .prob b { color: var(--r-high); }
+
+@media (prefers-reduced-motion: no-preference) { .node, .edge { transition: none; } }
+</style>
+</head>
+<body>
+<div class="controls" role="toolbar" aria-label="Mockup controls">
+  <fieldset><legend>Mode</legend>
+    <button data-set-mode="edit" aria-pressed="true">Editing</button>
+    <button data-set-mode="readonly" aria-pressed="false">Read-only</button>
+    <button data-set-mode="whatif" aria-pressed="false">What-if</button>
+  </fieldset>
+  <fieldset><legend>Theme</legend>
+    <button data-set-theme="light" aria-pressed="true">Light</button>
+    <button data-set-theme="dark" aria-pressed="false">Dark</button>
+  </fieldset>
+</div>
+
+<div class="fit" id="fit">
+<div class="window" id="win" data-mode="edit">
+  <div class="band" id="band"></div>
+  <nav class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Project</span><span>Help</span></nav>
+  <header class="header">
+    <h1>Brake-by-wire ECU</h1>
+    <span class="crumb">Attack trees / Unintended braking via spoofed brake request</span>
+    <span class="grow"></span>
+    <span class="version">Draft, 6 changes since baseline B3 "SOP gate"</span>
+    <button class="btn" id="whatifBtn">Try a what-if</button>
+    <button class="btn">Compare with B3</button>
+  </header>
+
+  <div class="main">
+    <aside class="rail">
+      <h2>TARA steps</h2>
+      <div class="step"><span class="n">1</span><span>Item definition</span><span class="count">14</span></div>
+      <div class="step"><span class="n">2</span><span>Assets</span><span class="count">23</span></div>
+      <div class="step"><span class="n">3</span><span>Damage scenarios</span><span class="count">31</span></div>
+      <div class="step"><span class="n">4</span><span>Threat scenarios</span><span class="count">47</span></div>
+      <div class="step on"><span class="n">5</span><span>Attack trees</span><span class="count">47</span></div>
+      <div class="step"><span class="n">6</span><span>Risk values</span><span class="count"><span class="warn" title="2 problems">2 !</span></span></div>
+      <div class="step"><span class="n">7</span><span>Treatment</span><span class="count">12</span></div>
+      <div class="step"><span class="n">8</span><span>Goals and claims</span><span class="count">9</span></div>
+      <div class="spacer"></div>
+      <div class="legend" aria-label="Attack feasibility ratings">
+        <div><span class="sw" style="background:var(--r-high)"></span>High, 0 to 13</div>
+        <div><span class="sw" style="background:var(--r-medium)"></span>Medium, 14 to 19</div>
+        <div><span class="sw" style="background:var(--r-low)"></span>Low, 20 to 24</div>
+        <div><span class="sw" style="background:var(--r-vlow)"></span>Very low, 25 and up</div>
+      </div>
+    </aside>
+
+    <section class="canvas" aria-label="Attack tree canvas">
+      <svg width="100%" height="100%" aria-hidden="true">
+        <!-- root output + OR gate -->
+        <line class="edge crit" x1="234" y1="418" x2="242" y2="418"/>
+        <path class="gate crit" d="M268 407 Q250 407 242 418 Q250 429 268 429 Q262 418 268 407 Z"/>
+        <path class="edge" d="M264 414 C300 414 300 166 330 166"/>
+        <path class="edge crit" d="M264 418 L330 418"/>
+        <path class="edge" d="M264 422 C300 422 300 632 330 632"/>
+        <!-- Remote: AND -->
+        <line class="edge" x1="540" y1="166" x2="548" y2="166"/>
+        <path class="gate" d="M574 155 L561 155 A11 11 0 0 0 561 177 L574 177 Z"/>
+        <path class="edge" d="M574 162 C610 162 610 90 640 90"/>
+        <path class="edge" d="M574 166 L640 166"/>
+        <path class="edge" d="M574 170 C610 170 610 242 640 242"/>
+        <!-- Physical: AND (critical) -->
+        <line class="edge crit" x1="540" y1="418" x2="548" y2="418"/>
+        <path class="gate crit" d="M574 407 L561 407 A11 11 0 0 0 561 429 L574 429 Z"/>
+        <path class="edge" d="M574 414 C610 414 610 342 640 342"/>
+        <path class="edge crit" d="M574 418 L640 418"/>
+        <path class="edge" d="M574 422 C610 422 610 494 640 494"/>
+        <!-- Malicious update: OR -->
+        <line class="edge" x1="540" y1="632" x2="548" y2="632"/>
+        <path class="gate" d="M574 621 Q556 621 548 632 Q556 643 574 643 Q568 632 574 621 Z"/>
+        <path class="edge" d="M570 628 C610 628 610 594 640 594"/>
+        <path class="edge" d="M570 636 C610 636 610 670 640 670"/>
+      </svg>
+      <div id="nodes"></div>
+      <div class="cv-tools">
+        <button class="btn" aria-pressed="true">Easiest path</button>
+        <button class="btn">Fit</button>
+        <button class="btn">100%</button>
+      </div>
+    </section>
+
+    <aside class="insp" aria-label="Inspector">
+      <div>
+        <h2>Unintended braking via spoofed brake request</h2>
+        <p class="sub">Threat scenario TS-12, any 1 of 3 paths</p>
+      </div>
+      <div class="result"><span class="big">15</span><span class="sw" style="background:var(--r-medium);width:14px;height:14px"></span><span>Medium attack feasibility</span></div>
+
+      <section class="why" aria-label="Why is this 15">
+        <h3>Why 15?</h3>
+        <div class="d"><span class="k">1</span>
+          <p class="claim">The easiest path decides: Physical via OBD port</p>
+          <p class="rule">Any path is enough, so the lowest potential wins. <code>min(25, 15, 38)</code></p>
+          <div class="rows">
+            <span class="dim">Remote via telematics unit</span><span class="v dim">25</span>
+            <span class="pick">Physical via OBD port</span><span class="v pick">15</span>
+            <span class="dim">Malicious ECU software update</span><span class="v dim">38</span>
+          </div>
+        </div>
+        <div class="d"><span class="k">2</span>
+          <p class="claim">The hardest step decides: Open diagnostic session</p>
+          <p class="rule">All steps are needed, so the highest potential wins. <code>max(4, 15, 7)</code></p>
+          <div class="rows">
+            <span class="dim">Gain access to OBD port</span><span class="v dim">4</span>
+            <span class="pick">Open diagnostic session</span><span class="v pick">15</span>
+            <span class="dim">Send spoofed brake request</span><span class="v dim">7</span>
+          </div>
+        </div>
+        <div class="d"><span class="k">3</span>
+          <p class="claim">Open diagnostic session adds up five factors</p>
+          <p class="rule"><code>1 + 3 + 3 + 4 + 4 = 15</code></p>
+          <div class="rows">
+            <span>Elapsed time: up to 1 week</span><span class="v">1</span>
+            <span>Expertise: proficient</span><span class="v">3</span>
+            <span>Knowledge of the item: restricted</span><span class="v">3</span>
+            <span>Window of opportunity: moderate</span><span class="v">4</span>
+            <span>Equipment: specialized</span><span class="v">4</span>
+          </div>
+        </div>
+        <div class="d"><span class="k">4</span>
+          <p class="claim">15 falls in Medium (14 to 19)</p>
+          <p class="rule">Rating bands from pack "Attack potential, CEM based" v1.2</p>
+        </div>
+      </section>
+      <p class="prov">Factors set by Mira Chen on 14 Oct: "Needs a UDS seed-key tool, sold online for about 300 EUR."<br>Computed by engine 0.4.1. The server result matches.</p>
+    </aside>
+  </div>
+
+  <footer class="status">
+    <span class="prob"><b>2</b> problems: risk R-7 is retained but has no approver</span>
+    <span class="grow"></span>
+    <span>Synced with tara.oem.internal</span>
+    <span>CPU renderer</span>
+    <span>100%</span>
+  </footer>
+</div>
+</div>
+
+<script>
+const R = { High: "var(--r-high)", Medium: "var(--r-medium)", Low: "var(--r-low)", "Very low": "var(--r-vlow)" };
+const nodes = [
+  [24, 388, "Unintended braking via spoofed brake request", 15, "Medium", "any 1 of 3", true],
+  [330, 136, "Remote via telematics unit", 25, "Very low", "all 3 needed"],
+  [330, 388, "Physical via OBD port", 15, "Medium", "all 3 needed"],
+  [330, 602, "Malicious ECU software update", 38, "Very low", "any 1 of 2"],
+  [640, 60, "Exploit cellular modem firmware", 17, "Medium"],
+  [640, 136, "Pivot from TCU to CAN-1", 12, "High"],
+  [640, 212, "Bypass gateway routing filter", 25, "Very low"],
+  [640, 312, "Gain access to OBD port", 4, "High"],
+  [640, 388, "Open diagnostic session", 15, "Medium"],
+  [640, 464, "Send spoofed brake request", 7, "High"],
+  [640, 564, "Compromise supplier build server", 55, "Very low"],
+  [640, 640, "Bypass OTA signature check", 38, "Very low"],
+];
+document.getElementById("nodes").innerHTML = nodes.map(([x, y, t, s, r, k, sel]) =>
+  `<div class="node${sel ? " sel" : ""}" style="left:${x}px;top:${y}px;--r:${R[r]}" role="listitem" aria-label="${t}: ${s}, ${r}">
+     ${sel ? '<i class="tick tl"></i><i class="tick tr"></i><i class="tick bl"></i><i class="tick br"></i>' : ""}
+     <div class="t" title="${t}">${t}</div>
+     <div class="m"><span class="score">${s}<span>${r}</span></span><span class="kind">${k || ""}</span></div>
+   </div>`).join("");
+
+const bands = {
+  edit: `<span class="grow">You're editing. Others on the project see your changes live.</span><button>Release edit lock</button>`,
+  readonly: `<span class="grow">Read-only. Mira Chen is editing, and her changes appear here live.</span><button>Try a what-if</button>`,
+  whatif: `<span class="grow">What-if sandbox. Changes stay private until you propose them.</span><button>Discard</button><button>Propose change</button>`,
+};
+const win = document.getElementById("win"), band = document.getElementById("band");
+function press(attr, val) { document.querySelectorAll(`[${attr}]`).forEach(b => b.setAttribute("aria-pressed", b.getAttribute(attr) === val)); }
+function setMode(m) { win.dataset.mode = m; band.innerHTML = bands[m]; press("data-set-mode", m); }
+document.querySelectorAll("[data-set-mode]").forEach(b => b.onclick = () => setMode(b.dataset.setMode));
+document.querySelectorAll("[data-set-theme]").forEach(b => b.onclick = () => {
+  document.documentElement.dataset.theme = b.dataset.setTheme; press("data-set-theme", b.dataset.setTheme);
+});
+document.getElementById("whatifBtn").onclick = () => setMode("whatif");
+setMode("edit");
+const fit = document.getElementById("fit");
+function scale() { const s = Math.min(1, (innerWidth - 32) / 1440); fit.style.transform = `scale(${s})`; fit.style.height = 880 * s + "px"; }
+addEventListener("resize", scale); scale();
+</script>
+</body>
+</html>
