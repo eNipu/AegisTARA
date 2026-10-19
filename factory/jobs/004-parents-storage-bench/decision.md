@@ -1,0 +1,6 @@
+ESCALATE
+Why: the spec has three open questions (realistic share pattern, whether to switch `AttackTree`, divan vs criterion). There is no rework.md, so the owner never answered them. The builder took all three defaults: shares of 1/10/50% with 1-3 extra parents, no switch, and divan. ADR 0004 now records "keep `Vec<Vec<NodeIdx>>`, no follow-up job" as the decision.
+Otherwise the build is clean. All four round-1 reviews pass with only cosmetic notes, AC1-AC12 are met, and the diff matches scope: 8 files, nothing under `src/`, `spikes/`, `docs/decisions.md` or `docs/engineering-standards.md`. Every new file has `#![forbid(unsafe_code)]`, and MSRV stays 1.85.
+The new dev-only dependencies `divan` 0.1.21 and `dhat` 0.3.3 are MIT OR Apache-2.0, and `deny.sh` passes. They add about 295 lines to Cargo.lock (clap, backtrace, serde_json and others) but are not in the library's dependency tree.
+Disclosed difference: the literal AC5 store-name grep counts 6 divan tree headers, not 36 rows. All 36 data rows are present, and the spec allows for this.
+Question for the owner: do you accept the three defaults? These are (1) 1/10/50% share with 1-3 linked parents as the "realistic" pattern, (2) keep `Vec<Vec<NodeIdx>>` with no follow-up job, as ADR 0004 records, and (3) divan plus dhat as new dev-dependencies. If yes, this can merge as is.
