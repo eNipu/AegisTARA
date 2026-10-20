@@ -1,0 +1,5 @@
+APPROVE
+The diff (4 files: ci.yml, scripts/ci.sh, ADR 0007, README) matches the spec plus rework.md: all six open questions are answered, and Rework 1 is done as written. `Swatinem/rust-cache` is replaced by `actions/cache` restore/save (MIT, SHA-pinned), with the requested paths, key and restore key, a master-only save, and crates found by glob.
+The round 1 licensing escalation is closed by the owner's own ruling (D5 is strict, no CI-only exception). All four actions are now MIT or Apache-2.0, and ADR 0007 records the license of each one. No change to docs/decisions.md, engineering-standards.md, crates/, deny.toml or dependencies. No auth, crypto or `unsafe`.
+All four round 2 reviewers passed with no blocking findings. The remaining notes are small UX follow-ups and the known limit that nothing prunes the cache, which the ADR states.
+After merge: run `gh run list --workflow ci.yml --limit 1` to confirm AC11 (all three jobs green), check that the second run's "Restore cargo cache" step hits, and add the GitHub run time to ADR 0007 "Numbers".
