@@ -118,6 +118,50 @@ pub enum ModelError {
     /// ```
     #[error("cycle in attack tree: {}", path_text(.0, true))]
     Cycle(Vec<NodeId>),
+    /// [`evaluate`](crate::evaluate) found a gate with no children. Such a
+    /// gate has no value: the domains have no neutral element, because
+    /// treating an empty AND as "trivially feasible" would be the dangerous
+    /// answer in a security tool. Carries the gate's public ID, never its
+    /// label.
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, GateKind, MinTime, ModelError, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let id = NodeId::new_v7();
+    /// let tree = AttackTree::new(id, Node::gate(GateKind::And, "empty"))?;
+    /// let err = evaluate(&tree, &MinTime, |_| Some(1)).err();
+    /// assert_eq!(err, Some(ModelError::EmptyGate(id)));
+    /// assert_eq!(
+    ///     err.map(|e| e.to_string()),
+    ///     Some(format!("gate node {id} has no children, so it has no value")),
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("gate node {0} has no children, so it has no value")]
+    EmptyGate(NodeId),
+    /// The leaf-value callback of [`evaluate`](crate::evaluate) gave no
+    /// value for this step. Evaluation never substitutes a default. Carries
+    /// the step's public ID, never its label.
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, MinTime, ModelError, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let id = NodeId::new_v7();
+    /// let tree = AttackTree::new(id, Node::step("unrated"))?;
+    /// let err = evaluate(&tree, &MinTime, |_| None).err();
+    /// assert_eq!(err, Some(ModelError::MissingLeafValue(id)));
+    /// assert_eq!(
+    ///     err.map(|e| e.to_string()),
+    ///     Some(format!("no value given for step node {id}")),
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("no value given for step node {0}")]
+    MissingLeafValue(NodeId),
 }
 
 /// Formats IDs as `a -> b -> c`; with `close`, the first ID is repeated at

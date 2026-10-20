@@ -23,3 +23,7 @@ harness = false
 [[bench]]
 name = "parents_memory"
 harness = false
+
+[[bench]]
+name = "eval"
+harness = false
