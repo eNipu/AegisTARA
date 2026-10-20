@@ -93,6 +93,22 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-20T12:19:52Z"
+    },
+    {
+      "id": "006-explain-why",
+      "title": "Explain-why traces for attack tree evaluation",
+      "branch": "factory/006-explain-why",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-20T14:07:47Z"
     }
   ]
 }
