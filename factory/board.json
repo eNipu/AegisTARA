@@ -125,6 +125,29 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-20T15:23:57Z"
+    },
+    {
+      "id": "008-workspace-ci",
+      "title": "Workspace CI: fmt, clippy, test, cargo-deny on GitHub Actions",
+      "branch": "factory/008-workspace-ci",
+      "stage": "merged",
+      "round": 2,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [
+        {
+          "security": "PASS",
+          "ux": "PASS",
+          "ui": "PASS",
+          "code": "PASS"
+        }
+      ],
+      "decision": "APPROVE",
+      "updated": "2026-10-20T21:06:06Z"
     }
   ]
 }
