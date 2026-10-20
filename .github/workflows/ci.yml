@@ -1,0 +1,153 @@
+# Quality gates for every production crate (crates/*/): standards Q1 and Q7,
+# decision D5. Rationale: docs/adr/0007-workspace-ci.md.
+#
+# Run the same gates locally with:
+#   scripts/ci.sh                # check job: fmt, clippy, test
+#   scripts/deny.sh              # deny job
+#   tools/deny-fixtures/run.sh   # deny job
+#
+# Every action is pinned to a full commit SHA (the tag is in the comment).
+# No secrets, no privileged pull request trigger, and no event data inside
+# run scripts.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Incremental artifacts only help local edit loops; off, the cached target/
+  # is smaller and restores faster.
+  CARGO_INCREMENTAL: 0
+  # Pinned stable toolchain for fmt, clippy, and test (ADR 0007). Bump it on
+  # purpose, in its own commit, so new lints never turn CI red by surprise.
+  RUST_TOOLCHAIN: "1.99.1"
+  # Minimum supported Rust version: rust-version in each crate's Cargo.toml.
+  RUST_MSRV: "1.85"
+
+jobs:
+  check:
+    name: fmt, clippy, test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      # One cache entry holds the cargo registry and git sources plus every
+      # crate's own target/ (no workspace yet). The path list is built with the
+      # same glob as scripts/ci.sh, and the key hashes every crates/*/Cargo.lock,
+      # so a new crate is cached with no workflow edit.
+      - name: List cache paths
+        id: crates
+        run: |
+          {
+            cargo_home=${CARGO_HOME:-$HOME/.cargo}
+            echo 'paths<<CRATES_EOF'
+            echo "$cargo_home/registry/index/"
+            echo "$cargo_home/registry/cache/"
+            echo "$cargo_home/git/db/"
+            for manifest in crates/*/Cargo.toml; do
+              [ -f "$manifest" ] || continue
+              echo "$(dirname "$manifest")/target/"
+            done
+            echo 'CRATES_EOF'
+          } >> "$GITHUB_OUTPUT"
+      - name: Restore cargo cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.crates.outputs.paths }}
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('crates/*/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+      - name: scripts/ci.sh
+        run: scripts/ci.sh
+      # Only master writes the cache, and only after a green run. Branches and
+      # pull requests restore the master entry but never save their own, so
+      # they cannot evict or poison it. An exact key hit is not saved again
+      # (cache entries are immutable).
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/master' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.crates.outputs.paths }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # cargo-deny calls `cargo metadata`; pin cargo so its output is stable.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # Prebuilt binary, checked against the checksum in the action's
+      # manifest. No fallback to building from source.
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny@0.20.2
+          fallback: none
+      # All four checks, advisories included, block the push (rework 1, Q2).
+      - name: scripts/deny.sh
+        run: scripts/deny.sh
+      - name: tools/deny-fixtures/run.sh
+        run: tools/deny-fixtures/run.sh
+
+  msrv:
+    name: MSRV cargo check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+      # Library only: dev-dependencies (divan, proptest) may need a newer
+      # compiler than the crate itself. Same discovery rule as scripts/ci.sh.
+      - name: cargo check --locked (each crate)
+        run: |
+          checked=0
+          failed=0
+          for manifest in crates/*/Cargo.toml; do
+            [ -f "$manifest" ] || continue
+            dir=$(dirname "$manifest")
+            crate=$(basename "$dir")
+            checked=$((checked + 1))
+            echo "::group::$crate"
+            if (cd "$dir" && cargo check --locked); then
+              status="ok    $crate msrv"
+            else
+              status="FAIL  $crate msrv"
+              echo "::error title=msrv::FAIL $crate msrv"
+              failed=$((failed + 1))
+            fi
+            echo "::endgroup::"
+            echo "$status"
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "error: no crates found under crates/" >&2
+            exit 1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
