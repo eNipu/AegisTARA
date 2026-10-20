@@ -25,6 +25,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Incremental artifacts only help local edit loops; off, the cached target/
+  # is smaller and restores faster.
+  CARGO_INCREMENTAL: 0
   # Pinned stable toolchain for fmt, clippy, and test (ADR 0007). Bump it on
   # purpose, in its own commit, so new lints never turn CI red by surprise.
   RUST_TOOLCHAIN: "1.99.1"
@@ -44,28 +47,45 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-      # One cache entry covers every crate's own target/ (no workspace yet).
-      # The list is built with the same glob as scripts/ci.sh, so a new crate
-      # is cached with no workflow edit.
-      - name: List crate target directories
+      # One cache entry holds the cargo registry and git sources plus every
+      # crate's own target/ (no workspace yet). The path list is built with the
+      # same glob as scripts/ci.sh, and the key hashes every crates/*/Cargo.lock,
+      # so a new crate is cached with no workflow edit.
+      - name: List cache paths
         id: crates
         run: |
           {
-            echo 'workspaces<<CRATES_EOF'
+            cargo_home=${CARGO_HOME:-$HOME/.cargo}
+            echo 'paths<<CRATES_EOF'
+            echo "$cargo_home/registry/index/"
+            echo "$cargo_home/registry/cache/"
+            echo "$cargo_home/git/db/"
             for manifest in crates/*/Cargo.toml; do
               [ -f "$manifest" ] || continue
-              echo "$(dirname "$manifest") -> target"
+              echo "$(dirname "$manifest")/target/"
             done
             echo 'CRATES_EOF'
           } >> "$GITHUB_OUTPUT"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Restore cargo cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          workspaces: ${{ steps.crates.outputs.workspaces }}
-          # Branches and pull requests read the master cache but do not write
-          # their own, so short-lived branches cannot evict it.
-          save-if: ${{ github.ref == 'refs/heads/master' }}
+          path: ${{ steps.crates.outputs.paths }}
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('crates/*/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
       - name: scripts/ci.sh
         run: scripts/ci.sh
+      # Only master writes the cache, and only after a green run. Branches and
+      # pull requests restore the master entry but never save their own, so
+      # they cannot evict or poison it. An exact key hit is not saved again
+      # (cache entries are immutable).
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/master' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.crates.outputs.paths }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   deny:
     name: cargo-deny

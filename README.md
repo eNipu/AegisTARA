@@ -37,8 +37,9 @@ tools/deny-fixtures/run.sh       # deny.toml policy fixtures
 ```
 
 `scripts/ci.sh` prints one `ok` or `FAIL` line per crate and step, shows the
-output of failing steps only, and exits 1 if any step failed. CI pins Rust
-1.99.1; a newer local compiler may report lints CI does not see yet.
+output of failing steps only, and exits 1 if any step failed. CI pins one
+Rust version (`RUST_TOOLCHAIN` in `ci.yml`); a newer local compiler may
+report lints CI does not see yet.
 
 ## Dependency licenses
 
