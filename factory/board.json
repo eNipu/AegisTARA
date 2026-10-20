@@ -77,6 +77,22 @@
       "history": [],
       "decision": "ESCALATE",
       "updated": "2026-10-19T09:34:33Z"
+    },
+    {
+      "id": "005-tree-evaluation",
+      "title": "Attack tree evaluation (AND/OR/SAND, topo order, memoized)",
+      "branch": "factory/005-tree-evaluation",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-20T12:19:52Z"
     }
   ]
 }
