@@ -1,6 +1,8 @@
 //! Full evaluation time against the "full recompute" budget (engineering
 //! standards section 2): at most 200 ms at `large` (100,000 nodes) and 3 s
-//! at `stress` (1,000,000 nodes). Results are recorded in ADR 0005.
+//! at `stress` (1,000,000 nodes). Results are recorded in ADR 0005, and
+//! the before/after cost of the explain-why trace (recorded by every
+//! `evaluate` call) in ADR 0006.
 //!
 //! Run: `cargo bench --bench eval` (under `cargo test --benches`, divan runs
 //! every bench once as a smoke test).
