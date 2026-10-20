@@ -19,6 +19,28 @@ Status: direction set. No code yet.
 5. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
 6. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
 
+## Continuous integration
+
+Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+on each production crate (`crates/*`): `cargo fmt --check`,
+`cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`,
+the `cargo-deny` policy below, and `cargo check --locked` at the minimum
+supported Rust version (1.85). Rationale: [docs/adr/0007-workspace-ci.md](docs/adr/0007-workspace-ci.md).
+
+Run the same gates locally before you push:
+
+```sh
+scripts/ci.sh                    # fmt, clippy, test for every crate
+scripts/ci.sh crates/aegis-model # one crate
+scripts/deny.sh                  # cargo-deny (see below)
+tools/deny-fixtures/run.sh       # deny.toml policy fixtures
+```
+
+`scripts/ci.sh` prints one `ok` or `FAIL` line per crate and step, shows the
+output of failing steps only, and exits 1 if any step failed. CI pins one
+Rust version (`RUST_TOOLCHAIN` in `ci.yml`); a newer local compiler may
+report lints CI does not see yet.
+
 ## Dependency licenses
 
 Production crates (`crates/*`) must pass the `cargo-deny` policy in
