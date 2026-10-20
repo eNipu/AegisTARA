@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AegisTARA vehicle TARA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* Same tokens as aegis-design.html. Flat fills and 1px lines only (Slint software renderer, RDP). */
+:root {
+  --sheet: #E9EDF0; --panel: #FFFFFF; --ink: #1D2733; --graphite: #5B6875; --rule: #C3CBD3;
+  --wash: #F3F5F7; --accent: #5A3FC0; --accent-wash: #ECE8FA;
+  --r-high: #D55E00; --r-medium: #E69F00; --r-low: #56B4E9; --r-vlow: #009E73;
+  --mode: var(--ink); --mode-text: #FFFFFF;
+  --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+}
+:root[data-theme="dark"] {
+  --sheet: #151B21; --panel: #1E262E; --ink: #E4EAF0; --graphite: #9AA8B5;
+  --rule: #35424E; --wash: #252F38; --accent: #A894F2; --accent-wash: #2B2547; --mode-text: #151B21;
+}
+* { box-sizing: border-box; margin: 0; }
+[hidden] { display: none !important; }
+body { background: #8A949E; font-family: var(--sans); color: var(--ink); padding: 16px; }
+:root[data-theme="dark"] body { background: #0A0E12; }
+button { font: inherit; }
+
+.controls { display: flex; gap: 20px; align-items: center; color: #fff; font-size: 14px; margin-bottom: 12px; flex-wrap: wrap; }
+.controls fieldset { border: 0; padding: 0; display: flex; gap: 6px; align-items: center; }
+.controls legend { float: left; margin-right: 6px; }
+.controls button { padding: 4px 10px; border: 1px solid #fff; background: transparent; color: #fff; border-radius: 2px; cursor: pointer; }
+.controls button[aria-pressed="true"] { background: #fff; color: #1D2733; }
+
+.fit { transform-origin: 0 0; width: 1440px; }
+.window { width: 1440px; height: 900px; background: var(--panel); display: grid;
+  grid-template-rows: 28px 30px 48px 1fr 28px; border: 1px solid var(--rule); font-size: 14px; }
+.band { background: var(--mode); color: var(--mode-text); display: flex; align-items: center; gap: 16px; padding: 0 12px; font-size: 13px; }
+.band .grow { flex: 1; }
+.band button { font-size: 13px; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 2px; padding: 1px 8px; }
+.menubar { display: flex; gap: 2px; padding: 0 6px; align-items: center; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.menubar span { padding: 4px 8px; }
+
+.header { display: flex; align-items: stretch; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--rule); }
+.header h1 { font-size: 16px; font-weight: 700; align-self: center; }
+.header .grow { flex: 1; }
+.tabs { display: flex; gap: 2px; }
+.tab { border: 0; background: transparent; color: var(--graphite); padding: 0 12px; border-bottom: 3px solid transparent; cursor: pointer; font-size: 14px; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.version { color: var(--graphite); font-size: 13px; align-self: center; }
+.btn { font-size: 13px; padding: 5px 12px; border-radius: 2px; border: 1px solid var(--rule); background: var(--panel); color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+.btn:focus-visible, .tab:focus-visible, .controls button:focus-visible, .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.main { display: grid; grid-template-columns: 236px 1fr 400px; min-height: 0; }
+
+/* rail: scope tree on top (vehicle and its modules), TARA steps below */
+.rail { border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; }
+.rail h2 { font-size: 12px; font-weight: 600; color: var(--graphite); padding: 12px 16px 6px; }
+.scope { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px 16px; border-left: 3px solid transparent; font-size: 13px; align-items: baseline; }
+.scope.top { font-weight: 700; }
+.scope.child { padding-left: 30px; }
+.scope.on { border-left-color: var(--ink); background: var(--wash); font-weight: 600; }
+.scope .src { color: var(--graphite); font-size: 12px; font-weight: 400; }
+.scope .flag { color: var(--r-high); font-weight: 700; font-size: 12px; }
+.scope.more { color: var(--graphite); }
+.step { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px; align-items: baseline; padding: 5px 16px; font-size: 13px; }
+.step .n, .step .count { color: var(--graphite); font-variant-numeric: tabular-nums; font-size: 12px; }
+.rail .spacer { flex: 1; }
+.legend { padding: 10px 16px; border-top: 1px solid var(--rule); font-size: 12px; color: var(--graphite); display: grid; gap: 5px; }
+.legend div { display: flex; align-items: center; gap: 8px; }
+.sw { width: 10px; height: 10px; flex: none; display: inline-block; }
+
+/* canvas */
+.canvas { position: relative; background: var(--sheet); overflow: hidden; }
+.canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.view[hidden] { display: none; }
+.cv-tools { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; }
+.seg { display: flex; border: 1px solid var(--rule); border-radius: 2px; background: var(--panel); }
+.seg button { border: 0; background: transparent; color: var(--ink); padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--panel); font-weight: 600; }
+.cv-note { font-size: 12px; color: var(--graphite); background: var(--panel); border: 1px solid var(--rule); padding: 4px 8px; }
+
+/* vehicle map */
+.zone { position: absolute; border: 1px solid var(--rule); background: transparent; }
+.zone > span { position: absolute; left: 8px; top: 6px; font-size: 12px; color: var(--graphite); }
+.zone.ext { border-style: dashed; }
+.mod { position: absolute; width: 150px; height: 84px; background: var(--panel); border: 1px solid var(--rule); border-radius: 2px; padding: 6px 8px 0 14px; }
+.mod::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--r, var(--rule)); }
+.mod.ext { border-style: dashed; }
+.mod.ext::before { display: none; }
+.mod b { display: block; font-size: 13px; }
+.mod .src { font-size: 12px; color: var(--graphite); }
+.mod .st { position: absolute; left: 14px; bottom: 5px; font-size: 12px; }
+.mod .st.warn { color: var(--r-high); font-weight: 600; }
+.mod.sel { border: 2px solid var(--accent); }
+.bus { fill: none; stroke: var(--graphite); stroke-width: 1.5; }
+.buslabel { font-size: 11px; fill: var(--graphite); font-family: var(--sans); }
+.path-now { fill: none; stroke: var(--ink); stroke-width: 5; stroke-linejoin: round; }
+.path-alt { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 6 5; }
+.station { fill: var(--panel); stroke: var(--ink); stroke-width: 2.5; }
+.stationnum { font-size: 11px; font-weight: 700; fill: var(--ink); font-family: var(--sans); text-anchor: middle; }
+
+/* attack tree */
+.edge { fill: none; stroke: var(--graphite); stroke-width: 1.25; }
+.edge.crit { stroke: var(--ink); stroke-width: 3.5; }
+.gate { fill: var(--panel); stroke: var(--graphite); stroke-width: 1.5; }
+.gate.crit { stroke: var(--ink); stroke-width: 2.5; }
+.node { position: absolute; width: 196px; height: 64px; background: var(--panel); border: 1px solid var(--rule); border-radius: 2px; padding: 4px 8px 0 14px; overflow: hidden; }
+.node::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--r); }
+.node .mt { font-size: 11px; color: var(--graphite); }
+.node .t { font-size: 13px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node .m { position: absolute; left: 14px; right: 8px; bottom: 4px; display: flex; justify-content: space-between; font-size: 13px; }
+.node .score { font-weight: 700; font-variant-numeric: tabular-nums; }
+.node .score span { font-weight: 400; color: var(--graphite); margin-left: 4px; }
+.node .score s { font-weight: 400; color: var(--graphite); margin-right: 4px; }
+.node .kind { color: var(--graphite); font-size: 12px; }
+.node.ref { border-style: dashed; }
+.node.sel { border: 2px solid var(--accent); }
+/* a control is a barrier drawn across the edge it blocks; planned controls are outlined */
+.ctl { stroke: var(--ink); stroke-width: 5; }
+.ctl.planned { stroke-dasharray: 3 2; }
+.ctl.off { opacity: 0; }
+.ctllabel { font-size: 11px; font-weight: 700; fill: var(--ink); font-family: var(--sans); }
+
+/* inspector */
+.insp { border-left: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; }
+.insp-head { padding: 14px 18px 0; }
+.insp h2 { font-size: 17px; font-weight: 700; line-height: 1.3; }
+.insp .sub { color: var(--graphite); font-size: 13px; margin-top: 2px; }
+.itabs { display: flex; gap: 2px; border-bottom: 1px solid var(--rule); margin-top: 10px; }
+.itabs .tab { padding: 6px 10px; font-size: 13px; }
+.ibody { overflow: auto; padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 14px; }
+.ibody h3 { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+
+/* risk ladder: three evaluations of the same tree */
+.ladder { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--rule); }
+.ladder > div { padding: 8px 10px; border-right: 1px solid var(--rule); }
+.ladder > div:last-child { border-right: 0; }
+.ladder .lab { font-size: 12px; color: var(--graphite); }
+.ladder .val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.ladder .fz { font-size: 12px; display: flex; align-items: center; gap: 5px; }
+.ladder > div { border-bottom: 3px solid transparent; }
+.ladder > .on { background: var(--wash); border-bottom-color: var(--ink); }
+.accept { font-size: 13px; padding: 8px 10px; border: 1px solid var(--rule); border-left: 4px solid var(--ink); }
+.accept.no { border-left-color: var(--r-high); }
+
+.d { position: relative; padding-left: 26px; padding-bottom: 12px; }
+.d::before { content: ""; position: absolute; left: 8px; top: 20px; bottom: 0; width: 2px; background: var(--ink); }
+.d:last-child::before { display: none; }
+.d .k { position: absolute; left: 0; top: 1px; width: 18px; height: 18px; border: 2px solid var(--ink); background: var(--panel); font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+.d .k.planned { border-style: dashed; }
+.d .claim { font-weight: 600; line-height: 1.35; font-size: 13.5px; }
+.d .rule { color: var(--graphite); font-size: 13px; margin: 2px 0 4px; line-height: 1.4; }
+.d .alert { font-size: 13px; margin-top: 4px; padding: 4px 8px; background: var(--accent-wash); border-left: 3px solid var(--accent); }
+code { font-family: var(--mono); font-size: 12px; background: var(--wash); padding: 1px 5px; border: 1px solid var(--rule); border-radius: 2px; }
+.rows { display: grid; grid-template-columns: 1fr auto; font-size: 13px; border-top: 1px solid var(--rule); }
+.rows > * { padding: 4px 0; border-bottom: 1px solid var(--rule); }
+.rows .v { text-align: right; font-variant-numeric: tabular-nums; padding-left: 12px; }
+.rows .dim { color: var(--graphite); }
+.ok { font-weight: 600; }
+.open { color: var(--r-high); font-weight: 600; }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.status { border-top: 1px solid var(--rule); display: flex; align-items: center; gap: 18px; padding: 0 12px; font-size: 12px; color: var(--graphite); background: var(--wash); }
+.status .grow { flex: 1; }
+.status b { color: var(--r-high); }
+.status .prob { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="controls" role="toolbar" aria-label="Mockup controls">
+  <fieldset><legend>Theme</legend>
+    <button data-set-theme="light" aria-pressed="true">Light</button>
+    <button data-set-theme="dark" aria-pressed="false">Dark</button>
+  </fieldset>
+  <span>Use the window's tabs: Vehicle map and Attack tree. On the tree, switch Initial, Current, Target.</span>
+</div>
+
+<div class="fit" id="fit">
+<div class="window">
+  <div class="band"><span class="grow">You're editing the vehicle TARA. Module TARAs from suppliers stay read-only here.</span><button>Release edit lock</button></div>
+  <nav class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Project</span><span>Help</span></nav>
+  <header class="header">
+    <h1>E-platform 2028</h1>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-view="map" aria-selected="true">Vehicle map</button>
+      <button class="tab" role="tab" data-view="tree" aria-selected="false">Attack tree</button>
+      <button class="tab" role="tab" aria-selected="false">Risk register</button>
+      <button class="tab" role="tab" aria-selected="false">Obligations</button>
+    </div>
+    <span class="grow"></span>
+    <span class="version">47 modules, 3,812 threats, baseline B3</span>
+  </header>
+
+  <div class="main">
+    <aside class="rail">
+      <h2>Scope</h2>
+      <div class="scope top"><span>Vehicle TARA</span><span class="src">own</span></div>
+      <div class="scope child"><span>Telematics unit<br><span class="src">Supplier, package 2.1</span></span><span class="flag" title="1 open assumption">1</span></div>
+      <div class="scope child"><span>Infotainment<br><span class="src">In-house, v0.9</span></span><span></span></div>
+      <div class="scope child"><span>Central gateway<br><span class="src">Supplier, 3.2, update 3.3</span></span><span class="flag" title="Update available">new</span></div>
+      <div class="scope child on" id="scopeBrake"><span>Brake ECU<br><span class="src">Supplier, 1.4, sealed</span></span><span class="flag" title="1 open assumption">1</span></div>
+      <div class="scope child"><span>Steering ECU<br><span class="src">Supplier, 2.0</span></span><span></span></div>
+      <div class="scope child more"><span>42 more modules</span><span></span></div>
+      <h2>TARA steps for the vehicle</h2>
+      <div class="step"><span class="n">1</span><span>Item definition</span><span class="count">118</span></div>
+      <div class="step"><span class="n">5</span><span>Attack trees</span><span class="count">3,812</span></div>
+      <div class="step"><span class="n">7</span><span>Treatment</span><span class="count">412</span></div>
+      <div class="spacer"></div>
+      <div class="legend" aria-label="Ratings">
+        <div><span class="sw" style="background:var(--r-high)"></span>High, 0 to 13</div>
+        <div><span class="sw" style="background:var(--r-medium)"></span>Medium, 14 to 19</div>
+        <div><span class="sw" style="background:var(--r-low)"></span>Low, 20 to 24</div>
+        <div><span class="sw" style="background:var(--r-vlow)"></span>Very low, 25 and up</div>
+      </div>
+    </aside>
+
+    <!-- VEHICLE MAP -->
+    <section class="canvas view" data-view="map" aria-label="Vehicle map">
+      <div class="zone ext" style="left:16px;top:16px;width:184px;height:690px"><span>Outside the vehicle</span></div>
+      <div class="zone" style="left:216px;top:16px;width:190px;height:690px"><span>Connectivity</span></div>
+      <div class="zone" style="left:422px;top:16px;width:180px;height:690px"><span>Central gateway</span></div>
+      <div class="zone" style="left:618px;top:16px;width:170px;height:690px"><span>Chassis domain</span></div>
+      <svg aria-hidden="true">
+        <path class="bus" d="M180 122 H230"/><text class="buslabel" x="186" y="114">Cellular</text>
+        <path class="bus" d="M380 122 H470 V300"/><text class="buslabel" x="476" y="200">CAN-1</text>
+        <path class="bus" d="M180 372 H440"/><text class="buslabel" x="290" y="364">OBD</text>
+        <path class="bus" d="M380 522 H480 V384"/><text class="buslabel" x="404" y="514">Ethernet</text>
+        <path class="bus" d="M590 330 H610 V242 H630 M610 330 V422 H630"/><text class="buslabel" x="564" y="296">CAN-2</text>
+        <!-- second-easiest path today: remote via TCU (dashed); easiest: physical via OBD (solid) -->
+        <path class="path-alt" d="M180 116 H230 M380 116 H464 V300"/>
+        <path class="path-now" d="M180 372 H440 M590 330 H610 V242 H630"/>
+        <circle class="station" cx="210" cy="372" r="9"/><text class="stationnum" x="210" y="376">1</text>
+        <circle class="station" cx="515" cy="372" r="9"/><text class="stationnum" x="515" y="376">2</text>
+        <circle class="station" cx="705" cy="270" r="9"/><text class="stationnum" x="705" y="274">3</text>
+      </svg>
+      <div class="mod ext" style="left:30px;top:80px"><b>Backend and mobile network</b><span class="src">External</span></div>
+      <div class="mod ext" style="left:30px;top:330px"><b>Workshop OBD tester</b><span class="src">External</span></div>
+      <div class="mod" style="left:230px;top:80px;--r:var(--r-vlow)"><b>Telematics unit</b><span class="src">Supplier, package 2.1</span><span class="st warn">1 open assumption</span></div>
+      <div class="mod" style="left:230px;top:480px;--r:var(--r-vlow)"><b>Infotainment</b><span class="src">In-house, v0.9</span><span class="st">0 open</span></div>
+      <div class="mod" style="left:440px;top:300px;--r:var(--r-low)"><b>Central gateway</b><span class="src">Supplier, 3.2</span><span class="st warn">Update 3.3 to review</span></div>
+      <div class="mod sel" style="left:630px;top:200px;--r:var(--r-low)"><b>Brake ECU</b><span class="src">Supplier 1.4, sealed</span><span class="st warn">1 open assumption</span></div>
+      <div class="mod" style="left:630px;top:380px;--r:var(--r-vlow)"><b>Steering ECU</b><span class="src">Supplier, 2.0</span><span class="st">0 open</span></div>
+      <div class="cv-tools">
+        <span class="cv-note">Solid: easiest path to unintended braking today (21, Low). Dashed: next easiest (25).</span>
+      </div>
+    </section>
+
+    <!-- ATTACK TREE -->
+    <section class="canvas view" data-view="tree" aria-label="Attack tree" hidden>
+      <svg aria-hidden="true" id="treeSvg"></svg>
+      <div id="nodes"></div>
+      <div class="cv-tools">
+        <div class="seg" role="group" aria-label="Evaluate with controls">
+          <button data-scen="initial" aria-pressed="false">Initial</button>
+          <button data-scen="current" aria-pressed="true">Current</button>
+          <button data-scen="target" aria-pressed="false">Target</button>
+        </div>
+        <span class="cv-note" id="scenNote"></span>
+      </div>
+    </section>
+
+    <!-- INSPECTOR -->
+    <aside class="insp" aria-label="Inspector">
+      <!-- module selected on the map -->
+      <div class="view" data-view="map" style="display:contents">
+        <div class="insp-head">
+          <h2>Brake ECU</h2>
+          <p class="sub">Supplier TARA package 1.4, signature verified. Internals sealed; summaries only.</p>
+        </div>
+        <div class="ibody">
+          <section>
+            <h3>Port summary</h3>
+            <p class="sub" style="margin-bottom:6px">Easiest attack potential from each port to the module's goals, with current controls.</p>
+            <div class="rows">
+              <span>CAN-2 to "brake request accepted"</span><span class="v">21 <span class="sw" style="background:var(--r-low)"></span></span>
+              <span>Debug port to "firmware replaced"</span><span class="v">31 <span class="sw" style="background:var(--r-vlow)"></span></span>
+              <span>OTA to "firmware replaced"</span><span class="v">38 <span class="sw" style="background:var(--r-vlow)"></span></span>
+            </div>
+          </section>
+          <section>
+            <h3>What this module assumes</h3>
+            <div class="rows">
+              <span>The gateway blocks diagnostic requests from OBD to CAN-2</span><span class="v ok">Gateway G-4</span>
+              <span>Brake requests on CAN-2 are authenticated</span><span class="v open">Open</span>
+            </div>
+          </section>
+          <section>
+            <h3>What this module guarantees</h3>
+            <div class="rows">
+              <span>Secure boot rejects unsigned firmware</span><span class="v dim">used by 3 risks</span>
+              <span>Diagnostic access needs HSM seed-key</span><span class="v dim">used by 5 risks</span>
+            </div>
+          </section>
+          <section>
+            <h3>Vehicle risks through this module</h3>
+            <div class="rows">
+              <span>R-12 Unintended braking at speed</span><span class="v">3 now, 2 target</span>
+              <span>R-19 Brakes disabled by flooding CAN-2</span><span class="v">2 now</span>
+              <span>R-7 Brake log tampering</span><span class="v open">3, no approver</span>
+            </div>
+          </section>
+          <div class="acts"><button class="btn primary">Open module TARA</button><button class="btn">Request internals from supplier</button></div>
+        </div>
+      </div>
+
+      <!-- threat scenario selected on the tree -->
+      <div class="view" data-view="tree" style="display:contents" hidden>
+        <div class="insp-head">
+          <h2>R-12 Unintended braking at speed</h2>
+          <p class="sub">Threat TS-12 across 3 modules. Damage: vehicle brakes hard on the highway. Safety impact severe.</p>
+          <div class="itabs" role="tablist">
+            <button class="tab" role="tab" data-itab="sum" aria-selected="false">Summary</button>
+            <button class="tab" role="tab" data-itab="res" aria-selected="true">Residual risk</button>
+            <button class="tab" role="tab" data-itab="why" aria-selected="false">Why?</button>
+          </div>
+        </div>
+
+        <div class="ibody" data-ipanel="res">
+          <div class="ladder" id="ladder">
+            <div data-scen="initial"><div class="lab">Initial, no controls</div><div class="val">4</div><div class="fz"><span class="sw" style="background:var(--r-medium)"></span>15 Medium</div></div>
+            <div data-scen="current"><div class="lab">Current, verified controls</div><div class="val">3</div><div class="fz"><span class="sw" style="background:var(--r-low)"></span>21 Low</div></div>
+            <div data-scen="target"><div class="lab">Target, with planned</div><div class="val">2</div><div class="fz"><span class="sw" style="background:var(--r-vlow)"></span>25 Very low</div></div>
+          </div>
+          <p class="accept no">Acceptance level for severe safety damage is 2. Today's risk of 3 is above it until C-7 ships (planned for gateway 3.3).</p>
+
+          <section>
+            <h3>How the controls bring risk down</h3>
+            <div class="d"><span class="k">0</span>
+              <p class="claim">Without controls: risk 4</p>
+              <p class="rule">Easiest path is physical via the OBD port, 15 Medium. Severe times Medium is 4.</p>
+            </div>
+            <div class="d"><span class="k">1</span>
+              <p class="claim">C-12 Authenticated diagnostics: risk 3</p>
+              <p class="rule">Verified by pen test PT-33. "Open diagnostic session" goes from 15 to 21: expertise proficient to expert, equipment specialized to bespoke.</p>
+              <p class="rule">Circumvention checked: glitching the HSM to skip the seed-key check rates 22. That is harder than 21, so the control holds.</p>
+            </div>
+            <div class="d"><span class="k planned">2</span>
+              <p class="claim">C-7 Gateway OBD filter: risk 2</p>
+              <p class="rule">Planned. Comes from the gateway supplier's guarantee G-4. "Send spoofed brake request" goes from 7 to 26.</p>
+              <p class="alert">The easiest path switches to remote via the telematics unit (25). More controls on the OBD path no longer lower this risk.</p>
+            </div>
+          </section>
+
+          <section>
+            <h3>This result relies on</h3>
+            <div class="rows">
+              <span>Gateway guarantee G-4, package 3.2</span><span class="v open">3.3 rewords it</span>
+              <span>Brake ECU guarantee: seed-key in HSM</span><span class="v ok">Verified</span>
+              <span>TCU authenticates CAN-1 messages (C-3)</span><span class="v dim">Planned</span>
+            </div>
+          </section>
+
+          <section>
+            <h3>Treatment</h3>
+            <p class="rule" style="color:var(--graphite);font-size:13px;margin-bottom:8px">Reduce. Owner: chassis security team. Cybersecurity goal CG-4 covers it.</p>
+            <div class="acts"><button class="btn">Add a control</button><button class="btn">Accept residual risk…</button></div>
+          </section>
+        </div>
+
+        <div class="ibody" data-ipanel="sum" hidden>
+          <div class="rows">
+            <span>Damage</span><span class="v">Vehicle brakes hard on the highway</span>
+            <span>Impact</span><span class="v">Safety severe, financial moderate</span>
+            <span>Asset</span><span class="v">Brake request on CAN-2, integrity</span>
+            <span>UN R155 Annex 5</span><span class="v">Spoofing of messages</span>
+            <span>Paths</span><span class="v">3, across 3 modules</span>
+            <span>Controls</span><span class="v">1 verified, 2 planned</span>
+            <span>Risk now</span><span class="v">3, target 2</span>
+          </div>
+        </div>
+        <div class="ibody" data-ipanel="why" hidden>
+          <p class="sub">The step-by-step derivation from the single-TARA design, evaluated for the selected scenario.</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="status">
+    <span class="prob"><b>3</b> open obligations, <b>2</b> problems</span>
+    <span class="grow"></span>
+    <span>Synced with tara.oem.internal</span>
+    <span>CPU renderer</span>
+    <span>100%</span>
+  </footer>
+</div>
+</div>
+
+<script>
+const RC = r => r <= 13 ? ["High", "var(--r-high)"] : r <= 19 ? ["Medium", "var(--r-medium)"] : r <= 24 ? ["Low", "var(--r-low)"] : ["Very low", "var(--r-vlow)"];
+// [x, y, module, title, {initial, current, target}, kind, flags]
+const N = {
+  root: [16, 386, "Vehicle", "Unintended braking at speed", [15, 21, 25], "any 1 of 3", "sel"],
+  rem:  [278, 134, "Telematics unit", "Remote via telematics unit", [25, 25, 25], "all 3 needed"],
+  phy:  [278, 386, "Gateway, Brake ECU", "Physical via OBD port", [15, 21, 26], "all 3 needed"],
+  mal:  [278, 600, "Brake ECU", "Malicious brake firmware", [38, 38, 38], "any 1 of 2"],
+  r1: [590, 58, "Telematics unit", "Exploit cellular modem", [17, 17, 17]],
+  r2: [590, 134, "Telematics unit", "Pivot from TCU to CAN-1", [12, 12, 20]],
+  r3: [590, 210, "Central gateway, 3.2", "Gateway port summary", [25, 25, 25], "", "ref"],
+  p1: [590, 310, "Vehicle", "Gain access to OBD port", [4, 4, 4]],
+  p2: [590, 386, "Brake ECU, 1.4", "Open diagnostic session", [15, 21, 21]],
+  p3: [590, 462, "Central gateway, 3.2", "Send spoofed brake request", [7, 7, 26]],
+  m1: [590, 562, "Brake ECU, 1.4", "Supplier build server", [55, 55, 55], "", "ref"],
+  m2: [590, 638, "Brake ECU, 1.4", "Bypass OTA signature check", [38, 38, 38], "", "ref"],
+};
+const S = { initial: 0, current: 1, target: 2 };
+// critical path per scenario
+const CRIT = { initial: ["phy", "p2"], current: ["phy", "p2"], target: ["rem", "r3"] };
+const CTL = [ // [child, label, planned-from-scenario]
+  ["p2", "C-12", "current", false], ["p3", "C-7", "target", true], ["r2", "C-3", "target", true],
+];
+const NOTES = {
+  initial: "No controls. Easiest path: physical via OBD, 15.",
+  current: "Verified controls only. Easiest path: physical via OBD, 21.",
+  target: "With planned controls. Easiest path moved to remote via TCU, 25.",
+};
+const kids = { root: ["rem", "phy", "mal"], rem: ["r1", "r2", "r3"], phy: ["p1", "p2", "p3"], mal: ["m1", "m2"] };
+const W = 196, H = 64, cy = id => N[id][1] + H / 2;
+
+function drawTree(sc) {
+  const i = S[sc], crit = CRIT[sc];
+  document.getElementById("nodes").innerHTML = Object.entries(N).map(([id, [x, y, mod, t, v, k, f]]) => {
+    const [rl, col] = RC(v[i]); const was = i > 0 && v[0] !== v[i] ? `<s>${v[0]}</s>` : "";
+    return `<div class="node ${f || ""}" style="left:${x}px;top:${y}px;--r:${col}" aria-label="${t}: ${v[i]}, ${rl}">
+      <div class="mt">${f === "ref" ? "Summary from " : ""}${mod}</div><div class="t" title="${t}">${t}</div>
+      <div class="m"><span class="score">${was}${v[i]}<span>${rl}</span></span><span class="kind">${k || ""}</span></div></div>`;
+  }).join("");
+  let svg = "";
+  for (const [p, cs] of Object.entries(kids)) {
+    const px = N[p][0] + W, py = cy(p), gx = px + 8, onPath = p === "root" || crit[0] === p;
+    const or = N[p][5].startsWith("any");
+    svg += `<line class="edge ${onPath ? "crit" : ""}" x1="${px}" y1="${py}" x2="${gx}" y2="${py}"/>`;
+    svg += or ? `<path class="gate ${onPath ? "crit" : ""}" d="M${gx + 26} ${py - 11} Q${gx + 8} ${py - 11} ${gx} ${py} Q${gx + 8} ${py + 11} ${gx + 26} ${py + 11} Q${gx + 20} ${py} ${gx + 26} ${py - 11} Z"/>`
+              : `<path class="gate ${onPath ? "crit" : ""}" d="M${gx + 26} ${py - 11} L${gx + 13} ${py - 11} A11 11 0 0 0 ${gx + 13} ${py + 11} L${gx + 26} ${py + 11} Z"/>`;
+    const ix = gx + (or ? 22 : 26);
+    cs.forEach((c, n) => {
+      const off = (n - (cs.length - 1) / 2) * 4, cx = N[c][0], ccy = cy(c), mid = (ix + cx) / 2;
+      const isCrit = (p === "root" && c === crit[0]) || (p === crit[0] && c === crit[1]);
+      svg += `<path class="edge ${isCrit ? "crit" : ""}" d="M${ix} ${py + off} C${mid} ${py + off} ${mid} ${ccy} ${cx} ${ccy}"/>`;
+    });
+  }
+  for (const [c, lab, from, planned] of CTL) {
+    const on = S[sc] >= S[from], x = N[c][0] - 18, y = cy(c);
+    svg += `<line class="ctl ${planned ? "planned" : ""} ${on ? "" : "off"}" x1="${x}" y1="${y - 11}" x2="${x}" y2="${y + 11}"/>`;
+    svg += `<text class="ctllabel" x="${x - 16}" y="${y - 15}" ${on ? "" : 'opacity="0.45"'}>${lab}${on ? "" : " off"}</text>`;
+  }
+  document.getElementById("treeSvg").innerHTML = svg;
+  document.getElementById("scenNote").textContent = NOTES[sc];
+  document.querySelectorAll("[data-scen]").forEach(b => {
+    if (b.tagName === "BUTTON") b.setAttribute("aria-pressed", b.dataset.scen === sc);
+    else b.classList.toggle("on", b.dataset.scen === sc);
+  });
+}
+document.querySelectorAll("button[data-scen]").forEach(b => b.onclick = () => drawTree(b.dataset.scen));
+drawTree("current");
+
+function showView(v) {
+  document.querySelectorAll(".tab[data-view]").forEach(t => t.setAttribute("aria-selected", t.dataset.view === v));
+  document.querySelectorAll(".view").forEach(el => el.hidden = el.dataset.view !== v);
+  document.querySelectorAll(".insp > .view").forEach(el => el.style.display = el.dataset.view === v ? "contents" : "none");
+}
+document.querySelectorAll(".tab[data-view]").forEach(t => t.onclick = () => showView(t.dataset.view));
+document.querySelectorAll("[data-itab]").forEach(t => t.onclick = () => {
+  document.querySelectorAll("[data-itab]").forEach(x => x.setAttribute("aria-selected", x === t));
+  document.querySelectorAll("[data-ipanel]").forEach(p => p.hidden = p.dataset.ipanel !== t.dataset.itab);
+});
+document.querySelectorAll("[data-set-theme]").forEach(b => b.onclick = () => {
+  document.documentElement.dataset.theme = b.dataset.setTheme;
+  document.querySelectorAll("[data-set-theme]").forEach(x => x.setAttribute("aria-pressed", x === b));
+});
+showView(new URLSearchParams(location.search).get("view") || "map");
+const fit = document.getElementById("fit");
+function scale() { const s = Math.min(1, (innerWidth - 32) / 1440); fit.style.transform = `scale(${s})`; fit.style.height = 900 * s + "px"; }
+addEventListener("resize", scale); scale();
+</script>
+</body>
+</html>
