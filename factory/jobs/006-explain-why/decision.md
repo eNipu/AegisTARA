@@ -1,0 +1,5 @@
+APPROVE
+The owner answered all five open questions in rework.md (2026-10-20), and every answer kept the spec's default. The diff stays inside crates/aegis-model plus the new ADR 0006, which the spec asks for.
+All four round-1 reviewers passed. Their notes are minor and do not block: the pre-filled `resize`, an unreachable `get_mut` skip, and `explain` returning `None` with no reason given, which the UI job can refine later.
+Two small additions go beyond the letter of the spec, and both are documented in build.md and ADR 0006. `explain` also checks that the node count matches, which keeps `inputs()` from panicking and fits the spec's goal of catching edited trees. `MaxMin` overrides `seq_and_kept`, so its SAND gates are traced as Selected, as a selection rule should be.
+It touches no auth, licensing, crypto, `unsafe`, Cargo or dependency files, `docs/decisions.md`, or `docs/engineering-standards.md`. The always-on trace adds about 4% to evaluate time (2.0 ms of the 200 ms budget at large, 21 ms of 3 s at stress), and the owner confirmed always-on. The budgets themselves are unchanged.
