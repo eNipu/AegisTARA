@@ -109,6 +109,22 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-20T14:07:47Z"
+    },
+    {
+      "id": "007-eval-property-tests",
+      "title": "Property tests for attack tree evaluation",
+      "branch": "factory/007-eval-property-tests",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-20T15:23:57Z"
     }
   ]
 }

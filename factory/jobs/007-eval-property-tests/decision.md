@@ -1,0 +1,5 @@
+APPROVE
+All four open questions in the spec are answered in rework.md: no ADR, fix bugs in this job, a 60 s debug budget, and commit any regressions file. No bug was found, so `src/`, `Cargo.toml` and `Cargo.lock` are unchanged (AC10).
+The diff adds one test-only file, `crates/aegis-model/tests/eval_properties.rs`, and covers AC1 to AC12. It goes beyond the spec in a few small, test-only ways: Poly traces in AC2 and a `fix_empty = true` pass in AC5. Two config changes support the spec rather than adding to it: `FileFailurePersistence::Direct` makes the regressions path match rework answer 4, and the `PROPTEST_CASES` check keeps the soak run that the spec mentions working.
+All four reviewers (code, security, UI, UX) passed with no blocking findings. The only reservation is a minor note that `tests/properties.rs` has the same persistence-path problem. It is out of scope and a possible backlog item, not a risk to this merge.
+It does not touch auth, licensing, crypto, `unsafe`, dependencies, `docs/decisions.md`, performance budgets or MUST rules. The suite runs in about 1.8 s against the 60 s limit.
