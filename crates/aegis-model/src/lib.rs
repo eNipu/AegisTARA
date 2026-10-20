@@ -22,9 +22,17 @@
 //! result, an [`Evaluation`], is derived data kept apart from the tree.
 //! [`MaxMin`] (feasibility levels) and [`MinTime`] are built in.
 //!
+//! Every value explains itself: the evaluation records a [`Derivation`] per
+//! node (a caller-supplied leaf, one [`Selected`](Derivation::Selected)
+//! deciding child, or several children [`Combined`](Derivation::Combined)).
+//! [`Evaluation::explain`] returns a node's rule, inputs, and deciding
+//! child, and [`Evaluation::why_path`] follows the deciding children from
+//! the root down to the step that dominates the result.
+//!
 //! See `docs/adr/0001-arena-and-typed-ids.md` for why the model is built this
 //! way, `docs/adr/0002-dag-links-and-cycle-detection.md` for links and
-//! cycle detection, and `docs/adr/0005-tree-evaluation.md` for evaluation.
+//! cycle detection, `docs/adr/0005-tree-evaluation.md` for evaluation, and
+//! `docs/adr/0006-explain-why-traces.md` for explain-why traces.
 //!
 //! # Example
 //!
@@ -54,6 +62,8 @@ mod topo;
 mod tree;
 
 pub use error::ModelError;
-pub use eval::{AttributeDomain, Evaluation, MaxMin, MinTime, evaluate};
+pub use eval::{
+    AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
+};
 pub use id::{NodeId, NodeIdx};
 pub use tree::{AttackTree, GateKind, Node};
