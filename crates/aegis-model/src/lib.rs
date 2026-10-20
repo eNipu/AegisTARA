@@ -15,9 +15,16 @@
 //! more [`parents`](AttackTree::parents). Errors name nodes by their stable
 //! [`NodeId`], never by label.
 //!
+//! [`evaluate`] computes a value for every node in one O(V + E) pass over
+//! that order, in an [`AttributeDomain`] chosen by the caller (how OR, AND,
+//! and sequential AND combine child values), with the leaf values supplied
+//! by the caller. Each node is evaluated once, also when it is shared. The
+//! result, an [`Evaluation`], is derived data kept apart from the tree.
+//! [`MaxMin`] (feasibility levels) and [`MinTime`] are built in.
+//!
 //! See `docs/adr/0001-arena-and-typed-ids.md` for why the model is built this
-//! way, and `docs/adr/0002-dag-links-and-cycle-detection.md` for links and
-//! cycle detection.
+//! way, `docs/adr/0002-dag-links-and-cycle-detection.md` for links and
+//! cycle detection, and `docs/adr/0005-tree-evaluation.md` for evaluation.
 //!
 //! # Example
 //!
@@ -41,10 +48,12 @@
 #![warn(clippy::pedantic)]
 
 mod error;
+mod eval;
 mod id;
 mod topo;
 mod tree;
 
 pub use error::ModelError;
+pub use eval::{AttributeDomain, Evaluation, MaxMin, MinTime, evaluate};
 pub use id::{NodeId, NodeIdx};
 pub use tree::{AttackTree, GateKind, Node};
