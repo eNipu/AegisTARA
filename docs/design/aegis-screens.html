@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AegisTARA screens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* Same tokens as the other mockups. Flat fills and 1px lines only. */
+:root {
+  --sheet: #E9EDF0; --panel: #FFFFFF; --ink: #1D2733; --graphite: #5B6875; --rule: #C3CBD3;
+  --wash: #F3F5F7; --accent: #5A3FC0; --accent-wash: #ECE8FA;
+  --r-high: #D55E00; --r-medium: #E69F00; --r-low: #56B4E9; --r-vlow: #009E73;
+  /* risk value ramp (pack data). Text colour on a cell is picked by contrast, in Rust. */
+  --k1: #EEF1F4; --k2: #F7D9C2; --k3: #EFA36C; --k4: #D4622A; --k5: #9C3A0A;
+  --mode: var(--ink); --mode-text: #FFFFFF;
+  --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+}
+:root[data-theme="dark"] {
+  --sheet: #151B21; --panel: #1E262E; --ink: #E4EAF0; --graphite: #9AA8B5;
+  --rule: #35424E; --wash: #252F38; --accent: #A894F2; --accent-wash: #2B2547; --mode-text: #151B21;
+  --k1: #2A333C;
+}
+* { box-sizing: border-box; margin: 0; }
+[hidden] { display: none !important; }
+body { background: #8A949E; font-family: var(--sans); color: var(--ink); padding: 16px; }
+:root[data-theme="dark"] body { background: #0A0E12; }
+button { font: inherit; }
+
+.controls { display: flex; gap: 16px; align-items: center; color: #fff; font-size: 14px; margin-bottom: 12px; flex-wrap: wrap; }
+.controls fieldset { border: 0; padding: 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.controls legend { float: left; margin-right: 6px; }
+.controls button { padding: 4px 10px; border: 1px solid #fff; background: transparent; color: #fff; border-radius: 2px; cursor: pointer; }
+.controls button[aria-pressed="true"] { background: #fff; color: #1D2733; }
+
+.fit { transform-origin: 0 0; width: 1440px; }
+.window { width: 1440px; height: 900px; background: var(--panel); display: grid;
+  grid-template-rows: 28px 30px 48px 1fr 28px; border: 1px solid var(--rule); font-size: 14px; }
+.band { background: var(--mode); color: var(--mode-text); display: flex; align-items: center; gap: 16px; padding: 0 12px; font-size: 13px; }
+.band .grow { flex: 1; }
+.band button { font-size: 13px; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 2px; padding: 1px 8px; }
+.menubar { display: flex; gap: 2px; padding: 0 6px; align-items: center; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.menubar span { padding: 4px 8px; }
+.header { display: flex; align-items: stretch; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--rule); }
+.header h1 { font-size: 16px; font-weight: 700; align-self: center; white-space: nowrap; }
+.header .grow { flex: 1; }
+.tabs { display: flex; gap: 2px; }
+.tab { border: 0; background: transparent; color: var(--graphite); padding: 0 11px; border-bottom: 3px solid transparent; cursor: pointer; font-size: 14px; white-space: nowrap; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.btn { font-size: 13px; padding: 5px 12px; border-radius: 2px; border: 1px solid var(--rule); background: var(--panel); color: var(--ink); cursor: pointer; white-space: nowrap; }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+.btn[disabled] { color: var(--graphite); border-style: dashed; cursor: not-allowed; }
+.header .btn { align-self: center; }
+:is(.btn, .tab, .controls button, .seg button, .cell, .opt):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.main { display: grid; grid-template-columns: 236px 1fr 400px; min-height: 0; }
+.rail { border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; }
+.rail h2 { font-size: 12px; font-weight: 600; color: var(--graphite); padding: 12px 16px 6px; }
+.scope { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px 16px; border-left: 3px solid transparent; font-size: 13px; align-items: baseline; }
+.scope.top { font-weight: 700; }
+.scope.child { padding-left: 30px; }
+.scope.on { border-left-color: var(--ink); background: var(--wash); font-weight: 600; }
+.scope .src { color: var(--graphite); font-size: 12px; font-weight: 400; }
+.scope .flag { color: var(--r-high); font-weight: 700; font-size: 12px; }
+.scope.more { color: var(--graphite); }
+
+.center { min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.toolbar { display: flex; gap: 10px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--rule); }
+.toolbar .grow { flex: 1; }
+.toolbar .lbl { font-size: 13px; color: var(--graphite); }
+.search { border: 1px solid var(--rule); background: var(--panel); color: var(--graphite); font-size: 13px; padding: 5px 10px; width: 220px; border-radius: 2px; }
+.seg { display: flex; border: 1px solid var(--rule); border-radius: 2px; background: var(--panel); }
+.seg button { border: 0; background: transparent; color: var(--ink); padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--panel); font-weight: 600; }
+.scroll { overflow: auto; padding: 4px 18px 18px; flex: 1; }
+
+/* attribute sheet */
+.group { margin-top: 14px; }
+.group > header { display: flex; align-items: baseline; gap: 10px; padding: 6px 0; border-bottom: 2px solid var(--ink); }
+.group > header h3 { font-size: 14px; font-weight: 700; }
+.group > header .meta { font-size: 12px; color: var(--graphite); }
+.group > header .grow { flex: 1; }
+.kv { display: grid; grid-template-columns: 200px 1fr 150px; font-size: 13px; }
+.kv > * { padding: 6px 0; border-bottom: 1px solid var(--rule); }
+.kv .k { color: var(--graphite); }
+.kv .s { color: var(--graphite); font-size: 12px; text-align: right; }
+.kv .s.over { color: var(--accent); font-weight: 600; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th { text-align: left; font-weight: 600; color: var(--graphite); font-size: 12px; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--rule); }
+table.grid td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+table.grid tr.sel td { background: var(--accent-wash); }
+table.grid tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
+table.grid .c { text-align: center; width: 44px; }
+.dot { display: inline-block; width: 9px; height: 9px; background: var(--ink); }
+.dim { color: var(--graphite); }
+.lock { color: var(--graphite); font-size: 12px; }
+
+/* inspector */
+.insp { border-left: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; overflow: auto; padding: 14px 18px 18px; gap: 14px; }
+.insp h2 { font-size: 17px; font-weight: 700; line-height: 1.3; }
+.insp h3 { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+.sub { color: var(--graphite); font-size: 13px; margin-top: 2px; line-height: 1.4; }
+.rows { display: grid; grid-template-columns: 1fr auto; font-size: 13px; border-top: 1px solid var(--rule); }
+.rows > * { padding: 4px 0; border-bottom: 1px solid var(--rule); }
+.rows .v { text-align: right; font-variant-numeric: tabular-nums; padding-left: 12px; }
+.open { color: var(--r-high); font-weight: 600; }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.sw { width: 10px; height: 10px; flex: none; display: inline-block; }
+.big { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+code { font-family: var(--mono); font-size: 12px; background: var(--wash); padding: 1px 5px; border: 1px solid var(--rule); border-radius: 2px; }
+
+/* threat x damage matrix */
+.tdm { border-collapse: collapse; font-size: 13px; }
+.tdm th, .tdm td { border: 1px solid var(--rule); }
+.tdm thead th { vertical-align: bottom; text-align: left; font-weight: 600; padding: 6px 8px; width: 92px; background: var(--panel); }
+.tdm thead th .imp { display: block; font-weight: 400; font-size: 12px; color: var(--graphite); margin-top: 3px; }
+.tdm thead th.sel { box-shadow: inset 0 -3px 0 var(--accent); }
+.tdm tbody th { text-align: left; font-weight: 400; padding: 6px 8px; width: 270px; background: var(--panel); }
+.tdm tbody th b { font-weight: 600; }
+.tdm tbody th .imp { display: flex; justify-content: space-between; font-size: 12px; color: var(--graphite); margin-top: 2px; }
+.tdm tbody tr.sel th { box-shadow: inset 3px 0 0 var(--accent); }
+.tdm td { padding: 0; height: 50px; text-align: center; background: var(--panel); }
+.cell { width: 100%; height: 100%; border: 0; background: transparent; cursor: pointer; font-size: 15px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.cell.l1 { background: var(--k1); } .cell.l2 { background: var(--k2); color: #1D2733; } .cell.l3 { background: var(--k3); color: #1D2733; }
+.cell.l4 { background: var(--k4); color: #fff; } .cell.l5 { background: var(--k5); color: #fff; }
+.cell.sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+.cell small { display: block; font-size: 11px; font-weight: 400; }
+.tdm td.none { color: var(--graphite); font-size: 12px; }
+.keyrow { display: flex; gap: 14px; align-items: center; font-size: 12px; color: var(--graphite); padding: 10px 0 0; flex-wrap: wrap; }
+.keyrow span { display: flex; gap: 5px; align-items: center; }
+.keyrow i { width: 14px; height: 14px; display: inline-block; border: 1px solid var(--rule); }
+
+.chain { display: grid; gap: 0; }
+.chain > div { border: 1px solid var(--rule); padding: 8px 10px; font-size: 13px; }
+.chain > div + div { border-top: 0; }
+.chain .lab { font-size: 12px; color: var(--graphite); }
+.chain .ar { border: 0 !important; padding: 2px 0 2px 14px; color: var(--graphite); font-size: 12px; }
+
+/* report flow */
+.rmain { display: grid; grid-template-columns: 236px 1fr 340px; min-height: 0; }
+.stepper { border-right: 1px solid var(--rule); padding: 14px 0; }
+.stepper h2 { font-size: 12px; font-weight: 600; color: var(--graphite); padding: 0 16px 8px; }
+.st { display: grid; grid-template-columns: 26px 1fr; gap: 8px; padding: 8px 16px; border-left: 3px solid transparent; font-size: 13px; cursor: pointer; background: transparent; border-top: 0; border-right: 0; border-bottom: 0; text-align: left; width: 100%; color: var(--ink); }
+.st .n { width: 22px; height: 22px; border: 2px solid var(--rule); display: grid; place-items: center; font-size: 12px; font-weight: 700; color: var(--graphite); }
+.st.done .n { border-color: var(--ink); background: var(--ink); color: var(--panel); }
+.st.on { border-left-color: var(--ink); background: var(--wash); font-weight: 600; }
+.st.on .n { border-color: var(--ink); color: var(--ink); }
+.st small { display: block; color: var(--graphite); font-weight: 400; font-size: 12px; margin-top: 1px; }
+.rcenter { display: flex; flex-direction: column; min-height: 0; }
+.rbody { flex: 1; overflow: auto; padding: 20px 28px; }
+.rbody h2 { font-size: 20px; font-weight: 700; }
+.rbody > .sub { margin: 4px 0 16px; font-size: 14px; max-width: 64ch; }
+.rfoot { border-top: 1px solid var(--rule); padding: 10px 28px; display: flex; gap: 10px; align-items: center; }
+.rfoot .grow { flex: 1; }
+.rfoot .sub { margin: 0; }
+.opt { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; padding: 12px 14px; border: 1px solid var(--rule); border-bottom-width: 0; text-align: left; background: var(--panel); color: var(--ink); width: 100%; cursor: pointer; }
+.opt:last-of-type { border-bottom-width: 1px; }
+.opt .rb { width: 16px; height: 16px; border: 2px solid var(--graphite); border-radius: 50%; margin-top: 2px; }
+.opt.on { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
+.opt.on .rb { border: 5px solid var(--accent); }
+.opt .cb { width: 16px; height: 16px; border: 2px solid var(--graphite); margin-top: 2px; display: grid; place-items: center; font-size: 11px; }
+.opt .cb.on { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+.opt b { font-weight: 600; font-size: 14px; }
+.opt .sub { margin-top: 2px; }
+.opt .pages { font-size: 12px; color: var(--graphite); white-space: nowrap; }
+.fields { display: grid; grid-template-columns: 180px 1fr; gap: 0; max-width: 680px; font-size: 13px; }
+.fields > * { padding: 9px 0; border-bottom: 1px solid var(--rule); }
+.fields .k { color: var(--graphite); }
+.select { display: flex; justify-content: space-between; border: 1px solid var(--rule); padding: 5px 10px; border-radius: 2px; max-width: 380px; background: var(--panel); }
+.select::after { content: "▾"; color: var(--graphite); }
+.check { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.badge { font-size: 12px; font-weight: 700; padding: 1px 6px; border: 1.5px solid currentColor; text-align: center; }
+.badge.block { color: var(--r-high); }
+.badge.warn { color: var(--graphite); }
+.badge.pass { color: var(--r-vlow); }
+.summary { border-left: 1px solid var(--rule); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.summary h3 { font-size: 14px; font-weight: 700; }
+
+/* report page (A4, scaled). Same tokens as the screen: the PDF and the app look like one product. */
+.preview { display: grid; grid-template-columns: 96px 1fr; gap: 18px; }
+.thumbs { display: grid; gap: 10px; align-content: start; }
+.thumb { width: 84px; height: 119px; border: 1px solid var(--rule); background: #fff; padding: 6px; font-size: 6px; color: #5B6875; position: relative; cursor: pointer; }
+.thumb.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+.thumb i { display: block; height: 3px; background: #C3CBD3; margin-bottom: 3px; }
+.thumb i.h { height: 5px; width: 70%; background: #1D2733; }
+.thumb span { position: absolute; bottom: -16px; left: 0; right: 0; text-align: center; font-size: 11px; }
+.page { width: 560px; height: 792px; background: #fff; color: #1D2733; border: 1px solid var(--rule); padding: 36px 40px; font-size: 10.5px; line-height: 1.45; position: relative; }
+.page .wm { position: absolute; right: 40px; top: 16px; font-size: 9px; color: #5B6875; }
+.page h1 { font-size: 19px; line-height: 1.2; }
+.page .meta { color: #5B6875; font-size: 10px; margin-top: 3px; }
+.page .lead { font-size: 13px; line-height: 1.4; margin: 14px 0 12px; padding: 8px 0 8px 10px; border-left: 3px solid #1D2733; }
+.page h2 { font-size: 11.5px; font-weight: 700; margin: 12px 0 6px; padding-bottom: 3px; border-bottom: 1.5px solid #1D2733; }
+.mxs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.mx { display: grid; grid-template-columns: 54px repeat(4, 1fr); font-size: 9px; }
+.mx > div { height: 26px; display: grid; place-items: center; border: 1px solid #fff; font-size: 10.5px; font-weight: 700; color: #1D2733; }
+.mx .ax { font-weight: 400; color: #5B6875; font-size: 8.5px; justify-items: end; padding-right: 4px; }
+.mx .cx { font-weight: 400; color: #5B6875; font-size: 8.5px; height: 22px; text-align: center; line-height: 1.1; }
+.mx .l1 { background: #EEF1F4; } .mx .l2 { background: #F7D9C2; } .mx .l3 { background: #EFA36C; }
+.mx .l4 { background: #D4622A; color: #fff; } .mx .l5 { background: #9C3A0A; color: #fff; }
+.mxcap { font-size: 10px; font-weight: 700; margin-bottom: 4px; }
+.mxcap span { font-weight: 400; color: #5B6875; }
+.lvl { display: grid; grid-template-columns: 70px repeat(3, 1fr); font-size: 10px; border-top: 1px solid #C3CBD3; }
+.lvl > div { padding: 3px 0; border-bottom: 1px solid #C3CBD3; font-variant-numeric: tabular-nums; }
+.lvl .hd { color: #5B6875; }
+.top5 { padding-left: 16px; display: grid; gap: 5px; }
+.top5 b { font-weight: 700; }
+.pfoot { position: absolute; left: 40px; right: 40px; bottom: 18px; display: flex; justify-content: space-between; font-size: 8.5px; color: #5B6875; border-top: 1px solid #C3CBD3; padding-top: 5px; }
+
+.status { border-top: 1px solid var(--rule); display: flex; align-items: center; gap: 18px; padding: 0 12px; font-size: 12px; color: var(--graphite); background: var(--wash); }
+.status .grow { flex: 1; }
+.status b { color: var(--r-high); }
+.status .prob { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="controls" role="toolbar" aria-label="Mockup controls">
+  <fieldset><legend>Screen</legend>
+    <button data-go="comp">Component attributes</button>
+    <button data-go="tdm">Threats and damage</button>
+    <button data-go="r1">Report 1</button><button data-go="r2">2</button><button data-go="r3">3</button><button data-go="r4">4</button><button data-go="r5">5</button>
+  </fieldset>
+  <fieldset><legend>Theme</legend>
+    <button data-set-theme="light" aria-pressed="true">Light</button>
+    <button data-set-theme="dark" aria-pressed="false">Dark</button>
+  </fieldset>
+</div>
+
+<div class="fit" id="fit">
+<div class="window">
+  <div class="band"><span class="grow" id="bandText">You're editing the vehicle TARA. Module TARAs from suppliers stay read-only here.</span><button>Release edit lock</button></div>
+  <nav class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Project</span><span>Reports</span><span>Help</span></nav>
+  <header class="header">
+    <h1>E-platform 2028</h1>
+    <div class="tabs" role="tablist" id="tabs">
+      <button class="tab" role="tab" data-link="map" aria-selected="false">Vehicle map</button>
+      <button class="tab" role="tab" data-go="comp" aria-selected="true">Components</button>
+      <button class="tab" role="tab" data-go="tdm" aria-selected="false">Threats and damage</button>
+      <button class="tab" role="tab" data-link="tree" aria-selected="false">Attack tree</button>
+      <button class="tab" role="tab" aria-selected="false">Risk register</button>
+      <button class="tab" role="tab" aria-selected="false">Obligations</button>
+    </div>
+    <span class="grow"></span>
+    <button class="btn" data-go="r1">Create report…</button>
+  </header>
+
+  <!-- ============ COMPONENT ATTRIBUTES ============ -->
+  <div class="main" data-screen="comp">
+    <aside class="rail">
+      <h2>Scope</h2>
+      <div class="scope top"><span>Vehicle TARA</span><span class="src">own</span></div>
+      <div class="scope child"><span>Telematics unit<br><span class="src">Supplier, package 2.1</span></span><span class="flag">1</span></div>
+      <div class="scope child"><span>Infotainment<br><span class="src">In-house, v0.9</span></span><span></span></div>
+      <div class="scope child"><span>Central gateway<br><span class="src">Supplier, 3.2, update 3.3</span></span><span class="flag">new</span></div>
+      <div class="scope child on"><span>Brake ECU<br><span class="src">Supplier, 1.4, sealed</span></span><span class="flag">1</span></div>
+      <div class="scope child"><span>Steering ECU<br><span class="src">Supplier, 2.0</span></span><span></span></div>
+      <div class="scope child more"><span>42 more modules</span><span></span></div>
+    </aside>
+    <section class="center">
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Layout">
+          <button aria-pressed="true">Sheet</button><button aria-pressed="false">Table, all components</button>
+        </div>
+        <span class="search">Filter attributes</span>
+        <span class="grow"></span>
+        <span class="lbl">Fields from pack "Automotive ISO/SAE 21434" 1.2</span>
+      </div>
+      <div class="scroll">
+        <section class="group">
+          <header><h3>General</h3><span class="grow"></span><span class="meta">Source</span></header>
+          <div class="kv">
+            <span class="k">Part number</span><span>BR-ECU-7740</span><span class="s">Supplier 1.4</span>
+            <span class="k">Lifecycle phase</span><span>Development, B-sample</span><span class="s">Supplier 1.4</span>
+            <span class="k">Safety relevance</span><span>ASIL D, from HARA item H-4</span><span class="s">Linked</span>
+            <span class="k">Variants</span><span>All markets, all trims</span><span class="s over">Set in vehicle TARA</span>
+            <span class="k">Classification</span><span>Confidential</span><span class="s over">Set in vehicle TARA</span>
+          </div>
+        </section>
+        <section class="group">
+          <header><h3>Interfaces</h3><span class="meta">3 ports</span><span class="grow"></span><span class="meta">Supplier 1.4</span></header>
+          <table class="grid">
+            <thead><tr><th>Port</th><th>Type</th><th>Exposure</th><th>Reached from</th><th>Protection</th></tr></thead>
+            <tbody>
+              <tr><td>CAN-2</td><td>CAN FD</td><td>In-vehicle</td><td>Central gateway</td><td>SecOC planned (C-3)</td></tr>
+              <tr><td>Debug</td><td>JTAG</td><td>Housing opened</td><td class="dim">None</td><td>Locked at end of line</td></tr>
+              <tr><td>OTA</td><td>Logical</td><td>Remote</td><td>Telematics unit</td><td>Signed images</td></tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="group">
+          <header><h3>Assets and security properties</h3><span class="meta">4 assets</span><span class="grow"></span><button class="btn">Add asset</button></header>
+          <table class="grid" aria-label="Assets with confidentiality, integrity, availability, authenticity">
+            <thead><tr><th>Asset</th><th class="c" title="Confidentiality">Conf.</th><th class="c" title="Integrity">Integ.</th><th class="c" title="Availability">Avail.</th><th class="c" title="Authenticity">Auth.</th><th>Threats</th></tr></thead>
+            <tbody>
+              <tr class="sel"><td>Brake request on CAN-2</td><td class="c dim">–</td><td class="c"><span class="dot" aria-label="yes"></span></td><td class="c"><span class="dot" aria-label="yes"></span></td><td class="c"><span class="dot" aria-label="yes"></span></td><td>4, worst risk 3</td></tr>
+              <tr><td>Brake firmware</td><td class="c dim">–</td><td class="c"><span class="dot"></span></td><td class="c dim">–</td><td class="c"><span class="dot"></span></td><td>3, worst risk 2</td></tr>
+              <tr><td>Event log</td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot"></span></td><td class="c dim">–</td><td class="c dim">–</td><td>2, worst risk 3</td></tr>
+              <tr><td>Diagnostic seed-key</td><td class="c"><span class="dot"></span></td><td class="c dim">–</td><td class="c dim">–</td><td class="c dim">–</td><td>1, worst risk 2</td></tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="group">
+          <header><h3>Assumptions and guarantees</h3><span class="meta">2 and 2</span><span class="grow"></span><span class="lock">Sealed by supplier: read-only</span></header>
+          <div class="kv">
+            <span class="k">Assumes</span><span>The gateway blocks diagnostic requests from OBD to CAN-2</span><span class="s">Matched, gateway G-4</span>
+            <span class="k">Assumes</span><span>Brake requests on CAN-2 are authenticated</span><span class="s open">Open</span>
+            <span class="k">Guarantees</span><span>Secure boot rejects unsigned firmware</span><span class="s">Used by 3 risks</span>
+            <span class="k">Guarantees</span><span>Diagnostic access needs the HSM seed-key</span><span class="s">Used by 5 risks</span>
+          </div>
+        </section>
+        <section class="group">
+          <header><h3>Functions and data flows</h3><span class="meta">5 functions, 9 flows</span><span class="grow"></span><button class="btn">Show</button></header>
+        </section>
+      </div>
+    </section>
+    <aside class="insp">
+      <div><h2>Brake request on CAN-2</h2><p class="sub">Asset of Brake ECU. Integrity, availability and authenticity matter.</p></div>
+      <section><h3>Threats to this asset</h3>
+        <div class="rows">
+          <span>TS-12 Spoofed brake request</span><span class="v">risk 3</span>
+          <span>TS-13 CAN-2 flooding</span><span class="v">risk 2</span>
+          <span>TS-14 Replayed brake request</span><span class="v">risk 2</span>
+          <span>TS-16 Delayed brake request</span><span class="v">risk 1</span>
+        </div>
+      </section>
+      <section><h3>Damage these threats can cause</h3>
+        <div class="rows">
+          <span>DS-3 Vehicle brakes hard at speed</span><span class="v">safety severe</span>
+          <span>DS-4 Brakes don't respond</span><span class="v">safety severe</span>
+          <span>DS-11 Vehicle off the road</span><span class="v">operational major</span>
+        </div>
+      </section>
+      <section><h3>History</h3>
+        <p class="sub">Integrity and authenticity from supplier package 1.4. Availability added in the vehicle TARA by Mira Chen on 9 Oct: "Loss of braking is a vehicle-level damage, not visible to the supplier."</p>
+      </section>
+      <div class="acts"><button class="btn primary" data-go="tdm">Show in threats and damage</button></div>
+    </aside>
+  </div>
+
+  <!-- ============ THREATS AND DAMAGE ============ -->
+  <div class="main" data-screen="tdm" hidden>
+    <aside class="rail">
+      <h2>Scope</h2>
+      <div class="scope top"><span>Vehicle TARA</span><span class="src">own</span></div>
+      <div class="scope child"><span>Telematics unit<br><span class="src">Supplier, package 2.1</span></span><span class="flag">1</span></div>
+      <div class="scope child"><span>Central gateway<br><span class="src">Supplier, 3.2, update 3.3</span></span><span class="flag">new</span></div>
+      <div class="scope child on"><span>Brake ECU<br><span class="src">Supplier, 1.4, sealed</span></span><span class="flag">1</span></div>
+      <div class="scope child more"><span>43 more modules</span><span></span></div>
+    </aside>
+    <section class="center">
+      <div class="toolbar">
+        <span class="lbl">Risk value for</span>
+        <div class="seg" role="group" aria-label="Evaluate with controls">
+          <button data-tscen="0" aria-pressed="false">Initial</button><button data-tscen="1" aria-pressed="true">Current</button><button data-tscen="2" aria-pressed="false">Target</button>
+        </div>
+        <span class="search">Filter threats or damage</span>
+        <span class="grow"></span>
+        <button class="btn">Link threat to damage</button>
+      </div>
+      <div class="scroll">
+        <p class="sub" style="margin:10px 0">Each filled cell is one threat leading to one damage. The number is the risk for that pair. Rows: threats to Brake ECU assets. Columns: vehicle-level damage scenarios.</p>
+        <table class="tdm" id="tdm"></table>
+        <div class="keyrow" aria-label="Risk value key">
+          <span><i style="background:var(--k1)"></i>1</span><span><i style="background:var(--k2)"></i>2</span><span><i style="background:var(--k3)"></i>3</span><span><i style="background:var(--k4)"></i>4</span><span><i style="background:var(--k5)"></i>5</span>
+          <span>Acceptance level: 2 for safety, 3 otherwise</span>
+        </div>
+      </div>
+    </section>
+    <aside class="insp" id="tdmInsp"></aside>
+  </div>
+
+  <!-- ============ REPORT FLOW ============ -->
+  <div class="rmain" data-screen="report" hidden>
+    <nav class="stepper" aria-label="Report steps">
+      <h2>Create report</h2>
+      <button class="st" data-go="r1"><span class="n">1</span><span>Report type<small id="s1v">Executive summary</small></span></button>
+      <button class="st" data-go="r2"><span class="n">2</span><span>Scope and version<small>Vehicle, baseline B3</small></span></button>
+      <button class="st" data-go="r3"><span class="n">3</span><span>Contents<small>7 sections</small></span></button>
+      <button class="st" data-go="r4"><span class="n">4</span><span>Check<small>1 blocks official</small></span></button>
+      <button class="st" data-go="r5"><span class="n">5</span><span>Preview and create<small>12 pages</small></span></button>
+    </nav>
+    <section class="rcenter">
+      <div class="rbody">
+        <!-- step 1 -->
+        <div data-rstep="r1">
+          <h2>What kind of report?</h2>
+          <p class="sub">Each type has its own template. You can change the sections in step 3.</p>
+          <div role="radiogroup" aria-label="Report type">
+            <button class="opt on" role="radio" aria-checked="true"><span class="rb"></span><span><b>Executive summary</b><p class="sub">Risk posture, risk matrices before and after controls, top risks in plain language. For management and release gates.</p></span><span class="pages">about 12 pages</span></button>
+            <button class="opt" role="radio" aria-checked="false"><span class="rb"></span><span><b>Full TARA work product</b><p class="sub">Every asset, damage, threat, attack tree and decision, following ISO/SAE 21434 clause 15. For assessors and auditors.</p></span><span class="pages">about 900 pages</span></button>
+            <button class="opt" role="radio" aria-checked="false"><span class="rb"></span><span><b>Residual risk and acceptance</b><p class="sub">Retained and shared risks, who accepted them, and the cybersecurity claims behind them.</p></span><span class="pages">about 40 pages</span></button>
+            <button class="opt" role="radio" aria-checked="false"><span class="rb"></span><span><b>Changes since a baseline</b><p class="sub">Change impact analysis: what changed and which risks moved.</p></span><span class="pages">varies</span></button>
+            <button class="opt" role="radio" aria-checked="false"><span class="rb"></span><span><b>UN R155 coverage</b><p class="sub">Each Annex 5 threat: covered, with the matching threat scenarios, or not applicable with a reason. For type approval.</p></span><span class="pages">about 30 pages</span></button>
+          </div>
+        </div>
+        <!-- step 2 -->
+        <div data-rstep="r2" hidden>
+          <h2>Which part and which version?</h2>
+          <p class="sub">An official report needs a signed baseline. A draft can use the current state and carries a "Draft" watermark.</p>
+          <div class="fields">
+            <span class="k">Scope</span><span><span class="select">Whole vehicle, 47 modules</span></span>
+            <span class="k">Version</span><span><span class="select">Baseline B3 "SOP gate", signed 12 Oct</span></span>
+            <span class="k">Compare with</span><span><span class="select">Baseline B2 "Design freeze"</span></span>
+            <span class="k">Variant</span><span><span class="select">EU market, all trims</span></span>
+            <span class="k">Standards</span><span><span class="select">ISO/SAE 21434 and UN R155</span></span>
+            <span class="k">Risk shown as</span><span><span class="select">Initial and current; target in the appendix</span></span>
+          </div>
+        </div>
+        <!-- step 3 -->
+        <div data-rstep="r3" hidden>
+          <h2>What goes in?</h2>
+          <p class="sub">Sections print in this order. Drag to reorder.</p>
+          <div id="sections"></div>
+          <div class="fields" style="margin-top:18px">
+            <span class="k">Risk matrix axes</span><span>Impact by attack feasibility, from the pack's risk table</span>
+            <span class="k">Matrix cells show</span><span><span class="select">Number of risks</span></span>
+            <span class="k">Classification</span><span><span class="select">Confidential</span></span>
+            <span class="k">Watermark</span><span>Your name and the time on every page (company policy)</span>
+          </div>
+        </div>
+        <!-- step 4 -->
+        <div data-rstep="r4" hidden>
+          <h2>Check before creating</h2>
+          <p class="sub">The same rules as the problems list. Blocking issues stop an official report; a draft can still be made.</p>
+          <div class="check"><span class="badge block">Blocks</span><span><b>R-7 Brake log tampering is retained without an approver.</b><p class="sub">An accepted residual risk needs an approver before it can appear in an official report.</p></span><button class="btn">Go to R-7</button></div>
+          <div class="check"><span class="badge warn">Warning</span><span><b>3 assumptions have no matching guarantee.</b><p class="sub">They will be listed under "Open obligations".</p></span><button class="btn">Show</button></div>
+          <div class="check"><span class="badge warn">Warning</span><span><b>Central gateway 3.3 is not reviewed.</b><p class="sub">The report uses 3.2, the version in baseline B3.</p></span><button class="btn">Compare</button></div>
+          <div class="check"><span class="badge pass">Passed</span><span><b>All 412 risks have a treatment decision.</b></span><span></span></div>
+          <div class="check"><span class="badge pass">Passed</span><span><b>Every UN R155 Annex 5 threat is covered or marked not applicable.</b></span><span></span></div>
+          <div class="check"><span class="badge pass">Passed</span><span><b>The server's results match this computer's.</b><p class="sub">Engine 0.4.1 on both.</p></span><span></span></div>
+        </div>
+        <!-- step 5 -->
+        <div data-rstep="r5" hidden>
+          <div class="preview">
+            <div class="thumbs">
+              <div class="thumb on"><i class="h"></i><i></i><i style="width:60%"></i><i></i><i></i><span>1</span></div>
+              <div class="thumb"><i class="h"></i><i></i><i></i><i style="width:50%"></i><span>2</span></div>
+              <div class="thumb"><i class="h"></i><i></i><i style="width:80%"></i><span>3</span></div>
+              <div class="thumb"><i class="h"></i><i></i><i></i><span>4</span></div>
+            </div>
+            <article class="page" aria-label="Report page 1">
+              <span class="wm">Confidential. Draft, created by Ana Ruiz, 19 Oct 2026 14:02</span>
+              <h1>E-platform 2028: cybersecurity risk posture</h1>
+              <p class="meta">Baseline B3 "SOP gate", signed 12 Oct 2026. Compared with B2. EU market, all trims.</p>
+              <p class="lead">41 of 412 risks are above the acceptance level today, down from 115 at B2. With the 14 planned controls, 3 remain, and each needs an approved acceptance.</p>
+              <h2>Risk matrices</h2><p class="meta" style="margin:-2px 0 6px">Rows: impact. Columns: attack feasibility. Each number counts risks; the shade is the risk value.</p>
+              <div class="mxs">
+                <div><p class="mxcap">Initial <span>no controls</span></p><div class="mx" id="mxI"></div></div>
+                <div><p class="mxcap">Current <span>verified controls</span></p><div class="mx" id="mxC"></div></div>
+              </div>
+              <h2>Risks by level</h2>
+              <div class="lvl">
+                <div class="hd">Risk value</div><div class="hd">Initial</div><div class="hd">Current</div><div class="hd">Target</div>
+                <div>4 and 5</div><div>45</div><div>14</div><div>0</div>
+                <div>3</div><div>70</div><div>27</div><div>3</div>
+                <div>1 and 2</div><div>297</div><div>371</div><div>409</div>
+              </div>
+              <h2>Top five risks today</h2>
+              <ol class="top5">
+                <li><b>Unintended braking at speed (R-12), risk 3.</b> An attacker with OBD access and expert skills can make the car brake hard. The planned gateway filter brings this to 2.</li>
+                <li><b>Phone-key relay unlocks the car (R-31), risk 3.</b> Needs two people near the owner and the car. Ultra-wideband ranging is planned.</li>
+                <li><b>Steering assist lost through CAN flooding (R-44), risk 3.</b> Needs access inside the car. Rate limiting in the gateway is planned.</li>
+                <li><b>Brake log tampering (R-7), risk 3.</b> Retained. Approval pending.</li>
+                <li><b>Location data leak from the backend (R-58), risk 3.</b> Privacy severe. Access logging is in place; key rotation is planned.</li>
+              </ol>
+              <div class="pfoot"><span>AegisTARA report, engine 0.4.1, pack Automotive 1.2</span><span>Page 1 of 12</span></div>
+            </article>
+          </div>
+        </div>
+      </div>
+      <div class="rfoot">
+        <button class="btn" id="back">Back</button>
+        <span class="grow"></span>
+        <p class="sub" id="footNote"></p>
+        <span id="footBtns"></span>
+      </div>
+    </section>
+    <aside class="summary" id="rsum">
+      <h3>Your report</h3>
+      <div class="rows">
+        <span>Type</span><span class="v">Executive summary</span>
+        <span>Scope</span><span class="v">Whole vehicle</span>
+        <span>Version</span><span class="v">Baseline B3</span>
+        <span>Compared with</span><span class="v">B2</span>
+        <span>Sections</span><span class="v">7</span>
+        <span>Pages</span><span class="v">about 12</span>
+      </div>
+      <h3>Output</h3>
+      <p class="sub">Draft PDF: made on this computer, watermarked "Draft".</p>
+      <p class="sub">Official PDF: made and signed by the company server, stored with the baseline. Needs a fresh sign-in.</p>
+      <p class="sub">Excel: risk register and matrices as tables.</p>
+    </aside>
+  </div>
+
+  <footer class="status">
+    <span class="prob"><b>3</b> open obligations, <b>2</b> problems</span>
+    <span class="grow"></span>
+    <span>Synced with tara.oem.internal</span>
+    <span>CPU renderer</span>
+  </footer>
+</div>
+</div>
+
+<script>
+/* ---------- risk table (pack data, example values) ---------- */
+const IMPACT = ["Severe", "Major", "Moderate", "Negligible"], FEAS = ["Very low", "Low", "Medium", "High"];
+const RISK = [[2, 3, 4, 5], [1, 2, 3, 4], [1, 2, 2, 3], [1, 1, 1, 1]];
+const fz = p => p <= 13 ? 3 : p <= 19 ? 2 : p <= 24 ? 1 : 0;           // attack potential -> feasibility column
+const FZN = ["Very low", "Low", "Medium", "High"];
+
+/* ---------- threats x damage ---------- */
+const DMG = [ // id, name, impact index, category
+  ["DS-3", "Vehicle brakes hard at speed", 0, "safety"], ["DS-4", "Brakes don't respond", 0, "safety"],
+  ["DS-9", "Warranty fraud goes undetected", 1, "financial"], ["DS-11", "Vehicle off the road", 1, "operational"],
+  ["DS-15", "Driving data exposed", 2, "privacy"],
+];
+const THR = [ // id, name, asset, potentials [initial,current,target], linked damage ids
+  ["TS-12", "Spoofed brake request", "Brake request, integrity", [15, 21, 25], ["DS-3", "DS-11"]],
+  ["TS-13", "CAN-2 flooding", "Brake request, availability", [22, 26, 26], ["DS-4", "DS-11"]],
+  ["TS-20", "Firmware replaced via debug port", "Firmware, integrity", [31, 31, 31], ["DS-3", "DS-4", "DS-9"]],
+  ["TS-21", "Malicious OTA firmware", "Firmware, authenticity", [38, 38, 38], ["DS-3", "DS-4", "DS-11"]],
+  ["TS-27", "Brake log tampering", "Event log, integrity", [16, 16, 16], ["DS-9"]],
+  ["TS-30", "Driving data read out", "Event log, confidentiality", [14, 14, 20], ["DS-15"]],
+];
+let tsc = 1, selT = 0, selD = 0;
+function drawTdm() {
+  const head = `<thead><tr><th style="width:270px">Threat scenario<span class="imp">Attack feasibility</span></th>${DMG.map(([id, n, im, c], j) =>
+    `<th class="${j === selD ? "sel" : ""}">${id} ${n}<span class="imp">${c[0].toUpperCase() + c.slice(1)} ${IMPACT[im].toLowerCase()}</span></th>`).join("")}</tr></thead>`;
+  const body = THR.map(([id, n, a, p, links], i) => {
+    const f = fz(p[tsc]);
+    return `<tr class="${i === selT ? "sel" : ""}"><th><b>${id}</b> ${n}<span class="imp"><span>${a}</span><span>${p[tsc]} ${FZN[f]}</span></span></th>${DMG.map(([did, , im], j) => {
+      if (!links.includes(did)) return `<td class="none" aria-label="no link"></td>`;
+      const r = RISK[im][f], s = i === selT && j === selD;
+      return `<td><button class="cell l${r} ${s ? "sel" : ""}" data-t="${i}" data-d="${j}" aria-label="${id} leads to ${did}, risk ${r}">${r}</button></td>`;
+    }).join("")}</tr>`;
+  }).join("");
+  document.getElementById("tdm").innerHTML = head + `<tbody>${body}</tbody>`;
+  document.querySelectorAll(".cell").forEach(c => c.onclick = () => { selT = +c.dataset.t; selD = +c.dataset.d; drawTdm(); });
+  const [tid, tn, ta, tp, tl] = THR[selT], [did, dn, dim, dc] = DMG[selD], f = fz(tp[tsc]), r = RISK[dim][f];
+  const others = tl.filter(x => x !== did).map(x => { const d = DMG.find(y => y[0] === x); return `<span>${x} ${d[1]}</span><span class="v">risk ${RISK[d[2]][f]}</span>`; }).join("");
+  document.getElementById("tdmInsp").innerHTML = `
+    <div><h2>${tid} leads to ${did}</h2><p class="sub">${tn} can cause: ${dn.toLowerCase()}.</p></div>
+    <div style="display:flex;align-items:baseline;gap:10px"><span class="big">${r}</span><span>risk, ${["initial", "current", "target"][tsc]}</span></div>
+    <section class="chain" aria-label="From asset to risk">
+      <div><span class="lab">Asset</span><br>${ta}</div><div class="ar">threatened by</div>
+      <div><span class="lab">Threat scenario, feasibility from its attack tree</span><br>${tid} ${tn}: <b>${tp[tsc]} ${FZN[f]}</b></div><div class="ar">leads to</div>
+      <div><span class="lab">Damage scenario, highest impact category decides</span><br>${did} ${dn}: <b>${dc} ${IMPACT[dim].toLowerCase()}</b></div><div class="ar">gives</div>
+      <div><span class="lab">Risk table</span><br><code>risk(${IMPACT[dim]}, ${FZN[f]}) = ${r}</code></div>
+    </section>
+    ${others ? `<section><h3>${tid} also leads to</h3><div class="rows">${others}</div></section>` : ""}
+    <section><h3>Why this threat causes this damage</h3><p class="sub">${selT === 0 && selD === 0 ? '"The brake ECU acts on any well-formed brake request. A forged request at speed triggers full braking." Mira Chen, 9 Oct.' : "Rationale recorded on the link."}</p></section>
+    <div class="acts"><button class="btn primary">Open attack tree</button><button class="btn">Edit impact</button><button class="btn">Remove link</button></div>`;
+  document.querySelectorAll("[data-tscen]").forEach(b => b.setAttribute("aria-pressed", +b.dataset.tscen === tsc));
+}
+document.querySelectorAll("[data-tscen]").forEach(b => b.onclick = () => { tsc = +b.dataset.tscen; drawTdm(); });
+drawTdm();
+
+/* ---------- report sections + matrices ---------- */
+const SECTIONS = [
+  ["One-page risk posture", "Headline, matrices, counts by level, top five", true],
+  ["Risk matrices in detail", "Initial and current, with risk IDs per cell", true],
+  ["What changed since B2", "Risks that moved, and why", true],
+  ["Accepted residual risks", "Who accepted them, when, and the claims behind them", true],
+  ["Open obligations", "Unmatched assumptions and missing evidence", true],
+  ["UN R155 coverage summary", "Annex 5 threats covered or not applicable", true],
+  ["Appendix: Why? for the top risks", "The step-by-step derivation of each number", true],
+  ["Full risk register", "All 412 risks as a table, adds about 30 pages", false],
+];
+document.getElementById("sections").innerHTML = SECTIONS.map(([t, d, on]) =>
+  `<button class="opt" role="checkbox" aria-checked="${on}"><span class="cb ${on ? "on" : ""}">${on ? "✓" : ""}</span><span><b>${t}</b><p class="sub">${d}</p></span><span class="pages">⠿</span></button>`).join("");
+const CI = [[12, 18, 22, 9], [20, 31, 35, 14], [30, 44, 38, 17], [40, 41, 30, 11]];
+const CC = [[33, 17, 8, 3], [41, 46, 10, 3], [55, 52, 22, 0], [60, 39, 18, 5]];
+function mx(el, counts) {
+  let h = `<div class="cx"></div>` + FEAS.map(f => `<div class="cx">${f}</div>`).join("");
+  IMPACT.forEach((im, i) => { h += `<div class="ax">${im}</div>` + counts[i].map((n, j) => `<div class="l${RISK[i][j]}">${n}</div>`).join(""); });
+  document.getElementById(el).innerHTML = h;
+}
+mx("mxI", CI); mx("mxC", CC);
+
+/* ---------- navigation ---------- */
+const FOOT = {
+  r1: ["", `<button class="btn primary" data-go="r2">Next: scope</button>`],
+  r2: ["", `<button class="btn primary" data-go="r3">Next: contents</button>`],
+  r3: ["7 sections, about 12 pages", `<button class="btn primary" data-go="r4">Next: check</button>`],
+  r4: ["1 issue blocks an official report", `<button class="btn primary" data-go="r5">Next: preview</button>`],
+  r5: ["Official report is blocked by R-7", `<button class="btn">Export Excel</button> <button class="btn" disabled title="Fix R-7 first">Create official PDF</button> <button class="btn primary">Create draft PDF</button>`],
+};
+const ORDER = ["r1", "r2", "r3", "r4", "r5"];
+function go(s) {
+  const isR = s.startsWith("r");
+  document.querySelector('[data-screen="comp"]').hidden = s !== "comp";
+  document.querySelector('[data-screen="tdm"]').hidden = s !== "tdm";
+  document.querySelector('[data-screen="report"]').hidden = !isR;
+  document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", t.dataset.go === s));
+  document.querySelectorAll(".controls [data-go]").forEach(b => b.setAttribute("aria-pressed", b.dataset.go === s));
+  if (isR) {
+    const k = ORDER.indexOf(s);
+    document.querySelectorAll("[data-rstep]").forEach(el => el.hidden = el.dataset.rstep !== s);
+    document.querySelectorAll(".st").forEach((el, i) => { el.classList.toggle("on", i === k); el.classList.toggle("done", i < k); el.setAttribute("aria-current", i === k ? "step" : "false"); });
+    document.getElementById("footNote").textContent = FOOT[s][0];
+    document.getElementById("footBtns").innerHTML = FOOT[s][1];
+    document.getElementById("back").textContent = k === 0 ? "Cancel" : "Back";
+    document.getElementById("back").dataset.go = k === 0 ? "comp" : ORDER[k - 1];
+    document.getElementById("rsum").hidden = s === "r5";
+    document.querySelector(".rmain").style.gridTemplateColumns = s === "r5" ? "236px 1fr" : "236px 1fr 340px";
+  }
+}
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-go]"); if (g && !g.disabled) go(g.dataset.go);
+  const l = e.target.closest("[data-link]"); if (l) location.href = "aegis-vehicle.html?view=" + l.dataset.link;
+});
+document.querySelectorAll("[data-set-theme]").forEach(b => b.onclick = () => {
+  document.documentElement.dataset.theme = b.dataset.setTheme;
+  document.querySelectorAll("[data-set-theme]").forEach(x => x.setAttribute("aria-pressed", x === b));
+});
+go(new URLSearchParams(location.search).get("s") || "comp");
+const fit = document.getElementById("fit");
+function scale() { const s = Math.min(1, (innerWidth - 32) / 1440); fit.style.transform = `scale(${s})`; fit.style.height = 900 * s + "px"; }
+addEventListener("resize", scale); scale();
+</script>
+</body>
+</html>
