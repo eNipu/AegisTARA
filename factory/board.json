@@ -216,6 +216,22 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-21T16:44:15Z"
+    },
+    {
+      "id": "012-methodology-packs",
+      "title": "Methodology packs from files",
+      "branch": "factory/012-methodology-packs",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-21T22:44:31Z"
     }
   ]
 }
