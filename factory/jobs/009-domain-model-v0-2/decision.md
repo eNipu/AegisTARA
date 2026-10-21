@@ -1,0 +1,6 @@
+APPROVE
+All three of the spec's open questions, and the owner's guiding principle (a methodology-neutral core), are answered in rework.md. The diff follows them: the methodology is fixed per project, ops use typed indices in memory, and each threat holds a sorted set of at most 16 catalog refs.
+In round 2 all four reviewers passed (code, security, UX, UI) with no blocking findings. The one round-1 blocker was a defect in the AC15 check itself, and rework.md corrects it. I re-ran the corrected check on the branch and it prints nothing.
+Scope: the diff only touches crates/aegis-model/{src,tests} and ADR 0008. It changes no dependencies (Cargo.toml and Cargo.lock are identical), adds no `unsafe` (`forbid(unsafe_code)` stays), and does not touch docs/decisions.md, docs/engineering-standards.md, auth, licensing or crypto.
+The builder added some API the spec did not list: `Project::with_slot_limit`, vocabulary count and syntax getters, `index()` accessors, and public MAX consts. It also put the second methodology's definition in tests/common. These are small, documented and tested, the code reviewer accepted them, and none of them changes behaviour the spec set.
+The open advisories are for later jobs and do not block this merge: UX wants more specific error messages, and security wants size caps when the pack loader and serde arrive.

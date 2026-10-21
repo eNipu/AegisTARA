@@ -148,6 +148,29 @@
       ],
       "decision": "APPROVE",
       "updated": "2026-10-20T21:06:06Z"
+    },
+    {
+      "id": "009-domain-model-v0-2",
+      "title": "Domain model v0 part 2: assets, damage and threat scenarios, typed operations",
+      "branch": "factory/009-domain-model-v0-2",
+      "stage": "merged",
+      "round": 2,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [
+        {
+          "security": "PASS",
+          "ux": "PASS",
+          "ui": "PASS",
+          "code": "CHANGES"
+        }
+      ],
+      "decision": "APPROVE",
+      "updated": "2026-10-21T00:35:23Z"
     }
   ]
 }
