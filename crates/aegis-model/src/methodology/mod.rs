@@ -217,14 +217,6 @@ macro_rules! vocab_index {
         pub struct $name(u8);
 
         impl $name {
-            /// Wraps a raw position. Only a [`Methodology`] (or a validated
-            /// entity) hands indices out. Not every index type needs it
-            /// outside tests.
-            #[allow(dead_code)]
-            pub(crate) fn new(i: u8) -> Self {
-                $name(i)
-            }
-
             /// Returns the position in its vocabulary, in declaration order.
             /// Time O(1).
             ///
@@ -327,6 +319,40 @@ vocab_index! {
     CatalogScheme
 }
 
+// Raw constructors, only where the crate needs them. A [`Methodology`] hands
+// out every index; these serve entity views that rebuild an index from a
+// stored position, and tests that need an out-of-range index.
+
+impl ImpactCategory {
+    /// Wraps a raw position (used by `DamageScenario::impacts`).
+    pub(crate) fn new(i: u8) -> Self {
+        ImpactCategory(i)
+    }
+}
+
+impl Property {
+    /// Wraps a raw position (used by `PropertySet::iter`).
+    pub(crate) fn new(i: u8) -> Self {
+        Property(i)
+    }
+}
+
+#[cfg(test)]
+impl Level {
+    /// Wraps a raw position, for tests.
+    pub(crate) fn new(i: u8) -> Self {
+        Level(i)
+    }
+}
+
+#[cfg(test)]
+impl CatalogScheme {
+    /// Wraps a raw position, for tests.
+    pub(crate) fn new(i: u8) -> Self {
+        CatalogScheme(i)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Validated methodology.
 // ---------------------------------------------------------------------------
@@ -351,6 +377,13 @@ struct CategoryData {
 struct ThreatCategoryData {
     entry: Entry,
     violates: PropertySet,
+}
+
+/// One validated vocabulary while it is built: the entries in declaration
+/// order and the key-to-position map.
+struct Vocab<T> {
+    items: Vec<T>,
+    by_key: BTreeMap<Arc<str>, u8>,
 }
 
 /// A validated catalog scheme.
@@ -498,35 +531,31 @@ impl Methodology {
         }
         check_label(&def.key, &def.label)?;
 
-        let (impact_categories, impact_by_key) = Self::build_impacts(&def.impact_categories)?;
-        let (properties, property_by_key) = Self::build_properties(&def.properties)?;
-        let all_properties = (0..properties.len())
+        let impacts = Self::build_impacts(&def.impact_categories)?;
+        let properties = Self::build_properties(&def.properties)?;
+        let all_properties = (0..properties.items.len())
             .filter_map(|i| u8::try_from(i).ok().map(Property))
             .collect();
-        let (threat_categories, threat_by_key) =
-            Self::build_threats(&def.threat_categories, &property_by_key)?;
-        let (schemes, scheme_by_key) = Self::build_schemes(&def.catalog_schemes)?;
+        let threats = Self::build_threats(&def.threat_categories, &properties.by_key)?;
+        let schemes = Self::build_schemes(&def.catalog_schemes)?;
 
         Ok(Methodology {
             key: def.key,
             version: def.version,
             label: def.label,
-            impact_categories,
-            impact_by_key,
-            properties,
-            property_by_key,
-            threat_categories,
-            threat_by_key,
-            schemes,
-            scheme_by_key,
+            impact_categories: impacts.items,
+            impact_by_key: impacts.by_key,
+            properties: properties.items,
+            property_by_key: properties.by_key,
+            threat_categories: threats.items,
+            threat_by_key: threats.by_key,
+            schemes: schemes.items,
+            scheme_by_key: schemes.by_key,
             all_properties,
         })
     }
 
-    #[allow(clippy::type_complexity)]
-    fn build_impacts(
-        defs: &[ImpactCategoryDef],
-    ) -> Result<(Vec<CategoryData>, BTreeMap<Arc<str>, u8>), MethodologyError> {
+    fn build_impacts(defs: &[ImpactCategoryDef]) -> Result<Vocab<CategoryData>, MethodologyError> {
         check_count(defs.len(), 1, MAX_IMPACT_CATEGORIES, || {
             if defs.is_empty() {
                 MethodologyError::NoImpactCategory
@@ -565,13 +594,10 @@ impl Methodology {
                 level_by_key,
             });
         }
-        Ok((out, by_key))
+        Ok(Vocab { items: out, by_key })
     }
 
-    #[allow(clippy::type_complexity)]
-    fn build_properties(
-        defs: &[PropertyDef],
-    ) -> Result<(Vec<Entry>, BTreeMap<Arc<str>, u8>), MethodologyError> {
+    fn build_properties(defs: &[PropertyDef]) -> Result<Vocab<Entry>, MethodologyError> {
         check_count(defs.len(), 1, MAX_PROPERTIES, || {
             if defs.is_empty() {
                 MethodologyError::NoProperty
@@ -588,14 +614,13 @@ impl Methodology {
                 MethodologyError::DuplicateProperty(k)
             })?);
         }
-        Ok((out, by_key))
+        Ok(Vocab { items: out, by_key })
     }
 
-    #[allow(clippy::type_complexity)]
     fn build_threats(
         defs: &[ThreatCategoryDef],
         property_by_key: &BTreeMap<Arc<str>, u8>,
-    ) -> Result<(Vec<ThreatCategoryData>, BTreeMap<Arc<str>, u8>), MethodologyError> {
+    ) -> Result<Vocab<ThreatCategoryData>, MethodologyError> {
         check_count(defs.len(), 1, MAX_THREAT_CATEGORIES, || {
             if defs.is_empty() {
                 MethodologyError::NoThreatCategory
@@ -634,13 +659,10 @@ impl Methodology {
             }
             out.push(ThreatCategoryData { entry, violates });
         }
-        Ok((out, by_key))
+        Ok(Vocab { items: out, by_key })
     }
 
-    #[allow(clippy::type_complexity)]
-    fn build_schemes(
-        defs: &[CatalogSchemeDef],
-    ) -> Result<(Vec<SchemeData>, BTreeMap<Arc<str>, u8>), MethodologyError> {
+    fn build_schemes(defs: &[CatalogSchemeDef]) -> Result<Vocab<SchemeData>, MethodologyError> {
         check_count(defs.len(), 0, MAX_CATALOG_SCHEMES, || {
             MethodologyError::TooManyCatalogSchemes {
                 max: MAX_CATALOG_SCHEMES,
@@ -658,7 +680,7 @@ impl Methodology {
                 syntax: s.syntax.clone(),
             });
         }
-        Ok((out, by_key))
+        Ok(Vocab { items: out, by_key })
     }
 
     // -- Identity ----------------------------------------------------------
