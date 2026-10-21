@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
-    self, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView, PropertyKeys,
-    Required, SnapshotWire, Text,
+    self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
+    PropertyKeys, Required, SnapshotWire, Text,
 };
 use crate::error::StoreError;
 use crate::id::{AssetId, DamageId, ThreatId};
@@ -133,39 +133,6 @@ impl Serialize for LinkedDamages<'_> {
 
 /// Size of the read buffer between the input and the parser.
 const READ_BUFFER_BYTES: usize = 64 * 1024;
-
-/// A reader that fails once more than [`MAX_PROJECT_FILE_BYTES`] have come
-/// through, and remembers that it did, so the caller can report
-/// [`Limit::ProjectFileBytes`] instead of the parser's I/O error. It never
-/// reads more than one byte past the cap. Time O(1) per call besides the
-/// inner read.
-struct CappedReader<R> {
-    inner: std::io::Take<R>,
-    read: u64,
-    exceeded: bool,
-}
-
-impl<R: Read> CappedReader<R> {
-    fn new(inner: R) -> Self {
-        CappedReader {
-            inner: inner.take(MAX_PROJECT_FILE_BYTES.saturating_add(1)),
-            read: 0,
-            exceeded: false,
-        }
-    }
-}
-
-impl<R: Read> Read for CappedReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        self.read = self.read.saturating_add(wire::to_u64(n));
-        if self.read > MAX_PROJECT_FILE_BYTES {
-            self.exceeded = true;
-            return Err(std::io::Error::other("project file exceeds its size cap"));
-        }
-        Ok(n)
-    }
-}
 
 impl Project {
     /// Writes the project as an `aegis-project` v1 snapshot: one line of
@@ -308,7 +275,7 @@ impl Project {
     /// # }
     /// ```
     pub fn load<R: Read>(r: R, methodology: Arc<Methodology>) -> Result<Project, StoreError> {
-        let mut input = CappedReader::new(r);
+        let mut input = CappedReader::new(r, MAX_PROJECT_FILE_BYTES);
         let decoded = wire::decode(&methodology, None, || {
             let buffered = BufReader::with_capacity(READ_BUFFER_BYTES, &mut input);
             let mut de = serde_json::Deserializer::from_reader(buffered);
@@ -316,7 +283,7 @@ impl Project {
             de.end()?;
             Ok(snapshot)
         });
-        if input.exceeded {
+        if input.exceeded() {
             return Err(StoreError::LimitExceeded(Limit::PROJECT_FILE));
         }
         let snapshot = decoded?;
@@ -357,16 +324,14 @@ mod tests {
     #[test]
     fn capped_reader_allows_exactly_the_cap() {
         let mut sink = std::io::sink();
-        let mut at = CappedReader::new(std::io::repeat(b' ').take(MAX_PROJECT_FILE_BYTES));
-        assert_eq!(
-            std::io::copy(&mut at, &mut sink).ok(),
-            Some(MAX_PROJECT_FILE_BYTES)
-        );
-        assert!(!at.exceeded);
-        let mut over = CappedReader::new(std::io::repeat(b' '));
+        let cap = MAX_PROJECT_FILE_BYTES;
+        let mut at = CappedReader::new(std::io::repeat(b' ').take(cap), cap);
+        assert_eq!(std::io::copy(&mut at, &mut sink).ok(), Some(cap));
+        assert!(!at.exceeded());
+        let mut over = CappedReader::new(std::io::repeat(b' '), cap);
         assert!(std::io::copy(&mut over, &mut sink).is_err());
-        assert!(over.exceeded);
-        assert_eq!(over.read, MAX_PROJECT_FILE_BYTES + 1);
+        assert!(over.exceeded());
+        assert_eq!(over.bytes_read(), cap + 1);
     }
 
     #[test]
@@ -388,9 +353,14 @@ mod tests {
         let p = Project::new(Arc::clone(&m));
         let mut bytes = Vec::new();
         assert!(p.save(&mut bytes).is_ok());
+        // The test methodology is named only through the test kit, so no
+        // `src` file names it (job 012, AC6).
+        let (key, version) = (m.key(), m.version());
         assert_eq!(
             String::from_utf8_lossy(&bytes),
-            "{\"format\":\"aegis-project\",\"version\":1,\"methodology\":{\"key\":\"med-device-demo\",\"version\":\"2026.1\"},\"assets\":[],\"damage_scenarios\":[],\"threat_scenarios\":[]}\n"
+            format!(
+                "{{\"format\":\"aegis-project\",\"version\":1,\"methodology\":{{\"key\":\"{key}\",\"version\":\"{version}\"}},\"assets\":[],\"damage_scenarios\":[],\"threat_scenarios\":[]}}\n"
+            )
         );
         assert_eq!(Project::load(bytes.as_slice(), m).ok(), Some(p));
     }

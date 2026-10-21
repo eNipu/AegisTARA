@@ -86,12 +86,14 @@ with `wrappers` that keeps the crate out of everything that ships.
 ## Fuzzing
 
 `crates/aegis-model/fuzz/` is a `cargo-fuzz` crate (not a production crate,
-not in CI) with two targets: `snapshot` (`Project::load`) and `op_log`
-(`OpLogReader`). Seeds are the golden v1 files in `seeds/`. Rationale:
-[docs/adr/0009-save-load-format.md](docs/adr/0009-save-load-format.md).
+not in CI) with three targets: `snapshot` (`Project::load`), `op_log`
+(`OpLogReader`), and `pack` (`Methodology::read_pack`). Seeds are the golden
+v1 files and the two methodology packs in `seeds/`. Rationale:
+[docs/adr/0009-save-load-format.md](docs/adr/0009-save-load-format.md) and
+[docs/adr/0011-methodology-pack-files.md](docs/adr/0011-methodology-pack-files.md).
 
 ```sh
-crates/aegis-model/fuzz/run.sh                # both targets, 60 s each, stable toolchain
+crates/aegis-model/fuzz/run.sh                # all three targets, 60 s each, stable toolchain
 crates/aegis-model/fuzz/run.sh 600 op_log     # one target, 10 minutes
 
 # or, with a nightly toolchain and cargo-fuzz (adds AddressSanitizer)

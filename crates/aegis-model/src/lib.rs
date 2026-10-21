@@ -62,9 +62,37 @@
 //! is methodology-neutral: the core names no impact category, rating scale,
 //! security property, threat taxonomy, or catalog. A [`MethodologyDef`] is
 //! plain data that declares them, and [`Methodology::new`] validates it.
-//! ISO/SAE 21434 + UN R155 ships as the first methodology,
-//! [`Methodology::iso21434_r155`], built through the same `new`. A second
-//! methodology is a data change, not a code change.
+//! A methodology ships as a pack file (format `aegis-methodology-pack`
+//! v1, JSON): [`Methodology::read_pack`] decodes one with capped, strict
+//! decoding ([`PackError`]) and validates it through the same `new`, and
+//! [`MethodologyDef::write_pack`] writes one. ISO/SAE 21434 + UN R155 ships
+//! as the first methodology, [`Methodology::iso21434_r155`], a pack
+//! embedded in the binary. A second methodology is one more pack file, not
+//! a code change. See `docs/adr/0011-methodology-pack-files.md`.
+//!
+//! ```
+//! use aegis_model::{Methodology, MethodologyDef};
+//!
+//! # fn main() -> Result<(), aegis_model::PackError> {
+//! let pack = r#"{"format": "aegis-methodology-pack", "version": 1, "methodology": {
+//!   "key": "tiny", "version": "1", "label": "Tiny",
+//!   "impact_categories": [{"key": "harm", "label": "Harm", "levels": [
+//!     {"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]}],
+//!   "properties": [{"key": "integrity", "label": "Integrity"}],
+//!   "threat_categories": [{"key": "corruption", "label": "Corruption",
+//!                          "violates": ["integrity"]}],
+//!   "catalog_schemes": []}}"#;
+//! let m = Methodology::read_pack(pack.as_bytes())?;
+//! assert_eq!(m.key(), "tiny");
+//!
+//! // Packs round-trip; the writer's output is canonical.
+//! let def = MethodologyDef::read_pack(pack.as_bytes())?;
+//! let mut canonical = Vec::new();
+//! def.write_pack(&mut canonical)?;
+//! assert_eq!(Methodology::read_pack(canonical.as_slice())?, m);
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! A [`Project`] is created over one `Arc<Methodology>`, fixed for its
 //! lifetime. Every change is a typed [`Op`]; [`Project::apply`] checks it
@@ -195,7 +223,7 @@ mod tree;
 
 pub use asset::{Asset, PropertySet};
 pub use damage::DamageScenario;
-pub use error::{MethodologyError, ModelError, StoreError};
+pub use error::{MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
 };
@@ -208,9 +236,9 @@ pub use methodology::{
 pub use op::Op;
 pub use project::{MAX_NAME_CHARS, Project};
 pub use store::{
-    Limit, LoggedOp, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_METHODOLOGY_VERSION_BYTES,
-    MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PROJECT_FILE_BYTES, OpLogReader, OpLogWriter,
-    VocabKind,
+    Limit, LoggedOp, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
+    MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,
+    MAX_PROJECT_FILE_BYTES, OpLogReader, OpLogWriter, VocabKind,
 };
 pub use threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
 pub use tree::{AttackTree, GateKind, Node};
