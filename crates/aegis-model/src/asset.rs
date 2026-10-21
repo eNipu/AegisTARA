@@ -14,7 +14,7 @@ use crate::methodology::Property;
 /// ```
 /// use aegis_model::{Methodology, PropertySet};
 ///
-/// # fn main() -> Result<(), aegis_model::MethodologyError> {
+/// # fn main() -> Result<(), aegis_model::PackError> {
 /// let m = Methodology::iso21434_r155()?;
 /// let set: PropertySet = m.properties().take(2).collect();
 /// assert_eq!(set.len(), 2);
@@ -52,7 +52,7 @@ impl PropertySet {
     /// ```
     /// use aegis_model::{Methodology, PropertySet};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let Some(p) = m.property("integrity") else { return Ok(()) };
     /// let set = PropertySet::empty().with(p);
@@ -71,7 +71,7 @@ impl PropertySet {
     /// ```
     /// use aegis_model::{Methodology, PropertySet};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let (Some(c), Some(i)) = (m.property("confidentiality"), m.property("integrity")) else {
     ///     return Ok(());
@@ -93,7 +93,7 @@ impl PropertySet {
     /// ```
     /// use aegis_model::{Methodology, PropertySet};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let some: PropertySet = m.properties().take(3).collect();
     /// assert!(some.is_subset(m.all_properties()));
@@ -113,7 +113,7 @@ impl PropertySet {
     /// ```
     /// use aegis_model::{Methodology, PropertySet};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let props: Vec<_> = m.properties().collect();
     /// let set: PropertySet = props.iter().rev().copied().collect();
@@ -138,7 +138,7 @@ impl PropertySet {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.all_properties().len(), 6);
     /// # Ok(())
     /// # }

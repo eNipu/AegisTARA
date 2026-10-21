@@ -1,0 +1,189 @@
+{
+  "format": "aegis-methodology-pack",
+  "version": 1,
+  "methodology": {
+    "key": "iso21434-r155",
+    "version": "0.1.0",
+    "label": "ISO/SAE 21434 + UN R155",
+    "impact_categories": [
+      {
+        "key": "safety",
+        "label": "Safety",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ]
+      },
+      {
+        "key": "financial",
+        "label": "Financial",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ]
+      },
+      {
+        "key": "operational",
+        "label": "Operational",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ]
+      },
+      {
+        "key": "privacy",
+        "label": "Privacy",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ]
+      }
+    ],
+    "properties": [
+      {
+        "key": "confidentiality",
+        "label": "Confidentiality"
+      },
+      {
+        "key": "integrity",
+        "label": "Integrity"
+      },
+      {
+        "key": "availability",
+        "label": "Availability"
+      },
+      {
+        "key": "authenticity",
+        "label": "Authenticity"
+      },
+      {
+        "key": "authorization",
+        "label": "Authorization"
+      },
+      {
+        "key": "non-repudiation",
+        "label": "Non-repudiation"
+      }
+    ],
+    "threat_categories": [
+      {
+        "key": "spoofing",
+        "label": "Spoofing",
+        "violates": [
+          "authenticity"
+        ]
+      },
+      {
+        "key": "tampering",
+        "label": "Tampering",
+        "violates": [
+          "integrity"
+        ]
+      },
+      {
+        "key": "repudiation",
+        "label": "Repudiation",
+        "violates": [
+          "non-repudiation"
+        ]
+      },
+      {
+        "key": "information-disclosure",
+        "label": "Information disclosure",
+        "violates": [
+          "confidentiality"
+        ]
+      },
+      {
+        "key": "denial-of-service",
+        "label": "Denial of service",
+        "violates": [
+          "availability"
+        ]
+      },
+      {
+        "key": "elevation-of-privilege",
+        "label": "Elevation of privilege",
+        "violates": [
+          "authorization"
+        ]
+      }
+    ],
+    "catalog_schemes": [
+      {
+        "key": "r155-annex5",
+        "label": "UN R155 Annex 5",
+        "syntax": {
+          "prefix": "",
+          "required": 1,
+          "segments": [
+            {
+              "min": 1,
+              "max": 32
+            },
+            {
+              "min": 1,
+              "max": 99
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

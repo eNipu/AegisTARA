@@ -1,0 +1,269 @@
+//! The built-in ISO/SAE 21434 + UN R155 methodology, now a pack file
+//! (`packs/iso21434-r155.json`, job 012).
+//!
+//! `expected()` is the hand-written definition that `src/methodology/iso21434.rs`
+//! built before the vocabulary moved into the pack. The tests check that
+//! the shipped pack decodes to exactly it, that the pack is canonical
+//! `write_pack` output, and the vocabulary itself (moved here from the
+//! unit tests of `iso21434.rs`).
+
+mod common;
+
+use std::sync::Arc;
+
+use aegis_model::{
+    CatalogSchemeDef, CatalogSyntax, ImpactCategoryDef, LevelDef, Methodology, MethodologyDef,
+    ModelError, PropertyDef, SegmentDef, ThreatCategoryDef,
+};
+
+/// The shipped pack bytes.
+const PACK: &str = include_str!("../packs/iso21434-r155.json");
+
+/// Impact categories, in declaration order.
+const IMPACT_CATEGORIES: [(&str, &str); 4] = [
+    ("safety", "Safety"),
+    ("financial", "Financial"),
+    ("operational", "Operational"),
+    ("privacy", "Privacy"),
+];
+
+/// The rating scale shared by every impact category, lowest first.
+const LEVELS: [(&str, &str); 4] = [
+    ("negligible", "Negligible"),
+    ("moderate", "Moderate"),
+    ("major", "Major"),
+    ("severe", "Severe"),
+];
+
+/// Security properties, in declaration order.
+const PROPERTIES: [(&str, &str); 6] = [
+    ("confidentiality", "Confidentiality"),
+    ("integrity", "Integrity"),
+    ("availability", "Availability"),
+    ("authenticity", "Authenticity"),
+    ("authorization", "Authorization"),
+    ("non-repudiation", "Non-repudiation"),
+];
+
+/// STRIDE threat categories and the one property each violates.
+const THREAT_CATEGORIES: [(&str, &str, &str); 6] = [
+    ("spoofing", "Spoofing", "authenticity"),
+    ("tampering", "Tampering", "integrity"),
+    ("repudiation", "Repudiation", "non-repudiation"),
+    (
+        "information-disclosure",
+        "Information disclosure",
+        "confidentiality",
+    ),
+    ("denial-of-service", "Denial of service", "availability"),
+    (
+        "elevation-of-privilege",
+        "Elevation of privilege",
+        "authorization",
+    ),
+];
+
+fn s(text: &str) -> Arc<str> {
+    Arc::from(text)
+}
+
+/// The old hand-written definition (job 009), unchanged.
+fn expected() -> MethodologyDef {
+    MethodologyDef {
+        key: s("iso21434-r155"),
+        version: s("0.1.0"),
+        label: s("ISO/SAE 21434 + UN R155"),
+        impact_categories: IMPACT_CATEGORIES
+            .iter()
+            .map(|&(key, label)| ImpactCategoryDef {
+                key: s(key),
+                label: s(label),
+                levels: LEVELS
+                    .iter()
+                    .map(|&(key, label)| LevelDef {
+                        key: s(key),
+                        label: s(label),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        properties: PROPERTIES
+            .iter()
+            .map(|&(key, label)| PropertyDef {
+                key: s(key),
+                label: s(label),
+            })
+            .collect(),
+        threat_categories: THREAT_CATEGORIES
+            .iter()
+            .map(|&(key, label, violates)| ThreatCategoryDef {
+                key: s(key),
+                label: s(label),
+                violates: vec![s(violates)],
+            })
+            .collect(),
+        catalog_schemes: vec![CatalogSchemeDef {
+            key: s("r155-annex5"),
+            label: s("UN R155 Annex 5"),
+            syntax: CatalogSyntax {
+                prefix: s(""),
+                segments: vec![
+                    SegmentDef {
+                        min: 1,
+                        max: 32,
+                        digits: None,
+                    },
+                    SegmentDef {
+                        min: 1,
+                        max: 99,
+                        digits: None,
+                    },
+                ],
+                required: 1,
+            },
+        }],
+    }
+}
+
+fn m() -> Methodology {
+    Methodology::iso21434_r155().expect("built-in methodology is valid")
+}
+
+#[test]
+fn builtin_pack_equals_the_old_definition() {
+    let def = MethodologyDef::read_pack(PACK.as_bytes()).expect("pack decodes");
+    assert_eq!(def, expected());
+    assert_eq!(Methodology::new(expected()).ok(), Some(m()));
+}
+
+#[test]
+fn builtin_pack_is_canonical() {
+    let def = MethodologyDef::read_pack(PACK.as_bytes()).expect("pack decodes");
+    let mut out = Vec::new();
+    def.write_pack(&mut out).expect("write");
+    assert_eq!(String::from_utf8(out).expect("utf-8"), PACK);
+    // Writing the old definition gives the same bytes.
+    assert_eq!(common::pack_bytes(&expected()), PACK.as_bytes());
+}
+
+#[test]
+fn iso21434_vocabulary_identity() {
+    let m = m();
+    assert_eq!(m.key(), "iso21434-r155");
+    assert_eq!(m.version(), "0.1.0");
+    assert_eq!(m.label(), "ISO/SAE 21434 + UN R155");
+}
+
+#[test]
+fn iso21434_vocabulary_impacts_and_levels() {
+    let m = m();
+    let keys: Vec<_> = m
+        .impact_categories()
+        .map(|c| m.impact_category_key(c).expect("key"))
+        .collect();
+    assert_eq!(keys, ["safety", "financial", "operational", "privacy"]);
+    for c in m.impact_categories() {
+        let levels: Vec<_> = m
+            .levels(c)
+            .map(|l| m.level_key(c, l).expect("level"))
+            .collect();
+        assert_eq!(levels, ["negligible", "moderate", "major", "severe"]);
+        let low = m.level(c, "negligible").expect("low");
+        let high = m.level(c, "severe").expect("high");
+        assert!(low < high);
+        assert_eq!(low.index(), 0);
+    }
+}
+
+#[test]
+fn iso21434_vocabulary_properties() {
+    let m = m();
+    let keys: Vec<_> = m
+        .properties()
+        .map(|p| m.property_key(p).expect("key"))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "confidentiality",
+            "integrity",
+            "availability",
+            "authenticity",
+            "authorization",
+            "non-repudiation"
+        ]
+    );
+}
+
+#[test]
+fn iso21434_vocabulary_stride_mapping() {
+    let m = m();
+    let pairs: Vec<_> = m
+        .threat_categories()
+        .map(|t| {
+            let v: Vec<_> = m
+                .violates(t)
+                .iter()
+                .map(|p| m.property_key(p).expect("p"))
+                .collect();
+            (m.threat_category_key(t).expect("t"), v)
+        })
+        .collect();
+    let want = [
+        ("spoofing", vec!["authenticity"]),
+        ("tampering", vec!["integrity"]),
+        ("repudiation", vec!["non-repudiation"]),
+        ("information-disclosure", vec!["confidentiality"]),
+        ("denial-of-service", vec!["availability"]),
+        ("elevation-of-privilege", vec!["authorization"]),
+    ];
+    assert_eq!(pairs, want);
+}
+
+#[test]
+fn iso21434_vocabulary_catalog_scheme() {
+    let m = m();
+    let keys: Vec<_> = m
+        .catalog_schemes()
+        .map(|s| m.catalog_scheme_key(s).expect("k"))
+        .collect();
+    assert_eq!(keys, ["r155-annex5"]);
+}
+
+#[test]
+fn catalog_syntax_r155() {
+    let m = m();
+    let s = m.catalog_scheme("r155-annex5").expect("scheme");
+    for ok in ["1", "32", "4.1", "32.99", "4", "4.2", "5", "10.10"] {
+        let r = m.parse_catalog_ref(s, ok).expect(ok);
+        let shown = m.display_catalog_ref(&r).to_string();
+        assert_eq!(shown, ok);
+        assert_eq!(m.parse_catalog_ref(s, &shown), Ok(r));
+    }
+    for bad in [
+        "0", "33", "04", "4.0", "4.", ".1", " 4", "+4", "4.1.2", "", "4.100", "-4", "4 ", "4..1",
+        "4.01",
+    ] {
+        assert_eq!(
+            m.parse_catalog_ref(s, bad),
+            Err(ModelError::InvalidCatalogId { scheme: s }),
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn catalog_syntax_r155_order() {
+    let m = m();
+    let s = m.catalog_scheme("r155-annex5").expect("scheme");
+    let mut refs: Vec<_> = ["5", "4.2", "4", "4.1"]
+        .iter()
+        .map(|t| m.parse_catalog_ref(s, t).expect(t))
+        .collect();
+    refs.sort();
+    let shown: Vec<_> = refs
+        .iter()
+        .map(|r| m.display_catalog_ref(r).to_string())
+        .collect();
+    assert_eq!(shown, ["4", "4.1", "4.2", "5"]);
+}

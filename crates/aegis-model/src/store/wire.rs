@@ -12,25 +12,35 @@
 //! the project or the op, resolving indices to keys as it goes; nothing is
 //! copied first.
 //!
-//! Two thread-local cells connect the visitors with [`decode`], which is
-//! the only entry point:
+//! Two thread-local cells connect the visitors with the two entry points,
+//! [`decode`] (snapshots and op logs) and [`decode_pack`] (methodology
+//! packs, which need no methodology context):
 //!
 //! - **Context.** `decode` installs the methodology for the duration of one
 //!   decode (an RAII guard restores the previous value, also on unwind).
 //!   This is the `DeserializeSeed` idea without threading a seed through
 //!   every derived struct: derive keeps its strict field handling
 //!   (`deny_unknown_fields`, duplicate and missing fields) for all the wire
-//!   shapes, including the internally tagged ops.
+//!   shapes, including the internally tagged ops. The pack wire types
+//!   (`crate::methodology::pack`) use only the bounded leaves and the
+//!   format checks, none of which read the context.
 //! - **Faults.** A cap, a repeated key, a bad ID, an unknown key, a bad
 //!   catalog ref, a wrong format, or another methodology found inside a
-//!   visitor must come out as its own [`StoreError`] variant, but serde only
-//!   carries a text message. The visitor records a [`Fault`] before it
-//!   returns a fixed-text serde error, and `decode` reads it back. The cell
-//!   is cleared before each decode and taken once after it, on the same
-//!   thread, so a fault can never leak from one decode into another.
+//!   visitor must come out as its own [`StoreError`] (or [`PackError`])
+//!   variant, but serde only carries a text message. The visitor records a
+//!   [`Fault`] before it returns a fixed-text serde error, and the entry
+//!   point reads it back. The cell is cleared before each decode and taken
+//!   once after it, on the same thread, so a fault can never leak from one
+//!   decode into another.
+//!
+//! The bounded leaves ([`BoundedStr`], [`BoundedVec`], [`Cap`]), the format
+//! checks ([`Format`], [`FormatVersion`]), [`CappedReader`], and
+//! [`decode_pack`] are `pub(crate)` so the pack reader shares one strict,
+//! capped decoding approach with the store (ADR 0011).
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
+use std::io::Read;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -40,15 +50,16 @@ use serde::ser::{self, Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use super::{Limit, MAX_KEY_BYTES, VocabKind};
 use crate::asset::PropertySet;
-use crate::error::StoreError;
+use crate::error::{PackError, StoreError};
 use crate::id::{AssetId, DamageId, ThreatId};
 use crate::methodology::{
     CatalogRef, CatalogScheme, ImpactCategory, Level, MAX_IMPACT_CATEGORIES, MAX_PROPERTIES,
     Methodology, Property, ThreatCategory,
 };
 
-/// The version both formats are written with and the only one read.
-pub(super) const FORMAT_VERSION: u32 = 1;
+/// The version every format (snapshot, op log, methodology pack) is written
+/// with and the only one read.
+pub(crate) const FORMAT_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // Decode context and fault side channel.
@@ -56,7 +67,7 @@ pub(super) const FORMAT_VERSION: u32 = 1;
 
 /// A typed decode failure found inside a serde visitor.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Fault {
+pub(crate) enum Fault {
     Limit(Limit),
     Duplicate,
     InvalidId,
@@ -154,11 +165,9 @@ pub(super) fn decode<T>(
     f: impl FnOnce() -> Result<T, serde_json::Error>,
 ) -> Result<T, StoreError> {
     let guard = ContextGuard::enter(m);
-    FAULT.with(|c| c.set(None));
-    let result = f();
-    let fault = FAULT.with(Cell::take);
+    let result = with_fault_channel(f);
     drop(guard);
-    result.map_err(|e| match fault {
+    result.map_err(|(e, fault)| match fault {
         Some(fault) => fault.into(),
         None if e.is_io() => StoreError::Io(e.into()),
         None => StoreError::Decode {
@@ -168,9 +177,86 @@ pub(super) fn decode<T>(
     })
 }
 
+/// Runs `f` with a clean fault cell and returns its error together with
+/// the fault a visitor recorded, if any. Time O(1) besides `f`.
+fn with_fault_channel<T>(
+    f: impl FnOnce() -> Result<T, serde_json::Error>,
+) -> Result<T, (serde_json::Error, Option<Fault>)> {
+    FAULT.with(|c| c.set(None));
+    let result = f();
+    let fault = FAULT.with(Cell::take);
+    result.map_err(|e| (e, fault))
+}
+
+/// Runs one serde decode of a methodology pack, which needs no methodology
+/// context, and maps its error: a recorded cap or format [`Fault`] wins; an
+/// I/O error stays [`PackError::Io`]; any other error becomes
+/// [`PackError::Decode`] with its position only (the parser's message can
+/// quote input). Time O(1) besides `f`.
+pub(crate) fn decode_pack<T>(
+    f: impl FnOnce() -> Result<T, serde_json::Error>,
+) -> Result<T, PackError> {
+    with_fault_channel(f).map_err(|(e, fault)| match fault {
+        Some(Fault::Limit(l)) => PackError::LimitExceeded(l),
+        Some(Fault::UnsupportedFormat(version)) => PackError::UnsupportedFormat { version },
+        _ if e.is_io() => PackError::Io(e.into()),
+        // The pack wire types raise no other fault; keep the position.
+        _ => PackError::Decode {
+            line: to_u64(e.line()),
+            column: to_u64(e.column()),
+        },
+    })
+}
+
 /// Widens a `usize` (always fits on supported targets; saturates otherwise).
-pub(super) fn to_u64(n: usize) -> u64 {
+pub(crate) fn to_u64(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
+}
+
+/// A reader that fails once more than `cap` bytes have come through, and
+/// remembers that it did, so the caller can report its file-size
+/// [`Limit`] instead of the parser's I/O error. It never pulls more than
+/// `cap + 1` bytes from the inner reader. Time O(1) per call besides the
+/// inner read.
+pub(crate) struct CappedReader<R> {
+    inner: std::io::Take<R>,
+    cap: u64,
+    read: u64,
+    exceeded: bool,
+}
+
+impl<R: Read> CappedReader<R> {
+    pub(crate) fn new(inner: R, cap: u64) -> Self {
+        CappedReader {
+            inner: inner.take(cap.saturating_add(1)),
+            cap,
+            read: 0,
+            exceeded: false,
+        }
+    }
+
+    /// Whether more than the cap came through.
+    pub(crate) fn exceeded(&self) -> bool {
+        self.exceeded
+    }
+
+    /// Bytes pulled from the inner reader so far.
+    #[cfg(test)]
+    pub(crate) fn bytes_read(&self) -> u64 {
+        self.read
+    }
+}
+
+impl<R: Read> Read for CappedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read = self.read.saturating_add(to_u64(n));
+        if self.read > self.cap {
+            self.exceeded = true;
+            return Err(std::io::Error::other("input exceeds its size cap"));
+        }
+        Ok(n)
+    }
 }
 
 /// Decodes one complete JSON value from `bytes` against `m`; trailing data
@@ -203,14 +289,14 @@ pub(super) fn encode_error(e: serde_json::Error) -> StoreError {
 // ---------------------------------------------------------------------------
 
 /// A decode cap: its size and the [`Limit`] reported when it breaks.
-pub(super) trait Cap {
+pub(crate) trait Cap {
     const MAX: usize;
     const LIMIT: Limit;
 }
 
 macro_rules! caps {
     ($($name:ident = $max:expr, $limit:expr;)*) => {$(
-        pub(super) enum $name {}
+        pub(crate) enum $name {}
         impl Cap for $name {
             const MAX: usize = $max;
             const LIMIT: Limit = $limit;
@@ -229,11 +315,11 @@ caps! {
 
 /// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
 /// on the parser's text, before anything is allocated.
-pub(super) struct BoundedStr<C>(pub(super) Arc<str>, PhantomData<C>);
+pub(crate) struct BoundedStr<C>(pub(crate) Arc<str>, PhantomData<C>);
 
 pub(super) type Name = BoundedStr<NameCap>;
-pub(super) type Key = BoundedStr<KeyCap>;
-pub(super) type VersionText = BoundedStr<VersionCap>;
+pub(crate) type Key = BoundedStr<KeyCap>;
+pub(crate) type VersionText = BoundedStr<VersionCap>;
 pub(super) type RefText = BoundedStr<RefTextCap>;
 
 impl<'de, C: Cap> Deserialize<'de> for BoundedStr<C> {
@@ -251,7 +337,7 @@ impl<'de, C: Cap> Deserialize<'de> for BoundedStr<C> {
 /// A list of at most `C::MAX` items. Pre-allocates at most
 /// `min(size_hint, C::MAX)` and stops on item `C::MAX + 1`, so it never
 /// holds more than `C::MAX` items.
-pub(super) struct BoundedVec<T, C>(pub(super) Vec<T>, PhantomData<C>);
+pub(crate) struct BoundedVec<T, C>(pub(crate) Vec<T>, PhantomData<C>);
 
 impl<'de, T: Deserialize<'de>, C: Cap> Deserialize<'de> for BoundedVec<T, C> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -594,8 +680,9 @@ impl<'de, T: FromStr> Deserialize<'de> for WireId<T> {
     }
 }
 
-/// A format name, `aegis-project` or `aegis-oplog`.
-pub(super) trait FormatName {
+/// A format name: `aegis-project`, `aegis-oplog`, or
+/// `aegis-methodology-pack`.
+pub(crate) trait FormatName {
     const NAME: &'static str;
 }
 
@@ -612,8 +699,9 @@ impl FormatName for OpLogFormat {
 }
 
 /// The `format` field: exactly `F::NAME`, else
-/// [`StoreError::UnsupportedFormat`] as soon as it is read.
-pub(super) struct Format<F>(PhantomData<F>);
+/// [`StoreError::UnsupportedFormat`] (or [`PackError::UnsupportedFormat`])
+/// as soon as it is read.
+pub(crate) struct Format<F>(PhantomData<F>);
 
 impl<'de, F: FormatName> Deserialize<'de> for Format<F> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -633,7 +721,7 @@ impl<'de, F: FormatName> Deserialize<'de> for Format<F> {
 /// carrying the number only if it is an integer above the current version
 /// (a newer file), else `None` (0, negative, or fractional: not a valid
 /// file).
-pub(super) struct FormatVersion;
+pub(crate) struct FormatVersion;
 
 impl<'de> Deserialize<'de> for FormatVersion {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -1115,6 +1203,40 @@ mod tests {
     }
 
     #[test]
+    fn decode_pack_maps_faults() {
+        let with = wire_decode_pack_with;
+        assert!(matches!(
+            with(Some(Fault::Limit(Limit::LABEL))),
+            Err(PackError::LimitExceeded(Limit::LabelBytes { max: 1024 }))
+        ));
+        assert!(matches!(
+            with(Some(Fault::UnsupportedFormat(Some(3)))),
+            Err(PackError::UnsupportedFormat { version: Some(3) })
+        ));
+        // Store-only faults never come from the pack wire types; if one
+        // did, it would be a shape error like a plain serde error.
+        assert!(matches!(
+            with(Some(Fault::Duplicate)),
+            Err(PackError::Decode { .. })
+        ));
+        assert!(matches!(with(None), Err(PackError::Decode { .. })));
+        // The cell is clean for the next decode.
+        assert_eq!(FAULT.with(Cell::take), None);
+    }
+
+    /// Runs `decode_pack` over a closure that fails after recording `fault`.
+    fn wire_decode_pack_with(fault: Option<Fault>) -> Result<(), PackError> {
+        decode_pack(|| {
+            let mut d = serde_json::Deserializer::from_str("\"x\"");
+            let _ = de::IgnoredAny::deserialize(&mut d)?;
+            Err(match fault {
+                Some(f) => raise::<serde_json::Error>(f),
+                None => de::Error::custom("shape"),
+            })
+        })
+    }
+
+    #[test]
     fn context_is_scoped_to_one_decode() {
         assert_eq!(context().err(), Some(Fault::NoContext));
         let m = testkit::second();
@@ -1271,7 +1393,8 @@ mod tests {
 
     #[test]
     fn methodology_is_checked_while_decoding() {
-        let ok = de::<CheckedMethodology>(r#"{"key":"med-device-demo","version":"9"}"#);
+        let key = testkit::second_def().key;
+        let ok = de::<CheckedMethodology>(&format!(r#"{{"key":"{key}","version":"9"}}"#));
         assert_eq!(ok.map(|c| c.version.to_string()).ok(), Some("9".into()));
         assert!(matches!(
             de::<CheckedMethodology>(r#"{"key":"other","version":"1"}"#).err(),
