@@ -128,7 +128,8 @@ The snapshot is also streamed: `Project::load` reads through a 64 KiB
 buffer and a reader that fails one byte past the 64 MiB cap, instead of
 reading the file into one growing buffer (which reserved up to 128 MiB
 near the cap, security review minor point). Measured numbers are under
-Numbers below; `benches/store_memory.rs` gates nine shapes.
+Numbers below; `benches/store_memory.rs` gates every shape, peak and kept
+(ADR 0010 added the kept gates and three shapes).
 
 ## Decision
 
@@ -358,33 +359,40 @@ of the open budget. `read_10k` got faster because keys no longer allocate.
 - **Load memory** (`cargo bench --bench store_memory`, dhat): peak heap
   during `load` as a factor of the file size. Each hostile file is 4 MiB;
   the factor does not depend on size, so multiply by 64 MiB for the cap.
-  "Kept" is the loaded project itself.
+  "Kept" is the loaded project itself. The last two columns are after
+  ADR 0010 (sparse per-asset reference counts), which is what the gates
+  now hold; the earlier columns are kept for the record.
 
-  | Shape | Round 1 peak | Round 2 peak | Round 2 kept | Gate |
-  |---|---|---|---|---|
-  | typical (1.1 MB, 4,300 entities) | 3.65x | **1.03x** | 0.83x | 1.5x |
-  | short property keys (64 per asset, valid) | 8.01x | **1.47x** | 1.32x | 2.0x |
-  | short impact keys (32 per damage, valid) | 9.04x | **0.76x** | 0.54x | 1.5x |
-  | unknown property keys | 8.01x | **0.02x** | 0 | 0.1x |
-  | unknown impact keys | 9.04x | **0.02x** | 0 | 0.1x |
-  | 62 one-byte unknown keys per asset | 10.14x | **0.02x** | 0 | 0.1x |
-  | long names (1,024 bytes each, valid) | 3.08x | **1.31x** | 1.28x | 2.0x |
-  | one huge string (fails the name cap) | 2.00x | **1.02x** | 0 | 2.5x |
-  | minimal entities (smallest valid assets, damages, threats, mixed) | 3.49x | **2.99x** | 2.59x | 4.0x |
+  | Shape | Round 1 peak | Round 2 peak | Round 2 kept | ADR 0010 peak / kept | Gates peak / kept |
+  |---|---|---|---|---|---|
+  | typical (1.1 MB, 4,300 entities) | 3.65x | 1.03x | 0.83x | **1.03x / 0.83x** | 1.4x / 1.2x |
+  | short property keys (64 per asset, valid) | 8.01x | 1.47x | 1.32x | **0.54x / 0.38x** | 0.8x / 0.6x |
+  | short impact keys (32 per damage, valid) | 9.04x | 0.76x | 0.54x | **0.76x / 0.54x** | 1.1x / 0.8x |
+  | unknown property keys | 8.01x | 0.02x | 0 | **0.02x / 0** | 0.1x / 0.1x |
+  | unknown impact keys | 9.04x | 0.02x | 0 | **0.02x / 0** | 0.1x / 0.1x |
+  | 62 one-byte unknown keys per asset | 10.14x | 0.02x | 0 | **0.02x / 0** | 0.1x / 0.1x |
+  | long names (1,024 bytes each, valid) | 3.08x | 1.31x | 1.28x | **1.08x / 1.04x** | 1.5x / 1.5x |
+  | one huge string (fails the name cap) | 2.00x | 1.02x | 0 | **1.02x / 0** | 1.4x / 0.1x |
+  | minimal entities (smallest valid assets, damages, threats, mixed) | 3.49x | 2.99x | 2.59x | **2.08x / 1.68x** | 2.9x / 2.3x |
 
   Round 3 added single-kind files, each entity as small as a valid one can
   be, over the built-in methodology (6 properties, 4 impact categories)
   and over a methodology at every vocabulary limit (64 properties, 32
   impact categories). These are the densest shapes:
 
-  | Shape | Methodology | Peak | Kept (project) | Decoder (peak - kept) | Gate |
+  | Shape | Methodology | Round 3 peak / kept | ADR 0010 peak / kept | Decoder (peak - kept) | Gates peak / kept |
   |---|---|---|---|---|---|
-  | assets only | built-in | 2.43x | 1.81x | 0.62x | 3.3x |
-  | assets only | max vocabulary | **6.16x** | **5.53x** | 0.63x | 8.3x |
-  | damage scenarios only | built-in | 2.73x | 1.85x | 0.88x | 3.7x |
-  | damage scenarios only | max vocabulary | 3.53x | 2.65x | 0.88x | 4.8x |
-  | threats only | built-in | 1.91x | 1.10x | 0.81x | 2.6x |
-  | threats only | max vocabulary | 1.93x | 1.12x | 0.81x | 2.6x |
+  | assets only | built-in | 2.43x / 1.81x | **2.31x / 1.68x** | 0.63x | 3.2x / 2.3x |
+  | assets only | max vocabulary | 6.16x / 5.53x | **2.41x / 1.78x** | 0.63x | 3.3x / 2.2x |
+  | damage scenarios only | built-in | 2.73x / 1.85x | **2.73x / 1.85x** | 0.88x | 3.7x / 2.5x |
+  | damage scenarios only | max vocabulary | 3.53x / 2.65x | **3.53x / 2.65x** | 0.88x | 4.8x / 3.0x |
+  | threats only | built-in | 1.91x / 1.10x | **1.91x / 1.10x** | 0.81x | 2.6x / 1.5x |
+  | threats only | max vocabulary | 1.93x / 1.12x | **1.93x / 1.12x** | 0.81x | 2.6x / 1.6x |
+
+  ADR 0010 added three shapes in which every asset is targeted (see its
+  before/after table): one minimal threat per minimal asset, kept 1.72x
+  (built-in) and 1.76x (max vocabulary; 3.60x before ADR 0010); and one
+  threat violating all 64 properties per asset, kept 1.36x.
 
   The worst case depends on the methodology's size, because it is the
   in-memory project, not the decoder:
@@ -394,37 +402,33 @@ of the open budget. `read_10k` got faster because keys no longer allocate.
     hostile file of them costs only the 64 KiB read buffer. One huge
     string costs up to 2x its size in the parser's scratch buffer (it
     grows by doubling) before the name cap rejects it.
-  - **Project:** a file of minimal assets is about 77 bytes per asset, but
-    each loaded asset keeps a reference-count row of 4 bytes per
-    methodology property (job 009's `RefCounts.asset_properties`), plus its
-    arena slot, ID map entry, and name. With the built-in methodology
-    (6 properties) that is 1.81x the file; with 64 properties it is 5.53x.
-    Minimal damage scenarios keep one rating slot per impact category:
-    1.85x (4 categories) to 2.65x (32).
+  - **Project:** a file of minimal assets is about 77 bytes per asset.
+    Each loaded asset keeps its arena slot, ID map entry, name, and (since
+    ADR 0010) a 16-byte empty reference-count row that does not grow with
+    the methodology: 1.68x the file (built-in) to 1.78x (64 properties).
+    Before ADR 0010 the row was 4 bytes per methodology property, 5.53x at
+    64 properties. A targeted asset adds 8 bytes per property its threats
+    violate. Minimal damage scenarios keep one rating slot per impact
+    category: 1.85x (4 categories) to 2.65x (32).
   - **Worst case:** built-in methodology 2.73x peak (damage scenarios
     only), about 175 MiB at the 64 MiB cap, kept at most 1.85x. Maximum
-    vocabulary 6.16x peak (assets only), about 394 MiB at the cap, kept
-    5.53x.
+    vocabulary 3.53x peak (damage scenarios only), about 226 MiB at the
+    cap, kept at most 2.65x (about 170 MiB).
 
-  Each gate is the measured factor plus about 35% headroom. The server
-  budget "memory per open project <= 3x its serialized size" holds for
-  methodologies of the built-in size (kept at most 1.85x for any shape) and
-  for every realistic shape measured (typical 0.83x). It does **not** hold
-  for a file made only of minimal assets over a methodology with many more
-  properties: kept grows by about 4 bytes per asset per property, reaching
-  5.53x at 64 properties. That is a property of the in-memory model, not of
-  the file format.
+  Each gate is the measured factor plus about 35% headroom, and every kept
+  gate is at most 3x. The server budget "memory per open project <= 3x
+  its serialized size" limits the open project, the kept heap after `load`
+  returns (owner's answer, job 011). It holds for every shape measured and
+  every methodology size measured, from the built-in vocabulary to the
+  maximum one: kept is at most 2.65x (damage scenarios only over 32 impact
+  categories), and the bench fails if any kept gate exceeds 3x. One
+  transient peak is above 3x: damage scenarios only over 32 impact
+  categories, 3.53x while loading, from the dense impact slots in
+  `DamageScenario`. It is gated at 4.8x and is not held to 3x.
 
-  **Follow-up for the in-memory model (not this job).** The per-asset
-  reference-count row is dense: `assets x properties x 4` bytes, even
-  though an asset typically carries a few properties and no threats. A
-  sparse layout (count only properties some threat targets, or one row per
-  asset that has threats) would remove most of it: the row is 256 bytes
-  per asset at 64 properties, 3.3x of a 77-byte minimal asset, so
-  assets-only over the max vocabulary would drop from 5.53x kept to about
-  2.2x (built-in: the row is 24 bytes, 0.3x). It touches job 009's invariants and every
-  op that updates counts, so it belongs in a model job with its own
-  benchmark, not in this round.
+  **In-memory model:** the per-asset reference counts are sparse since
+  [ADR 0010](0010-sparse-reference-counts.md), which records the options,
+  the numbers before and after, and the cost of each op.
 - **Budget:** "open project from local cache <= 1.0 s (large)". Loading the
   TARA part of the typical project takes 5.1 ms, 0.5% of that budget. Load
   is linear in bytes plus O(n log n), so a TARA part ten times larger
