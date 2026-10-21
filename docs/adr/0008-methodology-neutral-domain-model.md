@@ -162,6 +162,16 @@ threats per asset, and a `Vec<u32>` of threats per damage scenario. Every
 op updates them in O(p + k). A lib-level proptest recounts them from the
 threats after every op (`check_invariants`).
 
+**Changed by [ADR 0010](0010-sparse-reference-counts.md).** The flat
+asset x property row cost 4 bytes per methodology property for every
+asset, targeted or not, and made a loaded project keep up to 5.53x its
+file size over a 64-property methodology. The per-asset property counts
+are now sparse: one sorted, exact-size boxed slice per asset slot, holding
+only the properties some live threat on that asset violates (8 bytes per
+entry, 16 bytes and no heap for an untargeted asset). Lookups are a binary
+search, O(log p); updates stay O(p + k). The per-asset and per-damage
+counts are unchanged.
+
 ### Typed ops and inverse ops for undo (D9)
 
 Every change is an `Op` (16 variants). `validate(&Op)` runs every check
