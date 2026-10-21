@@ -171,6 +171,35 @@
       ],
       "decision": "APPROVE",
       "updated": "2026-10-21T00:35:23Z"
+    },
+    {
+      "id": "010-save-load",
+      "title": "Saving and loading: serde for Project and an operation log",
+      "branch": "factory/010-save-load",
+      "stage": "merged",
+      "round": 3,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [
+        {
+          "security": "CHANGES",
+          "ux": "PASS",
+          "ui": "PASS",
+          "code": "CHANGES"
+        },
+        {
+          "security": "PASS",
+          "ux": "PASS",
+          "ui": "PASS",
+          "code": "CHANGES"
+        }
+      ],
+      "decision": "ESCALATE",
+      "updated": "2026-10-21T16:15:35Z"
     }
   ]
 }
