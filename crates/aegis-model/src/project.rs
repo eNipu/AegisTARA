@@ -12,7 +12,7 @@ use crate::methodology::{
     CatalogRef, ImpactCategory, Level, Methodology, Property, ThreatCategory,
 };
 use crate::op::Op;
-use crate::threat::{MAX_CATALOG_REFS, ThreatScenario};
+use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
 
 /// Longest entity name, in chars.
 pub const MAX_NAME_CHARS: usize = 256;
@@ -636,9 +636,10 @@ impl Project {
     /// name; vocabulary indices against the methodology; the entity's own
     /// rules (non-empty properties, no repeated category, the asset carries
     /// the threat category's properties, unique and at most 16 catalog
-    /// refs, existing and unique damage links); referential rules (no
-    /// removal or property drop while referenced, links and refs must or
-    /// must not exist); and capacity. See [`ModelError`] for each variant.
+    /// refs, at most 256 damage links, each existing and unique);
+    /// referential rules (no removal or property drop while referenced,
+    /// links and refs must or must not exist, a link must not be the
+    /// 257th); and capacity. See [`ModelError`] for each variant.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -1084,6 +1085,12 @@ impl Project {
         if refs.windows(2).any(|w| w.first() == w.get(1)) {
             return Err(ModelError::DuplicateCatalogRef { threat: id });
         }
+        if damages.len() > MAX_DAMAGE_LINKS {
+            return Err(ModelError::TooManyDamageLinks {
+                threat: id,
+                max: MAX_DAMAGE_LINKS,
+            });
+        }
         for &d in damages {
             self.live_damage(d)?;
         }
@@ -1134,6 +1141,12 @@ impl Project {
         self.live_damage(damage)?;
         match (link, self.find_link(t, damage).is_ok()) {
             (true, true) => Err(ModelError::DuplicateDamageLink { threat, damage }),
+            (true, false) if t.damages.len() >= MAX_DAMAGE_LINKS => {
+                Err(ModelError::TooManyDamageLinks {
+                    threat,
+                    max: MAX_DAMAGE_LINKS,
+                })
+            }
             (false, false) => Err(ModelError::DamageNotLinked { threat, damage }),
             _ => Ok(()),
         }
@@ -1460,6 +1473,9 @@ impl Project {
             }
             if t.catalog_refs.len() > MAX_CATALOG_REFS {
                 return Err(format!("threat {id} has too many catalog refs"));
+            }
+            if t.damages.len() > MAX_DAMAGE_LINKS {
+                return Err(format!("threat {id} has too many damage links"));
             }
             if !t.catalog_refs.windows(2).all(|w| w[0] < w[1]) {
                 return Err(format!("threat {id} catalog refs not sorted and unique"));

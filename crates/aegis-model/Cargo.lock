@@ -24,6 +24,8 @@ dependencies = [
  "dhat",
  "divan",
  "proptest",
+ "serde",
+ "serde_json",
  "thiserror",
  "uuid",
 ]

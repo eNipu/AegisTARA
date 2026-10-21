@@ -1,0 +1,5 @@
+# cargo-fuzz output. The committed seed inputs live in seeds/.
+target/
+corpus/
+artifacts/
+coverage/

@@ -8,6 +8,17 @@ use crate::methodology::{CatalogRef, ThreatCategory};
 /// Most catalog refs on one threat scenario.
 pub const MAX_CATALOG_REFS: usize = 16;
 
+/// Most damage scenarios one threat scenario may link to.
+///
+/// Bounds the size of one op and one saved threat, so the save/load
+/// decoder can cap every list at decode time and still accept every
+/// project the model accepts (see `docs/adr/0009-save-load-format.md`).
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_DAMAGE_LINKS, 256);
+/// ```
+pub const MAX_DAMAGE_LINKS: usize = 256;
+
 /// A threat scenario of a [`Project`](crate::Project).
 ///
 /// A read-only view. It targets one asset, has one threat category (the
@@ -15,7 +26,8 @@ pub const MAX_CATALOG_REFS: usize = 16;
 /// [`Project::targets`](crate::Project::targets), so they can never
 /// disagree), cites 0 to 16 catalog refs, and links to damage scenarios.
 /// `catalog_refs` is sorted and unique; `damages` is sorted by the damage
-/// scenario's public ID and unique. Neither order depends on edit history.
+/// scenario's public ID, unique, and at most [`MAX_DAMAGE_LINKS`] long.
+/// Neither order depends on edit history.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -48,7 +60,8 @@ pub struct ThreatScenario {
     pub(crate) category: ThreatCategory,
     /// Sorted, unique, at most [`MAX_CATALOG_REFS`].
     pub(crate) catalog_refs: Vec<CatalogRef>,
-    /// Sorted by the target's `DamageId`, unique.
+    /// Sorted by the target's `DamageId`, unique, at most
+    /// [`MAX_DAMAGE_LINKS`].
     pub(crate) damages: Vec<DamageIdx>,
 }
 

@@ -1273,3 +1273,94 @@ fn errors_have_no_labels() {
     }
     assert_eq!(seen.len(), NEW_VARIANTS.len());
 }
+
+// ---------------------------------------------------------------------------
+// Job 010: at most 256 damage links per threat.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn too_many_damage_links() {
+    let m = builtin();
+    let max = aegis_model::MAX_DAMAGE_LINKS;
+    assert_eq!(max, 256);
+    let mut p = Project::new(Arc::clone(&m));
+    let asset = asset_id(1);
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: asset,
+            name: name("ECU"),
+            properties: m.all_properties(),
+        },
+    );
+    let damages: Vec<_> = (0..=max as u64).map(|i| damage_id(100 + i)).collect();
+    for &id in &damages {
+        ok(
+            &mut p,
+            Op::AddDamageScenario {
+                id,
+                name: name("d"),
+                impacts: vec![],
+            },
+        );
+    }
+    let (t, other) = (threat_id(2), threat_id(3));
+    let add = |id, damages: &[DamageId]| Op::AddThreatScenario {
+        id,
+        name: name("t"),
+        asset,
+        category: threat_cat(&m, "tampering"),
+        catalog_refs: vec![],
+        damages: damages.to_vec(),
+    };
+    // 257 links on add.
+    rejects(
+        &mut p,
+        add(t, &damages),
+        &ModelError::TooManyDamageLinks { threat: t, max },
+    );
+    // Exactly 256 is fine; the 257th through `LinkDamage` is not.
+    ok(&mut p, add(t, &damages[..max]));
+    let last = damages[max];
+    rejects(
+        &mut p,
+        Op::LinkDamage {
+            threat: t,
+            damage: last,
+        },
+        &ModelError::TooManyDamageLinks { threat: t, max },
+    );
+    // A duplicate link is still reported as a duplicate, not as the cap.
+    rejects(
+        &mut p,
+        Op::LinkDamage {
+            threat: t,
+            damage: damages[0],
+        },
+        &ModelError::DuplicateDamageLink {
+            threat: t,
+            damage: damages[0],
+        },
+    );
+    // After an unlink there is room again; other threats are unaffected.
+    ok(
+        &mut p,
+        Op::UnlinkDamage {
+            threat: t,
+            damage: damages[0],
+        },
+    );
+    ok(
+        &mut p,
+        Op::LinkDamage {
+            threat: t,
+            damage: last,
+        },
+    );
+    ok(&mut p, add(other, &[last]));
+    let text = ModelError::TooManyDamageLinks { threat: t, max }.to_string();
+    assert_eq!(
+        text,
+        format!("threat scenario {t} would link more than 256 damage scenarios")
+    );
+}

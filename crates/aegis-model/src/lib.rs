@@ -122,6 +122,52 @@
 //! # }
 //! ```
 
+//!
+//! # Saving and loading
+//!
+//! [`Project::save`] writes a project as a versioned JSON snapshot and
+//! [`Project::load`] reads it back over a caller-supplied methodology.
+//! [`OpLogWriter`] appends every accepted [`Op`] to a JSON Lines log, and
+//! [`OpLogReader`] reads it back for replay onto an empty project or onto a
+//! loaded snapshot. Files never hold vocabulary indices, only stable keys,
+//! so a methodology whose vocabularies are reordered or extended still
+//! reads them with the same meaning. Decoding is capped while it runs
+//! ([`Limit`]), before any model check, and every failure is a typed
+//! [`StoreError`]. See `docs/adr/0009-save-load-format.md`.
+//!
+//! ```
+//! use std::sync::Arc;
+//! use aegis_model::{AssetId, Methodology, Op, OpLogReader, OpLogWriter, Project};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let m = Arc::new(Methodology::iso21434_r155()?);
+//! let mut project = Project::new(Arc::clone(&m));
+//! let mut log = OpLogWriter::create(Vec::new(), Arc::clone(&m))?;
+//!
+//! let ecu = AssetId::new_v7();
+//! for op in [
+//!     Op::AddAsset { id: ecu, name: "Brake ECU".into(), properties: m.all_properties() },
+//!     Op::RenameAsset { id: ecu, name: "Brake control unit".into() },
+//! ] {
+//!     project.apply(op.clone())?;
+//!     log.append(&op)?;
+//! }
+//!
+//! // A snapshot loads back as an equal project.
+//! let mut snapshot = Vec::new();
+//! project.save(&mut snapshot)?;
+//! assert_eq!(Project::load(snapshot.as_slice(), Arc::clone(&m))?, project);
+//!
+//! // Replaying the log onto an empty project gives the same project.
+//! let mut replayed = Project::new(Arc::clone(&m));
+//! for record in OpLogReader::open(log.into_inner()?.as_slice(), m)? {
+//!     replayed.apply(record?.op)?;
+//! }
+//! assert_eq!(replayed, project);
+//! # Ok(())
+//! # }
+//! ```
+
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
@@ -139,6 +185,7 @@ mod id;
 mod methodology;
 mod op;
 mod project;
+mod store;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod testkit;
@@ -148,7 +195,7 @@ mod tree;
 
 pub use asset::{Asset, PropertySet};
 pub use damage::DamageScenario;
-pub use error::{MethodologyError, ModelError};
+pub use error::{MethodologyError, ModelError, StoreError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
 };
@@ -160,5 +207,10 @@ pub use methodology::{
 };
 pub use op::Op;
 pub use project::{MAX_NAME_CHARS, Project};
-pub use threat::{MAX_CATALOG_REFS, ThreatScenario};
+pub use store::{
+    Limit, LoggedOp, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_METHODOLOGY_VERSION_BYTES,
+    MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PROJECT_FILE_BYTES, OpLogReader, OpLogWriter,
+    VocabKind,
+};
+pub use threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
 pub use tree::{AttackTree, GateKind, Node};
