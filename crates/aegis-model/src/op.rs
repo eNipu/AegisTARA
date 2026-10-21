@@ -128,8 +128,8 @@ pub enum Op {
         category: ThreatCategory,
         /// Catalog refs, unique, at most 16, in any order (stored sorted).
         catalog_refs: Vec<CatalogRef>,
-        /// Linked damage scenarios, unique, in any order (stored sorted by
-        /// ID).
+        /// Linked damage scenarios, unique, at most 256, in any order
+        /// (stored sorted by ID).
         damages: Vec<DamageId>,
     },
     /// Renames a threat scenario.
@@ -161,7 +161,7 @@ pub enum Op {
         /// A ref on the threat.
         catalog_ref: CatalogRef,
     },
-    /// Links a threat to a damage scenario.
+    /// Links a threat to a damage scenario. A threat links at most 256.
     LinkDamage {
         /// Existing threat scenario.
         threat: ThreatId,

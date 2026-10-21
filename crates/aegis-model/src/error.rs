@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId};
 use crate::methodology::{CatalogScheme, ImpactCategory, Level, Property, ThreatCategory};
+use crate::store::{Limit, VocabKind};
 
 /// Errors returned by the model.
 ///
@@ -308,6 +309,25 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// A threat may link to at most `max` damage scenarios.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, ThreatId, MAX_DAMAGE_LINKS};
+    ///
+    /// let threat = ThreatId::new_v7();
+    /// let err = ModelError::TooManyDamageLinks { threat, max: MAX_DAMAGE_LINKS };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     format!("threat scenario {threat} would link more than 256 damage scenarios"),
+    /// );
+    /// ```
+    #[error("threat scenario {threat} would link more than {max} damage scenarios")]
+    TooManyDamageLinks {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The limit.
+        max: usize,
+    },
     /// The project cannot hold more entities of this kind (the arena is at
     /// its slot limit, at most `u32::MAX`).
     #[error("project capacity exceeded")]
@@ -476,6 +496,112 @@ pub enum MethodologyError {
         /// Key of the scheme.
         scheme: Arc<str>,
     },
+}
+
+/// Errors from saving and loading: [`Project::save`](crate::Project::save),
+/// [`Project::load`](crate::Project::load), [`OpLogWriter`](crate::OpLogWriter)
+/// and [`OpLogReader`](crate::OpLogReader).
+///
+/// No variant carries decoded text except vocabulary keys, which are capped
+/// at 64 bytes and printed with `{:?}` (escaped). [`Decode`](Self::Decode)
+/// keeps only the position of a JSON error and drops the parser's message,
+/// because that message can quote input such as an entity name.
+///
+/// Not `PartialEq` (it can hold an [`std::io::Error`]); match it with
+/// `matches!`.
+///
+/// ```
+/// use std::sync::Arc;
+/// use aegis_model::{Methodology, Project, StoreError};
+///
+/// # fn main() -> Result<(), aegis_model::MethodologyError> {
+/// let m = Arc::new(Methodology::iso21434_r155()?);
+/// let err = Project::load(&b"{\"format\":\"spreadsheet\"}"[..], m).err();
+/// assert!(matches!(err, Some(StoreError::UnsupportedFormat)));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum StoreError {
+    /// Reading or writing failed.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    /// The bytes are not valid JSON, or the JSON has the wrong shape (a
+    /// missing, unknown, repeated, or mistyped field; trailing data; a
+    /// blank line or a `\r` in an op log). Lines and columns are 1-based;
+    /// a column of 0 means the end of the line.
+    #[error("malformed input at line {line}, column {column}")]
+    Decode {
+        /// Line of the error.
+        line: u64,
+        /// Column of the error.
+        column: u64,
+    },
+    /// A decode cap was exceeded, before any model validation ran.
+    #[error("{0}")]
+    LimitExceeded(Limit),
+    /// The `format` string or the format `version` is not one this build
+    /// reads.
+    #[error("unsupported file format or format version")]
+    UnsupportedFormat,
+    /// The file was written under another methodology (its key differs).
+    #[error("file was written for methodology {found:?}, expected {expected:?}")]
+    MethodologyMismatch {
+        /// Key of the supplied methodology.
+        expected: Arc<str>,
+        /// Key in the file.
+        found: Arc<str>,
+    },
+    /// A vocabulary key in the file is not in the supplied methodology.
+    #[error("unknown {kind} key {key:?}")]
+    UnknownKey {
+        /// Which vocabulary the key was looked up in.
+        kind: VocabKind,
+        /// The key, at most 64 bytes.
+        key: Arc<str>,
+    },
+    /// An ID is not a hyphenated lowercase RFC 9562 version 7 UUID.
+    #[error("invalid ID: not a hyphenated lowercase UUIDv7")]
+    InvalidId,
+    /// A catalog ref's text does not match its scheme's syntax.
+    #[error("catalog ref does not match the syntax of scheme {scheme:?}")]
+    InvalidCatalogRef {
+        /// Key of the scheme.
+        scheme: Arc<str>,
+    },
+    /// A property set or an impact map names the same key twice.
+    #[error("a key is repeated in a set or map")]
+    DuplicateEntry,
+    /// An op log record has the wrong sequence number: a gap, a repeat, or
+    /// a step back.
+    #[error("expected sequence number {expected}, found {found}")]
+    Sequence {
+        /// The next number in the run.
+        expected: u64,
+        /// The number in the record.
+        found: u64,
+    },
+    /// The last line of an op log does not end in `\n`, for example
+    /// because a write was cut short.
+    #[error("record at line {line} does not end in a newline")]
+    TruncatedRecord {
+        /// Line of the incomplete record.
+        line: u64,
+    },
+    /// The op log is empty: it has no header line.
+    #[error("op log has no header line")]
+    MissingHeader,
+    /// The op cannot be written so that it reads back the same: an index
+    /// is not in the writer's methodology, an impact category is repeated,
+    /// a list or name is over its decode cap, the record would exceed the
+    /// record cap, or the sequence number would overflow. Nothing was
+    /// written.
+    #[error("op cannot be encoded under this methodology")]
+    UnencodableOp,
+    /// The decoded data broke a model rule (see [`ModelError`]).
+    #[error("model rejected the data: {0}")]
+    Model(#[from] ModelError),
 }
 
 /// Formats IDs as `a -> b -> c`; with `close`, the first ID is repeated at
