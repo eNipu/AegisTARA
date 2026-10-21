@@ -1,9 +1,9 @@
 #!/bin/sh
-# Build and run the aegis-model fuzz targets (ADR 0009) for a bounded time.
+# Build and run the aegis-model fuzz targets (ADRs 0009, 0011) for a bounded time.
 #
 # Usage: crates/aegis-model/fuzz/run.sh [SECONDS] [TARGET...]
 #   SECONDS  run time per target (default 60)
-#   TARGET   snapshot, op_log (default: both)
+#   TARGET   snapshot, op_log, pack (default: all three)
 #
 # Works on the stable toolchain and needs no cargo-fuzz: it builds each
 # target with the same libFuzzer coverage flags cargo-fuzz passes (sancov,
@@ -20,21 +20,21 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 secs=${1:-60}
 [ "$#" -gt 0 ] && shift
-[ "$#" -eq 0 ] && set -- snapshot op_log
+[ "$#" -eq 0 ] && set -- snapshot op_log pack
 
 # Validate the arguments before the (slow) build.
 case $secs in
     '' | *[!0-9]*)
         echo "error: SECONDS must be a whole number, got '$secs'" >&2
-        echo "usage: $0 [SECONDS] [TARGET...]   (targets: snapshot op_log)" >&2
+        echo "usage: $0 [SECONDS] [TARGET...]   (targets: snapshot op_log pack)" >&2
         exit 2
         ;;
 esac
 for target in "$@"; do
     case $target in
-        snapshot | op_log) ;;
+        snapshot | op_log | pack) ;;
         *)
-            echo "error: unknown target '$target'; expected snapshot or op_log" >&2
+            echo "error: unknown target '$target'; expected snapshot, op_log, or pack" >&2
             exit 2
             ;;
     esac
