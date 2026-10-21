@@ -682,3 +682,164 @@ pub fn replay(
     prop_assert_eq!(&project, &Project::new(Arc::clone(m)));
     Ok(stats)
 }
+
+// ---------------------------------------------------------------------------
+// Save/load helpers.
+// ---------------------------------------------------------------------------
+
+/// `def` with its vocabularies reordered (AC4 of job 010): the impact
+/// categories, properties, threat categories, each `violates` list, and the
+/// catalog schemes are reversed, and one unused item is prepended to each
+/// vocabulary. Level scales keep their order (a scale is ordered by
+/// meaning). The key and version stay the same, so a file written under
+/// `def` must read under the result with the same meaning.
+pub fn reordered(mut def: MethodologyDef) -> MethodologyDef {
+    def.impact_categories.reverse();
+    def.impact_categories.insert(
+        0,
+        ImpactCategoryDef {
+            key: "zz-unused-impact".into(),
+            label: "Unused impact".into(),
+            levels: level_defs(&["u0", "u1"]),
+        },
+    );
+    def.properties.reverse();
+    def.properties.insert(
+        0,
+        PropertyDef {
+            key: "zz-unused-property".into(),
+            label: "Unused property".into(),
+        },
+    );
+    for t in &mut def.threat_categories {
+        t.violates.reverse();
+    }
+    def.threat_categories.reverse();
+    def.threat_categories.insert(
+        0,
+        ThreatCategoryDef {
+            key: "zz-unused-threat".into(),
+            label: "Unused threat".into(),
+            violates: vec!["zz-unused-property".into()],
+        },
+    );
+    def.catalog_schemes.reverse();
+    def.catalog_schemes.insert(
+        0,
+        CatalogSchemeDef {
+            key: "zz-unused-scheme".into(),
+            label: "Unused scheme".into(),
+            syntax: CatalogSyntax {
+                prefix: "U-".into(),
+                segments: vec![SegmentDef {
+                    min: 1,
+                    max: 9,
+                    digits: None,
+                }],
+                required: 1,
+            },
+        },
+    );
+    def
+}
+
+/// Replays `seeds` on a fresh project over `m` and calls `f(project, op,
+/// inverse)` after every accepted op, with the project after the op.
+/// Returns the final project.
+pub fn accepted(
+    m: &Arc<Methodology>,
+    seeds: &[Seed],
+    mut f: impl FnMut(&Project, &Op, &Op) -> Result<(), TestCaseError>,
+) -> Result<Project, TestCaseError> {
+    let mut generator = Gen::new(Arc::clone(m));
+    let mut project = Project::new(Arc::clone(m));
+    for s in seeds {
+        let op = generator.op(&project, s);
+        if let Ok(inverse) = project.apply(op.clone()) {
+            f(&project, &op, &inverse)?;
+        }
+    }
+    Ok(project)
+}
+
+/// Saves `p` to bytes.
+pub fn save(p: &Project) -> Vec<u8> {
+    let mut out = Vec::new();
+    p.save(&mut out).expect("save");
+    out
+}
+
+/// Writes `ops` as an op log over `m`.
+pub fn write_log<'a>(m: &Arc<Methodology>, ops: impl IntoIterator<Item = &'a Op>) -> Vec<u8> {
+    let mut log = aegis_model::OpLogWriter::create(Vec::new(), Arc::clone(m)).expect("header");
+    for op in ops {
+        log.append(op).expect("append");
+    }
+    log.into_inner().expect("flush")
+}
+
+/// Reads every record of an op log over `m`, panicking on any error.
+pub fn read_log(m: &Arc<Methodology>, bytes: &[u8]) -> Vec<aegis_model::LoggedOp> {
+    aegis_model::OpLogReader::open(bytes, Arc::clone(m))
+        .expect("header")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("records")
+}
+
+/// A key-based description of every entity, one line each, independent of
+/// vocabulary indices: names, property keys, ratings as category and level
+/// keys, threat category keys, and catalog ref texts.
+pub fn describe(p: &Project) -> Vec<String> {
+    let m = p.methodology();
+    let mut out = Vec::new();
+    for (_, id, a) in p.assets() {
+        let mut keys: Vec<_> = a
+            .properties()
+            .iter()
+            .filter_map(|x| m.property_key(x))
+            .collect();
+        keys.sort_unstable();
+        out.push(format!("asset {id} {:?} {keys:?}", a.name()));
+    }
+    for (_, id, d) in p.damage_scenarios() {
+        let mut rated: Vec<_> = d
+            .impacts()
+            .filter_map(|(c, l)| {
+                let l = l?;
+                Some(format!(
+                    "{}={}",
+                    m.impact_category_key(c)?,
+                    m.level_key(c, l)?
+                ))
+            })
+            .collect();
+        rated.sort_unstable();
+        out.push(format!("damage {id} {:?} {rated:?}", d.name()));
+    }
+    for (_, id, t) in p.threat_scenarios() {
+        let mut refs: Vec<_> = t
+            .catalog_refs()
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}:{}",
+                    m.catalog_scheme_key(r.scheme()).unwrap_or("?"),
+                    m.display_catalog_ref(r)
+                )
+            })
+            .collect();
+        refs.sort_unstable();
+        let damages: Vec<_> = t
+            .damages()
+            .iter()
+            .filter_map(|&d| p.damage_scenario_id(d))
+            .collect();
+        out.push(format!(
+            "threat {id} {:?} asset {:?} {:?} {refs:?} {damages:?}",
+            t.name(),
+            p.asset_id(t.asset()),
+            m.threat_category_key(t.category()),
+        ));
+    }
+    out
+}
