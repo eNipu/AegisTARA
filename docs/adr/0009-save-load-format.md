@@ -63,6 +63,15 @@ written under the second test methodology reads under a copy whose
 vocabularies are reversed and extended, every entity keeps its keys, and
 saving again gives identical bytes.
 
+The AC4 helper (`reordered` in `tests/common/mod.rs`) prepends one unused
+item to each vocabulary (impact categories, properties, threat categories,
+catalog schemes) but only *reverses* each threat category's `violates`
+list. Prepending a property to `violates` would change what that category
+means: every threat using it would then need the extra property on its
+asset, so valid files would fail to load for a reason that has nothing to
+do with ordering. Reversing the list tests the same thing (the order of a
+`violates` list carries no meaning) without changing meaning.
+
 ### Caps: at decode time, or checks after decoding
 
 | Option | Good | Bad |
@@ -77,8 +86,44 @@ before each decode and reads it once after. The channel never holds input
 text and cannot leak between decodes (same thread, cleared first). Faults:
 a cap (`LimitExceeded(Limit)`), a repeated key in a set or map
 (`DuplicateEntry`), a malformed or non-v7 ID (`InvalidId`), a wrong format
-name or version (`UnsupportedFormat`). Covered by `tests/store_limits.rs`
-and `src/store/wire.rs` unit tests.
+name or version (`UnsupportedFormat`), another methodology
+(`MethodologyMismatch`), an unknown key (`UnknownKey`), and a catalog ref
+outside its scheme's syntax (`InvalidCatalogRef`). Covered by
+`tests/store_limits.rs` and `src/store/wire.rs` unit tests.
+
+### Keys: resolved while decoding, or after (round 2)
+
+Round 1 decoded every key into its own `Arc<str>` and looked keys up only
+after the whole file was decoded. Both reviews measured what that costs on
+a hostile snapshot: a 1-byte key is 4 bytes of JSON (`"a",`) but about 48
+bytes of heap (the `Arc` allocation plus its slot), so a file of short
+distinct keys peaked at 8-10x its size (about 650-790 MB at the 64 MiB
+cap), and an unknown key was reported only after all of it was decoded.
+
+| Option | Good | Bad |
+|---|---|---|
+| Keep strings, document the factor | No code change | About 10x worst case; one hostile upload can hold most of a gigabyte |
+| Borrow keys (`&'de str` / `Cow`) | Fewer allocations | Needs the whole input in memory to borrow from; still about 6x from the `(key, key)` slots (security review) |
+| `DeserializeSeed` carrying `&Methodology` through every type | Textbook; no global state | Every derived struct (snapshot, three entity kinds, header, record, 16 internally tagged op variants) becomes a hand-written visitor with its own unknown, missing and duplicate field handling: much new code on the exact path that must be strict |
+| **A scoped decode context** (the methodology in a thread-local, installed by `wire::decode` and restored by an RAII guard) that the leaf types read | Leaves resolve each key on the parser's own text, with no allocation; derive keeps every struct's strict field handling; the same pattern as the fault channel | Hidden state: a leaf decoded outside `wire::decode` has no methodology (it fails with a fault, never guesses) |
+
+**Chosen: the scoped context.** It gives the effect of a seed (each key is
+resolved against the caller's methodology as it is read) at the leaves,
+where the keys are, and leaves the shapes to derive. Within a set or an
+impact map the leaf visitor itself is a seed-driven loop: it resolves each
+key through a `DeserializeSeed` that receives the parser's `&str`, keeps a
+bit set for repeats, and notes only the *first* unknown key (one 64-byte
+allocation at most), raising it when the list ends so that a list's count
+cap is still reported first (AC11). Decoded entities now hold names and
+1-byte indices only. The methodology key is checked as soon as it is read,
+so a file from another methodology fails with `MethodologyMismatch`
+before any vocabulary lookup.
+
+The snapshot is also streamed: `Project::load` reads through a 64 KiB
+buffer and a reader that fails one byte past the 64 MiB cap, instead of
+reading the file into one growing buffer (which reserved up to 128 MiB
+near the cap, security review minor point). Measured numbers are under
+Numbers below; `benches/store_memory.rs` gates nine shapes.
 
 ## Decision
 
@@ -121,12 +166,22 @@ Rules:
   by key. Equal projects save to identical bytes whatever their history
   (AC3).
 - **Strict decoding.** `deny_unknown_fields` everywhere; duplicate fields,
-  repeated keys in a set or map, a blank line, any `\r`, trailing data, and
-  a last record without `\n` are errors.
-- **Header checks.** Wrong `format` or a `version` other than 1:
-  `UnsupportedFormat`, as soon as the field is read. Another methodology
-  key: `MethodologyMismatch`. Another methodology version: accepted (open
-  question 1).
+  repeated keys in a set or map, trailing data other than whitespace, and
+  unknown keys are errors. The op log is strict about framing too: a blank
+  line, any `\r`, and a last record without `\n` are errors. The snapshot
+  is lenient about JSON whitespace between tokens and about a missing final
+  `\n`; that is harmless, since a re-save is always canonical.
+- **Header checks.** Wrong `format`, or a `version` other than 1:
+  `UnsupportedFormat`, as soon as the field is read. It carries the
+  version number when that is a non-negative integer (most likely a newer
+  file, so an application can say "update"), and `None` for the wrong kind
+  of file. Another methodology key: `MethodologyMismatch`, also as soon as
+  it is read. Another methodology version: accepted (open question 1).
+- **Keys resolve as they are read.** An unknown key fails inside the
+  entity that holds it. Within one property set or impact map a cap or a
+  repeated key is reported at once and the first unknown key at the end of
+  the list. In an op log record, decoding (including key lookups) comes
+  before the `seq` check.
 - **Sequence.** `seq` starts at 1 and goes up by exactly 1; a gap, repeat,
   or step back is `Sequence { expected, found }`. `resume(w, m, n)`
   continues at `n + 1`.
@@ -163,7 +218,8 @@ Each cap is at least the model's own limit, so every project the model
 accepts round-trips (AC12: a methodology at every vocabulary limit with
 64-byte keys, a threat with 16 refs and 256 links, names of 256 four-byte
 chars, every category rated). Entity lists in a snapshot are bounded by the
-file cap. `serde_json` also limits nesting to 128 levels.
+file cap; their memory is measured below. `serde_json` also limits nesting
+to 128 levels.
 
 **New model limit `MAX_DAMAGE_LINKS = 256`.** Before this job `damages` had
 no limit of its own (only "each link unique and live", so up to n). A
@@ -181,7 +237,7 @@ m = methodology size, k = size of one op.
 | Operation | Time | Extra space |
 |---|---|---|
 | `save` | O(n + L log L_max + m log m) | O(m) for the key-sorted vocabulary order; the project is not copied |
-| `load` | O(B + n log n + L log n) | O(B) |
+| `load` | O(B + n log n + L log n) | O(n + L + longest string): decoded entities hold names and 1-byte indices; the input streams through 64 KiB |
 | `append` | O(k log k) | O(k), reused buffer |
 | reader, per record | O(record bytes + k log k) | O(64 KiB), reused line buffer |
 
@@ -241,8 +297,10 @@ owner then allowed it for non-shipped tooling:
   `unsafe` code, so the sanitizer adds little). Result on this machine,
   60 s per target, run twice: `snapshot` 7.7 million runs (cov 2,763,
   corpus 1,992), `op_log` 3.1 million runs (cov 3,306, corpus 1,272), no
-  crash. The proptest hostile-input tests (AC13, 512 cases) stay as the
-  in-CI guard.
+  crash. After the round 2 decoder change, 60 s each again: `snapshot`
+  6.8 million runs (cov 2,653), `op_log` 3.0 million runs (cov 3,120), no
+  crash. `run.sh` checks its arguments before building. The proptest
+  hostile-input tests (AC13, 512 cases) stay as the in-CI guard.
 
 ## Dependency notes (L6)
 
@@ -279,31 +337,54 @@ rating changes).
 | Bench | Median | Throughput |
 |---|---|---|
 | `save` (snapshot, 1,097,749 bytes) | 1.07 ms | 1.03 GB/s |
-| `load` | 4.31 ms | 255 MB/s |
-| `append_10k` (2,010,433 bytes) | 1.95 ms | 5.1 M ops/s |
-| `read_10k` | 8.21 ms | 1.2 M ops/s |
-| `replay_log` (read + apply, 10,000 ops) | 9.87 ms | 1.0 M ops/s |
+| `load` | 5.08 ms (round 1: 4.31) | 216 MB/s |
+| `append_10k` (2,010,433 bytes) | 1.93 ms | 5.2 M ops/s |
+| `read_10k` | 7.28 ms (round 1: 8.21) | 1.4 M ops/s |
+| `replay_log` (read + apply, 10,000 ops) | 8.92 ms (round 1: 9.87) | 1.1 M ops/s |
+
+Round 2 made `load` about 18% slower: `serde_json` reads a stream byte by
+byte instead of scanning a slice. That buys the memory below; 5 ms is 0.5%
+of the open budget. `read_10k` got faster because keys no longer allocate.
 
 - **Size:** 255 bytes per entity in the snapshot; 201 bytes per op in the
   log. Uncompressed JSON; the "150 bytes per node after compression"
   budget is for the stored format and is not measured here.
-- **Load memory:** peak heap during `load` 4,001,584 bytes = **3.65x the
-  file size** (`store_memory` fails above 5x); the loaded project keeps
-  912,320 bytes = 0.83x; 45,549 allocations. The peak is the input buffer
-  (1x, dropped after decoding) plus the owned wire entities, whose keys
-  and names are separate `Arc<str>` allocations (each with a 16-byte
-  header), plus the project being built. Decoding straight into indices
-  with a `DeserializeSeed` would cut the wire overhead; not needed at
-  these numbers.
+- **Load memory** (`cargo bench --bench store_memory`, dhat): peak heap
+  during `load` as a factor of the file size. Each hostile file is 4 MiB;
+  the factor does not depend on size, so multiply by 64 MiB for the cap.
+  "Kept" is the loaded project itself.
+
+  | Shape | Round 1 peak | Round 2 peak | Round 2 kept | Gate |
+  |---|---|---|---|---|
+  | typical (1.1 MB, 4,300 entities) | 3.65x | **1.03x** | 0.83x | 1.5x |
+  | short property keys (64 per asset, valid) | 8.01x | **1.47x** | 1.32x | 2.0x |
+  | short impact keys (32 per damage, valid) | 9.04x | **0.76x** | 0.54x | 1.5x |
+  | unknown property keys | 8.01x | **0.02x** | 0 | 0.1x |
+  | unknown impact keys | 9.04x | **0.02x** | 0 | 0.1x |
+  | 62 one-byte unknown keys per asset | 10.14x | **0.02x** | 0 | 0.1x |
+  | long names (1,024 bytes each, valid) | 3.08x | **1.31x** | 1.28x | 2.0x |
+  | one huge string (fails the name cap) | 2.00x | **1.02x** | 0 | 2.5x |
+  | minimal entities (smallest valid assets, damages, threats) | 3.49x | **2.99x** | 2.59x | 4.0x |
+
+  The worst case is now the smallest valid entities: 2.99x, so about
+  192 MiB at the 64 MiB cap, of which 2.59x is the loaded project (arena
+  slot, ID map entry, and reference counts per entity, which any project
+  of that many entities needs). Decoding adds at most about 0.4x on top of
+  the project. Unknown keys fail inside the first entity, so a hostile
+  file of them costs only the 64 KiB read buffer. One huge string costs up
+  to 2x its size in the parser's scratch buffer (it grows by doubling)
+  before the name cap rejects it. Each gate is the measured factor plus
+  about 35% headroom. The server budget "memory per open project <= 3x its
+  serialized size" holds for every valid shape (kept at most 2.59x).
 - **Budget:** "open project from local cache <= 1.0 s (large)". Loading the
-  TARA part of the typical project takes 4.3 ms, 0.4% of that budget. Load
+  TARA part of the typical project takes 5.1 ms, 0.5% of that budget. Load
   is linear in bytes plus O(n log n), so a TARA part ten times larger
-  (43,000 entities, about 11 MB) would take roughly 45 ms, 4.5%. Attack
+  (43,000 entities, about 11 MB) would take roughly 50 ms, 5%. Attack
   trees are not in `Project` yet and will add to this.
-- **Lesson (L2):** `load` (4.3 ms) beats `replay_log` (9.9 ms for 10,000
+- **Lesson (L2):** `load` (5.1 ms) beats `replay_log` (8.9 ms for 10,000
   ops, which rebuild the same 4,300 entities plus 5,700 edits). Both go
   through `apply`; the difference is mostly decoding: an op record costs
-  about 2x a snapshot entity per byte, because serde buffers each
+  more per byte than a snapshot entity, because serde buffers each
   internally tagged op into a `Content` tree before choosing its variant.
   A snapshot plus a short log tail is the fast path to open a project; a
   hand-written op visitor that reads `"op"` first could remove the buffer

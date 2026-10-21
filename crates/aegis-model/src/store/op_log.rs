@@ -264,9 +264,9 @@ fn encode_record(
 // Decoding.
 // ---------------------------------------------------------------------------
 
-/// Turns a decoded op into an `Op` of `m`: keys to indices, catalog ref
-/// texts parsed again under their scheme. Lists keep their order. Time
-/// O(k log m).
+/// Turns a decoded op into an `Op` of `m`. Vocabulary was resolved while
+/// decoding; only a `SetImpact` level is resolved here, against its
+/// category. Lists keep their order. Time O(k).
 fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
     Ok(match w {
         OpWire::AddAsset {
@@ -276,7 +276,7 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::AddAsset {
             id: id.0,
             name: name.0,
-            properties: wire::resolve_properties(m, &properties)?,
+            properties: properties.0,
         },
         OpWire::RenameAsset { id, name } => Op::RenameAsset {
             id: id.0,
@@ -284,13 +284,13 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         },
         OpWire::SetAssetProperties { id, properties } => Op::SetAssetProperties {
             id: id.0,
-            properties: wire::resolve_properties(m, &properties)?,
+            properties: properties.0,
         },
         OpWire::RemoveAsset { id } => Op::RemoveAsset { id: id.0 },
         OpWire::AddDamageScenario { id, name, impacts } => Op::AddDamageScenario {
             id: id.0,
             name: name.0,
-            impacts: wire::resolve_impacts(m, &impacts)?,
+            impacts: impacts.0,
         },
         OpWire::RenameDamageScenario { id, name } => Op::RenameDamageScenario {
             id: id.0,
@@ -301,7 +301,7 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             category,
             level,
         } => {
-            let category = wire::resolve_impact_category(m, &category)?;
+            let category = category.0;
             let level = match level {
                 Some(l) => Some(wire::resolve_level(m, category, &l)?),
                 None => None,
@@ -324,8 +324,8 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             id: id.0,
             name: name.0,
             asset: asset.0,
-            category: wire::resolve_threat_category(m, &category)?,
-            catalog_refs: wire::resolve_catalog_refs(m, &catalog_refs.0)?,
+            category: category.0,
+            catalog_refs: catalog_refs.0.into_iter().map(|r| r.0).collect(),
             damages: damages.0.into_iter().map(|d| d.0).collect(),
         },
         OpWire::RenameThreatScenario { id, name } => Op::RenameThreatScenario {
@@ -334,21 +334,21 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         },
         OpWire::SetThreatCategory { id, category } => Op::SetThreatCategory {
             id: id.0,
-            category: wire::resolve_threat_category(m, &category)?,
+            category: category.0,
         },
         OpWire::AddCatalogRef {
             threat,
             catalog_ref,
         } => Op::AddCatalogRef {
             threat: threat.0,
-            catalog_ref: wire::resolve_catalog_ref(m, &catalog_ref)?,
+            catalog_ref: catalog_ref.0,
         },
         OpWire::RemoveCatalogRef {
             threat,
             catalog_ref,
         } => Op::RemoveCatalogRef {
             threat: threat.0,
-            catalog_ref: wire::resolve_catalog_ref(m, &catalog_ref)?,
+            catalog_ref: catalog_ref.0,
         },
         OpWire::LinkDamage { threat, damage } => Op::LinkDamage {
             threat: threat.0,
@@ -697,12 +697,11 @@ impl<R: BufRead> OpLogReader<R> {
             return Err(StoreError::MissingHeader);
         }
         reject_cr(&buf, 1)?;
-        let header: HeaderWire = wire::from_slice(&buf, Some(1))?;
-        wire::check_methodology(&header.methodology, &m)?;
+        let header: HeaderWire = wire::from_slice(&m, &buf, Some(1))?;
         Ok(OpLogReader {
             r,
             m,
-            version: header.methodology.version.0,
+            version: header.methodology.version,
             last_seq: 0,
             line: 1,
             buf,
@@ -784,7 +783,7 @@ impl<R: BufRead> OpLogReader<R> {
         }
         self.line = line;
         reject_cr(&self.buf, line)?;
-        let record: RecordWire = wire::from_slice(&self.buf, Some(line))?;
+        let record: RecordWire = wire::from_slice(&self.m, &self.buf, Some(line))?;
         let expected = self.last_seq.saturating_add(1);
         if record.seq != expected || self.last_seq == u64::MAX {
             return Err(StoreError::Sequence {

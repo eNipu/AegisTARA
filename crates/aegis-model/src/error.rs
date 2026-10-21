@@ -507,6 +507,12 @@ pub enum MethodologyError {
 /// keeps only the position of a JSON error and drops the parser's message,
 /// because that message can quote input such as an entity name.
 ///
+/// Where it failed: [`Decode`](Self::Decode) and
+/// [`TruncatedRecord`](Self::TruncatedRecord) carry their line. For any
+/// other error from an op log record, [`OpLogReader::line`](crate::OpLogReader::line)
+/// gives the line of the record that failed (the iterator stops there).
+/// Snapshot errors other than `Decode` carry no position.
+///
 /// Not `PartialEq` (it can hold an [`std::io::Error`]); match it with
 /// `matches!`.
 ///
@@ -516,8 +522,11 @@ pub enum MethodologyError {
 ///
 /// # fn main() -> Result<(), aegis_model::MethodologyError> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
-/// let err = Project::load(&b"{\"format\":\"spreadsheet\"}"[..], m).err();
-/// assert!(matches!(err, Some(StoreError::UnsupportedFormat)));
+/// let err = Project::load(&b"{\"format\":\"spreadsheet\"}"[..], Arc::clone(&m)).err();
+/// assert!(matches!(err, Some(StoreError::UnsupportedFormat { version: None })));
+/// let newer = br#"{"format":"aegis-project","version":2}"#;
+/// let err = Project::load(&newer[..], m).err();
+/// assert!(matches!(err, Some(StoreError::UnsupportedFormat { version: Some(2) })));
 /// # Ok(())
 /// # }
 /// ```
@@ -542,9 +551,15 @@ pub enum StoreError {
     #[error("{0}")]
     LimitExceeded(Limit),
     /// The `format` string or the format `version` is not one this build
-    /// reads.
-    #[error("unsupported file format or format version")]
-    UnsupportedFormat,
+    /// reads. `version` is the file's format version when that is a
+    /// non-negative integer other than 1 (most likely a file from a newer
+    /// application: the user should update), and `None` when the file is
+    /// not of the expected kind at all (the user picked the wrong file).
+    #[error("{}", unsupported_format_text(*.version))]
+    UnsupportedFormat {
+        /// The file's format version, if it is a number other than 1.
+        version: Option<u64>,
+    },
     /// The file was written under another methodology (its key differs).
     #[error("file was written for methodology {found:?}, expected {expected:?}")]
     MethodologyMismatch {
@@ -554,6 +569,11 @@ pub enum StoreError {
         found: Arc<str>,
     },
     /// A vocabulary key in the file is not in the supplied methodology.
+    ///
+    /// Likely causes: the methodology pack no longer defines the key (the
+    /// file needs a pack version that does), or the file is corrupt. The
+    /// message names only the vocabulary and the key; an application should
+    /// add that hint for its users.
     #[error("unknown {kind} key {key:?}")]
     UnknownKey {
         /// Which vocabulary the key was looked up in.
@@ -602,6 +622,17 @@ pub enum StoreError {
     /// The decoded data broke a model rule (see [`ModelError`]).
     #[error("model rejected the data: {0}")]
     Model(#[from] ModelError),
+}
+
+/// The message for [`StoreError::UnsupportedFormat`]. Time O(1).
+fn unsupported_format_text(version: Option<u64>) -> String {
+    match version {
+        Some(v) => format!(
+            "file format version {v} is not supported: this build reads version 1, \
+             a newer application may read it"
+        ),
+        None => "not a supported AegisTARA file: wrong format name or format version".into(),
+    }
 }
 
 /// Formats IDs as `a -> b -> c`; with `close`, the first ID is repeated at
