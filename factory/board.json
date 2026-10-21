@@ -200,6 +200,22 @@
       ],
       "decision": "ESCALATE",
       "updated": "2026-10-21T16:15:35Z"
+    },
+    {
+      "id": "011-sparse-refcounts",
+      "title": "Sparse per-asset reference counts (3x memory budget)",
+      "branch": "factory/011-sparse-refcounts",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-21T16:44:15Z"
     }
   ]
 }

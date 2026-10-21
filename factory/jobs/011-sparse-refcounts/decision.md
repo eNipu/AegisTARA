@@ -1,0 +1,5 @@
+APPROVE
+The spec's one open question (does the 3x budget cover the load peak or only the kept heap) was answered by the owner in rework.md: kept only. The build implements that answer: every loading case has a kept gate of at most 3.0, and the 3.53x damages_only_max peak stays gated and documented.
+The diff matches the spec. It changes only the allowed files: project.rs, the snapshot.rs doc comment, the store_memory bench, and ADRs 0008, 0009 and 0010. No `pub` item changed, nothing changed under tests/ or fuzz/, Cargo.toml and Cargo.lock are untouched, and there is no `unsafe` code. It does not touch auth, crypto, licensing, docs/decisions.md or docs/engineering-standards.md.
+Every peak gate went down or stayed the same (assets_only_max went from 8.3 to 3.3). The new kept gates enforce the owner's budget. This closes the breach that job 010's owner accepted only temporarily, plus a second breach found here: targeted_narrow_max kept 3.60x on master and keeps 1.76x now.
+All four reviewers passed. The only findings are non-blocking: an ADR wording nit, and the code reviewer did not re-run the AC5 timing bench. The recorded timings are within +1% of master.
