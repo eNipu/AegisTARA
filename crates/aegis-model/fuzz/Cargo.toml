@@ -1,0 +1,41 @@
+# Fuzz targets for the aegis-model decoders (ADR 0009). Non-shipped tooling:
+# never a dependency of a shipped crate. libfuzzer-sys is licensed
+# `(MIT OR Apache-2.0) AND NCSA`; NCSA is allowed for non-shipped tooling by
+# decision D5, through a per-crate exception in deny.toml.
+#
+# Needs a nightly toolchain and cargo-fuzz:
+#   cd crates/aegis-model/fuzz
+#   cargo +nightly fuzz run snapshot corpus/snapshot seeds/snapshot -- -max_total_time=60
+#   cargo +nightly fuzz run op_log corpus/op_log seeds/op_log -- -max_total_time=60
+
+[package]
+name = "aegis-model-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "LicenseRef-Proprietary"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+aegis-model = { path = ".." }
+libfuzzer-sys = "0.4"
+
+# Its own workspace, so it never joins the aegis-model build.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "snapshot"
+path = "fuzz_targets/snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "op_log"
+path = "fuzz_targets/op_log.rs"
+test = false
+doc = false
+bench = false

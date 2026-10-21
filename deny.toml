@@ -31,7 +31,12 @@ unused-allowed-license = "allow"
 # Review-first licenses pass only through a per-crate exception that names the
 # crate and version, with a comment pointing to the approving decision, e.g.
 #   { crate = "name@1.2.3", allow = ["<SPDX-ID>"] },  # approved in D<N>
-exceptions = []
+exceptions = [
+    # Approved in D5 (docs/decisions.md, non-shipped tooling): the libFuzzer
+    # runtime, used only by the cargo-fuzz crate crates/aegis-model/fuzz.
+    # [bans] below keeps it out of every shipped crate.
+    { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
+]
 
 [licenses.private]
 # Our own `publish = false` crates carry a proprietary license ref; skip them
@@ -52,6 +57,12 @@ multiple-versions = "warn"
 # so include them and keep the duplicates visible.
 multiple-versions-include-dev = true
 wildcards = "deny"
+# Non-shipped tooling only (D5): a crate with a tooling-only license exception
+# may be a direct dependency of the named fuzz crates and nothing else, so a
+# shipped crate cannot pick it up unnoticed.
+deny = [
+    { crate = "libfuzzer-sys", wrappers = ["aegis-model-fuzz"], reason = "fuzzing runtime (NCSA), non-shipped tooling only (D5)" },
+]
 # Path dependencies (fixtures, future workspace members) may omit a version.
 allow-wildcard-paths = true
 

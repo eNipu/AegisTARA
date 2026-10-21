@@ -119,8 +119,19 @@ The version is part of the name on purpose. A reviewed license is a fact about
 one release; a later release can change its license or its bundled code. With
 the version pinned, an upgrade fails the check and forces a new look, which is
 the review D5 asks for. The comment points to the decision that approved it, so
-the reason is traceable. No exceptions exist today (Slint and MPL-2.0 are not
-approved yet).
+the reason is traceable. Slint and MPL-2.0 are not approved yet.
+
+The first exception came with job 010 (ADR 0009): `libfuzzer-sys@0.4.13`
+may use NCSA, under the D5 rule for non-shipped tooling. Two more pieces keep
+that exception from leaking into a shipped binary:
+
+- `[bans] deny` lists `libfuzzer-sys` with `wrappers = ["aegis-model-fuzz"]`,
+  so any other crate that depends on it fails the `bans` check. A
+  tooling-only exception always gets such a ban entry.
+- `scripts/deny.sh` also checks every `crates/*/fuzz/Cargo.toml`, so the fuzz
+  crate's own licenses are checked in CI even though it is not a production
+  crate. `tools/deny-fixtures` has a `bad-ncsa` case proving NCSA stays off
+  the global allow list.
 
 `[advisories] ignore` stays empty for the same reason: an advisory is fixed or
 reviewed, never silenced without a record.
