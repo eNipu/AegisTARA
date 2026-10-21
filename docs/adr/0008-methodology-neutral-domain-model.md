@@ -57,6 +57,10 @@ a pack will, and `src/methodology/iso21434.rs` is the only non-test file
 that names its vocabulary. Labels are short names only, with no text or
 tables from the standards (direction-v1 section 11).
 
+(Job 012 moved the vocabulary into the pack file
+`packs/iso21434-r155.json`, decoded by `Methodology::read_pack`; see
+`0011-methodology-pack-files.md`.)
+
 ## Decision
 
 ### Methodology

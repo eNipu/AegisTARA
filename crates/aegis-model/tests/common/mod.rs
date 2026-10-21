@@ -843,3 +843,295 @@ pub fn describe(p: &Project) -> Vec<String> {
     }
     out
 }
+
+// ---------------------------------------------------------------------------
+// Ops over the second methodology.
+// ---------------------------------------------------------------------------
+
+/// Applies every `Op` variant over `m`, which must be the second
+/// methodology (built from `second_def()` or loaded from its pack), checks
+/// the resulting state, and tears the project down again (AC7 of job 009,
+/// AC6 of job 012).
+pub fn second_every_op(m: Arc<Methodology>) {
+    fn ok(p: &mut Project, op: Op) -> Op {
+        match p.apply(op.clone()) {
+            Ok(inverse) => inverse,
+            Err(e) => panic!("{op:?} failed: {e}"),
+        }
+    }
+    fn rejects(p: &mut Project, op: Op, want: &aegis_model::ModelError) {
+        let before = p.clone();
+        assert_eq!(p.validate(&op).as_ref(), Err(want), "validate {op:?}");
+        assert_eq!(p.apply(op.clone()).as_ref(), Err(want), "apply {op:?}");
+        assert_eq!(*p, before);
+    }
+    let mut p = Project::new(Arc::clone(&m));
+    let capec = scheme(&m, "capec");
+    let harm = cat(&m, "patient-harm");
+    let exposure = cat(&m, "data-exposure");
+    let loss = cat(&m, "service-loss");
+    let (pump, monitor) = (asset_id(1), asset_id(2));
+    let (overdose, leak) = (damage_id(3), damage_id(4));
+    let (lock, sniff) = (threat_id(5), threat_id(6));
+
+    // Assets.
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: pump,
+            name: "Infusion pump".into(),
+            properties: props(&m, &["i", "a"]),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: monitor,
+            name: "Monitor".into(),
+            properties: props(&m, &["c"]),
+        },
+    );
+    ok(
+        &mut p,
+        Op::RenameAsset {
+            id: monitor,
+            name: "Bedside monitor".into(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetAssetProperties {
+            id: monitor,
+            properties: m.all_properties(),
+        },
+    );
+
+    // Damage scenarios, rated on the 5-level and 2-level scales.
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: overdose,
+            name: "Overdose".into(),
+            impacts: vec![
+                (harm, lvl(&m, harm, "critical")),
+                (loss, lvl(&m, loss, "intolerable")),
+            ],
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: leak,
+            name: "Record leak".into(),
+            impacts: vec![],
+        },
+    );
+    ok(
+        &mut p,
+        Op::RenameDamageScenario {
+            id: leak,
+            name: "Patient record leak".into(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetImpact {
+            id: leak,
+            category: exposure,
+            level: Some(lvl(&m, exposure, "extreme")),
+        },
+    );
+
+    // Threats; ransomware violates two properties.
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: lock,
+            name: "Encrypt pump firmware".into(),
+            asset: pump,
+            category: threat_cat(&m, "ransomware"),
+            catalog_refs: vec![cref(&m, capec, "CAPEC-549")],
+            damages: vec![overdose],
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: sniff,
+            name: "Sniff telemetry".into(),
+            asset: monitor,
+            category: threat_cat(&m, "corruption"),
+            catalog_refs: vec![],
+            damages: vec![],
+        },
+    );
+    ok(
+        &mut p,
+        Op::RenameThreatScenario {
+            id: sniff,
+            name: "Sniff patient telemetry".into(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatCategory {
+            id: sniff,
+            category: threat_cat(&m, "data-leak"),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddCatalogRef {
+            threat: sniff,
+            catalog_ref: cref(&m, capec, "CAPEC-157"),
+        },
+    );
+    ok(
+        &mut p,
+        Op::LinkDamage {
+            threat: sniff,
+            damage: leak,
+        },
+    );
+
+    // Check the state.
+    let lock_idx = p.threat_scenario_idx(&lock).expect("lock");
+    assert_eq!(p.targets(lock_idx), Some(props(&m, &["i", "a"])));
+    let sniff_idx = p.threat_scenario_idx(&sniff).expect("sniff");
+    assert_eq!(p.targets(sniff_idx), Some(props(&m, &["c"])));
+    let d = p
+        .damage_scenario(p.damage_scenario_idx(&leak).expect("leak"))
+        .expect("live");
+    assert_eq!(d.name(), "Patient record leak");
+    assert_eq!(d.impacts().count(), 3);
+    assert_eq!(d.impact(exposure), Some(lvl(&m, exposure, "extreme")));
+    assert_eq!(d.impact(harm), None);
+    let t = p.threat_scenario(sniff_idx).expect("live");
+    assert_eq!(t.name(), "Sniff patient telemetry");
+    assert_eq!(t.catalog_refs(), [cref(&m, capec, "CAPEC-157")]);
+    assert_eq!(t.damages(), [p.damage_scenario_idx(&leak).expect("leak")]);
+
+    // Ransomware relies on both I and A of the pump.
+    rejects(
+        &mut p,
+        Op::SetAssetProperties {
+            id: pump,
+            properties: props(&m, &["i"]),
+        },
+        &aegis_model::ModelError::PropertyInUse {
+            asset: pump,
+            property: prop(&m, "a"),
+            threats: 1,
+        },
+    );
+
+    // Tear down with the remaining ops.
+    ok(
+        &mut p,
+        Op::RemoveCatalogRef {
+            threat: sniff,
+            catalog_ref: cref(&m, capec, "CAPEC-157"),
+        },
+    );
+    ok(
+        &mut p,
+        Op::UnlinkDamage {
+            threat: sniff,
+            damage: leak,
+        },
+    );
+    ok(&mut p, Op::RemoveDamageScenario { id: leak });
+    ok(&mut p, Op::RemoveThreatScenario { id: sniff });
+    ok(&mut p, Op::RemoveThreatScenario { id: lock });
+    ok(&mut p, Op::RemoveDamageScenario { id: overdose });
+    ok(&mut p, Op::RemoveAsset { id: pump });
+    ok(&mut p, Op::RemoveAsset { id: monitor });
+    assert_eq!(p, Project::new(m));
+}
+
+// ---------------------------------------------------------------------------
+// Pack helpers.
+// ---------------------------------------------------------------------------
+
+/// `def` written as a pack.
+pub fn pack_bytes(def: &MethodologyDef) -> Vec<u8> {
+    let mut out = Vec::new();
+    def.write_pack(&mut out).expect("write_pack into a Vec");
+    out
+}
+
+/// A key of exactly `len` bytes: `tag`, `-`, then `i` zero-padded.
+pub fn key_of_len(tag: &str, i: usize, len: usize) -> Arc<str> {
+    let width = len - tag.len() - 1;
+    format!("{tag}-{i:0>width$}").into()
+}
+
+/// The largest definition `Methodology::new` accepts, as measured by its
+/// pack size (AC9 of job 012): every vocabulary at its maximum count, every
+/// key 64 bytes, every label 256 control chars (each escaped to 6 bytes in
+/// JSON), a 64-char version of control chars, every threat category
+/// violating all 64 properties, and every catalog scheme with a 16-byte
+/// prefix and 4 fixed-width segments.
+pub fn max_def() -> MethodologyDef {
+    let label: Arc<str> = "\u{1}".repeat(256).into();
+    let entry = |tag: &str, i: usize| (key_of_len(tag, i, 64), Arc::clone(&label));
+    let properties: Vec<PropertyDef> = (0..64)
+        .map(|i| {
+            let (key, label) = entry("p", i);
+            PropertyDef { key, label }
+        })
+        .collect();
+    let all: Vec<Arc<str>> = properties.iter().map(|p| Arc::clone(&p.key)).collect();
+    MethodologyDef {
+        key: key_of_len("m", 0, 64),
+        version: "\u{1}".repeat(64).into(),
+        label: Arc::clone(&label),
+        impact_categories: (0..32)
+            .map(|i| {
+                let (key, label) = entry("c", i);
+                ImpactCategoryDef {
+                    key,
+                    label,
+                    levels: (0..16)
+                        .map(|l| {
+                            let (key, label) = entry("l", l);
+                            LevelDef { key, label }
+                        })
+                        .collect(),
+                }
+            })
+            .collect(),
+        properties,
+        threat_categories: (0..64)
+            .map(|i| {
+                let (key, label) = entry("t", i);
+                ThreatCategoryDef {
+                    key,
+                    label,
+                    violates: all.clone(),
+                }
+            })
+            .collect(),
+        catalog_schemes: (0..16)
+            .map(|i| {
+                let (key, label) = entry("s", i);
+                CatalogSchemeDef {
+                    key,
+                    label,
+                    syntax: CatalogSyntax {
+                        prefix: "ABCDEFGHIJKLMNOP".into(),
+                        segments: vec![
+                            SegmentDef {
+                                min: 0,
+                                max: 65535,
+                                digits: Some(5),
+                            };
+                            4
+                        ],
+                        required: 4,
+                    },
+                }
+            })
+            .collect(),
+    }
+}

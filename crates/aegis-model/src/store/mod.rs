@@ -42,13 +42,16 @@
 
 mod op_log;
 mod snapshot;
-mod wire;
+pub(crate) mod wire;
 
 use std::fmt;
 
 pub use op_log::{LoggedOp, OpLogReader, OpLogWriter};
 
-use crate::methodology::{MAX_IMPACT_CATEGORIES, MAX_KEY_LEN, MAX_PROPERTIES};
+use crate::methodology::{
+    MAX_CATALOG_SCHEMES, MAX_IMPACT_CATEGORIES, MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS,
+    MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
+};
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 
 /// Largest snapshot [`Project::load`](crate::Project::load) reads, in
@@ -100,15 +103,39 @@ pub const MAX_METHODOLOGY_VERSION_BYTES: usize = 256;
 /// ```
 pub const MAX_CATALOG_REF_BYTES: usize = 64;
 
-/// A decode cap, carried by
-/// [`StoreError::LimitExceeded`](crate::StoreError::LimitExceeded). Each
-/// variant holds the cap's `max`.
+/// Largest methodology pack file
+/// [`MethodologyDef::read_pack`](crate::MethodologyDef::read_pack) reads, in
+/// bytes: 4 MiB. The largest pack that
+/// [`Methodology::new`](crate::Methodology::new) accepts is about 1.4 MB
+/// (`docs/adr/0011-methodology-pack-files.md`); the built-in pack is about
+/// 3 KB.
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_PACK_FILE_BYTES, 4 * 1024 * 1024);
+/// ```
+pub const MAX_PACK_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Longest decoded methodology label, in bytes: 1,024. A label has at most
+/// 256 chars of up to 4 bytes each; [`Methodology::new`](crate::Methodology::new)
+/// then checks the char count.
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_LABEL_BYTES, 1024);
+/// ```
+pub const MAX_LABEL_BYTES: usize = 4 * MAX_LABEL_CHARS;
+
+/// A decode cap, carried by both
+/// [`StoreError::LimitExceeded`](crate::StoreError::LimitExceeded) (project
+/// snapshots and op logs) and
+/// [`PackError::LimitExceeded`](crate::PackError::LimitExceeded)
+/// (methodology packs). Each variant holds the cap's `max`. Its `Display`
+/// names the cap and its value, never the input.
 ///
 /// ```
 /// use std::sync::Arc;
 /// use aegis_model::{Limit, Methodology, Project, StoreError};
 ///
-/// # fn main() -> Result<(), aegis_model::MethodologyError> {
+/// # fn main() -> Result<(), aegis_model::PackError> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
 /// let long_key = "k".repeat(65);
 /// let text = format!(
@@ -171,9 +198,51 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
-    /// A property set has more than 64 members (the most a methodology
+    /// A property set, a pack's property list, or a pack threat category's
+    /// `violates` list has more than 64 members (the most a methodology
     /// declares).
     Properties {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A methodology pack is larger than [`MAX_PACK_FILE_BYTES`].
+    PackFileBytes {
+        /// The cap, in bytes.
+        max: u64,
+    },
+    /// A pack label is longer than [`MAX_LABEL_BYTES`].
+    LabelBytes {
+        /// The cap, in bytes.
+        max: usize,
+    },
+    /// A pack catalog prefix is longer than 16 bytes (the longest prefix a
+    /// methodology may declare).
+    CatalogPrefixBytes {
+        /// The cap, in bytes.
+        max: usize,
+    },
+    /// A pack declares more than 32 impact categories.
+    ImpactCategories {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A pack impact category declares more than 16 levels.
+    Levels {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A pack declares more than 64 threat categories.
+    ThreatCategories {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A pack declares more than 16 catalog schemes.
+    CatalogSchemes {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A pack catalog syntax has more than 4 segments.
+    CatalogSegments {
         /// The cap, in items.
         max: usize,
     },
@@ -208,6 +277,26 @@ impl Limit {
     pub(crate) const PROPERTIES: Limit = Limit::Properties {
         max: MAX_PROPERTIES,
     };
+    pub(crate) const PACK_FILE: Limit = Limit::PackFileBytes {
+        max: MAX_PACK_FILE_BYTES,
+    };
+    pub(crate) const LABEL: Limit = Limit::LabelBytes {
+        max: MAX_LABEL_BYTES,
+    };
+    pub(crate) const CATALOG_PREFIX: Limit = Limit::CatalogPrefixBytes {
+        max: MAX_PREFIX_LEN,
+    };
+    pub(crate) const IMPACT_CATEGORIES: Limit = Limit::ImpactCategories {
+        max: MAX_IMPACT_CATEGORIES,
+    };
+    pub(crate) const LEVELS: Limit = Limit::Levels { max: MAX_LEVELS };
+    pub(crate) const THREAT_CATEGORIES: Limit = Limit::ThreatCategories {
+        max: MAX_THREAT_CATEGORIES,
+    };
+    pub(crate) const CATALOG_SCHEMES: Limit = Limit::CatalogSchemes {
+        max: MAX_CATALOG_SCHEMES,
+    };
+    pub(crate) const CATALOG_SEGMENTS: Limit = Limit::CatalogSegments { max: MAX_SEGMENTS };
 }
 
 impl fmt::Display for Limit {
@@ -228,6 +317,18 @@ impl fmt::Display for Limit {
             Limit::DamageLinks { max } => write!(f, "more than {max} damage links"),
             Limit::Impacts { max } => write!(f, "more than {max} impact ratings"),
             Limit::Properties { max } => write!(f, "more than {max} properties"),
+            Limit::PackFileBytes { max } => {
+                write!(f, "methodology pack is larger than {max} bytes")
+            }
+            Limit::LabelBytes { max } => write!(f, "label is longer than {max} bytes"),
+            Limit::CatalogPrefixBytes { max } => {
+                write!(f, "catalog prefix is longer than {max} bytes")
+            }
+            Limit::ImpactCategories { max } => write!(f, "more than {max} impact categories"),
+            Limit::Levels { max } => write!(f, "more than {max} levels in one impact category"),
+            Limit::ThreatCategories { max } => write!(f, "more than {max} threat categories"),
+            Limit::CatalogSchemes { max } => write!(f, "more than {max} catalog schemes"),
+            Limit::CatalogSegments { max } => write!(f, "more than {max} catalog ID segments"),
         }
     }
 }
@@ -293,6 +394,37 @@ mod tests {
         ] {
             assert_ne!(l.to_string(), "");
         }
+    }
+
+    #[test]
+    fn pack_limit_display_names_the_cap() {
+        let shown: Vec<_> = [
+            Limit::PACK_FILE,
+            Limit::LABEL,
+            Limit::CATALOG_PREFIX,
+            Limit::IMPACT_CATEGORIES,
+            Limit::LEVELS,
+            Limit::THREAT_CATEGORIES,
+            Limit::CATALOG_SCHEMES,
+            Limit::CATALOG_SEGMENTS,
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+        assert_eq!(
+            shown,
+            [
+                "methodology pack is larger than 4194304 bytes",
+                "label is longer than 1024 bytes",
+                "catalog prefix is longer than 16 bytes",
+                "more than 32 impact categories",
+                "more than 16 levels in one impact category",
+                "more than 64 threat categories",
+                "more than 16 catalog schemes",
+                "more than 4 catalog ID segments",
+            ]
+        );
+        assert_eq!(MAX_LABEL_BYTES, 1024);
     }
 
     #[test]
