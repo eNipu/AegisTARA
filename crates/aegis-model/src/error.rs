@@ -551,13 +551,14 @@ pub enum StoreError {
     #[error("{0}")]
     LimitExceeded(Limit),
     /// The `format` string or the format `version` is not one this build
-    /// reads. `version` is the file's format version when that is a
-    /// non-negative integer other than 1 (most likely a file from a newer
-    /// application: the user should update), and `None` when the file is
-    /// not of the expected kind at all (the user picked the wrong file).
+    /// reads. `version` is the file's format version when that is an
+    /// integer above 1 (most likely a file from a newer application: the
+    /// user should update), and `None` when the file is not a valid file of
+    /// the expected kind at all (wrong format name, or a version of 0, a
+    /// negative or a fractional number: the user picked the wrong file).
     #[error("{}", unsupported_format_text(*.version))]
     UnsupportedFormat {
-        /// The file's format version, if it is a number other than 1.
+        /// The file's format version, if it is an integer above 1.
         version: Option<u64>,
     },
     /// The file was written under another methodology (its key differs).

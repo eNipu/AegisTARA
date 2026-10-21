@@ -117,7 +117,12 @@ allocation at most), raising it when the list ends so that a list's count
 cap is still reported first (AC11). Decoded entities now hold names and
 1-byte indices only. The methodology key is checked as soon as it is read,
 so a file from another methodology fails with `MethodologyMismatch`
-before any vocabulary lookup.
+before any vocabulary lookup, as long as `methodology` comes before the
+entity lists in the JSON, which is how `save` writes it. The decoder
+accepts any field order; in a hand-edited file with the lists first, keys
+are resolved against the caller's methodology first and the error may be
+`UnknownKey` instead. Either way the load fails before a project is built,
+and no key is reinterpreted.
 
 The snapshot is also streamed: `Project::load` reads through a 64 KiB
 buffer and a reader that fails one byte past the 64 MiB cap, instead of
@@ -173,10 +178,11 @@ Rules:
   `\n`; that is harmless, since a re-save is always canonical.
 - **Header checks.** Wrong `format`, or a `version` other than 1:
   `UnsupportedFormat`, as soon as the field is read. It carries the
-  version number when that is a non-negative integer (most likely a newer
+  version number only when that is an integer above 1 (most likely a newer
   file, so an application can say "update"), and `None` for the wrong kind
-  of file. Another methodology key: `MethodologyMismatch`, also as soon as
-  it is read. Another methodology version: accepted (open question 1).
+  of file, including version 0, a negative, or a fractional number. Another
+  methodology key: `MethodologyMismatch`, also as soon as it is read (when
+  the header comes first, as `save` writes it). Another methodology version: accepted (open question 1).
 - **Keys resolve as they are read.** An unknown key fails inside the
   entity that holds it. Within one property set or impact map a cap or a
   repeated key is reported at once and the first unknown key at the end of
@@ -364,18 +370,61 @@ of the open budget. `read_10k` got faster because keys no longer allocate.
   | 62 one-byte unknown keys per asset | 10.14x | **0.02x** | 0 | 0.1x |
   | long names (1,024 bytes each, valid) | 3.08x | **1.31x** | 1.28x | 2.0x |
   | one huge string (fails the name cap) | 2.00x | **1.02x** | 0 | 2.5x |
-  | minimal entities (smallest valid assets, damages, threats) | 3.49x | **2.99x** | 2.59x | 4.0x |
+  | minimal entities (smallest valid assets, damages, threats, mixed) | 3.49x | **2.99x** | 2.59x | 4.0x |
 
-  The worst case is now the smallest valid entities: 2.99x, so about
-  192 MiB at the 64 MiB cap, of which 2.59x is the loaded project (arena
-  slot, ID map entry, and reference counts per entity, which any project
-  of that many entities needs). Decoding adds at most about 0.4x on top of
-  the project. Unknown keys fail inside the first entity, so a hostile
-  file of them costs only the 64 KiB read buffer. One huge string costs up
-  to 2x its size in the parser's scratch buffer (it grows by doubling)
-  before the name cap rejects it. Each gate is the measured factor plus
-  about 35% headroom. The server budget "memory per open project <= 3x its
-  serialized size" holds for every valid shape (kept at most 2.59x).
+  Round 3 added single-kind files, each entity as small as a valid one can
+  be, over the built-in methodology (6 properties, 4 impact categories)
+  and over a methodology at every vocabulary limit (64 properties, 32
+  impact categories). These are the densest shapes:
+
+  | Shape | Methodology | Peak | Kept (project) | Decoder (peak - kept) | Gate |
+  |---|---|---|---|---|---|
+  | assets only | built-in | 2.43x | 1.81x | 0.62x | 3.3x |
+  | assets only | max vocabulary | **6.16x** | **5.53x** | 0.63x | 8.3x |
+  | damage scenarios only | built-in | 2.73x | 1.85x | 0.88x | 3.7x |
+  | damage scenarios only | max vocabulary | 3.53x | 2.65x | 0.88x | 4.8x |
+  | threats only | built-in | 1.91x | 1.10x | 0.81x | 2.6x |
+  | threats only | max vocabulary | 1.93x | 1.12x | 0.81x | 2.6x |
+
+  The worst case depends on the methodology's size, because it is the
+  in-memory project, not the decoder:
+
+  - **Decoder:** at most about 0.9x the file on top of the project in
+    every shape measured. Unknown keys fail inside the first entity, so a
+    hostile file of them costs only the 64 KiB read buffer. One huge
+    string costs up to 2x its size in the parser's scratch buffer (it
+    grows by doubling) before the name cap rejects it.
+  - **Project:** a file of minimal assets is about 77 bytes per asset, but
+    each loaded asset keeps a reference-count row of 4 bytes per
+    methodology property (job 009's `RefCounts.asset_properties`), plus its
+    arena slot, ID map entry, and name. With the built-in methodology
+    (6 properties) that is 1.81x the file; with 64 properties it is 5.53x.
+    Minimal damage scenarios keep one rating slot per impact category:
+    1.85x (4 categories) to 2.65x (32).
+  - **Worst case:** built-in methodology 2.73x peak (damage scenarios
+    only), about 175 MiB at the 64 MiB cap, kept at most 1.85x. Maximum
+    vocabulary 6.16x peak (assets only), about 394 MiB at the cap, kept
+    5.53x.
+
+  Each gate is the measured factor plus about 35% headroom. The server
+  budget "memory per open project <= 3x its serialized size" holds for
+  methodologies of the built-in size (kept at most 1.85x for any shape) and
+  for every realistic shape measured (typical 0.83x). It does **not** hold
+  for a file made only of minimal assets over a methodology with many more
+  properties: kept grows by about 4 bytes per asset per property, reaching
+  5.53x at 64 properties. That is a property of the in-memory model, not of
+  the file format.
+
+  **Follow-up for the in-memory model (not this job).** The per-asset
+  reference-count row is dense: `assets x properties x 4` bytes, even
+  though an asset typically carries a few properties and no threats. A
+  sparse layout (count only properties some threat targets, or one row per
+  asset that has threats) would remove most of it: the row is 256 bytes
+  per asset at 64 properties, 3.3x of a 77-byte minimal asset, so
+  assets-only over the max vocabulary would drop from 5.53x kept to about
+  2.2x (built-in: the row is 24 bytes, 0.3x). It touches job 009's invariants and every
+  op that updates counts, so it belongs in a model job with its own
+  benchmark, not in this round.
 - **Budget:** "open project from local cache <= 1.0 s (large)". Loading the
   TARA part of the typical project takes 5.1 ms, 0.5% of that budget. Load
   is linear in bytes plus O(n log n), so a TARA part ten times larger

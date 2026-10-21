@@ -60,8 +60,8 @@ pub(super) enum Fault {
     Limit(Limit),
     Duplicate,
     InvalidId,
-    /// The format name is wrong (`None`), or the format version is the
-    /// number given.
+    /// The format name or version is not valid (`None`), or the format
+    /// version is the given number, above the current one.
     UnsupportedFormat(Option<u64>),
     MethodologyMismatch {
         expected: Arc<str>,
@@ -630,7 +630,9 @@ impl<'de, F: FormatName> Deserialize<'de> for Format<F> {
 
 /// The format `version` field: exactly [`FORMAT_VERSION`]; any other
 /// number is [`StoreError::UnsupportedFormat`] as soon as it is read,
-/// carrying the number if it is a non-negative integer.
+/// carrying the number only if it is an integer above the current version
+/// (a newer file), else `None` (0, negative, or fractional: not a valid
+/// file).
 pub(super) struct FormatVersion;
 
 impl<'de> Deserialize<'de> for FormatVersion {
@@ -642,10 +644,12 @@ impl<'de> Deserialize<'de> for FormatVersion {
                 f.write_str("a format version number")
             }
             fn visit_u64<E: de::Error>(self, v: u64) -> Result<FormatVersion, E> {
-                if v == u64::from(FORMAT_VERSION) {
-                    Ok(FormatVersion)
-                } else {
-                    Err(raise(Fault::UnsupportedFormat(Some(v))))
+                match v.cmp(&u64::from(FORMAT_VERSION)) {
+                    std::cmp::Ordering::Equal => Ok(FormatVersion),
+                    // Most likely written by a newer application.
+                    std::cmp::Ordering::Greater => Err(raise(Fault::UnsupportedFormat(Some(v)))),
+                    // Below every version ever written: not a valid file.
+                    std::cmp::Ordering::Less => Err(raise(Fault::UnsupportedFormat(None))),
                 }
             }
             fn visit_i64<E: de::Error>(self, _: i64) -> Result<FormatVersion, E> {
@@ -1320,10 +1324,13 @@ mod tests {
                 Some(StoreError::UnsupportedFormat { version: None })
             ));
         }
+        // Version 0 is not "newer": no message may suggest updating.
         assert!(matches!(
             de::<FormatVersion>("0").err(),
-            Some(StoreError::UnsupportedFormat { version: Some(0) })
+            Some(StoreError::UnsupportedFormat { version: None })
         ));
+        let text = de::<FormatVersion>("0").err().map(|e| e.to_string());
+        assert!(text.is_some_and(|t| !t.contains("newer")));
         assert!(matches!(
             de::<FormatVersion>("\"1\"").err(),
             Some(StoreError::Decode { .. })

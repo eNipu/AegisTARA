@@ -16,7 +16,13 @@
 //! - `one_huge_string`: one name as long as the whole file, so the
 //!   parser's string buffer is the cost (the load fails with the name cap);
 //! - `minimal_entities`: the smallest valid assets, damage scenarios, and
-//!   threats, so per-entity overhead dominates.
+//!   threats in one file;
+//! - `{assets,damages,threats}_only_{builtin,max}`: one entity kind only,
+//!   each entity as small as a valid one can be, over the built-in
+//!   methodology (6 properties, 4 impact categories) and over `short`, a
+//!   methodology at every vocabulary limit (64 properties, 32 impact
+//!   categories). These are the densest shapes: the loaded project's fixed
+//!   cost per entity dominates, and it grows with the methodology's size.
 //!
 //! Each hostile file is about `HOSTILE_BYTES`; the factor does not depend
 //! on the size (load is linear), so the gate holds at the 64 MiB cap too.
@@ -35,7 +41,14 @@
 //! | unknown keys (all three) | 0.02 | 0.1 | the read buffer: the load fails inside the first entity |
 //! | long names | 1.31 | 2.0 | the names, moved into the project |
 //! | one huge string | 1.02 | 2.5 | the parser's string buffer, which grows by doubling |
-//! | minimal entities | 2.99 | 4.0 | the project's fixed per-entity cost (arena slot, ID map, counts) |
+//! | minimal entities (mixed kinds) | 2.99 | 4.0 | the project's fixed per-entity cost (arena slot, ID map, counts) |
+//! | assets only, built-in / max vocabulary | 2.43 / 6.16 | 3.3 / 8.3 | the project: per asset, a reference-count row of 4 bytes per methodology property (64 x 4 = 256 bytes at the max) |
+//! | damages only, built-in / max vocabulary | 2.73 / 3.53 | 3.7 / 4.8 | the project: per damage scenario, one rating slot per impact category |
+//! | threats only, built-in / max vocabulary | 1.91 / 1.93 | 2.6 / 2.6 | the project |
+//!
+//! The decoder's own share is the peak minus "kept" (the loaded project):
+//! at most about 0.9x the file in every case. The rest is the project,
+//! which any project of that many entities needs.
 //!
 //! Run: `cargo bench --bench store_memory` (also runs under
 //! `cargo test --benches`). The profiler runs in testing mode, so it never
@@ -153,6 +166,69 @@ fn snapshot(kind: &str, mut entity: impl FnMut(u64) -> String) -> Vec<u8> {
     .into_bytes()
 }
 
+/// A snapshot over `m` with one entity kind only, each entity as small as
+/// a valid one can be: assets with one name byte and the properties of the
+/// first threat category; damage scenarios with no ratings; or one such
+/// asset plus threats of the first category with no refs or links. This
+/// is the densest shape per byte for each kind, so the in-memory project's
+/// fixed cost per entity dominates.
+fn single_kind(m: &Methodology, kind: &str) -> Vec<u8> {
+    let category = m.threat_categories().next();
+    let category_key = category
+        .and_then(|t| m.threat_category_key(t))
+        .unwrap_or("");
+    let props: Vec<String> = category
+        .map(|t| m.violates(t))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| m.property_key(p))
+        .map(|k| format!("\"{k}\""))
+        .collect();
+    let props = props.join(",");
+    let asset = |i: u64| {
+        format!(
+            "{{\"id\":\"{}\",\"name\":\"a\",\"properties\":[{props}]}}",
+            id(i)
+        )
+    };
+    let mut list = String::new();
+    let mut i = 0u64;
+    while list.len() < HOSTILE_BYTES {
+        if i > 0 {
+            list.push(',');
+        }
+        let entity = match kind {
+            "assets" => asset(i),
+            "damage_scenarios" => {
+                format!(
+                    "{{\"id\":\"{}\",\"name\":\"a\",\"impacts\":{{}}}}",
+                    id(1 << 40 | i)
+                )
+            }
+            _ => format!(
+                "{{\"id\":\"{}\",\"name\":\"a\",\"asset\":\"{}\",\"category\":\"{category_key}\",\"catalog_refs\":[],\"damages\":[]}}",
+                id(2 << 40 | i),
+                id(0)
+            ),
+        };
+        list.push_str(&entity);
+        i += 1;
+    }
+    let one_asset = asset(0);
+    let (assets, damages, threats) = match kind {
+        "assets" => (list.as_str(), "", ""),
+        "damage_scenarios" => ("", list.as_str(), ""),
+        _ => (one_asset.as_str(), "", list.as_str()),
+    };
+    format!(
+        "{{\"format\":\"aegis-project\",\"version\":1,\"methodology\":{{\"key\":\"{}\",\"version\":\"{}\"}},\
+         \"assets\":[{assets}],\"damage_scenarios\":[{damages}],\"threat_scenarios\":[{threats}]}}\n",
+        m.key(),
+        m.version(),
+    )
+    .into_bytes()
+}
+
 fn keys(prefix: &str, n: usize) -> String {
     let mut out = String::new();
     for i in 0..n {
@@ -213,7 +289,7 @@ fn cases() -> Vec<Case> {
     }
     let short = short_keys();
     let long_name = "\u{1f512}".repeat(256);
-    vec![
+    let mut cases = vec![
         Case {
             name: "typical",
             methodology: typical_m,
@@ -318,12 +394,30 @@ fn cases() -> Vec<Case> {
         },
         Case {
             name: "minimal_entities",
-            methodology: short,
+            methodology: Arc::clone(&short),
             bytes: minimal(),
             loads: true,
             max_factor: 4.0,
         },
-    ]
+    ];
+    let builtin = store_kit::methodology();
+    for (name, m, kind, max_factor) in [
+        ("assets_only_builtin", &builtin, "assets", 3.3),
+        ("assets_only_max", &short, "assets", 8.3),
+        ("damages_only_builtin", &builtin, "damage_scenarios", 3.7),
+        ("damages_only_max", &short, "damage_scenarios", 4.8),
+        ("threats_only_builtin", &builtin, "threat_scenarios", 2.6),
+        ("threats_only_max", &short, "threat_scenarios", 2.6),
+    ] {
+        cases.push(Case {
+            name,
+            methodology: Arc::clone(m),
+            bytes: single_kind(m, kind),
+            loads: true,
+            max_factor,
+        });
+    }
+    cases
 }
 
 fn main() {
