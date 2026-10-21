@@ -201,8 +201,18 @@ dependencies already downloaded, 2026-10-20:
 Warm and cold are close because `cargo test` dominates: the property tests
 (job 007) and the timing tests run for about 10 s whatever the cache state.
 A standard GitHub `ubuntu-24.04` runner has 2 to 4 vCPUs, so expect the
-`check` job to take roughly 1 to 3 minutes. The measured time of the first
-GitHub run is recorded here by the approver after merge (spec AC11).
+`check` job to take roughly 1 to 3 minutes.
+
+GitHub, `ubuntu-24.04`, all three jobs green (spec AC11):
+
+| Run | Commit | Cache | `check` | `deny` | `msrv` | Whole run |
+|---|---|---|---|---|---|---|
+| [39511008327](https://github.com/eNipu/AegisTARA/actions/runs/39511008327), 2026-10-20 | `657e775` (job 008) | miss; saved 138 MiB on master | 83 s | 21 s | 20 s | about 85 s |
+| [39522231668](https://github.com/eNipu/AegisTARA/actions/runs/39522231668), 2026-10-21 | `3f41d56` (job 009) | exact key hit | 54 s | 21 s | 20 s | about 55 s |
+
+The second run tests far more code (job 009 added about 360 tests), yet the
+cache hit cut the `check` job by about a third. The cache key did not change
+between the two runs because no `Cargo.lock` changed.
 
 ## Consequences
 
