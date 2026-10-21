@@ -1,7 +1,9 @@
-//! Peak heap of `Project::load`, measured with `dhat`, as a factor of the
-//! snapshot's size (ADR 0009 records the numbers). One benign shape (the
-//! `typical` project) and the hostile shapes that cost the most heap per
-//! byte of JSON:
+//! Peak and kept heap of `Project::load`, measured with `dhat`, as a factor
+//! of the snapshot's size (ADRs 0009 and 0010 record the numbers). "Peak"
+//! is the most heap live at any time during `load`; "kept" is the heap
+//! still held when `load` returns, which is the loaded project. One benign
+//! shape (the `typical` project) and the hostile shapes that cost the most
+//! heap per byte of JSON:
 //!
 //! - `short_property_keys`: assets carrying 64 two- or three-byte property
 //!   keys each (valid, so the whole file loads);
@@ -22,37 +24,53 @@
 //!   methodology (6 properties, 4 impact categories) and over `short`, a
 //!   methodology at every vocabulary limit (64 properties, 32 impact
 //!   categories). These are the densest shapes: the loaded project's fixed
-//!   cost per entity dominates, and it grows with the methodology's size.
+//!   cost per entity dominates;
+//! - `targeted_narrow_{builtin,max}`: minimal assets (the properties of the
+//!   first threat category), each targeted by exactly one minimal threat of
+//!   that category. The densest file in which every asset has a non-empty
+//!   reference-count row;
+//! - `targeted_wide_max`: assets carrying all 64 properties, each targeted
+//!   by one threat of `short`'s `t63`, which violates every property. The
+//!   largest reference-count row per asset (64 entries). `t63` violates all
+//!   64 properties only for this case; no other case uses it.
 //!
-//! Each hostile file is about `HOSTILE_BYTES`; the factor does not depend
-//! on the size (load is linear), so the gate holds at the 64 MiB cap too.
+//! Each hostile file is about `HOSTILE_BYTES`; the factors do not depend
+//! on the size (load is linear), so the gates hold at the 64 MiB cap too.
 //!
-//! Bounds (peak heap / file bytes). Load resolves every key while decoding,
+//! Gates (heap / file bytes). Load resolves every key while decoding,
 //! streams the input through a 64 KiB buffer, and keeps only names and
-//! 1-byte indices per entity, so the peak is the loaded project ("kept")
-//! plus the decoded entity lists. Each bound is the measured factor
-//! (ADR 0009) plus about 35% headroom for allocator and `std` changes:
+//! 1-byte indices per entity, so the peak is the loaded project (kept)
+//! plus the decoded entity lists. Each gate is the measured factor plus
+//! about 35% headroom for allocator and `std` changes, rounded up to 0.1.
+//! A kept gate is capped at `SERVER_BUDGET` (3x, engineering standards
+//! section 2), and the bench fails if a case that loads has a kept gate
+//! above it:
 //!
-//! | Case | Measured | Bound | What dominates |
+//! | Case | Peak measured / gate | Kept measured / gate | What dominates |
 //! |---|---|---|---|
-//! | typical | 1.03 | 1.5 | the project |
-//! | short property keys | 1.47 | 2.0 | the project's per-asset reference counts (64 x 4 bytes) |
-//! | short impact keys | 0.76 | 1.5 | the project |
-//! | unknown keys (all three) | 0.02 | 0.1 | the read buffer: the load fails inside the first entity |
-//! | long names | 1.31 | 2.0 | the names, moved into the project |
-//! | one huge string | 1.02 | 2.5 | the parser's string buffer, which grows by doubling |
-//! | minimal entities (mixed kinds) | 2.99 | 4.0 | the project's fixed per-entity cost (arena slot, ID map, counts) |
-//! | assets only, built-in / max vocabulary | 2.43 / 6.16 | 3.3 / 8.3 | the project: per asset, a reference-count row of 4 bytes per methodology property (64 x 4 = 256 bytes at the max) |
-//! | damages only, built-in / max vocabulary | 2.73 / 3.53 | 3.7 / 4.8 | the project: per damage scenario, one rating slot per impact category |
-//! | threats only, built-in / max vocabulary | 1.91 / 1.93 | 2.6 / 2.6 | the project |
+//! | typical | 1.03 / 1.4 | 0.83 / 1.2 | the project |
+//! | short property keys | 0.54 / 0.8 | 0.38 / 0.6 | the project; 64 keys become one 8-byte set |
+//! | short impact keys | 0.76 / 1.1 | 0.54 / 0.8 | the project |
+//! | unknown keys (all three) | 0.02 / 0.1 | 0.00 / 0.1 | the read buffer: the load fails inside the first entity |
+//! | long names | 1.08 / 1.5 | 1.04 / 1.5 | the names, moved into the project |
+//! | one huge string | 1.02 / 1.4 | 0.00 / 0.1 | the parser's string buffer, which grows by doubling |
+//! | minimal entities (mixed kinds) | 2.08 / 2.9 | 1.68 / 2.3 | the project's fixed per-entity cost (arena slot, ID map, counts) |
+//! | assets only, built-in / max vocabulary | 2.31 / 2.41, gates 3.2 / 3.3 | 1.68 / 1.78, gates 2.3 / 2.2 | the project's fixed per-asset cost; the empty count row is 16 bytes whatever the methodology |
+//! | damages only, built-in / max vocabulary | 2.73 / 3.53, gates 3.7 / 4.8 | 1.85 / 2.65, gates 2.5 / 3.0 | the project: per damage scenario, one rating slot per impact category |
+//! | threats only, built-in / max vocabulary | 1.91 / 1.93, gates 2.6 / 2.6 | 1.10 / 1.12, gates 1.5 / 1.6 | the project |
+//! | targeted narrow, built-in / max vocabulary | 2.53 / 2.57, gates 3.5 / 3.5 | 1.72 / 1.76, gates 2.4 / 2.4 | the project: per asset and threat, the fixed cost plus one 8-byte count entry |
+//! | targeted wide, max vocabulary | 1.57 / 2.2 | 1.36 / 1.9 | the project: per asset, a 64-entry count row (512 bytes) |
 //!
-//! The decoder's own share is the peak minus "kept" (the loaded project):
-//! at most about 0.9x the file in every case. The rest is the project,
-//! which any project of that many entities needs.
+//! The decoder's own share is the peak minus kept: at most about 0.9x the
+//! file in every case. The rest is the project, which any project of that
+//! many entities needs. Only `damages_only_max` peaks above 3x while
+//! loading, from its dense impact slots; the budget limits the open
+//! project (kept), so that peak is gated but not held to 3x (ADR 0010).
 //!
 //! Run: `cargo bench --bench store_memory` (also runs under
 //! `cargo test --benches`). The profiler runs in testing mode, so it never
-//! writes `dhat-heap.json`. Fails if a case's peak exceeds its bound.
+//! writes `dhat-heap.json`. Fails if a case's peak or kept factor exceeds
+//! its gate. `STORE_MEMORY_CASE=<name>` runs one case.
 
 #![forbid(unsafe_code)]
 
@@ -63,7 +81,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use aegis_model::{
-    ImpactCategoryDef, LevelDef, Methodology, MethodologyDef, Project, PropertyDef,
+    ImpactCategoryDef, LevelDef, Methodology, MethodologyDef, Project, PropertyDef, ThreatCategory,
     ThreatCategoryDef,
 };
 
@@ -82,11 +100,21 @@ struct Case {
     loads: bool,
     /// Upper bound on peak heap / file bytes.
     max_factor: f64,
+    /// Upper bound on kept heap (the loaded project, still held when
+    /// `load` returns) / file bytes. At most `SERVER_BUDGET` for a case
+    /// that loads.
+    max_kept: f64,
 }
+
+/// Engineering standards section 2: server memory per open project is at
+/// most 3x the project's serialized size. Every case that loads keeps at
+/// most this factor (`max_kept`), and no `max_kept` may exceed it.
+const SERVER_BUDGET: f64 = 3.0;
 
 /// A methodology with short keys at every vocabulary limit: properties
 /// `p0`..`p63`, impact categories `c0`..`c31` rated `a` < `b`, threat
-/// categories `t0`..`t63` (`tN` violates `pN`).
+/// categories `t0`..`t63` (`tN` violates `pN` for N < 63; `t63` violates
+/// every property, the widest reference-count row one threat can make).
 fn short_keys() -> Arc<Methodology> {
     let entry = |key: String| {
         (
@@ -126,7 +154,11 @@ fn short_keys() -> Arc<Methodology> {
                 ThreatCategoryDef {
                     key,
                     label,
-                    violates: vec![format!("p{i}").into()],
+                    violates: if i == 63 {
+                        (0..64).map(|p| format!("p{p}").into()).collect()
+                    } else {
+                        vec![format!("p{i}").into()]
+                    },
                 }
             })
             .collect(),
@@ -229,6 +261,50 @@ fn single_kind(m: &Methodology, kind: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// A snapshot over `m` of assets each targeted by exactly one threat of
+/// `category`: assets with one name byte and exactly the properties
+/// `category` violates, threats with no refs or links. Every asset then
+/// has a non-empty reference-count row of `|violates(category)|` entries,
+/// the densest file per byte for that row length.
+fn targeted(m: &Methodology, category: Option<ThreatCategory>) -> Vec<u8> {
+    let category_key = category
+        .and_then(|t| m.threat_category_key(t))
+        .unwrap_or("");
+    let props: Vec<String> = category
+        .map(|t| m.violates(t))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| m.property_key(p))
+        .map(|k| format!("\"{k}\""))
+        .collect();
+    let props = props.join(",");
+    let mut assets = String::new();
+    let mut threats = String::new();
+    let mut i = 0u64;
+    while assets.len() + threats.len() < HOSTILE_BYTES {
+        let sep = if i > 0 { "," } else { "" };
+        let _ = write!(
+            assets,
+            "{sep}{{\"id\":\"{}\",\"name\":\"a\",\"properties\":[{props}]}}",
+            id(i)
+        );
+        let _ = write!(
+            threats,
+            "{sep}{{\"id\":\"{}\",\"name\":\"a\",\"asset\":\"{}\",\"category\":\"{category_key}\",\"catalog_refs\":[],\"damages\":[]}}",
+            id(2 << 40 | i),
+            id(i)
+        );
+        i += 1;
+    }
+    format!(
+        "{{\"format\":\"aegis-project\",\"version\":1,\"methodology\":{{\"key\":\"{}\",\"version\":\"{}\"}},\
+         \"assets\":[{assets}],\"damage_scenarios\":[],\"threat_scenarios\":[{threats}]}}\n",
+        m.key(),
+        m.version(),
+    )
+    .into_bytes()
+}
+
 fn keys(prefix: &str, n: usize) -> String {
     let mut out = String::new();
     for i in 0..n {
@@ -295,7 +371,8 @@ fn cases() -> Vec<Case> {
             methodology: typical_m,
             bytes: typical,
             loads: true,
-            max_factor: 1.5,
+            max_factor: 1.4,
+            max_kept: 1.2,
         },
         Case {
             name: "short_property_keys",
@@ -308,7 +385,8 @@ fn cases() -> Vec<Case> {
                 )
             }),
             loads: true,
-            max_factor: 2.0,
+            max_factor: 0.8,
+            max_kept: 0.6,
         },
         Case {
             name: "short_impact_keys",
@@ -321,7 +399,8 @@ fn cases() -> Vec<Case> {
                 )
             }),
             loads: true,
-            max_factor: 1.5,
+            max_factor: 1.1,
+            max_kept: 0.8,
         },
         Case {
             name: "unknown_property_keys",
@@ -335,6 +414,7 @@ fn cases() -> Vec<Case> {
             }),
             loads: false,
             max_factor: 0.1,
+            max_kept: 0.1,
         },
         Case {
             name: "unknown_impact_keys",
@@ -348,6 +428,7 @@ fn cases() -> Vec<Case> {
             }),
             loads: false,
             max_factor: 0.1,
+            max_kept: 0.1,
         },
         Case {
             name: "unknown_one_byte_keys",
@@ -366,6 +447,7 @@ fn cases() -> Vec<Case> {
             }),
             loads: false,
             max_factor: 0.1,
+            max_kept: 0.1,
         },
         Case {
             name: "long_names",
@@ -377,7 +459,8 @@ fn cases() -> Vec<Case> {
                 )
             }),
             loads: true,
-            max_factor: 2.0,
+            max_factor: 1.5,
+            max_kept: 1.5,
         },
         Case {
             name: "one_huge_string",
@@ -390,24 +473,39 @@ fn cases() -> Vec<Case> {
                 )
             }),
             loads: false,
-            max_factor: 2.5,
+            max_factor: 1.4,
+            max_kept: 0.1,
         },
         Case {
             name: "minimal_entities",
             methodology: Arc::clone(&short),
             bytes: minimal(),
             loads: true,
-            max_factor: 4.0,
+            max_factor: 2.9,
+            max_kept: 2.3,
         },
     ];
     let builtin = store_kit::methodology();
-    for (name, m, kind, max_factor) in [
-        ("assets_only_builtin", &builtin, "assets", 3.3),
-        ("assets_only_max", &short, "assets", 8.3),
-        ("damages_only_builtin", &builtin, "damage_scenarios", 3.7),
-        ("damages_only_max", &short, "damage_scenarios", 4.8),
-        ("threats_only_builtin", &builtin, "threat_scenarios", 2.6),
-        ("threats_only_max", &short, "threat_scenarios", 2.6),
+    // (name, methodology, kind, peak gate, kept gate)
+    for (name, m, kind, max_factor, max_kept) in [
+        ("assets_only_builtin", &builtin, "assets", 3.2, 2.3),
+        ("assets_only_max", &short, "assets", 3.3, 2.2),
+        (
+            "damages_only_builtin",
+            &builtin,
+            "damage_scenarios",
+            3.7,
+            2.5,
+        ),
+        ("damages_only_max", &short, "damage_scenarios", 4.8, 3.0),
+        (
+            "threats_only_builtin",
+            &builtin,
+            "threat_scenarios",
+            2.6,
+            1.5,
+        ),
+        ("threats_only_max", &short, "threat_scenarios", 2.6, 1.6),
     ] {
         cases.push(Case {
             name,
@@ -415,6 +513,29 @@ fn cases() -> Vec<Case> {
             bytes: single_kind(m, kind),
             loads: true,
             max_factor,
+            max_kept,
+        });
+    }
+    let first = |m: &Methodology| m.threat_categories().next();
+    let all = short.threat_category("t63");
+    for (name, m, category, max_factor, max_kept) in [
+        (
+            "targeted_narrow_builtin",
+            &builtin,
+            first(&builtin),
+            3.5,
+            2.4,
+        ),
+        ("targeted_narrow_max", &short, first(&short), 3.5, 2.4),
+        ("targeted_wide_max", &short, all, 2.2, 1.9),
+    ] {
+        cases.push(Case {
+            name,
+            methodology: Arc::clone(m),
+            bytes: targeted(m, category),
+            loads: true,
+            max_factor,
+            max_kept,
         });
     }
     cases
@@ -424,6 +545,14 @@ fn main() {
     let only = std::env::var("STORE_MEMORY_CASE").ok();
     let mut failed = Vec::new();
     for case in cases() {
+        // A configuration check, so no edit can raise a kept gate past the
+        // budget unnoticed.
+        if case.loads && case.max_kept > SERVER_BUDGET {
+            failed.push(format!(
+                "{}: kept gate {} exceeds the server budget {SERVER_BUDGET}",
+                case.name, case.max_kept
+            ));
+        }
         if only.as_deref().is_some_and(|o| o != case.name) {
             continue;
         }
@@ -446,7 +575,7 @@ fn main() {
             stats.curr_bytes as f64 / file as f64,
         );
         println!(
-            "{:<22} {:>9} bytes  peak {:>10} bytes ({peak:>5.2} x)  kept {kept:>5.2} x  {:>8} allocs  {outcome}",
+            "{:<24} {:>9} bytes  peak {:>10} bytes ({peak:>5.2} x)  kept {kept:>5.2} x  {:>8} allocs  {outcome}",
             case.name, file, stats.max_bytes, stats.total_blocks,
         );
         let ok_as_expected = outcome.starts_with("ok") == case.loads
@@ -458,6 +587,12 @@ fn main() {
             failed.push(format!(
                 "{}: peak {peak:.2} x file exceeds {}",
                 case.name, case.max_factor
+            ));
+        }
+        if kept > case.max_kept {
+            failed.push(format!(
+                "{}: kept {kept:.2} x file exceeds {}",
+                case.name, case.max_kept
             ));
         }
     }
