@@ -10,4 +10,4 @@
 - [x] Explain-why traces for attack tree evaluation: every computed node value records which children and which gate rule produced it, so any value can be explained step by step (006-explain-why)
 - [x] Property tests for attack tree evaluation: random DAGs (proptest) check determinism (P4), that each node is evaluated exactly once, and agreement with a naive recursive evaluator (007-eval-property-tests)
 - [x] Workspace CI: a GitHub Actions workflow that runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` and `scripts/deny.sh` on every push and pull request (008-workspace-ci)
-- [ ] Domain model v0, part 2: `Asset` with security properties, `DamageScenario` with the four impact categories (safety, financial, operational, privacy), `ThreatScenario` with STRIDE and an R155 Annex 5 catalog ID, plus a typed operation API that applies validated changes
+- [x] Domain model v0, part 2: `Asset` with security properties, `DamageScenario` with the four impact categories (safety, financial, operational, privacy), `ThreatScenario` with STRIDE and an R155 Annex 5 catalog ID, plus a typed operation API that applies validated changes (009-domain-model-v0-2)
