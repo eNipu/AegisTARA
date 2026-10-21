@@ -1,6 +1,9 @@
 //! Typed errors for the model crate.
 
-use crate::id::{NodeId, NodeIdx};
+use std::sync::Arc;
+
+use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId};
+use crate::methodology::{CatalogScheme, ImpactCategory, Level, Property, ThreatCategory};
 
 /// Errors returned by the model.
 ///
@@ -162,6 +165,317 @@ pub enum ModelError {
     /// ```
     #[error("no value given for step node {0}")]
     MissingLeafValue(NodeId),
+
+    // -- Project ops ----------------------------------------------------------
+    //
+    // These carry public IDs, vocabulary indices, and counts, never entity
+    // names (customer data).
+    /// An asset with this ID already exists in the project.
+    #[error("asset {0} already exists in the project")]
+    DuplicateAsset(AssetId),
+    /// A damage scenario with this ID already exists in the project.
+    #[error("damage scenario {0} already exists in the project")]
+    DuplicateDamageScenario(DamageId),
+    /// A threat scenario with this ID already exists in the project.
+    #[error("threat scenario {0} already exists in the project")]
+    DuplicateThreatScenario(ThreatId),
+    /// No asset with this ID is in the project.
+    #[error("asset {0} is not in the project")]
+    UnknownAsset(AssetId),
+    /// No damage scenario with this ID is in the project.
+    #[error("damage scenario {0} is not in the project")]
+    UnknownDamageScenario(DamageId),
+    /// No threat scenario with this ID is in the project.
+    #[error("threat scenario {0} is not in the project")]
+    UnknownThreatScenario(ThreatId),
+    /// A name is empty after trimming whitespace.
+    #[error("name is empty")]
+    EmptyName,
+    /// A name is longer than `max` chars.
+    #[error("name is longer than {max} chars")]
+    NameTooLong {
+        /// The limit, in chars.
+        max: usize,
+    },
+    /// The impact category index is not in the project's methodology.
+    #[error("impact category index {} is not in the methodology", .0.index())]
+    UnknownImpactCategory(ImpactCategory),
+    /// The level index is not in that impact category's scale.
+    #[error(
+        "level index {} is not in the scale of impact category index {}",
+        .level.index(),
+        .category.index()
+    )]
+    UnknownLevel {
+        /// The impact category.
+        category: ImpactCategory,
+        /// The out-of-range level.
+        level: Level,
+    },
+    /// The property index is not in the project's methodology.
+    #[error("property index {} is not in the methodology", .0.index())]
+    UnknownProperty(Property),
+    /// The threat category index is not in the project's methodology.
+    #[error("threat category index {} is not in the methodology", .0.index())]
+    UnknownThreatCategory(ThreatCategory),
+    /// The catalog scheme index is not in the project's methodology.
+    #[error("catalog scheme index {} is not in the methodology", .0.index())]
+    UnknownCatalogScheme(CatalogScheme),
+    /// The catalog ID does not match its scheme's syntax.
+    #[error("catalog ID does not match the syntax of scheme index {}", .scheme.index())]
+    InvalidCatalogId {
+        /// The scheme whose syntax was not met.
+        scheme: CatalogScheme,
+    },
+    /// An asset must have at least one security property.
+    #[error("asset {0} has no security properties")]
+    NoSecurityProperties(AssetId),
+    /// The threat category violates a property the asset does not carry.
+    #[error("asset {asset} does not carry property index {}", .property.index())]
+    PropertyNotOnAsset {
+        /// The targeted asset.
+        asset: AssetId,
+        /// The missing property.
+        property: Property,
+    },
+    /// The property cannot be dropped: `threats` threats target it on this
+    /// asset.
+    #[error(
+        "property index {} of asset {asset} is targeted by {threats} threat(s)",
+        .property.index()
+    )]
+    PropertyInUse {
+        /// The asset.
+        asset: AssetId,
+        /// The property still in use.
+        property: Property,
+        /// How many threats target it.
+        threats: u32,
+    },
+    /// The asset cannot be removed: `threats` threats target it.
+    #[error("asset {asset} is targeted by {threats} threat(s)")]
+    AssetInUse {
+        /// The asset.
+        asset: AssetId,
+        /// How many threats target it.
+        threats: u32,
+    },
+    /// The damage scenario cannot be removed: `threats` threats link to it.
+    #[error("damage scenario {damage} is linked by {threats} threat(s)")]
+    DamageScenarioInUse {
+        /// The damage scenario.
+        damage: DamageId,
+        /// How many threats link to it.
+        threats: u32,
+    },
+    /// An impacts list names the same category twice.
+    #[error("impact category index {} is listed twice", .0.index())]
+    DuplicateImpactCategory(ImpactCategory),
+    /// The threat already links to this damage scenario, or an op lists it
+    /// twice.
+    #[error("threat scenario {threat} already links damage scenario {damage}")]
+    DuplicateDamageLink {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The damage scenario.
+        damage: DamageId,
+    },
+    /// The threat does not link to this damage scenario.
+    #[error("threat scenario {threat} does not link damage scenario {damage}")]
+    DamageNotLinked {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The damage scenario.
+        damage: DamageId,
+    },
+    /// The threat does not have this catalog ref.
+    #[error("threat scenario {threat} does not have this catalog ref")]
+    CatalogRefNotFound {
+        /// The threat scenario.
+        threat: ThreatId,
+    },
+    /// The threat already has this catalog ref, or an op lists it twice.
+    #[error("threat scenario {threat} already has this catalog ref")]
+    DuplicateCatalogRef {
+        /// The threat scenario.
+        threat: ThreatId,
+    },
+    /// A threat may have at most `max` catalog refs.
+    #[error("threat scenario {threat} would have more than {max} catalog refs")]
+    TooManyCatalogRefs {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The limit.
+        max: usize,
+    },
+    /// The project cannot hold more entities of this kind (the arena is at
+    /// its slot limit, at most `u32::MAX`).
+    #[error("project capacity exceeded")]
+    ProjectCapacityExceeded,
+}
+
+/// Errors from [`Methodology::new`](crate::Methodology::new): one variant
+/// per rule a [`MethodologyDef`](crate::MethodologyDef) must meet.
+///
+/// Variants carry vocabulary keys (methodology data, not project data).
+///
+/// ```
+/// use aegis_model::{Methodology, MethodologyDef, MethodologyError};
+///
+/// let def = MethodologyDef {
+///     key: "empty".into(),
+///     version: "1".into(),
+///     label: "Empty".into(),
+///     impact_categories: vec![],
+///     properties: vec![],
+///     threat_categories: vec![],
+///     catalog_schemes: vec![],
+/// };
+/// assert_eq!(Methodology::new(def), Err(MethodologyError::NoImpactCategory));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum MethodologyError {
+    /// A key does not match `[a-z][a-z0-9_-]{0,63}`.
+    #[error("key {0:?} does not match [a-z][a-z0-9_-]{{0,63}}")]
+    InvalidKey(Arc<str>),
+    /// The version is blank or longer than 64 chars.
+    #[error("version must be 1 to 64 chars and not blank")]
+    InvalidVersion,
+    /// The label of the item with this key is blank.
+    #[error("label of {key:?} is blank")]
+    BlankLabel {
+        /// Key of the item.
+        key: Arc<str>,
+    },
+    /// The label of the item with this key is longer than `max` chars.
+    #[error("label of {key:?} is longer than {max} chars")]
+    LabelTooLong {
+        /// Key of the item.
+        key: Arc<str>,
+        /// The limit, in chars.
+        max: usize,
+    },
+    /// No impact category is declared.
+    #[error("at least one impact category is required")]
+    NoImpactCategory,
+    /// More than `max` impact categories are declared.
+    #[error("more than {max} impact categories")]
+    TooManyImpactCategories {
+        /// The limit.
+        max: usize,
+    },
+    /// A rating scale has fewer than `min` or more than `max` levels.
+    #[error("impact category {category:?} must have {min} to {max} levels")]
+    LevelCount {
+        /// Key of the impact category.
+        category: Arc<str>,
+        /// Fewest levels.
+        min: usize,
+        /// Most levels.
+        max: usize,
+    },
+    /// Two impact categories share a key.
+    #[error("impact category key {0:?} is declared twice")]
+    DuplicateImpactCategory(Arc<str>),
+    /// Two levels of one category share a key.
+    #[error("level key {level:?} is declared twice in impact category {category:?}")]
+    DuplicateLevel {
+        /// Key of the impact category.
+        category: Arc<str>,
+        /// The repeated level key.
+        level: Arc<str>,
+    },
+    /// No security property is declared.
+    #[error("at least one security property is required")]
+    NoProperty,
+    /// More than `max` security properties are declared.
+    #[error("more than {max} security properties")]
+    TooManyProperties {
+        /// The limit.
+        max: usize,
+    },
+    /// Two properties share a key.
+    #[error("property key {0:?} is declared twice")]
+    DuplicateProperty(Arc<str>),
+    /// No threat category is declared.
+    #[error("at least one threat category is required")]
+    NoThreatCategory,
+    /// More than `max` threat categories are declared.
+    #[error("more than {max} threat categories")]
+    TooManyThreatCategories {
+        /// The limit.
+        max: usize,
+    },
+    /// Two threat categories share a key.
+    #[error("threat category key {0:?} is declared twice")]
+    DuplicateThreatCategory(Arc<str>),
+    /// A threat category violates no property.
+    #[error("threat category {category:?} violates no property")]
+    EmptyViolates {
+        /// Key of the threat category.
+        category: Arc<str>,
+    },
+    /// A threat category names a property that is not declared.
+    #[error("threat category {category:?} names unknown property {property:?}")]
+    UnknownViolatedProperty {
+        /// Key of the threat category.
+        category: Arc<str>,
+        /// The unknown property key.
+        property: Arc<str>,
+    },
+    /// A threat category names the same property twice.
+    #[error("threat category {category:?} names property {property:?} twice")]
+    RepeatedViolatedProperty {
+        /// Key of the threat category.
+        category: Arc<str>,
+        /// The repeated property key.
+        property: Arc<str>,
+    },
+    /// More than `max` catalog schemes are declared.
+    #[error("more than {max} catalog schemes")]
+    TooManyCatalogSchemes {
+        /// The limit.
+        max: usize,
+    },
+    /// Two catalog schemes share a key.
+    #[error("catalog scheme key {0:?} is declared twice")]
+    DuplicateCatalogScheme(Arc<str>),
+    /// A catalog syntax has fewer than 1 or more than 4 segments.
+    #[error("catalog scheme {scheme:?} must have 1 to 4 segments")]
+    CatalogSegmentCount {
+        /// Key of the scheme.
+        scheme: Arc<str>,
+    },
+    /// `required` is 0 or above the segment count.
+    #[error("catalog scheme {scheme:?} must require 1 to all of its segments")]
+    CatalogRequired {
+        /// Key of the scheme.
+        scheme: Arc<str>,
+    },
+    /// A segment has `min > max`.
+    #[error("segment {segment} of catalog scheme {scheme:?} has min above max")]
+    CatalogSegmentRange {
+        /// Key of the scheme.
+        scheme: Arc<str>,
+        /// Position of the segment.
+        segment: usize,
+    },
+    /// A fixed digit count is outside 1 to 5 or too small for `max`.
+    #[error("segment {segment} of catalog scheme {scheme:?} has an invalid digit count")]
+    CatalogSegmentDigits {
+        /// Key of the scheme.
+        scheme: Arc<str>,
+        /// Position of the segment.
+        segment: usize,
+    },
+    /// The prefix is longer than 16 bytes or has a char other than an ASCII
+    /// letter, `-`, or `_`.
+    #[error("catalog scheme {scheme:?} has an invalid prefix")]
+    CatalogPrefix {
+        /// Key of the scheme.
+        scheme: Arc<str>,
+    },
 }
 
 /// Formats IDs as `a -> b -> c`; with `close`, the first ID is repeated at
