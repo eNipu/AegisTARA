@@ -2,20 +2,22 @@
 //!
 //! The core model names no impact category, rating scale, security
 //! property, threat taxonomy, or catalog. A [`MethodologyDef`] declares them
-//! as plain data (the shape a pack file will have), and [`Methodology::new`]
-//! validates it once. The validated [`Methodology`] hands out small typed
+//! as plain data (the shape a pack file has, see [`MethodologyDef::read_pack`]),
+//! and [`Methodology::new`] validates it once. The validated [`Methodology`] hands out small typed
 //! indices ([`ImpactCategory`], [`Level`], [`Property`], [`ThreatCategory`],
 //! [`CatalogScheme`]) that ops and entities carry. Text keys are resolved to
 //! indices once, at the boundary.
 
 mod catalog;
 mod iso21434;
+mod pack;
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
 pub use catalog::{CatalogRef, CatalogSyntax, SegmentDef};
+pub(crate) use catalog::{MAX_PREFIX_LEN, MAX_SEGMENTS};
 
 use crate::asset::PropertySet;
 use crate::error::{MethodologyError, ModelError};
@@ -41,12 +43,13 @@ pub const MAX_VERSION_CHARS: usize = 64;
 pub const MAX_KEY_LEN: usize = 64;
 
 // ---------------------------------------------------------------------------
-// Definition: plain data a pack will provide.
+// Definition: plain data a pack provides.
 // ---------------------------------------------------------------------------
 
 /// A methodology as plain data, before validation.
 ///
-/// All fields are public so tests and a later pack loader can build it.
+/// All fields are public so tests and tools can build it;
+/// [`MethodologyDef::read_pack`] decodes it from a pack file.
 /// [`Methodology::new`] checks it. Declaration order is meaningful: it fixes
 /// the indices and the iteration order, and a scale's levels are listed
 /// lowest first.
@@ -223,7 +226,7 @@ macro_rules! vocab_index {
             /// ```
             /// use aegis_model::Methodology;
             ///
-            /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+            /// # fn main() -> Result<(), aegis_model::PackError> {
             /// let m = Methodology::iso21434_r155()?;
             /// let positions: Vec<usize> = m.properties().map(|p| p.index()).collect();
             /// assert_eq!(positions, [0, 1, 2, 3, 4, 5]);
@@ -244,7 +247,7 @@ vocab_index! {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let first = m.impact_categories().next();
     /// assert_eq!(first.and_then(|c| m.impact_category_key(c)), Some("safety"));
@@ -264,7 +267,7 @@ vocab_index! {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let cat = m.impact_category("safety").ok_or(aegis_model::MethodologyError::NoImpactCategory)?;
     /// assert!(m.level(cat, "negligible") < m.level(cat, "severe"));
@@ -280,7 +283,7 @@ vocab_index! {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert_eq!(m.property("integrity").map(|p| p.index()), Some(1));
     /// # Ok(())
@@ -295,7 +298,7 @@ vocab_index! {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert_eq!(m.threat_categories().count(), 6);
     /// # Ok(())
@@ -310,7 +313,7 @@ vocab_index! {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert_eq!(m.catalog_scheme("r155-annex5").map(|s| s.index()), Some(0));
     /// # Ok(())
@@ -395,15 +398,15 @@ struct SchemeData {
 
 /// A validated methodology: the vocabularies a project is checked against.
 ///
-/// Built only by [`Methodology::new`] (or a built-in such as
-/// [`Methodology::iso21434_r155`], which goes through `new`). It hands out
+/// Built only by [`Methodology::new`] (or by [`Methodology::read_pack`] and
+/// the built-in [`Methodology::iso21434_r155`], which go through `new`). It hands out
 /// typed vocabulary indices, resolves keys to indices in O(log m) (m = the
 /// vocabulary size), and parses and formats catalog IDs.
 ///
 /// ```
 /// use aegis_model::Methodology;
 ///
-/// # fn main() -> Result<(), aegis_model::MethodologyError> {
+/// # fn main() -> Result<(), aegis_model::PackError> {
 /// let m = Methodology::iso21434_r155()?;
 /// assert_eq!(m.impact_categories().count(), 4);
 /// assert_eq!(m.properties().count(), 6);
@@ -427,19 +430,49 @@ pub struct Methodology {
     all_properties: PropertySet,
 }
 
-/// Checks `[a-z][a-z0-9_-]{0,63}`. Time O(key length).
+/// Checks `[a-z][a-z0-9_-]{0,63}`. The length is checked first, so an
+/// oversized key is rejected in O(1); otherwise time O(key length) <= O(64).
 fn check_key(key: &Arc<str>) -> Result<(), MethodologyError> {
     let bytes = key.as_bytes();
+    if bytes.len() > MAX_KEY_LEN {
+        return Err(MethodologyError::InvalidKey(error_key_text(key)));
+    }
     let first_ok = bytes.first().is_some_and(u8::is_ascii_lowercase);
     let rest_ok = bytes
         .iter()
         .skip(1)
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_' || *b == b'-');
-    if first_ok && rest_ok && bytes.len() <= MAX_KEY_LEN {
+    if first_ok && rest_ok {
         Ok(())
     } else {
         Err(MethodologyError::InvalidKey(Arc::clone(key)))
     }
+}
+
+/// Marker appended to key text cut for an error. `.` is not a key char, so
+/// a cut text never looks like a valid key.
+const CUT_MARK: &str = "...";
+
+/// The key text an error keeps of a key that may not be valid: at most
+/// [`MAX_KEY_LEN`] bytes. A key of at most 64 bytes is shared as is (no
+/// allocation); a longer one becomes its longest char-boundary prefix of at
+/// most 61 bytes plus `...` (one allocation of at most 64 bytes). Time
+/// O(1).
+fn error_key_text(key: &Arc<str>) -> Arc<str> {
+    if key.len() <= MAX_KEY_LEN {
+        return Arc::clone(key);
+    }
+    let room = MAX_KEY_LEN - CUT_MARK.len();
+    // A char is at most 4 bytes, so this looks at no more than 4 positions;
+    // position 0 is always a boundary.
+    let end = (0..=room)
+        .rev()
+        .find(|&i| key.is_char_boundary(i))
+        .unwrap_or(0);
+    let mut text = String::with_capacity(MAX_KEY_LEN);
+    text.push_str(key.get(..end).unwrap_or(""));
+    text.push_str(CUT_MARK);
+    Arc::from(text)
 }
 
 /// Checks a label of the item named `key`. Time O(label length).
@@ -646,7 +679,7 @@ impl Methodology {
                 let Some(&p) = property_by_key.get(key) else {
                     return Err(MethodologyError::UnknownViolatedProperty {
                         category: Arc::clone(&t.key),
-                        property: Arc::clone(key),
+                        property: error_key_text(key),
                     });
                 };
                 if violates.contains(Property(p)) {
@@ -690,7 +723,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.key(), "iso21434-r155");
     /// # Ok(())
     /// # }
@@ -705,7 +738,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.version(), "0.1.0");
     /// # Ok(())
     /// # }
@@ -720,7 +753,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert!(!Methodology::iso21434_r155()?.label().is_empty());
     /// # Ok(())
     /// # }
@@ -738,7 +771,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let keys: Vec<_> = m.impact_categories().filter_map(|c| m.impact_category_key(c)).collect();
     /// assert_eq!(keys, ["safety", "financial", "operational", "privacy"]);
@@ -754,7 +787,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.impact_category_count(), 4);
     /// # Ok(())
     /// # }
@@ -769,7 +802,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert_eq!(m.impact_category("privacy").map(|c| c.index()), Some(3));
     /// assert_eq!(m.impact_category("nope"), None);
@@ -787,7 +820,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let c = m.impact_category("financial");
     /// assert_eq!(c.and_then(|c| m.impact_category_key(c)), Some("financial"));
@@ -804,7 +837,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let c = m.impact_category("safety");
     /// assert_eq!(c.and_then(|c| m.impact_category_label(c)), Some("Safety"));
@@ -822,7 +855,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let Some(cat) = m.impact_category("safety") else { return Ok(()) };
     /// let keys: Vec<_> = m.levels(cat).filter_map(|l| m.level_key(cat, l)).collect();
@@ -840,7 +873,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let counts: Vec<_> = m.impact_categories().map(|c| m.level_count(c)).collect();
     /// assert_eq!(counts, [4, 4, 4, 4]);
@@ -857,7 +890,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let Some(cat) = m.impact_category("safety") else { return Ok(()) };
     /// assert_eq!(m.level(cat, "major").map(|l| l.index()), Some(2));
@@ -878,7 +911,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let Some(cat) = m.impact_category("safety") else { return Ok(()) };
     /// let top = m.levels(cat).last();
@@ -896,7 +929,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let Some(cat) = m.impact_category("safety") else { return Ok(()) };
     /// let low = m.levels(cat).next();
@@ -917,7 +950,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::{Methodology, PropertySet};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let all: PropertySet = m.properties().collect();
     /// assert_eq!(all.len(), 6);
@@ -933,7 +966,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.property_count(), 6);
     /// # Ok(())
     /// # }
@@ -948,7 +981,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert!(m.property("availability").is_some());
     /// assert!(m.property("Availability").is_none());
@@ -965,7 +998,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let first = m.properties().next();
     /// assert_eq!(first.and_then(|p| m.property_key(p)), Some("confidentiality"));
@@ -982,7 +1015,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let p = m.property("integrity");
     /// assert_eq!(p.and_then(|p| m.property_label(p)), Some("Integrity"));
@@ -999,7 +1032,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert_eq!(m.all_properties().len(), m.property_count());
     /// # Ok(())
@@ -1018,7 +1051,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let first = m.threat_categories().next();
     /// assert_eq!(first.and_then(|t| m.threat_category_key(t)), Some("spoofing"));
@@ -1034,7 +1067,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.threat_category_count(), 6);
     /// # Ok(())
     /// # }
@@ -1049,7 +1082,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert_eq!(m.threat_category("tampering").map(|t| t.index()), Some(1));
     /// # Ok(())
@@ -1065,7 +1098,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let t = m.threat_category("repudiation");
     /// assert_eq!(t.and_then(|t| m.threat_category_key(t)), Some("repudiation"));
@@ -1082,7 +1115,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let t = m.threat_category("spoofing");
     /// assert_eq!(t.and_then(|t| m.threat_category_label(t)), Some("Spoofing"));
@@ -1102,7 +1135,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let (Some(t), Some(i)) = (m.threat_category("tampering"), m.property("integrity")) else {
     ///     return Ok(());
@@ -1126,7 +1159,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.catalog_schemes().count(), 1);
     /// # Ok(())
     /// # }
@@ -1140,7 +1173,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// assert_eq!(Methodology::iso21434_r155()?.catalog_scheme_count(), 1);
     /// # Ok(())
     /// # }
@@ -1155,7 +1188,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// assert!(m.catalog_scheme("r155-annex5").is_some());
     /// assert!(m.catalog_scheme("capec").is_none());
@@ -1172,7 +1205,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let s = m.catalog_schemes().next();
     /// assert_eq!(s.and_then(|s| m.catalog_scheme_key(s)), Some("r155-annex5"));
@@ -1189,7 +1222,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let s = m.catalog_schemes().next();
     /// assert_eq!(s.and_then(|s| m.catalog_scheme_label(s)), Some("UN R155 Annex 5"));
@@ -1206,7 +1239,7 @@ impl Methodology {
     /// ```
     /// use aegis_model::Methodology;
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Methodology::iso21434_r155()?;
     /// let s = m.catalog_schemes().next();
     /// assert_eq!(s.and_then(|s| m.catalog_syntax(s)).map(|x| x.segments.len()), Some(2));
@@ -1551,7 +1584,9 @@ mod tests {
             .collect();
         let mut d = base();
         d.properties[0].key = long.as_str().into();
-        rejects(d, &MethodologyError::InvalidKey(long.as_str().into()));
+        // Over 64 bytes, the error keeps a cut text (job 012).
+        let cut = format!("a{}...", "b".repeat(60));
+        rejects(d, &MethodologyError::InvalidKey(cut.as_str().into()));
         // 64 bytes is the limit and passes.
         let ok: String = std::iter::once('a')
             .chain(std::iter::repeat_n('b', 63))
@@ -1566,6 +1601,138 @@ mod tests {
         let mut d = base();
         d.impact_categories[1].levels[0].key = "L0".into();
         rejects(d, &MethodologyError::InvalidKey("L0".into()));
+    }
+
+    /// The key text an error from `new` keeps, for the two variants that can
+    /// hold an unvalidated key.
+    fn error_key(e: &MethodologyError) -> Option<&Arc<str>> {
+        match e {
+            MethodologyError::InvalidKey(k) => Some(k),
+            MethodologyError::UnknownViolatedProperty { property, .. } => Some(property),
+            _ => None,
+        }
+    }
+
+    /// Runs `new` on `d` and returns the error with its key text.
+    fn key_error(d: MethodologyDef) -> (MethodologyError, Arc<str>) {
+        let e = Methodology::new(d).expect_err("an error");
+        let k = Arc::clone(error_key(&e).expect("a key-text error"));
+        (e, k)
+    }
+
+    #[test]
+    fn methodology_error_key_text_is_bounded_in_every_position() {
+        const MIB: usize = 1024 * 1024;
+        for filler in ["K", "\u{1}", "\u{10ffff}"] {
+            let huge: Arc<str> = filler.repeat(MIB / filler.len()).into();
+            let mut cases: Vec<MethodologyDef> = Vec::new();
+            let mut d = base();
+            d.key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.impact_categories[1].key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.impact_categories[0].levels[2].key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.properties[2].key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.threat_categories[1].key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.catalog_schemes[0].key = Arc::clone(&huge);
+            cases.push(d);
+            // An unknown `violates` entry is looked up, never key-checked.
+            let mut d = base();
+            d.threat_categories[0].violates = vec![Arc::clone(&huge)];
+            cases.push(d);
+            let mut d = base();
+            d.threat_categories[0].violates = vec!["x".repeat(MIB).into()];
+            cases.push(d);
+            for (i, d) in cases.into_iter().enumerate() {
+                let (e, k) = key_error(d);
+                assert!(k.len() <= MAX_KEY_LEN, "case {i}: {} bytes", k.len());
+                assert!(k.ends_with("..."), "case {i}");
+                assert!(
+                    e.to_string().len() <= 512,
+                    "case {i}: {}",
+                    e.to_string().len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn methodology_error_key_text_reports_the_right_variant() {
+        let huge: Arc<str> = "K".repeat(100_000).into();
+        let cut: Arc<str> = format!("{}...", "K".repeat(61)).into();
+        let mut d = base();
+        d.properties[0].key = Arc::clone(&huge);
+        rejects(d, &MethodologyError::InvalidKey(Arc::clone(&cut)));
+        let mut d = base();
+        d.threat_categories[1].violates.push(Arc::clone(&huge));
+        rejects(
+            d,
+            &MethodologyError::UnknownViolatedProperty {
+                category: "wipe".into(),
+                property: cut,
+            },
+        );
+    }
+
+    #[test]
+    fn methodology_error_key_text_never_splits_a_char() {
+        // 4-byte chars: 15 of them fill 60 bytes, the 16th would pass 61.
+        let emoji = "\u{1f600}";
+        let cases = [
+            (emoji.repeat(1000), format!("{}...", emoji.repeat(15))),
+            (
+                format!("a{}", emoji.repeat(100)),
+                format!("a{}...", emoji.repeat(15)),
+            ),
+            (
+                format!("ab{}", emoji.repeat(100)),
+                format!("ab{}...", emoji.repeat(14)),
+            ),
+            (
+                format!("abc{}", emoji.repeat(100)),
+                format!("abc{}...", emoji.repeat(14)),
+            ),
+            (
+                format!("é{}", "x".repeat(100)),
+                format!("é{}...", "x".repeat(59)),
+            ),
+        ];
+        for (key, want) in cases {
+            let k = error_key_text(&Arc::from(key.as_str()));
+            assert_eq!(&*k, want.as_str());
+            assert!(k.len() <= MAX_KEY_LEN);
+        }
+    }
+
+    #[test]
+    fn methodology_error_key_text_keeps_short_keys_exactly() {
+        for len in [0, 1, 9, 63, 64] {
+            let key: Arc<str> = "A".repeat(len).into();
+            let kept = error_key_text(&key);
+            assert!(
+                Arc::ptr_eq(&kept, &key),
+                "{len} bytes are shared, not copied"
+            );
+        }
+        let over: Arc<str> = "A".repeat(65).into();
+        assert_eq!(&*error_key_text(&over), format!("{}...", "A".repeat(61)));
+        // The 64-byte invalid key in an error is the whole key.
+        let mut d = base();
+        d.key = "A".repeat(64).into();
+        let (_, k) = key_error(d);
+        assert_eq!(&*k, "A".repeat(64));
+        // Unchanged for the existing short-key cases.
+        let mut d = base();
+        d.key = "Not-A-Key".into();
+        rejects(d, &MethodologyError::InvalidKey("Not-A-Key".into()));
     }
 
     #[test]

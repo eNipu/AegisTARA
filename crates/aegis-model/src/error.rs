@@ -338,6 +338,11 @@ pub enum ModelError {
 /// per rule a [`MethodologyDef`](crate::MethodologyDef) must meet.
 ///
 /// Variants carry vocabulary keys (methodology data, not project data).
+/// Every key they hold is at most 64 bytes: keys that passed the key check
+/// are at most 64 bytes by rule, and the two variants that can hold a key
+/// that did not ([`InvalidKey`](Self::InvalidKey) and
+/// [`UnknownViolatedProperty`](Self::UnknownViolatedProperty)) keep at
+/// most 64 bytes of it, so an error built from hostile input stays small.
 ///
 /// ```
 /// use aegis_model::{Methodology, MethodologyDef, MethodologyError};
@@ -357,6 +362,27 @@ pub enum ModelError {
 #[non_exhaustive]
 pub enum MethodologyError {
     /// A key does not match `[a-z][a-z0-9_-]{0,63}`.
+    ///
+    /// Holds at most 64 bytes of the key: a key of 64 bytes or fewer is
+    /// kept exactly; a longer one is cut at a char boundary to at most 61
+    /// bytes and ends in `...` (`.` is not a key char, so a cut text never
+    /// looks like a valid key).
+    ///
+    /// ```
+    /// use aegis_model::{Methodology, MethodologyDef, MethodologyError};
+    ///
+    /// let def = MethodologyDef {
+    ///     key: "K".repeat(100_000).into(),
+    ///     version: "1".into(),
+    ///     label: "Huge".into(),
+    ///     impact_categories: vec![],
+    ///     properties: vec![],
+    ///     threat_categories: vec![],
+    ///     catalog_schemes: vec![],
+    /// };
+    /// let kept = format!("{}...", "K".repeat(61));
+    /// assert_eq!(Methodology::new(def), Err(MethodologyError::InvalidKey(kept.into())));
+    /// ```
     #[error("key {0:?} does not match [a-z][a-z0-9_-]{{0,63}}")]
     InvalidKey(Arc<str>),
     /// The version is blank or longer than 64 chars.
@@ -441,7 +467,8 @@ pub enum MethodologyError {
     UnknownViolatedProperty {
         /// Key of the threat category.
         category: Arc<str>,
-        /// The unknown property key.
+        /// The unknown property key, at most 64 bytes of it (cut like
+        /// [`InvalidKey`](Self::InvalidKey)'s).
         property: Arc<str>,
     },
     /// A threat category names the same property twice.
@@ -520,7 +547,7 @@ pub enum MethodologyError {
 /// use std::sync::Arc;
 /// use aegis_model::{Methodology, Project, StoreError};
 ///
-/// # fn main() -> Result<(), aegis_model::MethodologyError> {
+/// # fn main() -> Result<(), aegis_model::PackError> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
 /// let err = Project::load(&b"{\"format\":\"spreadsheet\"}"[..], Arc::clone(&m)).err();
 /// assert!(matches!(err, Some(StoreError::UnsupportedFormat { version: None })));
@@ -625,7 +652,72 @@ pub enum StoreError {
     Model(#[from] ModelError),
 }
 
-/// The message for [`StoreError::UnsupportedFormat`]. Time O(1).
+/// Errors from reading or writing a methodology pack:
+/// [`MethodologyDef::read_pack`](crate::MethodologyDef::read_pack),
+/// [`MethodologyDef::write_pack`](crate::MethodologyDef::write_pack),
+/// [`Methodology::read_pack`](crate::Methodology::read_pack), and
+/// [`Methodology::iso21434_r155`](crate::Methodology::iso21434_r155).
+///
+/// Decoding is capped before [`Methodology::new`](crate::Methodology::new)
+/// runs, so a hostile pack gives a typed error and bounded memory, never a
+/// panic. [`Decode`](Self::Decode) keeps only the position of a JSON error,
+/// because the parser's message can quote input.
+///
+/// Not `PartialEq` (it can hold an [`std::io::Error`]); match it with
+/// `matches!`.
+///
+/// ```
+/// use aegis_model::{Limit, Methodology, PackError};
+///
+/// let newer = br#"{"format":"aegis-methodology-pack","version":2}"#;
+/// let err = Methodology::read_pack(&newer[..]).err();
+/// assert!(matches!(err, Some(PackError::UnsupportedFormat { version: Some(2) })));
+///
+/// let label = "x".repeat(2000);
+/// let text = format!(
+///     r#"{{"format":"aegis-methodology-pack","version":1,
+///         "methodology":{{"key":"k","version":"1","label":"{label}"}}}}"#
+/// );
+/// let err = Methodology::read_pack(text.as_bytes()).err();
+/// assert!(matches!(err, Some(PackError::LimitExceeded(Limit::LabelBytes { max: 1024 }))));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PackError {
+    /// Reading or writing failed.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    /// The bytes are not valid JSON, or the JSON has the wrong shape (a
+    /// missing, unknown, repeated, or mistyped field; a number out of its
+    /// field's range; trailing data). Lines and columns are 1-based; a
+    /// column of 0 means the end of the line (for example an empty input).
+    #[error("malformed methodology pack at line {line}, column {column}")]
+    Decode {
+        /// Line of the error.
+        line: u64,
+        /// Column of the error.
+        column: u64,
+    },
+    /// A decode cap was exceeded, before any model validation ran.
+    #[error("{0}")]
+    LimitExceeded(Limit),
+    /// The `format` string or the format `version` is not one this build
+    /// reads; same meaning and text as
+    /// [`StoreError::UnsupportedFormat`]: `version` is the file's format
+    /// version when that is an integer above 1 (a newer application wrote
+    /// it), else `None` (not a pack at all).
+    #[error("{}", unsupported_format_text(*.version))]
+    UnsupportedFormat {
+        /// The file's format version, if it is an integer above 1.
+        version: Option<u64>,
+    },
+    /// The pack decoded, but its definition breaks a methodology rule.
+    #[error("invalid methodology: {0}")]
+    Methodology(#[from] MethodologyError),
+}
+
+/// The message for [`StoreError::UnsupportedFormat`] and
+/// [`PackError::UnsupportedFormat`]. Time O(1).
 fn unsupported_format_text(version: Option<u64>) -> String {
     match version {
         Some(v) => format!(
