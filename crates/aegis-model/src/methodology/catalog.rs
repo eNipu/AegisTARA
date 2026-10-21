@@ -163,20 +163,20 @@ impl CatalogSyntax {
         scheme: CatalogScheme,
         text: &str,
     ) -> Result<CatalogRef, ModelError> {
-        let err = ModelError::InvalidCatalogId { scheme };
-        let rest = text.strip_prefix(&*self.prefix).ok_or(err.clone())?;
+        let err = || ModelError::InvalidCatalogId { scheme };
+        let rest = text.strip_prefix(&*self.prefix).ok_or_else(err)?;
         let mut segments = [0u16; MAX_SEGMENTS];
         let mut len = 0usize;
         for part in rest.split('.') {
-            let def = self.segments.get(len).ok_or(err.clone())?;
-            let slot = segments.get_mut(len).ok_or(err.clone())?;
-            *slot = def.parse(part).ok_or(err.clone())?;
+            let def = self.segments.get(len).ok_or_else(err)?;
+            let slot = segments.get_mut(len).ok_or_else(err)?;
+            *slot = def.parse(part).ok_or_else(err)?;
             len += 1;
         }
         if len < usize::from(self.required) {
-            return Err(err);
+            return Err(err());
         }
-        let len = u8::try_from(len).map_err(|_| err)?;
+        let len = u8::try_from(len).map_err(|_| err())?;
         Ok(CatalogRef {
             scheme,
             len,

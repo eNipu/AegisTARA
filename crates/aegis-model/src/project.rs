@@ -1055,7 +1055,6 @@ impl Project {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn check_add_threat(
         &self,
         id: ThreatId,
