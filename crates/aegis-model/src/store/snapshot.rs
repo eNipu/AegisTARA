@@ -263,16 +263,19 @@ impl Project {
     /// Time O(B + n log n + L log n), with B input bytes, n entities, and L
     /// damage links plus catalog refs. Extra space O(n + L + the longest
     /// string) besides the project: the decoded entities hold names and
-    /// 1-byte indices only. Measured peak heap, as a factor of the file
-    /// size (`benches/store_memory.rs`, ADR 0009): 1.03x for the typical
-    /// project; 0.02x when keys are unknown, since the load fails inside
-    /// the first entity. The worst case depends on the methodology's size,
-    /// because it is mostly the loaded project, not the decoder (the
-    /// decoder adds at most about 0.9x): a file of minimal entities peaks
-    /// at 2.73x with the built-in methodology (about 175 MiB at the 64 MiB
-    /// cap) and at 6.16x with a methodology of 64 properties (about
-    /// 394 MiB), where each loaded asset keeps a reference-count row of
-    /// 4 bytes per property.
+    /// 1-byte indices only. Measured heap, as a factor of the file size
+    /// (`benches/store_memory.rs`, ADRs 0009 and 0010), as peak during the
+    /// load and kept (the returned project): 1.03x peak and 0.83x kept for
+    /// the typical project; 0.02x peak when keys are unknown, since the
+    /// load fails inside the first entity. The worst case is a file of
+    /// minimal entities of one kind, and it is mostly the loaded project,
+    /// not the decoder (the decoder adds at most about 0.9x). With the
+    /// built-in methodology it peaks at 2.73x (about 175 MiB at the 64 MiB
+    /// cap) and keeps at most 1.85x. With a methodology at every vocabulary
+    /// limit (64 properties, 32 impact categories) it peaks at 3.53x (about
+    /// 226 MiB) and keeps at most 2.65x, both from damage scenarios' one
+    /// rating slot per impact category. Kept stays within 3x for every
+    /// shape measured.
     ///
     /// # Errors
     ///
