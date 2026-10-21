@@ -68,6 +68,7 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
     }
 
     /// Slots, tombstones included. O(1).
+    #[cfg(test)]
     fn slot_count(&self) -> usize {
         self.slots.len()
     }
@@ -111,52 +112,159 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
 // Derived reference counts.
 // ---------------------------------------------------------------------------
 
+/// One counted property on one asset: how many live threats on that asset
+/// violate it. Never stored with `threats == 0`. 8 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PropertyCount {
+    property: Property,
+    threats: u32,
+}
+
 /// Reference counts derived from the threats. A cache (D10): the threats
 /// are the source of truth, and the counts can be rebuilt from them in
-/// O(threats x p). They make the "in use" checks O(1) instead of a scan.
+/// O(threats x p). They make the "in use" checks O(1) or O(log p) instead
+/// of a scan.
+///
+/// Layout (ADR 0010): the per-property counts are sparse. Each asset slot
+/// holds one exact-size boxed slice of the properties that at least one
+/// live threat on that asset violates, sorted by property, with no
+/// duplicates and no zero counts. A slot no threat targets (tombstones
+/// included) holds an empty slice, which costs 16 bytes and no heap. This
+/// canonical form makes the derived `==` an exact comparison.
+///
+/// Space: O(asset slots + damage slots + targeted (asset, property)
+/// pairs): 16 + 4 bytes per asset slot, 4 bytes per damage slot, 8 bytes
+/// per targeted pair (before: 4 bytes x methodology properties per asset
+/// slot). Time: a lookup is a binary search, O(log p); counting one threat
+/// in or out is O(r + p), with r the row length and p = |violates|, both
+/// at most 64; it allocates once only when the row's set of properties
+/// changes. `clone` is O(slots + pairs) with one allocation per targeted
+/// asset.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct RefCounts {
-    /// Per asset slot and property (flat, stride = property count, D4): how
-    /// many live threats on that asset violate that property.
-    asset_properties: Vec<u32>,
+    /// Per asset slot: the properties some live threat on that asset
+    /// violates, with how many threats violate each (see the type doc).
+    asset_properties: Vec<Box<[PropertyCount]>>,
     /// Per asset slot: how many live threats target it.
     assets: Vec<u32>,
     /// Per damage scenario slot: how many live threats link to it.
     damages: Vec<u32>,
 }
 
-/// Position of (asset, property) in the flat counts.
-fn flat(row: usize, a: AssetIdx, p: Property) -> Option<usize> {
-    a.index().checked_mul(row)?.checked_add(p.index())
-}
-
 /// Adds 1 to (or, with `up == false`, takes 1 from) `v[i]` if it exists.
 /// Validation guarantees the slot exists and the count cannot wrap.
 fn bump(v: &mut [u32], i: Option<usize>, up: bool) {
     if let Some(c) = i.and_then(|i| v.get_mut(i)) {
-        *c = if up {
-            c.saturating_add(1)
+        *c = step(*c, up);
+    }
+}
+
+/// `c + 1` (`up`) or `c - 1`, saturating.
+fn step(c: u32, up: bool) -> u32 {
+    if up {
+        c.saturating_add(1)
+    } else {
+        c.saturating_sub(1)
+    }
+}
+
+/// The count of `p` in one sorted row; 0 if absent. O(log r).
+fn row_count(row: &[PropertyCount], p: Property) -> u32 {
+    row.binary_search_by_key(&p, |c| c.property)
+        .ok()
+        .and_then(|i| row.get(i))
+        .map_or(0, |c| c.threats)
+}
+
+/// Counts the properties in `violates` in (`up`) or out of one sorted
+/// row, keeping it canonical (sorted, no zero counts, exact size).
+///
+/// When the row's set of properties does not change (counting in only
+/// properties it has, or counting out none that drop to 0), the counts
+/// change in place with no allocation. Otherwise the row and `violates`
+/// merge into one new exact-size slice: one allocation, or none if the
+/// row becomes empty. Counting out a property the row lacks is ignored
+/// (validation rules it out). Time O(r + p), r = row length, p =
+/// |violates|.
+fn count_row(row: &mut Box<[PropertyCount]>, violates: PropertySet, up: bool) {
+    let have: PropertySet = row.iter().map(|c| c.property).collect();
+    let same_shape = if up {
+        violates.is_subset(have)
+    } else {
+        row.iter()
+            .all(|c| c.threats > 1 || !violates.contains(c.property))
+    };
+    if same_shape {
+        for c in row.iter_mut().filter(|c| violates.contains(c.property)) {
+            c.threats = step(c.threats, up);
+        }
+        return;
+    }
+    // Candidates in ascending order: the row's properties, plus the new
+    // ones when counting in.
+    let candidates = if up {
+        have.iter().chain(violates.iter()).collect()
+    } else {
+        have
+    };
+    let mut old = row.iter().copied().peekable();
+    let mut merged = Vec::with_capacity(new_row_len(row, violates, up, candidates));
+    for property in candidates.iter() {
+        let before = old
+            .next_if(|c| c.property == property)
+            .map_or(0, |c| c.threats);
+        let threats = if violates.contains(property) {
+            step(before, up)
         } else {
-            c.saturating_sub(1)
+            before
         };
+        if threats > 0 {
+            merged.push(PropertyCount { property, threats });
+        }
+    }
+    *row = merged.into_boxed_slice();
+}
+
+/// The length of a row after [`count_row`] changes its shape, so the new
+/// slice is allocated at its exact size. O(r).
+fn new_row_len(
+    row: &[PropertyCount],
+    violates: PropertySet,
+    up: bool,
+    candidates: PropertySet,
+) -> usize {
+    if up {
+        candidates.len()
+    } else {
+        row.iter()
+            .filter(|c| c.threats > 1 || !violates.contains(c.property))
+            .count()
     }
 }
 
 impl RefCounts {
-    /// Counts one threat in (`up`) or out. O(p + k).
-    fn threat(&mut self, row: usize, t: &ThreatScenario, violates: PropertySet, up: bool) {
+    /// Counts one threat in (`up`) or out. O(r + p + k).
+    fn threat(&mut self, t: &ThreatScenario, violates: PropertySet, up: bool) {
         bump(&mut self.assets, Some(t.asset.index()), up);
-        self.properties(row, t.asset, violates, up);
+        self.properties(t.asset, violates, up);
         for d in &t.damages {
             bump(&mut self.damages, Some(d.index()), up);
         }
     }
 
-    /// Counts the properties of one threat in or out. O(p).
-    fn properties(&mut self, row: usize, a: AssetIdx, violates: PropertySet, up: bool) {
-        for p in violates.iter() {
-            bump(&mut self.asset_properties, flat(row, a, p), up);
+    /// Counts the properties of one threat in or out. A missing asset slot
+    /// is ignored. O(r + p).
+    fn properties(&mut self, a: AssetIdx, violates: PropertySet, up: bool) {
+        if let Some(row) = self.asset_properties.get_mut(a.index()) {
+            count_row(row, violates, up);
         }
+    }
+
+    /// How many live threats on `a` violate `p`. O(log r).
+    fn property(&self, a: AssetIdx, p: Property) -> u32 {
+        self.asset_properties
+            .get(a.index())
+            .map_or(0, |row| row_count(row, p))
     }
 }
 
@@ -907,17 +1015,9 @@ impl Project {
         self.damages.id(idx)
     }
 
-    /// Length of one asset's row in the flat per-property counts: the
-    /// property count of the methodology.
-    fn row_len(&self) -> usize {
-        self.methodology.property_count()
-    }
-
+    /// How many live threats on `a` violate `p`. O(log p).
     fn asset_property_refs(&self, a: AssetIdx, p: Property) -> u32 {
-        flat(self.row_len(), a, p)
-            .and_then(|i| self.refs.asset_properties.get(i))
-            .copied()
-            .unwrap_or(0)
+        self.refs.property(a, p)
     }
 
     // -- Checks ----------------------------------------------------------------------
@@ -936,14 +1036,7 @@ impl Project {
         if properties.is_empty() {
             return Err(ModelError::NoSecurityProperties(id));
         }
-        // The flat per-property counts must stay addressable.
-        let flat_ok = self
-            .assets
-            .slot_count()
-            .checked_add(1)
-            .and_then(|n| n.checked_mul(self.row_len()))
-            .is_some();
-        if self.assets.next_idx(self.slot_limit).is_none() || !flat_ok {
+        if self.assets.next_idx(self.slot_limit).is_none() {
             return Err(ModelError::ProjectCapacityExceeded);
         }
         Ok(())
@@ -1164,9 +1257,8 @@ impl Project {
         self.assets
             .push(id, asset, self.slot_limit)
             .ok_or(ModelError::ProjectCapacityExceeded)?;
-        let row = self.row_len();
-        let len = self.refs.asset_properties.len().saturating_add(row);
-        self.refs.asset_properties.resize(len, 0);
+        // No threat targets a new asset: an empty row, no heap.
+        self.refs.asset_properties.push(Box::default());
         self.refs.assets.push(0);
         Ok(Op::RemoveAsset { id })
     }
@@ -1278,14 +1370,13 @@ impl Project {
             catalog_refs,
             damages,
         };
-        let row = self.row_len();
         let violates = self.methodology.violates(category);
         let idx = self
             .threats
             .push(id, t, self.slot_limit)
             .ok_or(ModelError::ProjectCapacityExceeded)?;
         if let Some(t) = self.threats.get(idx) {
-            self.refs.threat(row, t, violates, true);
+            self.refs.threat(t, violates, true);
         }
         Ok(Op::RemoveThreatScenario { id })
     }
@@ -1296,7 +1387,6 @@ impl Project {
         category: ThreatCategory,
     ) -> Result<Op, ModelError> {
         let idx = self.threat_index(id)?;
-        let row = self.row_len();
         let new = self.methodology.violates(category);
         let t = self
             .threats
@@ -1305,8 +1395,10 @@ impl Project {
         let old_category = std::mem::replace(&mut t.category, category);
         let asset = t.asset;
         let old = self.methodology.violates(old_category);
-        self.refs.properties(row, asset, old, false);
-        self.refs.properties(row, asset, new, true);
+        // New in before old out: a property both categories violate never
+        // drops to 0, so it causes no reallocation.
+        self.refs.properties(asset, new, true);
+        self.refs.properties(asset, old, false);
         Ok(Op::SetThreatCategory {
             id,
             category: old_category,
@@ -1366,7 +1458,7 @@ impl Project {
             .remove(idx)
             .ok_or(ModelError::UnknownThreatScenario(id))?;
         let violates = self.methodology.violates(t.category);
-        self.refs.threat(self.row_len(), &t, violates, false);
+        self.refs.threat(&t, violates, false);
         Ok(Op::AddThreatScenario {
             id,
             name: t.name,
@@ -1425,7 +1517,7 @@ impl Project {
     }
 
     /// Checks every structural invariant and returns a description of the
-    /// first one broken. Time O(n + L + m).
+    /// first one broken. Time O(n log n + L + m).
     #[cfg(test)]
     pub(crate) fn check_invariants(&self) -> Result<(), String> {
         let m = &*self.methodology;
@@ -1454,12 +1546,11 @@ impl Project {
             }
         }
 
-        let row = self.row_len();
-        let mut want = RefCounts {
-            asset_properties: vec![0; self.assets.slot_count() * row],
-            assets: vec![0; self.assets.slot_count()],
-            damages: vec![0; self.damages.slot_count()],
-        };
+        let mut assets = vec![0u32; self.assets.slot_count()];
+        let mut damages = vec![0u32; self.damages.slot_count()];
+        // Recounted independently of `count_row`: (asset slot, property)
+        // -> threats, in ascending order.
+        let mut pairs: BTreeMap<(usize, Property), u32> = BTreeMap::new();
         for (_, id, t) in self.threat_scenarios() {
             check_name(&t.name).map_err(|e| format!("threat {id}: {e}"))?;
             m.check_threat_category(t.category)
@@ -1491,13 +1582,75 @@ impl Project {
             if !keys.windows(2).all(|w| w[0] < w[1]) {
                 return Err(format!("threat {id} damages not sorted and unique"));
             }
-            want.threat(row, t, m.violates(t.category), true);
+            bump(&mut assets, Some(t.asset.index()), true);
+            for d in &t.damages {
+                bump(&mut damages, Some(d.index()), true);
+            }
+            for p in m.violates(t.category).iter() {
+                *pairs.entry((t.asset.index(), p)).or_insert(0) += 1;
+            }
         }
-        if want != self.refs {
+        let mut rows = vec![Vec::new(); self.assets.slot_count()];
+        for ((a, property), threats) in pairs {
+            rows.get_mut(a)
+                .ok_or(format!("a threat targets asset slot {a}, beyond the arena"))?
+                .push(PropertyCount { property, threats });
+        }
+        let want = RefCounts {
+            asset_properties: rows.into_iter().map(Vec::into_boxed_slice).collect(),
+            assets,
+            damages,
+        };
+        self.refs_invariants(&want)
+    }
+
+    /// Checks that the reference counts are canonical and equal a recount
+    /// `want`. O(asset slots + targeted pairs).
+    #[cfg(test)]
+    fn refs_invariants(&self, want: &RefCounts) -> Result<(), String> {
+        let have = &self.refs;
+        if have.asset_properties.len() != want.asset_properties.len() {
             return Err(format!(
-                "reference counts differ from a recount: {:?} vs {:?}",
-                self.refs, want
+                "{} property-count rows for {} asset slots",
+                have.asset_properties.len(),
+                want.asset_properties.len()
             ));
+        }
+        for (slot, (h, w)) in have
+            .asset_properties
+            .iter()
+            .zip(&want.asset_properties)
+            .enumerate()
+        {
+            if h.iter().any(|c| c.threats == 0) {
+                return Err(format!("asset slot {slot} stores a zero count: {h:?}"));
+            }
+            if !h.windows(2).all(|w| w[0].property < w[1].property) {
+                return Err(format!(
+                    "asset slot {slot} row not sorted and unique: {h:?}"
+                ));
+            }
+            if h != w {
+                return Err(format!(
+                    "asset slot {slot} property counts differ from a recount: {h:?} vs {w:?}"
+                ));
+            }
+        }
+        if have.assets != want.assets {
+            return Err(format!(
+                "asset counts differ from a recount: {:?} vs {:?}",
+                have.assets, want.assets
+            ));
+        }
+        if have.damages != want.damages {
+            return Err(format!(
+                "damage counts differ from a recount: {:?} vs {:?}",
+                have.damages, want.damages
+            ));
+        }
+        // The derived `==` must agree with the field-by-field checks.
+        if have != want {
+            return Err("reference counts differ from a recount".to_owned());
         }
         Ok(())
     }
@@ -1606,6 +1759,259 @@ mod tests {
         assert_eq!(p.check_invariants(), Ok(()));
         p.refs.assets[0] = 3;
         assert!(p.check_invariants().is_err());
+    }
+
+    fn pc(property: Property, threats: u32) -> PropertyCount {
+        PropertyCount { property, threats }
+    }
+
+    /// A row with every property of `set` counted `threats` times.
+    fn row_of(set: PropertySet, threats: u32) -> Vec<PropertyCount> {
+        set.iter().map(|p| pc(p, threats)).collect()
+    }
+
+    /// The pair of threat categories with different `violates` that share
+    /// the most properties (ties: the first found).
+    fn category_pair(m: &Methodology) -> (ThreatCategory, ThreatCategory) {
+        let cats: Vec<_> = m.threat_categories().collect();
+        let mut best = None;
+        let mut best_shared = 0;
+        for &a in &cats {
+            for &b in &cats {
+                let (va, vb) = (m.violates(a), m.violates(b));
+                if va == vb {
+                    continue;
+                }
+                let shared = va.iter().filter(|&p| vb.contains(p)).count();
+                if best.is_none() || shared > best_shared {
+                    best = Some((a, b));
+                    best_shared = shared;
+                }
+            }
+        }
+        best.expect("two categories with different violates")
+    }
+
+    fn threat_op(n: u64, asset: AssetId, category: ThreatCategory) -> Op {
+        Op::AddThreatScenario {
+            id: testkit::threat_id(n),
+            name: "t".into(),
+            asset,
+            category,
+            catalog_refs: vec![],
+            damages: vec![],
+        }
+    }
+
+    fn assert_sparse(m: &Arc<Methodology>) {
+        let mut p = Project::new(Arc::clone(m));
+        let ok = |p: &Project| assert_eq!(p.check_invariants(), Ok(()));
+        // (a) 1,000 assets carrying every property, no threats: no counts.
+        for n in 0..1_000 {
+            p.apply(Op::AddAsset {
+                id: testkit::asset_id(n),
+                name: "a".into(),
+                properties: m.all_properties(),
+            })
+            .expect("valid asset");
+        }
+        assert_eq!(p.refs.asset_properties.len(), 1_000);
+        assert!(p.refs.asset_properties.iter().all(|r| r.is_empty()));
+        ok(&p);
+
+        let a = testkit::asset_id(0);
+        let a_idx = p.asset_idx(&a).expect("live");
+        let (from, to) = category_pair(m);
+        let (vf, vt) = (m.violates(from), m.violates(to));
+        let others_empty = |p: &Project| {
+            p.refs
+                .asset_properties
+                .iter()
+                .enumerate()
+                .all(|(i, r)| i == a_idx.index() || r.is_empty())
+        };
+        let row = |p: &Project| p.refs.asset_properties[a_idx.index()].to_vec();
+
+        // (b) one threat: the row is exactly `violates`, sorted, counts 1.
+        p.apply(threat_op(1, a, from)).expect("valid threat");
+        assert_eq!(row(&p), row_of(vf, 1));
+        assert!(row(&p).windows(2).all(|w| w[0].property < w[1].property));
+        assert!(others_empty(&p));
+        ok(&p);
+
+        // (c) a second threat of the same category: counts 2.
+        p.apply(threat_op(2, a, from)).expect("valid threat");
+        assert_eq!(row(&p), row_of(vf, 2));
+        assert!(others_empty(&p));
+        ok(&p);
+
+        // (d) recategorize the second threat: entries move; shared
+        // properties keep their counts.
+        let undo = p
+            .apply(Op::SetThreatCategory {
+                id: testkit::threat_id(2),
+                category: to,
+            })
+            .expect("valid recategorization");
+        let want: Vec<_> = vf
+            .iter()
+            .chain(vt.iter())
+            .collect::<PropertySet>()
+            .iter()
+            .map(|q| pc(q, u32::from(vf.contains(q)) + u32::from(vt.contains(q))))
+            .collect();
+        assert_eq!(row(&p), want);
+        for q in vf.iter().filter(|&q| vt.contains(q)) {
+            assert_eq!(p.asset_property_refs(a_idx, q), 2, "shared {q:?}");
+        }
+        for q in vt.iter().filter(|&q| !vf.contains(q)) {
+            assert_eq!(p.asset_property_refs(a_idx, q), 1, "moved in {q:?}");
+        }
+        for q in vf.iter().filter(|&q| !vt.contains(q)) {
+            assert_eq!(p.asset_property_refs(a_idx, q), 1, "moved out {q:?}");
+        }
+        assert!(others_empty(&p));
+        ok(&p);
+        p.apply(undo).expect("undo");
+        assert_eq!(row(&p), row_of(vf, 2));
+        p.apply(Op::SetThreatCategory {
+            id: testkit::threat_id(2),
+            category: to,
+        })
+        .expect("redo");
+        ok(&p);
+
+        // (e) removing every threat empties the row again.
+        for n in [1, 2] {
+            p.apply(Op::RemoveThreatScenario {
+                id: testkit::threat_id(n),
+            })
+            .expect("valid removal");
+            ok(&p);
+        }
+        assert!(p.refs.asset_properties.iter().all(|r| r.is_empty()));
+
+        // (f) removing the asset leaves an empty row on its tombstone.
+        p.apply(Op::RemoveAsset { id: a }).expect("valid removal");
+        assert_eq!(p.asset(a_idx), None);
+        assert_eq!(p.refs.asset_properties.len(), 1_000);
+        assert!(p.refs.asset_properties[a_idx.index()].is_empty());
+        ok(&p);
+    }
+
+    #[test]
+    fn refcounts_are_sparse() {
+        assert_sparse(&testkit::builtin());
+        assert_sparse(&testkit::second());
+    }
+
+    #[test]
+    fn refcounts_category_pair_shares_a_property_in_second() {
+        // Guards (d) above: in the second methodology the chosen pair
+        // shares a property, so the "shared keeps its count" path runs.
+        let m = testkit::second();
+        let (from, to) = category_pair(&m);
+        assert!(m.violates(from).iter().any(|q| m.violates(to).contains(q)));
+    }
+
+    #[test]
+    fn count_row_keeps_canonical_form() {
+        let q = |i: u8| Property::new(i);
+        let set = |is: &[u8]| is.iter().map(|&i| q(i)).collect::<PropertySet>();
+        let mut row: Box<[PropertyCount]> = Box::default();
+        count_row(&mut row, set(&[5, 1]), true);
+        assert_eq!(&*row, [pc(q(1), 1), pc(q(5), 1)]);
+        // In place: every property present.
+        count_row(&mut row, set(&[5]), true);
+        assert_eq!(&*row, [pc(q(1), 1), pc(q(5), 2)]);
+        // Merge: new properties before, between, and after.
+        count_row(&mut row, set(&[0, 3, 5, 9]), true);
+        assert_eq!(
+            &*row,
+            [
+                pc(q(0), 1),
+                pc(q(1), 1),
+                pc(q(3), 1),
+                pc(q(5), 3),
+                pc(q(9), 1)
+            ]
+        );
+        assert_eq!(row.len(), 5);
+        // Out, nothing drops to 0: in place.
+        count_row(&mut row, set(&[5]), false);
+        assert_eq!(row_count(&row, q(5)), 2);
+        // Out, some drop to 0: removed; a missing property is ignored.
+        count_row(&mut row, set(&[0, 5, 9, 42]), false);
+        assert_eq!(&*row, [pc(q(1), 1), pc(q(3), 1), pc(q(5), 1)]);
+        count_row(&mut row, set(&[1, 3, 5]), false);
+        assert!(row.is_empty());
+        // Out of an empty row: still empty.
+        count_row(&mut row, set(&[2]), false);
+        assert!(row.is_empty());
+    }
+
+    #[test]
+    fn row_count_looks_up_by_property() {
+        let q = |i: u8| Property::new(i);
+        let row = [pc(q(2), 4), pc(q(7), 1)];
+        assert_eq!(row_count(&row, q(2)), 4);
+        assert_eq!(row_count(&row, q(7)), 1);
+        assert_eq!(row_count(&row, q(3)), 0);
+        assert_eq!(row_count(&[], q(0)), 0);
+    }
+
+    #[test]
+    fn refcounts_ignore_missing_asset_slots() {
+        let mut refs = RefCounts::default();
+        let p = Property::new(0);
+        refs.properties(AssetIdx::from_u32(3), PropertySet::empty().with(p), true);
+        assert_eq!(refs, RefCounts::default());
+        assert_eq!(refs.property(AssetIdx::from_u32(3), p), 0);
+    }
+
+    #[test]
+    fn check_invariants_detects_bad_property_counts() {
+        let m = testkit::builtin();
+        let mut p = Project::new(Arc::clone(&m));
+        let a = testkit::asset_id(1);
+        p.apply(Op::AddAsset {
+            id: a,
+            name: "a".into(),
+            properties: m.all_properties(),
+        })
+        .expect("valid");
+        // Two threats over two different properties, so the row has two
+        // entries to put out of order.
+        let cats: Vec<_> = m.threat_categories().collect();
+        let (c0, c1) = (cats[0], cats[1]);
+        assert_ne!(m.violates(c0), m.violates(c1));
+        p.apply(threat_op(1, a, c0)).expect("valid");
+        p.apply(threat_op(2, a, c1)).expect("valid");
+        assert_eq!(p.check_invariants(), Ok(()));
+        let good = p.refs.asset_properties[0].clone();
+        assert_eq!(good.len(), 2);
+
+        // A wrong count.
+        let mut bad = good.to_vec();
+        bad[0].threats = 2;
+        p.refs.asset_properties[0] = bad.into_boxed_slice();
+        assert!(p.check_invariants().is_err());
+
+        // An entry with `threats: 0`.
+        let mut bad = good.to_vec();
+        bad.push(pc(Property::new(5), 0));
+        bad.sort_by_key(|c| c.property);
+        p.refs.asset_properties[0] = bad.into_boxed_slice();
+        assert!(p.check_invariants().is_err());
+
+        // Two entries out of order.
+        let mut bad = good.to_vec();
+        bad.reverse();
+        p.refs.asset_properties[0] = bad.into_boxed_slice();
+        assert!(p.check_invariants().is_err());
+
+        p.refs.asset_properties[0] = good;
+        assert_eq!(p.check_invariants(), Ok(()));
     }
 
     proptest! {
