@@ -1,0 +1,16 @@
+VERDICT: PASS
+
+Scope: no GUI or CLI. The user-facing surfaces are the library API (`Project::save/load`, `OpLogWriter`, `OpLogReader`), the `StoreError` and `Limit` messages that a future app will show, and the fuzz helper `crates/aegis-model/fuzz/run.sh` with its README section. Nothing here touches the UI thread, keyboard access or accessible labels, so those checks do not apply. The 50 ms budget is met: save 1.07 ms, load 4.31 ms, append of 10k ops 1.95 ms (ADR 0009).
+
+What works for the user:
+- Fewest steps: save and load are one call each, and the log is create/append/open/iterate. A reader `line()` accessor lets a caller locate a failing record. A log opens under a different methodology version with no extra step, as the owner confirmed.
+- No silent failures. Every rejection is typed, and a failed `append` writes nothing and leaves the writer usable. A truncated last record gives `TruncatedRecord { line }`, so crash recovery has a clear signal.
+- Messages say what went wrong without echoing decoded text (a deliberate privacy rule, AC14). `Limit` messages name the cap and its value ("name is longer than 1024 bytes"). `UnknownKey` names the vocabulary and the key. `MethodologyMismatch` names both keys. `Sequence` gives expected and found.
+- README fuzz section is short and copy-pasteable, gives both the stable script and the nightly route, and says where crashes are saved and how to replay them.
+
+Non-blocking suggestions (none block the merge; all can be taken when the app layer needs them):
+
+1. crates/aegis-model/src/error.rs (`StoreError::UnsupportedFormat`, message "unsupported file format or format version") — one message covers "not an Aegis file" and "written by a newer Aegis". The user's next step differs: pick the right file, or update the app. A future UI cannot tell them apart. Fix: split into two variants, or carry `found_version: Option<u64>` (a number, so it fits the no-decoded-text rule), and word the message "file format version {n} is newer than this build reads; update the application".
+2. crates/aegis-model/src/error.rs (`UnknownKey`, `InvalidId`, `DuplicateEntry`, `InvalidCatalogRef`, `LimitExceeded`) — none of these carries a location, while `Decode` and `TruncatedRecord` do. For an op log the caller can use `OpLogReader::line()`, but that is not mentioned on these variants. For a snapshot there is no location at all, so a user with a 1 MB file cannot find the bad entity. Fix: add one sentence to the `StoreError` docs saying "for a log, `OpLogReader::line()` gives the failing line", and consider a follow-up that adds the entity kind (asset, damage scenario, threat scenario) as a fixed label. That is not decoded text.
+3. crates/aegis-model/src/error.rs (`UnknownKey`) — the message does not say what to do next. The likely causes are a methodology pack that dropped the key, or a corrupt file. Fix: keep the Display as is, and have the app layer add the hint "this file needs a methodology pack that defines this key". Document that expectation on the variant.
+4. crates/aegis-model/fuzz/run.sh — a misspelled target (`run.sh 60 snapshots`) fails with a bare shell "No such file or directory" after a full build, and a non-numeric SECONDS gives a libFuzzer error. Fix: check each target against `snapshot|op_log` before the build and print "unknown target X; expected snapshot or op_log".

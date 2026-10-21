@@ -1,0 +1,21 @@
+VERDICT: PASS
+
+Scope: `git diff master...factory/010-save-load`, focused on round-2 commit 82da671 (decode-time key resolution, streaming snapshot reader, `UnsupportedFormat { version }`, memory gates, `fuzz/run.sh`). Round-1 findings are re-checked below. No new findings.
+
+## Round-1 items
+
+1. **Hostile-snapshot memory amplification (blocker): fixed.** Vocabulary keys are now resolved on the parser's `&str` inside the visitor (`wire.rs` `WithStr`, `PropertySetKeys`, `Impacts`, `ThreatCategoryKey`, `ImpactCategoryKey`, `CatalogSchemeKey`). No per-key `Arc<str>` is kept. An unknown key fails inside the entity that holds it. Within one list, only the first unknown key is kept (at most 64 bytes, after `check_key_len`). The key-count caps (64 properties, 32 impacts) are still enforced per item, so the deferred unknown-key path is bounded. I re-ran `cargo bench --bench store_memory` on an export of the branch and got the builder's numbers: the reviewers' shape (62 one-byte unknown keys per asset) now peaks at 0.02x (65 KiB), down from about 10x. The worst valid shape is `minimal_entities` at 2.99x, and nearly all of that is the loaded project (2.59x kept). All nine gates pass, and they run in CI under `cargo test --benches`. ADR 0009 and the `Project::load` doc comment now give the measured factors.
+2. **Minor, `read_to_end` doubling: fixed.** `load` now streams through a 64 KiB `BufReader` over `CappedReader`. That reader reads at most one byte past `MAX_PROJECT_FILE_BYTES` (`Take` at cap+1), sets `exceeded`, and `load` checks it before the decode result, so the error is `LimitExceeded(ProjectFileBytes)` and not an I/O error. Unit tests cover exactly-at-cap, one-past and I/O passthrough. A single 64 MiB string still passes through serde_json's scratch buffer before the name cap rejects it (measured 1.02x). That is bounded by the file cap and acceptable.
+
+## Checked, no issue
+
+- **Q4 / R3 / R6:** every string and list cap is still checked in the visitor before anything is kept. The serde_json recursion limit (128) is still on with `from_reader`. The op log line cap (64 KiB) still bounds internally tagged `OpWire` `Content` buffering, and keys resolved during the second pass still see the context, because they run inside `decode`. `de.end()` rejects trailing non-whitespace.
+- **Decode context (`wire.rs` `ContextGuard`, `context()`):** the thread-local is installed only for the synchronous `decode` closure and restored by an RAII guard. All access uses `try_borrow`/`try_borrow_mut`, so there is no panic path. A missing context becomes `Fault::NoContext` and then `Decode`. The fault cell is cleared before each decode and taken after it, as in round 1. A caller's `Read` that re-enters `load` gets its own guard, and the previous context is restored afterwards.
+- **Methodology check order:** if `methodology` comes after the entity lists, keys are resolved against the caller's methodology first. The decode still fails with `MethodologyMismatch` (or a missing-field error) before any project is built, so a key is never silently reinterpreted.
+- **Error contents:** `UnsupportedFormat { version: Option<u64> }` exposes only a number. `UnknownKey` and `MethodologyMismatch` keys are capped at 64 bytes and printed with `{:?}`. The visitor's serde error text is fixed. Entity names never appear in errors.
+- **Q2/Q3:** `#![forbid(unsafe_code)]` is kept. A grep for `unwrap()`/`expect(`/`unsafe`/`panic!`/`unreachable!` over `src/store/` prints nothing. The bit shift in `Impacts` uses `checked_shl` and handles failure as `Duplicate`.
+- **D7:** no hash maps are added. Lookups go through the methodology's existing key search.
+- **D5 / dependencies:** round 2 adds no new dependencies. Round-1 dependency findings still hold (serde and serde_json MIT/Apache-2.0, locked; the `libfuzzer-sys` NCSA exception is scoped to the fuzz crate).
+- **`fuzz/run.sh`:** `SECONDS` and the target names are checked against allow lists before they are used, so no arbitrary text reaches `cargo fuzz` or `RUSTFLAGS`.
+- **Secrets:** the new bench shapes, tests and ADR text contain no secrets, tokens or customer data.
+- **Tests:** `cargo test --locked` passes on the branch export.
