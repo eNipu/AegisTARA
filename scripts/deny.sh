@@ -5,8 +5,10 @@
 #   CHECK is any of: advisories bans licenses sources (default: all four).
 #   `scripts/deny.sh licenses bans sources` runs fully offline.
 #
-# Checks each crates/*/Cargo.toml in sorted order, keeps going after a
-# failure, prints one summary line per crate, and exits 1 if any crate failed.
+# Checks each crates/*/Cargo.toml, then each non-shipped fuzz crate
+# crates/*/fuzz/Cargo.toml (decision D5: tooling-only license exceptions must
+# still be checked), in sorted order. Keeps going after a failure, prints one
+# summary line per crate, and exits 1 if any crate failed.
 # The full cargo-deny report is printed only for failing crates.
 #
 # Cost: one cargo-deny run per crate, O(D) in its locked dependencies.
@@ -33,9 +35,10 @@ trap 'rm -f "$log"; exit 130' INT TERM
 failed=0
 checked=0
 # Globs expand in sorted order in POSIX sh.
-for manifest in "$repo_root"/crates/*/Cargo.toml; do
+for manifest in "$repo_root"/crates/*/Cargo.toml "$repo_root"/crates/*/fuzz/Cargo.toml; do
     [ -f "$manifest" ] || continue
-    crate=$(basename "$(dirname "$manifest")")
+    crate=${manifest#"$repo_root"/crates/}
+    crate=${crate%/Cargo.toml}
     checked=$((checked + 1))
     if cargo deny --manifest-path "$manifest" --config "$config" check "$@" >"$log" 2>&1; then
         echo "ok    $crate"

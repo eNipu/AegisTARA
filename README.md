@@ -77,3 +77,27 @@ exceptions = [
 ```
 
 Never widen `allow` for a review-first license, and never add a `deny` list.
+
+Non-shipped tooling (dev-dependencies and fuzz crates) may also use NCSA
+(D5), again only through a per-crate exception, plus a `[bans] deny` entry
+with `wrappers` that keeps the crate out of everything that ships.
+`scripts/deny.sh` also checks each `crates/*/fuzz/Cargo.toml`.
+
+## Fuzzing
+
+`crates/aegis-model/fuzz/` is a `cargo-fuzz` crate (not a production crate,
+not in CI) with two targets: `snapshot` (`Project::load`) and `op_log`
+(`OpLogReader`). Seeds are the golden v1 files in `seeds/`. Rationale:
+[docs/adr/0009-save-load-format.md](docs/adr/0009-save-load-format.md).
+
+```sh
+crates/aegis-model/fuzz/run.sh                # both targets, 60 s each, stable toolchain
+crates/aegis-model/fuzz/run.sh 600 op_log     # one target, 10 minutes
+
+# or, with a nightly toolchain and cargo-fuzz (adds AddressSanitizer)
+cd crates/aegis-model/fuzz
+cargo +nightly fuzz run snapshot corpus/snapshot seeds/snapshot -- -max_total_time=60
+```
+
+A crash is saved under `artifacts/<target>/`; replay it by passing that file
+to the target binary (or `cargo fuzz run <target> <file>`).
