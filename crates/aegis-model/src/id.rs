@@ -1,4 +1,9 @@
 //! Typed identifiers: the internal arena index and the stable public ID.
+//!
+//! Every entity kind has a pair: a `u32` arena index (`NodeIdx`, `AssetIdx`,
+//! ...) that is only meaningful inside one container, and a stable public ID
+//! (`NodeId`, `AssetId`, ...) that is always a `UUIDv7`. The version check
+//! lives in one place, [`check_v7`], and every ID type goes through it.
 
 use std::fmt;
 use std::str::FromStr;
@@ -119,11 +124,7 @@ impl NodeId {
     /// assert!(NodeId::from_uuid(Uuid::now_v7()).is_ok());
     /// ```
     pub fn from_uuid(u: Uuid) -> Result<Self, ModelError> {
-        if u.get_version() == Some(Version::SortRand) && u.get_variant() == Variant::RFC4122 {
-            Ok(NodeId(u))
-        } else {
-            Err(ModelError::NotVersion7)
-        }
+        check_v7(u).map(NodeId)
     }
 
     /// Returns the underlying UUID.
@@ -151,8 +152,7 @@ impl FromStr for NodeId {
     /// [`ModelError::InvalidUuid`] for malformed text,
     /// [`ModelError::NotVersion7`] for a valid UUID of another version.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let u = Uuid::parse_str(s).map_err(|_| ModelError::InvalidUuid)?;
-        NodeId::from_uuid(u)
+        parse_v7(s).map(NodeId)
     }
 }
 
@@ -162,6 +162,293 @@ impl fmt::Display for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0.hyphenated(), f)
     }
+}
+
+/// Checks that `u` is a version 7 UUID with the RFC 9562 variant. This is
+/// the only place the rule lives; every public ID type calls it. Time O(1).
+fn check_v7(u: Uuid) -> Result<Uuid, ModelError> {
+    if u.get_version() == Some(Version::SortRand) && u.get_variant() == Variant::RFC4122 {
+        Ok(u)
+    } else {
+        Err(ModelError::NotVersion7)
+    }
+}
+
+/// Parses UUID text and checks it with [`check_v7`]. Time O(1).
+fn parse_v7(s: &str) -> Result<Uuid, ModelError> {
+    let u = Uuid::parse_str(s).map_err(|_| ModelError::InvalidUuid)?;
+    check_v7(u)
+}
+
+/// An arena index type: built from a `u32` by the crate only, read back as a
+/// `usize` position. Implemented by the project arena indices.
+pub(crate) trait ArenaIndex: Copy {
+    /// Wraps a raw arena position.
+    fn from_u32(i: u32) -> Self;
+    /// Returns the arena position.
+    fn position(self) -> usize;
+}
+
+/// Defines one entity's index and public ID pair. The index is a `u32`
+/// newtype with no public constructor; the ID is a `UUIDv7` newtype checked
+/// by [`check_v7`].
+macro_rules! entity_ids {
+    (
+        $(#[$idx_meta:meta])*
+        pub struct $idx:ident;
+        index_example { $(#[$index_meta:meta])* }
+        $(#[$id_meta:meta])*
+        pub struct $id:ident;
+    ) => {
+        $(#[$idx_meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $idx(u32);
+
+        impl $idx {
+            /// Returns the position of this entity in its arena, for
+            /// indexing slices. Time O(1).
+            ///
+            $(#[$index_meta])*
+            #[must_use]
+            pub fn index(self) -> usize {
+                // A `u32` always fits in `usize` on the 32- and 64-bit
+                // targets we support; widening never loses information.
+                self.0 as usize
+            }
+        }
+
+        impl ArenaIndex for $idx {
+            fn from_u32(i: u32) -> Self {
+                $idx(i)
+            }
+            fn position(self) -> usize {
+                self.index()
+            }
+        }
+
+        $(#[$id_meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $id(Uuid);
+
+        impl $id {
+            /// Creates a fresh `UUIDv7` from the system clock and random
+            /// bits. Time O(1).
+            ///
+            /// ```
+            #[doc = concat!("use aegis_model::", stringify!($id), ";")]
+            ///
+            #[doc = concat!("let a = ", stringify!($id), "::new_v7();")]
+            #[doc = concat!("assert_ne!(a, ", stringify!($id), "::new_v7());")]
+            /// assert_eq!(a.as_uuid().get_version_num(), 7);
+            /// ```
+            #[must_use]
+            pub fn new_v7() -> Self {
+                $id(Uuid::now_v7())
+            }
+
+            /// Wraps a UUID after checking that it is version 7 with the
+            /// RFC 9562 variant. Time O(1).
+            ///
+            /// # Errors
+            ///
+            /// Returns [`ModelError::NotVersion7`] for any other version or
+            /// variant.
+            ///
+            /// ```
+            #[doc = concat!("use aegis_model::{ModelError, ", stringify!($id), "};")]
+            /// use uuid::Uuid;
+            ///
+            /// let v4 = Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").ok();
+            #[doc = concat!("assert_eq!(v4.map(", stringify!($id), "::from_uuid), Some(Err(ModelError::NotVersion7)));")]
+            #[doc = concat!("assert!(", stringify!($id), "::from_uuid(Uuid::now_v7()).is_ok());")]
+            /// ```
+            pub fn from_uuid(u: Uuid) -> Result<Self, ModelError> {
+                check_v7(u).map($id)
+            }
+
+            /// Returns the underlying UUID. Time O(1).
+            ///
+            /// ```
+            #[doc = concat!("use aegis_model::", stringify!($id), ";")]
+            ///
+            #[doc = concat!("let id = ", stringify!($id), "::new_v7();")]
+            /// assert_eq!(id.as_uuid().get_version_num(), 7);
+            /// ```
+            #[must_use]
+            pub fn as_uuid(&self) -> &Uuid {
+                &self.0
+            }
+        }
+
+        impl FromStr for $id {
+            type Err = ModelError;
+
+            /// Parses any textual UUID form accepted by
+            /// [`Uuid::parse_str`], then checks that it is version 7.
+            ///
+            /// # Errors
+            ///
+            /// [`ModelError::InvalidUuid`] for malformed text,
+            /// [`ModelError::NotVersion7`] for a valid UUID of another
+            /// version.
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                parse_v7(s).map($id)
+            }
+        }
+
+        impl fmt::Display for $id {
+            /// Writes the hyphenated lowercase form.
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.0.hyphenated(), f)
+            }
+        }
+    };
+}
+
+entity_ids! {
+    /// Internal index of an asset in a [`Project`](crate::Project) arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::AssetIdx>(), 4);
+    /// ```
+    pub struct AssetIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let m = Arc::new(Methodology::iso21434_r155()?);
+        /// let mut project = Project::new(Arc::clone(&m));
+        /// let id = AssetId::new_v7();
+        /// let properties: PropertySet = m.properties().collect();
+        /// project.apply(Op::AddAsset { id, name: "Gateway ECU".into(), properties })?;
+        /// assert_eq!(project.asset_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of an asset: an RFC 9562 version 7 UUID.
+    ///
+    /// Distinct from the other ID types, so an `AssetId` cannot be passed
+    /// where a [`ThreatId`] is expected:
+    ///
+    /// ```compile_fail
+    /// use std::sync::Arc;
+    /// use aegis_model::{AssetId, Methodology, Project};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = AssetId::new_v7();
+    /// let _ = project.threat_scenario_idx(&id); // error: expected `&ThreatId`
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The correct call uses the asset lookup:
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{AssetId, Methodology, Project};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = AssetId::new_v7();
+    /// assert_eq!(project.asset_idx(&id), None);
+    /// assert_eq!(id.to_string().parse::<AssetId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct AssetId;
+}
+
+entity_ids! {
+    /// Internal index of a damage scenario in a [`Project`](crate::Project)
+    /// arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::DamageIdx>(), 4);
+    /// ```
+    pub struct DamageIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{DamageId, Methodology, Op, Project};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = DamageId::new_v7();
+        /// project.apply(Op::AddDamageScenario { id, name: "Loss of braking".into(), impacts: vec![] })?;
+        /// assert_eq!(project.damage_scenario_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a damage scenario: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::DamageId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = DamageId::new_v7();
+    /// assert_eq!(id.to_string().parse::<DamageId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct DamageId;
+}
+
+entity_ids! {
+    /// Internal index of a threat scenario in a [`Project`](crate::Project)
+    /// arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::ThreatIdx>(), 4);
+    /// ```
+    pub struct ThreatIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, ThreatId};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let m = Arc::new(Methodology::iso21434_r155()?);
+        /// let mut project = Project::new(Arc::clone(&m));
+        /// let asset = AssetId::new_v7();
+        /// let properties: PropertySet = m.properties().collect();
+        /// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties })?;
+        /// let category = m.threat_categories().next().ok_or("no category")?;
+        /// let id = ThreatId::new_v7();
+        /// project.apply(Op::AddThreatScenario {
+        ///     id, name: "Forge messages".into(), asset, category,
+        ///     catalog_refs: vec![], damages: vec![],
+        /// })?;
+        /// assert_eq!(project.threat_scenario_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a threat scenario: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::ThreatId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = ThreatId::new_v7();
+    /// assert_eq!(id.to_string().parse::<ThreatId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct ThreatId;
 }
 
 #[cfg(test)]
@@ -267,5 +554,61 @@ mod capacity {
     fn try_from_usize_rejects_u32_max_plus_one() {
         assert_eq!(NodeIdx::try_from_usize(u32::MAX as usize + 1), None);
         assert_eq!(NodeIdx::try_from_usize(usize::MAX), None);
+    }
+}
+
+#[cfg(test)]
+mod entity_ids {
+    use super::*;
+
+    const V7: &str = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    const V4: &str = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+
+    /// Runs the same checks on one ID type.
+    macro_rules! id_checks {
+        ($id:ident) => {{
+            let v4 = Uuid::parse_str(V4).expect("valid v4 literal");
+            assert_eq!($id::from_uuid(v4), Err(ModelError::NotVersion7));
+            assert_eq!($id::from_uuid(Uuid::nil()), Err(ModelError::NotVersion7));
+            let wrong_variant =
+                Uuid::parse_str("0190a1b2-c3d4-7e5f-ca9b-0c1d2e3f4a5b").expect("valid literal");
+            assert_eq!($id::from_uuid(wrong_variant), Err(ModelError::NotVersion7));
+            assert_eq!(V4.parse::<$id>(), Err(ModelError::NotVersion7));
+            assert_eq!("nope".parse::<$id>(), Err(ModelError::InvalidUuid));
+            let id: $id = V7.to_uppercase().parse().expect("valid v7");
+            assert_eq!(id.to_string(), V7);
+            for _ in 0..100 {
+                let fresh = $id::new_v7();
+                assert_eq!(fresh.as_uuid().get_version(), Some(Version::SortRand));
+                assert_eq!(fresh.to_string().parse::<$id>(), Ok(fresh));
+            }
+        }};
+    }
+
+    #[test]
+    fn ids_asset_accepts_only_v7_and_round_trips() {
+        id_checks!(AssetId);
+    }
+
+    #[test]
+    fn ids_damage_accepts_only_v7_and_round_trips() {
+        id_checks!(DamageId);
+    }
+
+    #[test]
+    fn ids_threat_accepts_only_v7_and_round_trips() {
+        id_checks!(ThreatId);
+    }
+
+    #[test]
+    fn ids_node_id_unchanged() {
+        id_checks!(NodeId);
+    }
+
+    #[test]
+    fn ids_index_round_trips_through_arena_index() {
+        assert_eq!(AssetIdx::from_u32(7).index(), 7);
+        assert_eq!(DamageIdx::from_u32(0).position(), 0);
+        assert_eq!(ThreatIdx::from_u32(u32::MAX).index(), u32::MAX as usize);
     }
 }

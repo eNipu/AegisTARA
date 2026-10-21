@@ -1,6 +1,10 @@
 //! Domain model for `AegisTARA`.
 //!
-//! This crate holds an attack tree in an arena: nodes live in one `Vec` and
+//! This crate holds two parts of a TARA: attack trees, and the
+//! methodology-neutral core of assets, damage scenarios, and threat
+//! scenarios (see [Methodologies](#methodologies) below).
+//!
+//! An attack tree lives in an arena: nodes live in one `Vec` and
 //! refer to each other by a typed index, [`NodeIdx`]. Every node also has a
 //! stable public ID, [`NodeId`] (a `UUIDv7`), that files, APIs, and history use.
 //! [`AttackTree`] keeps one map from [`NodeId`] to [`NodeIdx`], so lookups by
@@ -51,19 +55,110 @@
 //! # }
 //! ```
 
+//!
+//! # Methodologies
+//!
+//! The TARA side of the model (assets, damage scenarios, threat scenarios)
+//! is methodology-neutral: the core names no impact category, rating scale,
+//! security property, threat taxonomy, or catalog. A [`MethodologyDef`] is
+//! plain data that declares them, and [`Methodology::new`] validates it.
+//! ISO/SAE 21434 + UN R155 ships as the first methodology,
+//! [`Methodology::iso21434_r155`], built through the same `new`. A second
+//! methodology is a data change, not a code change.
+//!
+//! A [`Project`] is created over one `Arc<Methodology>`, fixed for its
+//! lifetime. Every change is a typed [`Op`]; [`Project::apply`] checks it
+//! against the methodology and the referential rules, commits it only if
+//! every check passes, and returns the inverse op for undo. Ops carry small
+//! typed vocabulary indices ([`ImpactCategory`], [`Level`], [`Property`],
+//! [`ThreatCategory`], [`CatalogScheme`]) resolved once from text keys. See
+//! `docs/adr/0008-methodology-neutral-domain-model.md`.
+//!
+//! ```
+//! use std::sync::Arc;
+//! use aegis_model::{AssetId, DamageId, Methodology, Op, Project, ThreatId};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let m = Arc::new(Methodology::iso21434_r155()?);
+//! let mut project = Project::new(Arc::clone(&m));
+//!
+//! // Resolve vocabulary keys once, at the boundary.
+//! let integrity = m.property("integrity").ok_or("no property")?;
+//! let tampering = m.threat_category("tampering").ok_or("no category")?;
+//! let safety = m.impact_category("safety").ok_or("no category")?;
+//! let severe = m.level(safety, "severe").ok_or("no level")?;
+//! let annex5 = m.catalog_scheme("r155-annex5").ok_or("no scheme")?;
+//!
+//! let ecu = AssetId::new_v7();
+//! project.apply(Op::AddAsset {
+//!     id: ecu,
+//!     name: "Brake ECU".into(),
+//!     properties: [integrity].into_iter().collect(),
+//! })?;
+//! let crash = DamageId::new_v7();
+//! project.apply(Op::AddDamageScenario {
+//!     id: crash,
+//!     name: "Vehicle cannot brake".into(),
+//!     impacts: vec![(safety, severe)],
+//! })?;
+//! let threat = ThreatId::new_v7();
+//! let undo = project.apply(Op::AddThreatScenario {
+//!     id: threat,
+//!     name: "Modify brake firmware".into(),
+//!     asset: ecu,
+//!     category: tampering,
+//!     catalog_refs: vec![m.parse_catalog_ref(annex5, "4.1")?],
+//!     damages: vec![crash],
+//! })?;
+//!
+//! // The targeted property is derived from the category.
+//! let idx = project.threat_scenario_idx(&threat).ok_or("missing")?;
+//! assert_eq!(project.targets(idx), Some(m.violates(tampering)));
+//!
+//! // Undo is the inverse op.
+//! project.apply(undo)?;
+//! assert_eq!(project.threat_scenario_count(), 0);
+//! # Ok(())
+//! # }
+//! ```
+
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 
+// Lets the shared test kit (`tests/common/mod.rs`) name this crate as
+// `aegis_model` when it is compiled into the unit tests.
+#[cfg(test)]
+extern crate self as aegis_model;
+
+mod asset;
+mod damage;
 mod error;
 mod eval;
 mod id;
+mod methodology;
+mod op;
+mod project;
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod testkit;
+mod threat;
 mod topo;
 mod tree;
 
-pub use error::ModelError;
+pub use asset::{Asset, PropertySet};
+pub use damage::DamageScenario;
+pub use error::{MethodologyError, ModelError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
 };
-pub use id::{NodeId, NodeIdx};
+pub use id::{AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx};
+pub use methodology::{
+    CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, ImpactCategory, ImpactCategoryDef,
+    Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef, SegmentDef,
+    ThreatCategory, ThreatCategoryDef,
+};
+pub use op::Op;
+pub use project::{MAX_NAME_CHARS, Project};
+pub use threat::{MAX_CATALOG_REFS, ThreatScenario};
 pub use tree::{AttackTree, GateKind, Node};
