@@ -243,7 +243,10 @@ impl Project {
     /// Decoding is capped before any model check: at most
     /// [`MAX_PROJECT_FILE_BYTES`] of input, and every string and list
     /// within its cap ([`Limit`]). The file's methodology key must equal
-    /// `methodology.key()`, checked as soon as it is read; its methodology
+    /// `methodology.key()`, checked as soon as it is read (before any
+    /// vocabulary key when `methodology` comes before the entity lists, as
+    /// `save` writes it; else a foreign file may fail with
+    /// [`StoreError::UnknownKey`] instead); its methodology
     /// version may differ, since the file holds keys, not indices. Every
     /// vocabulary key is resolved to its index the moment it is read, so a
     /// key the methodology does not have fails with
@@ -262,10 +265,14 @@ impl Project {
     /// string) besides the project: the decoded entities hold names and
     /// 1-byte indices only. Measured peak heap, as a factor of the file
     /// size (`benches/store_memory.rs`, ADR 0009): 1.03x for the typical
-    /// project; at most 2.99x for any shape measured (the smallest valid
-    /// entities, where the loaded project itself is 2.59x), so at most
-    /// about 192 MiB at the 64 MiB cap; 0.02x when keys are unknown, since
-    /// the load fails inside the first entity.
+    /// project; 0.02x when keys are unknown, since the load fails inside
+    /// the first entity. The worst case depends on the methodology's size,
+    /// because it is mostly the loaded project, not the decoder (the
+    /// decoder adds at most about 0.9x): a file of minimal entities peaks
+    /// at 2.73x with the built-in methodology (about 175 MiB at the 64 MiB
+    /// cap) and at 6.16x with a methodology of 64 properties (about
+    /// 394 MiB), where each loaded asset keeps a reference-count row of
+    /// 4 bytes per property.
     ///
     /// # Errors
     ///
