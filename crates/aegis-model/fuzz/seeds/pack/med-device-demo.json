@@ -1,0 +1,130 @@
+{
+  "format": "aegis-methodology-pack",
+  "version": 1,
+  "methodology": {
+    "key": "med-device-demo",
+    "version": "2026.1",
+    "label": "Medical device demo",
+    "impact_categories": [
+      {
+        "key": "patient-harm",
+        "label": "Patient harm",
+        "levels": [
+          {
+            "key": "minor",
+            "label": "minor"
+          },
+          {
+            "key": "serious",
+            "label": "serious"
+          },
+          {
+            "key": "critical",
+            "label": "critical"
+          }
+        ]
+      },
+      {
+        "key": "data-exposure",
+        "label": "Data exposure",
+        "levels": [
+          {
+            "key": "trivial",
+            "label": "trivial"
+          },
+          {
+            "key": "low",
+            "label": "low"
+          },
+          {
+            "key": "medium",
+            "label": "medium"
+          },
+          {
+            "key": "high",
+            "label": "high"
+          },
+          {
+            "key": "extreme",
+            "label": "extreme"
+          }
+        ]
+      },
+      {
+        "key": "service-loss",
+        "label": "Service loss",
+        "levels": [
+          {
+            "key": "tolerable",
+            "label": "tolerable"
+          },
+          {
+            "key": "intolerable",
+            "label": "intolerable"
+          }
+        ]
+      }
+    ],
+    "properties": [
+      {
+        "key": "c",
+        "label": "C"
+      },
+      {
+        "key": "i",
+        "label": "I"
+      },
+      {
+        "key": "a",
+        "label": "A"
+      }
+    ],
+    "threat_categories": [
+      {
+        "key": "data-leak",
+        "label": "Data leak",
+        "violates": [
+          "c"
+        ]
+      },
+      {
+        "key": "corruption",
+        "label": "Corruption",
+        "violates": [
+          "i"
+        ]
+      },
+      {
+        "key": "outage",
+        "label": "Outage",
+        "violates": [
+          "a"
+        ]
+      },
+      {
+        "key": "ransomware",
+        "label": "Ransomware",
+        "violates": [
+          "i",
+          "a"
+        ]
+      }
+    ],
+    "catalog_schemes": [
+      {
+        "key": "capec",
+        "label": "CAPEC",
+        "syntax": {
+          "prefix": "CAPEC-",
+          "required": 1,
+          "segments": [
+            {
+              "min": 1,
+              "max": 9999
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -361,7 +361,7 @@ impl Project {
     /// use std::sync::Arc;
     /// use aegis_model::{Methodology, Project};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.asset_count(), 0);
     /// # Ok(())
@@ -409,7 +409,7 @@ impl Project {
     /// use std::sync::Arc;
     /// use aegis_model::{Methodology, Project};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let project = Project::new(Arc::clone(&m));
     /// assert!(Arc::ptr_eq(project.methodology(), &m));
@@ -448,7 +448,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{AssetId, Methodology, Project};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.asset_idx(&AssetId::new_v7()), None);
     /// # Ok(())
@@ -486,7 +486,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{Methodology, Project};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.asset_count(), 0);
     /// # Ok(())
@@ -545,7 +545,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{DamageId, Methodology, Project};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.damage_scenario_idx(&DamageId::new_v7()), None);
     /// # Ok(())
@@ -580,7 +580,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{Methodology, Project};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.damage_scenario_count(), 0);
     /// # Ok(())
@@ -616,7 +616,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{Methodology, Project, ThreatId};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let idx = project.threat_scenario_idx(&ThreatId::new_v7());
     /// assert!(idx.and_then(|i| project.threat_scenario(i)).is_none());
@@ -633,7 +633,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{Methodology, Project, ThreatId};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.threat_scenario_idx(&ThreatId::new_v7()), None);
     /// # Ok(())
@@ -674,7 +674,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{Methodology, Project};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.threat_scenario_count(), 0);
     /// # Ok(())
@@ -691,7 +691,7 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{Methodology, Project};
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// assert_eq!(project.threat_scenarios().count(), 0);
     /// # Ok(())
@@ -753,7 +753,7 @@ impl Project {
     /// use std::sync::Arc;
     /// use aegis_model::{AssetId, Methodology, ModelError, Op, Project, PropertySet};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = AssetId::new_v7();
     /// let op = Op::AddAsset { id, name: "ECU".into(), properties: PropertySet::empty() };

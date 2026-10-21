@@ -37,3 +37,7 @@ harness = false
 [[bench]]
 name = "store_memory"
 harness = false
+
+[[bench]]
+name = "pack"
+harness = false

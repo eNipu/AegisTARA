@@ -684,7 +684,7 @@ impl<R: BufRead> OpLogReader<R> {
     /// use std::sync::Arc;
     /// use aegis_model::{Methodology, OpLogReader, StoreError};
     ///
-    /// # fn main() -> Result<(), aegis_model::MethodologyError> {
+    /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let err = OpLogReader::open(&b""[..], m).err();
     /// assert!(matches!(err, Some(StoreError::MissingHeader)));
