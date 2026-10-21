@@ -1,32 +1,44 @@
 //! Private serde types for the v1 formats.
 //!
-//! Reading decodes into owned `*Wire` types whose leaves are bounded:
-//! [`BoundedStr`] and [`BoundedVec`] check their cap inside the serde
-//! visitor, [`KeySet`] and [`KeyMap`] also reject repeated keys, and
-//! [`WireId`] parses the ID text in place. Keys are turned into indices
-//! afterwards by the `resolve_*` functions, against the caller's
-//! methodology. Writing serializes borrowed `*View` types straight from the
-//! project or the op, resolving indices to keys as it goes; nothing is
+//! Reading decodes into owned `*Wire` types whose leaves are bounded and
+//! already resolved: [`BoundedStr`] and [`BoundedVec`] check their cap
+//! inside the serde visitor; [`WireId`] parses the ID text in place; and
+//! every vocabulary key is looked up in the caller's methodology the moment
+//! it is read ([`PropertySetKeys`], [`Impacts`], [`ThreatCategoryKey`],
+//! [`ImpactCategoryKey`], [`CatalogRefText`]), so a decoded entity holds
+//! 1-byte indices, never key strings. The only strings kept are names (and,
+//! once per op log record, a `SetImpact` level key, which needs its
+//! category first). Writing serializes borrowed `*View` types straight from
+//! the project or the op, resolving indices to keys as it goes; nothing is
 //! copied first.
 //!
-//! A cap, a repeated key, a bad ID, or an unknown format found inside a
-//! visitor must come out as its own [`StoreError`] variant, but serde only
-//! carries a text message. The visitor therefore records a [`Fault`] in a
-//! thread-local side channel before it returns the serde error, and
-//! [`decode`] reads it back. The channel is cleared before each decode and
-//! read once after it, on the same thread, so a fault can never leak from
-//! one decode into another.
+//! Two thread-local cells connect the visitors with [`decode`], which is
+//! the only entry point:
+//!
+//! - **Context.** `decode` installs the methodology for the duration of one
+//!   decode (an RAII guard restores the previous value, also on unwind).
+//!   This is the `DeserializeSeed` idea without threading a seed through
+//!   every derived struct: derive keeps its strict field handling
+//!   (`deny_unknown_fields`, duplicate and missing fields) for all the wire
+//!   shapes, including the internally tagged ops.
+//! - **Faults.** A cap, a repeated key, a bad ID, an unknown key, a bad
+//!   catalog ref, a wrong format, or another methodology found inside a
+//!   visitor must come out as its own [`StoreError`] variant, but serde only
+//!   carries a text message. The visitor records a [`Fault`] before it
+//!   returns a fixed-text serde error, and `decode` reads it back. The cell
+//!   is cleared before each decode and taken once after it, on the same
+//!   thread, so a fault can never leak from one decode into another.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, Deserialize, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{self, Serialize, SerializeMap, SerializeStruct, Serializer};
 
-use super::{Limit, VocabKind};
+use super::{Limit, MAX_KEY_BYTES, VocabKind};
 use crate::asset::PropertySet;
 use crate::error::StoreError;
 use crate::id::{AssetId, DamageId, ThreatId};
@@ -39,16 +51,32 @@ use crate::methodology::{
 pub(super) const FORMAT_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
-// Fault side channel.
+// Decode context and fault side channel.
 // ---------------------------------------------------------------------------
 
 /// A typed decode failure found inside a serde visitor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Fault {
     Limit(Limit),
     Duplicate,
     InvalidId,
-    UnsupportedFormat,
+    /// The format name is wrong (`None`), or the format version is the
+    /// number given.
+    UnsupportedFormat(Option<u64>),
+    MethodologyMismatch {
+        expected: Arc<str>,
+        found: Arc<str>,
+    },
+    UnknownKey {
+        kind: VocabKind,
+        key: Arc<str>,
+    },
+    InvalidCatalogRef {
+        scheme: Arc<str>,
+    },
+    /// A visitor ran outside [`decode`]. Never happens: `decode` is the only
+    /// entry point and always installs the methodology.
+    NoContext,
 }
 
 impl From<Fault> for StoreError {
@@ -57,13 +85,20 @@ impl From<Fault> for StoreError {
             Fault::Limit(l) => StoreError::LimitExceeded(l),
             Fault::Duplicate => StoreError::DuplicateEntry,
             Fault::InvalidId => StoreError::InvalidId,
-            Fault::UnsupportedFormat => StoreError::UnsupportedFormat,
+            Fault::UnsupportedFormat(version) => StoreError::UnsupportedFormat { version },
+            Fault::MethodologyMismatch { expected, found } => {
+                StoreError::MethodologyMismatch { expected, found }
+            }
+            Fault::UnknownKey { kind, key } => StoreError::UnknownKey { kind, key },
+            Fault::InvalidCatalogRef { scheme } => StoreError::InvalidCatalogRef { scheme },
+            Fault::NoContext => StoreError::Decode { line: 0, column: 0 },
         }
     }
 }
 
 thread_local! {
     static FAULT: Cell<Option<Fault>> = const { Cell::new(None) };
+    static CONTEXT: RefCell<Option<Arc<Methodology>>> = const { RefCell::new(None) };
 }
 
 /// Records `fault` and returns the serde error that stops decoding. The
@@ -73,20 +108,59 @@ fn raise<E: de::Error>(fault: Fault) -> E {
     E::custom("aegis store fault")
 }
 
-/// Runs one serde decode with a clean side channel and maps its error: a
-/// recorded [`Fault`] wins; any other error becomes
-/// [`StoreError::Decode`] with its position only. `line`, if given,
-/// replaces the parser's line (an op log decodes one line at a time).
-/// Time O(1) besides `f`.
+/// Installs a methodology as the decode context; restores the previous one
+/// when dropped.
+struct ContextGuard {
+    previous: Option<Arc<Methodology>>,
+}
+
+impl ContextGuard {
+    fn enter(m: &Arc<Methodology>) -> Self {
+        let previous = CONTEXT.with(|c| {
+            c.try_borrow_mut()
+                .ok()
+                .and_then(|mut slot| slot.replace(Arc::clone(m)))
+        });
+        ContextGuard { previous }
+    }
+}
+
+impl Drop for ContextGuard {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        CONTEXT.with(|c| {
+            if let Ok(mut slot) = c.try_borrow_mut() {
+                *slot = previous;
+            }
+        });
+    }
+}
+
+/// The methodology of the running decode. Time O(1) (one reference count).
+fn context() -> Result<Arc<Methodology>, Fault> {
+    CONTEXT
+        .with(|c| c.try_borrow().ok().and_then(|slot| slot.clone()))
+        .ok_or(Fault::NoContext)
+}
+
+/// Runs one serde decode against `m` with a clean side channel and maps its
+/// error: a recorded [`Fault`] wins; an I/O error stays [`StoreError::Io`];
+/// any other error becomes [`StoreError::Decode`] with its position only.
+/// `line`, if given, replaces the parser's line (an op log decodes one line
+/// at a time). Time O(1) besides `f`.
 pub(super) fn decode<T>(
+    m: &Arc<Methodology>,
     line: Option<u64>,
     f: impl FnOnce() -> Result<T, serde_json::Error>,
 ) -> Result<T, StoreError> {
+    let guard = ContextGuard::enter(m);
     FAULT.with(|c| c.set(None));
     let result = f();
     let fault = FAULT.with(Cell::take);
+    drop(guard);
     result.map_err(|e| match fault {
         Some(fault) => fault.into(),
+        None if e.is_io() => StoreError::Io(e.into()),
         None => StoreError::Decode {
             line: line.unwrap_or_else(|| to_u64(e.line())),
             column: to_u64(e.column()),
@@ -99,13 +173,14 @@ pub(super) fn to_u64(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 
-/// Decodes one complete JSON value from `bytes`; trailing data other than
-/// whitespace is an error. Time O(bytes).
+/// Decodes one complete JSON value from `bytes` against `m`; trailing data
+/// other than whitespace is an error. Time O(bytes).
 pub(super) fn from_slice<'a, T: Deserialize<'a>>(
+    m: &Arc<Methodology>,
     bytes: &'a [u8],
     line: Option<u64>,
 ) -> Result<T, StoreError> {
-    decode(line, || {
+    decode(m, line, || {
         let mut de = serde_json::Deserializer::from_slice(bytes);
         let value = T::deserialize(&mut de)?;
         de.end()?;
@@ -152,8 +227,8 @@ caps! {
     LinksCap = crate::threat::MAX_DAMAGE_LINKS, Limit::DAMAGE_LINKS;
 }
 
-/// A string of at most `C::MAX` bytes. The check runs in the visitor, on
-/// the parser's borrowed text, before anything is allocated.
+/// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
+/// on the parser's text, before anything is allocated.
 pub(super) struct BoundedStr<C>(pub(super) Arc<str>, PhantomData<C>);
 
 pub(super) type Name = BoundedStr<NameCap>;
@@ -163,20 +238,13 @@ pub(super) type RefText = BoundedStr<RefTextCap>;
 
 impl<'de, C: Cap> Deserialize<'de> for BoundedStr<C> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V<C>(PhantomData<C>);
-        impl<C: Cap> Visitor<'_> for V<C> {
-            type Value = BoundedStr<C>;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a string")
+        WithStr::new(|s: &str| {
+            if s.len() > C::MAX {
+                return Err(Fault::Limit(C::LIMIT));
             }
-            fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
-                if s.len() > C::MAX {
-                    return Err(raise(Fault::Limit(C::LIMIT)));
-                }
-                Ok(BoundedStr(Arc::from(s), PhantomData))
-            }
-        }
-        d.deserialize_str(V(PhantomData))
+            Ok(BoundedStr(Arc::from(s), PhantomData))
+        })
+        .deserialize(d)
     }
 }
 
@@ -208,69 +276,292 @@ impl<'de, T: Deserialize<'de>, C: Cap> Deserialize<'de> for BoundedVec<T, C> {
     }
 }
 
-/// A set of keys: at most 64 (the most properties a methodology declares),
-/// none repeated. Held sorted, since a set has no order. Time O(k log k).
-pub(super) struct KeySet(pub(super) Vec<Key>);
+// ---------------------------------------------------------------------------
+// Keys resolved while decoding.
+// ---------------------------------------------------------------------------
 
-impl<'de> Deserialize<'de> for KeySet {
+/// A seed that hands the next JSON string to `f` on the parser's own text
+/// (borrowed from the input, or from the parser's reused scratch buffer),
+/// without allocating. A fault from `f` stops decoding. Time O(1) besides
+/// `f`.
+struct WithStr<F, T>(F, PhantomData<fn() -> T>);
+
+impl<F, T> WithStr<F, T> {
+    fn new(f: F) -> Self {
+        WithStr(f, PhantomData)
+    }
+}
+
+impl<'de, F: FnOnce(&str) -> Result<T, Fault>, T> DeserializeSeed<'de> for WithStr<F, T> {
+    type Value = T;
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<T, D::Error> {
+        struct V<F, T>(F, PhantomData<fn() -> T>);
+        impl<F: FnOnce(&str) -> Result<T, Fault>, T> Visitor<'_> for V<F, T> {
+            type Value = T;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a string")
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<T, E> {
+                (self.0)(s).map_err(raise)
+            }
+        }
+        d.deserialize_str(V(self.0, PhantomData))
+    }
+}
+
+/// Checks the key length cap. Time O(1).
+fn check_key_len(s: &str) -> Result<(), Fault> {
+    if s.len() > MAX_KEY_BYTES {
+        Err(Fault::Limit(Limit::KEY))
+    } else {
+        Ok(())
+    }
+}
+
+/// The fault for an unknown key; allocates the (at most 64-byte) key once.
+fn unknown_key(kind: VocabKind, s: &str) -> Fault {
+    Fault::UnknownKey {
+        kind,
+        key: Arc::from(s),
+    }
+}
+
+/// Returns `found`, or notes the first unknown key of a list in `pending`
+/// (raised when the list ends, so a list's cap is reported first) and
+/// returns `None`. Time O(1), one allocation for the first unknown key only.
+fn note_unknown<T>(
+    found: Option<T>,
+    kind: VocabKind,
+    s: &str,
+    pending: &mut Option<Fault>,
+) -> Option<T> {
+    if found.is_none() && pending.is_none() {
+        *pending = Some(unknown_key(kind, s));
+    }
+    found
+}
+
+/// A threat category key, resolved as it is read.
+pub(super) struct ThreatCategoryKey(pub(super) ThreatCategory);
+
+impl<'de> Deserialize<'de> for ThreatCategoryKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .threat_category(s)
+                .map(ThreatCategoryKey)
+                .ok_or_else(|| unknown_key(VocabKind::ThreatCategory, s))
+        })
+        .deserialize(d)
+    }
+}
+
+/// An impact category key, resolved as it is read.
+pub(super) struct ImpactCategoryKey(pub(super) ImpactCategory);
+
+impl<'de> Deserialize<'de> for ImpactCategoryKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .impact_category(s)
+                .map(ImpactCategoryKey)
+                .ok_or_else(|| unknown_key(VocabKind::ImpactCategory, s))
+        })
+        .deserialize(d)
+    }
+}
+
+/// A catalog scheme key, resolved as it is read.
+struct CatalogSchemeKey(CatalogScheme);
+
+impl<'de> Deserialize<'de> for CatalogSchemeKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .catalog_scheme(s)
+                .map(CatalogSchemeKey)
+                .ok_or_else(|| unknown_key(VocabKind::CatalogScheme, s))
+        })
+        .deserialize(d)
+    }
+}
+
+/// A property set given as keys: at most 64 (the most properties a
+/// methodology declares), none repeated, each resolved as it is read into
+/// one 8-byte [`PropertySet`]. Within the list a cap or a repeat is
+/// reported at once, the first unknown key when the list ends. Time
+/// O(k log m), no allocation.
+pub(super) struct PropertySetKeys(pub(super) PropertySet);
+
+impl<'de> Deserialize<'de> for PropertySetKeys {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct V;
         impl<'de> Visitor<'de> for V {
-            type Value = KeySet;
+            type Value = PropertySetKeys;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a list of keys")
+                f.write_str("a list of property keys")
             }
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<KeySet, A::Error> {
-                let mut keys: Vec<Key> =
-                    Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_PROPERTIES));
-                while let Some(key) = seq.next_element::<Key>()? {
-                    if keys.len() >= MAX_PROPERTIES {
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<PropertySetKeys, A::Error> {
+                let m = context().map_err(raise)?;
+                let mut set = PropertySet::empty();
+                let mut count = 0usize;
+                let mut pending = None;
+                while let Some(found) = seq.next_element_seed(WithStr::new(|s: &str| {
+                    check_key_len(s)?;
+                    Ok(note_unknown(
+                        m.property(s),
+                        VocabKind::Property,
+                        s,
+                        &mut pending,
+                    ))
+                }))? {
+                    count += 1;
+                    if count > MAX_PROPERTIES {
                         return Err(raise(Fault::Limit(Limit::PROPERTIES)));
                     }
-                    match keys.binary_search_by(|k| k.0.cmp(&key.0)) {
-                        Ok(_) => return Err(raise(Fault::Duplicate)),
-                        Err(pos) => keys.insert(pos, key),
+                    if let Some(p) = found {
+                        if set.contains(p) {
+                            return Err(raise(Fault::Duplicate));
+                        }
+                        set = set.with(p);
                     }
                 }
-                Ok(KeySet(keys))
+                match pending {
+                    Some(fault) => Err(raise(fault)),
+                    None => Ok(PropertySetKeys(set)),
+                }
             }
         }
         d.deserialize_seq(V)
     }
 }
 
-/// A map from impact category key to level key, in input order: at most 32
-/// entries (the most categories a methodology declares), no category
-/// repeated. Time O(c log c).
-pub(super) struct KeyMap(pub(super) Vec<(Key, Key)>);
+/// Impact ratings given as an object from category key to level key, in
+/// input order: at most 32 entries (the most categories a methodology
+/// declares), no category repeated, each pair resolved as it is read.
+/// Within the object a cap or a repeat is reported at once, the first
+/// unknown key when the object ends. Time O(c log m); one allocation of 2
+/// bytes per rating.
+pub(super) struct Impacts(pub(super) Vec<(ImpactCategory, Level)>);
 
-impl<'de> Deserialize<'de> for KeyMap {
+impl<'de> Deserialize<'de> for Impacts {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct V;
         impl<'de> Visitor<'de> for V {
-            type Value = KeyMap;
+            type Value = Impacts;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("an object of keys")
+                f.write_str("an object of impact ratings")
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<KeyMap, A::Error> {
-                let cap = map.size_hint().unwrap_or(0).min(MAX_IMPACT_CATEGORIES);
-                let mut pairs: Vec<(Key, Key)> = Vec::with_capacity(cap);
-                let mut seen: Vec<Arc<str>> = Vec::with_capacity(cap);
-                while let Some(key) = map.next_key::<Key>()? {
-                    if pairs.len() >= MAX_IMPACT_CATEGORIES {
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Impacts, A::Error> {
+                let m = context().map_err(raise)?;
+                let mut out = Vec::new();
+                let mut seen = 0u64;
+                let mut count = 0usize;
+                let mut pending = None;
+                while let Some(category) = map.next_key_seed(WithStr::new(|s: &str| {
+                    check_key_len(s)?;
+                    Ok(note_unknown(
+                        m.impact_category(s),
+                        VocabKind::ImpactCategory,
+                        s,
+                        &mut pending,
+                    ))
+                }))? {
+                    count += 1;
+                    if count > MAX_IMPACT_CATEGORIES {
                         return Err(raise(Fault::Limit(Limit::IMPACTS)));
                     }
-                    match seen.binary_search(&key.0) {
-                        Ok(_) => return Err(raise(Fault::Duplicate)),
-                        Err(pos) => seen.insert(pos, Arc::clone(&key.0)),
+                    if let Some(c) = category {
+                        let bit = u32::try_from(c.index())
+                            .ok()
+                            .and_then(|i| 1u64.checked_shl(i))
+                            .unwrap_or(0);
+                        if bit == 0 || seen & bit != 0 {
+                            return Err(raise(Fault::Duplicate));
+                        }
+                        seen |= bit;
                     }
-                    let value = map.next_value::<Key>()?;
-                    pairs.push((key, value));
+                    let level = map.next_value_seed(WithStr::new(|s: &str| {
+                        check_key_len(s)?;
+                        Ok(category.and_then(|c| {
+                            note_unknown(m.level(c, s), VocabKind::Level, s, &mut pending)
+                        }))
+                    }))?;
+                    if let (Some(c), Some(l)) = (category, level) {
+                        out.push((c, l));
+                    }
                 }
-                Ok(KeyMap(pairs))
+                match pending {
+                    Some(fault) => Err(raise(fault)),
+                    None => Ok(Impacts(out)),
+                }
             }
         }
         d.deserialize_map(V)
+    }
+}
+
+/// `{"scheme": <key>, "id": <text>}` as read: the scheme already resolved.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCatalogRef {
+    scheme: CatalogSchemeKey,
+    id: RefText,
+}
+
+/// A catalog ref: the scheme resolved, then the text parsed again under the
+/// scheme's syntax. The text (at most 64 bytes) is dropped right away.
+/// Time O(log m + text length).
+pub(super) struct CatalogRefText(pub(super) CatalogRef);
+
+impl<'de> Deserialize<'de> for CatalogRefText {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = RawCatalogRef::deserialize(d)?;
+        let m = context().map_err(raise)?;
+        m.parse_catalog_ref(raw.scheme.0, &raw.id.0)
+            .map(CatalogRefText)
+            .map_err(|_| {
+                raise(Fault::InvalidCatalogRef {
+                    scheme: Arc::from(m.catalog_scheme_key(raw.scheme.0).unwrap_or("")),
+                })
+            })
+    }
+}
+
+/// `{"key": ..., "version": ...}` as read.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawMethodology {
+    key: Key,
+    version: VersionText,
+}
+
+/// The file's methodology, checked as it is read: the key must equal the
+/// supplied methodology's key, else [`StoreError::MethodologyMismatch`]
+/// before any vocabulary key is looked up. Any version is accepted (ADR
+/// 0009, open question 1) and kept.
+pub(super) struct CheckedMethodology {
+    pub(super) version: Arc<str>,
+}
+
+impl<'de> Deserialize<'de> for CheckedMethodology {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = RawMethodology::deserialize(d)?;
+        let m = context().map_err(raise)?;
+        if &*raw.key.0 == m.key() {
+            Ok(CheckedMethodology {
+                version: raw.version.0,
+            })
+        } else {
+            Err(raise(Fault::MethodologyMismatch {
+                expected: Arc::from(m.key()),
+                found: raw.key.0,
+            }))
+        }
     }
 }
 
@@ -293,22 +584,13 @@ fn is_canonical_uuid(s: &str) -> bool {
 
 impl<'de, T: FromStr> Deserialize<'de> for WireId<T> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V<T>(PhantomData<T>);
-        impl<T: FromStr> Visitor<'_> for V<T> {
-            type Value = WireId<T>;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a UUIDv7 string")
+        WithStr::new(|s: &str| {
+            if !is_canonical_uuid(s) {
+                return Err(Fault::InvalidId);
             }
-            fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
-                if !is_canonical_uuid(s) {
-                    return Err(raise(Fault::InvalidId));
-                }
-                T::from_str(s)
-                    .map(WireId)
-                    .map_err(|_| raise(Fault::InvalidId))
-            }
-        }
-        d.deserialize_str(V(PhantomData))
+            T::from_str(s).map(WireId).map_err(|_| Fault::InvalidId)
+        })
+        .deserialize(d)
     }
 }
 
@@ -335,26 +617,20 @@ pub(super) struct Format<F>(PhantomData<F>);
 
 impl<'de, F: FormatName> Deserialize<'de> for Format<F> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V<F>(PhantomData<F>);
-        impl<F: FormatName> Visitor<'_> for V<F> {
-            type Value = Format<F>;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a format name")
+        WithStr::new(|s: &str| {
+            if s == F::NAME {
+                Ok(Format(PhantomData))
+            } else {
+                Err(Fault::UnsupportedFormat(None))
             }
-            fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
-                if s == F::NAME {
-                    Ok(Format(PhantomData))
-                } else {
-                    Err(raise(Fault::UnsupportedFormat))
-                }
-            }
-        }
-        d.deserialize_str(V(PhantomData))
+        })
+        .deserialize(d)
     }
 }
 
 /// The format `version` field: exactly [`FORMAT_VERSION`]; any other
-/// number is [`StoreError::UnsupportedFormat`] as soon as it is read.
+/// number is [`StoreError::UnsupportedFormat`] as soon as it is read,
+/// carrying the number if it is a non-negative integer.
 pub(super) struct FormatVersion;
 
 impl<'de> Deserialize<'de> for FormatVersion {
@@ -369,14 +645,14 @@ impl<'de> Deserialize<'de> for FormatVersion {
                 if v == u64::from(FORMAT_VERSION) {
                     Ok(FormatVersion)
                 } else {
-                    Err(raise(Fault::UnsupportedFormat))
+                    Err(raise(Fault::UnsupportedFormat(Some(v))))
                 }
             }
             fn visit_i64<E: de::Error>(self, _: i64) -> Result<FormatVersion, E> {
-                Err(raise(Fault::UnsupportedFormat))
+                Err(raise(Fault::UnsupportedFormat(None)))
             }
             fn visit_f64<E: de::Error>(self, _: f64) -> Result<FormatVersion, E> {
-                Err(raise(Fault::UnsupportedFormat))
+                Err(raise(Fault::UnsupportedFormat(None)))
             }
         }
         d.deserialize_u64(V)
@@ -387,23 +663,7 @@ impl<'de> Deserialize<'de> for FormatVersion {
 // Owned wire types (reading).
 // ---------------------------------------------------------------------------
 
-/// `{"key": ..., "version": ...}`.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct MethodologyWire {
-    pub(super) key: Key,
-    pub(super) version: VersionText,
-}
-
-/// `{"scheme": <key>, "id": <text>}`.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct CatalogRefWire {
-    pub(super) scheme: Key,
-    pub(super) id: RefText,
-}
-
-/// A snapshot.
+/// A snapshot. The methodology field is checked while decoding.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SnapshotWire {
@@ -412,19 +672,20 @@ pub(super) struct SnapshotWire {
     _format: Format<ProjectFormat>,
     #[serde(rename = "version")]
     _version: FormatVersion,
-    pub(super) methodology: MethodologyWire,
+    #[serde(rename = "methodology")]
+    _methodology: CheckedMethodology,
     pub(super) assets: Vec<AssetWire>,
     pub(super) damage_scenarios: Vec<DamageWire>,
     pub(super) threat_scenarios: Vec<ThreatWire>,
 }
 
-/// A snapshot asset.
+/// A snapshot asset: 40 bytes plus its name.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AssetWire {
     pub(super) id: WireId<AssetId>,
     pub(super) name: Name,
-    pub(super) properties: KeySet,
+    pub(super) properties: PropertySetKeys,
 }
 
 /// A snapshot damage scenario; unrated categories are absent.
@@ -433,7 +694,7 @@ pub(super) struct AssetWire {
 pub(super) struct DamageWire {
     pub(super) id: WireId<DamageId>,
     pub(super) name: Name,
-    pub(super) impacts: KeyMap,
+    pub(super) impacts: Impacts,
 }
 
 /// A snapshot threat scenario.
@@ -443,12 +704,12 @@ pub(super) struct ThreatWire {
     pub(super) id: WireId<ThreatId>,
     pub(super) name: Name,
     pub(super) asset: WireId<AssetId>,
-    pub(super) category: Key,
-    pub(super) catalog_refs: BoundedVec<CatalogRefWire, RefsCap>,
+    pub(super) category: ThreatCategoryKey,
+    pub(super) catalog_refs: BoundedVec<CatalogRefText, RefsCap>,
     pub(super) damages: BoundedVec<WireId<DamageId>, LinksCap>,
 }
 
-/// The op log header line.
+/// The op log header line. The methodology is checked while decoding.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HeaderWire {
@@ -457,7 +718,7 @@ pub(super) struct HeaderWire {
     _format: Format<OpLogFormat>,
     #[serde(rename = "version")]
     _version: FormatVersion,
-    pub(super) methodology: MethodologyWire,
+    pub(super) methodology: CheckedMethodology,
 }
 
 /// One op log record line.
@@ -469,14 +730,15 @@ pub(super) struct RecordWire {
 }
 
 /// An op, internally tagged by `"op"`. Field names are the `Op` field
-/// names.
+/// names. Vocabulary is resolved while decoding, except the `SetImpact`
+/// level, which is resolved against its category afterwards.
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum OpWire {
     AddAsset {
         id: WireId<AssetId>,
         name: Name,
-        properties: KeySet,
+        properties: PropertySetKeys,
     },
     RenameAsset {
         id: WireId<AssetId>,
@@ -484,7 +746,7 @@ pub(super) enum OpWire {
     },
     SetAssetProperties {
         id: WireId<AssetId>,
-        properties: KeySet,
+        properties: PropertySetKeys,
     },
     RemoveAsset {
         id: WireId<AssetId>,
@@ -492,7 +754,7 @@ pub(super) enum OpWire {
     AddDamageScenario {
         id: WireId<DamageId>,
         name: Name,
-        impacts: KeyMap,
+        impacts: Impacts,
     },
     RenameDamageScenario {
         id: WireId<DamageId>,
@@ -500,7 +762,7 @@ pub(super) enum OpWire {
     },
     SetImpact {
         id: WireId<DamageId>,
-        category: Key,
+        category: ImpactCategoryKey,
         // `deserialize_with` makes the field required: `null` is unrated,
         // a missing field is an error.
         #[serde(deserialize_with = "Option::deserialize")]
@@ -513,8 +775,8 @@ pub(super) enum OpWire {
         id: WireId<ThreatId>,
         name: Name,
         asset: WireId<AssetId>,
-        category: Key,
-        catalog_refs: BoundedVec<CatalogRefWire, RefsCap>,
+        category: ThreatCategoryKey,
+        catalog_refs: BoundedVec<CatalogRefText, RefsCap>,
         damages: BoundedVec<WireId<DamageId>, LinksCap>,
     },
     RenameThreatScenario {
@@ -523,15 +785,15 @@ pub(super) enum OpWire {
     },
     SetThreatCategory {
         id: WireId<ThreatId>,
-        category: Key,
+        category: ThreatCategoryKey,
     },
     AddCatalogRef {
         threat: WireId<ThreatId>,
-        catalog_ref: CatalogRefWire,
+        catalog_ref: CatalogRefText,
     },
     RemoveCatalogRef {
         threat: WireId<ThreatId>,
-        catalog_ref: CatalogRefWire,
+        catalog_ref: CatalogRefText,
     },
     LinkDamage {
         threat: WireId<ThreatId>,
@@ -546,106 +808,16 @@ pub(super) enum OpWire {
     },
 }
 
-// ---------------------------------------------------------------------------
-// Keys to indices.
-// ---------------------------------------------------------------------------
-
-fn unknown(kind: VocabKind, key: &Key) -> StoreError {
-    StoreError::UnknownKey {
-        kind,
-        key: Arc::clone(&key.0),
-    }
-}
-
-/// Checks the file's methodology key against the supplied one; any version
-/// is accepted (ADR 0009, open question 1). Time O(key length).
-pub(super) fn check_methodology(w: &MethodologyWire, m: &Methodology) -> Result<(), StoreError> {
-    if &*w.key.0 == m.key() {
-        Ok(())
-    } else {
-        Err(StoreError::MethodologyMismatch {
-            expected: Arc::from(m.key()),
-            found: Arc::clone(&w.key.0),
-        })
-    }
-}
-
-/// Resolves property keys. Time O(k log m).
-pub(super) fn resolve_properties(
-    m: &Methodology,
-    keys: &KeySet,
-) -> Result<PropertySet, StoreError> {
-    keys.0.iter().try_fold(PropertySet::empty(), |set, k| {
-        m.property(&k.0)
-            .map(|p| set.with(p))
-            .ok_or_else(|| unknown(VocabKind::Property, k))
-    })
-}
-
-/// Resolves an impact category key. Time O(log m).
-pub(super) fn resolve_impact_category(
-    m: &Methodology,
-    key: &Key,
-) -> Result<ImpactCategory, StoreError> {
-    m.impact_category(&key.0)
-        .ok_or_else(|| unknown(VocabKind::ImpactCategory, key))
-}
-
-/// Resolves a level key within `cat`. Time O(log m).
+/// Resolves the `SetImpact` level key within its category. Time O(log m).
 pub(super) fn resolve_level(
     m: &Methodology,
     cat: ImpactCategory,
     key: &Key,
 ) -> Result<Level, StoreError> {
-    m.level(cat, &key.0)
-        .ok_or_else(|| unknown(VocabKind::Level, key))
-}
-
-/// Resolves impact ratings, keeping their order. Time O(c log m).
-pub(super) fn resolve_impacts(
-    m: &Methodology,
-    map: &KeyMap,
-) -> Result<Vec<(ImpactCategory, Level)>, StoreError> {
-    map.0
-        .iter()
-        .map(|(c, l)| {
-            let cat = resolve_impact_category(m, c)?;
-            Ok((cat, resolve_level(m, cat, l)?))
-        })
-        .collect()
-}
-
-/// Resolves a threat category key. Time O(log m).
-pub(super) fn resolve_threat_category(
-    m: &Methodology,
-    key: &Key,
-) -> Result<ThreatCategory, StoreError> {
-    m.threat_category(&key.0)
-        .ok_or_else(|| unknown(VocabKind::ThreatCategory, key))
-}
-
-/// Resolves a catalog ref: the scheme key, then the text parsed again
-/// under the scheme's syntax. Time O(log m + text length).
-pub(super) fn resolve_catalog_ref(
-    m: &Methodology,
-    w: &CatalogRefWire,
-) -> Result<CatalogRef, StoreError> {
-    let scheme = m
-        .catalog_scheme(&w.scheme.0)
-        .ok_or_else(|| unknown(VocabKind::CatalogScheme, &w.scheme))?;
-    m.parse_catalog_ref(scheme, &w.id.0)
-        .map_err(|_| StoreError::InvalidCatalogRef {
-            scheme: Arc::clone(&w.scheme.0),
-        })
-}
-
-/// Resolves a list of catalog refs, keeping their order. Time O(k (log m +
-/// text length)).
-pub(super) fn resolve_catalog_refs(
-    m: &Methodology,
-    refs: &[CatalogRefWire],
-) -> Result<Vec<CatalogRef>, StoreError> {
-    refs.iter().map(|r| resolve_catalog_ref(m, r)).collect()
+    m.level(cat, &key.0).ok_or_else(|| StoreError::UnknownKey {
+        kind: VocabKind::Level,
+        key: Arc::clone(&key.0),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -919,8 +1091,9 @@ mod tests {
     use super::*;
     use crate::testkit;
 
+    /// Decodes `json` against the second test methodology.
     fn de<T: for<'a> Deserialize<'a>>(json: &str) -> Result<T, StoreError> {
-        from_slice(json.as_bytes(), Some(7))
+        from_slice(&testkit::second(), json.as_bytes(), Some(7))
     }
 
     #[test]
@@ -935,6 +1108,35 @@ mod tests {
         let err = de::<Key>("12").err();
         assert!(matches!(err, Some(StoreError::Decode { line: 7, .. })));
         assert!(de::<Key>("\"ok\"").is_ok());
+    }
+
+    #[test]
+    fn context_is_scoped_to_one_decode() {
+        assert_eq!(context().err(), Some(Fault::NoContext));
+        let m = testkit::second();
+        {
+            let _outer = ContextGuard::enter(&m);
+            let other = testkit::builtin();
+            {
+                let _inner = ContextGuard::enter(&other);
+                assert_eq!(
+                    context().map(|c| c.key().to_string()).ok(),
+                    Some(other.key().into())
+                );
+            }
+            assert_eq!(
+                context().map(|c| c.key().to_string()).ok(),
+                Some(m.key().into())
+            );
+        }
+        assert_eq!(context().err(), Some(Fault::NoContext));
+        assert!(matches!(
+            StoreError::from(Fault::NoContext),
+            StoreError::Decode { line: 0, column: 0 }
+        ));
+        // Outside `decode`, a resolving leaf fails instead of guessing.
+        let mut d = serde_json::Deserializer::from_str("\"outage\"");
+        assert!(ThreatCategoryKey::deserialize(&mut d).is_err());
     }
 
     #[test]
@@ -956,25 +1158,120 @@ mod tests {
     }
 
     #[test]
-    fn key_set_sorts_and_rejects_repeats() {
-        let set = de::<KeySet>(r#"["b","a","c"]"#).ok();
-        let keys: Option<Vec<String>> = set.map(|s| s.0.iter().map(|k| k.0.to_string()).collect());
-        assert_eq!(keys, Some(vec!["a".into(), "b".into(), "c".into()]));
+    fn property_keys_resolve_while_decoding() {
+        let m = testkit::second();
+        let set = de::<PropertySetKeys>(r#"["i","a"]"#).map(|s| s.0).ok();
+        assert_eq!(set, Some(testkit::props(&m, &["a", "i"])));
         assert!(matches!(
-            de::<KeySet>(r#"["a","b","a"]"#).err(),
+            de::<PropertySetKeys>(r#"["a","i","a"]"#).err(),
             Some(StoreError::DuplicateEntry)
+        ));
+        // The first unknown key is reported, at the end of the list.
+        assert!(matches!(
+            de::<PropertySetKeys>(r#"["a","x","y"]"#).err(),
+            Some(StoreError::UnknownKey { kind: VocabKind::Property, key }) if &*key == "x"
+        ));
+        // A cap in the same list wins over an unknown key.
+        let over = (0..65)
+            .map(|i| format!("\"k{i}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(matches!(
+            de::<PropertySetKeys>(&format!("[{over}]")).err(),
+            Some(StoreError::LimitExceeded(Limit::Properties { max: 64 }))
         ));
     }
 
     #[test]
-    fn key_map_keeps_order_and_rejects_repeats() {
-        let map = de::<KeyMap>(r#"{"z":"1","a":"2"}"#).ok();
-        let keys: Option<Vec<String>> =
-            map.map(|m| m.0.iter().map(|(k, _)| k.0.to_string()).collect());
-        assert_eq!(keys, Some(vec!["z".into(), "a".into()]));
+    fn impacts_resolve_while_decoding_and_keep_order() {
+        let m = testkit::second();
+        let (harm, loss) = (
+            testkit::cat(&m, "patient-harm"),
+            testkit::cat(&m, "service-loss"),
+        );
+        let got = de::<Impacts>(r#"{"service-loss":"tolerable","patient-harm":"minor"}"#)
+            .map(|i| i.0)
+            .ok();
+        assert_eq!(
+            got,
+            Some(vec![
+                (loss, testkit::lvl(&m, loss, "tolerable")),
+                (harm, testkit::lvl(&m, harm, "minor")),
+            ])
+        );
         assert!(matches!(
-            de::<KeyMap>(r#"{"a":"1","a":"2"}"#).err(),
+            de::<Impacts>(r#"{"patient-harm":"minor","patient-harm":"serious"}"#).err(),
             Some(StoreError::DuplicateEntry)
+        ));
+        assert!(matches!(
+            de::<Impacts>(r#"{"patient-harm":"huge"}"#).err(),
+            Some(StoreError::UnknownKey { kind: VocabKind::Level, key }) if &*key == "huge"
+        ));
+        assert!(matches!(
+            de::<Impacts>(r#"{"nope":"minor"}"#).err(),
+            Some(StoreError::UnknownKey {
+                kind: VocabKind::ImpactCategory,
+                ..
+            })
+        ));
+        let over = (0..33)
+            .map(|i| format!("\"c{i}\":\"x\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(matches!(
+            de::<Impacts>(&format!("{{{over}}}")).err(),
+            Some(StoreError::LimitExceeded(Limit::Impacts { max: 32 }))
+        ));
+    }
+
+    #[test]
+    fn scalar_keys_and_catalog_refs_resolve_while_decoding() {
+        let m = testkit::second();
+        assert_eq!(
+            de::<ThreatCategoryKey>("\"outage\"").map(|k| k.0).ok(),
+            Some(testkit::threat_cat(&m, "outage"))
+        );
+        assert!(matches!(
+            de::<ThreatCategoryKey>("\"nope\"").err(),
+            Some(StoreError::UnknownKey {
+                kind: VocabKind::ThreatCategory,
+                ..
+            })
+        ));
+        assert!(matches!(
+            de::<ImpactCategoryKey>("\"nope\"").err(),
+            Some(StoreError::UnknownKey {
+                kind: VocabKind::ImpactCategory,
+                ..
+            })
+        ));
+        let capec = testkit::scheme(&m, "capec");
+        assert_eq!(
+            de::<CatalogRefText>(r#"{"scheme":"capec","id":"CAPEC-7"}"#)
+                .map(|r| r.0)
+                .ok(),
+            Some(testkit::cref(&m, capec, "CAPEC-7"))
+        );
+        assert!(matches!(
+            de::<CatalogRefText>(r#"{"scheme":"capec","id":"7"}"#).err(),
+            Some(StoreError::InvalidCatalogRef { scheme }) if &*scheme == "capec"
+        ));
+        assert!(matches!(
+            de::<CatalogRefText>(r#"{"scheme":"nope","id":"7"}"#).err(),
+            Some(StoreError::UnknownKey {
+                kind: VocabKind::CatalogScheme,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn methodology_is_checked_while_decoding() {
+        let ok = de::<CheckedMethodology>(r#"{"key":"med-device-demo","version":"9"}"#);
+        assert_eq!(ok.map(|c| c.version.to_string()).ok(), Some("9".into()));
+        assert!(matches!(
+            de::<CheckedMethodology>(r#"{"key":"other","version":"1"}"#).err(),
+            Some(StoreError::MethodologyMismatch { found, .. }) if &*found == "other"
         ));
     }
 
@@ -1009,16 +1306,24 @@ mod tests {
         for bad in ["\"aegis-oplog\"", "\"x\""] {
             assert!(matches!(
                 de::<Format<ProjectFormat>>(bad).err(),
-                Some(StoreError::UnsupportedFormat)
+                Some(StoreError::UnsupportedFormat { version: None })
             ));
         }
         assert!(de::<FormatVersion>("1").is_ok());
-        for bad in ["2", "0", "-1", "1.5"] {
+        assert!(matches!(
+            de::<FormatVersion>("2").err(),
+            Some(StoreError::UnsupportedFormat { version: Some(2) })
+        ));
+        for bad in ["-1", "1.5"] {
             assert!(matches!(
                 de::<FormatVersion>(bad).err(),
-                Some(StoreError::UnsupportedFormat)
+                Some(StoreError::UnsupportedFormat { version: None })
             ));
         }
+        assert!(matches!(
+            de::<FormatVersion>("0").err(),
+            Some(StoreError::UnsupportedFormat { version: Some(0) })
+        ));
         assert!(matches!(
             de::<FormatVersion>("\"1\"").err(),
             Some(StoreError::Decode { .. })
@@ -1043,29 +1348,5 @@ mod tests {
         let wide = testkit::wide();
         let foreign = wide.all_properties();
         assert!(order.sorted_properties(foreign).is_none());
-    }
-
-    #[test]
-    fn resolve_reports_the_vocabulary() {
-        let m = testkit::builtin();
-        let key = |s: &str| BoundedStr::<KeyCap>(Arc::from(s), PhantomData);
-        assert!(matches!(
-            resolve_threat_category(&m, &key("nope")),
-            Err(StoreError::UnknownKey {
-                kind: VocabKind::ThreatCategory,
-                ..
-            })
-        ));
-        let r = CatalogRefWire {
-            scheme: key("nope"),
-            id: BoundedStr(Arc::from("1"), PhantomData),
-        };
-        assert!(matches!(
-            resolve_catalog_ref(&m, &r),
-            Err(StoreError::UnknownKey {
-                kind: VocabKind::CatalogScheme,
-                ..
-            })
-        ));
     }
 }

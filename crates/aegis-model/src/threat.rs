@@ -26,7 +26,8 @@ pub const MAX_DAMAGE_LINKS: usize = 256;
 /// [`Project::targets`](crate::Project::targets), so they can never
 /// disagree), cites 0 to 16 catalog refs, and links to damage scenarios.
 /// `catalog_refs` is sorted and unique; `damages` is sorted by the damage
-/// scenario's public ID, unique, and at most [`MAX_DAMAGE_LINKS`] long. Neither order depends on edit history.
+/// scenario's public ID, unique, and at most [`MAX_DAMAGE_LINKS`] long.
+/// Neither order depends on edit history.
 ///
 /// ```
 /// use std::sync::Arc;

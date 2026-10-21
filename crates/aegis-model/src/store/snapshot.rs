@@ -1,9 +1,9 @@
 //! `Project::save` and `Project::load`: the `aegis-project` v1 snapshot.
 
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::sync::Arc;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
@@ -131,16 +131,40 @@ impl Serialize for LinkedDamages<'_> {
     }
 }
 
-/// Reads all of `r`, refusing more than [`MAX_PROJECT_FILE_BYTES`]. Reads
-/// at most one byte past the cap. Time and space O(bytes).
-fn read_capped<R: Read>(r: R) -> Result<Vec<u8>, StoreError> {
-    let mut bytes = Vec::new();
-    r.take(MAX_PROJECT_FILE_BYTES.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if wire::to_u64(bytes.len()) > MAX_PROJECT_FILE_BYTES {
-        return Err(StoreError::LimitExceeded(Limit::PROJECT_FILE));
+/// Size of the read buffer between the input and the parser.
+const READ_BUFFER_BYTES: usize = 64 * 1024;
+
+/// A reader that fails once more than [`MAX_PROJECT_FILE_BYTES`] have come
+/// through, and remembers that it did, so the caller can report
+/// [`Limit::ProjectFileBytes`] instead of the parser's I/O error. It never
+/// reads more than one byte past the cap. Time O(1) per call besides the
+/// inner read.
+struct CappedReader<R> {
+    inner: std::io::Take<R>,
+    read: u64,
+    exceeded: bool,
+}
+
+impl<R: Read> CappedReader<R> {
+    fn new(inner: R) -> Self {
+        CappedReader {
+            inner: inner.take(MAX_PROJECT_FILE_BYTES.saturating_add(1)),
+            read: 0,
+            exceeded: false,
+        }
     }
-    Ok(bytes)
+}
+
+impl<R: Read> Read for CappedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read = self.read.saturating_add(wire::to_u64(n));
+        if self.read > MAX_PROJECT_FILE_BYTES {
+            self.exceeded = true;
+            return Err(std::io::Error::other("project file exceeds its size cap"));
+        }
+        Ok(n)
+    }
 }
 
 impl Project {
@@ -215,19 +239,33 @@ impl Project {
     /// Reads an `aegis-project` v1 snapshot written by
     /// [`save`](Self::save) and rebuilds the project over `methodology`.
     ///
+    /// The input is streamed through a 64 KiB buffer, never read whole.
     /// Decoding is capped before any model check: at most
     /// [`MAX_PROJECT_FILE_BYTES`] of input, and every string and list
     /// within its cap ([`Limit`]). The file's methodology key must equal
-    /// `methodology.key()`; its methodology version may differ, since the
-    /// file holds keys, not indices, and a key the methodology no longer
-    /// has fails with [`StoreError::UnknownKey`]. The project is then built
-    /// only through [`Project::apply`], with `AddAsset`, then
-    /// `AddDamageScenario`, then `AddThreatScenario` ops, so every model
-    /// rule is checked exactly as for an edit.
+    /// `methodology.key()`, checked as soon as it is read; its methodology
+    /// version may differ, since the file holds keys, not indices. Every
+    /// vocabulary key is resolved to its index the moment it is read, so a
+    /// key the methodology does not have fails with
+    /// [`StoreError::UnknownKey`] inside the entity that holds it, and no
+    /// key string is kept. The project is then built only through
+    /// [`Project::apply`], with `AddAsset`, then `AddDamageScenario`, then
+    /// `AddThreatScenario` ops, so every model rule is checked exactly as
+    /// for an edit.
+    ///
+    /// The snapshot is lenient about JSON whitespace between tokens and
+    /// about a missing final `\n` (the op log is not); a re-save is always
+    /// canonical.
     ///
     /// Time O(B + n log n + L log n), with B input bytes, n entities, and L
-    /// damage links plus catalog refs. Extra space O(B): the input is read
-    /// into memory, decoded, and dropped before the project is built.
+    /// damage links plus catalog refs. Extra space O(n + L + the longest
+    /// string) besides the project: the decoded entities hold names and
+    /// 1-byte indices only. Measured peak heap, as a factor of the file
+    /// size (`benches/store_memory.rs`, ADR 0009): 1.03x for the typical
+    /// project; at most 2.99x for any shape measured (the smallest valid
+    /// entities, where the loaded project itself is 2.59x), so at most
+    /// about 192 MiB at the 64 MiB cap; 0.02x when keys are unknown, since
+    /// the load fails inside the first entity.
     ///
     /// # Errors
     ///
@@ -260,38 +298,40 @@ impl Project {
     /// # }
     /// ```
     pub fn load<R: Read>(r: R, methodology: Arc<Methodology>) -> Result<Project, StoreError> {
-        let bytes = read_capped(r)?;
-        let snapshot: SnapshotWire = wire::from_slice(&bytes, None)?;
-        drop(bytes);
-        wire::check_methodology(&snapshot.methodology, &methodology)?;
-        let shared = Arc::clone(&methodology);
-        let m = &*shared;
+        let mut input = CappedReader::new(r);
+        let decoded = wire::decode(&methodology, None, || {
+            let buffered = BufReader::with_capacity(READ_BUFFER_BYTES, &mut input);
+            let mut de = serde_json::Deserializer::from_reader(buffered);
+            let snapshot = SnapshotWire::deserialize(&mut de)?;
+            de.end()?;
+            Ok(snapshot)
+        });
+        if input.exceeded {
+            return Err(StoreError::LimitExceeded(Limit::PROJECT_FILE));
+        }
+        let snapshot = decoded?;
         let mut project = Project::new(methodology);
         for a in snapshot.assets {
-            let properties = wire::resolve_properties(m, &a.properties)?;
             project.apply(Op::AddAsset {
                 id: a.id.0,
                 name: a.name.0,
-                properties,
+                properties: a.properties.0,
             })?;
         }
         for d in snapshot.damage_scenarios {
-            let impacts = wire::resolve_impacts(m, &d.impacts)?;
             project.apply(Op::AddDamageScenario {
                 id: d.id.0,
                 name: d.name.0,
-                impacts,
+                impacts: d.impacts.0,
             })?;
         }
         for t in snapshot.threat_scenarios {
-            let category = wire::resolve_threat_category(m, &t.category)?;
-            let catalog_refs = wire::resolve_catalog_refs(m, &t.catalog_refs.0)?;
             project.apply(Op::AddThreatScenario {
                 id: t.id.0,
                 name: t.name.0,
                 asset: t.asset.0,
-                category,
-                catalog_refs,
+                category: t.category.0,
+                catalog_refs: t.catalog_refs.0.into_iter().map(|r| r.0).collect(),
                 damages: t.damages.0.into_iter().map(|d| d.0).collect(),
             })?;
         }
@@ -305,19 +345,33 @@ mod tests {
     use crate::testkit;
 
     #[test]
-    fn read_capped_allows_exactly_the_cap() {
-        let at = std::io::repeat(b' ').take(MAX_PROJECT_FILE_BYTES);
+    fn capped_reader_allows_exactly_the_cap() {
+        let mut sink = std::io::sink();
+        let mut at = CappedReader::new(std::io::repeat(b' ').take(MAX_PROJECT_FILE_BYTES));
         assert_eq!(
-            read_capped(at).map(|b| wire::to_u64(b.len())).ok(),
+            std::io::copy(&mut at, &mut sink).ok(),
             Some(MAX_PROJECT_FILE_BYTES)
         );
-        let over = std::io::repeat(b' ').take(MAX_PROJECT_FILE_BYTES + 1);
-        assert!(matches!(
-            read_capped(over),
-            Err(StoreError::LimitExceeded(Limit::ProjectFileBytes { .. }))
-        ));
+        assert!(!at.exceeded);
+        let mut over = CappedReader::new(std::io::repeat(b' '));
+        assert!(std::io::copy(&mut over, &mut sink).is_err());
+        assert!(over.exceeded);
+        assert_eq!(over.read, MAX_PROJECT_FILE_BYTES + 1);
     }
 
+    #[test]
+    fn load_reports_io_errors_as_io() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("disk gone"))
+            }
+        }
+        assert!(matches!(
+            Project::load(Broken, testkit::second()),
+            Err(StoreError::Io(_))
+        ));
+    }
     #[test]
     fn empty_project_round_trips() {
         let m = testkit::second();

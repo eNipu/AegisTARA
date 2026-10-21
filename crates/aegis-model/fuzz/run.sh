@@ -22,6 +22,24 @@ secs=${1:-60}
 [ "$#" -gt 0 ] && shift
 [ "$#" -eq 0 ] && set -- snapshot op_log
 
+# Validate the arguments before the (slow) build.
+case $secs in
+    '' | *[!0-9]*)
+        echo "error: SECONDS must be a whole number, got '$secs'" >&2
+        echo "usage: $0 [SECONDS] [TARGET...]   (targets: snapshot op_log)" >&2
+        exit 2
+        ;;
+esac
+for target in "$@"; do
+    case $target in
+        snapshot | op_log) ;;
+        *)
+            echo "error: unknown target '$target'; expected snapshot or op_log" >&2
+            exit 2
+            ;;
+    esac
+done
+
 host=$(rustc -vV | sed -n 's/^host: //p')
 RUSTFLAGS="--cfg fuzzing -Cpasses=sancov-module \
 -Cllvm-args=-sanitizer-coverage-level=4 \

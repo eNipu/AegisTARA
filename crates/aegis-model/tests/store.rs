@@ -708,35 +708,42 @@ fn framing_and_header_errors_header() {
     let text = log_text(&m, &[rename(1)]);
     let snapshot = String::from_utf8(save(&apply_all(&m, &golden_ops(&m)))).expect("utf8");
 
-    for (from, to) in [
-        ("\"aegis-oplog\"", "\"aegis-oplog2\""),
-        ("\"version\":1,", "\"version\":2,"),
+    // A wrong format name is "not this kind of file"; a newer version
+    // carries its number, so an application can say "update".
+    for (from, to, version) in [
+        ("\"aegis-oplog\"", "\"aegis-oplog2\"", None),
+        ("\"version\":1,", "\"version\":2,", Some(2)),
     ] {
         let (_, err) = read_until_error(&m, &text.replacen(from, to, 1));
         assert!(
-            matches!(err, Some(StoreError::UnsupportedFormat)),
+            matches!(err, Some(StoreError::UnsupportedFormat { version: v }) if v == version),
             "{to}: {err:?}"
         );
     }
-    for (from, to) in [
-        ("\"aegis-project\"", "\"aegis-oplog\""),
-        ("\"version\":1,", "\"version\":2,"),
+    for (from, to, version) in [
+        ("\"aegis-project\"", "\"aegis-oplog\"", None),
+        ("\"version\":1,", "\"version\":2,", Some(2)),
     ] {
         let err = load(snapshot.replacen(from, to, 1).as_bytes(), &m).err();
         assert!(
-            matches!(err, Some(StoreError::UnsupportedFormat)),
+            matches!(err, Some(StoreError::UnsupportedFormat { version: v }) if v == version),
             "{to}: {err:?}"
         );
     }
+    let newer = StoreError::UnsupportedFormat { version: Some(2) }.to_string();
+    assert!(
+        newer.contains("version 2") && newer.contains("newer"),
+        "{newer}"
+    );
     // A snapshot is not a log, and a log is not a snapshot.
     let (_, err) = read_until_error(&m, &snapshot);
     assert!(
-        matches!(err, Some(StoreError::UnsupportedFormat)),
+        matches!(err, Some(StoreError::UnsupportedFormat { version: None })),
         "{err:?}"
     );
     let err = load(text.as_bytes(), &m).err();
     assert!(
-        matches!(err, Some(StoreError::UnsupportedFormat)),
+        matches!(err, Some(StoreError::UnsupportedFormat { version: None })),
         "{err:?}"
     );
 

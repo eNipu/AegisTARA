@@ -34,6 +34,11 @@
 //!   [`StoreError::LimitExceeded`](crate::StoreError::LimitExceeded). Each
 //!   cap is at least the model's own limit, so every valid project
 //!   round-trips.
+//! - Keys are resolved while decoding: each vocabulary key becomes its
+//!   1-byte index as it is read, so decoded data never holds key strings
+//!   and an unknown key fails inside the entity that holds it. Within one
+//!   list or impact map, a cap or a repeated key is reported at once and
+//!   the first unknown key when the list ends.
 
 mod op_log;
 mod snapshot;
