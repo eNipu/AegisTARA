@@ -1,0 +1,25 @@
+{"format":"aegis-oplog","version":1,"methodology":{"key":"iso21434-r155","version":"0.1.0"}}
+{"seq":1,"op":{"op":"add_asset","id":"0199c82c-c001-7000-8000-000000000001","name":"Brake ECU","properties":["availability","integrity"]}}
+{"seq":2,"op":{"op":"add_asset","id":"0199c82c-c002-7000-8000-000000000002","name":"Telematics unit","properties":["authenticity","authorization","availability","confidentiality","integrity","non-repudiation"]}}
+{"seq":3,"op":{"op":"rename_asset","id":"0199c82c-c002-7000-8000-000000000002","name":"Telematics control unit"}}
+{"seq":4,"op":{"op":"set_asset_properties","id":"0199c82c-c001-7000-8000-000000000001","properties":["authenticity","availability","integrity"]}}
+{"seq":5,"op":{"op":"add_asset","id":"0199c82c-c003-7000-8000-000000000003","name":"Spare","properties":["confidentiality"]}}
+{"seq":6,"op":{"op":"remove_asset","id":"0199c82c-c003-7000-8000-000000000003"}}
+{"seq":7,"op":{"op":"add_damage_scenario","id":"0199c82c-c004-7000-8000-000000000004","name":"Vehicle cannot brake","impacts":{"safety":"severe","operational":"major"}}}
+{"seq":8,"op":{"op":"add_damage_scenario","id":"0199c82c-c005-7000-8000-000000000005","name":"Owner data leaks","impacts":{"privacy":"moderate"}}}
+{"seq":9,"op":{"op":"rename_damage_scenario","id":"0199c82c-c005-7000-8000-000000000005","name":"Owner data is disclosed"}}
+{"seq":10,"op":{"op":"set_impact","id":"0199c82c-c005-7000-8000-000000000005","category":"financial","level":"negligible"}}
+{"seq":11,"op":{"op":"set_impact","id":"0199c82c-c004-7000-8000-000000000004","category":"operational","level":null}}
+{"seq":12,"op":{"op":"add_damage_scenario","id":"0199c82c-c006-7000-8000-000000000006","name":"Temporary","impacts":{}}}
+{"seq":13,"op":{"op":"remove_damage_scenario","id":"0199c82c-c006-7000-8000-000000000006"}}
+{"seq":14,"op":{"op":"add_threat_scenario","id":"0199c82c-c007-7000-8000-000000000007","name":"Modify brake firmware \"v2\" – Ü \\ tab\t","asset":"0199c82c-c001-7000-8000-000000000001","category":"tampering","catalog_refs":[{"scheme":"r155-annex5","id":"5"},{"scheme":"r155-annex5","id":"4.1"}],"damages":["0199c82c-c004-7000-8000-000000000004"]}}
+{"seq":15,"op":{"op":"add_threat_scenario","id":"0199c82c-c008-7000-8000-000000000008","name":"Extract owner records","asset":"0199c82c-c002-7000-8000-000000000002","category":"information-disclosure","catalog_refs":[],"damages":["0199c82c-c005-7000-8000-000000000005"]}}
+{"seq":16,"op":{"op":"rename_threat_scenario","id":"0199c82c-c008-7000-8000-000000000008","name":"Read owner records over the air"}}
+{"seq":17,"op":{"op":"set_threat_category","id":"0199c82c-c007-7000-8000-000000000007","category":"denial-of-service"}}
+{"seq":18,"op":{"op":"add_catalog_ref","threat":"0199c82c-c008-7000-8000-000000000008","catalog_ref":{"scheme":"r155-annex5","id":"7.2"}}}
+{"seq":19,"op":{"op":"remove_catalog_ref","threat":"0199c82c-c007-7000-8000-000000000007","catalog_ref":{"scheme":"r155-annex5","id":"5"}}}
+{"seq":20,"op":{"op":"link_damage","threat":"0199c82c-c007-7000-8000-000000000007","damage":"0199c82c-c005-7000-8000-000000000005"}}
+{"seq":21,"op":{"op":"unlink_damage","threat":"0199c82c-c007-7000-8000-000000000007","damage":"0199c82c-c005-7000-8000-000000000005"}}
+{"seq":22,"op":{"op":"add_threat_scenario","id":"0199c82c-c009-7000-8000-000000000009","name":"Spoof key fob","asset":"0199c82c-c002-7000-8000-000000000002","category":"spoofing","catalog_refs":[],"damages":[]}}
+{"seq":23,"op":{"op":"remove_threat_scenario","id":"0199c82c-c009-7000-8000-000000000009"}}
+{"seq":24,"op":{"op":"link_damage","threat":"0199c82c-c008-7000-8000-000000000008","damage":"0199c82c-c004-7000-8000-000000000004"}}

@@ -12,6 +12,7 @@
 # bad-mpl    MPL-2.0 (review first)                              fail
 # bad-slint  GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0   fail
 # bad-and    MIT AND GPL-3.0-only                                fail
+# bad-ncsa   NCSA (tooling-only, per-crate exception; D5)        fail
 #
 # Usage: tools/deny-fixtures/run.sh
 # Runs offline (no registry dependencies). Exits 1 on any mismatch.
@@ -62,6 +63,7 @@ bad-lgpl  fail
 bad-mpl   fail
 bad-slint fail
 bad-and   fail
+bad-ncsa  fail
 CASES
 
 if [ "$mismatches" -ne 0 ]; then
