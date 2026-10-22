@@ -6,6 +6,29 @@ use std::sync::Arc;
 use crate::error::ModelError;
 use crate::id::{NodeId, NodeIdx};
 
+/// Most nodes one attack tree in a [`Project`](crate::Project) may hold.
+///
+/// Bounds the size of one [`Op::AddAttackTree`](crate::Op::AddAttackTree)
+/// record and one saved tree, so the save/load decoder can cap every node,
+/// edge, and step-feasibility list at decode time and still accept every
+/// project the model accepts (see
+/// `docs/adr/0014-store-trees-and-provenance.md`). Standalone [`AttackTree`]
+/// values outside a [`Project`](crate::Project) may still grow up to
+/// `u32::MAX` nodes.
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_ATTACK_TREE_NODES, 32);
+/// ```
+pub const MAX_ATTACK_TREE_NODES: usize = 32;
+
+/// Decoded parts of one attack tree node: `(id, label, gate_and_children, parents)`.
+pub(crate) type WireNodeParts = (
+    NodeId,
+    Arc<str>,
+    Option<(GateKind, Vec<NodeId>)>,
+    Option<Vec<NodeId>>,
+);
+
 /// How a gate combines its children.
 ///
 /// ```
@@ -623,6 +646,162 @@ impl AttackTree {
             // INVARIANT: every arena position was checked by `try_from_usize`
             // when the node was added, so this never drops an item.
             .filter_map(|(i, (node, id))| NodeIdx::try_from_usize(i).map(|idx| (idx, *id, node)))
+    }
+
+    /// Returns the linked (non-owner) parents of `idx` in link order. Empty
+    /// for the root, for unshared nodes, and for indices not in this tree.
+    /// Time O(1).
+    pub(crate) fn linked_parents_of(&self, idx: NodeIdx) -> &[NodeIdx] {
+        self.linked_parents
+            .get(idx.index())
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Reconstructs an [`AttackTree`] from decoded wire nodes, checking every
+    /// structural invariant in O(V + E) time and O(V + E) space:
+    /// - at least one node, with unique `NodeId`s;
+    /// - every child `NodeId` resolves to a node in this tree, with no
+    ///   duplicate child under the same gate;
+    /// - the root (index 0) has in-degree 0 and no `parents` list;
+    /// - every non-root node `i > 0` has in-degree >= 1, its owner precedes
+    ///   it in arena order (`owner.index() < i`), `parents` is omitted when
+    ///   in-degree == 1 and present with the exact incoming gate set when
+    ///   in-degree >= 2;
+    /// - the graph is acyclic ([`topological_order`](Self::topological_order)).
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn from_wire_parts(nodes_in: Vec<WireNodeParts>) -> Option<Self> {
+        let n = nodes_in.len();
+        if n == 0 {
+            return None;
+        }
+        let mut ids = Vec::with_capacity(n);
+        let mut by_id = HashMap::with_capacity(n);
+        for (i, (id, ..)) in nodes_in.iter().enumerate() {
+            let idx = NodeIdx::try_from_usize(i)?;
+            if by_id.insert(*id, idx).is_some() {
+                return None;
+            }
+            ids.push(*id);
+        }
+
+        let mut nodes = Vec::with_capacity(n);
+        let mut incoming: Vec<Vec<NodeIdx>> = vec![Vec::new(); n];
+        let mut scratch = vec![false; n];
+        for (i, (_, label, gate_children, _)) in nodes_in.iter().enumerate() {
+            let p_idx = NodeIdx::try_from_usize(i)?;
+            match gate_children {
+                None => nodes.push(Node::Step {
+                    label: Arc::clone(label),
+                }),
+                Some((kind, child_ids)) => {
+                    let mut children: Vec<NodeIdx> = Vec::with_capacity(child_ids.len());
+                    for cid in child_ids {
+                        let Some(&c_idx) = by_id.get(cid) else {
+                            for c in &children {
+                                if let Some(s) = scratch.get_mut(c.index()) {
+                                    *s = false;
+                                }
+                            }
+                            return None;
+                        };
+                        let slot = scratch.get_mut(c_idx.index())?;
+                        if *slot {
+                            for c in &children {
+                                if let Some(s) = scratch.get_mut(c.index()) {
+                                    *s = false;
+                                }
+                            }
+                            return None;
+                        }
+                        *slot = true;
+                        children.push(c_idx);
+                        incoming.get_mut(c_idx.index())?.push(p_idx);
+                    }
+                    for c in &children {
+                        if let Some(s) = scratch.get_mut(c.index()) {
+                            *s = false;
+                        }
+                    }
+                    nodes.push(Node::Gate {
+                        kind: *kind,
+                        label: Arc::clone(label),
+                        children,
+                    });
+                }
+            }
+        }
+
+        let mut owners = Vec::with_capacity(n);
+        let mut linked_parents = Vec::with_capacity(n);
+        for (i, (_, _, _, wire_parents)) in nodes_in.into_iter().enumerate() {
+            let inc = incoming.get(i)?;
+            if i == 0 {
+                if !inc.is_empty() || wire_parents.is_some() {
+                    return None;
+                }
+                owners.push(None);
+                linked_parents.push(Vec::new());
+            } else if inc.is_empty() {
+                return None;
+            } else if inc.len() == 1 {
+                if wire_parents.is_some() {
+                    return None;
+                }
+                let &owner = inc.first()?;
+                if owner.index() >= i {
+                    return None;
+                }
+                owners.push(Some(owner));
+                linked_parents.push(Vec::new());
+            } else {
+                let wp = wire_parents?;
+                if wp.len() != inc.len() {
+                    return None;
+                }
+                for &p in inc {
+                    *scratch.get_mut(p.index())? = true;
+                }
+                let mut resolved = Vec::with_capacity(wp.len());
+                for pid in &wp {
+                    let Some(&p_idx) = by_id.get(pid) else {
+                        for &p in inc {
+                            if let Some(s) = scratch.get_mut(p.index()) {
+                                *s = false;
+                            }
+                        }
+                        return None;
+                    };
+                    let slot = scratch.get_mut(p_idx.index())?;
+                    if !*slot {
+                        for &p in inc {
+                            if let Some(s) = scratch.get_mut(p.index()) {
+                                *s = false;
+                            }
+                        }
+                        return None;
+                    }
+                    *slot = false;
+                    resolved.push(p_idx);
+                }
+                let &owner = resolved.first()?;
+                if owner.index() >= i {
+                    return None;
+                }
+                owners.push(Some(owner));
+                linked_parents.push(resolved.into_iter().skip(1).collect());
+            }
+        }
+
+        crate::topo::topological_order(&nodes).ok()?;
+        let root = NodeIdx::try_from_usize(0)?;
+        Some(Self {
+            nodes,
+            ids,
+            owners,
+            linked_parents,
+            by_id,
+            root,
+        })
     }
 
     /// Checks every structural invariant. Used by unit tests. Time O(n).
