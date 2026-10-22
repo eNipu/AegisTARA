@@ -222,6 +222,39 @@ pub enum ModelError {
         /// The limit, in chars.
         max: usize,
     },
+    /// A non-empty provenance actor string contains only whitespace.
+    ///
+    /// Carries no actor text so user or customer identifiers never appear in
+    /// error messages or logs.
+    ///
+    /// ```
+    /// use aegis_model::ModelError;
+    ///
+    /// assert_eq!(
+    ///     ModelError::EmptyActor.to_string(),
+    ///     "provenance actor is empty after trimming whitespace",
+    /// );
+    /// ```
+    #[error("provenance actor is empty after trimming whitespace")]
+    EmptyActor,
+    /// A provenance actor string is longer than `max` chars.
+    ///
+    /// Carries only the character limit, never the actor text.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, MAX_NAME_CHARS};
+    ///
+    /// let err = ModelError::ActorTooLong { max: MAX_NAME_CHARS };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "provenance actor is longer than 256 chars",
+    /// );
+    /// ```
+    #[error("provenance actor is longer than {max} chars")]
+    ActorTooLong {
+        /// The limit, in chars.
+        max: usize,
+    },
     /// The impact category index is not in the project's methodology.
     #[error("impact category index {} is not in the methodology", .0.index())]
     UnknownImpactCategory(ImpactCategory),

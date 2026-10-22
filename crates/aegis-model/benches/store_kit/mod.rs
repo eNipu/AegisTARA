@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use aegis_model::{AssetId, DamageId, Methodology, Op, Project, ThreatId};
+use aegis_model::{AssetId, DamageId, Methodology, Op, Project, Provenance, ThreatId};
 
 /// Assets in the `typical` reference project.
 pub const ASSETS: u64 = 300;
@@ -61,6 +61,7 @@ pub fn ops(m: &Methodology) -> Vec<Op> {
             id: asset(i),
             name: format!("Electronic control unit {i}").into(),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         });
     }
     for i in 0..DAMAGES {
@@ -75,6 +76,7 @@ pub fn ops(m: &Methodology) -> Vec<Op> {
             id: damage(i),
             name: format!("Damage scenario {i}: loss of a vehicle function").into(),
             impacts,
+            provenance: Provenance::default(),
         });
     }
     for i in 0..THREATS {
@@ -94,6 +96,7 @@ pub fn ops(m: &Methodology) -> Vec<Op> {
             category: threat_cats[usize::try_from(i % threat_cats.len() as u64).unwrap_or(0)],
             catalog_refs: refs,
             damages: vec![damage(i % DAMAGES), damage((i + 1) % DAMAGES)],
+            provenance: Provenance::default(),
         });
     }
     let mut i = 0u64;
@@ -102,6 +105,7 @@ pub fn ops(m: &Methodology) -> Vec<Op> {
             Op::RenameThreatScenario {
                 id: threat(i % THREATS),
                 name: format!("Threat scenario {i}, revised").into(),
+                provenance: Provenance::default(),
             }
         } else {
             let c = cats[usize::try_from(i % cats.len() as u64).unwrap_or(0)];
@@ -109,6 +113,7 @@ pub fn ops(m: &Methodology) -> Vec<Op> {
                 id: damage(i % DAMAGES),
                 category: c,
                 level: m.levels(c).last(),
+                provenance: Provenance::default(),
             }
         });
         i += 1;

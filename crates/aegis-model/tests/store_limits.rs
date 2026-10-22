@@ -11,7 +11,7 @@ use std::sync::Arc;
 use aegis_model::{
     CatalogSchemeDef, CatalogSyntax, ImpactCategoryDef, LevelDef, Limit, MAX_CATALOG_REFS,
     MAX_DAMAGE_LINKS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES, MAX_PROJECT_FILE_BYTES, Methodology,
-    MethodologyDef, Op, OpLogReader, Project, PropertyDef, SegmentDef, StoreError,
+    MethodologyDef, Op, OpLogReader, Project, PropertyDef, Provenance, SegmentDef, StoreError,
     ThreatCategoryDef,
 };
 use common::{asset_id, builtin, damage_id, read_log, save, threat_id, write_log};
@@ -369,6 +369,7 @@ fn limits_admit_every_valid_project() {
         id: asset_id(1),
         name: long_name.clone(),
         properties: m.all_properties(),
+        provenance: Provenance::default(),
     }];
     let top: Vec<_> = m
         .impact_categories()
@@ -382,6 +383,7 @@ fn limits_admit_every_valid_project() {
             id: d,
             name: long_name.clone(),
             impacts: top.clone(),
+            provenance: Provenance::default(),
         });
     }
     // 16 refs over all 16 schemes, each 39 bytes of text.
@@ -400,6 +402,7 @@ fn limits_admit_every_valid_project() {
         category: m.threat_categories().last().expect("category"),
         catalog_refs,
         damages: damage_ids.iter().rev().copied().collect(),
+        provenance: Provenance::default(),
     });
     let mut p = Project::new(Arc::clone(&m));
     for op in &ops {

@@ -15,6 +15,7 @@ use crate::id::{AssetId, DamageId, ThreatId};
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::project::Project;
+use crate::provenance::Provenance;
 use crate::store::Limit;
 
 /// The whole snapshot, borrowed from the project.
@@ -153,13 +154,14 @@ impl Project {
     /// # Errors
     ///
     /// [`StoreError::Io`] if writing fails. [`StoreError::UnencodableOp`]
-    /// if the project contains attack trees (which v1 snapshots do not yet
-    /// encode) or if the project broke its own invariants (an index not in
-    /// its methodology), which the model prevents.
+    /// if the project contains attack trees or non-default provenance
+    /// (which v1 snapshots do not yet encode) or if the project broke its
+    /// own invariants (an index not in its methodology), which the model
+    /// prevents.
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{AssetId, Methodology, Op, Project};
+    /// use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
@@ -170,6 +172,7 @@ impl Project {
     ///     id,
     ///     name: "Brake ECU".into(),
     ///     properties: [integrity].into_iter().collect(),
+    ///     provenance: Provenance::default(),
     /// })?;
     ///
     /// let mut bytes = Vec::new();
@@ -183,9 +186,13 @@ impl Project {
     /// ```
     pub fn save<W: Write>(&self, w: W) -> Result<(), StoreError> {
         if self.attack_tree_count() > 0
+            || self.assets().any(|(_, _, a)| !a.provenance().is_default())
+            || self
+                .damage_scenarios()
+                .any(|(_, _, d)| !d.provenance().is_default())
             || self
                 .threat_scenarios()
-                .any(|(_, _, t)| t.attack_tree().is_some())
+                .any(|(_, _, t)| t.attack_tree().is_some() || !t.provenance().is_default())
         {
             return Err(StoreError::UnencodableOp);
         }
@@ -265,7 +272,7 @@ impl Project {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{DamageId, Methodology, Op, Project};
+    /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
@@ -274,6 +281,7 @@ impl Project {
     ///     id: DamageId::new_v7(),
     ///     name: "Data leak".into(),
     ///     impacts: vec![],
+    ///     provenance: Provenance::default(),
     /// })?;
     /// let mut bytes = Vec::new();
     /// project.save(&mut bytes)?;
@@ -301,6 +309,7 @@ impl Project {
                 id: a.id.0,
                 name: a.name.0,
                 properties: a.properties.0,
+                provenance: Provenance::default(),
             })?;
         }
         for d in snapshot.damage_scenarios {
@@ -308,6 +317,7 @@ impl Project {
                 id: d.id.0,
                 name: d.name.0,
                 impacts: d.impacts.0,
+                provenance: Provenance::default(),
             })?;
         }
         for t in snapshot.threat_scenarios {
@@ -318,6 +328,7 @@ impl Project {
                 category: t.category.0,
                 catalog_refs: t.catalog_refs.0.into_iter().map(|r| r.0).collect(),
                 damages: t.damages.0.into_iter().map(|d| d.0).collect(),
+                provenance: Provenance::default(),
             })?;
         }
         Ok(project)
