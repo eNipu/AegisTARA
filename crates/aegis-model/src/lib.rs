@@ -108,7 +108,7 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use aegis_model::{AssetId, DamageId, Methodology, Op, Project, ThreatId};
+//! use aegis_model::{AssetId, DamageId, Methodology, Op, Project, Provenance, ThreatId};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let m = Arc::new(Methodology::iso21434_r155()?);
@@ -126,12 +126,14 @@
 //!     id: ecu,
 //!     name: "Brake ECU".into(),
 //!     properties: [integrity].into_iter().collect(),
+//!     provenance: Provenance::default(),
 //! })?;
 //! let crash = DamageId::new_v7();
 //! project.apply(Op::AddDamageScenario {
 //!     id: crash,
 //!     name: "Vehicle cannot brake".into(),
 //!     impacts: vec![(safety, severe)],
+//!     provenance: Provenance::default(),
 //! })?;
 //! let threat = ThreatId::new_v7();
 //! let undo = project.apply(Op::AddThreatScenario {
@@ -141,6 +143,7 @@
 //!     category: tampering,
 //!     catalog_refs: vec![m.parse_catalog_ref(annex5, "4.1")?],
 //!     damages: vec![crash],
+//!     provenance: Provenance::default(),
 //! })?;
 //!
 //! // The targeted property is derived from the category.
@@ -169,7 +172,7 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use aegis_model::{AssetId, Methodology, Op, OpLogReader, OpLogWriter, Project};
+//! use aegis_model::{AssetId, Methodology, Op, OpLogReader, OpLogWriter, Project, Provenance};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let m = Arc::new(Methodology::iso21434_r155()?);
@@ -178,8 +181,17 @@
 //!
 //! let ecu = AssetId::new_v7();
 //! for op in [
-//!     Op::AddAsset { id: ecu, name: "Brake ECU".into(), properties: m.all_properties() },
-//!     Op::RenameAsset { id: ecu, name: "Brake control unit".into() },
+//!     Op::AddAsset {
+//!         id: ecu,
+//!         name: "Brake ECU".into(),
+//!         properties: m.all_properties(),
+//!         provenance: Provenance::default(),
+//!     },
+//!     Op::RenameAsset {
+//!         id: ecu,
+//!         name: "Brake control unit".into(),
+//!         provenance: Provenance::default(),
+//!     },
 //! ] {
 //!     project.apply(op.clone())?;
 //!     log.append(&op)?;
@@ -217,6 +229,7 @@ mod id;
 mod methodology;
 mod op;
 mod project;
+mod provenance;
 mod store;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
@@ -241,6 +254,7 @@ pub use methodology::{
 };
 pub use op::Op;
 pub use project::{MAX_NAME_CHARS, Project};
+pub use provenance::{Provenance, ProvenanceSource};
 pub use store::{
     Limit, LoggedOp, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
     MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,

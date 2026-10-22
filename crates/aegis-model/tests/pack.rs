@@ -48,6 +48,7 @@ fn second_pack_loads_projects_saved_under_the_definition() {
         id: pump,
         name: "Pump".into(),
         properties: built.all_properties(),
+        provenance: aegis_model::Provenance::default(),
     })
     .expect("add asset");
     let bytes = common::save(&p);

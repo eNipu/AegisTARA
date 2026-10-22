@@ -14,8 +14,8 @@ use std::sync::Arc;
 use aegis_model::{
     AssetId, AttackTree, CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, DamageId,
     FeasibilityLevel, GateKind, ImpactCategory, ImpactCategoryDef, Level, LevelDef, Methodology,
-    MethodologyDef, Node, NodeId, Op, Project, Property, PropertyDef, PropertySet, SegmentDef,
-    ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    MethodologyDef, Node, NodeId, Op, Project, Property, PropertyDef, PropertySet, Provenance,
+    ProvenanceSource, SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -312,6 +312,7 @@ pub struct Gen {
     m: Arc<Methodology>,
     wide: Methodology,
     next: u64,
+    default_provenance_only: bool,
 }
 
 /// Picks item `n` modulo the length, or `None` if there are no items.
@@ -330,6 +331,16 @@ impl Gen {
             m,
             wide: wide(),
             next: 0,
+            default_provenance_only: false,
+        }
+    }
+
+    pub fn new_v1(m: Arc<Methodology>) -> Self {
+        Gen {
+            m,
+            wide: wide(),
+            next: 0,
+            default_provenance_only: true,
         }
     }
 
@@ -344,6 +355,25 @@ impl Gen {
             1 => "  \t ".into(),
             2 => "x".repeat(257).into(),
             n => format!("{SENTINEL}-{n}").into(),
+        }
+    }
+
+    fn provenance(&self, sel: u16, bits: u64) -> Provenance {
+        if self.default_provenance_only {
+            return Provenance::default();
+        }
+        let source = match bits % 4 {
+            0 => ProvenanceSource::Human,
+            1 => ProvenanceSource::Import,
+            2 => ProvenanceSource::Catalog,
+            _ => ProvenanceSource::Ai,
+        };
+        let ts = bits.rotate_left(19);
+        match sel % 40 {
+            0 => Provenance::new("  \t ", ts, source),
+            1 => Provenance::new("x".repeat(257), ts, source),
+            2..=9 => Provenance::default(),
+            n => Provenance::new(format!("{SENTINEL}-actor-{n}"), ts, source),
         }
     }
 
@@ -530,6 +560,7 @@ impl Gen {
 
     /// Builds a concrete op from a seed against the current project.
     pub fn op(&mut self, p: &Project, s: &Seed) -> Op {
+        let provenance = self.provenance(s.c.rotate_left(3), s.bits);
         match s.kind {
             0..=2 => Op::AddAsset {
                 id: if s.a % 16 == 0 {
@@ -539,6 +570,7 @@ impl Gen {
                 },
                 name: self.name(s.c),
                 properties: self.property_set(s.bits),
+                provenance,
             },
             3..=5 => {
                 let impacts = s
@@ -557,6 +589,7 @@ impl Gen {
                     },
                     name: self.name(s.c),
                     impacts,
+                    provenance,
                 }
             }
             6..=8 => {
@@ -585,15 +618,18 @@ impl Gen {
                     category,
                     catalog_refs,
                     damages,
+                    provenance,
                 }
             }
             9 => Op::RenameAsset {
                 id: self.asset(p, s.a),
                 name: self.name(s.c),
+                provenance,
             },
             10 => Op::SetAssetProperties {
                 id: self.asset(p, s.a),
                 properties: self.property_set(s.bits),
+                provenance,
             },
             11 => Op::RemoveAsset {
                 id: self.asset(p, s.a),
@@ -601,6 +637,7 @@ impl Gen {
             12 => Op::RenameDamageScenario {
                 id: self.damage(p, s.a),
                 name: self.name(s.c),
+                provenance,
             },
             13 => {
                 let category = self.impact_category(s.b);
@@ -608,6 +645,7 @@ impl Gen {
                     id: self.damage(p, s.a),
                     category,
                     level: (s.c % 5 != 0).then(|| self.level(category, s.c)),
+                    provenance,
                 }
             }
             14 => Op::RemoveDamageScenario {
@@ -616,6 +654,7 @@ impl Gen {
             15 => Op::RenameThreatScenario {
                 id: self.threat(p, s.a),
                 name: self.name(s.c),
+                provenance,
             },
             16 => {
                 let id = self.threat(p, s.a);
@@ -627,11 +666,16 @@ impl Gen {
                     Some(a) => self.fitting_category(p, a, s.b),
                     None => self.threat_category(s.b),
                 };
-                Op::SetThreatCategory { id, category }
+                Op::SetThreatCategory {
+                    id,
+                    category,
+                    provenance,
+                }
             }
             17 => Op::AddCatalogRef {
                 threat: self.threat(p, s.a),
                 catalog_ref: self.catalog_ref(s.b, s.bits),
+                provenance,
             },
             18 => {
                 let threat = self.threat(p, s.a);
@@ -647,11 +691,13 @@ impl Gen {
                 Op::RemoveCatalogRef {
                     threat,
                     catalog_ref,
+                    provenance,
                 }
             }
             19 => Op::LinkDamage {
                 threat: self.threat(p, s.a),
                 damage: self.damage(p, s.b),
+                provenance,
             },
             20 => {
                 let threat = self.threat(p, s.a);
@@ -669,7 +715,11 @@ impl Gen {
                     Some(d) if s.c % 3 != 0 => d,
                     _ => self.damage(p, s.b),
                 };
-                Op::UnlinkDamage { threat, damage }
+                Op::UnlinkDamage {
+                    threat,
+                    damage,
+                    provenance,
+                }
             }
             21 => Op::RemoveThreatScenario {
                 id: self.threat(p, s.a),
@@ -712,6 +762,7 @@ impl Gen {
                     },
                     tree,
                     step_feasibility,
+                    provenance,
                 }
             }
             24..=25 => {
@@ -733,11 +784,13 @@ impl Gen {
                     tree,
                     node,
                     level: (s.c % 5 != 0).then(|| self.feasibility_level(s.c)),
+                    provenance,
                 }
             }
             26 => Op::SetThreatAttackTree {
                 threat: self.threat(p, s.a),
                 tree: (s.b % 4 != 0).then(|| self.tree(p, s.b)),
+                provenance,
             },
             _ => Op::RemoveAttackTree {
                 id: self.tree(p, s.a),
@@ -886,7 +939,7 @@ pub fn accepted(
     seeds: &[Seed],
     mut f: impl FnMut(&Project, &Op, &Op) -> Result<(), TestCaseError>,
 ) -> Result<Project, TestCaseError> {
-    let mut generator = Gen::new(Arc::clone(m));
+    let mut generator = Gen::new_v1(Arc::clone(m));
     let mut project = Project::new(Arc::clone(m));
     for s in seeds {
         let v1_seed = Seed {
@@ -1023,6 +1076,10 @@ pub fn second_every_op(m: Arc<Methodology>) {
     let (lock, sniff) = (threat_id(5), threat_id(6));
     let tree = tree_id(7);
     let (root, s1, s2) = (node_id(8), node_id(9), node_id(10));
+    let p_human = Provenance::human("alice", 100);
+    let p_import = Provenance::import("csv", 200);
+    let p_catalog = Provenance::catalog("capec", 300);
+    let p_ai = Provenance::ai("tara-assist", 400);
 
     // Assets.
     ok(
@@ -1031,6 +1088,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             id: pump,
             name: "Infusion pump".into(),
             properties: props(&m, &["i", "a"]),
+            provenance: p_human.clone(),
         },
     );
     ok(
@@ -1039,6 +1097,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             id: monitor,
             name: "Monitor".into(),
             properties: props(&m, &["c"]),
+            provenance: p_import.clone(),
         },
     );
     ok(
@@ -1046,6 +1105,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::RenameAsset {
             id: monitor,
             name: "Bedside monitor".into(),
+            provenance: p_human.clone(),
         },
     );
     ok(
@@ -1053,6 +1113,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::SetAssetProperties {
             id: monitor,
             properties: m.all_properties(),
+            provenance: p_ai.clone(),
         },
     );
 
@@ -1066,6 +1127,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
                 (harm, lvl(&m, harm, "critical")),
                 (loss, lvl(&m, loss, "intolerable")),
             ],
+            provenance: p_human.clone(),
         },
     );
     ok(
@@ -1074,6 +1136,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             id: leak,
             name: "Record leak".into(),
             impacts: vec![],
+            provenance: p_import.clone(),
         },
     );
     ok(
@@ -1081,6 +1144,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::RenameDamageScenario {
             id: leak,
             name: "Patient record leak".into(),
+            provenance: p_human.clone(),
         },
     );
     ok(
@@ -1089,6 +1153,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             id: leak,
             category: exposure,
             level: Some(lvl(&m, exposure, "extreme")),
+            provenance: p_ai.clone(),
         },
     );
 
@@ -1102,6 +1167,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             category: threat_cat(&m, "ransomware"),
             catalog_refs: vec![cref(&m, capec, "CAPEC-549")],
             damages: vec![overdose],
+            provenance: p_catalog.clone(),
         },
     );
     ok(
@@ -1113,6 +1179,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             category: threat_cat(&m, "corruption"),
             catalog_refs: vec![],
             damages: vec![],
+            provenance: p_human.clone(),
         },
     );
     ok(
@@ -1120,6 +1187,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::RenameThreatScenario {
             id: sniff,
             name: "Sniff patient telemetry".into(),
+            provenance: p_human.clone(),
         },
     );
     ok(
@@ -1127,6 +1195,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::SetThreatCategory {
             id: sniff,
             category: threat_cat(&m, "data-leak"),
+            provenance: p_import.clone(),
         },
     );
     ok(
@@ -1134,6 +1203,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::AddCatalogRef {
             threat: sniff,
             catalog_ref: cref(&m, capec, "CAPEC-157"),
+            provenance: p_catalog.clone(),
         },
     );
     ok(
@@ -1141,6 +1211,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::LinkDamage {
             threat: sniff,
             damage: leak,
+            provenance: p_ai.clone(),
         },
     );
 
@@ -1159,6 +1230,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             id: tree,
             tree: attack_tree,
             step_feasibility: vec![(s1, feas(&m, "remote")), (s2, feas(&m, "occasional"))],
+            provenance: p_human.clone(),
         },
     );
     ok(
@@ -1167,6 +1239,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             tree,
             node: s1,
             level: Some(feas(&m, "probable")),
+            provenance: p_ai.clone(),
         },
     );
     ok(
@@ -1174,6 +1247,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::SetThreatAttackTree {
             threat: lock,
             tree: Some(tree),
+            provenance: p_human.clone(),
         },
     );
 
@@ -1185,6 +1259,11 @@ pub fn second_every_op(m: Arc<Methodology>) {
         p.threat_scenario(lock_idx).and_then(|t| t.attack_tree()),
         Some(tree_idx)
     );
+    assert_eq!(
+        p.threat_scenario(lock_idx).map(|t| t.provenance()),
+        Some(&p_human)
+    );
+    assert_eq!(p.attack_tree_provenance(tree_idx), Some(&p_ai));
     let eval = p.evaluate_threat(lock).expect("evaluate threat");
     assert_eq!(eval.root_value(), &feas(&m, "probable"));
     let sniff_idx = p.threat_scenario_idx(&sniff).expect("sniff");
@@ -1196,10 +1275,12 @@ pub fn second_every_op(m: Arc<Methodology>) {
     assert_eq!(d.impacts().count(), 3);
     assert_eq!(d.impact(exposure), Some(lvl(&m, exposure, "extreme")));
     assert_eq!(d.impact(harm), None);
+    assert_eq!(d.provenance(), &p_ai);
     let t = p.threat_scenario(sniff_idx).expect("live");
     assert_eq!(t.name(), "Sniff patient telemetry");
     assert_eq!(t.catalog_refs(), [cref(&m, capec, "CAPEC-157")]);
     assert_eq!(t.damages(), [p.damage_scenario_idx(&leak).expect("leak")]);
+    assert_eq!(t.provenance(), &p_ai);
 
     // Ransomware relies on both I and A of the pump.
     rejects(
@@ -1207,6 +1288,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::SetAssetProperties {
             id: pump,
             properties: props(&m, &["i"]),
+            provenance: Provenance::default(),
         },
         &aegis_model::ModelError::PropertyInUse {
             asset: pump,
@@ -1232,6 +1314,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::SetThreatAttackTree {
             threat: lock,
             tree: None,
+            provenance: Provenance::default(),
         },
     );
     ok(&mut p, Op::RemoveAttackTree { id: tree });
@@ -1240,6 +1323,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::RemoveCatalogRef {
             threat: sniff,
             catalog_ref: cref(&m, capec, "CAPEC-157"),
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -1247,6 +1331,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::UnlinkDamage {
             threat: sniff,
             damage: leak,
+            provenance: Provenance::default(),
         },
     );
     ok(&mut p, Op::RemoveDamageScenario { id: leak });

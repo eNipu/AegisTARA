@@ -168,7 +168,8 @@ Measured on aarch64-apple-darwin:
 - All 20 `Op` variants have exact inverses verified by property tests over
   both the built-in ISO/SAE 21434 + UN R155 methodology and the second
   medical-device test methodology.
-- Snapshot and op-log persistence of attack trees is tracked as a follow-up
-  store job; until then, `Project::save` and `OpLogWriter::append` fail
-  explicitly with `StoreError::UnencodableOp` rather than silently omitting
-  trees or ratings.
+- Snapshot and op-log persistence of attack trees (and non-default
+  provenance, see [ADR 0013](0013-element-provenance.md)) is tracked as a
+  follow-up store job; until then, `Project::save` and `OpLogWriter::append`
+  fail explicitly with `StoreError::UnencodableOp` rather than silently
+  omitting trees, ratings, or provenance.
