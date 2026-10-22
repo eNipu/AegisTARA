@@ -7,15 +7,16 @@ use serde::Serialize;
 
 use super::wire::{
     self, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, HeaderView, HeaderWire, Ids,
-    ImpactsInOrder, KeyOrder, MethodologyView, OpWire, PropertyKeys, RecordWire, Required, Text,
+    ImpactsInOrder, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys, ProvenanceView,
+    RecordWire, Required, StepFeasibilityInOrder, Text,
 };
-use super::{Limit, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
+use super::{Limit, MAX_ACTOR_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
 use crate::error::StoreError;
-use crate::id::{AssetId, DamageId, ThreatId};
+use crate::id::{AssetId, DamageId, NodeId, ThreatId, TreeId};
 use crate::methodology::Methodology;
 use crate::op::Op;
-use crate::provenance::Provenance;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
+use crate::tree::MAX_ATTACK_TREE_NODES;
 
 /// One record of an op log: its sequence number and the op.
 ///
@@ -52,14 +53,20 @@ enum OpView<'a> {
         id: Text<AssetId>,
         name: &'a str,
         properties: PropertyKeys<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     RenameAsset {
         id: Text<AssetId>,
         name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     SetAssetProperties {
         id: Text<AssetId>,
         properties: PropertyKeys<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     RemoveAsset {
         id: Text<AssetId>,
@@ -68,15 +75,21 @@ enum OpView<'a> {
         id: Text<DamageId>,
         name: &'a str,
         impacts: ImpactsInOrder<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     RenameDamageScenario {
         id: Text<DamageId>,
         name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     SetImpact {
         id: Text<DamageId>,
         category: Required<&'a str>,
         level: Option<Required<&'a str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     RemoveDamageScenario {
         id: Text<DamageId>,
@@ -88,41 +101,81 @@ enum OpView<'a> {
         category: Required<&'a str>,
         catalog_refs: CatalogRefsInOrder<'a>,
         damages: Ids<'a, DamageId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     RenameThreatScenario {
         id: Text<ThreatId>,
         name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     SetThreatCategory {
         id: Text<ThreatId>,
         category: Required<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     AddCatalogRef {
         threat: Text<ThreatId>,
         catalog_ref: CatalogRefView<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     RemoveCatalogRef {
         threat: Text<ThreatId>,
         catalog_ref: CatalogRefView<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     LinkDamage {
         threat: Text<ThreatId>,
         damage: Text<DamageId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     UnlinkDamage {
         threat: Text<ThreatId>,
         damage: Text<DamageId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     RemoveThreatScenario {
         id: Text<ThreatId>,
     },
+    AddAttackTree {
+        id: Text<TreeId>,
+        nodes: NodesView<'a>,
+        step_feasibility: StepFeasibilityInOrder<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetStepFeasibility {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        level: Option<Required<&'a str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetThreatAttackTree {
+        threat: Text<ThreatId>,
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveAttackTree {
+        id: Text<TreeId>,
+    },
 }
 
-/// Refuses a name or list the reader would refuse, or non-default
-/// provenance, so the writer never writes a record it cannot read back.
-/// Time O(1).
+/// Refuses a name, provenance actor, or list the reader would refuse, so
+/// the writer never writes a record it cannot read back. Time O(V) for an
+/// `AddAttackTree` op with V nodes, O(1) for every other op.
 fn within_caps(op: &Op) -> bool {
-    if op.provenance().is_some_and(|p| !p.is_default()) {
+    if op
+        .provenance()
+        .is_some_and(|p| p.actor().len() > MAX_ACTOR_BYTES)
+    {
         return false;
     }
     let name_ok = |name: &str| name.len() <= MAX_NAME_BYTES;
@@ -142,59 +195,85 @@ fn within_caps(op: &Op) -> bool {
                 && catalog_refs.len() <= MAX_CATALOG_REFS
                 && damages.len() <= MAX_DAMAGE_LINKS
         }
-        Op::AddAttackTree { .. }
-        | Op::SetStepFeasibility { .. }
-        | Op::SetThreatAttackTree { .. }
-        | Op::RemoveAttackTree { .. } => false,
+        Op::AddAttackTree {
+            tree,
+            step_feasibility,
+            ..
+        } => {
+            tree.len() <= MAX_ATTACK_TREE_NODES
+                && step_feasibility.len() <= MAX_ATTACK_TREE_NODES
+                && tree.iter().all(|(_, _, n)| name_ok(n.label()))
+        }
         _ => true,
     }
 }
 
 /// Builds the borrowed view of `op`. Index-to-key lookups happen while it
-/// is serialized. Returns `None` for ops not in the v1 op log format.
-/// Time O(1).
-fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> Option<OpView<'a>> {
+/// is serialized. Time O(1).
+#[allow(clippy::too_many_lines)]
+fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a> {
     let props = |set| PropertyKeys { m, order, set };
-    Some(match op {
+    match op {
         Op::AddAsset {
             id,
             name,
             properties,
-            ..
+            provenance,
         } => OpView::AddAsset {
             id: Text(*id),
             name,
             properties: props(*properties),
+            provenance: ProvenanceView::of(provenance),
         },
-        Op::RenameAsset { id, name, .. } => OpView::RenameAsset {
+        Op::RenameAsset {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameAsset {
             id: Text(*id),
             name,
+            provenance: ProvenanceView::of(provenance),
         },
-        Op::SetAssetProperties { id, properties, .. } => OpView::SetAssetProperties {
+        Op::SetAssetProperties {
+            id,
+            properties,
+            provenance,
+        } => OpView::SetAssetProperties {
             id: Text(*id),
             properties: props(*properties),
+            provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveAsset { id } => OpView::RemoveAsset { id: Text(*id) },
         Op::AddDamageScenario {
-            id, name, impacts, ..
+            id,
+            name,
+            impacts,
+            provenance,
         } => OpView::AddDamageScenario {
             id: Text(*id),
             name,
             impacts: ImpactsInOrder { m, impacts },
+            provenance: ProvenanceView::of(provenance),
         },
-        Op::RenameDamageScenario { id, name, .. } => OpView::RenameDamageScenario {
+        Op::RenameDamageScenario {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameDamageScenario {
             id: Text(*id),
             name,
+            provenance: ProvenanceView::of(provenance),
         },
         Op::SetImpact {
             id,
             category,
             level,
-            ..
+            provenance,
         } => OpView::SetImpact {
             id: Text(*id),
             category: Required(m.impact_category_key(*category)),
             level: level.map(|l| Required(m.level_key(*category, l))),
+            provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveDamageScenario { id } => OpView::RemoveDamageScenario { id: Text(*id) },
         Op::AddThreatScenario {
@@ -204,7 +283,7 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> Option<Op
             category,
             catalog_refs,
             damages,
-            ..
+            provenance,
         } => OpView::AddThreatScenario {
             id: Text(*id),
             name,
@@ -215,45 +294,99 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> Option<Op
                 refs: catalog_refs,
             },
             damages: Ids(damages),
+            provenance: ProvenanceView::of(provenance),
         },
-        Op::RenameThreatScenario { id, name, .. } => OpView::RenameThreatScenario {
+        Op::RenameThreatScenario {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameThreatScenario {
             id: Text(*id),
             name,
+            provenance: ProvenanceView::of(provenance),
         },
-        Op::SetThreatCategory { id, category, .. } => OpView::SetThreatCategory {
+        Op::SetThreatCategory {
+            id,
+            category,
+            provenance,
+        } => OpView::SetThreatCategory {
             id: Text(*id),
             category: Required(m.threat_category_key(*category)),
+            provenance: ProvenanceView::of(provenance),
         },
         Op::AddCatalogRef {
             threat,
             catalog_ref,
-            ..
+            provenance,
         } => OpView::AddCatalogRef {
             threat: Text(*threat),
             catalog_ref: CatalogRefView { m, r: *catalog_ref },
+            provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveCatalogRef {
             threat,
             catalog_ref,
-            ..
+            provenance,
         } => OpView::RemoveCatalogRef {
             threat: Text(*threat),
             catalog_ref: CatalogRefView { m, r: *catalog_ref },
+            provenance: ProvenanceView::of(provenance),
         },
-        Op::LinkDamage { threat, damage, .. } => OpView::LinkDamage {
+        Op::LinkDamage {
+            threat,
+            damage,
+            provenance,
+        } => OpView::LinkDamage {
             threat: Text(*threat),
             damage: Text(*damage),
+            provenance: ProvenanceView::of(provenance),
         },
-        Op::UnlinkDamage { threat, damage, .. } => OpView::UnlinkDamage {
+        Op::UnlinkDamage {
+            threat,
+            damage,
+            provenance,
+        } => OpView::UnlinkDamage {
             threat: Text(*threat),
             damage: Text(*damage),
+            provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveThreatScenario { id } => OpView::RemoveThreatScenario { id: Text(*id) },
-        Op::AddAttackTree { .. }
-        | Op::SetStepFeasibility { .. }
-        | Op::SetThreatAttackTree { .. }
-        | Op::RemoveAttackTree { .. } => return None,
-    })
+        Op::AddAttackTree {
+            id,
+            tree,
+            step_feasibility,
+            provenance,
+        } => OpView::AddAttackTree {
+            id: Text(*id),
+            nodes: NodesView(tree),
+            step_feasibility: StepFeasibilityInOrder {
+                m,
+                ratings: step_feasibility,
+            },
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetStepFeasibility {
+            tree,
+            node,
+            level,
+            provenance,
+        } => OpView::SetStepFeasibility {
+            tree: Text(*tree),
+            node: Text(*node),
+            level: level.map(|l| Required(m.feasibility_level_key(l))),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetThreatAttackTree {
+            threat,
+            tree,
+            provenance,
+        } => OpView::SetThreatAttackTree {
+            threat: Text(*threat),
+            tree: tree.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveAttackTree { id } => OpView::RemoveAttackTree { id: Text(*id) },
+    }
 }
 
 /// Encodes one record line, `\n` included, into `buf` (cleared first). On
@@ -271,7 +404,7 @@ fn encode_record(
     }
     let record = RecordView {
         seq,
-        op: op_view(m, order, op).ok_or(StoreError::UnencodableOp)?,
+        op: op_view(m, order, op),
     };
     serde_json::to_writer(&mut *buf, &record).map_err(wire::encode_error)?;
     if buf.len() > MAX_OP_RECORD_BYTES {
@@ -290,44 +423,62 @@ fn encode_record(
 /// category. Lists keep their order. Time O(k).
 #[allow(clippy::too_many_lines)]
 fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
-    let provenance = Provenance::default();
     Ok(match w {
         OpWire::AddAsset {
             id,
             name,
             properties,
+            provenance,
         } => Op::AddAsset {
             id: id.0,
             name: name.0,
             properties: properties.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
-        OpWire::RenameAsset { id, name } => Op::RenameAsset {
+        OpWire::RenameAsset {
+            id,
+            name,
+            provenance,
+        } => Op::RenameAsset {
             id: id.0,
             name: name.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
-        OpWire::SetAssetProperties { id, properties } => Op::SetAssetProperties {
+        OpWire::SetAssetProperties {
+            id,
+            properties,
+            provenance,
+        } => Op::SetAssetProperties {
             id: id.0,
             properties: properties.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveAsset { id } => Op::RemoveAsset { id: id.0 },
-        OpWire::AddDamageScenario { id, name, impacts } => Op::AddDamageScenario {
+        OpWire::AddDamageScenario {
+            id,
+            name,
+            impacts,
+            provenance,
+        } => Op::AddDamageScenario {
             id: id.0,
             name: name.0,
             impacts: impacts.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
-        OpWire::RenameDamageScenario { id, name } => Op::RenameDamageScenario {
+        OpWire::RenameDamageScenario {
+            id,
+            name,
+            provenance,
+        } => Op::RenameDamageScenario {
             id: id.0,
             name: name.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetImpact {
             id,
             category,
             level,
+            provenance,
         } => Op::SetImpact {
             id: id.0,
             category: category.0,
@@ -335,7 +486,7 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
                 .as_ref()
                 .map(|l| wire::resolve_level(m, category.0, l))
                 .transpose()?,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveDamageScenario { id } => Op::RemoveDamageScenario { id: id.0 },
         OpWire::AddThreatScenario {
@@ -345,6 +496,7 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             category,
             catalog_refs,
             damages,
+            provenance,
         } => Op::AddThreatScenario {
             id: id.0,
             name: name.0,
@@ -352,45 +504,95 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             category: category.0,
             catalog_refs: catalog_refs.0.into_iter().map(|r| r.0).collect(),
             damages: damages.0.into_iter().map(|d| d.0).collect(),
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
-        OpWire::RenameThreatScenario { id, name } => Op::RenameThreatScenario {
+        OpWire::RenameThreatScenario {
+            id,
+            name,
+            provenance,
+        } => Op::RenameThreatScenario {
             id: id.0,
             name: name.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
-        OpWire::SetThreatCategory { id, category } => Op::SetThreatCategory {
+        OpWire::SetThreatCategory {
+            id,
+            category,
+            provenance,
+        } => Op::SetThreatCategory {
             id: id.0,
             category: category.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::AddCatalogRef {
             threat,
             catalog_ref,
+            provenance,
         } => Op::AddCatalogRef {
             threat: threat.0,
             catalog_ref: catalog_ref.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveCatalogRef {
             threat,
             catalog_ref,
+            provenance,
         } => Op::RemoveCatalogRef {
             threat: threat.0,
             catalog_ref: catalog_ref.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
-        OpWire::LinkDamage { threat, damage } => Op::LinkDamage {
+        OpWire::LinkDamage {
+            threat,
+            damage,
+            provenance,
+        } => Op::LinkDamage {
             threat: threat.0,
             damage: damage.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
-        OpWire::UnlinkDamage { threat, damage } => Op::UnlinkDamage {
+        OpWire::UnlinkDamage {
+            threat,
+            damage,
+            provenance,
+        } => Op::UnlinkDamage {
             threat: threat.0,
             damage: damage.0,
-            provenance,
+            provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveThreatScenario { id } => Op::RemoveThreatScenario { id: id.0 },
+        OpWire::AddAttackTree {
+            id,
+            nodes,
+            step_feasibility,
+            provenance,
+        } => Op::AddAttackTree {
+            id: id.0,
+            tree: nodes.0,
+            step_feasibility: step_feasibility.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetStepFeasibility {
+            tree,
+            node,
+            level,
+            provenance,
+        } => Op::SetStepFeasibility {
+            tree: tree.0,
+            node: node.0,
+            level: level.map(|l| l.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetThreatAttackTree {
+            threat,
+            tree,
+            provenance,
+        } => Op::SetThreatAttackTree {
+            threat: threat.0,
+            tree: tree.map(|t| t.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveAttackTree { id } => Op::RemoveAttackTree { id: id.0 },
     })
 }
 
@@ -870,6 +1072,7 @@ impl<R: BufRead> std::iter::FusedIterator for OpLogReader<R> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provenance::Provenance;
     use crate::testkit;
 
     #[test]

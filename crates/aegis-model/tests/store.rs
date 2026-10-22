@@ -7,12 +7,13 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    Methodology, ModelError, Op, OpLogReader, OpLogWriter, Project, Provenance, ProvenanceSource,
-    StoreError, VocabKind,
+    AttackTree, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter, Project,
+    Provenance, ProvenanceSource, StoreError, VocabKind,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, cref, damage_id, describe, lvl, prop, props, read_log,
-    reordered, save, scheme, second, second_def, threat_cat, threat_id, wide, write_log,
+    SENTINEL, asset_id, builtin, cat, cref, damage_id, describe, feas, lvl, node_id, prop, props,
+    read_log, reordered, save, scheme, second, second_def, threat_cat, threat_id, tree_id, wide,
+    write_log,
 };
 use serde_json::Value;
 
@@ -275,7 +276,21 @@ fn save_is_deterministic() {
         provenance: Provenance::default(),
     };
 
-    // One order, with a removed asset and a removed damage scenario.
+    // One order, with a removed asset, a removed damage scenario, a removed
+    // attack tree, a live attack tree with step feasibility on add, and
+    // non-default provenance.
+    let (tr1, tr2) = (tree_id(10), tree_id(11));
+    let (root, s1, s2) = (node_id(12), node_id(13), node_id(14));
+    let build_tree = || {
+        let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("root");
+        tree.add_child(tree.root(), s1, Node::step("Step 1"))
+            .expect("s1");
+        tree.add_child(tree.root(), s2, Node::step("Step 2"))
+            .expect("s2");
+        tree
+    };
+    let p_tree = Provenance::ai("tara-assist", 777);
+    let p_link = Provenance::human("alice", 888);
     let first = apply_all(
         &m,
         &[
@@ -288,6 +303,24 @@ fn save_is_deterministic() {
             Op::RemoveAsset { id: a3 },
             Op::RemoveDamageScenario { id: damage_id(9) },
             threat(vec!["5", "4.1", "4"], vec![d2, d1]),
+            Op::AddAttackTree {
+                id: tr2,
+                tree: AttackTree::new(node_id(99), Node::step("temp")).expect("temp"),
+                step_feasibility: vec![],
+                provenance: Provenance::default(),
+            },
+            Op::RemoveAttackTree { id: tr2 },
+            Op::AddAttackTree {
+                id: tr1,
+                tree: build_tree(),
+                step_feasibility: vec![(s2, feas(&m, "high")), (s1, feas(&m, "low"))],
+                provenance: p_tree.clone(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t1,
+                tree: Some(tr1),
+                provenance: p_link.clone(),
+            },
         ],
     );
     // Another order, ratings set one by one, refs and links added later.
@@ -296,6 +329,24 @@ fn save_is_deterministic() {
     let second = apply_all(
         &m,
         &[
+            Op::AddAttackTree {
+                id: tr1,
+                tree: build_tree(),
+                step_feasibility: vec![],
+                provenance: Provenance::default(),
+            },
+            Op::SetStepFeasibility {
+                tree: tr1,
+                node: s1,
+                level: Some(feas(&m, "low")),
+                provenance: Provenance::default(),
+            },
+            Op::SetStepFeasibility {
+                tree: tr1,
+                node: s2,
+                level: Some(feas(&m, "high")),
+                provenance: p_tree,
+            },
             add_damage(d1, vec![]),
             Op::SetImpact {
                 id: d1,
@@ -328,6 +379,11 @@ fn save_is_deterministic() {
                 damage: d2,
                 provenance: Provenance::default(),
             },
+            Op::SetThreatAttackTree {
+                threat: t1,
+                tree: Some(tr1),
+                provenance: p_link,
+            },
         ],
     );
     assert_eq!(first, second);
@@ -345,25 +401,41 @@ fn save_is_deterministic() {
 // AC4: a reordered methodology keeps the meaning.
 // ---------------------------------------------------------------------------
 
-/// A project over the second methodology that uses every vocabulary kind.
+/// A project over the second methodology that uses every vocabulary kind,
+/// attack trees (including a shared DAG node), and all provenance sources.
 fn second_ops(m: &Methodology) -> Vec<Op> {
     let capec = scheme(m, "capec");
     let harm = cat(m, "patient-harm");
     let exposure = cat(m, "data-exposure");
     let loss = cat(m, "service-loss");
-    let provenance = Provenance::default();
+    let (root, g1, s1, s2) = (node_id(10), node_id(11), node_id(12), node_id(13));
+    let mut tree =
+        AttackTree::new(root, Node::gate(GateKind::Or, "Compromise pump")).expect("root");
+    let g1_idx = tree
+        .add_child(
+            tree.root(),
+            g1,
+            Node::gate(GateKind::SeqAnd, "Chained access"),
+        )
+        .expect("g1");
+    let s1_idx = tree
+        .add_child(tree.root(), s1, Node::step("USB debug port"))
+        .expect("s1");
+    tree.link(g1_idx, s1_idx).expect("link s1");
+    tree.add_child(g1_idx, s2, Node::step("Bypass signature check"))
+        .expect("s2");
     vec![
         Op::AddAsset {
             id: asset_id(1),
             name: "Infusion pump".into(),
             properties: props(m, &["i", "a"]),
-            provenance: provenance.clone(),
+            provenance: Provenance::human("alice", 100),
         },
         Op::AddAsset {
             id: asset_id(2),
             name: "Monitor".into(),
             properties: props(m, &["c", "a"]),
-            provenance: provenance.clone(),
+            provenance: Provenance::import("reqif", 200),
         },
         Op::AddDamageScenario {
             id: damage_id(3),
@@ -372,19 +444,19 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
                 (loss, lvl(m, loss, "intolerable")),
                 (harm, lvl(m, harm, "critical")),
             ],
-            provenance: provenance.clone(),
+            provenance: Provenance::default(),
         },
         Op::AddDamageScenario {
             id: damage_id(4),
             name: "Record leak".into(),
             impacts: vec![(exposure, lvl(m, exposure, "high"))],
-            provenance: provenance.clone(),
+            provenance: Provenance::catalog("capec", 300),
         },
         Op::SetImpact {
             id: damage_id(4),
             category: harm,
             level: Some(lvl(m, harm, "minor")),
-            provenance: provenance.clone(),
+            provenance: Provenance::ai("tara-assist", 400),
         },
         Op::AddThreatScenario {
             id: threat_id(5),
@@ -393,7 +465,7 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             category: threat_cat(m, "ransomware"),
             catalog_refs: vec![cref(m, capec, "CAPEC-77"), cref(m, capec, "CAPEC-5")],
             damages: vec![damage_id(4), damage_id(3)],
-            provenance: provenance.clone(),
+            provenance: Provenance::human("bob", 500),
         },
         Op::AddThreatScenario {
             id: threat_id(6),
@@ -402,22 +474,39 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             category: threat_cat(m, "data-leak"),
             catalog_refs: vec![],
             damages: vec![damage_id(4)],
-            provenance: provenance.clone(),
+            provenance: Provenance::default(),
         },
         Op::SetAssetProperties {
             id: asset_id(2),
             properties: m.all_properties(),
-            provenance: provenance.clone(),
+            provenance: Provenance::default(),
         },
         Op::SetThreatCategory {
             id: threat_id(6),
             category: threat_cat(m, "outage"),
-            provenance: provenance.clone(),
+            provenance: Provenance::default(),
         },
         Op::AddCatalogRef {
             threat: threat_id(6),
             catalog_ref: cref(m, capec, "CAPEC-1"),
-            provenance,
+            provenance: Provenance::catalog("capec", 600),
+        },
+        Op::AddAttackTree {
+            id: tree_id(7),
+            tree,
+            step_feasibility: vec![(s2, feas(m, "remote")), (s1, feas(m, "occasional"))],
+            provenance: Provenance::human("alice", 700),
+        },
+        Op::SetStepFeasibility {
+            tree: tree_id(7),
+            node: s1,
+            level: Some(feas(m, "probable")),
+            provenance: Provenance::ai("tara-assist", 800),
+        },
+        Op::SetThreatAttackTree {
+            threat: threat_id(5),
+            tree: Some(tree_id(7)),
+            provenance: Provenance::human("alice", 900),
         },
     ]
 }
@@ -432,6 +521,10 @@ fn reordered_methodology_keeps_meaning() {
     assert_ne!(
         m.impact_category("patient-harm"),
         r.impact_category("patient-harm")
+    );
+    assert_ne!(
+        m.feasibility_level("probable"),
+        r.feasibility_level("probable")
     );
     assert_ne!(
         m.threat_category("ransomware"),
@@ -494,7 +587,8 @@ fn only_keys_on_disk() {
         }
         assert!(!keys.is_empty());
         assert!(
-            keys.iter().all(|k| k == "version" || k == "seq"),
+            keys.iter()
+                .all(|k| k == "version" || k == "seq" || k == "timestamp_ms"),
             "{keys:?}"
         );
     }
@@ -599,6 +693,12 @@ fn op_log_sequencing_unencodable_op_writes_nothing() {
     let m = builtin();
     let w = wide();
     let bytes = write_log(&m, &[rename(1)]);
+    let mut big_tree = AttackTree::new(node_id(1), Node::gate(GateKind::Or, "root")).expect("root");
+    for i in 2..=33 {
+        big_tree
+            .add_child(big_tree.root(), node_id(i), Node::step("s"))
+            .expect("step");
+    }
     let foreign = [
         Op::SetAssetProperties {
             id: asset_id(1),
@@ -630,6 +730,29 @@ fn op_log_sequencing_unencodable_op_writes_nothing() {
                 (cat(&m, "safety"), lvl(&m, cat(&m, "safety"), "severe")),
             ],
             provenance: Provenance::default(),
+        },
+        // A repeated step feasibility node could not be read back either.
+        Op::AddAttackTree {
+            id: tree_id(2),
+            tree: AttackTree::new(node_id(1), Node::step("s")).expect("step"),
+            step_feasibility: vec![
+                (node_id(1), feas(&m, "low")),
+                (node_id(1), feas(&m, "high")),
+            ],
+            provenance: Provenance::default(),
+        },
+        // An attack tree with more than MAX_ATTACK_TREE_NODES nodes.
+        Op::AddAttackTree {
+            id: tree_id(3),
+            tree: big_tree,
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+        // A provenance actor outside the 1,024-byte cap.
+        Op::RenameAsset {
+            id: asset_id(1),
+            name: "ok".into(),
+            provenance: Provenance::new("a".repeat(1025), 0, ProvenanceSource::Human),
         },
     ];
     for op in &foreign {
@@ -970,6 +1093,48 @@ fn framing_and_header_errors_keys_ids_and_entries() {
         matches!(err, Some(StoreError::Model(ModelError::UnknownAsset(a))) if a == asset_id(99)),
         "{err:?}"
     );
+
+    // FeasibilityLevel vocabulary kind and duplicate step_feasibility entries.
+    let s2 = second();
+    let s2_snap = String::from_utf8(save(&apply_all(&s2, &second_ops(&s2)))).expect("utf8");
+    let s2_log = log_text(&s2, &second_ops(&s2));
+    assert!(s2_snap.contains("\"remote\"") && s2_log.contains("\"remote\""));
+    let (_, err) = read_until_error(&s2, &s2_log.replacen("\"remote\"", "\"nope\"", 1));
+    assert!(
+        matches!(&err, Some(StoreError::UnknownKey { kind: VocabKind::FeasibilityLevel, key }) if &**key == "nope"),
+        "{err:?}"
+    );
+    let err = load(
+        s2_snap.replacen("\"remote\"", "\"nope\"", 1).as_bytes(),
+        &s2,
+    )
+    .err();
+    assert!(
+        matches!(
+            err,
+            Some(StoreError::UnknownKey {
+                kind: VocabKind::FeasibilityLevel,
+                ..
+            })
+        ),
+        "{err:?}"
+    );
+    let n12 = node_id(12).to_string();
+    let n13 = node_id(13).to_string();
+    let dup_log = s2_log.replacen(
+        &format!("\"{n13}\":\"remote\",\"{n12}\":\"occasional\""),
+        &format!("\"{n13}\":\"remote\",\"{n13}\":\"occasional\""),
+        1,
+    );
+    let (_, err) = read_until_error(&s2, &dup_log);
+    assert!(matches!(err, Some(StoreError::DuplicateEntry)), "{err:?}");
+    let dup_snap = s2_snap.replacen(
+        &format!("\"{n12}\":\"probable\",\"{n13}\":\"remote\""),
+        &format!("\"{n12}\":\"probable\",\"{n12}\":\"remote\""),
+        1,
+    );
+    let err = load(dup_snap.as_bytes(), &s2).err();
+    assert!(matches!(err, Some(StoreError::DuplicateEntry)), "{err:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -981,12 +1146,26 @@ fn errors_have_no_labels() {
     let m = builtin();
     let header = log_text(&m, &[]);
     let id = asset_id(1).to_string();
+    let tid = tree_id(2).to_string();
+    let nid = node_id(3).to_string();
     let rec = |body: String| format!("{header}{body}\n");
     let long = SENTINEL.repeat(70);
     let logs = [
         // A name, failing at the length cap.
         rec(format!(
             r#"{{"seq":1,"op":{{"op":"rename_asset","id":"{id}","name":"{long}"}}}}"#
+        )),
+        // A provenance actor, failing at the actor length cap.
+        rec(format!(
+            r#"{{"seq":1,"op":{{"op":"rename_asset","id":"{id}","name":"ok","provenance":{{"actor":"{long}","timestamp_ms":0,"source":"human"}}}}}}"#
+        )),
+        // An attack tree node label, failing at a later feasibility key lookup.
+        rec(format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{nid}","label":"{SENTINEL}"}}],"step_feasibility":{{"{nid}":"nope"}},"provenance":{{"actor":"{SENTINEL}","timestamp_ms":1,"source":"ai"}}}}}}"#
+        )),
+        // An attack tree node label, failing on a malformed DAG (self-cycle).
+        rec(format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{nid}","label":"{SENTINEL}","gate":"or","children":["{nid}"]}}],"step_feasibility":{{}}}}}}"#
         )),
         // A name, failing at a later key lookup.
         rec(format!(
@@ -1030,7 +1209,7 @@ fn errors_have_no_labels() {
         id: asset_id(1),
         name: SENTINEL.into(),
         properties: m.all_properties(),
-        provenance: Provenance::default(),
+        provenance: Provenance::human(SENTINEL, 1),
     })
     .expect("valid");
     let snapshot = String::from_utf8(save(&p)).expect("utf8");
@@ -1081,176 +1260,188 @@ fn every_vocabulary_kind_reads_back_under_its_key() {
 }
 
 #[test]
-fn save_and_append_refuse_attack_tree_ops_with_unencodable_op() {
+fn attack_trees_and_provenance_round_trip_and_evaluate() {
     let m = builtin();
-    let mut p = apply_all(&m, &golden_ops(&m));
-    let tid = common::tree_id(50);
-    let step = common::node_id(51);
-    let tree = aegis_model::AttackTree::new(step, aegis_model::Node::step("Step")).expect("step");
-    p.apply(Op::AddAttackTree {
-        id: tid,
-        tree: tree.clone(),
-        step_feasibility: vec![],
-        provenance: Provenance::default(),
-    })
-    .expect("add tree");
-    let mut out = Vec::new();
-    assert!(matches!(p.save(&mut out), Err(StoreError::UnencodableOp)));
-    assert!(out.is_empty());
+    let mut ops = golden_ops(&m);
+    let (tr1, tr2) = (tree_id(50), tree_id(51));
+    let (root, g_and, g_seq, s1, s2, s3) = (
+        node_id(52),
+        node_id(53),
+        node_id(54),
+        node_id(55),
+        node_id(56),
+        node_id(57),
+    );
+    let mut tree =
+        AttackTree::new(root, Node::gate(GateKind::Or, "Compromise brake ECU")).expect("root");
+    let g_and_idx = tree
+        .add_child(tree.root(), g_and, Node::gate(GateKind::And, "OBD path"))
+        .expect("g_and");
+    let g_seq_idx = tree
+        .add_child(
+            tree.root(),
+            g_seq,
+            Node::gate(GateKind::SeqAnd, "OTA chain"),
+        )
+        .expect("g_seq");
+    let s1_idx = tree
+        .add_child(g_and_idx, s1, Node::step("Physical OBD access"))
+        .expect("s1");
+    tree.add_child(g_and_idx, s2, Node::step("Exploit UDS session"))
+        .expect("s2");
+    tree.link(g_seq_idx, s1_idx).expect("shared s1");
+    tree.add_child(g_seq_idx, s3, Node::step("Bypass signature check"))
+        .expect("s3");
 
-    let header = log_text(&m, &[]);
-    for op in [
+    ops.extend([
+        Op::RenameAsset {
+            id: asset_id(1),
+            name: "Brake ECU v2".into(),
+            provenance: Provenance::human("alice", 1_700_000_000_000),
+        },
+        Op::RenameDamageScenario {
+            id: damage_id(4),
+            name: "Loss of braking".into(),
+            provenance: Provenance::import("reqif", 1_700_000_000_100),
+        },
         Op::AddAttackTree {
-            id: tid,
-            tree,
+            id: tr2,
+            tree: AttackTree::new(node_id(90), Node::step("Temp")).expect("temp"),
             step_feasibility: vec![],
-            provenance: Provenance::default(),
+            provenance: Provenance::catalog("r155", 1_700_000_000_200),
+        },
+        Op::RemoveAttackTree { id: tr2 },
+        Op::AddAttackTree {
+            id: tr1,
+            tree,
+            step_feasibility: vec![(s1, feas(&m, "medium")), (s2, feas(&m, "high"))],
+            provenance: Provenance::ai("tara-assist", 1_700_000_000_300),
         },
         Op::SetStepFeasibility {
-            tree: tid,
-            node: step,
-            level: None,
-            provenance: Provenance::default(),
+            tree: tr1,
+            node: s3,
+            level: Some(feas(&m, "low")),
+            provenance: Provenance::human("bob", 1_700_000_000_400),
         },
         Op::SetThreatAttackTree {
-            threat: threat_id(1),
-            tree: Some(tid),
-            provenance: Provenance::default(),
+            threat: threat_id(7),
+            tree: Some(tr1),
+            provenance: Provenance::human("alice", 1_700_000_000_500),
         },
-        Op::RemoveAttackTree { id: tid },
-    ] {
-        let mut writer =
-            aegis_model::OpLogWriter::create(Vec::new(), Arc::clone(&m)).expect("header");
-        assert!(matches!(writer.append(&op), Err(StoreError::UnencodableOp)));
-        let bytes = writer.into_inner().expect("flush");
-        assert_eq!(bytes, header.as_bytes());
-    }
+    ]);
+
+    let p = apply_all(&m, &ops);
+    let snap = save(&p);
+    let snap_text = String::from_utf8(snap.clone()).expect("utf8");
+    // Shared node `s1` carries `parents`, while single-parent nodes omit it.
+    assert!(snap_text.contains("\"parents\":"), "{snap_text}");
+    assert!(snap_text.contains("\"attack_trees\":"), "{snap_text}");
+    assert!(snap_text.contains("\"provenance\":"), "{snap_text}");
+
+    let from_snap = load(&snap, &m).expect("loads snapshot");
+    assert_eq!(from_snap, p);
+    assert_eq!(save(&from_snap), snap);
+
+    let log = write_log(&m, &ops);
+    let reread: Vec<Op> = read_log(&m, &log).into_iter().map(|r| r.op).collect();
+    assert_eq!(reread, ops);
+    let from_log = apply_all(&m, &reread);
+    assert_eq!(from_log, p);
+
+    // Threat evaluation produces identical results and explain-why traces.
+    let eval_orig = p.evaluate_threat(threat_id(7)).expect("eval orig");
+    let eval_snap = from_snap.evaluate_threat(threat_id(7)).expect("eval snap");
+    let eval_log = from_log.evaluate_threat(threat_id(7)).expect("eval log");
+    assert_eq!(eval_orig.root_value(), &feas(&m, "medium"));
+    assert_eq!(eval_orig, eval_snap);
+    assert_eq!(eval_orig, eval_log);
 }
 
 #[test]
-fn save_and_append_refuse_non_default_provenance_with_unencodable_op() {
+fn rejects_malformed_attack_tree_and_provenance_wire_shapes() {
     let m = builtin();
-    let annex5 = scheme(&m, "r155-annex5");
-    let safety = cat(&m, "safety");
-    for prov in [
-        Provenance::human("alice", 1),
-        Provenance::import("csv", 0),
-        Provenance::catalog("r155", 0),
-        Provenance::ai("tara-assist", 0),
-        Provenance::new("", 42, ProvenanceSource::Human),
-    ] {
-        // Snapshot: an asset, damage scenario, or threat scenario with non-default provenance.
-        for op in [
-            Op::RenameAsset {
-                id: asset_id(1),
-                name: "Brake ECU".into(),
-                provenance: prov.clone(),
-            },
-            Op::RenameDamageScenario {
-                id: damage_id(4),
-                name: "Vehicle cannot brake".into(),
-                provenance: prov.clone(),
-            },
-            Op::RenameThreatScenario {
-                id: threat_id(7),
-                name: "Modify brake firmware".into(),
-                provenance: prov.clone(),
-            },
-        ] {
-            let mut p = apply_all(&m, &golden_ops(&m));
-            let undo = p.apply(op).expect("apply mutation with provenance");
-            let mut out = Vec::new();
-            assert!(matches!(p.save(&mut out), Err(StoreError::UnencodableOp)));
-            assert!(out.is_empty());
-            // Undoing back to default provenance allows save again.
-            p.apply(undo).expect("undo");
-            assert!(p.save(&mut out).is_ok());
-        }
+    let header = log_text(&m, &[]);
+    let rec = |body: &str| format!("{header}{body}\n");
+    let id = asset_id(1);
+    let tid = tree_id(10);
+    let (n1, n2, n3) = (node_id(11), node_id(12), node_id(13));
 
-        // Op log: every v1 op variant with non-default provenance is refused.
-        let header = log_text(&m, &[]);
-        for op in [
-            Op::AddAsset {
-                id: asset_id(1),
-                name: "ECU".into(),
-                properties: m.all_properties(),
-                provenance: prov.clone(),
-            },
-            Op::RenameAsset {
-                id: asset_id(1),
-                name: "ECU".into(),
-                provenance: prov.clone(),
-            },
-            Op::SetAssetProperties {
-                id: asset_id(1),
-                properties: m.all_properties(),
-                provenance: prov.clone(),
-            },
-            Op::AddDamageScenario {
-                id: damage_id(4),
-                name: "Crash".into(),
-                impacts: vec![],
-                provenance: prov.clone(),
-            },
-            Op::RenameDamageScenario {
-                id: damage_id(4),
-                name: "Crash".into(),
-                provenance: prov.clone(),
-            },
-            Op::SetImpact {
-                id: damage_id(4),
-                category: safety,
-                level: None,
-                provenance: prov.clone(),
-            },
-            Op::AddThreatScenario {
-                id: threat_id(7),
-                name: "Threat".into(),
-                asset: asset_id(1),
-                category: threat_cat(&m, "tampering"),
-                catalog_refs: vec![],
-                damages: vec![],
-                provenance: prov.clone(),
-            },
-            Op::RenameThreatScenario {
-                id: threat_id(7),
-                name: "Threat".into(),
-                provenance: prov.clone(),
-            },
-            Op::SetThreatCategory {
-                id: threat_id(7),
-                category: threat_cat(&m, "tampering"),
-                provenance: prov.clone(),
-            },
-            Op::AddCatalogRef {
-                threat: threat_id(7),
-                catalog_ref: cref(&m, annex5, "5"),
-                provenance: prov.clone(),
-            },
-            Op::RemoveCatalogRef {
-                threat: threat_id(7),
-                catalog_ref: cref(&m, annex5, "5"),
-                provenance: prov.clone(),
-            },
-            Op::LinkDamage {
-                threat: threat_id(7),
-                damage: damage_id(4),
-                provenance: prov.clone(),
-            },
-            Op::UnlinkDamage {
-                threat: threat_id(7),
-                damage: damage_id(4),
-                provenance: prov.clone(),
-            },
-        ] {
-            let mut writer =
-                aegis_model::OpLogWriter::create(Vec::new(), Arc::clone(&m)).expect("header");
-            assert!(
-                matches!(writer.append(&op), Err(StoreError::UnencodableOp)),
-                "{op:?}"
-            );
-            let bytes = writer.into_inner().expect("flush");
-            assert_eq!(bytes, header.as_bytes());
-        }
+    let bad_logs = [
+        // Explicit default provenance must be omitted, not written out.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"rename_asset","id":"{id}","name":"x","provenance":{{"actor":"","timestamp_ms":0,"source":"human"}}}}}}"#
+        )),
+        // `provenance: null` is rejected when present.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"rename_asset","id":"{id}","name":"x","provenance":null}}}}"#
+        )),
+        // Empty `nodes` array.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[],"step_feasibility":{{}}}}}}"#
+        )),
+        // Gate without `children`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"g","gate":"or"}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Gate with duplicate child in `children`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"g","gate":"or","children":["{n2}","{n2}"]}},{{"id":"{n2}","label":"s"}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Disconnected node (non-root node with no incoming edges).
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"s1"}},{{"id":"{n2}","label":"s2"}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Step with `children`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"s","children":["{n2}"]}},{{"id":"{n2}","label":"s2"}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Root with `parents`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"s","parents":["{n1}"]}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Single-parent node with explicit `parents` (must be omitted).
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"g","gate":"or","children":["{n2}"]}},{{"id":"{n2}","label":"s","parents":["{n1}"]}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Shared node (2 incoming edges) missing `parents`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"r","gate":"or","children":["{n2}","{n3}"]}},{{"id":"{n2}","label":"g","gate":"and","children":["{n3}"]}},{{"id":"{n3}","label":"s"}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Shared node with mismatched `parents` set.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"r","gate":"or","children":["{n2}","{n3}"]}},{{"id":"{n2}","label":"g","gate":"and","children":["{n3}"]}},{{"id":"{n3}","label":"s","parents":["{n2}","{n3}"]}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Shared node with only 1 parent in `parents`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"r","gate":"or","children":["{n2}","{n3}"]}},{{"id":"{n2}","label":"g","gate":"and","children":["{n3}"]}},{{"id":"{n3}","label":"s","parents":["{n2}"]}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Cycle in `nodes`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"r","gate":"or","children":["{n2}"]}},{{"id":"{n2}","label":"g","gate":"and","children":["{n1}"]}}],"step_feasibility":{{}}}}}}"#
+        )),
+        // Duplicate node ID in `nodes`.
+        rec(&format!(
+            r#"{{"seq":1,"op":{{"op":"add_attack_tree","id":"{tid}","nodes":[{{"id":"{n1}","label":"s1"}},{{"id":"{n1}","label":"s2"}}],"step_feasibility":{{}}}}}}"#
+        )),
+    ];
+    for text in &bad_logs {
+        let (_, err) = read_until_error(&m, text);
+        assert!(
+            matches!(err, Some(StoreError::Decode { line: 2, .. })),
+            "{text}: {err:?}"
+        );
     }
+
+    // Snapshot with a threat pointing to a missing attack tree fails with UnknownAttackTree.
+    let snap = String::from_utf8(save(&apply_all(&m, &golden_ops(&m)))).expect("utf8");
+    let bad_snap = snap.replacen(
+        "\"damages\":[",
+        &format!("\"attack_tree\":\"{tid}\",\"damages\":["),
+        1,
+    );
+    let err = load(bad_snap.as_bytes(), &m).err();
+    assert!(
+        matches!(err, Some(StoreError::Model(ModelError::UnknownAttackTree(t))) if t == tid),
+        "{err:?}"
+    );
 }
