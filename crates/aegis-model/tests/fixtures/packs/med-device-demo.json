@@ -65,6 +65,28 @@
         ]
       }
     ],
+    "feasibility_levels": [
+      {
+        "key": "improbable",
+        "label": "Improbable"
+      },
+      {
+        "key": "remote",
+        "label": "Remote"
+      },
+      {
+        "key": "occasional",
+        "label": "Occasional"
+      },
+      {
+        "key": "probable",
+        "label": "Probable"
+      },
+      {
+        "key": "frequent",
+        "label": "Frequent"
+      }
+    ],
     "properties": [
       {
         "key": "c",

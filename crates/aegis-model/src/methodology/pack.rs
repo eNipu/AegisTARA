@@ -136,6 +136,7 @@ struct DefWire {
     version: VersionText,
     label: Label,
     impact_categories: BoundedVec<Object<ImpactCategoryWire>, ImpactCategoriesCap>,
+    feasibility_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
     properties: BoundedVec<Object<EntryWire>, PropertiesCap>,
     threat_categories: BoundedVec<Object<ThreatCategoryWire>, ThreatCategoriesCap>,
     catalog_schemes: BoundedVec<Object<CatalogSchemeWire>, CatalogSchemesCap>,
@@ -216,6 +217,13 @@ impl From<DefWire> for MethodologyDef {
                         .collect(),
                 })
                 .collect(),
+            feasibility_levels: w
+                .feasibility_levels
+                .0
+                .into_iter()
+                .map(entry)
+                .map(|(key, label)| LevelDef { key, label })
+                .collect(),
             properties: w
                 .properties
                 .0
@@ -295,11 +303,12 @@ impl Serialize for View<'_, [Arc<str>]> {
 impl Serialize for View<'_, MethodologyDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("methodology", 7)?;
+        let mut st = s.serialize_struct("methodology", 8)?;
         st.serialize_field("key", &*d.key)?;
         st.serialize_field("version", &*d.version)?;
         st.serialize_field("label", &*d.label)?;
         st.serialize_field("impact_categories", &View(d.impact_categories.as_slice()))?;
+        st.serialize_field("feasibility_levels", &View(d.feasibility_levels.as_slice()))?;
         st.serialize_field("properties", &View(d.properties.as_slice()))?;
         st.serialize_field("threat_categories", &View(d.threat_categories.as_slice()))?;
         st.serialize_field("catalog_schemes", &View(d.catalog_schemes.as_slice()))?;
@@ -428,6 +437,8 @@ impl MethodologyDef {
     ///     "key": "tiny", "version": "1", "label": "Tiny",
     ///     "impact_categories": [{ "key": "harm", "label": "Harm", "levels": [
     ///       { "key": "low", "label": "Low" }, { "key": "high", "label": "High" }] }],
+    ///     "feasibility_levels": [
+    ///       { "key": "low", "label": "Low" }, { "key": "high", "label": "High" }],
     ///     "properties": [{ "key": "integrity", "label": "Integrity" }],
     ///     "threat_categories": [{ "key": "corruption", "label": "Corruption",
     ///                             "violates": ["integrity"] }],
@@ -501,7 +512,7 @@ impl Methodology {
     /// [`MethodologyDef::read_pack`], then [`Methodology::new`].
     ///
     /// Time O(B + m log m + text), B = input bytes, m = vocabulary entries
-    /// (at most 689). Space O(B).
+    /// (at most 705). Space O(B).
     ///
     /// # Errors
     ///
@@ -514,7 +525,7 @@ impl Methodology {
     ///
     /// let text = r#"{"format": "aegis-methodology-pack", "version": 1, "methodology": {
     ///   "key": "tiny", "version": "1", "label": "Tiny", "impact_categories": [],
-    ///   "properties": [], "threat_categories": [], "catalog_schemes": []}}"#;
+    ///   "feasibility_levels": [], "properties": [], "threat_categories": [], "catalog_schemes": []}}"#;
     /// let err = Methodology::read_pack(text.as_bytes()).err();
     /// assert!(matches!(err, Some(PackError::Methodology(MethodologyError::NoImpactCategory))));
     /// ```
@@ -535,7 +546,7 @@ mod tests {
 
     #[test]
     fn object_rejects_array_form() {
-        let text = format!(r#"{HEAD}["k","1","L",[],[],[],[]]}}"#);
+        let text = format!(r#"{HEAD}["k","1","L",[],[],[],[],[]]}}"#);
         assert!(matches!(
             MethodologyDef::read_pack(text.as_bytes()),
             Err(PackError::Decode { line: 1, .. })
@@ -560,7 +571,7 @@ mod tests {
     fn digits_missing_null_or_set() {
         let seg = |digits: &str| {
             let text = tiny(&format!(
-                r#"{{"key":"k","version":"1","label":"L","impact_categories":[],"properties":[],"threat_categories":[],"catalog_schemes":[{{"key":"s","label":"S","syntax":{{"prefix":"","required":1,"segments":[{{"min":1,"max":9{digits}}}]}}}}]}}"#
+                r#"{{"key":"k","version":"1","label":"L","impact_categories":[],"feasibility_levels":[],"properties":[],"threat_categories":[],"catalog_schemes":[{{"key":"s","label":"S","syntax":{{"prefix":"","required":1,"segments":[{{"min":1,"max":9{digits}}}]}}}}]}}"#
             ));
             MethodologyDef::read_pack(text.as_bytes())
                 .ok()

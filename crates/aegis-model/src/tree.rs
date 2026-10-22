@@ -170,7 +170,7 @@ impl Node {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttackTree {
     /// Arena; position = `NodeIdx`.
     nodes: Vec<Node>,
@@ -1426,5 +1426,49 @@ mod links {
             children.push(s);
         }
         assert!(tree.check_invariants().is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attack_tree_equality_and_inequality() {
+        let root_id = NodeId::new_v7();
+        let sub_id = NodeId::new_v7();
+        let step_id = NodeId::new_v7();
+
+        let build = |root_kind: GateKind, b_label: &str| {
+            let mut tree = AttackTree::new(root_id, Node::gate(root_kind, "root")).expect("root");
+            let gate = tree
+                .add_child(tree.root(), sub_id, Node::gate(GateKind::And, "sub"))
+                .expect("a");
+            let step = tree
+                .add_child(gate, step_id, Node::step(b_label))
+                .expect("b");
+            tree.link(tree.root(), step).expect("link");
+            tree
+        };
+
+        let t1 = build(GateKind::Or, "step");
+        let t2 = build(GateKind::Or, "step");
+        assert_eq!(t1, t2);
+        assert_eq!(t1, t1.clone());
+
+        let diff_gate = build(GateKind::And, "step");
+        assert_ne!(t1, diff_gate);
+
+        let diff_label = build(GateKind::Or, "other");
+        assert_ne!(t1, diff_label);
+
+        let mut no_link = AttackTree::new(root_id, Node::gate(GateKind::Or, "root")).expect("root");
+        let gate = no_link
+            .add_child(no_link.root(), sub_id, Node::gate(GateKind::And, "sub"))
+            .expect("a");
+        no_link
+            .add_child(gate, step_id, Node::step("step"))
+            .expect("b");
+        assert_ne!(t1, no_link);
     }
 }

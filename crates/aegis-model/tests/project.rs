@@ -9,11 +9,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, CatalogRef, DamageId, Methodology, ModelError, Op, Project, PropertySet, ThreatId,
+    AssetId, AttackTree, CatalogRef, DamageId, Derivation, GateKind, Methodology, ModelError, Node,
+    NodeId, Op, Project, PropertySet, ThreatId, TreeId,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, cref, damage_id, lvl, prop, props, scheme, threat_cat,
-    threat_id, variant, wide,
+    SENTINEL, asset_id, builtin, cat, cref, damage_id, feas, lvl, node_id, prop, props, scheme,
+    second, threat_cat, threat_id, tree_id, variant, wide,
 };
 
 /// Applies `op` and expects success; returns the inverse.
@@ -239,14 +240,23 @@ struct Fx {
     d2: DamageId,
     /// Tampering on `a_all`, one ref (4.1), linked to `d1`.
     t1: ThreatId,
-    /// Spoofing on `a_all` with 16 refs.
+    /// Spoofing on `a_all` with 16 refs, linked to `tree1`.
     t_full: ThreatId,
+    /// Attack tree with OR gate `tree1_root` and step `tree1_step`, linked by `t_full`.
+    tree1: TreeId,
+    tree1_root: NodeId,
+    tree1_step: NodeId,
+    /// Unlinked attack tree with a single step `tree_free_step`.
+    tree_free: TreeId,
+    tree_free_step: NodeId,
     r41: CatalogRef,
     r5: CatalogRef,
     /// An unused ID of each kind.
     fresh_a: AssetId,
     fresh_d: DamageId,
     fresh_t: ThreatId,
+    fresh_tree: TreeId,
+    fresh_node: NodeId,
 }
 
 /// Builds the fixture with every entity named `name`.
@@ -262,11 +272,18 @@ fn fixture(name: &str) -> (Project, Fx) {
         d2: damage_id(4),
         t1: threat_id(5),
         t_full: threat_id(6),
+        tree1: tree_id(7),
+        tree1_root: node_id(8),
+        tree1_step: node_id(9),
+        tree_free: tree_id(10),
+        tree_free_step: node_id(11),
         r41: cref(&m, annex5, "4.1"),
         r5: cref(&m, annex5, "5"),
         fresh_a: asset_id(100),
         fresh_d: damage_id(101),
         fresh_t: threat_id(102),
+        fresh_tree: tree_id(103),
+        fresh_node: node_id(104),
         m: Arc::clone(&m),
     };
     ok(
@@ -331,6 +348,34 @@ fn fixture(name: &str) -> (Project, Fx) {
             damages: vec![],
         },
     );
+    let mut tree1 = AttackTree::new(fx.tree1_root, Node::gate(GateKind::Or, n())).expect("root");
+    tree1
+        .add_child(tree1.root(), fx.tree1_step, Node::step(n()))
+        .expect("step");
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.tree1,
+            tree: tree1,
+            step_feasibility: vec![(fx.tree1_step, feas(&m, "medium"))],
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: fx.t_full,
+            tree: Some(fx.tree1),
+        },
+    );
+    let tree_free = AttackTree::new(fx.tree_free_step, Node::step(n())).expect("step");
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.tree_free,
+            tree: tree_free,
+            step_feasibility: vec![(fx.tree_free_step, feas(&m, "low"))],
+        },
+    );
     (p, fx)
 }
 
@@ -347,6 +392,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
     // Out-of-range indices, drawn from a larger methodology.
     let bad_cat = w.impact_categories().nth(6).expect("wide category");
     let bad_level = w.levels(bad_cat).nth(9).expect("wide level");
+    let bad_flvl = w.feasibility_levels().nth(9).expect("wide feasibility").0;
     let bad_prop = w.properties().nth(9).expect("wide property");
     let bad_threat_cat = w.threat_categories().nth(10).expect("wide threat category");
     let wide_scheme_0 = w.catalog_schemes().next().expect("wide scheme");
@@ -598,6 +644,84 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             },
         ),
         (
+            p.clone(),
+            Op::AddAttackTree {
+                id: fx.tree1,
+                tree: AttackTree::new(fx.fresh_node, Node::step(n())).expect("step"),
+                step_feasibility: vec![],
+            },
+            ModelError::DuplicateAttackTree(fx.tree1),
+        ),
+        (
+            p.clone(),
+            Op::RemoveAttackTree { id: fx.fresh_tree },
+            ModelError::UnknownAttackTree(fx.fresh_tree),
+        ),
+        (
+            p.clone(),
+            Op::SetStepFeasibility {
+                tree: fx.tree1,
+                node: fx.fresh_node,
+                level: None,
+            },
+            ModelError::UnknownTreeNode {
+                tree: fx.tree1,
+                node: fx.fresh_node,
+            },
+        ),
+        (
+            p.clone(),
+            Op::SetStepFeasibility {
+                tree: fx.tree1,
+                node: fx.tree1_root,
+                level: None,
+            },
+            ModelError::NotAStep {
+                tree: fx.tree1,
+                node: fx.tree1_root,
+            },
+        ),
+        (
+            p.clone(),
+            Op::SetStepFeasibility {
+                tree: fx.tree1,
+                node: fx.tree1_step,
+                level: Some(bad_flvl),
+            },
+            ModelError::UnknownFeasibilityLevel(bad_flvl),
+        ),
+        (
+            p.clone(),
+            Op::AddAttackTree {
+                id: fx.fresh_tree,
+                tree: AttackTree::new(fx.fresh_node, Node::step(n())).expect("step"),
+                step_feasibility: vec![
+                    (fx.fresh_node, feas(m, "low")),
+                    (fx.fresh_node, feas(m, "high")),
+                ],
+            },
+            ModelError::DuplicateStepFeasibility {
+                tree: fx.fresh_tree,
+                node: fx.fresh_node,
+            },
+        ),
+        (
+            p.clone(),
+            Op::RemoveAttackTree { id: fx.tree1 },
+            ModelError::AttackTreeInUse {
+                tree: fx.tree1,
+                threats: 1,
+            },
+        ),
+        (
+            p.clone(),
+            Op::RemoveThreatScenario { id: fx.t_full },
+            ModelError::ThreatHasAttackTree {
+                threat: fx.t_full,
+                tree: fx.tree1,
+            },
+        ),
+        (
             full,
             Op::AddAsset {
                 id: fx.fresh_a,
@@ -609,18 +733,23 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
     ]
 }
 
-/// The new `ModelError` variants of this job.
-const NEW_VARIANTS: [&str; 26] = [
+/// The `ModelError` variants triggered by `Project::apply`.
+const NEW_VARIANTS: [&str; 34] = [
     "DuplicateAsset",
     "DuplicateDamageScenario",
     "DuplicateThreatScenario",
+    "DuplicateAttackTree",
     "UnknownAsset",
     "UnknownDamageScenario",
     "UnknownThreatScenario",
+    "UnknownAttackTree",
+    "UnknownTreeNode",
+    "NotAStep",
     "EmptyName",
     "NameTooLong",
     "UnknownImpactCategory",
     "UnknownLevel",
+    "UnknownFeasibilityLevel",
     "UnknownProperty",
     "UnknownThreatCategory",
     "UnknownCatalogScheme",
@@ -630,7 +759,10 @@ const NEW_VARIANTS: [&str; 26] = [
     "PropertyInUse",
     "AssetInUse",
     "DamageScenarioInUse",
+    "AttackTreeInUse",
+    "ThreatHasAttackTree",
     "DuplicateImpactCategory",
+    "DuplicateStepFeasibility",
     "DuplicateDamageLink",
     "DamageNotLinked",
     "CatalogRefNotFound",
@@ -879,6 +1011,21 @@ fn referential_integrity() {
             threats: 1,
         },
     );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: fx.t_full },
+        &ModelError::ThreatHasAttackTree {
+            threat: fx.t_full,
+            tree: fx.tree1,
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: fx.t_full,
+            tree: None,
+        },
+    );
     ok(&mut p, Op::RemoveThreatScenario { id: fx.t_full });
     ok(
         &mut p,
@@ -1026,7 +1173,30 @@ fn inverse_round_trip() {
             damage: fx.d1,
         },
         Op::RemoveThreatScenario { id: fx.t1 },
-        Op::RemoveThreatScenario { id: fx.t_full },
+        Op::AddAttackTree {
+            id: fx.fresh_tree,
+            tree: AttackTree::new(fx.fresh_node, Node::step("new")).expect("step"),
+            step_feasibility: vec![(fx.fresh_node, feas(&m, "high"))],
+        },
+        Op::SetStepFeasibility {
+            tree: fx.tree1,
+            node: fx.tree1_step,
+            level: Some(feas(&m, "high")),
+        },
+        Op::SetStepFeasibility {
+            tree: fx.tree1,
+            node: fx.tree1_step,
+            level: None,
+        },
+        Op::SetThreatAttackTree {
+            threat: fx.t1,
+            tree: Some(fx.tree_free),
+        },
+        Op::SetThreatAttackTree {
+            threat: fx.t_full,
+            tree: None,
+        },
+        Op::RemoveAttackTree { id: fx.tree_free },
         // Setting a value to what it already is succeeds with an equal
         // inverse.
         Op::RenameAsset {
@@ -1051,7 +1221,7 @@ fn inverse_round_trip() {
         assert_eq!(p, after);
         kinds.insert(variant(&op));
     }
-    assert_eq!(kinds.len(), 16, "every Op variant: {kinds:?}");
+    assert_eq!(kinds.len(), 20, "every Op variant: {kinds:?}");
 }
 
 #[test]
@@ -1245,14 +1415,14 @@ fn equality_compares_methodology_content() {
 }
 
 // ---------------------------------------------------------------------------
-// AC14: errors never contain names.
+// AC14 / AC8: errors never contain names.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn errors_have_no_labels() {
+fn errors_never_contain_names() {
     let mut seen = BTreeSet::new();
     for (mut p, op, want) in cases(SENTINEL) {
-        // Every entity in the fixture carries the sentinel name.
+        // Every entity and tree node in the fixture carries the sentinel name.
         assert!(p.assets().all(|(_, _, a)| a.name().contains(SENTINEL)));
         assert!(
             p.damage_scenarios()
@@ -1261,6 +1431,10 @@ fn errors_have_no_labels() {
         assert!(
             p.threat_scenarios()
                 .all(|(_, _, t)| t.name().contains(SENTINEL))
+        );
+        assert!(
+            p.attack_trees()
+                .all(|(_, _, t)| t.iter().all(|(_, _, n)| n.label().contains(SENTINEL)))
         );
         let err = p.apply(op).expect_err("case must fail");
         assert_eq!(err, want);
@@ -1272,6 +1446,395 @@ fn errors_have_no_labels() {
         seen.insert(variant(&err));
     }
     assert_eq!(seen.len(), NEW_VARIANTS.len());
+
+    // Evaluation errors on SENTINEL-named entities and tree nodes.
+    let (mut p, fx) = fixture(SENTINEL);
+    let err = p.evaluate_threat(fx.t1).expect_err("no attack tree");
+    assert_eq!(err, ModelError::NoAttackTree(fx.t1));
+    assert!(!err.to_string().contains(SENTINEL));
+    assert!(!format!("{err:?}").contains(SENTINEL));
+
+    ok(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree: fx.tree1,
+            node: fx.tree1_step,
+            level: None,
+        },
+    );
+    let err = p.evaluate_threat(fx.t_full).expect_err("unrated step");
+    assert_eq!(err, ModelError::MissingLeafValue(fx.tree1_step));
+    assert!(!err.to_string().contains(SENTINEL));
+    assert!(!format!("{err:?}").contains(SENTINEL));
+
+    let empty_tree_id = fx.fresh_tree;
+    let empty_gate_id = fx.fresh_node;
+    let empty_tree =
+        AttackTree::new(empty_gate_id, Node::gate(GateKind::And, SENTINEL)).expect("gate");
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: empty_tree_id,
+            tree: empty_tree,
+            step_feasibility: vec![],
+        },
+    );
+    let err = p.evaluate_tree(empty_tree_id).expect_err("empty gate");
+    assert_eq!(err, ModelError::EmptyGate(empty_gate_id));
+    assert!(!err.to_string().contains(SENTINEL));
+    assert!(!format!("{err:?}").contains(SENTINEL));
+}
+
+#[test]
+fn errors_have_no_labels() {
+    errors_never_contain_names();
+}
+
+// ---------------------------------------------------------------------------
+// Job 013 AC5 & AC6: threat attack trees, integrity, validation, and explain-why.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn threat_attack_tree_integrity_and_validation() {
+    let (mut p, fx) = fixture("x");
+    let m = Arc::clone(&fx.m);
+
+    // Sharing one attack tree across two threats tracks the exact refcount.
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: fx.t1,
+            tree: Some(fx.tree1),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveAttackTree { id: fx.tree1 },
+        &ModelError::AttackTreeInUse {
+            tree: fx.tree1,
+            threats: 2,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: fx.t1 },
+        &ModelError::ThreatHasAttackTree {
+            threat: fx.t1,
+            tree: fx.tree1,
+        },
+    );
+
+    // Switching t1 to `tree_free` drops `tree1`'s refcount to 1 and raises
+    // `tree_free`'s refcount to 1.
+    let undo_switch = ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: fx.t1,
+            tree: Some(fx.tree_free),
+        },
+    );
+    assert_eq!(
+        undo_switch,
+        Op::SetThreatAttackTree {
+            threat: fx.t1,
+            tree: Some(fx.tree1),
+        }
+    );
+    rejects(
+        &mut p,
+        Op::RemoveAttackTree { id: fx.tree1 },
+        &ModelError::AttackTreeInUse {
+            tree: fx.tree1,
+            threats: 1,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveAttackTree { id: fx.tree_free },
+        &ModelError::AttackTreeInUse {
+            tree: fx.tree_free,
+            threats: 1,
+        },
+    );
+
+    // Unlinking both allows removal of `tree1`.
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: fx.t1,
+            tree: None,
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: fx.t_full,
+            tree: None,
+        },
+    );
+    let restore_tree1 = ok(&mut p, Op::RemoveAttackTree { id: fx.tree1 });
+    assert_eq!(p.attack_tree_count(), 1);
+    ok(&mut p, restore_tree1);
+    assert_eq!(p.attack_tree_count(), 2);
+
+    // Validation rules on AddAttackTree and SetStepFeasibility.
+    rejects(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree: fx.tree1,
+            node: fx.tree1_root,
+            level: Some(feas(&m, "low")),
+        },
+        &ModelError::NotAStep {
+            tree: fx.tree1,
+            node: fx.tree1_root,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree: fx.tree1,
+            node: fx.fresh_node,
+            level: Some(feas(&m, "low")),
+        },
+        &ModelError::UnknownTreeNode {
+            tree: fx.tree1,
+            node: fx.fresh_node,
+        },
+    );
+    let step_tree = AttackTree::new(fx.fresh_node, Node::step("s")).expect("step");
+    rejects(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.fresh_tree,
+            tree: step_tree.clone(),
+            step_feasibility: vec![
+                (fx.fresh_node, feas(&m, "low")),
+                (fx.fresh_node, feas(&m, "high")),
+            ],
+        },
+        &ModelError::DuplicateStepFeasibility {
+            tree: fx.fresh_tree,
+            node: fx.fresh_node,
+        },
+    );
+    let bad_flvl = wide()
+        .feasibility_levels()
+        .nth(9)
+        .expect("wide feasibility")
+        .0;
+    rejects(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.fresh_tree,
+            tree: step_tree,
+            step_feasibility: vec![(fx.fresh_node, bad_flvl)],
+        },
+        &ModelError::UnknownFeasibilityLevel(bad_flvl),
+    );
+    let blank_tree = AttackTree::new(fx.fresh_node, Node::step("   ")).expect("step");
+    rejects(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.fresh_tree,
+            tree: blank_tree,
+            step_feasibility: vec![],
+        },
+        &ModelError::EmptyName,
+    );
+    let long_tree = AttackTree::new(fx.fresh_node, Node::step("x".repeat(257))).expect("step");
+    rejects(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.fresh_tree,
+            tree: long_tree,
+            step_feasibility: vec![],
+        },
+        &ModelError::NameTooLong { max: 256 },
+    );
+}
+
+#[test]
+fn evaluate_threat_feasibility_and_why_path() {
+    for (m, keys) in [
+        (builtin(), ["very-low", "low", "medium", "high"]),
+        (second(), ["improbable", "remote", "occasional", "probable"]),
+    ] {
+        let [f0, f1, f2, f3] = keys.map(|k| feas(&m, k));
+        let mut p = Project::new(Arc::clone(&m));
+        let asset = asset_id(1);
+        let threat = threat_id(2);
+        let tree_id = tree_id(3);
+        let cat = m.threat_categories().next().expect("threat cat");
+        ok(
+            &mut p,
+            Op::AddAsset {
+                id: asset,
+                name: "ECU".into(),
+                properties: m.all_properties(),
+            },
+        );
+        ok(
+            &mut p,
+            Op::AddThreatScenario {
+                id: threat,
+                name: "Threat".into(),
+                asset,
+                category: cat,
+                catalog_refs: vec![],
+                damages: vec![],
+            },
+        );
+
+        // No linked tree yet -> NoAttackTree.
+        assert_eq!(
+            p.evaluate_threat(threat),
+            Err(ModelError::NoAttackTree(threat))
+        );
+        assert_eq!(
+            p.evaluate_threat(threat_id(99)),
+            Err(ModelError::UnknownThreatScenario(threat_id(99)))
+        );
+        assert_eq!(
+            p.evaluate_tree(tree_id),
+            Err(ModelError::UnknownAttackTree(tree_id))
+        );
+
+        // Build a DAG with OR root, AND left branch, SeqAnd right branch, and a
+        // shared step `shared` linked into both branches:
+        //        root (OR)
+        //       /         \
+        //   left (AND)   right (SAND)
+        //    /     \      /       \
+        //  s_a    shared (linked)  s_b
+        let (root_id, left_id, right_id, sa_id, shared_id, sb_id) = (
+            node_id(10),
+            node_id(11),
+            node_id(12),
+            node_id(13),
+            node_id(14),
+            node_id(15),
+        );
+        let mut tree = AttackTree::new(root_id, Node::gate(GateKind::Or, "Root")).expect("root");
+        let root_idx = tree.root();
+        let left_idx = tree
+            .add_child(root_idx, left_id, Node::gate(GateKind::And, "Left"))
+            .expect("left");
+        let right_idx = tree
+            .add_child(root_idx, right_id, Node::gate(GateKind::SeqAnd, "Right"))
+            .expect("right");
+        let sa_idx = tree
+            .add_child(left_idx, sa_id, Node::step("Step A"))
+            .expect("sa");
+        let shared_idx = tree
+            .add_child(left_idx, shared_id, Node::step("Shared"))
+            .expect("shared");
+        tree.link(right_idx, shared_idx).expect("link shared");
+        let sb_idx = tree
+            .add_child(right_idx, sb_id, Node::step("Step B"))
+            .expect("sb");
+
+        // Initially rate s_a = f3 (high), shared = f2 (med), s_b = f1 (low):
+        // left (AND) = min(f3, f2) = f2 (decided by shared)
+        // right (SAND) = min(f2, f1) = f1 (decided by s_b)
+        // root (OR) = max(f2, f1) = f2 (decided by left -> shared)
+        ok(
+            &mut p,
+            Op::AddAttackTree {
+                id: tree_id,
+                tree,
+                step_feasibility: vec![(sa_id, f3), (shared_id, f2), (sb_id, f1)],
+            },
+        );
+        ok(
+            &mut p,
+            Op::SetThreatAttackTree {
+                threat,
+                tree: Some(tree_id),
+            },
+        );
+
+        let eval = p.evaluate_threat(threat).expect("eval threat");
+        let tree_eval = p.evaluate_tree(tree_id).expect("eval tree");
+        assert_eq!(eval.root_value(), &f2);
+        assert_eq!(tree_eval.root_value(), &f2);
+        assert_eq!(eval.get(root_idx), Some(&f2));
+        assert_eq!(eval.get(left_idx), Some(&f2));
+        assert_eq!(eval.get(right_idx), Some(&f1));
+        assert_eq!(eval.get(sa_idx), Some(&f3));
+        assert_eq!(eval.get(shared_idx), Some(&f2));
+        assert_eq!(eval.get(sb_idx), Some(&f1));
+        assert_eq!(
+            eval.derivation(root_idx),
+            Some(Derivation::Selected {
+                rule: GateKind::Or,
+                child: left_idx,
+            })
+        );
+        assert_eq!(
+            eval.derivation(left_idx),
+            Some(Derivation::Selected {
+                rule: GateKind::And,
+                child: shared_idx,
+            })
+        );
+        assert_eq!(eval.derivation(shared_idx), Some(Derivation::Leaf));
+        let path: Vec<_> = eval.why_path(root_idx).collect();
+        assert_eq!(path, [root_idx, left_idx, shared_idx]);
+
+        let stored_tree = p
+            .attack_tree(p.attack_tree_idx(&tree_id).expect("tree idx"))
+            .expect("tree");
+        let root_exp = eval.explain(stored_tree, root_idx).expect("explain root");
+        assert_eq!(root_exp.decisive(), Some(left_idx));
+        assert_eq!(root_exp.inputs().count(), 2);
+
+        // Now lower s_a to f0 (very-low) and raise s_b to f3 (high):
+        // left (AND) = min(f0, f2) = f0 (decided by s_a)
+        // right (SAND) = min(f2, f3) = f2 (decided by shared)
+        // root (OR) = max(f0, f2) = f2 (now decided by right -> shared!)
+        let undo_sa = ok(
+            &mut p,
+            Op::SetStepFeasibility {
+                tree: tree_id,
+                node: sa_id,
+                level: Some(f0),
+            },
+        );
+        let undo_sb = ok(
+            &mut p,
+            Op::SetStepFeasibility {
+                tree: tree_id,
+                node: sb_id,
+                level: Some(f3),
+            },
+        );
+        let eval2 = p.evaluate_threat(threat).expect("eval2");
+        assert_eq!(eval2.root_value(), &f2);
+        let path2: Vec<_> = eval2.why_path(root_idx).collect();
+        assert_eq!(path2, [root_idx, right_idx, shared_idx]);
+
+        // Undo both rating changes and verify the original why_path is restored.
+        ok(&mut p, undo_sb);
+        ok(&mut p, undo_sa);
+        let eval3 = p.evaluate_threat(threat).expect("eval3");
+        let path3: Vec<_> = eval3.why_path(root_idx).collect();
+        assert_eq!(path3, [root_idx, left_idx, shared_idx]);
+
+        // Clearing a step rating causes MissingLeafValue(sb_id).
+        ok(
+            &mut p,
+            Op::SetStepFeasibility {
+                tree: tree_id,
+                node: sb_id,
+                level: None,
+            },
+        );
+        assert_eq!(
+            p.evaluate_threat(threat),
+            Err(ModelError::MissingLeafValue(sb_id))
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

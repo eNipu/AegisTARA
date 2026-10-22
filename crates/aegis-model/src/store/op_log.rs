@@ -137,15 +137,20 @@ fn within_caps(op: &Op) -> bool {
                 && catalog_refs.len() <= MAX_CATALOG_REFS
                 && damages.len() <= MAX_DAMAGE_LINKS
         }
+        Op::AddAttackTree { .. }
+        | Op::SetStepFeasibility { .. }
+        | Op::SetThreatAttackTree { .. }
+        | Op::RemoveAttackTree { .. } => false,
         _ => true,
     }
 }
 
 /// Builds the borrowed view of `op`. Index-to-key lookups happen while it
-/// is serialized. Time O(1).
-fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a> {
+/// is serialized. Returns `None` for ops not in the v1 op log format.
+/// Time O(1).
+fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> Option<OpView<'a>> {
     let props = |set| PropertyKeys { m, order, set };
-    match op {
+    Some(match op {
         Op::AddAsset {
             id,
             name,
@@ -232,7 +237,11 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             damage: Text(*damage),
         },
         Op::RemoveThreatScenario { id } => OpView::RemoveThreatScenario { id: Text(*id) },
-    }
+        Op::AddAttackTree { .. }
+        | Op::SetStepFeasibility { .. }
+        | Op::SetThreatAttackTree { .. }
+        | Op::RemoveAttackTree { .. } => return None,
+    })
 }
 
 /// Encodes one record line, `\n` included, into `buf` (cleared first). On
@@ -250,7 +259,7 @@ fn encode_record(
     }
     let record = RecordView {
         seq,
-        op: op_view(m, order, op),
+        op: op_view(m, order, op).ok_or(StoreError::UnencodableOp)?,
     };
     serde_json::to_writer(&mut *buf, &record).map_err(wire::encode_error)?;
     if buf.len() > MAX_OP_RECORD_BYTES {

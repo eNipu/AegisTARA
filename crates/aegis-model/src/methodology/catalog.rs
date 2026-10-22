@@ -354,6 +354,16 @@ mod tests {
                     },
                 ],
             }],
+            feasibility_levels: vec![
+                LevelDef {
+                    key: "low".into(),
+                    label: "Low".into(),
+                },
+                LevelDef {
+                    key: "high".into(),
+                    label: "High".into(),
+                },
+            ],
             properties: vec![PropertyDef {
                 key: "i".into(),
                 label: "I".into(),

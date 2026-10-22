@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::id::{AssetIdx, DamageIdx};
+use crate::id::{AssetIdx, DamageIdx, TreeIdx};
 use crate::methodology::{CatalogRef, ThreatCategory};
 
 /// Most catalog refs on one threat scenario.
@@ -63,6 +63,7 @@ pub struct ThreatScenario {
     /// Sorted by the target's `DamageId`, unique, at most
     /// [`MAX_DAMAGE_LINKS`].
     pub(crate) damages: Vec<DamageIdx>,
+    pub(crate) attack_tree: Option<TreeIdx>,
 }
 
 impl ThreatScenario {
@@ -194,5 +195,38 @@ impl ThreatScenario {
     #[must_use]
     pub fn damages(&self) -> &[DamageIdx] {
         &self.damages
+    }
+
+    /// Returns the linked attack tree's arena index, if any. Time O(1),
+    /// space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![],
+    /// })?;
+    /// let tree_id = TreeId::new_v7();
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree { id: tree_id, tree, step_feasibility: vec![] })?;
+    /// project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id) })?;
+    /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
+    /// assert_eq!(t.attack_tree(), project.attack_tree_idx(&tree_id));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree(&self) -> Option<TreeIdx> {
+        self.attack_tree
     }
 }
