@@ -176,6 +176,7 @@ fn second_methodology_rejects_foreign_indices() {
     // one-segment CAPEC syntax that has the same index here.
     let annex5 = scheme(&first, "r155-annex5");
     let foreign = cref(&first, annex5, "32.99");
+    let capec = scheme(&m, "capec");
     rejects(
         &mut p,
         Op::AddCatalogRef {
@@ -184,7 +185,8 @@ fn second_methodology_rejects_foreign_indices() {
             provenance: Provenance::default(),
         },
         &ModelError::InvalidCatalogId {
-            scheme: scheme(&m, "capec"),
+            scheme: capec,
+            syntax: m.catalog_syntax(capec).expect("capec syntax").clone(),
         },
     );
     // Ransomware needs I and A; an asset with only C cannot carry it.

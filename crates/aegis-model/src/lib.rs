@@ -240,7 +240,7 @@ mod tree;
 
 pub use asset::{Asset, PropertySet};
 pub use damage::DamageScenario;
-pub use error::{MethodologyError, ModelError, PackError, StoreError};
+pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
 };

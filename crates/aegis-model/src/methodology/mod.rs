@@ -1406,9 +1406,13 @@ impl Methodology {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Methodology::iso21434_r155()?;
     /// let scheme = m.catalog_scheme("r155-annex5").ok_or("no scheme")?;
+    /// let syntax = m.catalog_syntax(scheme).ok_or("no syntax")?.clone();
     /// let r = m.parse_catalog_ref(scheme, "4.1")?;
     /// assert_eq!(r.segments(), [4, 1]);
-    /// assert_eq!(m.parse_catalog_ref(scheme, "4.0"), Err(ModelError::InvalidCatalogId { scheme }));
+    /// assert_eq!(
+    ///     m.parse_catalog_ref(scheme, "4.0"),
+    ///     Err(ModelError::InvalidCatalogId { scheme, syntax }),
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -1458,7 +1462,10 @@ impl Methodology {
         if syntax.accepts(r) {
             Ok(())
         } else {
-            Err(ModelError::InvalidCatalogId { scheme: r.scheme() })
+            Err(ModelError::InvalidCatalogId {
+                scheme: r.scheme(),
+                syntax: syntax.clone(),
+            })
         }
     }
 

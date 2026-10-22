@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use aegis_model::{AttackTree, GateKind, ModelError, Node, NodeId, NodeIdx};
 use proptest::prelude::*;
+use proptest::test_runner::FileFailurePersistence;
 
 /// One random `add_child` call.
 #[derive(Clone, Debug)]
@@ -75,8 +76,19 @@ fn check(tree: &AttackTree, inserted: &[NodeId]) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+fn config(cases: u32) -> ProptestConfig {
+    let mut config = ProptestConfig::default();
+    if std::env::var_os("PROPTEST_CASES").is_none() {
+        config.cases = cases;
+    }
+    config.failure_persistence = Some(Box::new(FileFailurePersistence::Direct(
+        "proptest-regressions/properties.txt",
+    )));
+    config
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
+    #![proptest_config(config(32))]
 
     #[test]
     fn random_add_child_sequences_keep_invariants(ops in prop::collection::vec(op(), 0..=2000)) {
