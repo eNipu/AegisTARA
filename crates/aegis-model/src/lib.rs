@@ -256,9 +256,9 @@ pub use op::Op;
 pub use project::{MAX_NAME_CHARS, Project};
 pub use provenance::{Provenance, ProvenanceSource};
 pub use store::{
-    Limit, LoggedOp, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
+    Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
     MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,
     MAX_PROJECT_FILE_BYTES, OpLogReader, OpLogWriter, VocabKind,
 };
 pub use threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
-pub use tree::{AttackTree, GateKind, Node};
+pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node};

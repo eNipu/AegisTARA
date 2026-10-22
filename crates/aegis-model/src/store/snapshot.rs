@@ -8,14 +8,13 @@ use serde::{Deserialize, Serialize, Serializer};
 use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
     self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
-    PropertyKeys, Required, SnapshotWire, Text,
+    NodesView, PropertyKeys, ProvenanceView, Required, SnapshotWire, StepFeasibilityByNode, Text,
 };
 use crate::error::StoreError;
-use crate::id::{AssetId, DamageId, ThreatId};
+use crate::id::{AssetId, DamageId, ThreatId, TreeId};
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::project::Project;
-use crate::provenance::Provenance;
 use crate::store::Limit;
 
 /// The whole snapshot, borrowed from the project.
@@ -27,6 +26,8 @@ struct SnapshotView<'a> {
     assets: Assets<'a>,
     damage_scenarios: Damages<'a>,
     threat_scenarios: Threats<'a>,
+    #[serde(skip_serializing_if = "Trees::is_empty")]
+    attack_trees: Trees<'a>,
 }
 
 /// What every entity view needs.
@@ -40,12 +41,21 @@ struct Ctx<'a> {
 struct Assets<'a>(Ctx<'a>);
 struct Damages<'a>(Ctx<'a>);
 struct Threats<'a>(Ctx<'a>);
+struct Trees<'a>(&'a Project);
+
+impl Trees<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.attack_tree_count() == 0
+    }
+}
 
 #[derive(Serialize)]
 struct AssetView<'a> {
     id: Text<AssetId>,
     name: &'a str,
     properties: PropertyKeys<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
 }
 
 #[derive(Serialize)]
@@ -53,6 +63,8 @@ struct DamageView<'a> {
     id: Text<DamageId>,
     name: &'a str,
     impacts: ImpactsByKey<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
 }
 
 #[derive(Serialize)]
@@ -63,6 +75,19 @@ struct ThreatView<'a> {
     category: Required<&'a str>,
     catalog_refs: CatalogRefsByKey<'a>,
     damages: LinkedDamages<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attack_tree: Option<Required<Text<TreeId>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+#[derive(Serialize)]
+struct TreeView<'a> {
+    id: Text<TreeId>,
+    nodes: NodesView<'a>,
+    step_feasibility: StepFeasibilityByNode<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
 }
 
 /// A threat's damage links as public IDs, in stored (ID) order.
@@ -82,6 +107,7 @@ impl Serialize for Assets<'_> {
                 order,
                 set: a.properties(),
             },
+            provenance: ProvenanceView::of(a.provenance()),
         }))
     }
 }
@@ -97,6 +123,7 @@ impl Serialize for Damages<'_> {
                 order,
                 damage: d,
             },
+            provenance: ProvenanceView::of(d.provenance()),
         }))
     }
 }
@@ -104,20 +131,46 @@ impl Serialize for Damages<'_> {
 impl Serialize for Threats<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let Ctx { p, m, order } = self.0;
-        s.collect_seq(p.threat_scenarios().map(|(_, id, t)| ThreatView {
-            id: Text(id),
-            name: t.name(),
-            asset: Required(p.asset_id(t.asset()).map(Text)),
-            category: Required(m.threat_category_key(t.category())),
-            catalog_refs: CatalogRefsByKey {
-                m,
-                order,
-                refs: t.catalog_refs(),
-            },
-            damages: LinkedDamages {
-                p,
-                links: t.damages(),
-            },
+        s.collect_seq(p.threat_scenarios().map(|(_, id, t)| {
+            ThreatView {
+                id: Text(id),
+                name: t.name(),
+                asset: Required(p.asset_id(t.asset()).map(Text)),
+                category: Required(m.threat_category_key(t.category())),
+                catalog_refs: CatalogRefsByKey {
+                    m,
+                    order,
+                    refs: t.catalog_refs(),
+                },
+                damages: LinkedDamages {
+                    p,
+                    links: t.damages(),
+                },
+                attack_tree: t
+                    .attack_tree()
+                    .map(|idx| Required(p.attack_tree_id(idx).map(Text))),
+                provenance: ProvenanceView::of(t.provenance()),
+            }
+        }))
+    }
+}
+
+impl Serialize for Trees<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(p.attack_trees().map(|(tree_idx, id, tree)| {
+            TreeView {
+                id: Text(id),
+                nodes: NodesView(tree),
+                step_feasibility: StepFeasibilityByNode {
+                    project: p,
+                    tree_idx,
+                    tree,
+                },
+                provenance: p
+                    .attack_tree_provenance(tree_idx)
+                    .and_then(ProvenanceView::of),
+            }
         }))
     }
 }
@@ -154,10 +207,8 @@ impl Project {
     /// # Errors
     ///
     /// [`StoreError::Io`] if writing fails. [`StoreError::UnencodableOp`]
-    /// if the project contains attack trees or non-default provenance
-    /// (which v1 snapshots do not yet encode) or if the project broke its
-    /// own invariants (an index not in its methodology), which the model
-    /// prevents.
+    /// if the project broke its own invariants (an index not in its
+    /// methodology), which the model prevents.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -185,17 +236,6 @@ impl Project {
     /// # }
     /// ```
     pub fn save<W: Write>(&self, w: W) -> Result<(), StoreError> {
-        if self.attack_tree_count() > 0
-            || self.assets().any(|(_, _, a)| !a.provenance().is_default())
-            || self
-                .damage_scenarios()
-                .any(|(_, _, d)| !d.provenance().is_default())
-            || self
-                .threat_scenarios()
-                .any(|(_, _, t)| t.attack_tree().is_some() || !t.provenance().is_default())
-        {
-            return Err(StoreError::UnencodableOp);
-        }
         let m = &**self.methodology();
         let order = KeyOrder::new(m);
         let ctx = Ctx {
@@ -210,6 +250,7 @@ impl Project {
             assets: Assets(ctx),
             damage_scenarios: Damages(ctx),
             threat_scenarios: Threats(ctx),
+            attack_trees: Trees(self),
         };
         let mut out = BufWriter::new(w);
         serde_json::to_writer(&mut out, &view).map_err(wire::encode_error)?;
@@ -309,7 +350,7 @@ impl Project {
                 id: a.id.0,
                 name: a.name.0,
                 properties: a.properties.0,
-                provenance: Provenance::default(),
+                provenance: wire::unwrap_provenance(a.provenance),
             })?;
         }
         for d in snapshot.damage_scenarios {
@@ -317,19 +358,37 @@ impl Project {
                 id: d.id.0,
                 name: d.name.0,
                 impacts: d.impacts.0,
-                provenance: Provenance::default(),
+                provenance: wire::unwrap_provenance(d.provenance),
+            })?;
+        }
+        for tr in snapshot.attack_trees {
+            project.apply(Op::AddAttackTree {
+                id: tr.id.0,
+                tree: tr.nodes.0,
+                step_feasibility: tr.step_feasibility.0,
+                provenance: wire::unwrap_provenance(tr.provenance),
             })?;
         }
         for t in snapshot.threat_scenarios {
+            let provenance = wire::unwrap_provenance(t.provenance);
+            let id = t.id.0;
+            let attack_tree = t.attack_tree.map(|w| w.0);
             project.apply(Op::AddThreatScenario {
-                id: t.id.0,
+                id,
                 name: t.name.0,
                 asset: t.asset.0,
                 category: t.category.0,
                 catalog_refs: t.catalog_refs.0.into_iter().map(|r| r.0).collect(),
                 damages: t.damages.0.into_iter().map(|d| d.0).collect(),
-                provenance: Provenance::default(),
+                provenance: provenance.clone(),
             })?;
+            if let Some(tree) = attack_tree {
+                project.apply(Op::SetThreatAttackTree {
+                    threat: id,
+                    tree: Some(tree),
+                    provenance,
+                })?;
+            }
         }
         Ok(project)
     }

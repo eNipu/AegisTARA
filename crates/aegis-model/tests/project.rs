@@ -785,6 +785,28 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         ),
         (
             p.clone(),
+            {
+                let mut big_tree =
+                    AttackTree::new(fx.fresh_node, Node::gate(GateKind::Or, n())).expect("root");
+                for i in 0..32 {
+                    big_tree
+                        .add_child(big_tree.root(), node_id(500 + i), Node::step(n()))
+                        .expect("step");
+                }
+                Op::AddAttackTree {
+                    id: fx.fresh_tree,
+                    tree: big_tree,
+                    step_feasibility: vec![],
+                    provenance: Provenance::default(),
+                }
+            },
+            ModelError::TooManyAttackTreeNodes {
+                tree: fx.fresh_tree,
+                max: 32,
+            },
+        ),
+        (
+            p.clone(),
             Op::RemoveAttackTree { id: fx.tree1 },
             ModelError::AttackTreeInUse {
                 tree: fx.tree1,
@@ -815,7 +837,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
 }
 
 /// The `ModelError` variants triggered by `Project::apply`.
-const NEW_VARIANTS: [&str; 36] = [
+const NEW_VARIANTS: [&str; 37] = [
     "DuplicateAsset",
     "DuplicateDamageScenario",
     "DuplicateThreatScenario",
@@ -846,6 +868,7 @@ const NEW_VARIANTS: [&str; 36] = [
     "ThreatHasAttackTree",
     "DuplicateImpactCategory",
     "DuplicateStepFeasibility",
+    "TooManyAttackTreeNodes",
     "DuplicateDamageLink",
     "DamageNotLinked",
     "CatalogRefNotFound",
@@ -1811,6 +1834,43 @@ fn threat_attack_tree_integrity_and_validation() {
             max: 256,
         },
     );
+
+    // 32 nodes (`MAX_ATTACK_TREE_NODES`) is accepted; 33 is rejected.
+    let mut tree32 =
+        AttackTree::new(fx.fresh_node, Node::gate(GateKind::Or, "root")).expect("root");
+    for i in 0..31 {
+        tree32
+            .add_child(tree32.root(), node_id(600 + i), Node::step("s"))
+            .expect("step");
+    }
+    assert_eq!(tree32.len(), aegis_model::MAX_ATTACK_TREE_NODES);
+    let mut tree33 = tree32.clone();
+    tree33
+        .add_child(tree33.root(), node_id(699), Node::step("s"))
+        .expect("33rd step");
+    rejects(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.fresh_tree,
+            tree: tree33,
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+        &ModelError::TooManyAttackTreeNodes {
+            tree: fx.fresh_tree,
+            max: 32,
+        },
+    );
+    let undo32 = ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: fx.fresh_tree,
+            tree: tree32,
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, undo32);
 }
 
 #[test]

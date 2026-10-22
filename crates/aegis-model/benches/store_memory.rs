@@ -19,6 +19,8 @@
 //!   parser's string buffer is the cost (the load fails with the name cap);
 //! - `minimal_entities`: the smallest valid assets, damage scenarios, and
 //!   threats in one file;
+//! - `attack_trees`: minimal 3-node attack trees (root OR gate with two
+//!   rated steps);
 //! - `{assets,damages,threats}_only_{builtin,max}`: one entity kind only,
 //!   each entity as small as a valid one can be, over the built-in
 //!   methodology (6 properties, 4 impact categories) and over `short`, a
@@ -55,6 +57,7 @@
 //! | long names | 1.08 / 1.5 | 1.04 / 1.5 | the names, moved into the project |
 //! | one huge string | 1.02 / 1.4 | 0.00 / 0.1 | the parser's string buffer, which grows by doubling |
 //! | minimal entities (mixed kinds) | 2.08 / 2.9 | 1.68 / 2.3 | the project's fixed per-entity cost (arena slot, ID map, counts) |
+//! | attack trees | 2.77 / 3.4 | 1.95 / 2.4 | the trees' node arenas, ID maps, and step ratings |
 //! | assets only, built-in / max vocabulary | 2.31 / 2.41, gates 3.2 / 3.3 | 1.68 / 1.78, gates 2.3 / 2.2 | the project's fixed per-asset cost; the empty count row is 16 bytes whatever the methodology |
 //! | damages only, built-in / max vocabulary | 2.73 / 3.53, gates 3.7 / 4.8 | 1.85 / 2.65, gates 2.5 / 3.0 | the project: per damage scenario, one rating slot per impact category |
 //! | threats only, built-in / max vocabulary | 1.91 / 1.93, gates 2.6 / 2.6 | 1.10 / 1.12, gates 1.5 / 1.6 | the project |
@@ -195,9 +198,14 @@ fn snapshot(kind: &str, mut entity: impl FnMut(u64) -> String) -> Vec<u8> {
         i += 1;
     }
     let field = |k: &str| if k == kind { list.as_str() } else { "" };
+    let trees = if kind == "attack_trees" {
+        format!(",\"attack_trees\":[{list}]")
+    } else {
+        String::new()
+    };
     format!(
         "{{\"format\":\"aegis-project\",\"version\":1,\"methodology\":{{\"key\":\"short\",\"version\":\"1\"}},\
-         \"assets\":[{}],\"damage_scenarios\":[{}],\"threat_scenarios\":[{}]}}\n",
+         \"assets\":[{}],\"damage_scenarios\":[{}],\"threat_scenarios\":[{}]{trees}}}\n",
         field("assets"),
         field("damage_scenarios"),
         field("threat_scenarios"),
@@ -491,6 +499,24 @@ fn cases() -> Vec<Case> {
             max_factor: 2.9,
             max_kept: 2.3,
         },
+        Case {
+            name: "attack_trees",
+            methodology: Arc::clone(&short),
+            bytes: snapshot("attack_trees", |i| {
+                let (r, a, b) = (id(3 * i + 1), id(3 * i + 2), id(3 * i + 3));
+                format!(
+                    "{{\"id\":\"{}\",\"nodes\":[\
+                     {{\"id\":\"{r}\",\"label\":\"g\",\"gate\":\"or\",\"children\":[\"{a}\",\"{b}\"]}},\
+                     {{\"id\":\"{a}\",\"label\":\"a\"}},\
+                     {{\"id\":\"{b}\",\"label\":\"b\"}}\
+                     ],\"step_feasibility\":{{\"{a}\":\"a\",\"{b}\":\"b\"}}}}",
+                    id(i),
+                )
+            }),
+            loads: true,
+            max_factor: 3.4,
+            max_kept: 2.4,
+        },
     ];
     let builtin = store_kit::methodology();
     // (name, methodology, kind, peak gate, kept gate)
@@ -570,7 +596,10 @@ fn main() {
         let outcome = match &result {
             Ok(p) => format!(
                 "ok ({} entities)",
-                p.asset_count() + p.damage_scenario_count() + p.threat_scenario_count()
+                p.asset_count()
+                    + p.damage_scenario_count()
+                    + p.threat_scenario_count()
+                    + p.attack_tree_count()
             ),
             Err(e) => format!("{e}"),
         };
