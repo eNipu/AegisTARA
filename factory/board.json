@@ -232,6 +232,22 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-21T22:44:31Z"
+    },
+    {
+      "id": "013-threat-attack-trees",
+      "title": "Link threat scenarios to attack trees",
+      "branch": "factory/013-threat-attack-trees",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-22T02:00:00Z"
     }
   ]
 }
