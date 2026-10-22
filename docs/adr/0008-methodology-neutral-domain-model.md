@@ -178,7 +178,9 @@ counts are unchanged.
 
 ### Typed ops and inverse ops for undo (D9)
 
-Every change is an `Op` (16 variants). `validate(&Op)` runs every check
+Every change is an `Op` (16 variants; extended to 20 with attack trees in
+[ADR 0012](0012-threat-attack-trees.md) and carrying element provenance in
+[ADR 0013](0013-element-provenance.md)). `validate(&Op)` runs every check
 without changing anything; `apply(Op)` runs the same checks, then commits
 and returns the inverse op. Every fallible lookup in a commit happens
 before its first mutation, so even an unexpected error leaves the project

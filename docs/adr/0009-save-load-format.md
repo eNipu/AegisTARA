@@ -196,7 +196,8 @@ Rules:
   the whole line with one `write_all` only if encoding succeeded. It refuses
   (`UnencodableOp`, nothing written) an op it could not read back: an index
   not in the writer's methodology, a repeated impact category, a name or
-  list over its cap, or a record over 64 KiB.
+  list over its cap, a record over 64 KiB, an attack-tree op ([ADR 0012](0012-threat-attack-trees.md)),
+  or an op with non-default provenance ([ADR 0013](0013-element-provenance.md)).
 - **Load builds through `apply`.** `Project::load` decodes, checks the
   methodology, then applies `AddAsset`, `AddDamageScenario`, and
   `AddThreatScenario` ops, so model validation has one path (Q4) and the

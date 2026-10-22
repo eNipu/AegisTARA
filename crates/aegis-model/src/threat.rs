@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::id::{AssetIdx, DamageIdx, TreeIdx};
 use crate::methodology::{CatalogRef, ThreatCategory};
+use crate::provenance::Provenance;
 
 /// Most catalog refs on one threat scenario.
 pub const MAX_CATALOG_REFS: usize = 16;
@@ -31,13 +32,18 @@ pub const MAX_DAMAGE_LINKS: usize = 256;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use aegis_model::{AssetId, Methodology, Op, Project, ThreatId};
+/// use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
 /// let mut project = Project::new(Arc::clone(&m));
 /// let asset = AssetId::new_v7();
-/// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+/// project.apply(Op::AddAsset {
+///     id: asset,
+///     name: "ECU".into(),
+///     properties: m.all_properties(),
+///     provenance: Provenance::default(),
+/// })?;
 /// let category = m.threat_category("tampering").ok_or("no category")?;
 /// project.apply(Op::AddThreatScenario {
 ///     id: ThreatId::new_v7(),
@@ -46,6 +52,7 @@ pub const MAX_DAMAGE_LINKS: usize = 256;
 ///     category,
 ///     catalog_refs: vec![],
 ///     damages: vec![],
+///     provenance: Provenance::default(),
 /// })?;
 /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
 /// assert_eq!(t.category(), category);
@@ -64,6 +71,7 @@ pub struct ThreatScenario {
     /// [`MAX_DAMAGE_LINKS`].
     pub(crate) damages: Vec<DamageIdx>,
     pub(crate) attack_tree: Option<TreeIdx>,
+    pub(crate) provenance: Provenance,
 }
 
 impl ThreatScenario {
@@ -71,16 +79,16 @@ impl ThreatScenario {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project, ThreatId};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// # let asset = AssetId::new_v7();
-    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
     /// # let category = m.threat_categories().next().ok_or("none")?;
     /// project.apply(Op::AddThreatScenario {
     ///     id: ThreatId::new_v7(), name: "Replay".into(), asset, category,
-    ///     catalog_refs: vec![], damages: vec![],
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
     /// })?;
     /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
     /// assert_eq!(t.name(), "Replay");
@@ -96,16 +104,16 @@ impl ThreatScenario {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project, ThreatId};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// let asset = AssetId::new_v7();
-    /// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
     /// # let category = m.threat_categories().next().ok_or("none")?;
     /// project.apply(Op::AddThreatScenario {
     ///     id: ThreatId::new_v7(), name: "Replay".into(), asset, category,
-    ///     catalog_refs: vec![], damages: vec![],
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
     /// })?;
     /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
     /// assert_eq!(project.asset_id(t.asset()), Some(asset));
@@ -121,16 +129,16 @@ impl ThreatScenario {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project, ThreatId};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// # let asset = AssetId::new_v7();
-    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
     /// let category = m.threat_category("spoofing").ok_or("none")?;
     /// project.apply(Op::AddThreatScenario {
     ///     id: ThreatId::new_v7(), name: "Fake key fob".into(), asset, category,
-    ///     catalog_refs: vec![], damages: vec![],
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
     /// })?;
     /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
     /// assert_eq!(t.category(), category);
@@ -146,18 +154,18 @@ impl ThreatScenario {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project, ThreatId};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// # let asset = AssetId::new_v7();
-    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
     /// # let category = m.threat_categories().next().ok_or("none")?;
     /// let scheme = m.catalog_scheme("r155-annex5").ok_or("none")?;
     /// let (a, b) = (m.parse_catalog_ref(scheme, "5")?, m.parse_catalog_ref(scheme, "4.1")?);
     /// project.apply(Op::AddThreatScenario {
     ///     id: ThreatId::new_v7(), name: "Replay".into(), asset, category,
-    ///     catalog_refs: vec![a, b], damages: vec![],
+    ///     catalog_refs: vec![a, b], damages: vec![], provenance: Provenance::default(),
     /// })?;
     /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
     /// assert_eq!(t.catalog_refs(), [b, a]);
@@ -174,18 +182,18 @@ impl ThreatScenario {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, DamageId, Methodology, Op, Project, ThreatId};
+    /// # use aegis_model::{AssetId, DamageId, Methodology, Op, Project, Provenance, ThreatId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// # let asset = AssetId::new_v7();
-    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
     /// # let category = m.threat_categories().next().ok_or("none")?;
     /// let damage = DamageId::new_v7();
-    /// project.apply(Op::AddDamageScenario { id: damage, name: "Crash".into(), impacts: vec![] })?;
+    /// project.apply(Op::AddDamageScenario { id: damage, name: "Crash".into(), impacts: vec![], provenance: Provenance::default() })?;
     /// project.apply(Op::AddThreatScenario {
     ///     id: ThreatId::new_v7(), name: "Replay".into(), asset, category,
-    ///     catalog_refs: vec![], damages: vec![damage],
+    ///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
     /// })?;
     /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
     /// assert_eq!(t.damages(), [project.damage_scenario_idx(&damage).ok_or("missing")?]);
@@ -203,23 +211,28 @@ impl ThreatScenario {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{
-    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, ThreatId, TreeId,
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
     /// # };
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// # let asset = AssetId::new_v7();
-    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
     /// # let category = m.threat_categories().next().ok_or("none")?;
     /// let threat = ThreatId::new_v7();
     /// project.apply(Op::AddThreatScenario {
     ///     id: threat, name: "Replay".into(), asset, category,
-    ///     catalog_refs: vec![], damages: vec![],
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
     /// })?;
     /// let tree_id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
-    /// project.apply(Op::AddAttackTree { id: tree_id, tree, step_feasibility: vec![] })?;
-    /// project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id) })?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
     /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
     /// assert_eq!(t.attack_tree(), project.attack_tree_idx(&tree_id));
     /// # Ok(())
@@ -228,5 +241,32 @@ impl ThreatScenario {
     #[must_use]
     pub fn attack_tree(&self) -> Option<TreeIdx> {
         self.attack_tree
+    }
+
+    /// Returns the provenance of the last creation or modification of this
+    /// threat scenario. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// let prov = Provenance::catalog("r155-annex5", 1_700_000_000_000);
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: ThreatId::new_v7(), name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: prov.clone(),
+    /// })?;
+    /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
+    /// assert_eq!(t.provenance(), &prov);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
     }
 }

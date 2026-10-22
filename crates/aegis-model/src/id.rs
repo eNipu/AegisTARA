@@ -318,14 +318,19 @@ entity_ids! {
     index_example {
         /// ```
         /// use std::sync::Arc;
-        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet};
+        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, Provenance};
         ///
         /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
         /// let m = Arc::new(Methodology::iso21434_r155()?);
         /// let mut project = Project::new(Arc::clone(&m));
         /// let id = AssetId::new_v7();
         /// let properties: PropertySet = m.properties().collect();
-        /// project.apply(Op::AddAsset { id, name: "Gateway ECU".into(), properties })?;
+        /// project.apply(Op::AddAsset {
+        ///     id,
+        ///     name: "Gateway ECU".into(),
+        ///     properties,
+        ///     provenance: Provenance::default(),
+        /// })?;
         /// assert_eq!(project.asset_idx(&id).map(|i| i.index()), Some(0));
         /// # Ok(())
         /// # }
@@ -379,12 +384,17 @@ entity_ids! {
     index_example {
         /// ```
         /// use std::sync::Arc;
-        /// use aegis_model::{DamageId, Methodology, Op, Project};
+        /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
         ///
         /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
         /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
         /// let id = DamageId::new_v7();
-        /// project.apply(Op::AddDamageScenario { id, name: "Loss of braking".into(), impacts: vec![] })?;
+        /// project.apply(Op::AddDamageScenario {
+        ///     id,
+        ///     name: "Loss of braking".into(),
+        ///     impacts: vec![],
+        ///     provenance: Provenance::default(),
+        /// })?;
         /// assert_eq!(project.damage_scenario_idx(&id).map(|i| i.index()), Some(0));
         /// # Ok(())
         /// # }
@@ -418,19 +428,24 @@ entity_ids! {
     index_example {
         /// ```
         /// use std::sync::Arc;
-        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, ThreatId};
+        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, Provenance, ThreatId};
         ///
         /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
         /// let m = Arc::new(Methodology::iso21434_r155()?);
         /// let mut project = Project::new(Arc::clone(&m));
         /// let asset = AssetId::new_v7();
         /// let properties: PropertySet = m.properties().collect();
-        /// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties })?;
+        /// project.apply(Op::AddAsset {
+        ///     id: asset,
+        ///     name: "ECU".into(),
+        ///     properties,
+        ///     provenance: Provenance::default(),
+        /// })?;
         /// let category = m.threat_categories().next().ok_or("no category")?;
         /// let id = ThreatId::new_v7();
         /// project.apply(Op::AddThreatScenario {
         ///     id, name: "Forge messages".into(), asset, category,
-        ///     catalog_refs: vec![], damages: vec![],
+        ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
         /// })?;
         /// assert_eq!(project.threat_scenario_idx(&id).map(|i| i.index()), Some(0));
         /// # Ok(())
@@ -465,13 +480,18 @@ entity_ids! {
     index_example {
         /// ```
         /// use std::sync::Arc;
-        /// use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+        /// use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
         ///
         /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
         /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
         /// let id = TreeId::new_v7();
         /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Pick lock"))?;
-        /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![] })?;
+        /// project.apply(Op::AddAttackTree {
+        ///     id,
+        ///     tree,
+        ///     step_feasibility: vec![],
+        ///     provenance: Provenance::default(),
+        /// })?;
         /// assert_eq!(project.attack_tree_idx(&id).map(|i| i.index()), Some(0));
         /// # Ok(())
         /// # }
