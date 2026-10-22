@@ -264,6 +264,22 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-22T02:45:00Z"
+    },
+    {
+      "id": "015-small-cleanups",
+      "title": "Small cleanups: proptest failure persistence and specific ModelError messages",
+      "branch": "factory/015-small-cleanups",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-22T03:15:00Z"
     }
   ]
 }
