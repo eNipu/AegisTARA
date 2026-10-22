@@ -1,10 +1,69 @@
 //! Typed errors for the model crate.
 
+use std::fmt;
 use std::sync::Arc;
 
-use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId};
-use crate::methodology::{CatalogScheme, ImpactCategory, Level, Property, ThreatCategory};
+use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId, TreeId};
+use crate::methodology::{
+    CatalogRef, CatalogScheme, CatalogSyntax, FeasibilityLevel, ImpactCategory, Level, Property,
+    ThreatCategory,
+};
 use crate::store::{Limit, VocabKind};
+
+/// Which entity kind a [`ModelError`] refers to.
+///
+/// Used by [`ModelError::EmptyName`], [`ModelError::NameTooLong`], and
+/// [`ModelError::ProjectCapacityExceeded`] so the error says which kind of
+/// entity had a bad name or hit its slot limit without naming the entity
+/// itself.
+///
+/// ```
+/// use aegis_model::EntityKind;
+///
+/// assert_eq!(EntityKind::Asset.to_string(), "asset");
+/// assert_eq!(EntityKind::DamageScenario.to_string(), "damage scenario");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EntityKind {
+    /// An asset ([`Asset`](crate::Asset)).
+    Asset,
+    /// A damage scenario ([`DamageScenario`](crate::DamageScenario)).
+    DamageScenario,
+    /// A threat scenario ([`ThreatScenario`](crate::ThreatScenario)).
+    ThreatScenario,
+    /// An attack tree ([`AttackTree`](crate::AttackTree)).
+    AttackTree,
+    /// A node in an attack tree ([`Node`](crate::Node)).
+    TreeNode,
+}
+
+impl EntityKind {
+    /// Returns the lowercase human-readable name of this entity kind.
+    ///
+    /// ```
+    /// use aegis_model::EntityKind;
+    ///
+    /// assert_eq!(EntityKind::Asset.as_str(), "asset");
+    /// assert_eq!(EntityKind::TreeNode.as_str(), "tree node");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Asset => "asset",
+            Self::DamageScenario => "damage scenario",
+            Self::ThreatScenario => "threat scenario",
+            Self::AttackTree => "attack tree",
+            Self::TreeNode => "tree node",
+        }
+    }
+}
+
+impl fmt::Display for EntityKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Errors returned by the model.
 ///
@@ -180,6 +239,9 @@ pub enum ModelError {
     /// A threat scenario with this ID already exists in the project.
     #[error("threat scenario {0} already exists in the project")]
     DuplicateThreatScenario(ThreatId),
+    /// An attack tree with this ID already exists in the project.
+    #[error("attack tree {0} already exists in the project")]
+    DuplicateAttackTree(TreeId),
     /// No asset with this ID is in the project.
     #[error("asset {0} is not in the project")]
     UnknownAsset(AssetId),
@@ -189,12 +251,69 @@ pub enum ModelError {
     /// No threat scenario with this ID is in the project.
     #[error("threat scenario {0} is not in the project")]
     UnknownThreatScenario(ThreatId),
+    /// No attack tree with this ID is in the project.
+    #[error("attack tree {0} is not in the project")]
+    UnknownAttackTree(TreeId),
+    /// No node with this ID is in the attack tree.
+    #[error("node {node} is not in attack tree {tree}")]
+    UnknownTreeNode {
+        /// The attack tree.
+        tree: TreeId,
+        /// The missing node ID.
+        node: NodeId,
+    },
+    /// A gate node was given where a leaf step is required.
+    #[error("node {node} of attack tree {tree} is a gate, not a step")]
+    NotAStep {
+        /// The attack tree.
+        tree: TreeId,
+        /// The gate node ID.
+        node: NodeId,
+    },
     /// A name is empty after trimming whitespace.
-    #[error("name is empty")]
-    EmptyName,
+    #[error("{kind} name is empty")]
+    EmptyName {
+        /// Which entity kind had an empty name.
+        kind: EntityKind,
+    },
     /// A name is longer than `max` chars.
-    #[error("name is longer than {max} chars")]
+    #[error("{kind} name is longer than {max} chars")]
     NameTooLong {
+        /// Which entity kind had a name that was too long.
+        kind: EntityKind,
+        /// The limit, in chars.
+        max: usize,
+    },
+    /// A non-empty provenance actor string contains only whitespace.
+    ///
+    /// Carries no actor text so user or customer identifiers never appear in
+    /// error messages or logs.
+    ///
+    /// ```
+    /// use aegis_model::ModelError;
+    ///
+    /// assert_eq!(
+    ///     ModelError::EmptyActor.to_string(),
+    ///     "provenance actor is empty after trimming whitespace",
+    /// );
+    /// ```
+    #[error("provenance actor is empty after trimming whitespace")]
+    EmptyActor,
+    /// A provenance actor string is longer than `max` chars.
+    ///
+    /// Carries only the character limit, never the actor text.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, MAX_NAME_CHARS};
+    ///
+    /// let err = ModelError::ActorTooLong { max: MAX_NAME_CHARS };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "provenance actor is longer than 256 chars",
+    /// );
+    /// ```
+    #[error("provenance actor is longer than {max} chars")]
+    ActorTooLong {
         /// The limit, in chars.
         max: usize,
     },
@@ -213,6 +332,9 @@ pub enum ModelError {
         /// The out-of-range level.
         level: Level,
     },
+    /// The feasibility level index is not in the project's methodology.
+    #[error("feasibility level index {} is not in the methodology", .0.index())]
+    UnknownFeasibilityLevel(FeasibilityLevel),
     /// The property index is not in the project's methodology.
     #[error("property index {} is not in the methodology", .0.index())]
     UnknownProperty(Property),
@@ -223,10 +345,15 @@ pub enum ModelError {
     #[error("catalog scheme index {} is not in the methodology", .0.index())]
     UnknownCatalogScheme(CatalogScheme),
     /// The catalog ID does not match its scheme's syntax.
-    #[error("catalog ID does not match the syntax of scheme index {}", .scheme.index())]
+    #[error(
+        "catalog ID does not match syntax {syntax} of scheme index {}",
+        .scheme.index()
+    )]
     InvalidCatalogId {
         /// The scheme whose syntax was not met.
         scheme: CatalogScheme,
+        /// The expected syntax of that scheme.
+        syntax: CatalogSyntax,
     },
     /// An asset must have at least one security property.
     #[error("asset {0} has no security properties")]
@@ -269,9 +396,37 @@ pub enum ModelError {
         /// How many threats link to it.
         threats: u32,
     },
+    /// The attack tree cannot be removed: `threats` threats reference it.
+    #[error("attack tree {tree} is referenced by {threats} threat(s)")]
+    AttackTreeInUse {
+        /// The attack tree.
+        tree: TreeId,
+        /// How many threats reference it.
+        threats: u32,
+    },
+    /// The threat scenario cannot be removed while it still references an
+    /// attack tree; unlink the tree first.
+    #[error("threat scenario {threat} still references attack tree {tree}")]
+    ThreatHasAttackTree {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The linked attack tree.
+        tree: TreeId,
+    },
+    /// The threat scenario has no linked attack tree to evaluate.
+    #[error("threat scenario {0} has no linked attack tree")]
+    NoAttackTree(ThreatId),
     /// An impacts list names the same category twice.
     #[error("impact category index {} is listed twice", .0.index())]
     DuplicateImpactCategory(ImpactCategory),
+    /// A step feasibility list rates the same step node twice.
+    #[error("step node {node} of attack tree {tree} is rated twice")]
+    DuplicateStepFeasibility {
+        /// The attack tree.
+        tree: TreeId,
+        /// The repeated step node ID.
+        node: NodeId,
+    },
     /// The threat already links to this damage scenario, or an op lists it
     /// twice.
     #[error("threat scenario {threat} already links damage scenario {damage}")]
@@ -290,16 +445,20 @@ pub enum ModelError {
         damage: DamageId,
     },
     /// The threat does not have this catalog ref.
-    #[error("threat scenario {threat} does not have this catalog ref")]
+    #[error("threat scenario {threat} does not have catalog ref {catalog_ref}")]
     CatalogRefNotFound {
         /// The threat scenario.
         threat: ThreatId,
+        /// The catalog ref that was not on the threat scenario.
+        catalog_ref: CatalogRef,
     },
     /// The threat already has this catalog ref, or an op lists it twice.
-    #[error("threat scenario {threat} already has this catalog ref")]
+    #[error("threat scenario {threat} already has catalog ref {catalog_ref}")]
     DuplicateCatalogRef {
         /// The threat scenario.
         threat: ThreatId,
+        /// The duplicated catalog ref.
+        catalog_ref: CatalogRef,
     },
     /// A threat may have at most `max` catalog refs.
     #[error("threat scenario {threat} would have more than {max} catalog refs")]
@@ -330,8 +489,11 @@ pub enum ModelError {
     },
     /// The project cannot hold more entities of this kind (the arena is at
     /// its slot limit, at most `u32::MAX`).
-    #[error("project capacity exceeded")]
-    ProjectCapacityExceeded,
+    #[error("project {kind} capacity exceeded")]
+    ProjectCapacityExceeded {
+        /// Which entity kind hit its slot limit.
+        kind: EntityKind,
+    },
 }
 
 /// Errors from [`Methodology::new`](crate::Methodology::new): one variant
@@ -352,6 +514,7 @@ pub enum ModelError {
 ///     version: "1".into(),
 ///     label: "Empty".into(),
 ///     impact_categories: vec![],
+///     feasibility_levels: vec![],
 ///     properties: vec![],
 ///     threat_categories: vec![],
 ///     catalog_schemes: vec![],
@@ -376,6 +539,7 @@ pub enum MethodologyError {
     ///     version: "1".into(),
     ///     label: "Huge".into(),
     ///     impact_categories: vec![],
+    ///     feasibility_levels: vec![],
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
@@ -432,6 +596,17 @@ pub enum MethodologyError {
         /// The repeated level key.
         level: Arc<str>,
     },
+    /// `feasibility_levels` has fewer than `min` or more than `max` levels.
+    #[error("feasibility_levels has fewer than {min} or more than {max} levels")]
+    FeasibilityLevelCount {
+        /// Fewest levels.
+        min: usize,
+        /// Most levels.
+        max: usize,
+    },
+    /// Two feasibility levels share a key.
+    #[error("duplicate feasibility level key {0:?}")]
+    DuplicateFeasibilityLevel(Arc<str>),
     /// No security property is declared.
     #[error("at least one security property is required")]
     NoProperty,

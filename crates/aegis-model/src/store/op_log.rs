@@ -14,6 +14,7 @@ use crate::error::StoreError;
 use crate::id::{AssetId, DamageId, ThreatId};
 use crate::methodology::Methodology;
 use crate::op::Op;
+use crate::provenance::Provenance;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 
 /// One record of an op log: its sequence number and the op.
@@ -117,9 +118,13 @@ enum OpView<'a> {
     },
 }
 
-/// Refuses a name or list the reader would refuse, so the writer never
-/// writes a record it cannot read back. Time O(1).
+/// Refuses a name or list the reader would refuse, or non-default
+/// provenance, so the writer never writes a record it cannot read back.
+/// Time O(1).
 fn within_caps(op: &Op) -> bool {
+    if op.provenance().is_some_and(|p| !p.is_default()) {
+        return false;
+    }
     let name_ok = |name: &str| name.len() <= MAX_NAME_BYTES;
     match op {
         Op::AddAsset { name, .. }
@@ -137,39 +142,47 @@ fn within_caps(op: &Op) -> bool {
                 && catalog_refs.len() <= MAX_CATALOG_REFS
                 && damages.len() <= MAX_DAMAGE_LINKS
         }
+        Op::AddAttackTree { .. }
+        | Op::SetStepFeasibility { .. }
+        | Op::SetThreatAttackTree { .. }
+        | Op::RemoveAttackTree { .. } => false,
         _ => true,
     }
 }
 
 /// Builds the borrowed view of `op`. Index-to-key lookups happen while it
-/// is serialized. Time O(1).
-fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a> {
+/// is serialized. Returns `None` for ops not in the v1 op log format.
+/// Time O(1).
+fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> Option<OpView<'a>> {
     let props = |set| PropertyKeys { m, order, set };
-    match op {
+    Some(match op {
         Op::AddAsset {
             id,
             name,
             properties,
+            ..
         } => OpView::AddAsset {
             id: Text(*id),
             name,
             properties: props(*properties),
         },
-        Op::RenameAsset { id, name } => OpView::RenameAsset {
+        Op::RenameAsset { id, name, .. } => OpView::RenameAsset {
             id: Text(*id),
             name,
         },
-        Op::SetAssetProperties { id, properties } => OpView::SetAssetProperties {
+        Op::SetAssetProperties { id, properties, .. } => OpView::SetAssetProperties {
             id: Text(*id),
             properties: props(*properties),
         },
         Op::RemoveAsset { id } => OpView::RemoveAsset { id: Text(*id) },
-        Op::AddDamageScenario { id, name, impacts } => OpView::AddDamageScenario {
+        Op::AddDamageScenario {
+            id, name, impacts, ..
+        } => OpView::AddDamageScenario {
             id: Text(*id),
             name,
             impacts: ImpactsInOrder { m, impacts },
         },
-        Op::RenameDamageScenario { id, name } => OpView::RenameDamageScenario {
+        Op::RenameDamageScenario { id, name, .. } => OpView::RenameDamageScenario {
             id: Text(*id),
             name,
         },
@@ -177,6 +190,7 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             id,
             category,
             level,
+            ..
         } => OpView::SetImpact {
             id: Text(*id),
             category: Required(m.impact_category_key(*category)),
@@ -190,6 +204,7 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             category,
             catalog_refs,
             damages,
+            ..
         } => OpView::AddThreatScenario {
             id: Text(*id),
             name,
@@ -201,17 +216,18 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             },
             damages: Ids(damages),
         },
-        Op::RenameThreatScenario { id, name } => OpView::RenameThreatScenario {
+        Op::RenameThreatScenario { id, name, .. } => OpView::RenameThreatScenario {
             id: Text(*id),
             name,
         },
-        Op::SetThreatCategory { id, category } => OpView::SetThreatCategory {
+        Op::SetThreatCategory { id, category, .. } => OpView::SetThreatCategory {
             id: Text(*id),
             category: Required(m.threat_category_key(*category)),
         },
         Op::AddCatalogRef {
             threat,
             catalog_ref,
+            ..
         } => OpView::AddCatalogRef {
             threat: Text(*threat),
             catalog_ref: CatalogRefView { m, r: *catalog_ref },
@@ -219,20 +235,25 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         Op::RemoveCatalogRef {
             threat,
             catalog_ref,
+            ..
         } => OpView::RemoveCatalogRef {
             threat: Text(*threat),
             catalog_ref: CatalogRefView { m, r: *catalog_ref },
         },
-        Op::LinkDamage { threat, damage } => OpView::LinkDamage {
+        Op::LinkDamage { threat, damage, .. } => OpView::LinkDamage {
             threat: Text(*threat),
             damage: Text(*damage),
         },
-        Op::UnlinkDamage { threat, damage } => OpView::UnlinkDamage {
+        Op::UnlinkDamage { threat, damage, .. } => OpView::UnlinkDamage {
             threat: Text(*threat),
             damage: Text(*damage),
         },
         Op::RemoveThreatScenario { id } => OpView::RemoveThreatScenario { id: Text(*id) },
-    }
+        Op::AddAttackTree { .. }
+        | Op::SetStepFeasibility { .. }
+        | Op::SetThreatAttackTree { .. }
+        | Op::RemoveAttackTree { .. } => return None,
+    })
 }
 
 /// Encodes one record line, `\n` included, into `buf` (cleared first). On
@@ -250,7 +271,7 @@ fn encode_record(
     }
     let record = RecordView {
         seq,
-        op: op_view(m, order, op),
+        op: op_view(m, order, op).ok_or(StoreError::UnencodableOp)?,
     };
     serde_json::to_writer(&mut *buf, &record).map_err(wire::encode_error)?;
     if buf.len() > MAX_OP_RECORD_BYTES {
@@ -267,7 +288,9 @@ fn encode_record(
 /// Turns a decoded op into an `Op` of `m`. Vocabulary was resolved while
 /// decoding; only a `SetImpact` level is resolved here, against its
 /// category. Lists keep their order. Time O(k).
+#[allow(clippy::too_many_lines)]
 fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
+    let provenance = Provenance::default();
     Ok(match w {
         OpWire::AddAsset {
             id,
@@ -277,41 +300,43 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             id: id.0,
             name: name.0,
             properties: properties.0,
+            provenance,
         },
         OpWire::RenameAsset { id, name } => Op::RenameAsset {
             id: id.0,
             name: name.0,
+            provenance,
         },
         OpWire::SetAssetProperties { id, properties } => Op::SetAssetProperties {
             id: id.0,
             properties: properties.0,
+            provenance,
         },
         OpWire::RemoveAsset { id } => Op::RemoveAsset { id: id.0 },
         OpWire::AddDamageScenario { id, name, impacts } => Op::AddDamageScenario {
             id: id.0,
             name: name.0,
             impacts: impacts.0,
+            provenance,
         },
         OpWire::RenameDamageScenario { id, name } => Op::RenameDamageScenario {
             id: id.0,
             name: name.0,
+            provenance,
         },
         OpWire::SetImpact {
             id,
             category,
             level,
-        } => {
-            let category = category.0;
-            let level = match level {
-                Some(l) => Some(wire::resolve_level(m, category, &l)?),
-                None => None,
-            };
-            Op::SetImpact {
-                id: id.0,
-                category,
-                level,
-            }
-        }
+        } => Op::SetImpact {
+            id: id.0,
+            category: category.0,
+            level: level
+                .as_ref()
+                .map(|l| wire::resolve_level(m, category.0, l))
+                .transpose()?,
+            provenance,
+        },
         OpWire::RemoveDamageScenario { id } => Op::RemoveDamageScenario { id: id.0 },
         OpWire::AddThreatScenario {
             id,
@@ -327,14 +352,17 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             category: category.0,
             catalog_refs: catalog_refs.0.into_iter().map(|r| r.0).collect(),
             damages: damages.0.into_iter().map(|d| d.0).collect(),
+            provenance,
         },
         OpWire::RenameThreatScenario { id, name } => Op::RenameThreatScenario {
             id: id.0,
             name: name.0,
+            provenance,
         },
         OpWire::SetThreatCategory { id, category } => Op::SetThreatCategory {
             id: id.0,
             category: category.0,
+            provenance,
         },
         OpWire::AddCatalogRef {
             threat,
@@ -342,6 +370,7 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::AddCatalogRef {
             threat: threat.0,
             catalog_ref: catalog_ref.0,
+            provenance,
         },
         OpWire::RemoveCatalogRef {
             threat,
@@ -349,14 +378,17 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::RemoveCatalogRef {
             threat: threat.0,
             catalog_ref: catalog_ref.0,
+            provenance,
         },
         OpWire::LinkDamage { threat, damage } => Op::LinkDamage {
             threat: threat.0,
             damage: damage.0,
+            provenance,
         },
         OpWire::UnlinkDamage { threat, damage } => Op::UnlinkDamage {
             threat: threat.0,
             damage: damage.0,
+            provenance,
         },
         OpWire::RemoveThreatScenario { id } => Op::RemoveThreatScenario { id: id.0 },
     })
@@ -431,14 +463,19 @@ fn reject_cr(buf: &[u8], line: u64) -> Result<(), StoreError> {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use aegis_model::{AssetId, Methodology, Op, OpLogReader, OpLogWriter, Project};
+/// use aegis_model::{AssetId, Methodology, Op, OpLogReader, OpLogWriter, Project, Provenance};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
 /// let mut project = Project::new(Arc::clone(&m));
 /// let mut log = OpLogWriter::create(Vec::new(), Arc::clone(&m))?;
 ///
-/// let op = Op::AddAsset { id: AssetId::new_v7(), name: "ECU".into(), properties: m.all_properties() };
+/// let op = Op::AddAsset {
+///     id: AssetId::new_v7(),
+///     name: "ECU".into(),
+///     properties: m.all_properties(),
+///     provenance: Provenance::default(),
+/// };
 /// let undo = project.apply(op.clone())?;
 /// if let Err(e) = log.append(&op) {
 ///     project.apply(undo)?;
@@ -637,12 +674,17 @@ impl<W: Write> OpLogWriter<W> {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use aegis_model::{DamageId, Methodology, Op, OpLogReader, OpLogWriter};
+/// use aegis_model::{DamageId, Methodology, Op, OpLogReader, OpLogWriter, Provenance};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
 /// let mut log = OpLogWriter::create(Vec::new(), Arc::clone(&m))?;
-/// let op = Op::AddDamageScenario { id: DamageId::new_v7(), name: "Leak".into(), impacts: vec![] };
+/// let op = Op::AddDamageScenario {
+///     id: DamageId::new_v7(),
+///     name: "Leak".into(),
+///     impacts: vec![],
+///     provenance: Provenance::default(),
+/// };
 /// log.append(&op)?;
 /// let bytes = log.into_inner()?;
 ///
@@ -879,10 +921,12 @@ mod tests {
         let ok = Op::RenameAsset {
             id,
             name: "x".repeat(MAX_NAME_BYTES).into(),
+            provenance: Provenance::default(),
         };
         let long = Op::RenameAsset {
             id,
             name: "x".repeat(MAX_NAME_BYTES + 1).into(),
+            provenance: Provenance::default(),
         };
         assert!(within_caps(&ok));
         assert!(!within_caps(&long));
@@ -898,6 +942,7 @@ mod tests {
         let foreign = Op::SetAssetProperties {
             id: testkit::asset_id(1),
             properties: wide.all_properties(),
+            provenance: Provenance::default(),
         };
         assert!(matches!(
             encode_record(&mut buf, &m, &order, 1, &foreign),

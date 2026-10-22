@@ -142,6 +142,13 @@ fn short_keys() -> Arc<Methodology> {
                 }
             })
             .collect(),
+        feasibility_levels: ["a", "b"]
+            .iter()
+            .map(|&l| LevelDef {
+                key: l.into(),
+                label: l.into(),
+            })
+            .collect(),
         properties: (0..64)
             .map(|i| {
                 let (key, label) = entry(format!("p{i}"));

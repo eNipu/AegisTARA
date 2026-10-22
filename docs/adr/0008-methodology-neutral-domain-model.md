@@ -178,7 +178,9 @@ counts are unchanged.
 
 ### Typed ops and inverse ops for undo (D9)
 
-Every change is an `Op` (16 variants). `validate(&Op)` runs every check
+Every change is an `Op` (16 variants; extended to 20 with attack trees in
+[ADR 0012](0012-threat-attack-trees.md) and carrying element provenance in
+[ADR 0013](0013-element-provenance.md)). `validate(&Op)` runs every check
 without changing anything; `apply(Op)` runs the same checks, then commits
 and returns the inverse op. Every fallible lookup in a commit happens
 before its first mutation, so even an unexpected error leaves the project
@@ -258,7 +260,9 @@ What would still need code:
   declarative risk matrix is a likely next data type; anything beyond a
   table is code.
 - **Feasibility models** (attack potential, CVSS-like vectors), which the
-  attack-tree side computes.
+  attack-tree side computes. (Job 013 added ordered `feasibility_levels`
+  and `FeasibilityLevel` to `Methodology` and linked `ThreatScenario` to
+  `AttackTree`; see [ADR 0012](0012-threat-attack-trees.md).)
 - **Catalog contents** and ID forms the grammar cannot express (see the
   catalog table).
 

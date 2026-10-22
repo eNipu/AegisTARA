@@ -318,14 +318,19 @@ entity_ids! {
     index_example {
         /// ```
         /// use std::sync::Arc;
-        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet};
+        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, Provenance};
         ///
         /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
         /// let m = Arc::new(Methodology::iso21434_r155()?);
         /// let mut project = Project::new(Arc::clone(&m));
         /// let id = AssetId::new_v7();
         /// let properties: PropertySet = m.properties().collect();
-        /// project.apply(Op::AddAsset { id, name: "Gateway ECU".into(), properties })?;
+        /// project.apply(Op::AddAsset {
+        ///     id,
+        ///     name: "Gateway ECU".into(),
+        ///     properties,
+        ///     provenance: Provenance::default(),
+        /// })?;
         /// assert_eq!(project.asset_idx(&id).map(|i| i.index()), Some(0));
         /// # Ok(())
         /// # }
@@ -379,12 +384,17 @@ entity_ids! {
     index_example {
         /// ```
         /// use std::sync::Arc;
-        /// use aegis_model::{DamageId, Methodology, Op, Project};
+        /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
         ///
         /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
         /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
         /// let id = DamageId::new_v7();
-        /// project.apply(Op::AddDamageScenario { id, name: "Loss of braking".into(), impacts: vec![] })?;
+        /// project.apply(Op::AddDamageScenario {
+        ///     id,
+        ///     name: "Loss of braking".into(),
+        ///     impacts: vec![],
+        ///     provenance: Provenance::default(),
+        /// })?;
         /// assert_eq!(project.damage_scenario_idx(&id).map(|i| i.index()), Some(0));
         /// # Ok(())
         /// # }
@@ -418,19 +428,24 @@ entity_ids! {
     index_example {
         /// ```
         /// use std::sync::Arc;
-        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, ThreatId};
+        /// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, Provenance, ThreatId};
         ///
         /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
         /// let m = Arc::new(Methodology::iso21434_r155()?);
         /// let mut project = Project::new(Arc::clone(&m));
         /// let asset = AssetId::new_v7();
         /// let properties: PropertySet = m.properties().collect();
-        /// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties })?;
+        /// project.apply(Op::AddAsset {
+        ///     id: asset,
+        ///     name: "ECU".into(),
+        ///     properties,
+        ///     provenance: Provenance::default(),
+        /// })?;
         /// let category = m.threat_categories().next().ok_or("no category")?;
         /// let id = ThreatId::new_v7();
         /// project.apply(Op::AddThreatScenario {
         ///     id, name: "Forge messages".into(), asset, category,
-        ///     catalog_refs: vec![], damages: vec![],
+        ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
         /// })?;
         /// assert_eq!(project.threat_scenario_idx(&id).map(|i| i.index()), Some(0));
         /// # Ok(())
@@ -449,6 +464,51 @@ entity_ids! {
     /// # }
     /// ```
     pub struct ThreatId;
+}
+
+entity_ids! {
+    /// Internal index of an attack tree in a [`Project`](crate::Project)
+    /// arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::TreeIdx>(), 4);
+    /// ```
+    pub struct TreeIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = TreeId::new_v7();
+        /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Pick lock"))?;
+        /// project.apply(Op::AddAttackTree {
+        ///     id,
+        ///     tree,
+        ///     step_feasibility: vec![],
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.attack_tree_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of an attack tree: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::TreeId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = TreeId::new_v7();
+    /// assert_eq!(id.to_string().parse::<TreeId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct TreeId;
 }
 
 #[cfg(test)]
@@ -601,6 +661,11 @@ mod entity_ids {
     }
 
     #[test]
+    fn ids_tree_accepts_only_v7_and_round_trips() {
+        id_checks!(TreeId);
+    }
+
+    #[test]
     fn ids_node_id_unchanged() {
         id_checks!(NodeId);
     }
@@ -610,5 +675,35 @@ mod entity_ids {
         assert_eq!(AssetIdx::from_u32(7).index(), 7);
         assert_eq!(DamageIdx::from_u32(0).position(), 0);
         assert_eq!(ThreatIdx::from_u32(u32::MAX).index(), u32::MAX as usize);
+        assert_eq!(TreeIdx::from_u32(42).index(), 42);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const V7: &str = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    const V4: &str = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+
+    #[test]
+    fn tree_id_and_idx_sizes_and_round_trips() {
+        assert_eq!(std::mem::size_of::<TreeIdx>(), 4);
+        assert_eq!(std::mem::size_of::<TreeId>(), 16);
+        assert_eq!(TreeIdx::from_u32(0).index(), 0);
+        assert_eq!(TreeIdx::from_u32(19).position(), 19);
+
+        let v4 = Uuid::parse_str(V4).expect("valid v4 literal");
+        assert_eq!(TreeId::from_uuid(v4), Err(ModelError::NotVersion7));
+        assert_eq!(TreeId::from_uuid(Uuid::nil()), Err(ModelError::NotVersion7));
+        assert_eq!(V4.parse::<TreeId>(), Err(ModelError::NotVersion7));
+        assert_eq!("invalid".parse::<TreeId>(), Err(ModelError::InvalidUuid));
+
+        let parsed: TreeId = V7.to_uppercase().parse().expect("valid v7");
+        assert_eq!(parsed.to_string(), V7);
+        assert_eq!(parsed.as_uuid().get_version_num(), 7);
+
+        let fresh = TreeId::new_v7();
+        assert_eq!(fresh.to_string().parse::<TreeId>(), Ok(fresh));
     }
 }

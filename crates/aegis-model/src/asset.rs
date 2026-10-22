@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::methodology::Property;
+use crate::provenance::Provenance;
 
 /// A set of security properties: one bit per [`Property`], 8 bytes.
 ///
@@ -178,14 +179,19 @@ impl FromIterator<Property> for PropertySet {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet};
+/// use aegis_model::{AssetId, Methodology, Op, Project, PropertySet, Provenance};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
 /// let mut project = Project::new(Arc::clone(&m));
 /// let id = AssetId::new_v7();
 /// let properties: PropertySet = m.properties().collect();
-/// project.apply(Op::AddAsset { id, name: "Gateway".into(), properties })?;
+/// project.apply(Op::AddAsset {
+///     id,
+///     name: "Gateway".into(),
+///     properties,
+///     provenance: Provenance::default(),
+/// })?;
 /// let asset = project.asset_idx(&id).and_then(|i| project.asset(i)).ok_or("missing")?;
 /// assert_eq!(asset.name(), "Gateway");
 /// assert_eq!(asset.properties(), properties);
@@ -196,6 +202,7 @@ impl FromIterator<Property> for PropertySet {
 pub struct Asset {
     pub(crate) name: Arc<str>,
     pub(crate) properties: PropertySet,
+    pub(crate) provenance: Provenance,
 }
 
 impl Asset {
@@ -203,13 +210,18 @@ impl Asset {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{AssetId, Methodology, Op, Project};
+    /// use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let mut project = Project::new(Arc::clone(&m));
     /// let id = AssetId::new_v7();
-    /// project.apply(Op::AddAsset { id, name: "ECU".into(), properties: m.all_properties() })?;
+    /// project.apply(Op::AddAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let (_, _, asset) = project.assets().next().ok_or("missing")?;
     /// assert_eq!(asset.name(), "ECU");
     /// # Ok(())
@@ -224,13 +236,18 @@ impl Asset {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{AssetId, Methodology, Op, Project};
+    /// use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let mut project = Project::new(Arc::clone(&m));
     /// let id = AssetId::new_v7();
-    /// project.apply(Op::AddAsset { id, name: "ECU".into(), properties: m.all_properties() })?;
+    /// project.apply(Op::AddAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let (_, _, asset) = project.assets().next().ok_or("missing")?;
     /// assert_eq!(asset.properties().len(), 6);
     /// # Ok(())
@@ -239,6 +256,34 @@ impl Asset {
     #[must_use]
     pub fn properties(&self) -> PropertySet {
         self.properties
+    }
+
+    /// Returns the provenance of the last creation or modification of this
+    /// asset. Time O(1), space O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = AssetId::new_v7();
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// project.apply(Op::AddAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     properties: m.all_properties(),
+    ///     provenance: prov.clone(),
+    /// })?;
+    /// let (_, _, asset) = project.assets().next().ok_or("missing")?;
+    /// assert_eq!(asset.provenance(), &prov);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
     }
 }
 
