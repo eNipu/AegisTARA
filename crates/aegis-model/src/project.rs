@@ -16,6 +16,7 @@ use crate::methodology::{
     CatalogRef, FeasibilityLevel, ImpactCategory, Level, Methodology, Property, ThreatCategory,
 };
 use crate::op::Op;
+use crate::provenance::Provenance;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
 use crate::tree::{AttackTree, Node};
 
@@ -118,11 +119,12 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
 // ---------------------------------------------------------------------------
 
 /// One attack tree in a [`Project`], paired with its per-node step
-/// feasibility ratings. Gate slots are always `None`.
+/// feasibility ratings and provenance. Gate slots are always `None`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeEntry {
     tree: AttackTree,
     step_feasibility: Vec<Option<FeasibilityLevel>>,
+    provenance: Provenance,
 }
 
 /// One counted property on one asset: how many live threats on that asset
@@ -196,7 +198,7 @@ fn row_count(row: &[PropertyCount], p: Property) -> u32 {
 ///
 /// When the row's set of properties does not change (counting in only
 /// properties it has, or counting out none that drop to 0), the counts
-/// change in place with no allocation. Otherwise the row and `violates`
+/// change in place with no allocation. Otherwise, the row and `violates`
 /// merge into one new exact-size slice: one allocation, or none if the
 /// row becomes empty. Counting out a property the row lacks is ignored
 /// (validation rules it out). Time O(r + p), r = row length, p =
@@ -311,14 +313,19 @@ impl RefCounts {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use aegis_model::{AssetId, DamageId, Methodology, Op, Project, ThreatId};
+/// use aegis_model::{AssetId, DamageId, Methodology, Op, Project, Provenance, ThreatId};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
 /// let mut project = Project::new(Arc::clone(&m));
 ///
 /// let ecu = AssetId::new_v7();
-/// project.apply(Op::AddAsset { id: ecu, name: "Brake ECU".into(), properties: m.all_properties() })?;
+/// project.apply(Op::AddAsset {
+///     id: ecu,
+///     name: "Brake ECU".into(),
+///     properties: m.all_properties(),
+///     provenance: Provenance::default(),
+/// })?;
 ///
 /// let safety = m.impact_category("safety").ok_or("no category")?;
 /// let severe = m.level(safety, "severe").ok_or("no level")?;
@@ -327,6 +334,7 @@ impl RefCounts {
 ///     id: crash,
 ///     name: "Vehicle cannot brake".into(),
 ///     impacts: vec![(safety, severe)],
+///     provenance: Provenance::default(),
 /// })?;
 ///
 /// let tampering = m.threat_category("tampering").ok_or("no category")?;
@@ -338,6 +346,7 @@ impl RefCounts {
 ///     category: tampering,
 ///     catalog_refs: vec![],
 ///     damages: vec![crash],
+///     provenance: Provenance::default(),
 /// })?;
 /// assert_eq!(undo, Op::RemoveThreatScenario { id: threat });
 /// assert_eq!(project.threat_scenario_count(), 1);
@@ -366,6 +375,22 @@ fn check_name(name: &str) -> Result<(), ModelError> {
         return Err(ModelError::NameTooLong {
             max: MAX_NAME_CHARS,
         });
+    }
+    Ok(())
+}
+
+/// Checks operation provenance. Time O(actor length).
+fn check_provenance(provenance: &Provenance) -> Result<(), ModelError> {
+    let actor = provenance.actor();
+    if !actor.is_empty() {
+        if actor.trim().is_empty() {
+            return Err(ModelError::EmptyActor);
+        }
+        if actor.chars().count() > MAX_NAME_CHARS {
+            return Err(ModelError::ActorTooLong {
+                max: MAX_NAME_CHARS,
+            });
+        }
     }
     Ok(())
 }
@@ -400,11 +425,16 @@ impl Project {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{DamageId, Methodology, ModelError, Op, Project};
+    /// use aegis_model::{DamageId, Methodology, ModelError, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut project = Project::with_slot_limit(Arc::new(Methodology::iso21434_r155()?), 1);
-    /// let add = |id| Op::AddDamageScenario { id, name: "d".into(), impacts: vec![] };
+    /// let add = |id| Op::AddDamageScenario {
+    ///     id,
+    ///     name: "d".into(),
+    ///     impacts: vec![],
+    ///     provenance: Provenance::default(),
+    /// };
     /// project.apply(add(DamageId::new_v7()))?;
     /// assert_eq!(project.apply(add(DamageId::new_v7())), Err(ModelError::ProjectCapacityExceeded));
     /// # Ok(())
@@ -447,12 +477,17 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// let id = AssetId::new_v7();
-    /// project.apply(Op::AddAsset { id, name: "ECU".into(), properties: m.all_properties() })?;
+    /// project.apply(Op::AddAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.asset_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.asset(idx).map(|a| a.name()), Some("ECU"));
     /// # Ok(())
@@ -483,12 +518,17 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// let id = AssetId::new_v7();
-    /// project.apply(Op::AddAsset { id, name: "ECU".into(), properties: m.all_properties() })?;
+    /// project.apply(Op::AddAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.asset_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.asset_id(idx), Some(id));
     /// project.apply(Op::RemoveAsset { id })?;
@@ -522,13 +562,18 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// let (a, b) = (AssetId::new_v7(), AssetId::new_v7());
     /// for id in [b, a] {
-    ///     project.apply(Op::AddAsset { id, name: "ECU".into(), properties: m.all_properties() })?;
+    ///     project.apply(Op::AddAsset {
+    ///         id,
+    ///         name: "ECU".into(),
+    ///         properties: m.all_properties(),
+    ///         provenance: Provenance::default(),
+    ///     })?;
     /// }
     /// let ids: Vec<_> = project.assets().map(|(_, id, _)| id).collect();
     /// assert_eq!(ids, [a.min(b), a.max(b)]);
@@ -545,11 +590,16 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{DamageId, Methodology, Op, Project};
+    /// # use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = DamageId::new_v7();
-    /// project.apply(Op::AddDamageScenario { id, name: "Crash".into(), impacts: vec![] })?;
+    /// project.apply(Op::AddDamageScenario {
+    ///     id,
+    ///     name: "Crash".into(),
+    ///     impacts: vec![],
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.damage_scenario_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.damage_scenario(idx).map(|d| d.name()), Some("Crash"));
     /// # Ok(())
@@ -580,11 +630,16 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{DamageId, Methodology, Op, Project};
+    /// # use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = DamageId::new_v7();
-    /// project.apply(Op::AddDamageScenario { id, name: "Crash".into(), impacts: vec![] })?;
+    /// project.apply(Op::AddDamageScenario {
+    ///     id,
+    ///     name: "Crash".into(),
+    ///     impacts: vec![],
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.damage_scenario_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.damage_scenario_id(idx), Some(id));
     /// # Ok(())
@@ -616,11 +671,16 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{DamageId, Methodology, Op, Project};
+    /// # use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = DamageId::new_v7();
-    /// project.apply(Op::AddDamageScenario { id, name: "Crash".into(), impacts: vec![] })?;
+    /// project.apply(Op::AddDamageScenario {
+    ///     id,
+    ///     name: "Crash".into(),
+    ///     impacts: vec![],
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// assert_eq!(project.damage_scenarios().map(|(_, id, _)| id).collect::<Vec<_>>(), [id]);
     /// # Ok(())
     /// # }
@@ -668,16 +728,20 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project, ThreatId};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// # let asset = AssetId::new_v7();
-    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # project.apply(Op::AddAsset {
+    /// #     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    /// #     provenance: Provenance::default(),
+    /// # })?;
     /// # let category = m.threat_categories().next().ok_or("none")?;
     /// let id = ThreatId::new_v7();
     /// project.apply(Op::AddThreatScenario {
     ///     id, name: "Replay".into(), asset, category, catalog_refs: vec![], damages: vec![],
+    ///     provenance: Provenance::default(),
     /// })?;
     /// let idx = project.threat_scenario_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.threat_scenario_id(idx), Some(id));
@@ -727,16 +791,20 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AssetId, Methodology, Op, Project, ThreatId};
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let m = Arc::new(Methodology::iso21434_r155()?);
     /// # let mut project = Project::new(Arc::clone(&m));
     /// # let asset = AssetId::new_v7();
-    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// # project.apply(Op::AddAsset {
+    /// #     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    /// #     provenance: Provenance::default(),
+    /// # })?;
     /// let category = m.threat_category("denial-of-service").ok_or("none")?;
     /// let id = ThreatId::new_v7();
     /// project.apply(Op::AddThreatScenario {
     ///     id, name: "Flood CAN bus".into(), asset, category, catalog_refs: vec![], damages: vec![],
+    ///     provenance: Provenance::default(),
     /// })?;
     /// let idx = project.threat_scenario_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.targets(idx), Some(m.violates(category)));
@@ -757,12 +825,14 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
-    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![] })?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.attack_tree(idx).map(|t| t.len()), Some(1));
     /// # Ok(())
@@ -771,6 +841,35 @@ impl Project {
     #[must_use]
     pub fn attack_tree(&self, idx: TreeIdx) -> Option<&AttackTree> {
         self.trees.get(idx).map(|e| &e.tree)
+    }
+
+    /// Returns the provenance of live attack tree `idx` in O(1), or `None`
+    /// if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TreeId::new_v7();
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
+    /// let prov = Provenance::ai("tara-assistant", 1_700_000_000_000);
+    /// project.apply(Op::AddAttackTree {
+    ///     id,
+    ///     tree,
+    ///     step_feasibility: vec![],
+    ///     provenance: prov.clone(),
+    /// })?;
+    /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.attack_tree_provenance(idx), Some(&prov));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree_provenance(&self, idx: TreeIdx) -> Option<&Provenance> {
+        self.trees.get(idx).map(|e| &e.provenance)
     }
 
     /// Resolves an attack tree's public ID to its arena index in O(log n).
@@ -795,12 +894,14 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
-    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![] })?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.attack_tree_id(idx), Some(id));
     /// # Ok(())
@@ -832,12 +933,14 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
-    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![] })?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
+    /// })?;
     /// assert_eq!(project.attack_trees().map(|(_, id, _)| id).collect::<Vec<_>>(), [id]);
     /// # Ok(())
     /// # }
@@ -852,7 +955,7 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let mut project = Project::new(Arc::clone(&m));
@@ -861,7 +964,9 @@ impl Project {
     /// let level = m.feasibility_level("medium").ok_or("no level")?;
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// let root = tree.root();
-    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![(step, level)] })?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id, tree, step_feasibility: vec![(step, level)], provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.step_feasibility(idx, root), Some(level));
     /// # Ok(())
@@ -883,7 +988,7 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let mut project = Project::new(Arc::clone(&m));
@@ -891,7 +996,9 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let level = m.feasibility_level("high").ok_or("no level")?;
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
-    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![(step, level)] })?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id, tree, step_feasibility: vec![(step, level)], provenance: Provenance::default(),
+    /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
     /// assert_eq!(project.step_feasibilities(idx), Some(&[Some(level)][..]));
     /// # Ok(())
@@ -916,7 +1023,9 @@ impl Project {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use aegis_model::{AttackTree, GateKind, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # use aegis_model::{
+    /// #     AttackTree, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let mut project = Project::new(Arc::clone(&m));
@@ -931,6 +1040,7 @@ impl Project {
     ///     id,
     ///     tree,
     ///     step_feasibility: vec![(s1, low), (s2, high)],
+    ///     provenance: Provenance::default(),
     /// })?;
     /// let eval = project.evaluate_tree(id)?;
     /// assert_eq!(eval.root_value(), &high);
@@ -960,25 +1070,34 @@ impl Project {
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{
-    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, ThreatId, TreeId,
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
     /// # };
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let mut project = Project::new(Arc::clone(&m));
     /// let asset = AssetId::new_v7();
-    /// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let category = m.threat_categories().next().ok_or("none")?;
     /// let threat = ThreatId::new_v7();
     /// project.apply(Op::AddThreatScenario {
     ///     id: threat, name: "Replay".into(), asset, category,
-    ///     catalog_refs: vec![], damages: vec![],
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
     /// })?;
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
-    /// project.apply(Op::AddAttackTree { id: tree_id, tree, step_feasibility: vec![(step, med)] })?;
-    /// project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id) })?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(step, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
     /// assert_eq!(project.evaluate_threat(threat)?.root_value(), &med);
     /// # Ok(())
     /// # }
@@ -1013,16 +1132,22 @@ impl Project {
     /// refs, at most 256 damage links, each existing and unique);
     /// referential rules (no removal or property drop while referenced,
     /// links and refs must or must not exist, a link must not be the
-    /// 257th); and capacity. See [`ModelError`] for each variant.
+    /// 257th); provenance; and capacity. See [`ModelError`] for each
+    /// variant.
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{AssetId, Methodology, ModelError, Op, Project, PropertySet};
+    /// use aegis_model::{AssetId, Methodology, ModelError, Op, Project, PropertySet, Provenance};
     ///
     /// # fn main() -> Result<(), aegis_model::PackError> {
     /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = AssetId::new_v7();
-    /// let op = Op::AddAsset { id, name: "ECU".into(), properties: PropertySet::empty() };
+    /// let op = Op::AddAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     properties: PropertySet::empty(),
+    ///     provenance: Provenance::default(),
+    /// };
     /// assert_eq!(project.validate(&op), Err(ModelError::NoSecurityProperties(id)));
     /// # Ok(())
     /// # }
@@ -1033,31 +1158,36 @@ impl Project {
                 id,
                 name,
                 properties,
-            } => self.check_add_asset(*id, name, *properties),
-            Op::RenameAsset { id, name } => {
+                provenance,
+            } => return self.check_add_asset(*id, name, *properties, provenance),
+            Op::RenameAsset { id, name, .. } => {
                 self.live_asset(*id)?;
-                check_name(name)
+                check_name(name)?;
             }
-            Op::SetAssetProperties { id, properties } => {
-                self.check_set_asset_properties(*id, *properties)
+            Op::SetAssetProperties { id, properties, .. } => {
+                self.check_set_asset_properties(*id, *properties)?;
             }
-            Op::RemoveAsset { id } => self.check_remove_asset(*id),
-            Op::AddDamageScenario { id, name, impacts } => {
-                self.check_add_damage(*id, name, impacts)
-            }
-            Op::RenameDamageScenario { id, name } => {
+            Op::RemoveAsset { id } => return self.check_remove_asset(*id),
+            Op::AddDamageScenario {
+                id,
+                name,
+                impacts,
+                provenance,
+            } => return self.check_add_damage(*id, name, impacts, provenance),
+            Op::RenameDamageScenario { id, name, .. } => {
                 self.live_damage(*id)?;
-                check_name(name)
+                check_name(name)?;
             }
             Op::SetImpact {
                 id,
                 category,
                 level,
+                ..
             } => {
                 self.live_damage(*id)?;
-                self.check_rating(*category, *level)
+                self.check_rating(*category, *level)?;
             }
-            Op::RemoveDamageScenario { id } => self.check_remove_damage(*id),
+            Op::RemoveDamageScenario { id } => return self.check_remove_damage(*id),
             Op::AddThreatScenario {
                 id,
                 name,
@@ -1065,40 +1195,55 @@ impl Project {
                 category,
                 catalog_refs,
                 damages,
-            } => self.check_add_threat(*id, name, *asset, *category, catalog_refs, damages),
-            Op::RenameThreatScenario { id, name } => {
-                self.live_threat(*id)?;
-                check_name(name)
+                provenance,
+            } => {
+                return self.check_add_threat(
+                    *id,
+                    name,
+                    *asset,
+                    *category,
+                    catalog_refs,
+                    damages,
+                    provenance,
+                );
             }
-            Op::SetThreatCategory { id, category } => {
+            Op::RenameThreatScenario { id, name, .. } => {
+                self.live_threat(*id)?;
+                check_name(name)?;
+            }
+            Op::SetThreatCategory { id, category, .. } => {
                 let t = self.threat_ref(*id)?;
                 let (asset_id, asset) = self.threat_asset(*id, t)?;
-                self.check_category_fits(asset_id, asset, *category)
+                self.check_category_fits(asset_id, asset, *category)?;
             }
             Op::AddCatalogRef {
                 threat,
                 catalog_ref,
-            } => self.check_catalog_ref_change(*threat, catalog_ref, true),
+                ..
+            } => self.check_catalog_ref_change(*threat, catalog_ref, true)?,
             Op::RemoveCatalogRef {
                 threat,
                 catalog_ref,
-            } => self.check_catalog_ref_change(*threat, catalog_ref, false),
-            Op::LinkDamage { threat, damage } => self.check_link(*threat, *damage, true),
-            Op::UnlinkDamage { threat, damage } => self.check_link(*threat, *damage, false),
-            Op::RemoveThreatScenario { id } => self.check_remove_threat(*id),
+                ..
+            } => self.check_catalog_ref_change(*threat, catalog_ref, false)?,
+            Op::LinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, true)?,
+            Op::UnlinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, false)?,
+            Op::RemoveThreatScenario { id } => return self.check_remove_threat(*id),
             Op::AddAttackTree {
                 id,
                 tree,
                 step_feasibility,
-            } => self.check_add_tree(*id, tree, step_feasibility),
-            Op::SetStepFeasibility { tree, node, level } => {
-                self.check_set_step_feasibility(*tree, *node, *level)
+                provenance,
+            } => return self.check_add_tree(*id, tree, step_feasibility, provenance),
+            Op::SetStepFeasibility {
+                tree, node, level, ..
+            } => self.check_set_step_feasibility(*tree, *node, *level)?,
+            Op::SetThreatAttackTree { threat, tree, .. } => {
+                self.check_set_threat_attack_tree(*threat, *tree)?;
             }
-            Op::SetThreatAttackTree { threat, tree } => {
-                self.check_set_threat_attack_tree(*threat, *tree)
-            }
-            Op::RemoveAttackTree { id } => self.check_remove_tree(*id),
+            Op::RemoveAttackTree { id } => return self.check_remove_tree(*id),
         }
+        op.provenance().map_or(Ok(()), check_provenance)
     }
 
     /// Checks `op` like [`validate`](Self::validate), then commits it and
@@ -1115,18 +1260,37 @@ impl Project {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{DamageId, Methodology, Op, Project};
+    /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
     /// let mut project = Project::new(Arc::clone(&m));
     /// let id = DamageId::new_v7();
-    /// project.apply(Op::AddDamageScenario { id, name: "Fraud".into(), impacts: vec![] })?;
+    /// let prov = Provenance::human("alice", 10);
+    /// project.apply(Op::AddDamageScenario {
+    ///     id,
+    ///     name: "Fraud".into(),
+    ///     impacts: vec![],
+    ///     provenance: prov.clone(),
+    /// })?;
     /// let before = project.clone();
     /// let cat = m.impact_category("financial").ok_or("none")?;
     /// let level = m.level(cat, "major");
-    /// let undo = project.apply(Op::SetImpact { id, category: cat, level })?;
-    /// assert_eq!(undo, Op::SetImpact { id, category: cat, level: None });
+    /// let undo = project.apply(Op::SetImpact {
+    ///     id,
+    ///     category: cat,
+    ///     level,
+    ///     provenance: Provenance::human("bob", 20),
+    /// })?;
+    /// assert_eq!(
+    ///     undo,
+    ///     Op::SetImpact {
+    ///         id,
+    ///         category: cat,
+    ///         level: None,
+    ///         provenance: prov,
+    ///     }
+    /// );
     /// project.apply(undo)?;
     /// assert_eq!(project, before);
     /// # Ok(())
@@ -1146,39 +1310,36 @@ impl Project {
                 id,
                 name,
                 properties,
-            } => self.commit_add_asset(id, name, properties),
-            Op::RenameAsset { id, name } => {
-                let name = std::mem::replace(&mut self.asset_mut(id)?.name, name);
-                Ok(Op::RenameAsset { id, name })
-            }
-            Op::SetAssetProperties { id, properties } => {
-                let properties = std::mem::replace(&mut self.asset_mut(id)?.properties, properties);
-                Ok(Op::SetAssetProperties { id, properties })
-            }
-            Op::RemoveAsset { id } => {
-                let idx = self.asset_index(id)?;
-                let a = self
-                    .assets
-                    .remove(idx)
-                    .ok_or(ModelError::UnknownAsset(id))?;
-                Ok(Op::AddAsset {
-                    id,
-                    name: a.name,
-                    properties: a.properties,
-                })
-            }
-            Op::AddDamageScenario { id, name, impacts } => {
-                self.commit_add_damage(id, name, &impacts)
-            }
-            Op::RenameDamageScenario { id, name } => {
-                let name = std::mem::replace(&mut self.damage_mut(id)?.name, name);
-                Ok(Op::RenameDamageScenario { id, name })
-            }
+                provenance,
+            } => self.commit_add_asset(id, name, properties, provenance),
+            Op::RenameAsset {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_asset(id, name, provenance),
+            Op::SetAssetProperties {
+                id,
+                properties,
+                provenance,
+            } => self.commit_set_asset_properties(id, properties, provenance),
+            Op::RemoveAsset { id } => self.commit_remove_asset(id),
+            Op::AddDamageScenario {
+                id,
+                name,
+                impacts,
+                provenance,
+            } => self.commit_add_damage(id, name, &impacts, provenance),
+            Op::RenameDamageScenario {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_damage(id, name, provenance),
             Op::SetImpact {
                 id,
                 category,
                 level,
-            } => self.commit_set_impact(id, category, level),
+                provenance,
+            } => self.commit_set_impact(id, category, level, provenance),
             Op::RemoveDamageScenario { id } => self.commit_remove_damage(id),
             Op::AddThreatScenario {
                 id,
@@ -1187,34 +1348,58 @@ impl Project {
                 category,
                 catalog_refs,
                 damages,
-            } => self.commit_add_threat(id, name, asset, category, catalog_refs, damages),
-            Op::RenameThreatScenario { id, name } => {
-                let name = std::mem::replace(&mut self.threat_mut(id)?.name, name);
-                Ok(Op::RenameThreatScenario { id, name })
+                provenance,
+            } => {
+                self.commit_add_threat(id, name, asset, category, catalog_refs, damages, provenance)
             }
-            Op::SetThreatCategory { id, category } => self.commit_set_category(id, category),
+            Op::RenameThreatScenario {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_threat(id, name, provenance),
+            Op::SetThreatCategory {
+                id,
+                category,
+                provenance,
+            } => self.commit_set_category(id, category, provenance),
             Op::AddCatalogRef {
                 threat,
                 catalog_ref,
-            } => self.commit_catalog_ref(threat, catalog_ref, true),
+                provenance,
+            } => self.commit_catalog_ref(threat, catalog_ref, provenance, true),
             Op::RemoveCatalogRef {
                 threat,
                 catalog_ref,
-            } => self.commit_catalog_ref(threat, catalog_ref, false),
-            Op::LinkDamage { threat, damage } => self.commit_link(threat, damage, true),
-            Op::UnlinkDamage { threat, damage } => self.commit_link(threat, damage, false),
+                provenance,
+            } => self.commit_catalog_ref(threat, catalog_ref, provenance, false),
+            Op::LinkDamage {
+                threat,
+                damage,
+                provenance,
+            } => self.commit_link(threat, damage, provenance, true),
+            Op::UnlinkDamage {
+                threat,
+                damage,
+                provenance,
+            } => self.commit_link(threat, damage, provenance, false),
             Op::RemoveThreatScenario { id } => self.commit_remove_threat(id),
             Op::AddAttackTree {
                 id,
                 tree,
                 step_feasibility,
-            } => self.commit_add_tree(id, tree, step_feasibility),
-            Op::SetStepFeasibility { tree, node, level } => {
-                self.commit_set_step_feasibility(tree, node, level)
-            }
-            Op::SetThreatAttackTree { threat, tree } => {
-                self.commit_set_threat_attack_tree(threat, tree)
-            }
+                provenance,
+            } => self.commit_add_tree(id, tree, step_feasibility, provenance),
+            Op::SetStepFeasibility {
+                tree,
+                node,
+                level,
+                provenance,
+            } => self.commit_set_step_feasibility(tree, node, level, provenance),
+            Op::SetThreatAttackTree {
+                threat,
+                tree,
+                provenance,
+            } => self.commit_set_threat_attack_tree(threat, tree, provenance),
             Op::RemoveAttackTree { id } => self.commit_remove_tree(id),
         }
     }
@@ -1342,6 +1527,7 @@ impl Project {
         id: AssetId,
         name: &str,
         properties: PropertySet,
+        provenance: &Provenance,
     ) -> Result<(), ModelError> {
         if self.assets.idx(&id).is_some() {
             return Err(ModelError::DuplicateAsset(id));
@@ -1351,6 +1537,7 @@ impl Project {
         if properties.is_empty() {
             return Err(ModelError::NoSecurityProperties(id));
         }
+        check_provenance(provenance)?;
         if self.assets.next_idx(self.slot_limit).is_none() {
             return Err(ModelError::ProjectCapacityExceeded);
         }
@@ -1405,6 +1592,7 @@ impl Project {
         id: DamageId,
         name: &str,
         impacts: &[(ImpactCategory, Level)],
+        provenance: &Provenance,
     ) -> Result<(), ModelError> {
         if self.damages.idx(&id).is_some() {
             return Err(ModelError::DuplicateDamageScenario(id));
@@ -1423,6 +1611,7 @@ impl Project {
             }
             seen |= bit;
         }
+        check_provenance(provenance)?;
         if self.damages.next_idx(self.slot_limit).is_none() {
             return Err(ModelError::ProjectCapacityExceeded);
         }
@@ -1464,6 +1653,7 @@ impl Project {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_add_threat(
         &self,
         id: ThreatId,
@@ -1472,6 +1662,7 @@ impl Project {
         category: ThreatCategory,
         catalog_refs: &[CatalogRef],
         damages: &[DamageId],
+        provenance: &Provenance,
     ) -> Result<(), ModelError> {
         if self.threats.idx(&id).is_some() {
             return Err(ModelError::DuplicateThreatScenario(id));
@@ -1509,6 +1700,7 @@ impl Project {
                 return Err(ModelError::DuplicateDamageLink { threat: id, damage });
             }
         }
+        check_provenance(provenance)?;
         if self.threats.next_idx(self.slot_limit).is_none() {
             return Err(ModelError::ProjectCapacityExceeded);
         }
@@ -1577,6 +1769,7 @@ impl Project {
         id: TreeId,
         tree: &AttackTree,
         step_feasibility: &[(NodeId, FeasibilityLevel)],
+        provenance: &Provenance,
     ) -> Result<(), ModelError> {
         if self.trees.idx(&id).is_some() {
             return Err(ModelError::DuplicateAttackTree(id));
@@ -1602,6 +1795,7 @@ impl Project {
             }
             *slot = true;
         }
+        check_provenance(provenance)?;
         if self.trees.next_idx(self.slot_limit).is_none() {
             return Err(ModelError::ProjectCapacityExceeded);
         }
@@ -1656,8 +1850,13 @@ impl Project {
         id: AssetId,
         name: Arc<str>,
         properties: PropertySet,
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
-        let asset = Asset { name, properties };
+        let asset = Asset {
+            name,
+            properties,
+            provenance,
+        };
         self.assets
             .push(id, asset, self.slot_limit)
             .ok_or(ModelError::ProjectCapacityExceeded)?;
@@ -1667,11 +1866,90 @@ impl Project {
         Ok(Op::RemoveAsset { id })
     }
 
+    fn commit_rename_asset(
+        &mut self,
+        id: AssetId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let a = self.asset_mut(id)?;
+        let name = std::mem::replace(&mut a.name, name);
+        let provenance = std::mem::replace(&mut a.provenance, provenance);
+        Ok(Op::RenameAsset {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_asset_properties(
+        &mut self,
+        id: AssetId,
+        properties: PropertySet,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let a = self.asset_mut(id)?;
+        let properties = std::mem::replace(&mut a.properties, properties);
+        let provenance = std::mem::replace(&mut a.provenance, provenance);
+        Ok(Op::SetAssetProperties {
+            id,
+            properties,
+            provenance,
+        })
+    }
+
+    fn commit_remove_asset(&mut self, id: AssetId) -> Result<Op, ModelError> {
+        let idx = self.asset_index(id)?;
+        let a = self
+            .assets
+            .remove(idx)
+            .ok_or(ModelError::UnknownAsset(id))?;
+        Ok(Op::AddAsset {
+            id,
+            name: a.name,
+            properties: a.properties,
+            provenance: a.provenance,
+        })
+    }
+
+    fn commit_rename_damage(
+        &mut self,
+        id: DamageId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let d = self.damage_mut(id)?;
+        let name = std::mem::replace(&mut d.name, name);
+        let provenance = std::mem::replace(&mut d.provenance, provenance);
+        Ok(Op::RenameDamageScenario {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_rename_threat(
+        &mut self,
+        id: ThreatId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let t = self.threat_mut(id)?;
+        let name = std::mem::replace(&mut t.name, name);
+        let provenance = std::mem::replace(&mut t.provenance, provenance);
+        Ok(Op::RenameThreatScenario {
+            id,
+            name,
+            provenance,
+        })
+    }
+
     fn commit_add_damage(
         &mut self,
         id: DamageId,
         name: Arc<str>,
         impacts: &[(ImpactCategory, Level)],
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
         let mut slots = vec![None; self.methodology.impact_category_count()];
         for &(category, level) in impacts {
@@ -1683,6 +1961,7 @@ impl Project {
         let d = DamageScenario {
             name,
             impacts: slots.into_boxed_slice(),
+            provenance,
         };
         self.damages
             .push(id, d, self.slot_limit)
@@ -1696,17 +1975,20 @@ impl Project {
         id: DamageId,
         category: ImpactCategory,
         level: Option<Level>,
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
-        let slot = self
-            .damage_mut(id)?
+        let d = self.damage_mut(id)?;
+        let slot = d
             .impacts
             .get_mut(category.index())
             .ok_or(ModelError::UnknownImpactCategory(category))?;
         let level = std::mem::replace(slot, level);
+        let provenance = std::mem::replace(&mut d.provenance, provenance);
         Ok(Op::SetImpact {
             id,
             category,
             level,
+            provenance,
         })
     }
 
@@ -1721,6 +2003,7 @@ impl Project {
             id,
             name: d.name,
             impacts,
+            provenance: d.provenance,
         })
     }
 
@@ -1728,22 +2011,27 @@ impl Project {
         &mut self,
         threat: ThreatId,
         catalog_ref: CatalogRef,
+        provenance: Provenance,
         add: bool,
     ) -> Result<Op, ModelError> {
-        let refs = &mut self.threat_mut(threat)?.catalog_refs;
-        match (add, refs.binary_search(&catalog_ref)) {
+        let t = self.threat_mut(threat)?;
+        match (add, t.catalog_refs.binary_search(&catalog_ref)) {
             (true, Err(pos)) => {
-                refs.insert(pos, catalog_ref);
+                t.catalog_refs.insert(pos, catalog_ref);
+                let provenance = std::mem::replace(&mut t.provenance, provenance);
                 Ok(Op::RemoveCatalogRef {
                     threat,
                     catalog_ref,
+                    provenance,
                 })
             }
             (false, Ok(pos)) => {
-                refs.remove(pos);
+                t.catalog_refs.remove(pos);
+                let provenance = std::mem::replace(&mut t.provenance, provenance);
                 Ok(Op::AddCatalogRef {
                     threat,
                     catalog_ref,
+                    provenance,
                 })
             }
             (true, Ok(_)) => Err(ModelError::DuplicateCatalogRef { threat }),
@@ -1751,6 +2039,7 @@ impl Project {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_add_threat(
         &mut self,
         id: ThreatId,
@@ -1759,6 +2048,7 @@ impl Project {
         category: ThreatCategory,
         mut catalog_refs: Vec<CatalogRef>,
         mut damages: Vec<DamageId>,
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
         let asset = self.asset_index(asset)?;
         damages.sort_unstable();
@@ -1774,6 +2064,7 @@ impl Project {
             catalog_refs,
             damages,
             attack_tree: None,
+            provenance,
         };
         let violates = self.methodology.violates(category);
         let idx = self
@@ -1790,6 +2081,7 @@ impl Project {
         &mut self,
         id: ThreatId,
         category: ThreatCategory,
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
         let idx = self.threat_index(id)?;
         let new = self.methodology.violates(category);
@@ -1798,6 +2090,7 @@ impl Project {
             .get_mut(idx)
             .ok_or(ModelError::UnknownThreatScenario(id))?;
         let old_category = std::mem::replace(&mut t.category, category);
+        let provenance = std::mem::replace(&mut t.provenance, provenance);
         let asset = t.asset;
         let old = self.methodology.violates(old_category);
         // New in before old out: a property both categories violate never
@@ -1807,6 +2100,7 @@ impl Project {
         Ok(Op::SetThreatCategory {
             id,
             category: old_category,
+            provenance,
         })
     }
 
@@ -1814,6 +2108,7 @@ impl Project {
         &mut self,
         threat: ThreatId,
         damage: DamageId,
+        provenance: Provenance,
         link: bool,
     ) -> Result<Op, ModelError> {
         let idx = self.threat_index(threat)?;
@@ -1830,13 +2125,23 @@ impl Project {
         match (link, found) {
             (true, Err(pos)) => {
                 t.damages.insert(pos, d);
+                let provenance = std::mem::replace(&mut t.provenance, provenance);
                 bump(&mut self.refs.damages, Some(d.index()), true);
-                Ok(Op::UnlinkDamage { threat, damage })
+                Ok(Op::UnlinkDamage {
+                    threat,
+                    damage,
+                    provenance,
+                })
             }
             (false, Ok(pos)) => {
                 t.damages.remove(pos);
+                let provenance = std::mem::replace(&mut t.provenance, provenance);
                 bump(&mut self.refs.damages, Some(d.index()), false);
-                Ok(Op::LinkDamage { threat, damage })
+                Ok(Op::LinkDamage {
+                    threat,
+                    damage,
+                    provenance,
+                })
             }
             (true, Ok(_)) => Err(ModelError::DuplicateDamageLink { threat, damage }),
             (false, Err(_)) => Err(ModelError::DamageNotLinked { threat, damage }),
@@ -1871,6 +2176,7 @@ impl Project {
             category: t.category,
             catalog_refs: t.catalog_refs,
             damages,
+            provenance: t.provenance,
         })
     }
 
@@ -1879,6 +2185,7 @@ impl Project {
         id: TreeId,
         tree: AttackTree,
         step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
         let mut slots = vec![None; tree.len()];
         for (node, level) in step_feasibility {
@@ -1893,6 +2200,7 @@ impl Project {
         let entry = TreeEntry {
             tree,
             step_feasibility: slots,
+            provenance,
         };
         self.trees
             .push(id, entry, self.slot_limit)
@@ -1906,6 +2214,7 @@ impl Project {
         tree: TreeId,
         node: NodeId,
         level: Option<FeasibilityLevel>,
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
         let entry = self.tree_mut(tree)?;
         let node_idx = entry
@@ -1917,13 +2226,20 @@ impl Project {
             .get_mut(node_idx.index())
             .ok_or(ModelError::UnknownTreeNode { tree, node })?;
         let level = std::mem::replace(slot, level);
-        Ok(Op::SetStepFeasibility { tree, node, level })
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        Ok(Op::SetStepFeasibility {
+            tree,
+            node,
+            level,
+            provenance,
+        })
     }
 
     fn commit_set_threat_attack_tree(
         &mut self,
         threat: ThreatId,
         tree: Option<TreeId>,
+        provenance: Provenance,
     ) -> Result<Op, ModelError> {
         let idx = self.threat_index(threat)?;
         let new_idx = tree.map(|t| self.tree_index(t)).transpose()?;
@@ -1944,6 +2260,7 @@ impl Project {
             .get_mut(idx)
             .ok_or(ModelError::UnknownThreatScenario(threat))?;
         t.attack_tree = new_idx;
+        let provenance = std::mem::replace(&mut t.provenance, provenance);
         if let Some(old) = old_idx {
             bump(&mut self.refs.trees, Some(old.index()), false);
         }
@@ -1953,6 +2270,7 @@ impl Project {
         Ok(Op::SetThreatAttackTree {
             threat,
             tree: old_tree,
+            provenance,
         })
     }
 
@@ -1972,6 +2290,7 @@ impl Project {
             id,
             tree: entry.tree,
             step_feasibility,
+            provenance: entry.provenance,
         })
     }
 }
@@ -2020,6 +2339,7 @@ impl Project {
         x.name == y.name
             && x.category == y.category
             && x.catalog_refs == y.catalog_refs
+            && x.provenance == y.provenance
             && self.assets.id(x.asset) == other.assets.id(y.asset)
             && self.tree_key(x.attack_tree) == other.tree_key(y.attack_tree)
             && x.damages.len() == y.damages.len()
@@ -2041,6 +2361,7 @@ impl Project {
 
         for (_, id, a) in self.assets() {
             check_name(&a.name).map_err(|e| format!("asset {id}: {e}"))?;
+            check_provenance(&a.provenance).map_err(|e| format!("asset {id}: {e}"))?;
             if a.properties.is_empty() {
                 return Err(format!("asset {id} has no properties"));
             }
@@ -2049,6 +2370,7 @@ impl Project {
         }
         for (_, id, d) in self.damage_scenarios() {
             check_name(&d.name).map_err(|e| format!("damage {id}: {e}"))?;
+            check_provenance(&d.provenance).map_err(|e| format!("damage {id}: {e}"))?;
             if d.impacts.len() != m.impact_category_count() {
                 return Err(format!("damage {id} has {} impact slots", d.impacts.len()));
             }
@@ -2069,6 +2391,7 @@ impl Project {
         let mut pairs: BTreeMap<(usize, Property), u32> = BTreeMap::new();
         for (_, id, t) in self.threat_scenarios() {
             check_name(&t.name).map_err(|e| format!("threat {id}: {e}"))?;
+            check_provenance(&t.provenance).map_err(|e| format!("threat {id}: {e}"))?;
             m.check_threat_category(t.category)
                 .map_err(|e| format!("threat {id}: {e}"))?;
             let asset = self
@@ -2131,6 +2454,7 @@ impl Project {
     fn tree_invariants(&self) -> Result<(), String> {
         let m = &*self.methodology;
         for (_, id, entry) in self.trees.iter() {
+            check_provenance(&entry.provenance).map_err(|e| format!("tree {id}: {e}"))?;
             if entry.step_feasibility.len() != entry.tree.len() {
                 return Err(format!(
                     "tree {id} has {} feasibility slots",
@@ -2267,6 +2591,26 @@ mod tests {
     }
 
     #[test]
+    fn check_provenance_rules() {
+        assert_eq!(check_provenance(&Provenance::default()), Ok(()));
+        assert_eq!(check_provenance(&Provenance::import("", 42)), Ok(()));
+        assert_eq!(check_provenance(&Provenance::human("alice", 1)), Ok(()));
+        assert_eq!(check_provenance(&Provenance::human(" alice ", 1)), Ok(()));
+        assert_eq!(
+            check_provenance(&Provenance::human(" \t\n", 1)),
+            Err(ModelError::EmptyActor)
+        );
+        assert_eq!(
+            check_provenance(&Provenance::human("é".repeat(256), 1)),
+            Ok(())
+        );
+        assert_eq!(
+            check_provenance(&Provenance::human("é".repeat(257), 1)),
+            Err(ModelError::ActorTooLong { max: 256 })
+        );
+    }
+
+    #[test]
     fn arena_tombstones_are_not_reused() {
         let mut a: Arena<u32, AssetIdx, &str> = Arena::new();
         let x = a.push(10, "x", u32::MAX).expect("room");
@@ -2313,6 +2657,7 @@ mod tests {
             id: a,
             name: "a".into(),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         })
         .expect("valid");
         assert_eq!(p.check_invariants(), Ok(()));
@@ -2359,6 +2704,7 @@ mod tests {
             category,
             catalog_refs: vec![],
             damages: vec![],
+            provenance: Provenance::default(),
         }
     }
 
@@ -2371,6 +2717,7 @@ mod tests {
                 id: testkit::asset_id(n),
                 name: "a".into(),
                 properties: m.all_properties(),
+                provenance: Provenance::default(),
             })
             .expect("valid asset");
         }
@@ -2410,6 +2757,7 @@ mod tests {
             .apply(Op::SetThreatCategory {
                 id: testkit::threat_id(2),
                 category: to,
+                provenance: Provenance::default(),
             })
             .expect("valid recategorization");
         let want: Vec<_> = vf
@@ -2436,6 +2784,7 @@ mod tests {
         p.apply(Op::SetThreatCategory {
             id: testkit::threat_id(2),
             category: to,
+            provenance: Provenance::default(),
         })
         .expect("redo");
         ok(&p);
@@ -2537,6 +2886,7 @@ mod tests {
             id: a,
             name: "a".into(),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         })
         .expect("valid");
         // Two threats over two different properties, so the row has two

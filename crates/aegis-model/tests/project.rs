@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use aegis_model::{
     AssetId, AttackTree, CatalogRef, DamageId, Derivation, GateKind, Methodology, ModelError, Node,
-    NodeId, Op, Project, PropertySet, ThreatId, TreeId,
+    NodeId, Op, Project, PropertySet, Provenance, ProvenanceSource, ThreatId, TreeId,
 };
 use common::{
     SENTINEL, asset_id, builtin, cat, cref, damage_id, feas, lvl, node_id, prop, props, scheme,
@@ -56,6 +56,7 @@ fn worked_example() {
             id: gateway,
             name: name("Central gateway"),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -64,6 +65,7 @@ fn worked_example() {
             id: brake,
             name: name("Brake ECU firmware"),
             properties: props(&m, &["integrity", "availability"]),
+            provenance: Provenance::default(),
         },
     );
 
@@ -86,6 +88,7 @@ fn worked_example() {
                 (operational, lvl(&m, operational, "major")),
                 (privacy, lvl(&m, privacy, "negligible")),
             ],
+            provenance: Provenance::default(),
         },
     );
     // Partly unrated: only privacy is rated.
@@ -95,6 +98,7 @@ fn worked_example() {
             id: data_leak,
             name: name("Driver location leaked"),
             impacts: vec![(privacy, lvl(&m, privacy, "major"))],
+            provenance: Provenance::default(),
         },
     );
 
@@ -110,6 +114,7 @@ fn worked_example() {
             category: threat_cat(&m, "tampering"),
             catalog_refs: vec![cref(&m, annex5, "5"), cref(&m, annex5, "4.1")],
             damages: vec![data_leak, no_brakes],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -121,6 +126,7 @@ fn worked_example() {
             category: threat_cat(&m, "denial-of-service"),
             catalog_refs: vec![],
             damages: vec![],
+            provenance: Provenance::default(),
         },
     );
     // Link out of order too.
@@ -129,6 +135,7 @@ fn worked_example() {
         Op::LinkDamage {
             threat: flood,
             damage: data_leak,
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -136,6 +143,7 @@ fn worked_example() {
         Op::LinkDamage {
             threat: flood,
             damage: no_brakes,
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -143,6 +151,7 @@ fn worked_example() {
         Op::AddCatalogRef {
             threat: flood,
             catalog_ref: cref(&m, annex5, "4"),
+            provenance: Provenance::default(),
         },
     );
 
@@ -292,6 +301,7 @@ fn fixture(name: &str) -> (Project, Fx) {
             id: fx.a_all,
             name: n(),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -300,6 +310,7 @@ fn fixture(name: &str) -> (Project, Fx) {
             id: fx.a_int,
             name: n(),
             properties: props(&m, &["integrity"]),
+            provenance: Provenance::default(),
         },
     );
     let safety = cat(&m, "safety");
@@ -313,6 +324,7 @@ fn fixture(name: &str) -> (Project, Fx) {
                 (safety, lvl(&m, safety, "major")),
                 (privacy, lvl(&m, privacy, "negligible")),
             ],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -321,6 +333,7 @@ fn fixture(name: &str) -> (Project, Fx) {
             id: fx.d2,
             name: n(),
             impacts: vec![],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -332,6 +345,7 @@ fn fixture(name: &str) -> (Project, Fx) {
             category: threat_cat(&m, "tampering"),
             catalog_refs: vec![fx.r41],
             damages: vec![fx.d1],
+            provenance: Provenance::default(),
         },
     );
     let sixteen: Vec<_> = (1..=16)
@@ -346,6 +360,7 @@ fn fixture(name: &str) -> (Project, Fx) {
             category: threat_cat(&m, "spoofing"),
             catalog_refs: sixteen,
             damages: vec![],
+            provenance: Provenance::default(),
         },
     );
     let mut tree1 = AttackTree::new(fx.tree1_root, Node::gate(GateKind::Or, n())).expect("root");
@@ -358,6 +373,7 @@ fn fixture(name: &str) -> (Project, Fx) {
             id: fx.tree1,
             tree: tree1,
             step_feasibility: vec![(fx.tree1_step, feas(&m, "medium"))],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -365,6 +381,7 @@ fn fixture(name: &str) -> (Project, Fx) {
         Op::SetThreatAttackTree {
             threat: fx.t_full,
             tree: Some(fx.tree1),
+            provenance: Provenance::default(),
         },
     );
     let tree_free = AttackTree::new(fx.tree_free_step, Node::step(n())).expect("step");
@@ -374,6 +391,7 @@ fn fixture(name: &str) -> (Project, Fx) {
             id: fx.tree_free,
             tree: tree_free,
             step_feasibility: vec![(fx.tree_free_step, feas(&m, "low"))],
+            provenance: Provenance::default(),
         },
     );
     (p, fx)
@@ -407,6 +425,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         category: tampering,
         catalog_refs,
         damages: vec![],
+        provenance: Provenance::default(),
     };
     let mut full = Project::with_slot_limit(Arc::clone(m), 1);
     ok(
@@ -415,6 +434,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             id: fx.a_all,
             name: n(),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         },
     );
 
@@ -425,6 +445,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.a_all,
                 name: n(),
                 properties: m.all_properties(),
+                provenance: Provenance::default(),
             },
             ModelError::DuplicateAsset(fx.a_all),
         ),
@@ -434,6 +455,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.d1,
                 name: n(),
                 impacts: vec![],
+                provenance: Provenance::default(),
             },
             ModelError::DuplicateDamageScenario(fx.d1),
         ),
@@ -447,6 +469,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::RenameAsset {
                 id: fx.fresh_a,
                 name: n(),
+                provenance: Provenance::default(),
             },
             ModelError::UnknownAsset(fx.fresh_a),
         ),
@@ -456,6 +479,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.fresh_d,
                 category: safety,
                 level: None,
+                provenance: Provenance::default(),
             },
             ModelError::UnknownDamageScenario(fx.fresh_d),
         ),
@@ -469,6 +493,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::RenameThreatScenario {
                 id: fx.t1,
                 name: " \t ".into(),
+                provenance: Provenance::default(),
             },
             ModelError::EmptyName,
         ),
@@ -477,8 +502,27 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::RenameDamageScenario {
                 id: fx.d1,
                 name: format!("{name}{}", "x".repeat(257)).into(),
+                provenance: Provenance::default(),
             },
             ModelError::NameTooLong { max: 256 },
+        ),
+        (
+            p.clone(),
+            Op::RenameAsset {
+                id: fx.a_all,
+                name: n(),
+                provenance: Provenance::human(" \t ", 1),
+            },
+            ModelError::EmptyActor,
+        ),
+        (
+            p.clone(),
+            Op::RenameDamageScenario {
+                id: fx.d1,
+                name: n(),
+                provenance: Provenance::human(format!("{name}{}", "x".repeat(257)), 1),
+            },
+            ModelError::ActorTooLong { max: 256 },
         ),
         (
             p.clone(),
@@ -486,6 +530,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.d1,
                 category: bad_cat,
                 level: None,
+                provenance: Provenance::default(),
             },
             ModelError::UnknownImpactCategory(bad_cat),
         ),
@@ -495,6 +540,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.fresh_d,
                 name: n(),
                 impacts: vec![(safety, bad_level)],
+                provenance: Provenance::default(),
             },
             ModelError::UnknownLevel {
                 category: safety,
@@ -506,6 +552,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::SetAssetProperties {
                 id: fx.a_int,
                 properties: PropertySet::empty().with(bad_prop),
+                provenance: Provenance::default(),
             },
             ModelError::UnknownProperty(bad_prop),
         ),
@@ -514,6 +561,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::SetThreatCategory {
                 id: fx.t1,
                 category: bad_threat_cat,
+                provenance: Provenance::default(),
             },
             ModelError::UnknownThreatCategory(bad_threat_cat),
         ),
@@ -522,6 +570,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::AddCatalogRef {
                 threat: fx.t1,
                 catalog_ref: foreign_scheme_ref,
+                provenance: Provenance::default(),
             },
             ModelError::UnknownCatalogScheme(wide_scheme_2),
         ),
@@ -536,6 +585,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.fresh_a,
                 name: n(),
                 properties: PropertySet::empty(),
+                provenance: Provenance::default(),
             },
             ModelError::NoSecurityProperties(fx.fresh_a),
         ),
@@ -548,6 +598,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 category: threat_cat(m, "spoofing"),
                 catalog_refs: vec![],
                 damages: vec![],
+                provenance: Provenance::default(),
             },
             ModelError::PropertyNotOnAsset {
                 asset: fx.a_int,
@@ -559,6 +610,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::SetAssetProperties {
                 id: fx.a_all,
                 properties: props(m, &["confidentiality", "availability"]),
+                provenance: Provenance::default(),
             },
             ModelError::PropertyInUse {
                 asset: fx.a_all,
@@ -591,6 +643,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                     (safety, lvl(m, safety, "major")),
                     (safety, lvl(m, safety, "severe")),
                 ],
+                provenance: Provenance::default(),
             },
             ModelError::DuplicateImpactCategory(safety),
         ),
@@ -599,6 +652,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::LinkDamage {
                 threat: fx.t1,
                 damage: fx.d1,
+                provenance: Provenance::default(),
             },
             ModelError::DuplicateDamageLink {
                 threat: fx.t1,
@@ -610,6 +664,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::UnlinkDamage {
                 threat: fx.t1,
                 damage: fx.d2,
+                provenance: Provenance::default(),
             },
             ModelError::DamageNotLinked {
                 threat: fx.t1,
@@ -621,6 +676,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::RemoveCatalogRef {
                 threat: fx.t1,
                 catalog_ref: fx.r5,
+                provenance: Provenance::default(),
             },
             ModelError::CatalogRefNotFound { threat: fx.t1 },
         ),
@@ -629,6 +685,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::AddCatalogRef {
                 threat: fx.t1,
                 catalog_ref: fx.r41,
+                provenance: Provenance::default(),
             },
             ModelError::DuplicateCatalogRef { threat: fx.t1 },
         ),
@@ -637,6 +694,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             Op::AddCatalogRef {
                 threat: fx.t_full,
                 catalog_ref: fx.r5,
+                provenance: Provenance::default(),
             },
             ModelError::TooManyCatalogRefs {
                 threat: fx.t_full,
@@ -649,6 +707,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.tree1,
                 tree: AttackTree::new(fx.fresh_node, Node::step(n())).expect("step"),
                 step_feasibility: vec![],
+                provenance: Provenance::default(),
             },
             ModelError::DuplicateAttackTree(fx.tree1),
         ),
@@ -663,6 +722,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 tree: fx.tree1,
                 node: fx.fresh_node,
                 level: None,
+                provenance: Provenance::default(),
             },
             ModelError::UnknownTreeNode {
                 tree: fx.tree1,
@@ -675,6 +735,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 tree: fx.tree1,
                 node: fx.tree1_root,
                 level: None,
+                provenance: Provenance::default(),
             },
             ModelError::NotAStep {
                 tree: fx.tree1,
@@ -687,6 +748,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 tree: fx.tree1,
                 node: fx.tree1_step,
                 level: Some(bad_flvl),
+                provenance: Provenance::default(),
             },
             ModelError::UnknownFeasibilityLevel(bad_flvl),
         ),
@@ -699,6 +761,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                     (fx.fresh_node, feas(m, "low")),
                     (fx.fresh_node, feas(m, "high")),
                 ],
+                provenance: Provenance::default(),
             },
             ModelError::DuplicateStepFeasibility {
                 tree: fx.fresh_tree,
@@ -727,6 +790,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 id: fx.fresh_a,
                 name: n(),
                 properties: m.all_properties(),
+                provenance: Provenance::default(),
             },
             ModelError::ProjectCapacityExceeded,
         ),
@@ -734,7 +798,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
 }
 
 /// The `ModelError` variants triggered by `Project::apply`.
-const NEW_VARIANTS: [&str; 34] = [
+const NEW_VARIANTS: [&str; 36] = [
     "DuplicateAsset",
     "DuplicateDamageScenario",
     "DuplicateThreatScenario",
@@ -747,6 +811,8 @@ const NEW_VARIANTS: [&str; 34] = [
     "NotAStep",
     "EmptyName",
     "NameTooLong",
+    "EmptyActor",
+    "ActorTooLong",
     "UnknownImpactCategory",
     "UnknownLevel",
     "UnknownFeasibilityLevel",
@@ -796,6 +862,7 @@ fn rejects_duplicate_catalog_ref_and_damage_inside_one_op() {
         category: threat_cat(&fx.m, "tampering"),
         catalog_refs: vec![fx.r5, fx.r41, fx.r5],
         damages: vec![],
+        provenance: Provenance::default(),
     };
     rejects(
         &mut p,
@@ -809,6 +876,7 @@ fn rejects_duplicate_catalog_ref_and_damage_inside_one_op() {
         category: threat_cat(&fx.m, "tampering"),
         catalog_refs: vec![],
         damages: vec![fx.d2, fx.d1, fx.d2],
+        provenance: Provenance::default(),
     };
     rejects(
         &mut p,
@@ -834,6 +902,7 @@ fn rejects_too_many_refs_on_add_and_unknown_targets_on_add_threat() {
         category: threat_cat(&fx.m, "tampering"),
         catalog_refs,
         damages,
+        provenance: Provenance::default(),
     };
     rejects(
         &mut p,
@@ -871,6 +940,7 @@ fn rejects_names_on_every_kind() {
                 id: fx.fresh_a,
                 name: name.clone(),
                 properties: fx.m.all_properties(),
+                provenance: Provenance::default(),
             },
             &want,
         );
@@ -880,6 +950,7 @@ fn rejects_names_on_every_kind() {
                 id: fx.fresh_d,
                 name: name.clone(),
                 impacts: vec![],
+                provenance: Provenance::default(),
             },
             &want,
         );
@@ -888,6 +959,7 @@ fn rejects_names_on_every_kind() {
             Op::RenameAsset {
                 id: fx.a_int,
                 name: name.clone(),
+                provenance: Provenance::default(),
             },
             &want,
         );
@@ -898,6 +970,7 @@ fn rejects_names_on_every_kind() {
         Op::RenameAsset {
             id: fx.a_int,
             name: "é".repeat(256).into(),
+            provenance: Provenance::default(),
         },
     );
 }
@@ -935,6 +1008,7 @@ fn referential_integrity() {
         Op::SetAssetProperties {
             id: fx.a_all,
             properties: props(&m, &["authenticity"]),
+            provenance: Provenance::default(),
         },
         &ModelError::PropertyInUse {
             asset: fx.a_all,
@@ -947,6 +1021,7 @@ fn referential_integrity() {
         Op::SetAssetProperties {
             id: fx.a_all,
             properties: props(&m, &["integrity", "authenticity"]),
+            provenance: Provenance::default(),
         },
     );
     // Recategorising t1 to a category the asset cannot satisfy.
@@ -955,6 +1030,7 @@ fn referential_integrity() {
         Op::SetThreatCategory {
             id: fx.t1,
             category: threat_cat(&m, "information-disclosure"),
+            provenance: Provenance::default(),
         },
         &ModelError::PropertyNotOnAsset {
             asset: fx.a_all,
@@ -967,6 +1043,7 @@ fn referential_integrity() {
         Op::SetThreatCategory {
             id: fx.t1,
             category: threat_cat(&m, "information-disclosure"),
+            provenance: Provenance::default(),
         },
     );
 
@@ -977,6 +1054,7 @@ fn referential_integrity() {
         Op::SetAssetProperties {
             id: fx.a_all,
             properties: props(&m, &["confidentiality", "authenticity"]),
+            provenance: Provenance::default(),
         },
     );
     // And confidentiality now is.
@@ -985,6 +1063,7 @@ fn referential_integrity() {
         Op::SetAssetProperties {
             id: fx.a_all,
             properties: props(&m, &["authenticity"]),
+            provenance: Provenance::default(),
         },
         &ModelError::PropertyInUse {
             asset: fx.a_all,
@@ -999,6 +1078,7 @@ fn referential_integrity() {
         Op::UnlinkDamage {
             threat: fx.t1,
             damage: fx.d1,
+            provenance: Provenance::default(),
         },
     );
     ok(&mut p, Op::RemoveDamageScenario { id: fx.d1 });
@@ -1024,6 +1104,7 @@ fn referential_integrity() {
         Op::SetThreatAttackTree {
             threat: fx.t_full,
             tree: None,
+            provenance: Provenance::default(),
         },
     );
     ok(&mut p, Op::RemoveThreatScenario { id: fx.t_full });
@@ -1032,6 +1113,7 @@ fn referential_integrity() {
         Op::SetAssetProperties {
             id: fx.a_all,
             properties: props(&m, &["availability"]),
+            provenance: Provenance::default(),
         },
     );
     ok(&mut p, Op::RemoveAsset { id: fx.a_all });
@@ -1054,11 +1136,13 @@ fn referential_integrity_counts_threats_per_property() {
             category: threat_cat(&m, "tampering"),
             catalog_refs: vec![],
             damages: vec![fx.d1],
+            provenance: Provenance::default(),
         },
     );
     let drop_integrity = Op::SetAssetProperties {
         id: fx.a_all,
         properties: props(&m, &["authenticity"]),
+        provenance: Provenance::default(),
     };
     rejects(
         &mut p,
@@ -1095,6 +1179,7 @@ fn inverse_round_trip() {
     let financial = cat(&m, "financial");
     let mut sorted = vec![fx.d1, fx.d2];
     sorted.sort();
+    let p_edit = Provenance::human("alice", 1000);
     // Ops in canonical form (sorted lists, impacts in category order), so
     // the inverse of the inverse is the op itself.
     let ops = vec![
@@ -1102,14 +1187,17 @@ fn inverse_round_trip() {
             id: fx.fresh_a,
             name: "new".into(),
             properties: props(&m, &["integrity", "availability"]),
+            provenance: p_edit.clone(),
         },
         Op::RenameAsset {
             id: fx.a_int,
             name: "renamed".into(),
+            provenance: p_edit.clone(),
         },
         Op::SetAssetProperties {
             id: fx.a_int,
             properties: props(&m, &["integrity", "authorization"]),
+            provenance: p_edit.clone(),
         },
         Op::RemoveAsset { id: fx.a_int },
         Op::AddDamageScenario {
@@ -1119,25 +1207,30 @@ fn inverse_round_trip() {
                 (safety, lvl(&m, safety, "negligible")),
                 (financial, lvl(&m, financial, "severe")),
             ],
+            provenance: p_edit.clone(),
         },
         Op::RenameDamageScenario {
             id: fx.d1,
             name: "renamed".into(),
+            provenance: p_edit.clone(),
         },
         Op::SetImpact {
             id: fx.d1,
             category: safety,
             level: Some(lvl(&m, safety, "severe")),
+            provenance: p_edit.clone(),
         },
         Op::SetImpact {
             id: fx.d1,
             category: safety,
             level: None,
+            provenance: p_edit.clone(),
         },
         Op::SetImpact {
             id: fx.d2,
             category: financial,
             level: Some(lvl(&m, financial, "moderate")),
+            provenance: p_edit.clone(),
         },
         Op::RemoveDamageScenario { id: fx.d2 },
         Op::AddThreatScenario {
@@ -1147,65 +1240,79 @@ fn inverse_round_trip() {
             category: threat_cat(&m, "repudiation"),
             catalog_refs: vec![cref(&m, annex5, "3"), cref(&m, annex5, "3.7")],
             damages: sorted.clone(),
+            provenance: p_edit.clone(),
         },
         Op::RenameThreatScenario {
             id: fx.t1,
             name: "renamed".into(),
+            provenance: p_edit.clone(),
         },
         Op::SetThreatCategory {
             id: fx.t1,
             category: threat_cat(&m, "elevation-of-privilege"),
+            provenance: p_edit.clone(),
         },
         Op::AddCatalogRef {
             threat: fx.t1,
             catalog_ref: fx.r5,
+            provenance: p_edit.clone(),
         },
         Op::RemoveCatalogRef {
             threat: fx.t1,
             catalog_ref: fx.r41,
+            provenance: p_edit.clone(),
         },
         Op::LinkDamage {
             threat: fx.t1,
             damage: fx.d2,
+            provenance: p_edit.clone(),
         },
         Op::UnlinkDamage {
             threat: fx.t1,
             damage: fx.d1,
+            provenance: p_edit.clone(),
         },
         Op::RemoveThreatScenario { id: fx.t1 },
         Op::AddAttackTree {
             id: fx.fresh_tree,
             tree: AttackTree::new(fx.fresh_node, Node::step("new")).expect("step"),
             step_feasibility: vec![(fx.fresh_node, feas(&m, "high"))],
+            provenance: p_edit.clone(),
         },
         Op::SetStepFeasibility {
             tree: fx.tree1,
             node: fx.tree1_step,
             level: Some(feas(&m, "high")),
+            provenance: p_edit.clone(),
         },
         Op::SetStepFeasibility {
             tree: fx.tree1,
             node: fx.tree1_step,
             level: None,
+            provenance: p_edit.clone(),
         },
         Op::SetThreatAttackTree {
             threat: fx.t1,
             tree: Some(fx.tree_free),
+            provenance: p_edit.clone(),
         },
         Op::SetThreatAttackTree {
             threat: fx.t_full,
             tree: None,
+            provenance: p_edit.clone(),
         },
         Op::RemoveAttackTree { id: fx.tree_free },
         // Setting a value to what it already is succeeds with an equal
-        // inverse.
+        // inverse when provenance is unchanged.
         Op::RenameAsset {
             id: fx.a_all,
             name: "x".into(),
+            provenance: Provenance::default(),
         },
         Op::SetThreatCategory {
             id: fx.t1,
             category: threat_cat(&m, "tampering"),
+            provenance: Provenance::default(),
         },
     ];
     let mut kinds = BTreeSet::new();
@@ -1231,11 +1338,13 @@ fn inverse_of_no_op_is_equal_op() {
     let op = Op::RenameDamageScenario {
         id: fx.d2,
         name: "same".into(),
+        provenance: Provenance::default(),
     };
     assert_eq!(ok(&mut p, op.clone()), op);
     let op = Op::SetAssetProperties {
         id: fx.a_all,
         properties: fx.m.all_properties(),
+        provenance: Provenance::default(),
     };
     assert_eq!(ok(&mut p, op.clone()), op);
     assert_eq!(p, before);
@@ -1258,11 +1367,13 @@ fn deterministic_order() {
         id,
         name: "asset".into(),
         properties: all,
+        provenance: Provenance::default(),
     };
     let add_damage = |id| Op::AddDamageScenario {
         id,
         name: "damage".into(),
         impacts: vec![],
+        provenance: Provenance::default(),
     };
 
     // Order one: everything in one go.
@@ -1282,6 +1393,7 @@ fn deterministic_order() {
             category: threat_cat(&m, "spoofing"),
             catalog_refs: vec![r("7"), r("4.2"), r("4")],
             damages: vec![d1, d3, d2],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -1293,6 +1405,7 @@ fn deterministic_order() {
             category: threat_cat(&m, "tampering"),
             catalog_refs: vec![],
             damages: vec![d2],
+            provenance: Provenance::default(),
         },
     );
 
@@ -1317,6 +1430,7 @@ fn deterministic_order() {
             category: threat_cat(&m, "spoofing"),
             catalog_refs: vec![],
             damages: vec![d2],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -1328,6 +1442,7 @@ fn deterministic_order() {
             category: threat_cat(&m, "spoofing"),
             catalog_refs: vec![r("4")],
             damages: vec![d2],
+            provenance: Provenance::default(),
         },
     );
     for d in [d3, d1] {
@@ -1336,6 +1451,7 @@ fn deterministic_order() {
             Op::LinkDamage {
                 threat: t1,
                 damage: d,
+                provenance: Provenance::default(),
             },
         );
     }
@@ -1345,6 +1461,7 @@ fn deterministic_order() {
             Op::AddCatalogRef {
                 threat: t1,
                 catalog_ref: r(t),
+                provenance: Provenance::default(),
             },
         );
     }
@@ -1353,6 +1470,7 @@ fn deterministic_order() {
         Op::RenameThreatScenario {
             id: t2,
             name: "threat".into(),
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -1360,6 +1478,7 @@ fn deterministic_order() {
         Op::SetThreatCategory {
             id: t2,
             category: threat_cat(&m, "tampering"),
+            provenance: Provenance::default(),
         },
     );
 
@@ -1460,6 +1579,7 @@ fn errors_never_contain_names() {
             tree: fx.tree1,
             node: fx.tree1_step,
             level: None,
+            provenance: Provenance::default(),
         },
     );
     let err = p.evaluate_threat(fx.t_full).expect_err("unrated step");
@@ -1477,6 +1597,7 @@ fn errors_never_contain_names() {
             id: empty_tree_id,
             tree: empty_tree,
             step_feasibility: vec![],
+            provenance: Provenance::default(),
         },
     );
     let err = p.evaluate_tree(empty_tree_id).expect_err("empty gate");
@@ -1505,6 +1626,7 @@ fn threat_attack_tree_integrity_and_validation() {
         Op::SetThreatAttackTree {
             threat: fx.t1,
             tree: Some(fx.tree1),
+            provenance: Provenance::default(),
         },
     );
     rejects(
@@ -1531,6 +1653,7 @@ fn threat_attack_tree_integrity_and_validation() {
         Op::SetThreatAttackTree {
             threat: fx.t1,
             tree: Some(fx.tree_free),
+            provenance: Provenance::default(),
         },
     );
     assert_eq!(
@@ -1538,6 +1661,7 @@ fn threat_attack_tree_integrity_and_validation() {
         Op::SetThreatAttackTree {
             threat: fx.t1,
             tree: Some(fx.tree1),
+            provenance: Provenance::default(),
         }
     );
     rejects(
@@ -1563,6 +1687,7 @@ fn threat_attack_tree_integrity_and_validation() {
         Op::SetThreatAttackTree {
             threat: fx.t1,
             tree: None,
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -1570,6 +1695,7 @@ fn threat_attack_tree_integrity_and_validation() {
         Op::SetThreatAttackTree {
             threat: fx.t_full,
             tree: None,
+            provenance: Provenance::default(),
         },
     );
     let restore_tree1 = ok(&mut p, Op::RemoveAttackTree { id: fx.tree1 });
@@ -1584,6 +1710,7 @@ fn threat_attack_tree_integrity_and_validation() {
             tree: fx.tree1,
             node: fx.tree1_root,
             level: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
         },
         &ModelError::NotAStep {
             tree: fx.tree1,
@@ -1596,6 +1723,7 @@ fn threat_attack_tree_integrity_and_validation() {
             tree: fx.tree1,
             node: fx.fresh_node,
             level: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
         },
         &ModelError::UnknownTreeNode {
             tree: fx.tree1,
@@ -1612,6 +1740,7 @@ fn threat_attack_tree_integrity_and_validation() {
                 (fx.fresh_node, feas(&m, "low")),
                 (fx.fresh_node, feas(&m, "high")),
             ],
+            provenance: Provenance::default(),
         },
         &ModelError::DuplicateStepFeasibility {
             tree: fx.fresh_tree,
@@ -1629,6 +1758,7 @@ fn threat_attack_tree_integrity_and_validation() {
             id: fx.fresh_tree,
             tree: step_tree,
             step_feasibility: vec![(fx.fresh_node, bad_flvl)],
+            provenance: Provenance::default(),
         },
         &ModelError::UnknownFeasibilityLevel(bad_flvl),
     );
@@ -1639,6 +1769,7 @@ fn threat_attack_tree_integrity_and_validation() {
             id: fx.fresh_tree,
             tree: blank_tree,
             step_feasibility: vec![],
+            provenance: Provenance::default(),
         },
         &ModelError::EmptyName,
     );
@@ -1649,6 +1780,7 @@ fn threat_attack_tree_integrity_and_validation() {
             id: fx.fresh_tree,
             tree: long_tree,
             step_feasibility: vec![],
+            provenance: Provenance::default(),
         },
         &ModelError::NameTooLong { max: 256 },
     );
@@ -1672,6 +1804,7 @@ fn evaluate_threat_feasibility_and_why_path() {
                 id: asset,
                 name: "ECU".into(),
                 properties: m.all_properties(),
+                provenance: Provenance::default(),
             },
         );
         ok(
@@ -1683,6 +1816,7 @@ fn evaluate_threat_feasibility_and_why_path() {
                 category: cat,
                 catalog_refs: vec![],
                 damages: vec![],
+                provenance: Provenance::default(),
             },
         );
 
@@ -1744,6 +1878,7 @@ fn evaluate_threat_feasibility_and_why_path() {
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(sa_id, f3), (shared_id, f2), (sb_id, f1)],
+                provenance: Provenance::default(),
             },
         );
         ok(
@@ -1751,6 +1886,7 @@ fn evaluate_threat_feasibility_and_why_path() {
             Op::SetThreatAttackTree {
                 threat,
                 tree: Some(tree_id),
+                provenance: Provenance::default(),
             },
         );
 
@@ -1799,6 +1935,7 @@ fn evaluate_threat_feasibility_and_why_path() {
                 tree: tree_id,
                 node: sa_id,
                 level: Some(f0),
+                provenance: Provenance::default(),
             },
         );
         let undo_sb = ok(
@@ -1807,6 +1944,7 @@ fn evaluate_threat_feasibility_and_why_path() {
                 tree: tree_id,
                 node: sb_id,
                 level: Some(f3),
+                provenance: Provenance::default(),
             },
         );
         let eval2 = p.evaluate_threat(threat).expect("eval2");
@@ -1828,6 +1966,7 @@ fn evaluate_threat_feasibility_and_why_path() {
                 tree: tree_id,
                 node: sb_id,
                 level: None,
+                provenance: Provenance::default(),
             },
         );
         assert_eq!(
@@ -1854,6 +1993,7 @@ fn too_many_damage_links() {
             id: asset,
             name: name("ECU"),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         },
     );
     let damages: Vec<_> = (0..=max as u64).map(|i| damage_id(100 + i)).collect();
@@ -1864,6 +2004,7 @@ fn too_many_damage_links() {
                 id,
                 name: name("d"),
                 impacts: vec![],
+                provenance: Provenance::default(),
             },
         );
     }
@@ -1875,6 +2016,7 @@ fn too_many_damage_links() {
         category: threat_cat(&m, "tampering"),
         catalog_refs: vec![],
         damages: damages.to_vec(),
+        provenance: Provenance::default(),
     };
     // 257 links on add.
     rejects(
@@ -1890,6 +2032,7 @@ fn too_many_damage_links() {
         Op::LinkDamage {
             threat: t,
             damage: last,
+            provenance: Provenance::default(),
         },
         &ModelError::TooManyDamageLinks { threat: t, max },
     );
@@ -1899,6 +2042,7 @@ fn too_many_damage_links() {
         Op::LinkDamage {
             threat: t,
             damage: damages[0],
+            provenance: Provenance::default(),
         },
         &ModelError::DuplicateDamageLink {
             threat: t,
@@ -1911,6 +2055,7 @@ fn too_many_damage_links() {
         Op::UnlinkDamage {
             threat: t,
             damage: damages[0],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -1918,6 +2063,7 @@ fn too_many_damage_links() {
         Op::LinkDamage {
             threat: t,
             damage: last,
+            provenance: Provenance::default(),
         },
     );
     ok(&mut p, add(other, &[last]));
@@ -1926,4 +2072,334 @@ fn too_many_damage_links() {
         text,
         format!("threat scenario {t} would link more than 256 damage scenarios")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Job 014 AC1–AC6: element provenance, lifecycle, undo/redo, validation, PartialEq.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn provenance_lifecycle_and_undo_redo_across_every_op() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let annex5 = scheme(&m, "r155-annex5");
+    let safety = cat(&m, "safety");
+
+    let a_id = asset_id(1);
+    let d_id = damage_id(2);
+    let t_id = threat_id(3);
+    let tree_id = tree_id(4);
+    let step_id = node_id(5);
+
+    let p_a0 = Provenance::human("alice", 100);
+    let p_a1 = Provenance::import("reqif", 110);
+    let p_a2 = Provenance::ai("tara-assist", 120);
+
+    let p_d0 = Provenance::import("csv", 200);
+    let p_d1 = Provenance::human("bob", 210);
+    let p_d2 = Provenance::ai("tara-assist", 220);
+
+    let p_t0 = Provenance::catalog("r155-annex5", 300);
+    let p_t1 = Provenance::human("alice", 310);
+    let p_t2 = Provenance::import("reqif", 320);
+    let p_t3 = Provenance::catalog("r155-annex5", 330);
+    let p_t4 = Provenance::human("bob", 340);
+    let p_t5 = Provenance::ai("tara-assist", 350);
+    let p_t6 = Provenance::human("alice", 360);
+    let p_t7 = Provenance::human("bob", 370);
+    let p_t8 = Provenance::ai("tara-assist", 380);
+
+    let p_tree0 = Provenance::human("alice", 400);
+    let p_tree1 = Provenance::ai("tara-assist", 410);
+
+    let mut history: Vec<(Op, Op, Project)> = Vec::new();
+    let mut record = |p: &mut Project, op: Op| {
+        let before = p.clone();
+        let inv = ok(p, op.clone());
+        history.push((op, inv, before));
+    };
+
+    // Create all 4 element kinds with distinct provenance records.
+    record(
+        &mut p,
+        Op::AddAsset {
+            id: a_id,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: p_a0.clone(),
+        },
+    );
+    record(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d_id,
+            name: "Crash".into(),
+            impacts: vec![],
+            provenance: p_d0.clone(),
+        },
+    );
+    record(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_id,
+            name: "Threat".into(),
+            asset: a_id,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: p_t0.clone(),
+        },
+    );
+    record(
+        &mut p,
+        Op::AddAttackTree {
+            id: tree_id,
+            tree: AttackTree::new(step_id, Node::step("Step")).expect("step"),
+            step_feasibility: vec![(step_id, feas(&m, "low"))],
+            provenance: p_tree0.clone(),
+        },
+    );
+
+    let a_idx = p.asset_idx(&a_id).expect("asset");
+    let d_idx = p.damage_scenario_idx(&d_id).expect("damage");
+    let t_idx = p.threat_scenario_idx(&t_id).expect("threat");
+    let tree_idx = p.attack_tree_idx(&tree_id).expect("tree");
+
+    assert_eq!(p.asset(a_idx).map(|a| a.provenance()), Some(&p_a0));
+    assert_eq!(
+        p.damage_scenario(d_idx).map(|d| d.provenance()),
+        Some(&p_d0)
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t0)
+    );
+    assert_eq!(p.attack_tree_provenance(tree_idx), Some(&p_tree0));
+
+    // Mutate Asset.
+    record(
+        &mut p,
+        Op::RenameAsset {
+            id: a_id,
+            name: "Brake ECU".into(),
+            provenance: p_a1.clone(),
+        },
+    );
+    assert_eq!(p.asset(a_idx).map(|a| a.provenance()), Some(&p_a1));
+    record(
+        &mut p,
+        Op::SetAssetProperties {
+            id: a_id,
+            properties: props(&m, &["integrity", "availability"]),
+            provenance: p_a2.clone(),
+        },
+    );
+    assert_eq!(p.asset(a_idx).map(|a| a.provenance()), Some(&p_a2));
+
+    // Mutate DamageScenario.
+    record(
+        &mut p,
+        Op::RenameDamageScenario {
+            id: d_id,
+            name: "Brake failure".into(),
+            provenance: p_d1.clone(),
+        },
+    );
+    assert_eq!(
+        p.damage_scenario(d_idx).map(|d| d.provenance()),
+        Some(&p_d1)
+    );
+    record(
+        &mut p,
+        Op::SetImpact {
+            id: d_id,
+            category: safety,
+            level: Some(lvl(&m, safety, "severe")),
+            provenance: p_d2.clone(),
+        },
+    );
+    assert_eq!(
+        p.damage_scenario(d_idx).map(|d| d.provenance()),
+        Some(&p_d2)
+    );
+
+    // Mutate ThreatScenario through every threat-mutating op.
+    record(
+        &mut p,
+        Op::RenameThreatScenario {
+            id: t_id,
+            name: "Reflash brake ECU".into(),
+            provenance: p_t1.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t1)
+    );
+    record(
+        &mut p,
+        Op::SetThreatCategory {
+            id: t_id,
+            category: threat_cat(&m, "denial-of-service"),
+            provenance: p_t2.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t2)
+    );
+    record(
+        &mut p,
+        Op::AddCatalogRef {
+            threat: t_id,
+            catalog_ref: cref(&m, annex5, "5"),
+            provenance: p_t3.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t3)
+    );
+    record(
+        &mut p,
+        Op::RemoveCatalogRef {
+            threat: t_id,
+            catalog_ref: cref(&m, annex5, "5"),
+            provenance: p_t4.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t4)
+    );
+    record(
+        &mut p,
+        Op::LinkDamage {
+            threat: t_id,
+            damage: d_id,
+            provenance: p_t5.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t5)
+    );
+    record(
+        &mut p,
+        Op::UnlinkDamage {
+            threat: t_id,
+            damage: d_id,
+            provenance: p_t6.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t6)
+    );
+    record(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_id,
+            tree: Some(tree_id),
+            provenance: p_t7.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t7)
+    );
+
+    // Mutate AttackTree step feasibility.
+    record(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree: tree_id,
+            node: step_id,
+            level: Some(feas(&m, "high")),
+            provenance: p_tree1.clone(),
+        },
+    );
+    assert_eq!(p.attack_tree_provenance(tree_idx), Some(&p_tree1));
+
+    // Unlink tree and remove all 4 entities; their inverses carry the stored provenance.
+    record(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_id,
+            tree: None,
+            provenance: p_t8.clone(),
+        },
+    );
+    record(&mut p, Op::RemoveAttackTree { id: tree_id });
+    assert_eq!(p.attack_tree_provenance(tree_idx), None);
+    record(&mut p, Op::RemoveThreatScenario { id: t_id });
+    record(&mut p, Op::RemoveDamageScenario { id: d_id });
+    record(&mut p, Op::RemoveAsset { id: a_id });
+    assert_eq!(p, Project::new(Arc::clone(&m)));
+
+    // Undo the entire history step by step, verifying exact project state
+    // (including provenance on all 4 element kinds) at every step, and then
+    // redo each step.
+    for (op, inv, before) in history.into_iter().rev() {
+        let after = p.clone();
+        let redo = ok(&mut p, inv);
+        assert_eq!(p, before);
+        assert_eq!(redo, op);
+        ok(&mut p, redo);
+        assert_eq!(p, after);
+        ok(&mut p, ok(&mut before.clone(), op));
+        p = before;
+    }
+    assert_eq!(p, Project::new(m));
+}
+
+#[test]
+fn project_equality_compares_provenance_on_every_element_kind() {
+    let (base, fx) = fixture("x");
+    let other = Provenance::new("auditor", 999, ProvenanceSource::Human);
+
+    let mut p_asset = base.clone();
+    ok(
+        &mut p_asset,
+        Op::RenameAsset {
+            id: fx.a_all,
+            name: "x".into(),
+            provenance: other.clone(),
+        },
+    );
+    assert_ne!(p_asset, base);
+
+    let mut p_damage = base.clone();
+    ok(
+        &mut p_damage,
+        Op::RenameDamageScenario {
+            id: fx.d1,
+            name: "x".into(),
+            provenance: other.clone(),
+        },
+    );
+    assert_ne!(p_damage, base);
+
+    let mut p_threat = base.clone();
+    ok(
+        &mut p_threat,
+        Op::RenameThreatScenario {
+            id: fx.t1,
+            name: "x".into(),
+            provenance: other.clone(),
+        },
+    );
+    assert_ne!(p_threat, base);
+
+    let mut p_tree = base.clone();
+    ok(
+        &mut p_tree,
+        Op::SetStepFeasibility {
+            tree: fx.tree1,
+            node: fx.tree1_step,
+            level: Some(feas(&fx.m, "medium")),
+            provenance: other,
+        },
+    );
+    assert_ne!(p_tree, base);
 }
