@@ -248,6 +248,22 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-22T02:00:00Z"
+    },
+    {
+      "id": "014-provenance",
+      "title": "Provenance on every element (D6)",
+      "branch": "factory/014-provenance",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-22T02:45:00Z"
     }
   ]
 }
