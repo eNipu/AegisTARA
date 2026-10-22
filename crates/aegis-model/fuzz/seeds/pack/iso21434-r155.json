@@ -95,6 +95,24 @@
         ]
       }
     ],
+    "feasibility_levels": [
+      {
+        "key": "very-low",
+        "label": "Very low"
+      },
+      {
+        "key": "low",
+        "label": "Low"
+      },
+      {
+        "key": "medium",
+        "label": "Medium"
+      },
+      {
+        "key": "high",
+        "label": "High"
+      }
+    ],
     "properties": [
       {
         "key": "confidentiality",

@@ -54,6 +54,15 @@ fn second_methodology_is_valid_data() {
         "CAPEC-123"
     );
     assert!(m.parse_catalog_ref(capec, "4.1").is_err());
+    assert_eq!(m.feasibility_levels().len(), 5);
+    let fkeys: Vec<_> = m
+        .feasibility_levels()
+        .map(|(_, key, _)| key.to_string())
+        .collect();
+    assert_eq!(
+        fkeys,
+        ["improbable", "remote", "occasional", "probable", "frequent"]
+    );
     // The same definition gives an equal methodology.
     assert_eq!(Methodology::new(def), Ok(m));
 }
@@ -193,5 +202,32 @@ fn second_methodology_rejects_foreign_indices() {
             asset: c_only,
             property: prop(&m, "i"),
         },
+    );
+    // Feasibility level index 5 is out of range in the 5-level medical
+    // feasibility scale.
+    let tree = common::tree_id(12);
+    let step = common::node_id(13);
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tree,
+            tree: aegis_model::AttackTree::new(step, aegis_model::Node::step("Step"))
+                .expect("step"),
+            step_feasibility: vec![],
+        },
+    );
+    let f5 = common::wide()
+        .feasibility_levels()
+        .nth(5)
+        .expect("feasibility 5")
+        .0;
+    rejects(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree,
+            node: step,
+            level: Some(f5),
+        },
+        &ModelError::UnknownFeasibilityLevel(f5),
     );
 }

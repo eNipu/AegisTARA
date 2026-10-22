@@ -149,54 +149,65 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
         impacts,
         properties_and_threats,
         schemes,
+        entries(2, 16),
     )
         .prop_map(
-            |(mkey, version, label, impacts, (props, threats), schemes)| MethodologyDef {
-                key: key("m", 0, &mkey),
-                version,
-                label,
-                impact_categories: impacts
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (tail, label, levels))| ImpactCategoryDef {
-                        key: key("c", i, &tail),
-                        label,
-                        levels: levels
-                            .into_iter()
-                            .enumerate()
-                            .map(|(l, (tail, label))| LevelDef {
-                                key: key("l", l, &tail),
-                                label,
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-                properties: props
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (tail, label))| PropertyDef {
-                        key: key("p", i, &tail),
-                        label,
-                    })
-                    .collect(),
-                threat_categories: threats
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (tail, label, violates))| ThreatCategoryDef {
-                        key: key("t", i, &tail),
-                        label,
-                        violates,
-                    })
-                    .collect(),
-                catalog_schemes: schemes
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (tail, label, syntax))| CatalogSchemeDef {
-                        key: key("s", i, &tail),
-                        label,
-                        syntax,
-                    })
-                    .collect(),
+            |(mkey, version, label, impacts, (props, threats), schemes, feasibility)| {
+                MethodologyDef {
+                    key: key("m", 0, &mkey),
+                    version,
+                    label,
+                    impact_categories: impacts
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (tail, label, levels))| ImpactCategoryDef {
+                            key: key("c", i, &tail),
+                            label,
+                            levels: levels
+                                .into_iter()
+                                .enumerate()
+                                .map(|(l, (tail, label))| LevelDef {
+                                    key: key("l", l, &tail),
+                                    label,
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                    properties: props
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (tail, label))| PropertyDef {
+                            key: key("p", i, &tail),
+                            label,
+                        })
+                        .collect(),
+                    threat_categories: threats
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (tail, label, violates))| ThreatCategoryDef {
+                            key: key("t", i, &tail),
+                            label,
+                            violates,
+                        })
+                        .collect(),
+                    catalog_schemes: schemes
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (tail, label, syntax))| CatalogSchemeDef {
+                            key: key("s", i, &tail),
+                            label,
+                            syntax,
+                        })
+                        .collect(),
+                    feasibility_levels: feasibility
+                        .into_iter()
+                        .enumerate()
+                        .map(|(l, (tail, label))| LevelDef {
+                            key: key("f", l, &tail),
+                            label,
+                        })
+                        .collect(),
+                }
             },
         )
 }

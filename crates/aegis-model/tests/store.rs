@@ -1030,3 +1030,46 @@ fn every_vocabulary_kind_reads_back_under_its_key() {
     let ecu = loaded.asset_idx(&asset_id(1)).and_then(|i| loaded.asset(i));
     assert!(ecu.is_some_and(|a| a.properties().contains(integrity)));
 }
+
+#[test]
+fn save_and_append_refuse_attack_tree_ops_with_unencodable_op() {
+    let m = builtin();
+    let mut p = apply_all(&m, &golden_ops(&m));
+    let tid = common::tree_id(50);
+    let step = common::node_id(51);
+    let tree = aegis_model::AttackTree::new(step, aegis_model::Node::step("Step")).expect("step");
+    p.apply(Op::AddAttackTree {
+        id: tid,
+        tree: tree.clone(),
+        step_feasibility: vec![],
+    })
+    .expect("add tree");
+    let mut out = Vec::new();
+    assert!(matches!(p.save(&mut out), Err(StoreError::UnencodableOp)));
+    assert!(out.is_empty());
+
+    let header = log_text(&m, &[]);
+    for op in [
+        Op::AddAttackTree {
+            id: tid,
+            tree,
+            step_feasibility: vec![],
+        },
+        Op::SetStepFeasibility {
+            tree: tid,
+            node: step,
+            level: None,
+        },
+        Op::SetThreatAttackTree {
+            threat: threat_id(1),
+            tree: Some(tid),
+        },
+        Op::RemoveAttackTree { id: tid },
+    ] {
+        let mut writer =
+            aegis_model::OpLogWriter::create(Vec::new(), Arc::clone(&m)).expect("header");
+        assert!(matches!(writer.append(&op), Err(StoreError::UnencodableOp)));
+        let bytes = writer.into_inner().expect("flush");
+        assert_eq!(bytes, header.as_bytes());
+    }
+}

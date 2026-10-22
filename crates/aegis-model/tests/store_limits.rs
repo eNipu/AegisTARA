@@ -347,6 +347,15 @@ fn maxed() -> Arc<Methodology> {
                 }
             })
             .collect(),
+        feasibility_levels: (0..16)
+            .map(|l| {
+                let key = key64("f", l);
+                LevelDef {
+                    label: label(&key),
+                    key,
+                }
+            })
+            .collect(),
     };
     Arc::new(Methodology::new(def).expect("maxed methodology is valid"))
 }

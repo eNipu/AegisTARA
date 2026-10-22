@@ -12,9 +12,10 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, DamageId, ImpactCategory,
-    ImpactCategoryDef, Level, LevelDef, Methodology, MethodologyDef, Op, Project, Property,
-    PropertyDef, PropertySet, SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId,
+    AssetId, AttackTree, CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, DamageId,
+    FeasibilityLevel, GateKind, ImpactCategory, ImpactCategoryDef, Level, LevelDef, Methodology,
+    MethodologyDef, Node, NodeId, Op, Project, Property, PropertyDef, PropertySet, SegmentDef,
+    ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -65,6 +66,28 @@ pub fn second_def() -> MethodologyDef {
                 key: s("service-loss"),
                 label: s("Service loss"),
                 levels: level_defs(&["tolerable", "intolerable"]),
+            },
+        ],
+        feasibility_levels: vec![
+            LevelDef {
+                key: s("improbable"),
+                label: s("Improbable"),
+            },
+            LevelDef {
+                key: s("remote"),
+                label: s("Remote"),
+            },
+            LevelDef {
+                key: s("occasional"),
+                label: s("Occasional"),
+            },
+            LevelDef {
+                key: s("probable"),
+                label: s("Probable"),
+            },
+            LevelDef {
+                key: s("frequent"),
+                label: s("Frequent"),
             },
         ],
         properties: ["c", "i", "a"]
@@ -152,6 +175,12 @@ pub fn wide() -> Methodology {
                     .collect(),
             })
             .collect(),
+        feasibility_levels: (0..16)
+            .map(|l| LevelDef {
+                key: s(format!("f{l}")),
+                label: s(format!("f{l}")),
+            })
+            .collect(),
         properties: (0..12)
             .map(|i| PropertyDef {
                 key: s(format!("p{i}")),
@@ -193,6 +222,14 @@ pub fn threat_id(n: u64) -> ThreatId {
     ThreatId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn tree_id(n: u64) -> TreeId {
+    TreeId::from_uuid(v7(n)).expect("v7")
+}
+
+pub fn node_id(n: u64) -> NodeId {
+    NodeId::from_uuid(v7(n)).expect("v7")
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -207,6 +244,10 @@ pub fn cat(m: &Methodology, key: &str) -> ImpactCategory {
 
 pub fn lvl(m: &Methodology, c: ImpactCategory, key: &str) -> Level {
     m.level(c, key).expect(key)
+}
+
+pub fn feas(m: &Methodology, key: &str) -> FeasibilityLevel {
+    m.feasibility_level(key).expect(key)
 }
 
 pub fn threat_cat(m: &Methodology, key: &str) -> ThreatCategory {
@@ -244,7 +285,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..22,
+        0u8..28,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -327,6 +368,32 @@ impl Gen {
         match nth(existing, sel / 8) {
             Some(id) if sel % 8 != 0 => id,
             _ => threat_id(self.fresh()),
+        }
+    }
+
+    fn tree(&mut self, p: &Project, sel: u16) -> TreeId {
+        let existing: Vec<_> = p.attack_trees().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if sel % 8 != 0 => id,
+            _ => tree_id(self.fresh()),
+        }
+    }
+
+    fn feasibility_level(&self, sel: u16) -> FeasibilityLevel {
+        let n = self.m.feasibility_levels().count();
+        if sel % 10 == 0 {
+            let extra = self.wide.feasibility_levels().count() - n;
+            self.wide
+                .feasibility_levels()
+                .nth(n + usize::from(sel / 10) % extra)
+                .expect("wide feasibility level")
+                .0
+        } else {
+            self.m
+                .feasibility_levels()
+                .nth(usize::from(sel) % n)
+                .expect("feasibility level")
+                .0
         }
     }
 
@@ -604,8 +671,76 @@ impl Gen {
                 };
                 Op::UnlinkDamage { threat, damage }
             }
-            _ => Op::RemoveThreatScenario {
+            21 => Op::RemoveThreatScenario {
                 id: self.threat(p, s.a),
+            },
+            22..=23 => {
+                let root = node_id(self.fresh());
+                let s1 = node_id(self.fresh());
+                let s2 = node_id(self.fresh());
+                let kind = match s.b % 3 {
+                    0 => GateKind::Or,
+                    1 => GateKind::And,
+                    _ => GateKind::SeqAnd,
+                };
+                let mut tree = AttackTree::new(root, Node::gate(kind, format!("{SENTINEL}-g")))
+                    .expect("valid root");
+                tree.add_child(tree.root(), s1, Node::step(format!("{SENTINEL}-s1")))
+                    .expect("valid s1");
+                tree.add_child(tree.root(), s2, Node::step(format!("{SENTINEL}-s2")))
+                    .expect("valid s2");
+                let step_feasibility = match s.c % 16 {
+                    0 => vec![(node_id(self.fresh()), self.feasibility_level(1))],
+                    1 => vec![(root, self.feasibility_level(1))],
+                    2 => vec![(s1, self.feasibility_level(0))],
+                    3 => vec![
+                        (s1, self.feasibility_level(1)),
+                        (s1, self.feasibility_level(2)),
+                    ],
+                    4 => vec![],
+                    5..=8 => vec![(s1, self.feasibility_level(s.a))],
+                    _ => vec![
+                        (s2, self.feasibility_level(s.a)),
+                        (s1, self.feasibility_level(s.b)),
+                    ],
+                };
+                Op::AddAttackTree {
+                    id: if s.a % 12 == 0 {
+                        self.tree(p, s.b)
+                    } else {
+                        tree_id(self.fresh())
+                    },
+                    tree,
+                    step_feasibility,
+                }
+            }
+            24..=25 => {
+                let tree = self.tree(p, s.a);
+                let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
+                    Some(_) if s.b % 8 == 0 => node_id(self.fresh()),
+                    Some(t) if s.b % 8 == 1 => t.id_of(t.root()).expect("root"),
+                    Some(t) => {
+                        let steps: Vec<_> = t
+                            .iter()
+                            .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                            .map(|(_, id, _)| id)
+                            .collect();
+                        nth(steps, s.b / 8).unwrap_or_else(|| node_id(self.fresh()))
+                    }
+                    None => node_id(self.fresh()),
+                };
+                Op::SetStepFeasibility {
+                    tree,
+                    node,
+                    level: (s.c % 5 != 0).then(|| self.feasibility_level(s.c)),
+                }
+            }
+            26 => Op::SetThreatAttackTree {
+                threat: self.threat(p, s.a),
+                tree: (s.b % 4 != 0).then(|| self.tree(p, s.b)),
+            },
+            _ => Op::RemoveAttackTree {
+                id: self.tree(p, s.a),
             },
         }
     }
@@ -754,7 +889,11 @@ pub fn accepted(
     let mut generator = Gen::new(Arc::clone(m));
     let mut project = Project::new(Arc::clone(m));
     for s in seeds {
-        let op = generator.op(&project, s);
+        let v1_seed = Seed {
+            kind: s.kind % 22,
+            ..s.clone()
+        };
+        let op = generator.op(&project, &v1_seed);
         if let Ok(inverse) = project.apply(op.clone()) {
             f(&project, &op, &inverse)?;
         }
@@ -841,6 +980,15 @@ pub fn describe(p: &Project) -> Vec<String> {
             m.threat_category_key(t.category()),
         ));
     }
+    for (idx, id, tree) in p.attack_trees() {
+        let feas: Vec<_> = p
+            .step_feasibilities(idx)
+            .unwrap_or(&[])
+            .iter()
+            .map(|l| l.and_then(|f| m.feasibility_level_key(f)))
+            .collect();
+        out.push(format!("tree {id} len {} {feas:?}", tree.len()));
+    }
     out
 }
 
@@ -851,7 +999,7 @@ pub fn describe(p: &Project) -> Vec<String> {
 /// Applies every `Op` variant over `m`, which must be the second
 /// methodology (built from `second_def()` or loaded from its pack), checks
 /// the resulting state, and tears the project down again (AC7 of job 009,
-/// AC6 of job 012).
+/// AC6 of job 012, AC7 of job 013).
 pub fn second_every_op(m: Arc<Methodology>) {
     fn ok(p: &mut Project, op: Op) -> Op {
         match p.apply(op.clone()) {
@@ -873,6 +1021,8 @@ pub fn second_every_op(m: Arc<Methodology>) {
     let (pump, monitor) = (asset_id(1), asset_id(2));
     let (overdose, leak) = (damage_id(3), damage_id(4));
     let (lock, sniff) = (threat_id(5), threat_id(6));
+    let tree = tree_id(7);
+    let (root, s1, s2) = (node_id(8), node_id(9), node_id(10));
 
     // Assets.
     ok(
@@ -994,9 +1144,49 @@ pub fn second_every_op(m: Arc<Methodology>) {
         },
     );
 
+    // Attack tree rated on the 5-level feasibility scale.
+    let mut attack_tree =
+        AttackTree::new(root, Node::gate(GateKind::Or, "Compromise pump")).expect("root");
+    attack_tree
+        .add_child(attack_tree.root(), s1, Node::step("USB update"))
+        .expect("s1");
+    attack_tree
+        .add_child(attack_tree.root(), s2, Node::step("Serial debug"))
+        .expect("s2");
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tree,
+            tree: attack_tree,
+            step_feasibility: vec![(s1, feas(&m, "remote")), (s2, feas(&m, "occasional"))],
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree,
+            node: s1,
+            level: Some(feas(&m, "probable")),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: lock,
+            tree: Some(tree),
+        },
+    );
+
     // Check the state.
     let lock_idx = p.threat_scenario_idx(&lock).expect("lock");
     assert_eq!(p.targets(lock_idx), Some(props(&m, &["i", "a"])));
+    let tree_idx = p.attack_tree_idx(&tree).expect("tree");
+    assert_eq!(
+        p.threat_scenario(lock_idx).and_then(|t| t.attack_tree()),
+        Some(tree_idx)
+    );
+    let eval = p.evaluate_threat(lock).expect("evaluate threat");
+    assert_eq!(eval.root_value(), &feas(&m, "probable"));
     let sniff_idx = p.threat_scenario_idx(&sniff).expect("sniff");
     assert_eq!(p.targets(sniff_idx), Some(props(&m, &["c"])));
     let d = p
@@ -1024,8 +1214,27 @@ pub fn second_every_op(m: Arc<Methodology>) {
             threats: 1,
         },
     );
+    // Linked attack tree blocks removal of both tree and threat.
+    rejects(
+        &mut p,
+        Op::RemoveAttackTree { id: tree },
+        &aegis_model::ModelError::AttackTreeInUse { tree, threats: 1 },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: lock },
+        &aegis_model::ModelError::ThreatHasAttackTree { threat: lock, tree },
+    );
 
     // Tear down with the remaining ops.
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: lock,
+            tree: None,
+        },
+    );
+    ok(&mut p, Op::RemoveAttackTree { id: tree });
     ok(
         &mut p,
         Op::RemoveCatalogRef {
@@ -1099,6 +1308,12 @@ pub fn max_def() -> MethodologyDef {
                         })
                         .collect(),
                 }
+            })
+            .collect(),
+        feasibility_levels: (0..16)
+            .map(|l| {
+                let (key, label) = entry("f", l);
+                LevelDef { key, label }
             })
             .collect(),
         properties,

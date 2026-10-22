@@ -61,7 +61,7 @@ fn key_cap_in_every_position() {
     const KEY: Limit = Limit::KeyBytes { max: 64 };
     // Each case sets one key position to `key`.
     type Set = fn(&mut MethodologyDef, Arc<str>);
-    let positions: [(&str, Set); 7] = [
+    let positions: [(&str, Set); 8] = [
         ("methodology key", |d, k| d.key = k),
         ("impact category key", |d, k| d.impact_categories[1].key = k),
         ("level key", |d, k| d.impact_categories[0].levels[2].key = k),
@@ -79,6 +79,9 @@ fn key_cap_in_every_position() {
             d.threat_categories[2].violates.push(k);
         }),
         ("catalog scheme key", |d, k| d.catalog_schemes[0].key = k),
+        ("feasibility level key", |d, k| {
+            d.feasibility_levels[2].key = k
+        }),
     ];
     for (what, set) in positions {
         let mut d = second_def();
@@ -114,7 +117,7 @@ fn methodology_version_cap() {
 fn label_cap_in_every_position() {
     const LABEL: Limit = Limit::LabelBytes { max: 1024 };
     type Set = fn(&mut MethodologyDef, Arc<str>);
-    let positions: [(&str, Set); 6] = [
+    let positions: [(&str, Set); 7] = [
         ("methodology label", |d, l| d.label = l),
         ("impact category label", |d, l| {
             d.impact_categories[2].label = l
@@ -128,6 +131,9 @@ fn label_cap_in_every_position() {
         }),
         ("catalog scheme label", |d, l| {
             d.catalog_schemes[0].label = l
+        }),
+        ("feasibility level label", |d, l| {
+            d.feasibility_levels[2].label = l
         }),
     ];
     assert_eq!(MAX_LABEL_BYTES, 1024);
@@ -187,6 +193,19 @@ fn level_count_cap() {
     at_cap(&d, "16 levels");
     d.impact_categories[1].levels.push(level(16));
     over_cap(&d, Limit::Levels { max: 16 }, "17 levels");
+}
+
+#[test]
+fn feasibility_level_count_cap() {
+    let level = |i: usize| LevelDef {
+        key: key_of_len("f", i, 6),
+        label: "F".into(),
+    };
+    let mut d = second_def();
+    d.feasibility_levels = (0..16).map(level).collect();
+    at_cap(&d, "16 feasibility levels");
+    d.feasibility_levels.push(level(16));
+    over_cap(&d, Limit::Levels { max: 16 }, "17 feasibility levels");
 }
 
 #[test]
@@ -342,6 +361,7 @@ fn maximal_pack_loads_below_the_file_cap() {
     assert_eq!(def.threat_categories.len(), 64);
     assert!(def.threat_categories.iter().all(|t| t.violates.len() == 64));
     assert_eq!(def.catalog_schemes.len(), 16);
+    assert_eq!(def.feasibility_levels.len(), 16);
     let m = Methodology::read_pack(bytes.as_slice()).expect("maximal pack loads");
     assert_eq!(Methodology::new(def).ok(), Some(m));
 }
