@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId};
-use crate::methodology::{CatalogScheme, ImpactCategory, Level, Property, ThreatCategory};
+use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId, TreeId};
+use crate::methodology::{
+    CatalogScheme, FeasibilityLevel, ImpactCategory, Level, Property, ThreatCategory,
+};
 use crate::store::{Limit, VocabKind};
 
 /// Errors returned by the model.
@@ -180,6 +182,9 @@ pub enum ModelError {
     /// A threat scenario with this ID already exists in the project.
     #[error("threat scenario {0} already exists in the project")]
     DuplicateThreatScenario(ThreatId),
+    /// An attack tree with this ID already exists in the project.
+    #[error("attack tree {0} already exists in the project")]
+    DuplicateAttackTree(TreeId),
     /// No asset with this ID is in the project.
     #[error("asset {0} is not in the project")]
     UnknownAsset(AssetId),
@@ -189,6 +194,25 @@ pub enum ModelError {
     /// No threat scenario with this ID is in the project.
     #[error("threat scenario {0} is not in the project")]
     UnknownThreatScenario(ThreatId),
+    /// No attack tree with this ID is in the project.
+    #[error("attack tree {0} is not in the project")]
+    UnknownAttackTree(TreeId),
+    /// No node with this ID is in the attack tree.
+    #[error("node {node} is not in attack tree {tree}")]
+    UnknownTreeNode {
+        /// The attack tree.
+        tree: TreeId,
+        /// The missing node ID.
+        node: NodeId,
+    },
+    /// A gate node was given where a leaf step is required.
+    #[error("node {node} of attack tree {tree} is a gate, not a step")]
+    NotAStep {
+        /// The attack tree.
+        tree: TreeId,
+        /// The gate node ID.
+        node: NodeId,
+    },
     /// A name is empty after trimming whitespace.
     #[error("name is empty")]
     EmptyName,
@@ -213,6 +237,9 @@ pub enum ModelError {
         /// The out-of-range level.
         level: Level,
     },
+    /// The feasibility level index is not in the project's methodology.
+    #[error("feasibility level index {} is not in the methodology", .0.index())]
+    UnknownFeasibilityLevel(FeasibilityLevel),
     /// The property index is not in the project's methodology.
     #[error("property index {} is not in the methodology", .0.index())]
     UnknownProperty(Property),
@@ -269,9 +296,37 @@ pub enum ModelError {
         /// How many threats link to it.
         threats: u32,
     },
+    /// The attack tree cannot be removed: `threats` threats reference it.
+    #[error("attack tree {tree} is referenced by {threats} threat(s)")]
+    AttackTreeInUse {
+        /// The attack tree.
+        tree: TreeId,
+        /// How many threats reference it.
+        threats: u32,
+    },
+    /// The threat scenario cannot be removed while it still references an
+    /// attack tree; unlink the tree first.
+    #[error("threat scenario {threat} still references attack tree {tree}")]
+    ThreatHasAttackTree {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The linked attack tree.
+        tree: TreeId,
+    },
+    /// The threat scenario has no linked attack tree to evaluate.
+    #[error("threat scenario {0} has no linked attack tree")]
+    NoAttackTree(ThreatId),
     /// An impacts list names the same category twice.
     #[error("impact category index {} is listed twice", .0.index())]
     DuplicateImpactCategory(ImpactCategory),
+    /// A step feasibility list rates the same step node twice.
+    #[error("step node {node} of attack tree {tree} is rated twice")]
+    DuplicateStepFeasibility {
+        /// The attack tree.
+        tree: TreeId,
+        /// The repeated step node ID.
+        node: NodeId,
+    },
     /// The threat already links to this damage scenario, or an op lists it
     /// twice.
     #[error("threat scenario {threat} already links damage scenario {damage}")]
@@ -352,6 +407,7 @@ pub enum ModelError {
 ///     version: "1".into(),
 ///     label: "Empty".into(),
 ///     impact_categories: vec![],
+///     feasibility_levels: vec![],
 ///     properties: vec![],
 ///     threat_categories: vec![],
 ///     catalog_schemes: vec![],
@@ -376,6 +432,7 @@ pub enum MethodologyError {
     ///     version: "1".into(),
     ///     label: "Huge".into(),
     ///     impact_categories: vec![],
+    ///     feasibility_levels: vec![],
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
@@ -432,6 +489,17 @@ pub enum MethodologyError {
         /// The repeated level key.
         level: Arc<str>,
     },
+    /// `feasibility_levels` has fewer than `min` or more than `max` levels.
+    #[error("feasibility_levels has fewer than {min} or more than {max} levels")]
+    FeasibilityLevelCount {
+        /// Fewest levels.
+        min: usize,
+        /// Most levels.
+        max: usize,
+    },
+    /// Two feasibility levels share a key.
+    #[error("duplicate feasibility level key {0:?}")]
+    DuplicateFeasibilityLevel(Arc<str>),
     /// No security property is declared.
     #[error("at least one security property is required")]
     NoProperty,

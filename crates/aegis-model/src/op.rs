@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use crate::asset::PropertySet;
-use crate::id::{AssetId, DamageId, ThreatId};
-use crate::methodology::{CatalogRef, ImpactCategory, Level, ThreatCategory};
+use crate::id::{AssetId, DamageId, NodeId, ThreatId, TreeId};
+use crate::methodology::{CatalogRef, FeasibilityLevel, ImpactCategory, Level, ThreatCategory};
+use crate::tree::AttackTree;
 
 /// One change to a [`Project`](crate::Project).
 ///
@@ -13,7 +14,8 @@ use crate::methodology::{CatalogRef, ImpactCategory, Level, ThreatCategory};
 /// the op, commits it, and returns its inverse, so undo is "apply the
 /// inverse" and costs O(size of the op). Costs below use n = entities of
 /// the kind, k = damage links or catalog refs on the threat, p <= 64
-/// properties, c <= 32 impact categories.
+/// properties, c <= 32 impact categories, V = nodes in the attack tree,
+/// E = edges in the attack tree.
 ///
 /// | Op | Inverse | Cost |
 /// |---|---|---|
@@ -33,6 +35,10 @@ use crate::methodology::{CatalogRef, ImpactCategory, Level, ThreatCategory};
 /// | `LinkDamage` | `UnlinkDamage` | O(log n + k) |
 /// | `UnlinkDamage` | `LinkDamage` | O(log n + k) |
 /// | `RemoveThreatScenario` | `AddThreatScenario`, fields in stored order | O(log n + k + p) |
+/// | `AddAttackTree` | `RemoveAttackTree` | O(log n + V + E) |
+/// | `SetStepFeasibility` | the same with the old level | O(log n + log V) |
+/// | `SetThreatAttackTree` | the same with the old tree | O(log n) |
+/// | `RemoveAttackTree` | `AddAttackTree`, rated steps in node order | O(log n + V) |
 ///
 /// ```
 /// use std::sync::Arc;
@@ -179,5 +185,38 @@ pub enum Op {
     RemoveThreatScenario {
         /// Existing threat scenario.
         id: ThreatId,
+    },
+    /// Adds an attack tree with optional initial step feasibility ratings.
+    /// Steps not listed are unrated (`None`).
+    AddAttackTree {
+        /// Unused attack tree ID.
+        id: TreeId,
+        /// The attack tree DAG.
+        tree: AttackTree,
+        /// Initial step feasibility ratings, each step at most once.
+        step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
+    },
+    /// Sets or clears (`None` = unrated) the feasibility rating of one
+    /// step node in an attack tree.
+    SetStepFeasibility {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// Existing step node in `tree`.
+        node: NodeId,
+        /// The new feasibility rating, or `None` for unrated.
+        level: Option<FeasibilityLevel>,
+    },
+    /// Links a threat scenario to an attack tree, replaces its linked
+    /// attack tree, or unlinks it (`None`).
+    SetThreatAttackTree {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// Existing attack tree, or `None` to unlink.
+        tree: Option<TreeId>,
+    },
+    /// Removes an attack tree that no threat scenario links to.
+    RemoveAttackTree {
+        /// Existing attack tree.
+        id: TreeId,
     },
 }

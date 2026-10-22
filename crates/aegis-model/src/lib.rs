@@ -58,9 +58,10 @@
 //!
 //! # Methodologies
 //!
-//! The TARA side of the model (assets, damage scenarios, threat scenarios)
-//! is methodology-neutral: the core names no impact category, rating scale,
-//! security property, threat taxonomy, or catalog. A [`MethodologyDef`] is
+//! The TARA side of the model (assets, damage scenarios, threat scenarios,
+//! and project attack trees) is methodology-neutral: the core names no
+//! impact category, rating scale, feasibility scale, security property,
+//! threat taxonomy, or catalog. A [`MethodologyDef`] is
 //! plain data that declares them, and [`Methodology::new`] validates it.
 //! A methodology ships as a pack file (format `aegis-methodology-pack`
 //! v1, JSON): [`Methodology::read_pack`] decodes one with capped, strict
@@ -78,6 +79,7 @@
 //!   "key": "tiny", "version": "1", "label": "Tiny",
 //!   "impact_categories": [{"key": "harm", "label": "Harm", "levels": [
 //!     {"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]}],
+//!   "feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}],
 //!   "properties": [{"key": "integrity", "label": "Integrity"}],
 //!   "threat_categories": [{"key": "corruption", "label": "Corruption",
 //!                          "violates": ["integrity"]}],
@@ -98,9 +100,11 @@
 //! lifetime. Every change is a typed [`Op`]; [`Project::apply`] checks it
 //! against the methodology and the referential rules, commits it only if
 //! every check passes, and returns the inverse op for undo. Ops carry small
-//! typed vocabulary indices ([`ImpactCategory`], [`Level`], [`Property`],
-//! [`ThreatCategory`], [`CatalogScheme`]) resolved once from text keys. See
-//! `docs/adr/0008-methodology-neutral-domain-model.md`.
+//! typed vocabulary indices ([`ImpactCategory`], [`Level`],
+//! [`FeasibilityLevel`], [`Property`], [`ThreatCategory`], [`CatalogScheme`])
+//! resolved once from text keys. See
+//! `docs/adr/0008-methodology-neutral-domain-model.md` and
+//! `docs/adr/0012-threat-attack-trees.md`.
 //!
 //! ```
 //! use std::sync::Arc;
@@ -227,11 +231,13 @@ pub use error::{MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
 };
-pub use id::{AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx};
+pub use id::{
+    AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+};
 pub use methodology::{
-    CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, ImpactCategory, ImpactCategoryDef,
-    Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef, SegmentDef,
-    ThreatCategory, ThreatCategoryDef,
+    CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, FeasibilityLevel, ImpactCategory,
+    ImpactCategoryDef, Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef,
+    SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
 pub use project::{MAX_NAME_CHARS, Project};

@@ -35,6 +35,14 @@ const LEVELS: [(&str, &str); 4] = [
     ("severe", "Severe"),
 ];
 
+/// The attack feasibility scale, lowest first.
+const FEASIBILITY_LEVELS: [(&str, &str); 4] = [
+    ("very-low", "Very low"),
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+];
+
 /// Security properties, in declaration order.
 const PROPERTIES: [(&str, &str); 6] = [
     ("confidentiality", "Confidentiality"),
@@ -85,6 +93,13 @@ fn expected() -> MethodologyDef {
                         label: s(label),
                     })
                     .collect(),
+            })
+            .collect(),
+        feasibility_levels: FEASIBILITY_LEVELS
+            .iter()
+            .map(|&(key, label)| LevelDef {
+                key: s(key),
+                label: s(label),
             })
             .collect(),
         properties: PROPERTIES
@@ -173,6 +188,33 @@ fn iso21434_vocabulary_impacts_and_levels() {
         assert!(low < high);
         assert_eq!(low.index(), 0);
     }
+}
+
+#[test]
+fn iso21434_vocabulary_feasibility_levels() {
+    let m = m();
+    let keys: Vec<_> = m
+        .feasibility_levels()
+        .map(|(l, key, _)| {
+            assert_eq!(m.feasibility_level_key(l), Some(key));
+            key
+        })
+        .collect();
+    assert_eq!(keys, ["very-low", "low", "medium", "high"]);
+    let labels: Vec<_> = m
+        .feasibility_levels()
+        .map(|(l, _, label)| {
+            assert_eq!(m.feasibility_level_label(l), Some(label));
+            label
+        })
+        .collect();
+    assert_eq!(labels, ["Very low", "Low", "Medium", "High"]);
+    let very_low = m.feasibility_level("very-low").expect("very-low");
+    let low = m.feasibility_level("low").expect("low");
+    let medium = m.feasibility_level("medium").expect("medium");
+    let high = m.feasibility_level("high").expect("high");
+    assert!(very_low < low && low < medium && medium < high);
+    assert_eq!(very_low.index(), 0);
 }
 
 #[test]

@@ -153,8 +153,9 @@ impl Project {
     /// # Errors
     ///
     /// [`StoreError::Io`] if writing fails. [`StoreError::UnencodableOp`]
-    /// only if the project broke its own invariants (an index not in its
-    /// methodology), which the model prevents.
+    /// if the project contains attack trees (which v1 snapshots do not yet
+    /// encode) or if the project broke its own invariants (an index not in
+    /// its methodology), which the model prevents.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -181,6 +182,13 @@ impl Project {
     /// # }
     /// ```
     pub fn save<W: Write>(&self, w: W) -> Result<(), StoreError> {
+        if self.attack_tree_count() > 0
+            || self
+                .threat_scenarios()
+                .any(|(_, _, t)| t.attack_tree().is_some())
+        {
+            return Err(StoreError::UnencodableOp);
+        }
         let m = &**self.methodology();
         let order = KeyOrder::new(m);
         let ctx = Ctx {
