@@ -9,8 +9,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, AttackTree, CatalogRef, DamageId, Derivation, GateKind, Methodology, ModelError, Node,
-    NodeId, Op, Project, PropertySet, Provenance, ProvenanceSource, ThreatId, TreeId,
+    AssetId, AttackTree, CatalogRef, DamageId, Derivation, EntityKind, GateKind, Methodology,
+    ModelError, Node, NodeId, Op, Project, PropertySet, Provenance, ProvenanceSource, ThreatId,
+    TreeId,
 };
 use common::{
     SENTINEL, asset_id, builtin, cat, cref, damage_id, feas, lvl, node_id, prop, props, scheme,
@@ -495,7 +496,9 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 name: " \t ".into(),
                 provenance: Provenance::default(),
             },
-            ModelError::EmptyName,
+            ModelError::EmptyName {
+                kind: EntityKind::ThreatScenario,
+            },
         ),
         (
             p.clone(),
@@ -504,7 +507,10 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 name: format!("{name}{}", "x".repeat(257)).into(),
                 provenance: Provenance::default(),
             },
-            ModelError::NameTooLong { max: 256 },
+            ModelError::NameTooLong {
+                kind: EntityKind::DamageScenario,
+                max: 256,
+            },
         ),
         (
             p.clone(),
@@ -577,7 +583,10 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         (
             p.clone(),
             add_threat(fx.fresh_t, vec![out_of_syntax_ref]),
-            ModelError::InvalidCatalogId { scheme: annex5 },
+            ModelError::InvalidCatalogId {
+                scheme: annex5,
+                syntax: m.catalog_syntax(annex5).expect("annex5 syntax").clone(),
+            },
         ),
         (
             p.clone(),
@@ -678,7 +687,10 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 catalog_ref: fx.r5,
                 provenance: Provenance::default(),
             },
-            ModelError::CatalogRefNotFound { threat: fx.t1 },
+            ModelError::CatalogRefNotFound {
+                threat: fx.t1,
+                catalog_ref: fx.r5,
+            },
         ),
         (
             p.clone(),
@@ -687,7 +699,10 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 catalog_ref: fx.r41,
                 provenance: Provenance::default(),
             },
-            ModelError::DuplicateCatalogRef { threat: fx.t1 },
+            ModelError::DuplicateCatalogRef {
+                threat: fx.t1,
+                catalog_ref: fx.r41,
+            },
         ),
         (
             p.clone(),
@@ -792,7 +807,9 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                 properties: m.all_properties(),
                 provenance: Provenance::default(),
             },
-            ModelError::ProjectCapacityExceeded,
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Asset,
+            },
         ),
     ]
 }
@@ -867,7 +884,10 @@ fn rejects_duplicate_catalog_ref_and_damage_inside_one_op() {
     rejects(
         &mut p,
         op,
-        &ModelError::DuplicateCatalogRef { threat: fx.fresh_t },
+        &ModelError::DuplicateCatalogRef {
+            threat: fx.fresh_t,
+            catalog_ref: fx.r5,
+        },
     );
     let op = Op::AddThreatScenario {
         id: fx.fresh_t,
@@ -928,12 +948,14 @@ fn rejects_too_many_refs_on_add_and_unknown_targets_on_add_threat() {
 fn rejects_names_on_every_kind() {
     let (mut p, fx) = fixture("x");
     let long: Arc<str> = "é".repeat(257).into();
-    for name in [Arc::<str>::from(""), long.clone()] {
-        let want = if name.is_empty() {
-            ModelError::EmptyName
+    let want_for = |kind, name: &Arc<str>| {
+        if name.is_empty() {
+            ModelError::EmptyName { kind }
         } else {
-            ModelError::NameTooLong { max: 256 }
-        };
+            ModelError::NameTooLong { kind, max: 256 }
+        }
+    };
+    for name in [Arc::<str>::from(""), long.clone()] {
         rejects(
             &mut p,
             Op::AddAsset {
@@ -942,7 +964,7 @@ fn rejects_names_on_every_kind() {
                 properties: fx.m.all_properties(),
                 provenance: Provenance::default(),
             },
-            &want,
+            &want_for(EntityKind::Asset, &name),
         );
         rejects(
             &mut p,
@@ -952,7 +974,7 @@ fn rejects_names_on_every_kind() {
                 impacts: vec![],
                 provenance: Provenance::default(),
             },
-            &want,
+            &want_for(EntityKind::DamageScenario, &name),
         );
         rejects(
             &mut p,
@@ -961,7 +983,7 @@ fn rejects_names_on_every_kind() {
                 name: name.clone(),
                 provenance: Provenance::default(),
             },
-            &want,
+            &want_for(EntityKind::Asset, &name),
         );
     }
     // 256 chars is the limit.
@@ -1771,7 +1793,9 @@ fn threat_attack_tree_integrity_and_validation() {
             step_feasibility: vec![],
             provenance: Provenance::default(),
         },
-        &ModelError::EmptyName,
+        &ModelError::EmptyName {
+            kind: EntityKind::TreeNode,
+        },
     );
     let long_tree = AttackTree::new(fx.fresh_node, Node::step("x".repeat(257))).expect("step");
     rejects(
@@ -1782,7 +1806,10 @@ fn threat_attack_tree_integrity_and_validation() {
             step_feasibility: vec![],
             provenance: Provenance::default(),
         },
-        &ModelError::NameTooLong { max: 256 },
+        &ModelError::NameTooLong {
+            kind: EntityKind::TreeNode,
+            max: 256,
+        },
     );
 }
 
@@ -2402,4 +2429,171 @@ fn project_equality_compares_provenance_on_every_element_kind() {
         },
     );
     assert_ne!(p_tree, base);
+}
+
+// ---------------------------------------------------------------------------
+// Job 015 AC2–AC6: specific ModelError messages without entity names.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn specific_model_error_messages() {
+    assert_eq!(EntityKind::Asset.as_str(), "asset");
+    assert_eq!(EntityKind::DamageScenario.as_str(), "damage scenario");
+    assert_eq!(EntityKind::ThreatScenario.as_str(), "threat scenario");
+    assert_eq!(EntityKind::AttackTree.as_str(), "attack tree");
+    assert_eq!(EntityKind::TreeNode.as_str(), "tree node");
+    for kind in [
+        EntityKind::Asset,
+        EntityKind::DamageScenario,
+        EntityKind::ThreatScenario,
+        EntityKind::AttackTree,
+        EntityKind::TreeNode,
+    ] {
+        assert_eq!(kind.to_string(), kind.as_str());
+        assert_eq!(
+            ModelError::EmptyName { kind }.to_string(),
+            format!("{kind} name is empty")
+        );
+        assert_eq!(
+            ModelError::NameTooLong { kind, max: 256 }.to_string(),
+            format!("{kind} name is longer than 256 chars")
+        );
+        assert_eq!(
+            ModelError::ProjectCapacityExceeded { kind }.to_string(),
+            format!("project {kind} capacity exceeded")
+        );
+    }
+
+    let (p, fx) = fixture(SENTINEL);
+    let annex5 = scheme(&fx.m, "r155-annex5");
+    let syntax = fx.m.catalog_syntax(annex5).expect("syntax").clone();
+    let bad_id = ModelError::InvalidCatalogId {
+        scheme: annex5,
+        syntax,
+    };
+    assert_eq!(
+        bad_id.to_string(),
+        "catalog ID does not match syntax <1..=32>[.<1..=99>] of scheme index 0"
+    );
+
+    let not_found = ModelError::CatalogRefNotFound {
+        threat: fx.t1,
+        catalog_ref: fx.r5,
+    };
+    assert_eq!(
+        not_found.to_string(),
+        format!("threat scenario {} does not have catalog ref 5", fx.t1)
+    );
+
+    let dup_ref = ModelError::DuplicateCatalogRef {
+        threat: fx.t1,
+        catalog_ref: fx.r41,
+    };
+    assert_eq!(
+        dup_ref.to_string(),
+        format!("threat scenario {} already has catalog ref 4.1", fx.t1)
+    );
+
+    // Every name-bearing entity kind produces its own EmptyName and NameTooLong.
+    let long: Arc<str> = format!("{SENTINEL}{}", "x".repeat(257)).into();
+    for (op, expected) in [
+        (
+            Op::AddAsset {
+                id: fx.fresh_a,
+                name: " ".into(),
+                properties: fx.m.all_properties(),
+                provenance: Provenance::default(),
+            },
+            ModelError::EmptyName {
+                kind: EntityKind::Asset,
+            },
+        ),
+        (
+            Op::RenameAsset {
+                id: fx.a_int,
+                name: long.clone(),
+                provenance: Provenance::default(),
+            },
+            ModelError::NameTooLong {
+                kind: EntityKind::Asset,
+                max: 256,
+            },
+        ),
+        (
+            Op::AddDamageScenario {
+                id: fx.fresh_d,
+                name: " ".into(),
+                impacts: vec![],
+                provenance: Provenance::default(),
+            },
+            ModelError::EmptyName {
+                kind: EntityKind::DamageScenario,
+            },
+        ),
+        (
+            Op::RenameDamageScenario {
+                id: fx.d1,
+                name: long.clone(),
+                provenance: Provenance::default(),
+            },
+            ModelError::NameTooLong {
+                kind: EntityKind::DamageScenario,
+                max: 256,
+            },
+        ),
+        (
+            Op::AddThreatScenario {
+                id: fx.fresh_t,
+                name: " ".into(),
+                asset: fx.a_all,
+                category: threat_cat(&fx.m, "tampering"),
+                catalog_refs: vec![],
+                damages: vec![],
+                provenance: Provenance::default(),
+            },
+            ModelError::EmptyName {
+                kind: EntityKind::ThreatScenario,
+            },
+        ),
+        (
+            Op::RenameThreatScenario {
+                id: fx.t1,
+                name: long.clone(),
+                provenance: Provenance::default(),
+            },
+            ModelError::NameTooLong {
+                kind: EntityKind::ThreatScenario,
+                max: 256,
+            },
+        ),
+        (
+            Op::AddAttackTree {
+                id: fx.fresh_tree,
+                tree: AttackTree::new(fx.fresh_node, Node::step(" ")).expect("step"),
+                step_feasibility: vec![],
+                provenance: Provenance::default(),
+            },
+            ModelError::EmptyName {
+                kind: EntityKind::TreeNode,
+            },
+        ),
+        (
+            Op::AddAttackTree {
+                id: fx.fresh_tree,
+                tree: AttackTree::new(fx.fresh_node, Node::step(long.to_string())).expect("step"),
+                step_feasibility: vec![],
+                provenance: Provenance::default(),
+            },
+            ModelError::NameTooLong {
+                kind: EntityKind::TreeNode,
+                max: 256,
+            },
+        ),
+    ] {
+        let mut q = p.clone();
+        let err = q.apply(op).expect_err("must reject");
+        assert_eq!(err, expected);
+        assert!(!err.to_string().contains(SENTINEL));
+        assert!(!format!("{err:?}").contains(SENTINEL));
+    }
 }

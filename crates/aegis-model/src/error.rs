@@ -1,12 +1,69 @@
 //! Typed errors for the model crate.
 
+use std::fmt;
 use std::sync::Arc;
 
 use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId, TreeId};
 use crate::methodology::{
-    CatalogScheme, FeasibilityLevel, ImpactCategory, Level, Property, ThreatCategory,
+    CatalogRef, CatalogScheme, CatalogSyntax, FeasibilityLevel, ImpactCategory, Level, Property,
+    ThreatCategory,
 };
 use crate::store::{Limit, VocabKind};
+
+/// Which entity kind a [`ModelError`] refers to.
+///
+/// Used by [`ModelError::EmptyName`], [`ModelError::NameTooLong`], and
+/// [`ModelError::ProjectCapacityExceeded`] so the error says which kind of
+/// entity had a bad name or hit its slot limit without naming the entity
+/// itself.
+///
+/// ```
+/// use aegis_model::EntityKind;
+///
+/// assert_eq!(EntityKind::Asset.to_string(), "asset");
+/// assert_eq!(EntityKind::DamageScenario.to_string(), "damage scenario");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EntityKind {
+    /// An asset ([`Asset`](crate::Asset)).
+    Asset,
+    /// A damage scenario ([`DamageScenario`](crate::DamageScenario)).
+    DamageScenario,
+    /// A threat scenario ([`ThreatScenario`](crate::ThreatScenario)).
+    ThreatScenario,
+    /// An attack tree ([`AttackTree`](crate::AttackTree)).
+    AttackTree,
+    /// A node in an attack tree ([`Node`](crate::Node)).
+    TreeNode,
+}
+
+impl EntityKind {
+    /// Returns the lowercase human-readable name of this entity kind.
+    ///
+    /// ```
+    /// use aegis_model::EntityKind;
+    ///
+    /// assert_eq!(EntityKind::Asset.as_str(), "asset");
+    /// assert_eq!(EntityKind::TreeNode.as_str(), "tree node");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Asset => "asset",
+            Self::DamageScenario => "damage scenario",
+            Self::ThreatScenario => "threat scenario",
+            Self::AttackTree => "attack tree",
+            Self::TreeNode => "tree node",
+        }
+    }
+}
+
+impl fmt::Display for EntityKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Errors returned by the model.
 ///
@@ -214,11 +271,16 @@ pub enum ModelError {
         node: NodeId,
     },
     /// A name is empty after trimming whitespace.
-    #[error("name is empty")]
-    EmptyName,
+    #[error("{kind} name is empty")]
+    EmptyName {
+        /// Which entity kind had an empty name.
+        kind: EntityKind,
+    },
     /// A name is longer than `max` chars.
-    #[error("name is longer than {max} chars")]
+    #[error("{kind} name is longer than {max} chars")]
     NameTooLong {
+        /// Which entity kind had a name that was too long.
+        kind: EntityKind,
         /// The limit, in chars.
         max: usize,
     },
@@ -283,10 +345,15 @@ pub enum ModelError {
     #[error("catalog scheme index {} is not in the methodology", .0.index())]
     UnknownCatalogScheme(CatalogScheme),
     /// The catalog ID does not match its scheme's syntax.
-    #[error("catalog ID does not match the syntax of scheme index {}", .scheme.index())]
+    #[error(
+        "catalog ID does not match syntax {syntax} of scheme index {}",
+        .scheme.index()
+    )]
     InvalidCatalogId {
         /// The scheme whose syntax was not met.
         scheme: CatalogScheme,
+        /// The expected syntax of that scheme.
+        syntax: CatalogSyntax,
     },
     /// An asset must have at least one security property.
     #[error("asset {0} has no security properties")]
@@ -378,16 +445,20 @@ pub enum ModelError {
         damage: DamageId,
     },
     /// The threat does not have this catalog ref.
-    #[error("threat scenario {threat} does not have this catalog ref")]
+    #[error("threat scenario {threat} does not have catalog ref {catalog_ref}")]
     CatalogRefNotFound {
         /// The threat scenario.
         threat: ThreatId,
+        /// The catalog ref that was not on the threat scenario.
+        catalog_ref: CatalogRef,
     },
     /// The threat already has this catalog ref, or an op lists it twice.
-    #[error("threat scenario {threat} already has this catalog ref")]
+    #[error("threat scenario {threat} already has catalog ref {catalog_ref}")]
     DuplicateCatalogRef {
         /// The threat scenario.
         threat: ThreatId,
+        /// The duplicated catalog ref.
+        catalog_ref: CatalogRef,
     },
     /// A threat may have at most `max` catalog refs.
     #[error("threat scenario {threat} would have more than {max} catalog refs")]
@@ -418,8 +489,11 @@ pub enum ModelError {
     },
     /// The project cannot hold more entities of this kind (the arena is at
     /// its slot limit, at most `u32::MAX`).
-    #[error("project capacity exceeded")]
-    ProjectCapacityExceeded,
+    #[error("project {kind} capacity exceeded")]
+    ProjectCapacityExceeded {
+        /// Which entity kind hit its slot limit.
+        kind: EntityKind,
+    },
 }
 
 /// Errors from [`Methodology::new`](crate::Methodology::new): one variant
