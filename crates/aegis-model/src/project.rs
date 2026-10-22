@@ -1,5 +1,5 @@
-//! The project: assets, damage scenarios, and threat scenarios over one
-//! methodology, changed only through typed [`Op`]s.
+//! The project: assets, damage scenarios, threat scenarios, and attack
+//! trees over one methodology, changed only through typed [`Op`]s.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -7,12 +7,17 @@ use std::sync::Arc;
 use crate::asset::{Asset, PropertySet};
 use crate::damage::DamageScenario;
 use crate::error::ModelError;
-use crate::id::{ArenaIndex, AssetId, AssetIdx, DamageId, DamageIdx, ThreatId, ThreatIdx};
+use crate::eval::{Evaluation, MaxMin, evaluate};
+use crate::id::{
+    ArenaIndex, AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx,
+    TreeId, TreeIdx,
+};
 use crate::methodology::{
-    CatalogRef, ImpactCategory, Level, Methodology, Property, ThreatCategory,
+    CatalogRef, FeasibilityLevel, ImpactCategory, Level, Methodology, Property, ThreatCategory,
 };
 use crate::op::Op;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
+use crate::tree::{AttackTree, Node};
 
 /// Longest entity name, in chars.
 pub const MAX_NAME_CHARS: usize = 256;
@@ -112,6 +117,14 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
 // Derived reference counts.
 // ---------------------------------------------------------------------------
 
+/// One attack tree in a [`Project`], paired with its per-node step
+/// feasibility ratings. Gate slots are always `None`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TreeEntry {
+    tree: AttackTree,
+    step_feasibility: Vec<Option<FeasibilityLevel>>,
+}
+
 /// One counted property on one asset: how many live threats on that asset
 /// violate it. Never stored with `threats == 0`. 8 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,14 +145,14 @@ struct PropertyCount {
 /// included) holds an empty slice, which costs 16 bytes and no heap. This
 /// canonical form makes the derived `==` an exact comparison.
 ///
-/// Space: O(asset slots + damage slots + targeted (asset, property)
-/// pairs): 16 + 4 bytes per asset slot, 4 bytes per damage slot, 8 bytes
-/// per targeted pair (before: 4 bytes x methodology properties per asset
-/// slot). Time: a lookup is a binary search, O(log p); counting one threat
-/// in or out is O(r + p), with r the row length and p = |violates|, both
-/// at most 64; it allocates once only when the row's set of properties
-/// changes. `clone` is O(slots + pairs) with one allocation per targeted
-/// asset.
+/// Space: O(asset slots + damage slots + tree slots + targeted (asset,
+/// property) pairs): 16 + 4 bytes per asset slot, 4 bytes per damage slot,
+/// 4 bytes per tree slot, 8 bytes per targeted pair (before: 4 bytes x
+/// methodology properties per asset slot). Time: a lookup is a binary
+/// search, O(log p); counting one threat in or out is O(r + p), with r the
+/// row length and p = |violates|, both at most 64; it allocates once only
+/// when the row's set of properties changes. `clone` is O(slots + pairs)
+/// with one allocation per targeted asset.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct RefCounts {
     /// Per asset slot: the properties some live threat on that asset
@@ -149,6 +162,8 @@ struct RefCounts {
     assets: Vec<u32>,
     /// Per damage scenario slot: how many live threats link to it.
     damages: Vec<u32>,
+    /// Per attack tree slot: how many live threats reference it.
+    trees: Vec<u32>,
 }
 
 /// Adds 1 to (or, with `up == false`, takes 1 from) `v[i]` if it exists.
@@ -250,6 +265,9 @@ impl RefCounts {
         for d in &t.damages {
             bump(&mut self.damages, Some(d.index()), up);
         }
+        if let Some(tree) = t.attack_tree {
+            bump(&mut self.trees, Some(tree.index()), up);
+        }
     }
 
     /// Counts the properties of one threat in or out. A missing asset slot
@@ -334,6 +352,7 @@ pub struct Project {
     assets: Arena<AssetId, AssetIdx, Asset>,
     damages: Arena<DamageId, DamageIdx, DamageScenario>,
     threats: Arena<ThreatId, ThreatIdx, ThreatScenario>,
+    trees: Arena<TreeId, TreeIdx, TreeEntry>,
     /// Derived data, rebuilt from `threats` (D10).
     refs: RefCounts,
 }
@@ -399,6 +418,7 @@ impl Project {
             assets: Arena::new(),
             damages: Arena::new(),
             threats: Arena::new(),
+            trees: Arena::new(),
             refs: RefCounts::default(),
         }
     }
@@ -730,6 +750,252 @@ impl Project {
             .map(|t| self.methodology.violates(t.category))
     }
 
+    // -- Attack trees ----------------------------------------------------------------
+
+    /// Returns a live attack tree in O(1), or `None` if `idx` is out of
+    /// range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TreeId::new_v7();
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![] })?;
+    /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.attack_tree(idx).map(|t| t.len()), Some(1));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree(&self, idx: TreeIdx) -> Option<&AttackTree> {
+        self.trees.get(idx).map(|e| &e.tree)
+    }
+
+    /// Resolves an attack tree's public ID to its arena index in O(log n).
+    /// Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project, TreeId};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.attack_tree_idx(&TreeId::new_v7()), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree_idx(&self, id: &TreeId) -> Option<TreeIdx> {
+        self.trees.idx(id)
+    }
+
+    /// Returns a live attack tree's public ID in O(1), or `None` if `idx` is
+    /// out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TreeId::new_v7();
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![] })?;
+    /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.attack_tree_id(idx), Some(id));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree_id(&self, idx: TreeIdx) -> Option<TreeId> {
+        self.trees.id(idx)
+    }
+
+    /// Returns the number of live attack trees in O(1). Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.attack_tree_count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree_count(&self) -> usize {
+        self.trees.len()
+    }
+
+    /// Iterates live attack trees in deterministic `TreeId` order. Time O(1)
+    /// per item, O(n) for the whole walk; space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TreeId::new_v7();
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![] })?;
+    /// assert_eq!(project.attack_trees().map(|(_, id, _)| id).collect::<Vec<_>>(), [id]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn attack_trees(&self) -> impl Iterator<Item = (TreeIdx, TreeId, &AttackTree)> {
+        self.trees.iter().map(|(idx, id, e)| (idx, id, &e.tree))
+    }
+
+    /// Returns the feasibility rating of `node` in `tree` in O(1), or `None`
+    /// if `tree` or `node` is invalid, `node` is a gate, or the step is
+    /// unrated. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let level = m.feasibility_level("medium").ok_or("no level")?;
+    /// let tree = AttackTree::new(step, Node::step("Step"))?;
+    /// let root = tree.root();
+    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![(step, level)] })?;
+    /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.step_feasibility(idx, root), Some(level));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn step_feasibility(&self, tree: TreeIdx, node: NodeIdx) -> Option<FeasibilityLevel> {
+        self.trees
+            .get(tree)?
+            .step_feasibility
+            .get(node.index())
+            .copied()
+            .flatten()
+    }
+
+    /// Returns the per-node step feasibility slice in `NodeIdx` order in
+    /// O(1), or `None` if `tree` is out of range or tombstoned. Gate slots
+    /// are always `None`. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let level = m.feasibility_level("high").ok_or("no level")?;
+    /// let tree = AttackTree::new(step, Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree { id, tree, step_feasibility: vec![(step, level)] })?;
+    /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.step_feasibilities(idx), Some(&[Some(level)][..]));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn step_feasibilities(&self, tree: TreeIdx) -> Option<&[Option<FeasibilityLevel>]> {
+        self.trees.get(tree).map(|e| e.step_feasibility.as_slice())
+    }
+
+    /// Evaluates attack tree `id` bottom-up using
+    /// [`MaxMin<FeasibilityLevel>`] and its stored step feasibility ratings.
+    ///
+    /// Time O(V + E), space O(V).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownAttackTree`] if `id` is not a live attack tree in
+    /// the project; [`ModelError::MissingLeafValue`] if any step node in the
+    /// tree has no feasibility rating; [`ModelError::EmptyGate`] if a gate has
+    /// no children; [`ModelError::Cycle`] if the tree contains a cycle.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, GateKind, Methodology, Node, NodeId, Op, Project, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = TreeId::new_v7();
+    /// let (root, s1, s2) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Goal"))?;
+    /// tree.add_child(tree.root(), s1, Node::step("Hard"))?;
+    /// tree.add_child(tree.root(), s2, Node::step("Easy"))?;
+    /// let low = m.feasibility_level("low").ok_or("no level")?;
+    /// let high = m.feasibility_level("high").ok_or("no level")?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id,
+    ///     tree,
+    ///     step_feasibility: vec![(s1, low), (s2, high)],
+    /// })?;
+    /// let eval = project.evaluate_tree(id)?;
+    /// assert_eq!(eval.root_value(), &high);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn evaluate_tree(&self, id: TreeId) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        evaluate(&entry.tree, &MaxMin::<FeasibilityLevel>::new(), |idx| {
+            entry.step_feasibility.get(idx.index()).copied().flatten()
+        })
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using
+    /// [`MaxMin<FeasibilityLevel>`].
+    ///
+    /// Time O(log n + V + E), space O(V).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownThreatScenario`] if `id` is not a live threat
+    /// scenario in the project; [`ModelError::NoAttackTree`] if the threat has
+    /// no linked attack tree; [`ModelError::MissingLeafValue`] if any step in
+    /// the linked tree is unrated; [`ModelError::EmptyGate`] if a gate has no
+    /// children; [`ModelError::Cycle`] if the linked tree contains a cycle.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties() })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![],
+    /// })?;
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let med = m.feasibility_level("medium").ok_or("no level")?;
+    /// let tree = AttackTree::new(step, Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree { id: tree_id, tree, step_feasibility: vec![(step, med)] })?;
+    /// project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id) })?;
+    /// assert_eq!(project.evaluate_threat(threat)?.root_value(), &med);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn evaluate_threat(
+        &self,
+        id: ThreatId,
+    ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.evaluate_tree(tree_id)
+    }
+
     // -- Ops ---------------------------------------------------------------------------
 
     /// Checks `op` against the methodology and the referential rules
@@ -819,7 +1085,19 @@ impl Project {
             } => self.check_catalog_ref_change(*threat, catalog_ref, false),
             Op::LinkDamage { threat, damage } => self.check_link(*threat, *damage, true),
             Op::UnlinkDamage { threat, damage } => self.check_link(*threat, *damage, false),
-            Op::RemoveThreatScenario { id } => self.live_threat(*id).map(|_| ()),
+            Op::RemoveThreatScenario { id } => self.check_remove_threat(*id),
+            Op::AddAttackTree {
+                id,
+                tree,
+                step_feasibility,
+            } => self.check_add_tree(*id, tree, step_feasibility),
+            Op::SetStepFeasibility { tree, node, level } => {
+                self.check_set_step_feasibility(*tree, *node, *level)
+            }
+            Op::SetThreatAttackTree { threat, tree } => {
+                self.check_set_threat_attack_tree(*threat, *tree)
+            }
+            Op::RemoveAttackTree { id } => self.check_remove_tree(*id),
         }
     }
 
@@ -926,6 +1204,18 @@ impl Project {
             Op::LinkDamage { threat, damage } => self.commit_link(threat, damage, true),
             Op::UnlinkDamage { threat, damage } => self.commit_link(threat, damage, false),
             Op::RemoveThreatScenario { id } => self.commit_remove_threat(id),
+            Op::AddAttackTree {
+                id,
+                tree,
+                step_feasibility,
+            } => self.commit_add_tree(id, tree, step_feasibility),
+            Op::SetStepFeasibility { tree, node, level } => {
+                self.commit_set_step_feasibility(tree, node, level)
+            }
+            Op::SetThreatAttackTree { threat, tree } => {
+                self.commit_set_threat_attack_tree(threat, tree)
+            }
+            Op::RemoveAttackTree { id } => self.commit_remove_tree(id),
         }
     }
 
@@ -948,6 +1238,13 @@ impl Project {
             .ok_or(ModelError::UnknownThreatScenario(id))
     }
 
+    fn tree_mut(&mut self, id: TreeId) -> Result<&mut TreeEntry, ModelError> {
+        let idx = self.tree_index(id)?;
+        self.trees
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownAttackTree(id))
+    }
+
     // -- Lookups shared by checks and commits ----------------------------------
 
     fn asset_index(&self, id: AssetId) -> Result<AssetIdx, ModelError> {
@@ -964,6 +1261,10 @@ impl Project {
         self.threats
             .idx(&id)
             .ok_or(ModelError::UnknownThreatScenario(id))
+    }
+
+    fn tree_index(&self, id: TreeId) -> Result<TreeIdx, ModelError> {
+        self.trees.idx(&id).ok_or(ModelError::UnknownAttackTree(id))
     }
 
     fn live_asset(&self, id: AssetId) -> Result<(AssetIdx, &Asset), ModelError> {
@@ -986,6 +1287,15 @@ impl Project {
             .get(idx)
             .map(|_| idx)
             .ok_or(ModelError::UnknownThreatScenario(id))
+    }
+
+    fn live_tree(&self, id: TreeId) -> Result<(TreeIdx, &TreeEntry), ModelError> {
+        let idx = self.tree_index(id)?;
+        let e = self
+            .trees
+            .get(idx)
+            .ok_or(ModelError::UnknownAttackTree(id))?;
+        Ok((idx, e))
     }
 
     /// The live asset a live threat targets. A threat's asset is always
@@ -1013,6 +1323,11 @@ impl Project {
     /// are always live.
     fn damage_key(&self, idx: DamageIdx) -> Option<DamageId> {
         self.damages.id(idx)
+    }
+
+    /// The public ID of a linked attack tree, if any.
+    fn tree_key(&self, idx: Option<TreeIdx>) -> Option<TreeId> {
+        idx.and_then(|i| self.trees.id(i))
     }
 
     /// How many live threats on `a` violate `p`. O(log p).
@@ -1245,6 +1560,95 @@ impl Project {
         }
     }
 
+    fn check_remove_threat(&self, id: ThreatId) -> Result<(), ModelError> {
+        let t = self.threat_ref(id)?;
+        if let Some(tree_idx) = t.attack_tree {
+            let tree = self
+                .trees
+                .id(tree_idx)
+                .ok_or(ModelError::UnknownThreatScenario(id))?;
+            return Err(ModelError::ThreatHasAttackTree { threat: id, tree });
+        }
+        Ok(())
+    }
+
+    fn check_add_tree(
+        &self,
+        id: TreeId,
+        tree: &AttackTree,
+        step_feasibility: &[(NodeId, FeasibilityLevel)],
+    ) -> Result<(), ModelError> {
+        if self.trees.idx(&id).is_some() {
+            return Err(ModelError::DuplicateAttackTree(id));
+        }
+        for (_, _, node) in tree.iter() {
+            check_name(node.label())?;
+        }
+        tree.topological_order()?;
+        let mut seen = vec![false; tree.len()];
+        for &(node, level) in step_feasibility {
+            let node_idx = tree
+                .idx_of(&node)
+                .ok_or(ModelError::UnknownTreeNode { tree: id, node })?;
+            if !matches!(tree.get(node_idx), Some(Node::Step { .. })) {
+                return Err(ModelError::NotAStep { tree: id, node });
+            }
+            self.methodology.check_feasibility_level(level)?;
+            let slot = seen
+                .get_mut(node_idx.index())
+                .ok_or(ModelError::UnknownTreeNode { tree: id, node })?;
+            if *slot {
+                return Err(ModelError::DuplicateStepFeasibility { tree: id, node });
+            }
+            *slot = true;
+        }
+        if self.trees.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::ProjectCapacityExceeded);
+        }
+        Ok(())
+    }
+
+    fn check_set_step_feasibility(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        level: Option<FeasibilityLevel>,
+    ) -> Result<(), ModelError> {
+        let (_, entry) = self.live_tree(tree)?;
+        let node_idx = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
+            return Err(ModelError::NotAStep { tree, node });
+        }
+        if let Some(level) = level {
+            self.methodology.check_feasibility_level(level)?;
+        }
+        Ok(())
+    }
+
+    fn check_set_threat_attack_tree(
+        &self,
+        threat: ThreatId,
+        tree: Option<TreeId>,
+    ) -> Result<(), ModelError> {
+        self.live_threat(threat)?;
+        if let Some(tree) = tree {
+            self.live_tree(tree)?;
+        }
+        Ok(())
+    }
+
+    fn check_remove_tree(&self, id: TreeId) -> Result<(), ModelError> {
+        let (idx, _) = self.live_tree(id)?;
+        let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
+        if threats > 0 {
+            return Err(ModelError::AttackTreeInUse { tree: id, threats });
+        }
+        Ok(())
+    }
+
     // -- Commits -----------------------------------------------------------------------
 
     fn commit_add_asset(
@@ -1369,6 +1773,7 @@ impl Project {
             category,
             catalog_refs,
             damages,
+            attack_tree: None,
         };
         let violates = self.methodology.violates(category);
         let idx = self
@@ -1468,6 +1873,107 @@ impl Project {
             damages,
         })
     }
+
+    fn commit_add_tree(
+        &mut self,
+        id: TreeId,
+        tree: AttackTree,
+        step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
+    ) -> Result<Op, ModelError> {
+        let mut slots = vec![None; tree.len()];
+        for (node, level) in step_feasibility {
+            let node_idx = tree
+                .idx_of(&node)
+                .ok_or(ModelError::UnknownTreeNode { tree: id, node })?;
+            let slot = slots
+                .get_mut(node_idx.index())
+                .ok_or(ModelError::UnknownTreeNode { tree: id, node })?;
+            *slot = Some(level);
+        }
+        let entry = TreeEntry {
+            tree,
+            step_feasibility: slots,
+        };
+        self.trees
+            .push(id, entry, self.slot_limit)
+            .ok_or(ModelError::ProjectCapacityExceeded)?;
+        self.refs.trees.push(0);
+        Ok(Op::RemoveAttackTree { id })
+    }
+
+    fn commit_set_step_feasibility(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        level: Option<FeasibilityLevel>,
+    ) -> Result<Op, ModelError> {
+        let entry = self.tree_mut(tree)?;
+        let node_idx = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let slot = entry
+            .step_feasibility
+            .get_mut(node_idx.index())
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let level = std::mem::replace(slot, level);
+        Ok(Op::SetStepFeasibility { tree, node, level })
+    }
+
+    fn commit_set_threat_attack_tree(
+        &mut self,
+        threat: ThreatId,
+        tree: Option<TreeId>,
+    ) -> Result<Op, ModelError> {
+        let idx = self.threat_index(threat)?;
+        let new_idx = tree.map(|t| self.tree_index(t)).transpose()?;
+        let old_idx = self
+            .threats
+            .get(idx)
+            .ok_or(ModelError::UnknownThreatScenario(threat))?
+            .attack_tree;
+        let old_tree = old_idx
+            .map(|i| {
+                self.trees
+                    .id(i)
+                    .ok_or(ModelError::UnknownThreatScenario(threat))
+            })
+            .transpose()?;
+        let t = self
+            .threats
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownThreatScenario(threat))?;
+        t.attack_tree = new_idx;
+        if let Some(old) = old_idx {
+            bump(&mut self.refs.trees, Some(old.index()), false);
+        }
+        if let Some(new) = new_idx {
+            bump(&mut self.refs.trees, Some(new.index()), true);
+        }
+        Ok(Op::SetThreatAttackTree {
+            threat,
+            tree: old_tree,
+        })
+    }
+
+    fn commit_remove_tree(&mut self, id: TreeId) -> Result<Op, ModelError> {
+        let idx = self.tree_index(id)?;
+        let entry = self
+            .trees
+            .remove(idx)
+            .ok_or(ModelError::UnknownAttackTree(id))?;
+        let step_feasibility = entry
+            .tree
+            .iter()
+            .zip(&entry.step_feasibility)
+            .filter_map(|((_, node_id, _), &level)| level.map(|l| (node_id, l)))
+            .collect();
+        Ok(Op::AddAttackTree {
+            id,
+            tree: entry.tree,
+            step_feasibility,
+        })
+    }
 }
 
 impl PartialEq for Project {
@@ -1484,6 +1990,7 @@ impl PartialEq for Project {
             && self.assets.len() == other.assets.len()
             && self.damages.len() == other.damages.len()
             && self.threats.len() == other.threats.len()
+            && self.trees.len() == other.trees.len()
             && self
                 .assets()
                 .zip(other.assets())
@@ -1491,6 +1998,11 @@ impl PartialEq for Project {
             && self
                 .damage_scenarios()
                 .zip(other.damage_scenarios())
+                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+            && self
+                .trees
+                .iter()
+                .zip(other.trees.iter())
                 .all(|((_, a, x), (_, b, y))| a == b && x == y)
             && self
                 .threat_scenarios()
@@ -1509,6 +2021,7 @@ impl Project {
             && x.category == y.category
             && x.catalog_refs == y.catalog_refs
             && self.assets.id(x.asset) == other.assets.id(y.asset)
+            && self.tree_key(x.attack_tree) == other.tree_key(y.attack_tree)
             && x.damages.len() == y.damages.len()
             && x.damages
                 .iter()
@@ -1524,6 +2037,7 @@ impl Project {
         arena_invariants("asset", &self.assets)?;
         arena_invariants("damage", &self.damages)?;
         arena_invariants("threat", &self.threats)?;
+        arena_invariants("tree", &self.trees)?;
 
         for (_, id, a) in self.assets() {
             check_name(&a.name).map_err(|e| format!("asset {id}: {e}"))?;
@@ -1545,9 +2059,11 @@ impl Project {
                 }
             }
         }
+        self.tree_invariants()?;
 
         let mut assets = vec![0u32; self.assets.slot_count()];
         let mut damages = vec![0u32; self.damages.slot_count()];
+        let mut trees = vec![0u32; self.trees.slot_count()];
         // Recounted independently of `count_row`: (asset slot, property)
         // -> threats, in ascending order.
         let mut pairs: BTreeMap<(usize, Property), u32> = BTreeMap::new();
@@ -1582,6 +2098,12 @@ impl Project {
             if !keys.windows(2).all(|w| w[0] < w[1]) {
                 return Err(format!("threat {id} damages not sorted and unique"));
             }
+            if let Some(tree) = t.attack_tree {
+                if self.trees.get(tree).is_none() {
+                    return Err(format!("threat {id} links a dead tree slot"));
+                }
+                bump(&mut trees, Some(tree.index()), true);
+            }
             bump(&mut assets, Some(t.asset.index()), true);
             for d in &t.damages {
                 bump(&mut damages, Some(d.index()), true);
@@ -1600,8 +2122,39 @@ impl Project {
             asset_properties: rows.into_iter().map(Vec::into_boxed_slice).collect(),
             assets,
             damages,
+            trees,
         };
         self.refs_invariants(&want)
+    }
+
+    #[cfg(test)]
+    fn tree_invariants(&self) -> Result<(), String> {
+        let m = &*self.methodology;
+        for (_, id, entry) in self.trees.iter() {
+            if entry.step_feasibility.len() != entry.tree.len() {
+                return Err(format!(
+                    "tree {id} has {} feasibility slots",
+                    entry.step_feasibility.len()
+                ));
+            }
+            entry
+                .tree
+                .topological_order()
+                .map_err(|e| format!("tree {id}: {e}"))?;
+            for ((_, node_id, node), &level) in entry.tree.iter().zip(&entry.step_feasibility) {
+                check_name(node.label()).map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
+                match (node, level) {
+                    (Node::Gate { .. }, Some(_)) => {
+                        return Err(format!("tree {id} gate {node_id} has a feasibility rating"));
+                    }
+                    (Node::Step { .. }, Some(l)) => m
+                        .check_feasibility_level(l)
+                        .map_err(|e| format!("tree {id} node {node_id}: {e}"))?,
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Checks that the reference counts are canonical and equal a recount
@@ -1646,6 +2199,12 @@ impl Project {
             return Err(format!(
                 "damage counts differ from a recount: {:?} vs {:?}",
                 have.damages, want.damages
+            ));
+        }
+        if have.trees != want.trees {
+            return Err(format!(
+                "tree counts differ from a recount: {:?} vs {:?}",
+                have.trees, want.trees
             ));
         }
         // The derived `==` must agree with the field-by-field checks.

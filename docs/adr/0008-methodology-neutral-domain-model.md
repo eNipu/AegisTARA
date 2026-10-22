@@ -258,7 +258,9 @@ What would still need code:
   declarative risk matrix is a likely next data type; anything beyond a
   table is code.
 - **Feasibility models** (attack potential, CVSS-like vectors), which the
-  attack-tree side computes.
+  attack-tree side computes. (Job 013 added ordered `feasibility_levels`
+  and `FeasibilityLevel` to `Methodology` and linked `ThreatScenario` to
+  `AttackTree`; see [ADR 0012](0012-threat-attack-trees.md).)
 - **Catalog contents** and ID forms the grammar cannot express (see the
   catalog table).
 

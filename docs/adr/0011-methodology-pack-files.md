@@ -93,7 +93,8 @@ doctests changed mechanically.
 
 - A pack holds exactly a `MethodologyDef`: no metadata, signature, catalog
   contents, risk matrix, or feasibility tables. Those need a format
-  version bump.
+  version bump. (Job 013 added `feasibility_levels` to `MethodologyDef`
+  and pack format v1; see [ADR 0012](0012-threat-attack-trees.md).)
 - Every field is required except `digits` on a segment; missing or `null`
   both mean `None`. Every list is present; `catalog_schemes` may be `[]`.
   Declaration order is meaningful, as in `MethodologyDef`.

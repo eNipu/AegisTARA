@@ -1,12 +1,13 @@
 //! Methodology definitions: the vocabularies a project is checked against.
 //!
-//! The core model names no impact category, rating scale, security
-//! property, threat taxonomy, or catalog. A [`MethodologyDef`] declares them
-//! as plain data (the shape a pack file has, see [`MethodologyDef::read_pack`]),
-//! and [`Methodology::new`] validates it once. The validated [`Methodology`] hands out small typed
-//! indices ([`ImpactCategory`], [`Level`], [`Property`], [`ThreatCategory`],
-//! [`CatalogScheme`]) that ops and entities carry. Text keys are resolved to
-//! indices once, at the boundary.
+//! The core model names no impact category, rating scale, feasibility
+//! scale, security property, threat taxonomy, or catalog. A
+//! [`MethodologyDef`] declares them as plain data (the shape a pack file
+//! has, see [`MethodologyDef::read_pack`]), and [`Methodology::new`]
+//! validates it once. The validated [`Methodology`] hands out small typed
+//! indices ([`ImpactCategory`], [`Level`], [`FeasibilityLevel`],
+//! [`Property`], [`ThreatCategory`], [`CatalogScheme`]) that ops and
+//! entities carry. Text keys are resolved to indices once, at the boundary.
 
 mod catalog;
 mod iso21434;
@@ -72,6 +73,10 @@ pub const MAX_KEY_LEN: usize = 64;
 ///             LevelDef { key: "high".into(), label: "High".into() },
 ///         ],
 ///     }],
+///     feasibility_levels: vec![
+///         LevelDef { key: "low".into(), label: "Low".into() },
+///         LevelDef { key: "high".into(), label: "High".into() },
+///     ],
 ///     properties: vec![PropertyDef { key: "integrity".into(), label: "Integrity".into() }],
 ///     threat_categories: vec![ThreatCategoryDef {
 ///         key: "corruption".into(),
@@ -95,6 +100,10 @@ pub struct MethodologyDef {
     pub label: Arc<str>,
     /// Impact categories, 1 to 32.
     pub impact_categories: Vec<ImpactCategoryDef>,
+    /// Ordered scale of attack feasibility levels, lowest feasibility
+    /// first. Must hold between [`MIN_LEVELS`] (2) and [`MAX_LEVELS`] (16)
+    /// levels with unique keys.
+    pub feasibility_levels: Vec<LevelDef>,
     /// Security properties, 1 to 64.
     pub properties: Vec<PropertyDef>,
     /// Threat categories, 1 to 64.
@@ -278,6 +287,27 @@ vocab_index! {
 }
 
 vocab_index! {
+    /// Index of a feasibility level inside a [`Methodology`], ordered from
+    /// lowest (`0`) to highest feasibility. 1 byte.
+    ///
+    /// `Ord` is the scale order (lowest feasibility = 0), so
+    /// [`MaxMin<FeasibilityLevel>`](crate::MaxMin) evaluates `OR` gates as
+    /// `max` (most feasible child) and `AND` / `SeqAnd` gates as `min`
+    /// (least feasible bottleneck child).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.feasibility_level("very-low") < m.feasibility_level("high"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    FeasibilityLevel
+}
+
+vocab_index! {
     /// Index of a security property in a [`Methodology`]. 1 byte.
     ///
     /// ```
@@ -420,6 +450,8 @@ pub struct Methodology {
     label: Arc<str>,
     impact_categories: Vec<CategoryData>,
     impact_by_key: BTreeMap<Arc<str>, u8>,
+    feasibility_levels: Vec<Entry>,
+    feasibility_by_key: BTreeMap<Arc<str>, u8>,
     properties: Vec<Entry>,
     property_by_key: BTreeMap<Arc<str>, u8>,
     threat_categories: Vec<ThreatCategoryData>,
@@ -550,6 +582,7 @@ impl Methodology {
     ///     version: "1".into(),
     ///     label: "Bad".into(),
     ///     impact_categories: vec![],
+    ///     feasibility_levels: vec![],
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
@@ -565,6 +598,7 @@ impl Methodology {
         check_label(&def.key, &def.label)?;
 
         let impacts = Self::build_impacts(&def.impact_categories)?;
+        let feasibility = Self::build_feasibility_levels(&def.feasibility_levels)?;
         let properties = Self::build_properties(&def.properties)?;
         let all_properties = (0..properties.items.len())
             .filter_map(|i| u8::try_from(i).ok().map(Property))
@@ -578,6 +612,8 @@ impl Methodology {
             label: def.label,
             impact_categories: impacts.items,
             impact_by_key: impacts.by_key,
+            feasibility_levels: feasibility.items,
+            feasibility_by_key: feasibility.by_key,
             properties: properties.items,
             property_by_key: properties.by_key,
             threat_categories: threats.items,
@@ -586,6 +622,27 @@ impl Methodology {
             scheme_by_key: schemes.by_key,
             all_properties,
         })
+    }
+
+    fn build_feasibility_levels(defs: &[LevelDef]) -> Result<Vocab<Entry>, MethodologyError> {
+        check_count(defs.len(), MIN_LEVELS, MAX_LEVELS, || {
+            MethodologyError::FeasibilityLevelCount {
+                min: MIN_LEVELS,
+                max: MAX_LEVELS,
+            }
+        })?;
+        let mut by_key = BTreeMap::new();
+        let mut out = Vec::with_capacity(defs.len());
+        for (pos, l) in defs.iter().enumerate() {
+            out.push(add_entry(
+                &l.key,
+                &l.label,
+                pos,
+                &mut by_key,
+                MethodologyError::DuplicateFeasibilityLevel,
+            )?);
+        }
+        Ok(Vocab { items: out, by_key })
     }
 
     fn build_impacts(defs: &[ImpactCategoryDef]) -> Result<Vocab<CategoryData>, MethodologyError> {
@@ -940,6 +997,88 @@ impl Methodology {
     #[must_use]
     pub fn level_label(&self, cat: ImpactCategory, level: Level) -> Option<&str> {
         self.level_entry(cat, level).map(|e| &*e.label)
+    }
+
+    // -- Feasibility levels ----------------------------------------------------
+
+    /// Iterates the feasibility scale from lowest (`0`) to highest feasibility:
+    /// `(index, key, label)`. Time O(1) per item, space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let keys: Vec<_> = m.feasibility_levels().map(|(_, k, _)| k).collect();
+    /// assert_eq!(keys, ["very-low", "low", "medium", "high"]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn feasibility_levels(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (FeasibilityLevel, &str, &str)> + '_ {
+        self.feasibility_levels.iter().enumerate().map(|(i, e)| {
+            let idx = u8::try_from(i).unwrap_or(u8::MAX);
+            (FeasibilityLevel(idx), &*e.key, &*e.label)
+        })
+    }
+
+    /// Resolves a feasibility level key in O(log L), L <= 16; space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.feasibility_level("medium").map(|l| l.index()), Some(2));
+    /// assert_eq!(m.feasibility_level("nope"), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_level(&self, key: &str) -> Option<FeasibilityLevel> {
+        self.feasibility_by_key
+            .get(key)
+            .copied()
+            .map(FeasibilityLevel)
+    }
+
+    /// Returns the key of `level` in O(1), or `None` if `level` is outside this
+    /// methodology's feasibility scale. Space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let high = m.feasibility_level("high");
+    /// assert_eq!(high.and_then(|l| m.feasibility_level_key(l)), Some("high"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_level_key(&self, level: FeasibilityLevel) -> Option<&str> {
+        self.feasibility_levels.get(level.index()).map(|e| &*e.key)
+    }
+
+    /// Returns the human-readable label of `level` in O(1), or `None` if
+    /// `level` is outside this methodology's feasibility scale. Space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let low = m.feasibility_level("very-low");
+    /// assert_eq!(low.and_then(|l| m.feasibility_level_label(l)), Some("Very low"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_level_label(&self, level: FeasibilityLevel) -> Option<&str> {
+        self.feasibility_levels
+            .get(level.index())
+            .map(|e| &*e.label)
     }
 
     // -- Properties ----------------------------------------------------------
@@ -1362,6 +1501,19 @@ impl Methodology {
         }
     }
 
+    /// Checks that a feasibility level is in this methodology's scale. Time
+    /// O(1).
+    pub(crate) fn check_feasibility_level(
+        &self,
+        level: FeasibilityLevel,
+    ) -> Result<(), ModelError> {
+        if level.index() < self.feasibility_levels.len() {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownFeasibilityLevel(level))
+        }
+    }
+
     fn category_data(&self, cat: ImpactCategory) -> Option<&CategoryData> {
         self.impact_categories.get(cat.index())
     }
@@ -1441,6 +1593,7 @@ mod tests {
             version: "1.0".into(),
             label: "Base".into(),
             impact_categories: vec![category("harm", 3), category("cost", 2)],
+            feasibility_levels: vec![level("f0"), level("f1"), level("f2")],
             properties: vec![entry_def("c"), entry_def("i"), entry_def("a")],
             threat_categories: vec![threat("leak", &["c"]), threat("wipe", &["i", "a"])],
             catalog_schemes: vec![scheme("cat", "X-", vec![seg(1, 99, None)], 1)],
@@ -1456,6 +1609,7 @@ mod tests {
         let m = Methodology::new(base()).expect("valid");
         assert_eq!(m.impact_category_count(), 2);
         assert_eq!(m.level_count(ImpactCategory(0)), 3);
+        assert_eq!(m.feasibility_levels().len(), 3);
         assert_eq!(m.property_count(), 3);
         assert_eq!(m.threat_category_count(), 2);
         assert_eq!(m.catalog_scheme_count(), 1);
@@ -1479,6 +1633,11 @@ mod tests {
                 assert!(m.level_label(c, l).is_some());
             }
         }
+        for (f, key, label) in m.feasibility_levels() {
+            assert_eq!(m.feasibility_level(key), Some(f));
+            assert_eq!(m.feasibility_level_key(f), Some(key));
+            assert_eq!(m.feasibility_level_label(f), Some(label));
+        }
         for p in m.properties() {
             assert_eq!(m.property(m.property_key(p).expect("key")), Some(p));
             assert!(m.property_label(p).is_some());
@@ -1498,6 +1657,8 @@ mod tests {
             assert!(m.catalog_scheme_label(s).is_some());
             assert!(m.catalog_syntax(s).is_some());
         }
+        assert_eq!(m.feasibility_level_key(FeasibilityLevel(3)), None);
+        assert_eq!(m.feasibility_level_label(FeasibilityLevel(3)), None);
         assert_eq!(m.property_key(Property(3)), None);
         assert_eq!(m.level_key(ImpactCategory(1), Level(2)), None);
         assert_eq!(m.catalog_scheme_key(CatalogScheme(1)), None);
@@ -1519,6 +1680,11 @@ mod tests {
             })
         );
         assert_eq!(m.check_level(ImpactCategory(0), Level(2)), Ok(()));
+        assert_eq!(m.check_feasibility_level(FeasibilityLevel(2)), Ok(()));
+        assert_eq!(
+            m.check_feasibility_level(FeasibilityLevel(3)),
+            Err(ModelError::UnknownFeasibilityLevel(FeasibilityLevel(3)))
+        );
         assert_eq!(
             m.check_threat_category(ThreatCategory(2)),
             Err(ModelError::UnknownThreatCategory(ThreatCategory(2)))
@@ -1548,6 +1714,30 @@ mod tests {
                 level: "l0".into(),
             },
         );
+    }
+
+    #[test]
+    fn methodology_rejects_duplicate_feasibility_level() {
+        let mut d = base();
+        d.feasibility_levels.push(level("f0"));
+        rejects(d, &MethodologyError::DuplicateFeasibilityLevel("f0".into()));
+    }
+
+    #[test]
+    fn methodology_rejects_feasibility_level_counts() {
+        for len in [0, 1, 17] {
+            let mut d = base();
+            d.feasibility_levels = (0..len).map(|i| level(&format!("f{i}"))).collect();
+            rejects(
+                d,
+                &MethodologyError::FeasibilityLevelCount { min: 2, max: 16 },
+            );
+        }
+        for len in [2, 16] {
+            let mut d = base();
+            d.feasibility_levels = (0..len).map(|i| level(&format!("f{i}"))).collect();
+            assert!(Methodology::new(d).is_ok());
+        }
     }
 
     #[test]
@@ -1634,6 +1824,9 @@ mod tests {
             cases.push(d);
             let mut d = base();
             d.impact_categories[0].levels[2].key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.feasibility_levels[2].key = Arc::clone(&huge);
             cases.push(d);
             let mut d = base();
             d.properties[2].key = Arc::clone(&huge);
@@ -1975,6 +2168,7 @@ mod tests {
         use std::mem::size_of;
         assert_eq!(size_of::<ImpactCategory>(), 1);
         assert_eq!(size_of::<Level>(), 1);
+        assert_eq!(size_of::<FeasibilityLevel>(), 1);
         assert_eq!(size_of::<Property>(), 1);
         assert_eq!(size_of::<ThreatCategory>(), 1);
         assert_eq!(size_of::<CatalogScheme>(), 1);
