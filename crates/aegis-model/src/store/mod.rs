@@ -6,9 +6,10 @@
 //!
 //! - **Snapshot**, format `aegis-project` version 1: one compact JSON
 //!   object on one line, ending in `\n`. It holds the methodology key and
-//!   version, then the live assets, damage scenarios, and threat scenarios
-//!   in public-ID order. Written by [`Project::save`](crate::Project::save),
-//!   read by [`Project::load`](crate::Project::load).
+//!   version, then the live assets, damage scenarios, threat scenarios,
+//!   and attack trees in public-ID order. Written by
+//!   [`Project::save`](crate::Project::save), read by
+//!   [`Project::load`](crate::Project::load).
 //! - **Op log**, format `aegis-oplog` version 1: JSON Lines. One header
 //!   line with the methodology key and version, then one record
 //!   `{"seq":N,"op":{...}}` per line, each ending in `\n`, with `seq`
@@ -17,15 +18,17 @@
 //!
 //! Rules both formats share:
 //!
-//! - The only JSON numbers are `version` and `seq`. IDs are hyphenated
-//!   lowercase `UUIDv7` text. Vocabulary items are their keys. A catalog
-//!   ref is `{"scheme": <key>, "id": <text in the scheme's syntax>}`.
+//! - The only JSON numbers are `version`, `seq`, and provenance
+//!   `timestamp_ms`. IDs are hyphenated lowercase `UUIDv7` text. Vocabulary
+//!   items are their keys. A catalog ref is `{"scheme": <key>, "id": <text
+//!   in the scheme's syntax>}`.
 //! - Output is canonical and does not depend on vocabulary order: property
 //!   sets are sorted by key; snapshot impacts are an object sorted by
 //!   category key with unrated categories left out; snapshot catalog refs
 //!   are sorted by scheme key, then by segments; damage links are sorted by
-//!   ID. In an op, lists keep the op's own order, so decoding an encoded
-//!   op gives the same op.
+//!   ID; attack tree nodes and step feasibility ratings are in arena order;
+//!   default provenance (`("", 0, Human)`) is omitted. In an op, lists keep
+//!   the op's own order, so decoding an encoded op gives the same op.
 //! - Decoding is strict: unknown, missing, and repeated fields, repeated
 //!   keys in a set or map, and trailing data are errors.
 //! - Decoding is capped (R3, R6): the input size, each record, each
@@ -53,6 +56,7 @@ use crate::methodology::{
     MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
 };
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
+use crate::tree::MAX_ATTACK_TREE_NODES;
 
 /// Largest snapshot [`Project::load`](crate::Project::load) reads, in
 /// bytes: 64 MiB. A typical project (300 assets, 2,000 threats) is about
@@ -78,6 +82,14 @@ pub const MAX_OP_RECORD_BYTES: usize = 64 * 1024;
 /// assert_eq!(aegis_model::MAX_NAME_BYTES, 4 * aegis_model::MAX_NAME_CHARS);
 /// ```
 pub const MAX_NAME_BYTES: usize = 1024;
+
+/// Longest decoded provenance actor, in bytes: 1,024. An actor has at most
+/// 256 chars of up to 4 bytes each; the model then checks the char count.
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_ACTOR_BYTES, 4 * aegis_model::MAX_NAME_CHARS);
+/// ```
+pub const MAX_ACTOR_BYTES: usize = 1024;
 
 /// Longest decoded vocabulary key, in bytes: 64, the longest key a
 /// methodology may declare. Also caps the methodology key in a header.
@@ -164,6 +176,11 @@ pub enum Limit {
         /// The cap, in bytes.
         max: usize,
     },
+    /// A provenance actor is longer than [`MAX_ACTOR_BYTES`].
+    ActorBytes {
+        /// The cap, in bytes.
+        max: usize,
+    },
     /// A vocabulary or methodology key is longer than [`MAX_KEY_BYTES`].
     KeyBytes {
         /// The cap, in bytes.
@@ -202,6 +219,19 @@ pub enum Limit {
     /// `violates` list has more than 64 members (the most a methodology
     /// declares).
     Properties {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// An attack tree, gate child list, or shared-node parent list has more
+    /// than [`MAX_ATTACK_TREE_NODES`](crate::MAX_ATTACK_TREE_NODES) nodes.
+    AttackTreeNodes {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// An attack tree or op lists more than
+    /// [`MAX_ATTACK_TREE_NODES`](crate::MAX_ATTACK_TREE_NODES) step
+    /// feasibility ratings.
+    StepFeasibility {
         /// The cap, in items.
         max: usize,
     },
@@ -258,6 +288,9 @@ impl Limit {
     pub(crate) const NAME: Limit = Limit::NameBytes {
         max: MAX_NAME_BYTES,
     };
+    pub(crate) const ACTOR: Limit = Limit::ActorBytes {
+        max: MAX_ACTOR_BYTES,
+    };
     pub(crate) const KEY: Limit = Limit::KeyBytes { max: MAX_KEY_BYTES };
     pub(crate) const VERSION: Limit = Limit::MethodologyVersionBytes {
         max: MAX_METHODOLOGY_VERSION_BYTES,
@@ -276,6 +309,12 @@ impl Limit {
     };
     pub(crate) const PROPERTIES: Limit = Limit::Properties {
         max: MAX_PROPERTIES,
+    };
+    pub(crate) const ATTACK_TREE_NODES: Limit = Limit::AttackTreeNodes {
+        max: MAX_ATTACK_TREE_NODES,
+    };
+    pub(crate) const STEP_FEASIBILITY: Limit = Limit::StepFeasibility {
+        max: MAX_ATTACK_TREE_NODES,
     };
     pub(crate) const PACK_FILE: Limit = Limit::PackFileBytes {
         max: MAX_PACK_FILE_BYTES,
@@ -306,6 +345,7 @@ impl fmt::Display for Limit {
             Limit::ProjectFileBytes { max } => write!(f, "project file is larger than {max} bytes"),
             Limit::OpRecordBytes { max } => write!(f, "op log line is longer than {max} bytes"),
             Limit::NameBytes { max } => write!(f, "name is longer than {max} bytes"),
+            Limit::ActorBytes { max } => write!(f, "provenance actor is longer than {max} bytes"),
             Limit::KeyBytes { max } => write!(f, "key is longer than {max} bytes"),
             Limit::MethodologyVersionBytes { max } => {
                 write!(f, "methodology version is longer than {max} bytes")
@@ -317,6 +357,10 @@ impl fmt::Display for Limit {
             Limit::DamageLinks { max } => write!(f, "more than {max} damage links"),
             Limit::Impacts { max } => write!(f, "more than {max} impact ratings"),
             Limit::Properties { max } => write!(f, "more than {max} properties"),
+            Limit::AttackTreeNodes { max } => write!(f, "more than {max} attack tree nodes"),
+            Limit::StepFeasibility { max } => {
+                write!(f, "more than {max} step feasibility ratings")
+            }
             Limit::PackFileBytes { max } => {
                 write!(f, "methodology pack is larger than {max} bytes")
             }
@@ -348,6 +392,8 @@ pub enum VocabKind {
     ImpactCategory,
     /// A level of an impact category's scale.
     Level,
+    /// A level of the methodology's feasibility scale.
+    FeasibilityLevel,
     /// A security property.
     Property,
     /// A threat category.
@@ -361,6 +407,7 @@ impl fmt::Display for VocabKind {
         f.write_str(match self {
             VocabKind::ImpactCategory => "impact category",
             VocabKind::Level => "level",
+            VocabKind::FeasibilityLevel => "feasibility level",
             VocabKind::Property => "property",
             VocabKind::ThreatCategory => "threat category",
             VocabKind::CatalogScheme => "catalog scheme",
@@ -385,12 +432,15 @@ mod tests {
         for l in [
             Limit::OP_RECORD,
             Limit::NAME,
+            Limit::ACTOR,
             Limit::KEY,
             Limit::VERSION,
             Limit::CATALOG_REF,
             Limit::CATALOG_REFS,
             Limit::IMPACTS,
             Limit::PROPERTIES,
+            Limit::ATTACK_TREE_NODES,
+            Limit::STEP_FEASIBILITY,
         ] {
             assert_ne!(l.to_string(), "");
         }
@@ -432,6 +482,7 @@ mod tests {
         let all = [
             VocabKind::ImpactCategory,
             VocabKind::Level,
+            VocabKind::FeasibilityLevel,
             VocabKind::Property,
             VocabKind::ThreatCategory,
             VocabKind::CatalogScheme,
@@ -442,6 +493,7 @@ mod tests {
             [
                 "impact category",
                 "level",
+                "feasibility level",
                 "property",
                 "threat category",
                 "catalog scheme"

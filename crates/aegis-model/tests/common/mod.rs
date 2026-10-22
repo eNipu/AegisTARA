@@ -312,7 +312,6 @@ pub struct Gen {
     m: Arc<Methodology>,
     wide: Methodology,
     next: u64,
-    default_provenance_only: bool,
 }
 
 /// Picks item `n` modulo the length, or `None` if there are no items.
@@ -331,16 +330,6 @@ impl Gen {
             m,
             wide: wide(),
             next: 0,
-            default_provenance_only: false,
-        }
-    }
-
-    pub fn new_v1(m: Arc<Methodology>) -> Self {
-        Gen {
-            m,
-            wide: wide(),
-            next: 0,
-            default_provenance_only: true,
         }
     }
 
@@ -359,9 +348,6 @@ impl Gen {
     }
 
     fn provenance(&self, sel: u16, bits: u64) -> Provenance {
-        if self.default_provenance_only {
-            return Provenance::default();
-        }
         let source = match bits % 4 {
             0 => ProvenanceSource::Human,
             1 => ProvenanceSource::Import,
@@ -735,10 +721,28 @@ impl Gen {
                 };
                 let mut tree = AttackTree::new(root, Node::gate(kind, format!("{SENTINEL}-g")))
                     .expect("valid root");
-                tree.add_child(tree.root(), s1, Node::step(format!("{SENTINEL}-s1")))
+                let s1_idx = tree
+                    .add_child(tree.root(), s1, Node::step(format!("{SENTINEL}-s1")))
                     .expect("valid s1");
                 tree.add_child(tree.root(), s2, Node::step(format!("{SENTINEL}-s2")))
                     .expect("valid s2");
+                if s.c % 32 == 0 {
+                    for i in 0..30 {
+                        let extra = node_id(self.fresh());
+                        tree.add_child(tree.root(), extra, Node::step(format!("{SENTINEL}-e{i}")))
+                            .expect("valid extra");
+                    }
+                } else if s.c % 4 == 1 {
+                    let g1 = node_id(self.fresh());
+                    let g1_idx = tree
+                        .add_child(
+                            tree.root(),
+                            g1,
+                            Node::gate(GateKind::And, format!("{SENTINEL}-g1")),
+                        )
+                        .expect("valid g1");
+                    tree.link(g1_idx, s1_idx).expect("link s1");
+                }
                 let step_feasibility = match s.c % 16 {
                     0 => vec![(node_id(self.fresh()), self.feasibility_level(1))],
                     1 => vec![(root, self.feasibility_level(1))],
@@ -891,6 +895,13 @@ pub fn reordered(mut def: MethodologyDef) -> MethodologyDef {
             levels: level_defs(&["u0", "u1"]),
         },
     );
+    def.feasibility_levels.insert(
+        0,
+        LevelDef {
+            key: "zz-unused-feasibility".into(),
+            label: "Unused feasibility".into(),
+        },
+    );
     def.properties.reverse();
     def.properties.insert(
         0,
@@ -939,14 +950,10 @@ pub fn accepted(
     seeds: &[Seed],
     mut f: impl FnMut(&Project, &Op, &Op) -> Result<(), TestCaseError>,
 ) -> Result<Project, TestCaseError> {
-    let mut generator = Gen::new_v1(Arc::clone(m));
+    let mut generator = Gen::new(Arc::clone(m));
     let mut project = Project::new(Arc::clone(m));
     for s in seeds {
-        let v1_seed = Seed {
-            kind: s.kind % 22,
-            ..s.clone()
-        };
-        let op = generator.op(&project, &v1_seed);
+        let op = generator.op(&project, s);
         if let Ok(inverse) = project.apply(op.clone()) {
             f(&project, &op, &inverse)?;
         }
@@ -980,7 +987,8 @@ pub fn read_log(m: &Arc<Methodology>, bytes: &[u8]) -> Vec<aegis_model::LoggedOp
 
 /// A key-based description of every entity, one line each, independent of
 /// vocabulary indices: names, property keys, ratings as category and level
-/// keys, threat category keys, and catalog ref texts.
+/// keys, threat category keys, catalog ref texts, attack trees, step
+/// feasibility keys, and provenance.
 pub fn describe(p: &Project) -> Vec<String> {
     let m = p.methodology();
     let mut out = Vec::new();
@@ -991,7 +999,11 @@ pub fn describe(p: &Project) -> Vec<String> {
             .filter_map(|x| m.property_key(x))
             .collect();
         keys.sort_unstable();
-        out.push(format!("asset {id} {:?} {keys:?}", a.name()));
+        out.push(format!(
+            "asset {id} {:?} {keys:?} {:?}",
+            a.name(),
+            a.provenance()
+        ));
     }
     for (_, id, d) in p.damage_scenarios() {
         let mut rated: Vec<_> = d
@@ -1006,7 +1018,11 @@ pub fn describe(p: &Project) -> Vec<String> {
             })
             .collect();
         rated.sort_unstable();
-        out.push(format!("damage {id} {:?} {rated:?}", d.name()));
+        out.push(format!(
+            "damage {id} {:?} {rated:?} {:?}",
+            d.name(),
+            d.provenance()
+        ));
     }
     for (_, id, t) in p.threat_scenarios() {
         let mut refs: Vec<_> = t
@@ -1026,21 +1042,33 @@ pub fn describe(p: &Project) -> Vec<String> {
             .iter()
             .filter_map(|&d| p.damage_scenario_id(d))
             .collect();
+        let tree = t.attack_tree().and_then(|idx| p.attack_tree_id(idx));
         out.push(format!(
-            "threat {id} {:?} asset {:?} {:?} {refs:?} {damages:?}",
+            "threat {id} {:?} asset {:?} {:?} {refs:?} {damages:?} tree {tree:?} {:?}",
             t.name(),
             p.asset_id(t.asset()),
             m.threat_category_key(t.category()),
+            t.provenance(),
         ));
     }
     for (idx, id, tree) in p.attack_trees() {
+        let nodes: Vec<_> = tree
+            .iter()
+            .map(|(n_idx, n_id, node)| {
+                let parents: Vec<_> = tree.parents(n_idx).collect();
+                (n_idx, n_id, node, tree.owner(n_idx), parents)
+            })
+            .collect();
         let feas: Vec<_> = p
             .step_feasibilities(idx)
             .unwrap_or(&[])
             .iter()
             .map(|l| l.and_then(|f| m.feasibility_level_key(f)))
             .collect();
-        out.push(format!("tree {id} len {} {feas:?}", tree.len()));
+        out.push(format!(
+            "tree {id} {nodes:?} {feas:?} {:?}",
+            p.attack_tree_provenance(idx),
+        ));
     }
     out
 }

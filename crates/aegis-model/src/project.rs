@@ -18,7 +18,7 @@ use crate::methodology::{
 use crate::op::Op;
 use crate::provenance::Provenance;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
-use crate::tree::{AttackTree, Node};
+use crate::tree::{AttackTree, MAX_ATTACK_TREE_NODES, Node};
 
 /// Longest entity name, in chars.
 pub const MAX_NAME_CHARS: usize = 256;
@@ -1796,6 +1796,12 @@ impl Project {
     ) -> Result<(), ModelError> {
         if self.trees.idx(&id).is_some() {
             return Err(ModelError::DuplicateAttackTree(id));
+        }
+        if tree.len() > MAX_ATTACK_TREE_NODES {
+            return Err(ModelError::TooManyAttackTreeNodes {
+                tree: id,
+                max: MAX_ATTACK_TREE_NODES,
+            });
         }
         for (_, _, node) in tree.iter() {
             check_name(EntityKind::TreeNode, node.label())?;

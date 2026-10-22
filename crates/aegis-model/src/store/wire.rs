@@ -51,11 +51,13 @@ use serde::ser::{self, Serialize, SerializeMap, SerializeStruct, Serializer};
 use super::{Limit, MAX_KEY_BYTES, VocabKind};
 use crate::asset::PropertySet;
 use crate::error::{PackError, StoreError};
-use crate::id::{AssetId, DamageId, ThreatId};
+use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx};
 use crate::methodology::{
-    CatalogRef, CatalogScheme, ImpactCategory, Level, MAX_IMPACT_CATEGORIES, MAX_PROPERTIES,
-    Methodology, Property, ThreatCategory,
+    CatalogRef, CatalogScheme, FeasibilityLevel, ImpactCategory, Level, MAX_IMPACT_CATEGORIES,
+    MAX_PROPERTIES, Methodology, Property, ThreatCategory,
 };
+use crate::provenance::{Provenance, ProvenanceSource};
+use crate::tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, WireNodeParts};
 
 /// The version every format (snapshot, op log, methodology pack) is written
 /// with and the only one read.
@@ -306,11 +308,13 @@ macro_rules! caps {
 
 caps! {
     NameCap = super::MAX_NAME_BYTES, Limit::NAME;
+    ActorCap = super::MAX_ACTOR_BYTES, Limit::ACTOR;
     KeyCap = super::MAX_KEY_BYTES, Limit::KEY;
     VersionCap = super::MAX_METHODOLOGY_VERSION_BYTES, Limit::VERSION;
     RefTextCap = super::MAX_CATALOG_REF_BYTES, Limit::CATALOG_REF;
     RefsCap = crate::threat::MAX_CATALOG_REFS, Limit::CATALOG_REFS;
     LinksCap = crate::threat::MAX_DAMAGE_LINKS, Limit::DAMAGE_LINKS;
+    AttackTreeNodesCap = crate::tree::MAX_ATTACK_TREE_NODES, Limit::ATTACK_TREE_NODES;
 }
 
 /// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
@@ -318,6 +322,7 @@ caps! {
 pub(crate) struct BoundedStr<C>(pub(crate) Arc<str>, PhantomData<C>);
 
 pub(super) type Name = BoundedStr<NameCap>;
+pub(super) type Actor = BoundedStr<ActorCap>;
 pub(crate) type Key = BoundedStr<KeyCap>;
 pub(crate) type VersionText = BoundedStr<VersionCap>;
 pub(super) type RefText = BoundedStr<RefTextCap>;
@@ -460,6 +465,22 @@ impl<'de> Deserialize<'de> for ImpactCategoryKey {
     }
 }
 
+/// A feasibility level key, resolved as it is read.
+pub(super) struct FeasibilityLevelKey(pub(super) FeasibilityLevel);
+
+impl<'de> Deserialize<'de> for FeasibilityLevelKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .feasibility_level(s)
+                .map(FeasibilityLevelKey)
+                .ok_or_else(|| unknown_key(VocabKind::FeasibilityLevel, s))
+        })
+        .deserialize(d)
+    }
+}
+
 /// A catalog scheme key, resolved as it is read.
 struct CatalogSchemeKey(CatalogScheme);
 
@@ -588,6 +609,197 @@ impl<'de> Deserialize<'de> for Impacts {
             }
         }
         d.deserialize_map(V)
+    }
+}
+
+/// Step feasibility ratings given as an object from step `NodeId` to
+/// feasibility level key, in input order: at most 32 entries
+/// ([`MAX_ATTACK_TREE_NODES`]), no node ID repeated, each pair resolved as
+/// it is read. Within the object a cap, an invalid ID, or a repeat is
+/// reported at once, the first unknown key when the object ends. Time
+/// O(k log f).
+pub(super) struct StepFeasibility(pub(super) Vec<(NodeId, FeasibilityLevel)>);
+
+impl<'de> Deserialize<'de> for StepFeasibility {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = StepFeasibility;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of step feasibility ratings")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<StepFeasibility, A::Error> {
+                let m = context().map_err(raise)?;
+                let mut out = Vec::new();
+                let mut seen: Vec<NodeId> = Vec::new();
+                let mut count = 0usize;
+                let mut pending = None;
+                while let Some(node) = map.next_key_seed(WithStr::new(|s: &str| {
+                    if count >= MAX_ATTACK_TREE_NODES {
+                        return Err(Fault::Limit(Limit::STEP_FEASIBILITY));
+                    }
+                    if !is_canonical_uuid(s) {
+                        return Err(Fault::InvalidId);
+                    }
+                    NodeId::from_str(s).map_err(|_| Fault::InvalidId)
+                }))? {
+                    count += 1;
+                    if seen.contains(&node) {
+                        return Err(raise(Fault::Duplicate));
+                    }
+                    seen.push(node);
+                    let level = map.next_value_seed(WithStr::new(|s: &str| {
+                        check_key_len(s)?;
+                        Ok(note_unknown(
+                            m.feasibility_level(s),
+                            VocabKind::FeasibilityLevel,
+                            s,
+                            &mut pending,
+                        ))
+                    }))?;
+                    if let Some(l) = level {
+                        out.push((node, l));
+                    }
+                }
+                match pending {
+                    Some(fault) => Err(raise(fault)),
+                    None => Ok(StepFeasibility(out)),
+                }
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+/// Deserializes `T` into `Some(T)`. Used with
+/// `#[serde(default, deserialize_with = "some")]` so an omitted field
+/// becomes `None` while an explicit `null` is rejected.
+fn some<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProvenanceSourceWire {
+    Human,
+    Import,
+    Catalog,
+    Ai,
+}
+
+impl From<ProvenanceSource> for ProvenanceSourceWire {
+    fn from(s: ProvenanceSource) -> Self {
+        match s {
+            ProvenanceSource::Human => Self::Human,
+            ProvenanceSource::Import => Self::Import,
+            ProvenanceSource::Catalog => Self::Catalog,
+            ProvenanceSource::Ai => Self::Ai,
+        }
+    }
+}
+
+impl From<ProvenanceSourceWire> for ProvenanceSource {
+    fn from(s: ProvenanceSourceWire) -> Self {
+        match s {
+            ProvenanceSourceWire::Human => Self::Human,
+            ProvenanceSourceWire::Import => Self::Import,
+            ProvenanceSourceWire::Catalog => Self::Catalog,
+            ProvenanceSourceWire::Ai => Self::Ai,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProvenance {
+    actor: Actor,
+    timestamp_ms: u64,
+    source: ProvenanceSourceWire,
+}
+
+/// Non-default provenance decoded from
+/// `{"actor": ..., "timestamp_ms": ..., "source": ...}`. Explicit default
+/// provenance (`{"actor":"","timestamp_ms":0,"source":"human"}`) is
+/// rejected so default provenance has one canonical form (omitted).
+pub(super) struct ProvenanceWire(pub(super) Provenance);
+
+impl<'de> Deserialize<'de> for ProvenanceWire {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = RawProvenance::deserialize(d)?;
+        let prov = Provenance::new(raw.actor.0, raw.timestamp_ms, raw.source.into());
+        if prov.is_default() {
+            return Err(de::Error::custom("default provenance must be omitted"));
+        }
+        Ok(ProvenanceWire(prov))
+    }
+}
+
+pub(super) fn unwrap_provenance(p: Option<ProvenanceWire>) -> Provenance {
+    p.map_or_else(Provenance::default, |w| w.0)
+}
+
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GateKindWire {
+    And,
+    Or,
+    SeqAnd,
+}
+
+impl From<GateKind> for GateKindWire {
+    fn from(k: GateKind) -> Self {
+        match k {
+            GateKind::And => Self::And,
+            GateKind::Or => Self::Or,
+            GateKind::SeqAnd => Self::SeqAnd,
+        }
+    }
+}
+
+impl From<GateKindWire> for GateKind {
+    fn from(k: GateKindWire) -> Self {
+        match k {
+            GateKindWire::And => Self::And,
+            GateKindWire::Or => Self::Or,
+            GateKindWire::SeqAnd => Self::SeqAnd,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeWire {
+    id: WireId<NodeId>,
+    label: Name,
+    #[serde(default, deserialize_with = "some")]
+    gate: Option<GateKindWire>,
+    #[serde(default, deserialize_with = "some")]
+    children: Option<BoundedVec<WireId<NodeId>, AttackTreeNodesCap>>,
+    #[serde(default, deserialize_with = "some")]
+    parents: Option<BoundedVec<WireId<NodeId>, AttackTreeNodesCap>>,
+}
+
+/// An [`AttackTree`] decoded from its arena-order `nodes` array.
+pub(super) struct NodesWire(pub(super) AttackTree);
+
+impl<'de> Deserialize<'de> for NodesWire {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = BoundedVec::<NodeWire, AttackTreeNodesCap>::deserialize(d)?.0;
+        let mut parts: Vec<WireNodeParts> = Vec::with_capacity(raw.len());
+        for n in raw {
+            let gate_children = match (n.gate, n.children) {
+                (Some(g), Some(c)) => {
+                    Some((GateKind::from(g), c.0.into_iter().map(|w| w.0).collect()))
+                }
+                (None, None) => None,
+                _ => return Err(de::Error::custom("gate and children must appear together")),
+            };
+            let parents = n.parents.map(|p| p.0.into_iter().map(|w| w.0).collect());
+            parts.push((n.id.0, n.label.0, gate_children, parents));
+        }
+        AttackTree::from_wire_parts(parts)
+            .map(NodesWire)
+            .ok_or_else(|| de::Error::custom("invalid attack tree"))
     }
 }
 
@@ -769,15 +981,19 @@ pub(super) struct SnapshotWire {
     pub(super) assets: Vec<AssetWire>,
     pub(super) damage_scenarios: Vec<DamageWire>,
     pub(super) threat_scenarios: Vec<ThreatWire>,
+    #[serde(default)]
+    pub(super) attack_trees: Vec<TreeWire>,
 }
 
-/// A snapshot asset: 40 bytes plus its name.
+/// A snapshot asset: 48 bytes plus its name.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AssetWire {
     pub(super) id: WireId<AssetId>,
     pub(super) name: Name,
     pub(super) properties: PropertySetKeys,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
 }
 
 /// A snapshot damage scenario; unrated categories are absent.
@@ -787,6 +1003,8 @@ pub(super) struct DamageWire {
     pub(super) id: WireId<DamageId>,
     pub(super) name: Name,
     pub(super) impacts: Impacts,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
 }
 
 /// A snapshot threat scenario.
@@ -799,6 +1017,21 @@ pub(super) struct ThreatWire {
     pub(super) category: ThreatCategoryKey,
     pub(super) catalog_refs: BoundedVec<CatalogRefText, RefsCap>,
     pub(super) damages: BoundedVec<WireId<DamageId>, LinksCap>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) attack_tree: Option<WireId<TreeId>>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot attack tree.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TreeWire {
+    pub(super) id: WireId<TreeId>,
+    pub(super) nodes: NodesWire,
+    pub(super) step_feasibility: StepFeasibility,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
 }
 
 /// The op log header line. The methodology is checked while decoding.
@@ -831,14 +1064,20 @@ pub(super) enum OpWire {
         id: WireId<AssetId>,
         name: Name,
         properties: PropertySetKeys,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     RenameAsset {
         id: WireId<AssetId>,
         name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     SetAssetProperties {
         id: WireId<AssetId>,
         properties: PropertySetKeys,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     RemoveAsset {
         id: WireId<AssetId>,
@@ -847,10 +1086,14 @@ pub(super) enum OpWire {
         id: WireId<DamageId>,
         name: Name,
         impacts: Impacts,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     RenameDamageScenario {
         id: WireId<DamageId>,
         name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     SetImpact {
         id: WireId<DamageId>,
@@ -859,6 +1102,8 @@ pub(super) enum OpWire {
         // a missing field is an error.
         #[serde(deserialize_with = "Option::deserialize")]
         level: Option<Key>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     RemoveDamageScenario {
         id: WireId<DamageId>,
@@ -870,33 +1115,72 @@ pub(super) enum OpWire {
         category: ThreatCategoryKey,
         catalog_refs: BoundedVec<CatalogRefText, RefsCap>,
         damages: BoundedVec<WireId<DamageId>, LinksCap>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     RenameThreatScenario {
         id: WireId<ThreatId>,
         name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     SetThreatCategory {
         id: WireId<ThreatId>,
         category: ThreatCategoryKey,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     AddCatalogRef {
         threat: WireId<ThreatId>,
         catalog_ref: CatalogRefText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     RemoveCatalogRef {
         threat: WireId<ThreatId>,
         catalog_ref: CatalogRefText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     LinkDamage {
         threat: WireId<ThreatId>,
         damage: WireId<DamageId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     UnlinkDamage {
         threat: WireId<ThreatId>,
         damage: WireId<DamageId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     RemoveThreatScenario {
         id: WireId<ThreatId>,
+    },
+    AddAttackTree {
+        id: WireId<TreeId>,
+        nodes: NodesWire,
+        step_feasibility: StepFeasibility,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetStepFeasibility {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        level: Option<FeasibilityLevelKey>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetThreatAttackTree {
+        threat: WireId<ThreatId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        tree: Option<WireId<TreeId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveAttackTree {
+        id: WireId<TreeId>,
     },
 }
 
@@ -1175,6 +1459,158 @@ pub(super) struct Ids<'a, T>(pub(super) &'a [T]);
 impl<T: fmt::Display> Serialize for Ids<'_, T> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_seq(self.0.iter().map(Text))
+    }
+}
+
+/// Non-default provenance as `{"actor": ..., "timestamp_ms": ..., "source": ...}`.
+#[derive(serde::Serialize)]
+pub(super) struct ProvenanceView<'a> {
+    actor: &'a str,
+    timestamp_ms: u64,
+    source: ProvenanceSourceWire,
+}
+
+impl<'a> ProvenanceView<'a> {
+    pub(super) fn of(p: &'a Provenance) -> Option<Self> {
+        if p.is_default() {
+            None
+        } else {
+            Some(Self {
+                actor: p.actor(),
+                timestamp_ms: p.timestamp_ms(),
+                source: p.source().into(),
+            })
+        }
+    }
+}
+
+/// Step feasibility ratings in the given order (ops), as an object. Fails
+/// on a repeated node ID or a level not in the methodology. O(k).
+pub(super) struct StepFeasibilityInOrder<'a> {
+    pub(super) m: &'a Methodology,
+    pub(super) ratings: &'a [(NodeId, FeasibilityLevel)],
+}
+
+impl Serialize for StepFeasibilityInOrder<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(Some(self.ratings.len()))?;
+        let mut seen: Vec<NodeId> = Vec::with_capacity(self.ratings.len());
+        for &(node, level) in self.ratings {
+            let Some(lk) = self.m.feasibility_level_key(level) else {
+                return Err(ser::Error::custom(
+                    "feasibility level not in the methodology",
+                ));
+            };
+            if seen.contains(&node) {
+                return Err(ser::Error::custom("step feasibility node repeated"));
+            }
+            seen.push(node);
+            map.serialize_entry(&Text(node), lk)?;
+        }
+        map.end()
+    }
+}
+
+/// A stored attack tree's step feasibility ratings in arena order, unrated
+/// steps left out, as an object. O(n).
+pub(super) struct StepFeasibilityByNode<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) tree_idx: TreeIdx,
+    pub(super) tree: &'a AttackTree,
+}
+
+impl Serialize for StepFeasibilityByNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let m = self.project.methodology();
+        let mut map = s.serialize_map(None)?;
+        for (node_idx, node_id, _) in self.tree.iter() {
+            if let Some(level) = self.project.step_feasibility(self.tree_idx, node_idx) {
+                map.serialize_entry(&Text(node_id), &Required(m.feasibility_level_key(level)))?;
+            }
+        }
+        map.end()
+    }
+}
+
+/// An [`AttackTree`]'s nodes in arena order. O(V + E).
+pub(super) struct NodesView<'a>(pub(super) &'a AttackTree);
+
+impl Serialize for NodesView<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.iter().map(|(idx, id, node)| NodeView {
+            tree: self.0,
+            idx,
+            id,
+            node,
+        }))
+    }
+}
+
+struct NodeView<'a> {
+    tree: &'a AttackTree,
+    idx: NodeIdx,
+    id: NodeId,
+    node: &'a Node,
+}
+
+impl Serialize for NodeView<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let gate = self.node.gate_kind();
+        let has_parents = !self.tree.linked_parents_of(self.idx).is_empty();
+        let len = 2 + usize::from(gate.is_some()) * 2 + usize::from(has_parents);
+        let mut st = s.serialize_struct("Node", len)?;
+        st.serialize_field("id", &Text(self.id))?;
+        st.serialize_field("label", self.node.label())?;
+        if let Some(kind) = gate {
+            st.serialize_field("gate", &GateKindWire::from(kind))?;
+            st.serialize_field(
+                "children",
+                &NodeIdxSliceIds {
+                    tree: self.tree,
+                    indices: self.node.children(),
+                },
+            )?;
+        }
+        if has_parents {
+            st.serialize_field(
+                "parents",
+                &NodeParentIds {
+                    tree: self.tree,
+                    idx: self.idx,
+                },
+            )?;
+        }
+        st.end()
+    }
+}
+
+struct NodeIdxSliceIds<'a> {
+    tree: &'a AttackTree,
+    indices: &'a [NodeIdx],
+}
+
+impl Serialize for NodeIdxSliceIds<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.indices
+                .iter()
+                .map(|&idx| Required(self.tree.id_of(idx).map(Text))),
+        )
+    }
+}
+
+struct NodeParentIds<'a> {
+    tree: &'a AttackTree,
+    idx: NodeIdx,
+}
+
+impl Serialize for NodeParentIds<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.tree
+                .parents(self.idx)
+                .map(|idx| Required(self.tree.id_of(idx).map(Text))),
+        )
     }
 }
 

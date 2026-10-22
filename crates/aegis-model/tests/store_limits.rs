@@ -9,12 +9,14 @@ use std::io::Read;
 use std::sync::Arc;
 
 use aegis_model::{
-    CatalogSchemeDef, CatalogSyntax, ImpactCategoryDef, LevelDef, Limit, MAX_CATALOG_REFS,
-    MAX_DAMAGE_LINKS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES, MAX_PROJECT_FILE_BYTES, Methodology,
-    MethodologyDef, Op, OpLogReader, Project, PropertyDef, Provenance, SegmentDef, StoreError,
-    ThreatCategoryDef,
+    AttackTree, CatalogSchemeDef, CatalogSyntax, GateKind, ImpactCategoryDef, LevelDef, Limit,
+    MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES,
+    MAX_PROJECT_FILE_BYTES, Methodology, MethodologyDef, Node, Op, OpLogReader, Project,
+    PropertyDef, Provenance, SegmentDef, StoreError, ThreatCategoryDef,
 };
-use common::{asset_id, builtin, damage_id, read_log, save, threat_id, write_log};
+use common::{
+    asset_id, builtin, damage_id, node_id, read_log, save, threat_id, tree_id, write_log,
+};
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -49,6 +51,20 @@ fn snapshot(version: &str, assets: Value, damages: Value, threats: Value) -> Str
            "methodology": {"key": "iso21434-r155", "version": version},
            "assets": assets, "damage_scenarios": damages, "threat_scenarios": threats})
     .to_string()
+}
+
+/// A snapshot with the given entity lists and attack trees.
+fn snapshot_with_trees(
+    version: &str,
+    assets: Value,
+    damages: Value,
+    threats: Value,
+    trees: Value,
+) -> String {
+    let mut s: Value =
+        serde_json::from_str(&snapshot(version, assets, damages, threats)).expect("json");
+    s["attack_trees"] = trees;
+    s.to_string()
 }
 
 fn snapshot_error(text: &str) -> StoreError {
@@ -159,12 +175,116 @@ fn caps_names() {
         json!({"op": "add_damage_scenario", "id": id(1), "name": name, "impacts": {}}),
         json!({"op": "rename_damage_scenario", "id": id(1), "name": name}),
         json!({"op": "rename_threat_scenario", "id": id(1), "name": name}),
+        json!({"op": "add_attack_tree", "id": id(1),
+               "nodes": [{"id": id(2), "label": name}],
+               "step_feasibility": {}}),
     ] {
         assert_limit(&log_error(&log_with(&op)), want);
     }
     let a = json!([{"id": id(1), "name": name, "properties": ["integrity"]}]);
     assert_limit(
         &snapshot_error(&snapshot("0.1.0", a, json!([]), json!([]))),
+        want,
+    );
+    let trees = json!([{"id": id(1), "nodes": [{"id": id(2), "label": name}],
+                        "step_feasibility": {}}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
+        want,
+    );
+}
+
+#[test]
+fn caps_actor() {
+    let want = Limit::ActorBytes { max: 1024 };
+    let actor = "a".repeat(1025);
+    let prov = json!({"actor": actor, "timestamp_ms": 1, "source": "human"});
+    for op in [
+        json!({"op": "add_asset", "id": id(1), "name": "a", "properties": ["integrity"],
+               "provenance": prov}),
+        json!({"op": "rename_asset", "id": id(1), "name": "a", "provenance": prov}),
+        json!({"op": "set_step_feasibility", "tree": id(1), "node": id(2),
+               "level": "low", "provenance": prov}),
+        json!({"op": "set_threat_attack_tree", "threat": id(1), "tree": id(2),
+               "provenance": prov}),
+    ] {
+        assert_limit(&log_error(&log_with(&op)), want);
+    }
+    let a = json!([{"id": id(1), "name": "a", "properties": ["integrity"], "provenance": prov}]);
+    assert_limit(
+        &snapshot_error(&snapshot("0.1.0", a, json!([]), json!([]))),
+        want,
+    );
+    let trees = json!([{"id": id(1), "nodes": [{"id": id(2), "label": "s"}],
+                        "step_feasibility": {}, "provenance": prov}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
+        want,
+    );
+}
+
+#[test]
+fn caps_attack_tree_nodes() {
+    let want = Limit::AttackTreeNodes { max: 32 };
+    let nodes33: Vec<Value> = (0..33)
+        .map(|i| json!({"id": id(100 + i), "label": "s"}))
+        .collect();
+    let children33: Vec<Value> = (0..33).map(|i| json!(id(100 + i))).collect();
+    let parents33: Vec<Value> = (0..33).map(|i| json!(id(100 + i))).collect();
+    for bad_nodes in [
+        Value::Array(nodes33),
+        json!([{"id": id(1), "label": "g", "gate": "or", "children": children33}]),
+        json!([{"id": id(1), "label": "g", "gate": "or", "children": [id(2)]},
+               {"id": id(2), "label": "s", "parents": parents33}]),
+    ] {
+        let op = json!({"op": "add_attack_tree", "id": id(10),
+                        "nodes": bad_nodes, "step_feasibility": {}});
+        assert_limit(&log_error(&log_with(&op)), want);
+        let trees = json!([{"id": id(10), "nodes": bad_nodes, "step_feasibility": {}}]);
+        assert_limit(
+            &snapshot_error(&snapshot_with_trees(
+                "0.1.0",
+                json!([]),
+                json!([]),
+                json!([]),
+                trees,
+            )),
+            want,
+        );
+    }
+}
+
+#[test]
+fn caps_step_feasibility() {
+    let want = Limit::StepFeasibility { max: 32 };
+    let feas: serde_json::Map<String, Value> =
+        (0..33).map(|i| (id(100 + i), json!("low"))).collect();
+    let op = json!({"op": "add_attack_tree", "id": id(10),
+                    "nodes": [{"id": id(100), "label": "s"}],
+                    "step_feasibility": feas});
+    assert_limit(&log_error(&log_with(&op)), want);
+    let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
+                        "step_feasibility": feas}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
         want,
     );
 }
@@ -180,6 +300,10 @@ fn caps_keys() {
         json!({"op": "set_threat_category", "id": id(1), "category": key}),
         json!({"op": "add_catalog_ref", "threat": id(1),
                "catalog_ref": {"scheme": key, "id": "1"}}),
+        json!({"op": "add_attack_tree", "id": id(1),
+               "nodes": [{"id": id(2), "label": "s"}],
+               "step_feasibility": {id(2): key}}),
+        json!({"op": "set_step_feasibility", "tree": id(1), "node": id(2), "level": key}),
     ] {
         assert_limit(&log_error(&log_with(&op)), want);
     }
@@ -189,6 +313,18 @@ fn caps_keys() {
                     "catalog_refs": [], "damages": []}]);
     assert_limit(
         &snapshot_error(&snapshot("0.1.0", json!([]), json!([]), t)),
+        want,
+    );
+    let trees = json!([{"id": id(1), "nodes": [{"id": id(2), "label": "s"}],
+                        "step_feasibility": {id(2): key}}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
         want,
     );
     let s = snapshot("0.1.0", json!([]), json!([]), json!([])).replace("iso21434-r155", &key);
@@ -365,11 +501,14 @@ fn limits_admit_every_valid_project() {
     let m = maxed();
     let long_name: Arc<str> = "\u{1f512}".repeat(MAX_NAME_CHARS).into();
     assert_eq!(long_name.len(), 1024);
+    let long_actor = "\u{1f512}".repeat(MAX_NAME_CHARS);
+    assert_eq!(long_actor.len(), 1024);
+    let max_prov = Provenance::ai(long_actor, u64::MAX);
     let mut ops = vec![Op::AddAsset {
         id: asset_id(1),
         name: long_name.clone(),
         properties: m.all_properties(),
-        provenance: Provenance::default(),
+        provenance: max_prov.clone(),
     }];
     let top: Vec<_> = m
         .impact_categories()
@@ -383,7 +522,7 @@ fn limits_admit_every_valid_project() {
             id: d,
             name: long_name.clone(),
             impacts: top.clone(),
-            provenance: Provenance::default(),
+            provenance: max_prov.clone(),
         });
     }
     // 16 refs over all 16 schemes, each 39 bytes of text.
@@ -402,7 +541,47 @@ fn limits_admit_every_valid_project() {
         category: m.threat_categories().last().expect("category"),
         catalog_refs,
         damages: damage_ids.iter().rev().copied().collect(),
-        provenance: Provenance::default(),
+        provenance: max_prov.clone(),
+    });
+    // A 32-node attack tree (1 root gate + 31 steps, all with 1,024-byte labels
+    // and 64-byte feasibility keys) with a shared DAG step and max provenance.
+    let root_id = node_id(500);
+    let mut tree =
+        AttackTree::new(root_id, Node::gate(GateKind::Or, long_name.to_string())).expect("root");
+    let sub_gate_id = node_id(501);
+    let sub_gate_idx = tree
+        .add_child(
+            tree.root(),
+            sub_gate_id,
+            Node::gate(GateKind::SeqAnd, long_name.to_string()),
+        )
+        .expect("sub gate");
+    let flvl = m.feasibility_levels().last().expect("feasibility").0;
+    let mut step_feasibility = Vec::new();
+    let mut first_step_idx = None;
+    for i in 2..MAX_ATTACK_TREE_NODES as u64 {
+        let sid = node_id(500 + i);
+        let idx = tree
+            .add_child(tree.root(), sid, Node::step(long_name.to_string()))
+            .expect("step");
+        if first_step_idx.is_none() {
+            first_step_idx = Some(idx);
+        }
+        step_feasibility.push((sid, flvl));
+    }
+    tree.link(sub_gate_idx, first_step_idx.expect("first step"))
+        .expect("link shared step");
+    assert_eq!(tree.len(), MAX_ATTACK_TREE_NODES);
+    ops.push(Op::AddAttackTree {
+        id: tree_id(1),
+        tree,
+        step_feasibility,
+        provenance: max_prov.clone(),
+    });
+    ops.push(Op::SetThreatAttackTree {
+        threat: threat_id(1),
+        tree: Some(tree_id(1)),
+        provenance: max_prov,
     });
     let mut p = Project::new(Arc::clone(&m));
     for op in &ops {

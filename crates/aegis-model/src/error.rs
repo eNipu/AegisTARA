@@ -487,6 +487,25 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// An attack tree in a project may have at most `max` nodes.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, TreeId, MAX_ATTACK_TREE_NODES};
+    ///
+    /// let tree = TreeId::new_v7();
+    /// let err = ModelError::TooManyAttackTreeNodes { tree, max: MAX_ATTACK_TREE_NODES };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     format!("attack tree {tree} would have more than 32 nodes"),
+    /// );
+    /// ```
+    #[error("attack tree {tree} would have more than {max} nodes")]
+    TooManyAttackTreeNodes {
+        /// The attack tree.
+        tree: TreeId,
+        /// The limit.
+        max: usize,
+    },
     /// The project cannot hold more entities of this kind (the arena is at
     /// its slot limit, at most `u32::MAX`).
     #[error("project {kind} capacity exceeded")]
@@ -793,7 +812,8 @@ pub enum StoreError {
         /// Key of the scheme.
         scheme: Arc<str>,
     },
-    /// A property set or an impact map names the same key twice.
+    /// A property set, an impact map, or a step feasibility map names the
+    /// same key twice.
     #[error("a key is repeated in a set or map")]
     DuplicateEntry,
     /// An op log record has the wrong sequence number: a gap, a repeat, or
