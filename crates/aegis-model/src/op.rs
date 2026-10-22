@@ -3,40 +3,50 @@
 use std::sync::Arc;
 
 use crate::asset::PropertySet;
-use crate::id::{AssetId, DamageId, ThreatId};
-use crate::methodology::{CatalogRef, ImpactCategory, Level, ThreatCategory};
+use crate::id::{AssetId, DamageId, NodeId, ThreatId, TreeId};
+use crate::methodology::{CatalogRef, FeasibilityLevel, ImpactCategory, Level, ThreatCategory};
+use crate::provenance::Provenance;
+use crate::tree::AttackTree;
 
 /// One change to a [`Project`](crate::Project).
 ///
 /// Entities are named by public ID; vocabulary by the typed indices of the
-/// project's methodology. [`Project::apply`](crate::Project::apply) checks
-/// the op, commits it, and returns its inverse, so undo is "apply the
-/// inverse" and costs O(size of the op). Costs below use n = entities of
-/// the kind, k = damage links or catalog refs on the threat, p <= 64
-/// properties, c <= 32 impact categories.
+/// project's methodology. Every creating or mutating variant carries a
+/// [`Provenance`] recording who made the change, when, and from what source
+/// (D6). [`Project::apply`](crate::Project::apply) checks the op, commits
+/// it, and returns its inverse (carrying the element's prior
+/// [`Provenance`]), so undo is "apply the inverse", restores both domain
+/// state and provenance, and costs O(size of the op). Costs below use
+/// n = entities of the kind, k = damage links or catalog refs on the
+/// threat, p <= 64 properties, c <= 32 impact categories, V = nodes in the
+/// attack tree, E = edges in the attack tree.
 ///
 /// | Op | Inverse | Cost |
 /// |---|---|---|
 /// | `AddAsset` | `RemoveAsset` | O(log n) |
-/// | `RenameAsset` | `RenameAsset` with the old name | O(log n) |
-/// | `SetAssetProperties` | the same with the old set | O(log n + p) |
-/// | `RemoveAsset` | `AddAsset` with the old fields | O(log n + p) |
+/// | `RenameAsset` | `RenameAsset` with the old name and provenance | O(log n) |
+/// | `SetAssetProperties` | the same with the old set and provenance | O(log n + p) |
+/// | `RemoveAsset` | `AddAsset` with the old fields and provenance | O(log n + p) |
 /// | `AddDamageScenario` | `RemoveDamageScenario` | O(log n + c) |
-/// | `RenameDamageScenario` | the same with the old name | O(log n) |
-/// | `SetImpact` | the same with the old level | O(log n) |
+/// | `RenameDamageScenario` | the same with the old name and provenance | O(log n) |
+/// | `SetImpact` | the same with the old level and provenance | O(log n) |
 /// | `RemoveDamageScenario` | `AddDamageScenario`, rated pairs in category order | O(log n + c) |
 /// | `AddThreatScenario` | `RemoveThreatScenario` | O(k log n + k log k + p) |
-/// | `RenameThreatScenario` | the same with the old name | O(log n) |
-/// | `SetThreatCategory` | the same with the old category | O(log n + p) |
-/// | `AddCatalogRef` | `RemoveCatalogRef` | O(log n + k) |
-/// | `RemoveCatalogRef` | `AddCatalogRef` | O(log n + k) |
-/// | `LinkDamage` | `UnlinkDamage` | O(log n + k) |
-/// | `UnlinkDamage` | `LinkDamage` | O(log n + k) |
+/// | `RenameThreatScenario` | the same with the old name and provenance | O(log n) |
+/// | `SetThreatCategory` | the same with the old category and provenance | O(log n + p) |
+/// | `AddCatalogRef` | `RemoveCatalogRef` with the old provenance | O(log n + k) |
+/// | `RemoveCatalogRef` | `AddCatalogRef` with the old provenance | O(log n + k) |
+/// | `LinkDamage` | `UnlinkDamage` with the old provenance | O(log n + k) |
+/// | `UnlinkDamage` | `LinkDamage` with the old provenance | O(log n + k) |
 /// | `RemoveThreatScenario` | `AddThreatScenario`, fields in stored order | O(log n + k + p) |
+/// | `AddAttackTree` | `RemoveAttackTree` | O(log n + V + E) |
+/// | `SetStepFeasibility` | the same with the old level and provenance | O(log n + log V) |
+/// | `SetThreatAttackTree` | the same with the old tree and provenance | O(log n) |
+/// | `RemoveAttackTree` | `AddAttackTree`, rated steps in node order | O(log n + V) |
 ///
 /// ```
 /// use std::sync::Arc;
-/// use aegis_model::{AssetId, Methodology, Op, Project};
+/// use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
@@ -46,6 +56,7 @@ use crate::methodology::{CatalogRef, ImpactCategory, Level, ThreatCategory};
 ///     id,
 ///     name: "Telematics unit".into(),
 ///     properties: m.all_properties(),
+///     provenance: Provenance::human("alice", 1_700_000_000_000),
 /// })?;
 /// assert_eq!(inverse, Op::RemoveAsset { id });
 /// project.apply(inverse)?;
@@ -64,6 +75,8 @@ pub enum Op {
         name: Arc<str>,
         /// Security properties of the asset.
         properties: PropertySet,
+        /// Provenance of the asset creation.
+        provenance: Provenance,
     },
     /// Renames an asset.
     RenameAsset {
@@ -71,6 +84,8 @@ pub enum Op {
         id: AssetId,
         /// New name.
         name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
     },
     /// Replaces an asset's properties. Must not drop a property that a
     /// threat targets.
@@ -79,6 +94,8 @@ pub enum Op {
         id: AssetId,
         /// New non-empty property set.
         properties: PropertySet,
+        /// Provenance of the property change.
+        provenance: Provenance,
     },
     /// Removes an asset that no threat targets.
     RemoveAsset {
@@ -93,6 +110,8 @@ pub enum Op {
         name: Arc<str>,
         /// Ratings, each category at most once.
         impacts: Vec<(ImpactCategory, Level)>,
+        /// Provenance of the damage scenario creation.
+        provenance: Provenance,
     },
     /// Renames a damage scenario.
     RenameDamageScenario {
@@ -100,6 +119,8 @@ pub enum Op {
         id: DamageId,
         /// New name.
         name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
     },
     /// Sets or clears (`None` = unrated) one impact rating.
     SetImpact {
@@ -109,6 +130,8 @@ pub enum Op {
         category: ImpactCategory,
         /// The new rating, or `None` for unrated.
         level: Option<Level>,
+        /// Provenance of the impact rating change.
+        provenance: Provenance,
     },
     /// Removes a damage scenario that no threat links to.
     RemoveDamageScenario {
@@ -131,6 +154,8 @@ pub enum Op {
         /// Linked damage scenarios, unique, at most 256, in any order
         /// (stored sorted by ID).
         damages: Vec<DamageId>,
+        /// Provenance of the threat scenario creation.
+        provenance: Provenance,
     },
     /// Renames a threat scenario.
     RenameThreatScenario {
@@ -138,6 +163,8 @@ pub enum Op {
         id: ThreatId,
         /// New name.
         name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
     },
     /// Changes a threat's category. The asset must carry every property the
     /// new category violates.
@@ -146,6 +173,8 @@ pub enum Op {
         id: ThreatId,
         /// The new category.
         category: ThreatCategory,
+        /// Provenance of the category change.
+        provenance: Provenance,
     },
     /// Adds a catalog ref to a threat.
     AddCatalogRef {
@@ -153,6 +182,8 @@ pub enum Op {
         threat: ThreatId,
         /// A ref not yet on the threat.
         catalog_ref: CatalogRef,
+        /// Provenance of adding the catalog ref.
+        provenance: Provenance,
     },
     /// Removes a catalog ref from a threat.
     RemoveCatalogRef {
@@ -160,6 +191,8 @@ pub enum Op {
         threat: ThreatId,
         /// A ref on the threat.
         catalog_ref: CatalogRef,
+        /// Provenance of removing the catalog ref.
+        provenance: Provenance,
     },
     /// Links a threat to a damage scenario. A threat links at most 256.
     LinkDamage {
@@ -167,6 +200,8 @@ pub enum Op {
         threat: ThreatId,
         /// Existing damage scenario, not yet linked.
         damage: DamageId,
+        /// Provenance of linking the damage scenario.
+        provenance: Provenance,
     },
     /// Unlinks a threat from a damage scenario.
     UnlinkDamage {
@@ -174,10 +209,96 @@ pub enum Op {
         threat: ThreatId,
         /// A linked damage scenario.
         damage: DamageId,
+        /// Provenance of unlinking the damage scenario.
+        provenance: Provenance,
     },
     /// Removes a threat scenario.
     RemoveThreatScenario {
         /// Existing threat scenario.
         id: ThreatId,
     },
+    /// Adds an attack tree with optional initial step feasibility ratings.
+    /// Steps not listed are unrated (`None`).
+    AddAttackTree {
+        /// Unused attack tree ID.
+        id: TreeId,
+        /// The attack tree DAG.
+        tree: AttackTree,
+        /// Initial step feasibility ratings, each step at most once.
+        step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
+        /// Provenance of the attack tree creation.
+        provenance: Provenance,
+    },
+    /// Sets or clears (`None` = unrated) the feasibility rating of one
+    /// step node in an attack tree.
+    SetStepFeasibility {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// Existing step node in `tree`.
+        node: NodeId,
+        /// The new feasibility rating, or `None` for unrated.
+        level: Option<FeasibilityLevel>,
+        /// Provenance of the step feasibility change.
+        provenance: Provenance,
+    },
+    /// Links a threat scenario to an attack tree, replaces its linked
+    /// attack tree, or unlinks it (`None`).
+    SetThreatAttackTree {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// Existing attack tree, or `None` to unlink.
+        tree: Option<TreeId>,
+        /// Provenance of linking or unlinking the attack tree.
+        provenance: Provenance,
+    },
+    /// Removes an attack tree that no threat scenario links to.
+    RemoveAttackTree {
+        /// Existing attack tree.
+        id: TreeId,
+    },
+}
+
+impl Op {
+    /// Returns the provenance carried by this operation, or `None` for the
+    /// four entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
+    /// `RemoveThreatScenario`, `RemoveAttackTree`). Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{AssetId, Op, Provenance};
+    ///
+    /// let id = AssetId::new_v7();
+    /// let prov = Provenance::human("alice", 100);
+    /// let rename = Op::RenameAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     provenance: prov.clone(),
+    /// };
+    /// assert_eq!(rename.provenance(), Some(&prov));
+    /// assert_eq!(Op::RemoveAsset { id }.provenance(), None);
+    /// ```
+    #[must_use]
+    pub const fn provenance(&self) -> Option<&Provenance> {
+        match self {
+            Self::AddAsset { provenance, .. }
+            | Self::RenameAsset { provenance, .. }
+            | Self::SetAssetProperties { provenance, .. }
+            | Self::AddDamageScenario { provenance, .. }
+            | Self::RenameDamageScenario { provenance, .. }
+            | Self::SetImpact { provenance, .. }
+            | Self::AddThreatScenario { provenance, .. }
+            | Self::RenameThreatScenario { provenance, .. }
+            | Self::SetThreatCategory { provenance, .. }
+            | Self::AddCatalogRef { provenance, .. }
+            | Self::RemoveCatalogRef { provenance, .. }
+            | Self::LinkDamage { provenance, .. }
+            | Self::UnlinkDamage { provenance, .. }
+            | Self::AddAttackTree { provenance, .. }
+            | Self::SetStepFeasibility { provenance, .. }
+            | Self::SetThreatAttackTree { provenance, .. } => Some(provenance),
+            Self::RemoveAsset { .. }
+            | Self::RemoveDamageScenario { .. }
+            | Self::RemoveThreatScenario { .. }
+            | Self::RemoveAttackTree { .. } => None,
+        }
+    }
 }

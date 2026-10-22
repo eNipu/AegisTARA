@@ -43,6 +43,7 @@ const MAX_DIGITS: usize = 5;
 ///     required: 1,
 /// };
 /// assert_eq!(syntax.segments.len(), 2);
+/// assert_eq!(syntax.to_string(), "<1..=32>[.<1..=99>]");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogSyntax {
@@ -52,6 +53,25 @@ pub struct CatalogSyntax {
     pub segments: Vec<SegmentDef>,
     /// How many leading segments an ID must have.
     pub required: u8,
+}
+
+impl fmt::Display for CatalogSyntax {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.prefix)?;
+        let req = usize::from(self.required);
+        for (i, seg) in self.segments.iter().enumerate() {
+            if i >= req {
+                f.write_str("[.")?;
+            } else if i > 0 {
+                f.write_str(".")?;
+            }
+            write!(f, "{seg}")?;
+        }
+        for _ in req..self.segments.len() {
+            f.write_str("]")?;
+        }
+        Ok(())
+    }
 }
 
 /// One numeric segment of a catalog ID.
@@ -65,6 +85,7 @@ pub struct CatalogSyntax {
 ///
 /// let technique = SegmentDef { min: 1, max: 9999, digits: Some(4) };
 /// assert!(technique.min <= technique.max);
+/// assert_eq!(technique.to_string(), "<0001..=9999>");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SegmentDef {
@@ -74,6 +95,13 @@ pub struct SegmentDef {
     pub max: u16,
     /// Fixed digit count, or `None` for a free count without leading zeros.
     pub digits: Option<u8>,
+}
+
+impl fmt::Display for SegmentDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let width = self.digits.map_or(0, usize::from);
+        write!(f, "<{:0width$}..={:0width$}>", self.min, self.max)
+    }
 }
 
 impl SegmentDef {
@@ -163,7 +191,10 @@ impl CatalogSyntax {
         scheme: CatalogScheme,
         text: &str,
     ) -> Result<CatalogRef, ModelError> {
-        let err = || ModelError::InvalidCatalogId { scheme };
+        let err = || ModelError::InvalidCatalogId {
+            scheme,
+            syntax: self.clone(),
+        };
         let rest = text.strip_prefix(&*self.prefix).ok_or_else(err)?;
         let mut segments = [0u16; MAX_SEGMENTS];
         let mut len = 0usize;
@@ -285,6 +316,16 @@ impl PartialOrd for CatalogRef {
     }
 }
 
+impl fmt::Display for CatalogRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        CatalogRefDisplay {
+            syntax: None,
+            r: *self,
+        }
+        .fmt(f)
+    }
+}
+
 /// Formats a [`CatalogRef`] in its scheme's syntax; returned by
 /// [`Methodology::display_catalog_ref`](crate::Methodology::display_catalog_ref).
 pub(crate) struct CatalogRefDisplay<'a> {
@@ -354,6 +395,16 @@ mod tests {
                     },
                 ],
             }],
+            feasibility_levels: vec![
+                LevelDef {
+                    key: "low".into(),
+                    label: "Low".into(),
+                },
+                LevelDef {
+                    key: "high".into(),
+                    label: "High".into(),
+                },
+            ],
             properties: vec![PropertyDef {
                 key: "i".into(),
                 label: "I".into(),
@@ -388,6 +439,8 @@ mod tests {
     fn catalog_syntax_capec_style() {
         let m = catalogs();
         let capec = m.catalog_scheme("capec").expect("capec");
+        let syntax = m.catalog_syntax(capec).expect("syntax").clone();
+        assert_eq!(syntax.to_string(), "CAPEC-<1..=9999>");
         for ok in ["CAPEC-123", "CAPEC-1", "CAPEC-9999"] {
             round_trips(&m, capec, ok);
         }
@@ -403,7 +456,10 @@ mod tests {
         ] {
             assert_eq!(
                 m.parse_catalog_ref(capec, bad),
-                Err(ModelError::InvalidCatalogId { scheme: capec }),
+                Err(ModelError::InvalidCatalogId {
+                    scheme: capec,
+                    syntax: syntax.clone(),
+                }),
                 "{bad:?}"
             );
         }
@@ -413,11 +469,14 @@ mod tests {
     fn catalog_syntax_attack_style() {
         let m = catalogs();
         let attack = m.catalog_scheme("attack").expect("attack");
+        let syntax = m.catalog_syntax(attack).expect("syntax").clone();
+        assert_eq!(syntax.to_string(), "T<0001..=9999>[.<001..=999>]");
         for ok in ["T1059", "T1059.001", "T0001", "T9999.999"] {
             round_trips(&m, attack, ok);
         }
         let r = m.parse_catalog_ref(attack, "T1059.001").expect("valid");
         assert_eq!(r.segments(), [1059, 1]);
+        assert_eq!(r.to_string(), "1059.1");
         for bad in [
             "T1059.1",
             "T59",
@@ -429,7 +488,10 @@ mod tests {
         ] {
             assert_eq!(
                 m.parse_catalog_ref(attack, bad),
-                Err(ModelError::InvalidCatalogId { scheme: attack }),
+                Err(ModelError::InvalidCatalogId {
+                    scheme: attack,
+                    syntax: syntax.clone(),
+                }),
                 "{bad:?}"
             );
         }
@@ -473,7 +535,10 @@ mod tests {
         assert!(!syntax.accepts(&mk(1, [1, 5, 0, 0])), "unused not zero");
         assert_eq!(
             m.check_catalog_ref(&mk(1, [0; 4])),
-            Err(ModelError::InvalidCatalogId { scheme: attack })
+            Err(ModelError::InvalidCatalogId {
+                scheme: attack,
+                syntax: syntax.clone(),
+            })
         );
     }
 

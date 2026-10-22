@@ -58,9 +58,10 @@
 //!
 //! # Methodologies
 //!
-//! The TARA side of the model (assets, damage scenarios, threat scenarios)
-//! is methodology-neutral: the core names no impact category, rating scale,
-//! security property, threat taxonomy, or catalog. A [`MethodologyDef`] is
+//! The TARA side of the model (assets, damage scenarios, threat scenarios,
+//! and project attack trees) is methodology-neutral: the core names no
+//! impact category, rating scale, feasibility scale, security property,
+//! threat taxonomy, or catalog. A [`MethodologyDef`] is
 //! plain data that declares them, and [`Methodology::new`] validates it.
 //! A methodology ships as a pack file (format `aegis-methodology-pack`
 //! v1, JSON): [`Methodology::read_pack`] decodes one with capped, strict
@@ -78,6 +79,7 @@
 //!   "key": "tiny", "version": "1", "label": "Tiny",
 //!   "impact_categories": [{"key": "harm", "label": "Harm", "levels": [
 //!     {"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]}],
+//!   "feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}],
 //!   "properties": [{"key": "integrity", "label": "Integrity"}],
 //!   "threat_categories": [{"key": "corruption", "label": "Corruption",
 //!                          "violates": ["integrity"]}],
@@ -98,13 +100,15 @@
 //! lifetime. Every change is a typed [`Op`]; [`Project::apply`] checks it
 //! against the methodology and the referential rules, commits it only if
 //! every check passes, and returns the inverse op for undo. Ops carry small
-//! typed vocabulary indices ([`ImpactCategory`], [`Level`], [`Property`],
-//! [`ThreatCategory`], [`CatalogScheme`]) resolved once from text keys. See
-//! `docs/adr/0008-methodology-neutral-domain-model.md`.
+//! typed vocabulary indices ([`ImpactCategory`], [`Level`],
+//! [`FeasibilityLevel`], [`Property`], [`ThreatCategory`], [`CatalogScheme`])
+//! resolved once from text keys. See
+//! `docs/adr/0008-methodology-neutral-domain-model.md` and
+//! `docs/adr/0012-threat-attack-trees.md`.
 //!
 //! ```
 //! use std::sync::Arc;
-//! use aegis_model::{AssetId, DamageId, Methodology, Op, Project, ThreatId};
+//! use aegis_model::{AssetId, DamageId, Methodology, Op, Project, Provenance, ThreatId};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let m = Arc::new(Methodology::iso21434_r155()?);
@@ -122,12 +126,14 @@
 //!     id: ecu,
 //!     name: "Brake ECU".into(),
 //!     properties: [integrity].into_iter().collect(),
+//!     provenance: Provenance::default(),
 //! })?;
 //! let crash = DamageId::new_v7();
 //! project.apply(Op::AddDamageScenario {
 //!     id: crash,
 //!     name: "Vehicle cannot brake".into(),
 //!     impacts: vec![(safety, severe)],
+//!     provenance: Provenance::default(),
 //! })?;
 //! let threat = ThreatId::new_v7();
 //! let undo = project.apply(Op::AddThreatScenario {
@@ -137,6 +143,7 @@
 //!     category: tampering,
 //!     catalog_refs: vec![m.parse_catalog_ref(annex5, "4.1")?],
 //!     damages: vec![crash],
+//!     provenance: Provenance::default(),
 //! })?;
 //!
 //! // The targeted property is derived from the category.
@@ -165,7 +172,7 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use aegis_model::{AssetId, Methodology, Op, OpLogReader, OpLogWriter, Project};
+//! use aegis_model::{AssetId, Methodology, Op, OpLogReader, OpLogWriter, Project, Provenance};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let m = Arc::new(Methodology::iso21434_r155()?);
@@ -174,8 +181,17 @@
 //!
 //! let ecu = AssetId::new_v7();
 //! for op in [
-//!     Op::AddAsset { id: ecu, name: "Brake ECU".into(), properties: m.all_properties() },
-//!     Op::RenameAsset { id: ecu, name: "Brake control unit".into() },
+//!     Op::AddAsset {
+//!         id: ecu,
+//!         name: "Brake ECU".into(),
+//!         properties: m.all_properties(),
+//!         provenance: Provenance::default(),
+//!     },
+//!     Op::RenameAsset {
+//!         id: ecu,
+//!         name: "Brake control unit".into(),
+//!         provenance: Provenance::default(),
+//!     },
 //! ] {
 //!     project.apply(op.clone())?;
 //!     log.append(&op)?;
@@ -213,6 +229,7 @@ mod id;
 mod methodology;
 mod op;
 mod project;
+mod provenance;
 mod store;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
@@ -223,18 +240,21 @@ mod tree;
 
 pub use asset::{Asset, PropertySet};
 pub use damage::DamageScenario;
-pub use error::{MethodologyError, ModelError, PackError, StoreError};
+pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
 };
-pub use id::{AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx};
+pub use id::{
+    AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+};
 pub use methodology::{
-    CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, ImpactCategory, ImpactCategoryDef,
-    Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef, SegmentDef,
-    ThreatCategory, ThreatCategoryDef,
+    CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, FeasibilityLevel, ImpactCategory,
+    ImpactCategoryDef, Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef,
+    SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
 pub use project::{MAX_NAME_CHARS, Project};
+pub use provenance::{Provenance, ProvenanceSource};
 pub use store::{
     Limit, LoggedOp, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
     MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::methodology::{ImpactCategory, Level};
+use crate::provenance::Provenance;
 
 /// A damage scenario of a [`Project`](crate::Project), rated per impact
 /// category of the project's methodology.
@@ -12,7 +13,7 @@ use crate::methodology::{ImpactCategory, Level};
 ///
 /// ```
 /// use std::sync::Arc;
-/// use aegis_model::{DamageId, Methodology, Op, Project};
+/// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let m = Arc::new(Methodology::iso21434_r155()?);
@@ -24,6 +25,7 @@ use crate::methodology::{ImpactCategory, Level};
 ///     id,
 ///     name: "Loss of braking".into(),
 ///     impacts: vec![(safety, severe)],
+///     provenance: Provenance::default(),
 /// })?;
 /// let (_, _, d) = project.damage_scenarios().next().ok_or("missing")?;
 /// assert_eq!(d.impact(safety), Some(severe));
@@ -37,6 +39,7 @@ pub struct DamageScenario {
     pub(crate) name: Arc<str>,
     /// One slot per impact category, in category order.
     pub(crate) impacts: Box<[Option<Level>]>,
+    pub(crate) provenance: Provenance,
 }
 
 impl DamageScenario {
@@ -44,12 +47,17 @@ impl DamageScenario {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{DamageId, Methodology, Op, Project};
+    /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
     /// let id = DamageId::new_v7();
-    /// project.apply(Op::AddDamageScenario { id, name: "Data leak".into(), impacts: vec![] })?;
+    /// project.apply(Op::AddDamageScenario {
+    ///     id,
+    ///     name: "Data leak".into(),
+    ///     impacts: vec![],
+    ///     provenance: Provenance::default(),
+    /// })?;
     /// let (_, _, d) = project.damage_scenarios().next().ok_or("missing")?;
     /// assert_eq!(d.name(), "Data leak");
     /// # Ok(())
@@ -65,7 +73,7 @@ impl DamageScenario {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{DamageId, Methodology, Op, Project};
+    /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
@@ -76,6 +84,7 @@ impl DamageScenario {
     ///     id: DamageId::new_v7(),
     ///     name: "Fraud".into(),
     ///     impacts: vec![(cat, low)],
+    ///     provenance: Provenance::default(),
     /// })?;
     /// let (_, _, d) = project.damage_scenarios().next().ok_or("missing")?;
     /// assert_eq!(d.impact(cat), Some(low)); // rated lowest, not unrated
@@ -92,7 +101,7 @@ impl DamageScenario {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{DamageId, Methodology, Op, Project};
+    /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let m = Arc::new(Methodology::iso21434_r155()?);
@@ -101,6 +110,7 @@ impl DamageScenario {
     ///     id: DamageId::new_v7(),
     ///     name: "Unrated".into(),
     ///     impacts: vec![],
+    ///     provenance: Provenance::default(),
     /// })?;
     /// let (_, _, d) = project.damage_scenarios().next().ok_or("missing")?;
     /// assert_eq!(d.impacts().count(), 4);
@@ -114,6 +124,33 @@ impl DamageScenario {
             .zip(0..=u8::MAX)
             .map(|(&level, i)| (ImpactCategory::new(i), level))
     }
+
+    /// Returns the provenance of the last creation or modification of this
+    /// damage scenario. Time O(1), space O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let prov = Provenance::import("fmea-sheet", 1_700_000_000_000);
+    /// project.apply(Op::AddDamageScenario {
+    ///     id: DamageId::new_v7(),
+    ///     name: "Loss of braking".into(),
+    ///     impacts: vec![],
+    ///     provenance: prov.clone(),
+    /// })?;
+    /// let (_, _, d) = project.damage_scenarios().next().ok_or("missing")?;
+    /// assert_eq!(d.provenance(), &prov);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +163,7 @@ mod tests {
         let d = DamageScenario {
             name: "d".into(),
             impacts: vec![Some(l(0)), None, Some(l(2))].into_boxed_slice(),
+            provenance: Provenance::default(),
         };
         let all: Vec<_> = d.impacts().collect();
         assert_eq!(all.len(), 3);
@@ -136,5 +174,6 @@ mod tests {
         assert_eq!(d.impact(ImpactCategory::new(1)), None);
         assert_eq!(d.impact(ImpactCategory::new(7)), None);
         assert_eq!(d.name(), "d");
+        assert!(d.provenance().is_default());
     }
 }

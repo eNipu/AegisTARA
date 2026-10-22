@@ -15,7 +15,7 @@ mod common;
 
 use std::sync::Arc;
 
-use aegis_model::{Methodology, MethodologyDef, ModelError, Op, Project, PropertySet};
+use aegis_model::{Methodology, MethodologyDef, ModelError, Op, Project, PropertySet, Provenance};
 use common::{
     asset_id, builtin, cat, cref, damage_id, prop, props, scheme, second, second_def, threat_cat,
     threat_id,
@@ -54,6 +54,15 @@ fn second_methodology_is_valid_data() {
         "CAPEC-123"
     );
     assert!(m.parse_catalog_ref(capec, "4.1").is_err());
+    assert_eq!(m.feasibility_levels().len(), 5);
+    let fkeys: Vec<_> = m
+        .feasibility_levels()
+        .map(|(_, key, _)| key.to_string())
+        .collect();
+    assert_eq!(
+        fkeys,
+        ["improbable", "remote", "occasional", "probable", "frequent"]
+    );
     // The same definition gives an equal methodology.
     assert_eq!(Methodology::new(def), Ok(m));
 }
@@ -77,6 +86,7 @@ fn second_methodology_rejects_foreign_indices() {
             id: pump,
             name: "Pump".into(),
             properties: m.all_properties(),
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -85,6 +95,7 @@ fn second_methodology_rejects_foreign_indices() {
             id: dmg,
             name: "Harm".into(),
             impacts: vec![],
+            provenance: Provenance::default(),
         },
     );
     ok(
@@ -96,6 +107,7 @@ fn second_methodology_rejects_foreign_indices() {
             category: threat_cat(&m, "corruption"),
             catalog_refs: vec![],
             damages: vec![],
+            provenance: Provenance::default(),
         },
     );
 
@@ -106,6 +118,7 @@ fn second_methodology_rejects_foreign_indices() {
         Op::SetAssetProperties {
             id: pump,
             properties: PropertySet::empty().with(p5),
+            provenance: Provenance::default(),
         },
         &ModelError::UnknownProperty(p5),
     );
@@ -119,6 +132,7 @@ fn second_methodology_rejects_foreign_indices() {
             id: dmg,
             category: harm,
             level: Some(level3),
+            provenance: Provenance::default(),
         },
         &ModelError::UnknownLevel {
             category: harm,
@@ -132,6 +146,7 @@ fn second_methodology_rejects_foreign_indices() {
             id: dmg,
             category: cat(&m, "data-exposure"),
             level: Some(level3),
+            provenance: Provenance::default(),
         },
     );
     // Impact category index 3 (the fourth built-in category).
@@ -142,6 +157,7 @@ fn second_methodology_rejects_foreign_indices() {
             id: damage_id(9),
             name: "x".into(),
             impacts: vec![(cat3, level3)],
+            provenance: Provenance::default(),
         },
         &ModelError::UnknownImpactCategory(cat3),
     );
@@ -152,6 +168,7 @@ fn second_methodology_rejects_foreign_indices() {
         Op::SetThreatCategory {
             id: threat,
             category: t5,
+            provenance: Provenance::default(),
         },
         &ModelError::UnknownThreatCategory(t5),
     );
@@ -159,14 +176,17 @@ fn second_methodology_rejects_foreign_indices() {
     // one-segment CAPEC syntax that has the same index here.
     let annex5 = scheme(&first, "r155-annex5");
     let foreign = cref(&first, annex5, "32.99");
+    let capec = scheme(&m, "capec");
     rejects(
         &mut p,
         Op::AddCatalogRef {
             threat,
             catalog_ref: foreign,
+            provenance: Provenance::default(),
         },
         &ModelError::InvalidCatalogId {
-            scheme: scheme(&m, "capec"),
+            scheme: capec,
+            syntax: m.catalog_syntax(capec).expect("capec syntax").clone(),
         },
     );
     // Ransomware needs I and A; an asset with only C cannot carry it.
@@ -177,6 +197,7 @@ fn second_methodology_rejects_foreign_indices() {
             id: c_only,
             name: "Display".into(),
             properties: props(&m, &["c"]),
+            provenance: Provenance::default(),
         },
     );
     rejects(
@@ -188,10 +209,58 @@ fn second_methodology_rejects_foreign_indices() {
             category: threat_cat(&m, "ransomware"),
             catalog_refs: vec![],
             damages: vec![],
+            provenance: Provenance::default(),
         },
         &ModelError::PropertyNotOnAsset {
             asset: c_only,
             property: prop(&m, "i"),
         },
+    );
+    // Feasibility level index 5 is out of range in the 5-level medical
+    // feasibility scale.
+    let tree = common::tree_id(12);
+    let step = common::node_id(13);
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tree,
+            tree: aegis_model::AttackTree::new(step, aegis_model::Node::step("Step"))
+                .expect("step"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+    );
+    let f5 = common::wide()
+        .feasibility_levels()
+        .nth(5)
+        .expect("feasibility 5")
+        .0;
+    rejects(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree,
+            node: step,
+            level: Some(f5),
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownFeasibilityLevel(f5),
+    );
+    rejects(
+        &mut p,
+        Op::RenameAsset {
+            id: pump,
+            name: "Pump".into(),
+            provenance: Provenance::human("   ", 1),
+        },
+        &ModelError::EmptyActor,
+    );
+    rejects(
+        &mut p,
+        Op::RenameAsset {
+            id: pump,
+            name: "Pump".into(),
+            provenance: Provenance::human("a".repeat(257), 1),
+        },
+        &ModelError::ActorTooLong { max: 256 },
     );
 }

@@ -7,7 +7,8 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    Methodology, ModelError, Op, OpLogReader, OpLogWriter, Project, StoreError, VocabKind,
+    Methodology, ModelError, Op, OpLogReader, OpLogWriter, Project, Provenance, ProvenanceSource,
+    StoreError, VocabKind,
 };
 use common::{
     SENTINEL, asset_id, builtin, cat, cref, damage_id, describe, lvl, prop, props, read_log,
@@ -47,29 +48,35 @@ fn golden_ops(m: &Methodology) -> Vec<Op> {
     let (ecu, tcu, spare) = (asset_id(1), asset_id(2), asset_id(3));
     let (crash, leak, temp) = (damage_id(4), damage_id(5), damage_id(6));
     let (firmware, records, fob) = (threat_id(7), threat_id(8), threat_id(9));
+    let provenance = Provenance::default();
     vec![
         Op::AddAsset {
             id: ecu,
             name: "Brake ECU".into(),
             properties: props(m, &["integrity", "availability"]),
+            provenance: provenance.clone(),
         },
         Op::AddAsset {
             id: tcu,
             name: "Telematics unit".into(),
             properties: m.all_properties(),
+            provenance: provenance.clone(),
         },
         Op::RenameAsset {
             id: tcu,
             name: "Telematics control unit".into(),
+            provenance: provenance.clone(),
         },
         Op::SetAssetProperties {
             id: ecu,
             properties: props(m, &["availability", "authenticity", "integrity"]),
+            provenance: provenance.clone(),
         },
         Op::AddAsset {
             id: spare,
             name: "Spare".into(),
             properties: props(m, &["confidentiality"]),
+            provenance: provenance.clone(),
         },
         Op::RemoveAsset { id: spare },
         Op::AddDamageScenario {
@@ -79,30 +86,36 @@ fn golden_ops(m: &Methodology) -> Vec<Op> {
                 (safety, lvl(m, safety, "severe")),
                 (operational, lvl(m, operational, "major")),
             ],
+            provenance: provenance.clone(),
         },
         Op::AddDamageScenario {
             id: leak,
             name: "Owner data leaks".into(),
             impacts: vec![(privacy, lvl(m, privacy, "moderate"))],
+            provenance: provenance.clone(),
         },
         Op::RenameDamageScenario {
             id: leak,
             name: "Owner data is disclosed".into(),
+            provenance: provenance.clone(),
         },
         Op::SetImpact {
             id: leak,
             category: financial,
             level: Some(lvl(m, financial, "negligible")),
+            provenance: provenance.clone(),
         },
         Op::SetImpact {
             id: crash,
             category: operational,
             level: None,
+            provenance: provenance.clone(),
         },
         Op::AddDamageScenario {
             id: temp,
             name: "Temporary".into(),
             impacts: vec![],
+            provenance: provenance.clone(),
         },
         Op::RemoveDamageScenario { id: temp },
         Op::AddThreatScenario {
@@ -112,6 +125,7 @@ fn golden_ops(m: &Methodology) -> Vec<Op> {
             category: threat_cat(m, "tampering"),
             catalog_refs: vec![cref(m, annex5, "5"), cref(m, annex5, "4.1")],
             damages: vec![crash],
+            provenance: provenance.clone(),
         },
         Op::AddThreatScenario {
             id: records,
@@ -120,30 +134,37 @@ fn golden_ops(m: &Methodology) -> Vec<Op> {
             category: threat_cat(m, "information-disclosure"),
             catalog_refs: vec![],
             damages: vec![leak],
+            provenance: provenance.clone(),
         },
         Op::RenameThreatScenario {
             id: records,
             name: "Read owner records over the air".into(),
+            provenance: provenance.clone(),
         },
         Op::SetThreatCategory {
             id: firmware,
             category: threat_cat(m, "denial-of-service"),
+            provenance: provenance.clone(),
         },
         Op::AddCatalogRef {
             threat: records,
             catalog_ref: cref(m, annex5, "7.2"),
+            provenance: provenance.clone(),
         },
         Op::RemoveCatalogRef {
             threat: firmware,
             catalog_ref: cref(m, annex5, "5"),
+            provenance: provenance.clone(),
         },
         Op::LinkDamage {
             threat: firmware,
             damage: leak,
+            provenance: provenance.clone(),
         },
         Op::UnlinkDamage {
             threat: firmware,
             damage: leak,
+            provenance: provenance.clone(),
         },
         Op::AddThreatScenario {
             id: fob,
@@ -152,11 +173,13 @@ fn golden_ops(m: &Methodology) -> Vec<Op> {
             category: threat_cat(m, "spoofing"),
             catalog_refs: vec![],
             damages: vec![],
+            provenance: provenance.clone(),
         },
         Op::RemoveThreatScenario { id: fob },
         Op::LinkDamage {
             threat: records,
             damage: crash,
+            provenance,
         },
     ]
 }
@@ -230,11 +253,13 @@ fn save_is_deterministic() {
         id,
         name: name.into(),
         properties: m.all_properties(),
+        provenance: Provenance::default(),
     };
     let add_damage = |id, impacts| Op::AddDamageScenario {
         id,
         name: "d".into(),
         impacts,
+        provenance: Provenance::default(),
     };
     let rated = vec![
         (privacy, lvl(&m, privacy, "major")),
@@ -247,6 +272,7 @@ fn save_is_deterministic() {
         category: threat_cat(&m, "tampering"),
         catalog_refs: refs.iter().map(|r| cref(&m, annex5, r)).collect(),
         damages,
+        provenance: Provenance::default(),
     };
 
     // One order, with a removed asset and a removed damage scenario.
@@ -275,11 +301,13 @@ fn save_is_deterministic() {
                 id: d1,
                 category: reversed[0].0,
                 level: Some(reversed[0].1),
+                provenance: Provenance::default(),
             },
             Op::SetImpact {
                 id: d1,
                 category: reversed[1].0,
                 level: Some(reversed[1].1),
+                provenance: Provenance::default(),
             },
             add_asset(a1, "a"),
             add_damage(d2, vec![]),
@@ -288,14 +316,17 @@ fn save_is_deterministic() {
             Op::AddCatalogRef {
                 threat: t1,
                 catalog_ref: cref(&m, annex5, "4.1"),
+                provenance: Provenance::default(),
             },
             Op::AddCatalogRef {
                 threat: t1,
                 catalog_ref: cref(&m, annex5, "5"),
+                provenance: Provenance::default(),
             },
             Op::LinkDamage {
                 threat: t1,
                 damage: d2,
+                provenance: Provenance::default(),
             },
         ],
     );
@@ -320,16 +351,19 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
     let harm = cat(m, "patient-harm");
     let exposure = cat(m, "data-exposure");
     let loss = cat(m, "service-loss");
+    let provenance = Provenance::default();
     vec![
         Op::AddAsset {
             id: asset_id(1),
             name: "Infusion pump".into(),
             properties: props(m, &["i", "a"]),
+            provenance: provenance.clone(),
         },
         Op::AddAsset {
             id: asset_id(2),
             name: "Monitor".into(),
             properties: props(m, &["c", "a"]),
+            provenance: provenance.clone(),
         },
         Op::AddDamageScenario {
             id: damage_id(3),
@@ -338,16 +372,19 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
                 (loss, lvl(m, loss, "intolerable")),
                 (harm, lvl(m, harm, "critical")),
             ],
+            provenance: provenance.clone(),
         },
         Op::AddDamageScenario {
             id: damage_id(4),
             name: "Record leak".into(),
             impacts: vec![(exposure, lvl(m, exposure, "high"))],
+            provenance: provenance.clone(),
         },
         Op::SetImpact {
             id: damage_id(4),
             category: harm,
             level: Some(lvl(m, harm, "minor")),
+            provenance: provenance.clone(),
         },
         Op::AddThreatScenario {
             id: threat_id(5),
@@ -356,6 +393,7 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             category: threat_cat(m, "ransomware"),
             catalog_refs: vec![cref(m, capec, "CAPEC-77"), cref(m, capec, "CAPEC-5")],
             damages: vec![damage_id(4), damage_id(3)],
+            provenance: provenance.clone(),
         },
         Op::AddThreatScenario {
             id: threat_id(6),
@@ -364,18 +402,22 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             category: threat_cat(m, "data-leak"),
             catalog_refs: vec![],
             damages: vec![damage_id(4)],
+            provenance: provenance.clone(),
         },
         Op::SetAssetProperties {
             id: asset_id(2),
             properties: m.all_properties(),
+            provenance: provenance.clone(),
         },
         Op::SetThreatCategory {
             id: threat_id(6),
             category: threat_cat(m, "outage"),
+            provenance: provenance.clone(),
         },
         Op::AddCatalogRef {
             threat: threat_id(6),
             catalog_ref: cref(m, capec, "CAPEC-1"),
+            provenance,
         },
     ]
 }
@@ -466,6 +508,7 @@ fn rename(n: u64) -> Op {
     Op::RenameAsset {
         id: asset_id(1),
         name: format!("name {n}").into(),
+        provenance: Provenance::default(),
     }
 }
 
@@ -560,19 +603,23 @@ fn op_log_sequencing_unencodable_op_writes_nothing() {
         Op::SetAssetProperties {
             id: asset_id(1),
             properties: w.all_properties(),
+            provenance: Provenance::default(),
         },
         Op::SetThreatCategory {
             id: threat_id(1),
             category: w.threat_categories().last().expect("category"),
+            provenance: Provenance::default(),
         },
         Op::SetImpact {
             id: damage_id(1),
             category: w.impact_categories().last().expect("category"),
             level: None,
+            provenance: Provenance::default(),
         },
         Op::AddCatalogRef {
             threat: threat_id(1),
             catalog_ref: cref(&w, scheme(&w, "w2"), "1.2.3"),
+            provenance: Provenance::default(),
         },
         // A repeated impact category could not be read back either.
         Op::AddDamageScenario {
@@ -582,6 +629,7 @@ fn op_log_sequencing_unencodable_op_writes_nothing() {
                 (cat(&m, "safety"), lvl(&m, cat(&m, "safety"), "major")),
                 (cat(&m, "safety"), lvl(&m, cat(&m, "safety"), "severe")),
             ],
+            provenance: Provenance::default(),
         },
     ];
     for op in &foreign {
@@ -982,6 +1030,7 @@ fn errors_have_no_labels() {
         id: asset_id(1),
         name: SENTINEL.into(),
         properties: m.all_properties(),
+        provenance: Provenance::default(),
     })
     .expect("valid");
     let snapshot = String::from_utf8(save(&p)).expect("utf8");
@@ -1029,4 +1078,179 @@ fn every_vocabulary_kind_reads_back_under_its_key() {
     let integrity = prop(&m, "integrity");
     let ecu = loaded.asset_idx(&asset_id(1)).and_then(|i| loaded.asset(i));
     assert!(ecu.is_some_and(|a| a.properties().contains(integrity)));
+}
+
+#[test]
+fn save_and_append_refuse_attack_tree_ops_with_unencodable_op() {
+    let m = builtin();
+    let mut p = apply_all(&m, &golden_ops(&m));
+    let tid = common::tree_id(50);
+    let step = common::node_id(51);
+    let tree = aegis_model::AttackTree::new(step, aegis_model::Node::step("Step")).expect("step");
+    p.apply(Op::AddAttackTree {
+        id: tid,
+        tree: tree.clone(),
+        step_feasibility: vec![],
+        provenance: Provenance::default(),
+    })
+    .expect("add tree");
+    let mut out = Vec::new();
+    assert!(matches!(p.save(&mut out), Err(StoreError::UnencodableOp)));
+    assert!(out.is_empty());
+
+    let header = log_text(&m, &[]);
+    for op in [
+        Op::AddAttackTree {
+            id: tid,
+            tree,
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+        Op::SetStepFeasibility {
+            tree: tid,
+            node: step,
+            level: None,
+            provenance: Provenance::default(),
+        },
+        Op::SetThreatAttackTree {
+            threat: threat_id(1),
+            tree: Some(tid),
+            provenance: Provenance::default(),
+        },
+        Op::RemoveAttackTree { id: tid },
+    ] {
+        let mut writer =
+            aegis_model::OpLogWriter::create(Vec::new(), Arc::clone(&m)).expect("header");
+        assert!(matches!(writer.append(&op), Err(StoreError::UnencodableOp)));
+        let bytes = writer.into_inner().expect("flush");
+        assert_eq!(bytes, header.as_bytes());
+    }
+}
+
+#[test]
+fn save_and_append_refuse_non_default_provenance_with_unencodable_op() {
+    let m = builtin();
+    let annex5 = scheme(&m, "r155-annex5");
+    let safety = cat(&m, "safety");
+    for prov in [
+        Provenance::human("alice", 1),
+        Provenance::import("csv", 0),
+        Provenance::catalog("r155", 0),
+        Provenance::ai("tara-assist", 0),
+        Provenance::new("", 42, ProvenanceSource::Human),
+    ] {
+        // Snapshot: an asset, damage scenario, or threat scenario with non-default provenance.
+        for op in [
+            Op::RenameAsset {
+                id: asset_id(1),
+                name: "Brake ECU".into(),
+                provenance: prov.clone(),
+            },
+            Op::RenameDamageScenario {
+                id: damage_id(4),
+                name: "Vehicle cannot brake".into(),
+                provenance: prov.clone(),
+            },
+            Op::RenameThreatScenario {
+                id: threat_id(7),
+                name: "Modify brake firmware".into(),
+                provenance: prov.clone(),
+            },
+        ] {
+            let mut p = apply_all(&m, &golden_ops(&m));
+            let undo = p.apply(op).expect("apply mutation with provenance");
+            let mut out = Vec::new();
+            assert!(matches!(p.save(&mut out), Err(StoreError::UnencodableOp)));
+            assert!(out.is_empty());
+            // Undoing back to default provenance allows save again.
+            p.apply(undo).expect("undo");
+            assert!(p.save(&mut out).is_ok());
+        }
+
+        // Op log: every v1 op variant with non-default provenance is refused.
+        let header = log_text(&m, &[]);
+        for op in [
+            Op::AddAsset {
+                id: asset_id(1),
+                name: "ECU".into(),
+                properties: m.all_properties(),
+                provenance: prov.clone(),
+            },
+            Op::RenameAsset {
+                id: asset_id(1),
+                name: "ECU".into(),
+                provenance: prov.clone(),
+            },
+            Op::SetAssetProperties {
+                id: asset_id(1),
+                properties: m.all_properties(),
+                provenance: prov.clone(),
+            },
+            Op::AddDamageScenario {
+                id: damage_id(4),
+                name: "Crash".into(),
+                impacts: vec![],
+                provenance: prov.clone(),
+            },
+            Op::RenameDamageScenario {
+                id: damage_id(4),
+                name: "Crash".into(),
+                provenance: prov.clone(),
+            },
+            Op::SetImpact {
+                id: damage_id(4),
+                category: safety,
+                level: None,
+                provenance: prov.clone(),
+            },
+            Op::AddThreatScenario {
+                id: threat_id(7),
+                name: "Threat".into(),
+                asset: asset_id(1),
+                category: threat_cat(&m, "tampering"),
+                catalog_refs: vec![],
+                damages: vec![],
+                provenance: prov.clone(),
+            },
+            Op::RenameThreatScenario {
+                id: threat_id(7),
+                name: "Threat".into(),
+                provenance: prov.clone(),
+            },
+            Op::SetThreatCategory {
+                id: threat_id(7),
+                category: threat_cat(&m, "tampering"),
+                provenance: prov.clone(),
+            },
+            Op::AddCatalogRef {
+                threat: threat_id(7),
+                catalog_ref: cref(&m, annex5, "5"),
+                provenance: prov.clone(),
+            },
+            Op::RemoveCatalogRef {
+                threat: threat_id(7),
+                catalog_ref: cref(&m, annex5, "5"),
+                provenance: prov.clone(),
+            },
+            Op::LinkDamage {
+                threat: threat_id(7),
+                damage: damage_id(4),
+                provenance: prov.clone(),
+            },
+            Op::UnlinkDamage {
+                threat: threat_id(7),
+                damage: damage_id(4),
+                provenance: prov.clone(),
+            },
+        ] {
+            let mut writer =
+                aegis_model::OpLogWriter::create(Vec::new(), Arc::clone(&m)).expect("header");
+            assert!(
+                matches!(writer.append(&op), Err(StoreError::UnencodableOp)),
+                "{op:?}"
+            );
+            let bytes = writer.into_inner().expect("flush");
+            assert_eq!(bytes, header.as_bytes());
+        }
+    }
 }

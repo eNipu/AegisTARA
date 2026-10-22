@@ -48,6 +48,7 @@ fn second_pack_loads_projects_saved_under_the_definition() {
         id: pump,
         name: "Pump".into(),
         properties: built.all_properties(),
+        provenance: aegis_model::Provenance::default(),
     })
     .expect("add asset");
     let bytes = common::save(&p);
@@ -68,7 +69,7 @@ const TINY: &str = r#"{
 "impact_categories": [{"key": "harm", "label": "Harm", "levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]}],
 "properties": [{"key": "i", "label": "I"}],
 "threat_categories": [{"key": "t", "label": "T", "violates": ["i"]}],
-"catalog_schemes": [{"key": "s", "label": "S", "syntax": {"prefix": "", "required": 1, "segments": [{"min": 1, "max": 9}]}}]
+"catalog_schemes": [{"key": "s", "label": "S", "syntax": {"prefix": "", "required": 1, "segments": [{"min": 1, "max": 9}]}}], "feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]
 }
 }
 "#;
@@ -293,6 +294,25 @@ fn pack_rejects_model_rule_breaks_as_methodology_errors() {
     assert!(MethodologyDef::read_pack(text.as_bytes()).is_ok());
     let shown = read(&text).err().map(|e| e.to_string()).unwrap_or_default();
     assert!(shown.starts_with("invalid methodology: "), "{shown}");
+    // Feasibility scale rules are checked too.
+    let one_f = edit(
+        r#""feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]"#,
+        r#""feasibility_levels": [{"key": "low", "label": "Low"}]"#,
+    );
+    assert!(matches!(
+        read(&one_f),
+        Err(PackError::Methodology(
+            MethodologyError::FeasibilityLevelCount { min: 2, max: 16 }
+        ))
+    ));
+    let dup_f = edit(
+        r#""feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]"#,
+        r#""feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "low", "label": "Again"}]"#,
+    );
+    assert!(matches!(
+        read(&dup_f),
+        Err(PackError::Methodology(MethodologyError::DuplicateFeasibilityLevel(k))) if &*k == "low"
+    ));
 }
 
 #[test]
@@ -330,7 +350,8 @@ fn pack_rejects_neither_missing_nor_null_digits() {
 #[test]
 fn pack_rejects_nothing_when_fields_are_reordered() {
     // Field order is free on input; the writer's order is canonical.
-    let text = r#"{"methodology": {"catalog_schemes": [], "threat_categories": [{"violates": ["i"], "label": "T", "key": "t"}],
+    let text = r#"{"methodology": {"feasibility_levels": [{"label": "L", "key": "l"}, {"label": "H", "key": "h"}],
+        "catalog_schemes": [], "threat_categories": [{"violates": ["i"], "label": "T", "key": "t"}],
         "properties": [{"label": "I", "key": "i"}], "impact_categories": [{"levels": [{"label": "L", "key": "l"},
         {"label": "H", "key": "h"}], "label": "C", "key": "c"}], "label": "X", "version": "1", "key": "x"},
         "version": 1, "format": "aegis-methodology-pack"}"#;
