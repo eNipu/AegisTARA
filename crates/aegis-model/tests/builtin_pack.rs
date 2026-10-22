@@ -276,10 +276,13 @@ fn iso21434_vocabulary_catalog_scheme() {
 fn catalog_syntax_r155() {
     let m = m();
     let s = m.catalog_scheme("r155-annex5").expect("scheme");
+    let syntax = m.catalog_syntax(s).expect("syntax").clone();
+    assert_eq!(syntax.to_string(), "<1..=32>[.<1..=99>]");
     for ok in ["1", "32", "4.1", "32.99", "4", "4.2", "5", "10.10"] {
         let r = m.parse_catalog_ref(s, ok).expect(ok);
         let shown = m.display_catalog_ref(&r).to_string();
         assert_eq!(shown, ok);
+        assert_eq!(r.to_string(), ok);
         assert_eq!(m.parse_catalog_ref(s, &shown), Ok(r));
     }
     for bad in [
@@ -288,7 +291,10 @@ fn catalog_syntax_r155() {
     ] {
         assert_eq!(
             m.parse_catalog_ref(s, bad),
-            Err(ModelError::InvalidCatalogId { scheme: s }),
+            Err(ModelError::InvalidCatalogId {
+                scheme: s,
+                syntax: syntax.clone(),
+            }),
             "{bad:?}"
         );
     }

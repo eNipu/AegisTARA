@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::asset::{Asset, PropertySet};
 use crate::damage::DamageScenario;
-use crate::error::ModelError;
+use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, evaluate};
 use crate::id::{
     ArenaIndex, AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx,
@@ -367,12 +367,13 @@ pub struct Project {
 }
 
 /// Checks an entity name. Time O(name length).
-fn check_name(name: &str) -> Result<(), ModelError> {
+fn check_name(kind: EntityKind, name: &str) -> Result<(), ModelError> {
     if name.trim().is_empty() {
-        return Err(ModelError::EmptyName);
+        return Err(ModelError::EmptyName { kind });
     }
     if name.chars().count() > MAX_NAME_CHARS {
         return Err(ModelError::NameTooLong {
+            kind,
             max: MAX_NAME_CHARS,
         });
     }
@@ -425,7 +426,7 @@ impl Project {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use aegis_model::{DamageId, Methodology, ModelError, Op, Project, Provenance};
+    /// use aegis_model::{DamageId, EntityKind, Methodology, ModelError, Op, Project, Provenance};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut project = Project::with_slot_limit(Arc::new(Methodology::iso21434_r155()?), 1);
@@ -436,7 +437,12 @@ impl Project {
     ///     provenance: Provenance::default(),
     /// };
     /// project.apply(add(DamageId::new_v7()))?;
-    /// assert_eq!(project.apply(add(DamageId::new_v7())), Err(ModelError::ProjectCapacityExceeded));
+    /// assert_eq!(
+    ///     project.apply(add(DamageId::new_v7())),
+    ///     Err(ModelError::ProjectCapacityExceeded {
+    ///         kind: EntityKind::DamageScenario,
+    ///     }),
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -1162,7 +1168,7 @@ impl Project {
             } => return self.check_add_asset(*id, name, *properties, provenance),
             Op::RenameAsset { id, name, .. } => {
                 self.live_asset(*id)?;
-                check_name(name)?;
+                check_name(EntityKind::Asset, name)?;
             }
             Op::SetAssetProperties { id, properties, .. } => {
                 self.check_set_asset_properties(*id, *properties)?;
@@ -1176,7 +1182,7 @@ impl Project {
             } => return self.check_add_damage(*id, name, impacts, provenance),
             Op::RenameDamageScenario { id, name, .. } => {
                 self.live_damage(*id)?;
-                check_name(name)?;
+                check_name(EntityKind::DamageScenario, name)?;
             }
             Op::SetImpact {
                 id,
@@ -1209,7 +1215,7 @@ impl Project {
             }
             Op::RenameThreatScenario { id, name, .. } => {
                 self.live_threat(*id)?;
-                check_name(name)?;
+                check_name(EntityKind::ThreatScenario, name)?;
             }
             Op::SetThreatCategory { id, category, .. } => {
                 let t = self.threat_ref(*id)?;
@@ -1532,14 +1538,16 @@ impl Project {
         if self.assets.idx(&id).is_some() {
             return Err(ModelError::DuplicateAsset(id));
         }
-        check_name(name)?;
+        check_name(EntityKind::Asset, name)?;
         self.methodology.check_properties(properties)?;
         if properties.is_empty() {
             return Err(ModelError::NoSecurityProperties(id));
         }
         check_provenance(provenance)?;
         if self.assets.next_idx(self.slot_limit).is_none() {
-            return Err(ModelError::ProjectCapacityExceeded);
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Asset,
+            });
         }
         Ok(())
     }
@@ -1597,7 +1605,7 @@ impl Project {
         if self.damages.idx(&id).is_some() {
             return Err(ModelError::DuplicateDamageScenario(id));
         }
-        check_name(name)?;
+        check_name(EntityKind::DamageScenario, name)?;
         // At most 32 categories, so one bit each fits a `u32`.
         let mut seen = 0u32;
         for &(category, level) in impacts {
@@ -1613,7 +1621,9 @@ impl Project {
         }
         check_provenance(provenance)?;
         if self.damages.next_idx(self.slot_limit).is_none() {
-            return Err(ModelError::ProjectCapacityExceeded);
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::DamageScenario,
+            });
         }
         Ok(())
     }
@@ -1667,7 +1677,7 @@ impl Project {
         if self.threats.idx(&id).is_some() {
             return Err(ModelError::DuplicateThreatScenario(id));
         }
-        check_name(name)?;
+        check_name(EntityKind::ThreatScenario, name)?;
         let (_, a) = self.live_asset(asset)?;
         self.check_category_fits(asset, a, category)?;
         if catalog_refs.len() > MAX_CATALOG_REFS {
@@ -1681,8 +1691,13 @@ impl Project {
         }
         let mut refs = catalog_refs.to_vec();
         refs.sort_unstable();
-        if refs.windows(2).any(|w| w.first() == w.get(1)) {
-            return Err(ModelError::DuplicateCatalogRef { threat: id });
+        if let Some(w) = refs.windows(2).find(|w| w.first() == w.get(1)) {
+            if let Some(&catalog_ref) = w.first() {
+                return Err(ModelError::DuplicateCatalogRef {
+                    threat: id,
+                    catalog_ref,
+                });
+            }
         }
         if damages.len() > MAX_DAMAGE_LINKS {
             return Err(ModelError::TooManyDamageLinks {
@@ -1702,7 +1717,9 @@ impl Project {
         }
         check_provenance(provenance)?;
         if self.threats.next_idx(self.slot_limit).is_none() {
-            return Err(ModelError::ProjectCapacityExceeded);
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::ThreatScenario,
+            });
         }
         Ok(())
     }
@@ -1717,14 +1734,20 @@ impl Project {
         self.methodology.check_catalog_ref(r)?;
         let present = t.catalog_refs.binary_search(r).is_ok();
         match (add, present) {
-            (true, true) => Err(ModelError::DuplicateCatalogRef { threat }),
+            (true, true) => Err(ModelError::DuplicateCatalogRef {
+                threat,
+                catalog_ref: *r,
+            }),
             (true, false) if t.catalog_refs.len() >= MAX_CATALOG_REFS => {
                 Err(ModelError::TooManyCatalogRefs {
                     threat,
                     max: MAX_CATALOG_REFS,
                 })
             }
-            (false, false) => Err(ModelError::CatalogRefNotFound { threat }),
+            (false, false) => Err(ModelError::CatalogRefNotFound {
+                threat,
+                catalog_ref: *r,
+            }),
             _ => Ok(()),
         }
     }
@@ -1775,7 +1798,7 @@ impl Project {
             return Err(ModelError::DuplicateAttackTree(id));
         }
         for (_, _, node) in tree.iter() {
-            check_name(node.label())?;
+            check_name(EntityKind::TreeNode, node.label())?;
         }
         tree.topological_order()?;
         let mut seen = vec![false; tree.len()];
@@ -1797,7 +1820,9 @@ impl Project {
         }
         check_provenance(provenance)?;
         if self.trees.next_idx(self.slot_limit).is_none() {
-            return Err(ModelError::ProjectCapacityExceeded);
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::AttackTree,
+            });
         }
         Ok(())
     }
@@ -1857,9 +1882,11 @@ impl Project {
             properties,
             provenance,
         };
-        self.assets
-            .push(id, asset, self.slot_limit)
-            .ok_or(ModelError::ProjectCapacityExceeded)?;
+        self.assets.push(id, asset, self.slot_limit).ok_or(
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Asset,
+            },
+        )?;
         // No threat targets a new asset: an empty row, no heap.
         self.refs.asset_properties.push(Box::default());
         self.refs.assets.push(0);
@@ -1965,7 +1992,9 @@ impl Project {
         };
         self.damages
             .push(id, d, self.slot_limit)
-            .ok_or(ModelError::ProjectCapacityExceeded)?;
+            .ok_or(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::DamageScenario,
+            })?;
         self.refs.damages.push(0);
         Ok(Op::RemoveDamageScenario { id })
     }
@@ -2034,8 +2063,14 @@ impl Project {
                     provenance,
                 })
             }
-            (true, Ok(_)) => Err(ModelError::DuplicateCatalogRef { threat }),
-            (false, Err(_)) => Err(ModelError::CatalogRefNotFound { threat }),
+            (true, Ok(_)) => Err(ModelError::DuplicateCatalogRef {
+                threat,
+                catalog_ref,
+            }),
+            (false, Err(_)) => Err(ModelError::CatalogRefNotFound {
+                threat,
+                catalog_ref,
+            }),
         }
     }
 
@@ -2067,10 +2102,11 @@ impl Project {
             provenance,
         };
         let violates = self.methodology.violates(category);
-        let idx = self
-            .threats
-            .push(id, t, self.slot_limit)
-            .ok_or(ModelError::ProjectCapacityExceeded)?;
+        let idx = self.threats.push(id, t, self.slot_limit).ok_or(
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::ThreatScenario,
+            },
+        )?;
         if let Some(t) = self.threats.get(idx) {
             self.refs.threat(t, violates, true);
         }
@@ -2204,7 +2240,9 @@ impl Project {
         };
         self.trees
             .push(id, entry, self.slot_limit)
-            .ok_or(ModelError::ProjectCapacityExceeded)?;
+            .ok_or(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::AttackTree,
+            })?;
         self.refs.trees.push(0);
         Ok(Op::RemoveAttackTree { id })
     }
@@ -2360,7 +2398,7 @@ impl Project {
         arena_invariants("tree", &self.trees)?;
 
         for (_, id, a) in self.assets() {
-            check_name(&a.name).map_err(|e| format!("asset {id}: {e}"))?;
+            check_name(EntityKind::Asset, &a.name).map_err(|e| format!("asset {id}: {e}"))?;
             check_provenance(&a.provenance).map_err(|e| format!("asset {id}: {e}"))?;
             if a.properties.is_empty() {
                 return Err(format!("asset {id} has no properties"));
@@ -2369,7 +2407,8 @@ impl Project {
                 .map_err(|e| format!("asset {id}: {e}"))?;
         }
         for (_, id, d) in self.damage_scenarios() {
-            check_name(&d.name).map_err(|e| format!("damage {id}: {e}"))?;
+            check_name(EntityKind::DamageScenario, &d.name)
+                .map_err(|e| format!("damage {id}: {e}"))?;
             check_provenance(&d.provenance).map_err(|e| format!("damage {id}: {e}"))?;
             if d.impacts.len() != m.impact_category_count() {
                 return Err(format!("damage {id} has {} impact slots", d.impacts.len()));
@@ -2390,7 +2429,8 @@ impl Project {
         // -> threats, in ascending order.
         let mut pairs: BTreeMap<(usize, Property), u32> = BTreeMap::new();
         for (_, id, t) in self.threat_scenarios() {
-            check_name(&t.name).map_err(|e| format!("threat {id}: {e}"))?;
+            check_name(EntityKind::ThreatScenario, &t.name)
+                .map_err(|e| format!("threat {id}: {e}"))?;
             check_provenance(&t.provenance).map_err(|e| format!("threat {id}: {e}"))?;
             m.check_threat_category(t.category)
                 .map_err(|e| format!("threat {id}: {e}"))?;
@@ -2466,7 +2506,8 @@ impl Project {
                 .topological_order()
                 .map_err(|e| format!("tree {id}: {e}"))?;
             for ((_, node_id, node), &level) in entry.tree.iter().zip(&entry.step_feasibility) {
-                check_name(node.label()).map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
+                check_name(EntityKind::TreeNode, node.label())
+                    .map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
                 match (node, level) {
                     (Node::Gate { .. }, Some(_)) => {
                         return Err(format!("tree {id} gate {node_id} has a feasibility rating"));
@@ -2579,14 +2620,18 @@ mod tests {
 
     #[test]
     fn check_name_rules() {
-        assert_eq!(check_name("a"), Ok(()));
-        assert_eq!(check_name(" a "), Ok(()));
-        assert_eq!(check_name(""), Err(ModelError::EmptyName));
-        assert_eq!(check_name(" \t\n"), Err(ModelError::EmptyName));
-        assert_eq!(check_name(&"é".repeat(256)), Ok(()));
+        let kind = EntityKind::Asset;
+        assert_eq!(check_name(kind, "a"), Ok(()));
+        assert_eq!(check_name(kind, " a "), Ok(()));
+        assert_eq!(check_name(kind, ""), Err(ModelError::EmptyName { kind }));
         assert_eq!(
-            check_name(&"é".repeat(257)),
-            Err(ModelError::NameTooLong { max: 256 })
+            check_name(kind, " \t\n"),
+            Err(ModelError::EmptyName { kind })
+        );
+        assert_eq!(check_name(kind, &"é".repeat(256)), Ok(()));
+        assert_eq!(
+            check_name(kind, &"é".repeat(257)),
+            Err(ModelError::NameTooLong { kind, max: 256 })
         );
     }
 
