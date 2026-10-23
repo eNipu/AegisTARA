@@ -9,7 +9,31 @@ mod common;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 
-use common::{Stats, builtin, replay, second, seeds};
+use common::{Stats, accepted, builtin, replay, second, seeds};
+
+fn check_lint_invariants(p: &aegis_model::Project) -> Result<(), TestCaseError> {
+    let findings = p.lint();
+    prop_assert!(
+        findings.windows(2).all(|w| w[0] <= w[1]),
+        "lint findings not sorted: {findings:?}"
+    );
+    let has_errors = findings.iter().any(|f| f.is_error());
+    if !has_errors {
+        for (_, id, _) in p.attack_trees() {
+            prop_assert!(p.evaluate_tree(id).is_ok());
+            prop_assert!(p.evaluate_residual_tree(id).is_ok());
+        }
+        for (_, id, t) in p.threat_scenarios() {
+            if t.attack_tree().is_some() {
+                prop_assert!(p.evaluate_threat(id).is_ok());
+                prop_assert!(p.evaluate_residual_threat(id).is_ok());
+            }
+            prop_assert!(p.evaluate_risk(id).is_ok());
+            prop_assert!(p.evaluate_residual_risk(id).is_ok());
+        }
+    }
+    Ok(())
+}
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
@@ -22,6 +46,20 @@ proptest! {
     #[test]
     fn ops_second_methodology(seeds in seeds()) {
         replay(&second(), &seeds, |_| Ok(()))?;
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn lint_soundness_first_methodology(seeds in seeds()) {
+        accepted(&builtin(), &seeds, |p, _, _| check_lint_invariants(p))?;
+    }
+
+    #[test]
+    fn lint_soundness_second_methodology(seeds in seeds()) {
+        accepted(&second(), &seeds, |p, _, _| check_lint_invariants(p))?;
     }
 }
 

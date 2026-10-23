@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, AttackTree, CatalogRef, DamageId, Derivation, EntityKind, GateKind,
-    MAX_STEP_MITIGATIONS, Methodology, ModelError, Node, NodeId, Op, Project, PropertySet,
-    Provenance, ProvenanceSource, RiskTreatment, ThreatId, TreeId,
+    AssetId, AttackTree, CatalogRef, DamageId, Derivation, EntityKind, GateKind, LintCode,
+    LintFinding, MAX_STEP_MITIGATIONS, Methodology, ModelError, Node, NodeId, Op, Project,
+    PropertySet, Provenance, ProvenanceSource, RiskTreatment, ThreatId, TreeId,
 };
 use common::{
     SENTINEL, asset_id, builtin, cat, control_id, cref, damage_id, feas, lvl, node_id, prop, props,
@@ -3443,4 +3443,591 @@ fn security_controls_risk_treatment_and_residual_risk() {
             provenance: Provenance::default(),
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// Job 020: completeness and consistency linting.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_all_rules_and_resolutions() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    assert!(p.lint().is_empty());
+
+    let a1 = asset_id(1);
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: a1,
+            name: name("Brake ECU"),
+            properties: props(&m, &["integrity", "availability"]),
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.lint(),
+        vec![LintFinding::new(LintCode::AssetWithoutThreats {
+            asset: a1
+        })]
+    );
+
+    let d1 = damage_id(10);
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d1,
+            name: name("Loss of braking"),
+            impacts: vec![],
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.lint(),
+        vec![
+            LintFinding::new(LintCode::AssetWithoutThreats { asset: a1 }),
+            LintFinding::new(LintCode::DamageScenarioWithoutImpacts { damage: d1 }),
+            LintFinding::new(LintCode::DamageScenarioUnlinked { damage: d1 }),
+        ]
+    );
+
+    // Tampering violates integrity only, leaving availability untested on a1.
+    let t1 = threat_id(20);
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t1,
+            name: name("Spoof brake command"),
+            asset: a1,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: Provenance::default(),
+        },
+    );
+    let availability = prop(&m, "availability");
+    assert_eq!(
+        p.lint(),
+        vec![
+            LintFinding::new(LintCode::AssetPropertyUntested {
+                asset: a1,
+                property: availability,
+            }),
+            LintFinding::new(LintCode::DamageScenarioWithoutImpacts { damage: d1 }),
+            LintFinding::new(LintCode::DamageScenarioUnlinked { damage: d1 }),
+            LintFinding::new(LintCode::ThreatWithoutDamages { threat: t1 }),
+            LintFinding::new(LintCode::ThreatWithoutFeasibility { threat: t1 }),
+            LintFinding::new(LintCode::ThreatWithoutTreatment { threat: t1 }),
+        ]
+    );
+
+    // Rate d1 and link it to t1.
+    let safety = cat(&m, "safety");
+    ok(
+        &mut p,
+        Op::SetImpact {
+            id: d1,
+            category: safety,
+            level: Some(lvl(&m, safety, "severe")),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::LinkDamage {
+            threat: t1,
+            damage: d1,
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.lint(),
+        vec![
+            LintFinding::new(LintCode::AssetPropertyUntested {
+                asset: a1,
+                property: availability,
+            }),
+            LintFinding::new(LintCode::ThreatWithoutFeasibility { threat: t1 }),
+            LintFinding::new(LintCode::ThreatWithoutTreatment { threat: t1 }),
+        ]
+    );
+
+    // Add an attack tree with an empty sub-gate and an unrated step.
+    let tr1 = tree_id(30);
+    let root = node_id(31);
+    let g_empty = node_id(32);
+    let s_unrated = node_id(33);
+    let s_rated = node_id(34);
+    let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Compromise brake")).expect("ok");
+    let root_idx = tree.root();
+    tree.add_child(root_idx, g_empty, Node::gate(GateKind::And, "Empty gate"))
+        .expect("ok");
+    tree.add_child(root_idx, s_unrated, Node::step("Unrated step"))
+        .expect("ok");
+    tree.add_child(root_idx, s_rated, Node::step("Rated step"))
+        .expect("ok");
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr1,
+            tree,
+            step_feasibility: vec![(s_rated, feas(&m, "high"))],
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.lint(),
+        vec![
+            LintFinding::new(LintCode::AssetPropertyUntested {
+                asset: a1,
+                property: availability,
+            }),
+            LintFinding::new(LintCode::ThreatWithoutFeasibility { threat: t1 }),
+            LintFinding::new(LintCode::ThreatWithoutTreatment { threat: t1 }),
+            LintFinding::new(LintCode::AttackTreeUnlinked { tree: tr1 }),
+            LintFinding::new(LintCode::AttackTreeGateEmpty {
+                tree: tr1,
+                node: g_empty,
+            }),
+            LintFinding::new(LintCode::AttackTreeStepUnrated {
+                tree: tr1,
+                node: s_unrated,
+            }),
+        ]
+    );
+
+    // Setting both direct feasibility and an attack tree triggers RedundantDirectFeasibility.
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t1,
+            level: Some(feas(&m, "medium")),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t1,
+            tree: Some(tr1),
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.lint(),
+        vec![
+            LintFinding::new(LintCode::AssetPropertyUntested {
+                asset: a1,
+                property: availability,
+            }),
+            LintFinding::new(LintCode::RedundantDirectFeasibility { threat: t1 }),
+            LintFinding::new(LintCode::ThreatWithoutTreatment { threat: t1 }),
+            LintFinding::new(LintCode::AttackTreeGateEmpty {
+                tree: tr1,
+                node: g_empty,
+            }),
+            LintFinding::new(LintCode::AttackTreeStepUnrated {
+                tree: tr1,
+                node: s_unrated,
+            }),
+        ]
+    );
+
+    // Clear the redundant direct feasibility, rate s_unrated, and populate g_empty.
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t1,
+            level: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree: tr1,
+            node: s_unrated,
+            level: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+    );
+    let mut fixed_tree =
+        AttackTree::new(root, Node::gate(GateKind::Or, "Compromise brake")).expect("ok");
+    let root_idx = fixed_tree.root();
+    let g_idx = fixed_tree
+        .add_child(root_idx, g_empty, Node::gate(GateKind::And, "Filled gate"))
+        .expect("ok");
+    fixed_tree
+        .add_child(g_idx, s_unrated, Node::step("Now rated step"))
+        .expect("ok");
+    fixed_tree
+        .add_child(root_idx, s_rated, Node::step("Rated step"))
+        .expect("ok");
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t1,
+            tree: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, Op::RemoveAttackTree { id: tr1 });
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr1,
+            tree: fixed_tree,
+            step_feasibility: vec![(s_unrated, feas(&m, "low")), (s_rated, feas(&m, "high"))],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t1,
+            tree: Some(tr1),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Set Reduce treatment on t1 without any step mitigations.
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t1,
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: Provenance::default(),
+        },
+    );
+    let c1 = control_id(40);
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c1,
+            name: name("Message authentication"),
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.lint(),
+        vec![
+            LintFinding::new(LintCode::AssetPropertyUntested {
+                asset: a1,
+                property: availability,
+            }),
+            LintFinding::new(LintCode::ReduceTreatmentWithoutControls { threat: t1 }),
+            LintFinding::new(LintCode::SecurityControlUnused { control: c1 }),
+        ]
+    );
+
+    // Attach c1 to s_rated: resolves both ReduceTreatmentWithoutControls and SecurityControlUnused.
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr1,
+            node: s_rated,
+            control: c1,
+            feasibility: Some(feas(&m, "very-low")),
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.lint(),
+        vec![LintFinding::new(LintCode::AssetPropertyUntested {
+            asset: a1,
+            property: availability,
+        })]
+    );
+
+    // Add a second threat covering availability on a1; initially with Reduce and direct feasibility.
+    let t2 = threat_id(21);
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t2,
+            name: name("Flood CAN bus"),
+            asset: a1,
+            category: threat_cat(&m, "denial-of-service"),
+            catalog_refs: vec![],
+            damages: vec![d1],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t2,
+            level: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t2,
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: Provenance::default(),
+        },
+    );
+    // Reduce on a direct-feasibility threat (no tree) also triggers ReduceTreatmentWithoutControls.
+    assert_eq!(
+        p.lint(),
+        vec![LintFinding::new(LintCode::ReduceTreatmentWithoutControls {
+            threat: t2
+        })]
+    );
+
+    // Switching t2 to Retain clears the last finding.
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t2,
+            treatment: Some(RiskTreatment::Retain),
+            provenance: Provenance::default(),
+        },
+    );
+    assert!(p.lint().is_empty());
+}
+
+#[test]
+fn lint_never_contains_names_or_actors() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let prov = Provenance::new(SENTINEL, 1_700_000_000_000, ProvenanceSource::Ai);
+
+    let a_unused = asset_id(1);
+    let a_partial = asset_id(2);
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: a_unused,
+            name: name(SENTINEL),
+            properties: props(&m, &["integrity"]),
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: a_partial,
+            name: name(SENTINEL),
+            properties: props(&m, &["integrity", "availability"]),
+            provenance: prov.clone(),
+        },
+    );
+
+    let d_unlinked = damage_id(10);
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d_unlinked,
+            name: name(SENTINEL),
+            impacts: vec![],
+            provenance: prov.clone(),
+        },
+    );
+
+    let tr_unlinked = tree_id(20);
+    let tr_linked = tree_id(21);
+    let mut tree1 =
+        AttackTree::new(node_id(22), Node::gate(GateKind::Or, SENTINEL)).expect("tree1");
+    let r1 = tree1.root();
+    tree1
+        .add_child(r1, node_id(23), Node::step(SENTINEL))
+        .expect("step");
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr_unlinked,
+            tree: tree1,
+            step_feasibility: vec![],
+            provenance: prov.clone(),
+        },
+    );
+
+    let tree2 = AttackTree::new(node_id(24), Node::gate(GateKind::And, SENTINEL)).expect("tree2");
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr_linked,
+            tree: tree2,
+            step_feasibility: vec![],
+            provenance: prov.clone(),
+        },
+    );
+
+    let t_bare = threat_id(30);
+    let t_redundant = threat_id(31);
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_bare,
+            name: name(SENTINEL),
+            asset: a_partial,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_redundant,
+            name: name(SENTINEL),
+            asset: a_partial,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t_redundant,
+            level: Some(feas(&m, "high")),
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_redundant,
+            tree: Some(tr_linked),
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t_redundant,
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: prov.clone(),
+        },
+    );
+
+    let c_unused = control_id(40);
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c_unused,
+            name: name(SENTINEL),
+            provenance: prov,
+        },
+    );
+
+    let findings = p.lint();
+    let kinds: BTreeSet<String> = findings.iter().map(|f| variant(&f.code())).collect();
+    assert_eq!(kinds.len(), 13, "expected all 13 lint variants: {kinds:?}");
+    for finding in &findings {
+        for rendered in [
+            finding.to_string(),
+            format!("{finding:?}"),
+            finding.code().to_string(),
+            format!("{:?}", finding.code()),
+            finding.severity().to_string(),
+        ] {
+            assert!(
+                !rendered.contains(SENTINEL),
+                "sentinel leaked in lint output: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn lint_order_is_independent_of_history() {
+    let m = builtin();
+    let mut p1 = Project::new(Arc::clone(&m));
+    let mut p2 = Project::new(Arc::clone(&m));
+
+    let a1 = asset_id(1);
+    let a2 = asset_id(2);
+    let d1 = damage_id(10);
+    let d2 = damage_id(11);
+    let c1 = control_id(20);
+    let c2 = control_id(21);
+
+    // Build p1 in ascending order.
+    for a in [a1, a2] {
+        ok(
+            &mut p1,
+            Op::AddAsset {
+                id: a,
+                name: name("Asset"),
+                properties: props(&m, &["integrity"]),
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    for d in [d1, d2] {
+        ok(
+            &mut p1,
+            Op::AddDamageScenario {
+                id: d,
+                name: name("Damage"),
+                impacts: vec![],
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    for c in [c1, c2] {
+        ok(
+            &mut p1,
+            Op::AddSecurityControl {
+                id: c,
+                name: name("Control"),
+                provenance: Provenance::default(),
+            },
+        );
+    }
+
+    // Build p2 in descending order with extra churn.
+    let a_temp = asset_id(99);
+    ok(
+        &mut p2,
+        Op::AddAsset {
+            id: a_temp,
+            name: name("Temp"),
+            properties: props(&m, &["integrity"]),
+            provenance: Provenance::default(),
+        },
+    );
+    for c in [c2, c1] {
+        ok(
+            &mut p2,
+            Op::AddSecurityControl {
+                id: c,
+                name: name("Control"),
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    for d in [d2, d1] {
+        ok(
+            &mut p2,
+            Op::AddDamageScenario {
+                id: d,
+                name: name("Damage"),
+                impacts: vec![],
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    for a in [a2, a1] {
+        ok(
+            &mut p2,
+            Op::AddAsset {
+                id: a,
+                name: name("Asset"),
+                properties: props(&m, &["integrity"]),
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    ok(&mut p2, Op::RemoveAsset { id: a_temp });
+
+    assert_eq!(p1, p2);
+    assert_eq!(p1.lint(), p2.lint());
 }
