@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::asset::{Asset, PropertySet};
 use crate::control::{MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl, StepMitigation};
 use crate::damage::DamageScenario;
+use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, evaluate};
 use crate::id::{
@@ -2191,6 +2192,306 @@ impl Project {
         }
     }
 
+    // -- Diff and impact analysis (rule A7) ---------------------------------------------
+
+    /// Computes a deterministic structural diff and change impact report
+    /// between `self` (the baseline project) and `other` (the current
+    /// project) (rule A7).
+    ///
+    /// Reports added, removed, and modified entity IDs in canonical ascending
+    /// order for every entity kind, together with [`ThreatRiskDelta`] entries
+    /// for all threat scenarios affected by any change (including threats
+    /// whose linked asset, damage scenario, attack tree, or security control
+    /// changed).
+    ///
+    /// Time O(N + L + `T_aff` * (V * m + E + d * c)) where `N` is the total
+    /// number of entities across both projects, `L` is the number of links and
+    /// catalog refs, and `T_aff` is the number of affected threat scenarios.
+    /// Space O(D) where `D` is the number of changed entities and affected
+    /// threats.
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::MethodologyMismatch`] if `self` and `other` do not use
+    /// equal methodologies.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, ControlId, DamageId, Methodology, Op, Project, Provenance, RiskChange,
+    /// #     ThreatId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut base = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// base.apply(Op::AddAsset {
+    ///     id: asset, name: "Gateway".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let safety = m.impact_category("safety").ok_or("no cat")?;
+    /// let moderate = m.level(safety, "moderate").ok_or("no level")?;
+    /// let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// let high = m.feasibility_level("high").ok_or("no level")?;
+    /// let damage = DamageId::new_v7();
+    /// base.apply(Op::AddDamageScenario {
+    ///     id: damage, name: "Loss of braking".into(), impacts: vec![(safety, moderate)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let cat = m.threat_categories().next().ok_or("no cat")?;
+    /// let threat = ThreatId::new_v7();
+    /// base.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Inject frame".into(), asset, category: cat,
+    ///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
+    /// })?;
+    /// base.apply(Op::SetThreatFeasibility {
+    ///     threat, level: Some(high), provenance: Provenance::default(),
+    /// })?;
+    ///
+    /// // Raise damage impact in `curr` without touching the threat scenario directly.
+    /// let mut curr = base.clone();
+    /// curr.apply(Op::SetImpact {
+    ///     id: damage, category: safety, level: Some(severe), provenance: Provenance::default(),
+    /// })?;
+    ///
+    /// let diff = base.diff(&curr)?;
+    /// assert_eq!(diff.damage_scenarios().modified(), &[damage]);
+    /// assert!(diff.threat_scenarios().is_empty());
+    /// assert_eq!(diff.risk_deltas().len(), 1);
+    /// assert_eq!(diff.risk_deltas()[0].threat(), threat);
+    /// assert_eq!(diff.risk_deltas()[0].inherent().change(), RiskChange::Increased);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn diff(&self, other: &Self) -> Result<ProjectDiff, ModelError> {
+        let same_methodology = Arc::ptr_eq(&self.methodology, &other.methodology)
+            || *self.methodology == *other.methodology;
+        if !same_methodology {
+            return Err(ModelError::MethodologyMismatch {
+                expected: self.methodology.key().into(),
+                expected_version: self.methodology.version().into(),
+                found: other.methodology.key().into(),
+                found_version: other.methodology.version().into(),
+            });
+        }
+        let assets = diff_arena(&self.assets, &other.assets, |x, y| x == y);
+        let damage_scenarios = diff_arena(&self.damages, &other.damages, |x, y| x == y);
+        let security_controls = diff_arena(&self.controls, &other.controls, |x, y| x == y);
+        let attack_trees = diff_arena(&self.trees, &other.trees, |x, y| {
+            self.same_tree(x, other, y)
+        });
+        let threat_scenarios = diff_arena(&self.threats, &other.threats, |x, y| {
+            self.same_threat(x, other, y)
+        });
+        let risk_deltas = self.diff_risk_deltas(
+            other,
+            &assets,
+            &damage_scenarios,
+            &threat_scenarios,
+            &attack_trees,
+            &security_controls,
+        );
+        Ok(ProjectDiff {
+            assets,
+            damage_scenarios,
+            threat_scenarios,
+            attack_trees,
+            security_controls,
+            risk_deltas,
+        })
+    }
+
+    fn diff_risk_deltas(
+        &self,
+        other: &Self,
+        assets: &EntityDiff<AssetId>,
+        damages: &EntityDiff<DamageId>,
+        threats: &EntityDiff<ThreatId>,
+        trees: &EntityDiff<TreeId>,
+        controls: &EntityDiff<ControlId>,
+    ) -> Box<[ThreatRiskDelta]> {
+        let mut deltas = Vec::new();
+        let mut base_iter = self.threats.iter().peekable();
+        let mut curr_iter = other.threats.iter().peekable();
+        loop {
+            match (base_iter.peek().copied(), curr_iter.peek().copied()) {
+                (Some((_, id_a, _)), Some((_, id_b, _))) => match id_a.cmp(&id_b) {
+                    std::cmp::Ordering::Less => {
+                        base_iter.next();
+                        let (inh, res) = self.threat_risk_snapshots(id_a);
+                        deltas.push(ThreatRiskDelta::new(
+                            id_a,
+                            RiskDelta::new(inh, None),
+                            RiskDelta::new(res, None),
+                        ));
+                    }
+                    std::cmp::Ordering::Greater => {
+                        curr_iter.next();
+                        let (inh, res) = other.threat_risk_snapshots(id_b);
+                        deltas.push(ThreatRiskDelta::new(
+                            id_b,
+                            RiskDelta::new(None, inh),
+                            RiskDelta::new(None, res),
+                        ));
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let Some((_, _, t_a)) = base_iter.next() else {
+                            break;
+                        };
+                        curr_iter.next();
+                        if self.is_threat_affected(
+                            id_a, t_a, assets, damages, threats, trees, controls,
+                        ) {
+                            let (inh_a, res_a) = self.threat_risk_snapshots(id_a);
+                            let (inh_b, res_b) = other.threat_risk_snapshots(id_a);
+                            deltas.push(ThreatRiskDelta::new(
+                                id_a,
+                                RiskDelta::new(inh_a, inh_b),
+                                RiskDelta::new(res_a, res_b),
+                            ));
+                        }
+                    }
+                },
+                (Some((_, id_a, _)), None) => {
+                    base_iter.next();
+                    let (inh, res) = self.threat_risk_snapshots(id_a);
+                    deltas.push(ThreatRiskDelta::new(
+                        id_a,
+                        RiskDelta::new(inh, None),
+                        RiskDelta::new(res, None),
+                    ));
+                }
+                (None, Some((_, id_b, _))) => {
+                    curr_iter.next();
+                    let (inh, res) = other.threat_risk_snapshots(id_b);
+                    deltas.push(ThreatRiskDelta::new(
+                        id_b,
+                        RiskDelta::new(None, inh),
+                        RiskDelta::new(None, res),
+                    ));
+                }
+                (None, None) => break,
+            }
+        }
+        deltas.into_boxed_slice()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn is_threat_affected(
+        &self,
+        id: ThreatId,
+        t: &ThreatScenario,
+        assets: &EntityDiff<AssetId>,
+        damages: &EntityDiff<DamageId>,
+        threats: &EntityDiff<ThreatId>,
+        trees: &EntityDiff<TreeId>,
+        controls: &EntityDiff<ControlId>,
+    ) -> bool {
+        if threats.modified().binary_search(&id).is_ok() {
+            return true;
+        }
+        if self
+            .assets
+            .id(t.asset)
+            .is_some_and(|a| assets.modified().binary_search(&a).is_ok())
+        {
+            return true;
+        }
+        if t.damages
+            .iter()
+            .filter_map(|&d| self.damages.id(d))
+            .any(|d| damages.modified().binary_search(&d).is_ok())
+        {
+            return true;
+        }
+        if let Some(tree_idx) = t.attack_tree {
+            if self
+                .trees
+                .id(tree_idx)
+                .is_some_and(|tr| trees.modified().binary_search(&tr).is_ok())
+            {
+                return true;
+            }
+            if !controls.modified().is_empty()
+                && let Some(entry) = self.trees.get(tree_idx)
+                && entry
+                    .step_mitigations
+                    .iter()
+                    .flat_map(|ms| ms.iter())
+                    .filter_map(|m| self.controls.id(m.control))
+                    .any(|c| controls.modified().binary_search(&c).is_ok())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn threat_risk_snapshots(&self, id: ThreatId) -> (Option<RiskSnapshot>, Option<RiskSnapshot>) {
+        let inh = self
+            .evaluate_risk(id)
+            .ok()
+            .map(|r| RiskSnapshot::new(r.feasibility(), r.max_risk()));
+        let res = self
+            .evaluate_residual_risk(id)
+            .ok()
+            .map(|r| RiskSnapshot::new(r.feasibility(), r.max_risk()));
+        (inh, res)
+    }
+}
+
+fn diff_arena<Id: Copy + Ord, Idx: ArenaIndex, T>(
+    base: &Arena<Id, Idx, T>,
+    curr: &Arena<Id, Idx, T>,
+    mut eq: impl FnMut(&T, &T) -> bool,
+) -> EntityDiff<Id> {
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut modified = Vec::new();
+    let mut base_iter = base.iter().peekable();
+    let mut curr_iter = curr.iter().peekable();
+    loop {
+        match (base_iter.peek().copied(), curr_iter.peek().copied()) {
+            (Some((_, id_a, _)), Some((_, id_b, _))) => match id_a.cmp(&id_b) {
+                std::cmp::Ordering::Less => {
+                    base_iter.next();
+                    removed.push(id_a);
+                }
+                std::cmp::Ordering::Greater => {
+                    curr_iter.next();
+                    added.push(id_b);
+                }
+                std::cmp::Ordering::Equal => {
+                    let Some((_, _, v_a)) = base_iter.next() else {
+                        break;
+                    };
+                    let Some((_, _, v_b)) = curr_iter.next() else {
+                        break;
+                    };
+                    if !eq(v_a, v_b) {
+                        modified.push(id_a);
+                    }
+                }
+            },
+            (Some((_, id_a, _)), None) => {
+                base_iter.next();
+                removed.push(id_a);
+            }
+            (None, Some((_, id_b, _))) => {
+                curr_iter.next();
+                added.push(id_b);
+            }
+            (None, None) => break,
+        }
+    }
+    EntityDiff {
+        added: added.into_boxed_slice(),
+        removed: removed.into_boxed_slice(),
+        modified: modified.into_boxed_slice(),
+    }
+}
+
+impl Project {
     // -- Ops ---------------------------------------------------------------------------
 
     /// Checks `op` against the methodology and the referential rules

@@ -4197,3 +4197,288 @@ fn top_k_inherent_and_residual_paths_on_project() {
         Err(ModelError::NoAttackTree(t_no_tree))
     );
 }
+
+#[test]
+fn project_diff_tracks_structural_changes_and_risk_deltas() {
+    let m = builtin();
+    let other_m = second();
+    let p_other_m = Project::new(Arc::clone(&other_m));
+    let mut base = Project::new(Arc::clone(&m));
+
+    // MethodologyMismatch is reported when comparing different methodologies.
+    assert_eq!(
+        base.diff(&p_other_m),
+        Err(ModelError::MethodologyMismatch {
+            expected: m.key().into(),
+            expected_version: m.version().into(),
+            found: other_m.key().into(),
+            found_version: other_m.version().into(),
+        })
+    );
+
+    let sentinel = "DIFF_SECRET_SENTINEL_NAME";
+    let a1 = asset_id(1);
+    let a2 = asset_id(2);
+    let d1 = damage_id(1);
+    let t1 = threat_id(1);
+    let t2 = threat_id(2);
+    let tr1 = tree_id(1);
+    let ctrl1 = control_id(1);
+
+    let safety = cat(&m, "safety");
+    let moderate = lvl(&m, safety, "moderate");
+    let severe = lvl(&m, safety, "severe");
+    let low = feas(&m, "low");
+    let high = feas(&m, "high");
+    let very_low = feas(&m, "very-low");
+    let r2 = risk(&m, "r2");
+    let r3 = risk(&m, "r3");
+    let r5 = risk(&m, "r5");
+    let spoof = threat_cat(&m, "spoofing");
+
+    ok(
+        &mut base,
+        Op::AddAsset {
+            id: a1,
+            name: sentinel.into(),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut base,
+        Op::AddAsset {
+            id: a2,
+            name: name("Removed asset"),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut base,
+        Op::AddDamageScenario {
+            id: d1,
+            name: sentinel.into(),
+            impacts: vec![(safety, moderate)],
+            provenance: Provenance::default(),
+        },
+    );
+
+    let n_root = node_id(1);
+    let n_step = node_id(2);
+    let mut tree = AttackTree::new(n_root, Node::gate(GateKind::Or, sentinel)).expect("root");
+    tree.add_child(tree.root(), n_step, Node::step(sentinel))
+        .expect("step");
+    ok(
+        &mut base,
+        Op::AddAttackTree {
+            id: tr1,
+            tree,
+            step_feasibility: vec![(n_step, high)],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut base,
+        Op::AddSecurityControl {
+            id: ctrl1,
+            name: sentinel.into(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut base,
+        Op::AddThreatScenario {
+            id: t1,
+            name: sentinel.into(),
+            asset: a1,
+            category: spoof,
+            catalog_refs: vec![],
+            damages: vec![d1],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut base,
+        Op::SetThreatAttackTree {
+            threat: t1,
+            tree: Some(tr1),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut base,
+        Op::AddThreatScenario {
+            id: t2,
+            name: sentinel.into(),
+            asset: a2,
+            category: spoof,
+            catalog_refs: vec![],
+            damages: vec![d1],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut base,
+        Op::SetThreatFeasibility {
+            threat: t2,
+            level: Some(low),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Reflexive diff is empty.
+    let self_diff = base.diff(&base).expect("self diff");
+    assert!(self_diff.is_empty());
+    assert!(self_diff.risk_deltas().is_empty());
+
+    // Build `curr` by:
+    // - removing `t2` and `a2`
+    // - adding `a3` and `t3` (newly evaluated)
+    // - raising `d1` impact from moderate to severe (indirectly raises `t1` inherent risk r4 -> r5)
+    // - attaching `ctrl1` mitigation on `tr1` step to very-low (lowers `t1` residual risk r4 -> r2)
+    // - renaming `ctrl1`
+    let mut curr = base.clone();
+    ok(
+        &mut curr,
+        Op::SetThreatFeasibility {
+            threat: t2,
+            level: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut curr,
+        Op::UnlinkDamage {
+            threat: t2,
+            damage: d1,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut curr, Op::RemoveThreatScenario { id: t2 });
+    ok(&mut curr, Op::RemoveAsset { id: a2 });
+    let a3 = asset_id(3);
+    let t3 = threat_id(3);
+    ok(
+        &mut curr,
+        Op::AddAsset {
+            id: a3,
+            name: sentinel.into(),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut curr,
+        Op::AddThreatScenario {
+            id: t3,
+            name: sentinel.into(),
+            asset: a3,
+            category: spoof,
+            catalog_refs: vec![],
+            damages: vec![d1],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut curr,
+        Op::SetThreatFeasibility {
+            threat: t3,
+            level: Some(high),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut curr,
+        Op::SetImpact {
+            id: d1,
+            category: safety,
+            level: Some(severe),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut curr,
+        Op::SetStepMitigation {
+            tree: tr1,
+            node: n_step,
+            control: ctrl1,
+            feasibility: Some(very_low),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut curr,
+        Op::RenameSecurityControl {
+            id: ctrl1,
+            name: name("Updated control"),
+            provenance: Provenance::default(),
+        },
+    );
+
+    let diff = base.diff(&curr).expect("diff");
+    assert!(!diff.is_empty());
+    assert_eq!(diff.assets().added(), &[a3]);
+    assert_eq!(diff.assets().removed(), &[a2]);
+    assert!(diff.assets().modified().is_empty());
+    assert_eq!(diff.damage_scenarios().modified(), &[d1]);
+    assert_eq!(diff.attack_trees().modified(), &[tr1]);
+    assert_eq!(diff.security_controls().modified(), &[ctrl1]);
+    assert_eq!(diff.threat_scenarios().added(), &[t3]);
+    assert_eq!(diff.threat_scenarios().removed(), &[t2]);
+    assert!(diff.threat_scenarios().modified().is_empty());
+
+    // Even though `t1` was not directly modified, its linked damage `d1` and tree `tr1` changed!
+    let deltas = diff.risk_deltas();
+    assert_eq!(deltas.len(), 3);
+    assert_eq!(deltas[0].threat(), t1);
+    assert_eq!(
+        deltas[0].inherent().before(),
+        Some(aegis_model::RiskSnapshot::new(high, Some(r3)))
+    );
+    assert_eq!(
+        deltas[0].inherent().after(),
+        Some(aegis_model::RiskSnapshot::new(high, Some(r5)))
+    );
+    assert_eq!(
+        deltas[0].inherent().change(),
+        aegis_model::RiskChange::Increased
+    );
+    assert_eq!(
+        deltas[0].residual().before(),
+        Some(aegis_model::RiskSnapshot::new(high, Some(r3)))
+    );
+    assert_eq!(
+        deltas[0].residual().after(),
+        Some(aegis_model::RiskSnapshot::new(very_low, Some(r2)))
+    );
+    assert_eq!(
+        deltas[0].residual().change(),
+        aegis_model::RiskChange::Decreased
+    );
+
+    assert_eq!(deltas[1].threat(), t2);
+    assert_eq!(
+        deltas[1].inherent().change(),
+        aegis_model::RiskChange::NoLongerEvaluated
+    );
+    assert_eq!(deltas[1].inherent().after(), None);
+
+    assert_eq!(deltas[2].threat(), t3);
+    assert_eq!(
+        deltas[2].inherent().change(),
+        aegis_model::RiskChange::NewlyEvaluated
+    );
+    assert_eq!(
+        deltas[2].inherent().after(),
+        Some(aegis_model::RiskSnapshot::new(high, Some(r5)))
+    );
+    assert_eq!(diff.changed_risks().count(), 3);
+
+    // Rule R6: Debug output of `ProjectDiff` must never leak entity names.
+    let debug_text = format!("{diff:?}");
+    assert!(
+        !debug_text.contains(sentinel),
+        "diff leaked sentinel: {debug_text}"
+    );
+}

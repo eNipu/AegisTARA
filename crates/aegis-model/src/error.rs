@@ -592,6 +592,36 @@ pub enum ModelError {
         /// Which entity kind hit its slot limit.
         kind: EntityKind,
     },
+    /// Two projects cannot be compared by [`Project::diff`](crate::Project::diff)
+    /// because they use different methodologies.
+    ///
+    /// ```
+    /// use aegis_model::ModelError;
+    ///
+    /// let err = ModelError::MethodologyMismatch {
+    ///     expected: "m1".into(),
+    ///     expected_version: "1".into(),
+    ///     found: "m2".into(),
+    ///     found_version: "1".into(),
+    /// };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "projects use different methodologies: expected m1 v1, found m2 v1"
+    /// );
+    /// ```
+    #[error(
+        "projects use different methodologies: expected {expected} v{expected_version}, found {found} v{found_version}"
+    )]
+    MethodologyMismatch {
+        /// Baseline methodology key.
+        expected: Arc<str>,
+        /// Baseline methodology version.
+        expected_version: Arc<str>,
+        /// Target methodology key.
+        found: Arc<str>,
+        /// Target methodology version.
+        found_version: Arc<str>,
+    },
 }
 
 /// Errors from [`Methodology::new`](crate::Methodology::new): one variant
