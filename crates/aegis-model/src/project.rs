@@ -18,6 +18,7 @@ use crate::methodology::{
     CatalogRef, FeasibilityLevel, ImpactCategory, Level, Methodology, Property, ThreatCategory,
 };
 use crate::op::Op;
+use crate::paths::AttackPath;
 use crate::provenance::Provenance;
 use crate::threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
 use crate::tree::{AttackTree, MAX_ATTACK_TREE_NODES, Node};
@@ -1664,6 +1665,248 @@ impl Project {
             (level, None)
         };
         Ok(self.risk_from_feasibility(t, feasibility, tree_evaluation))
+    }
+
+    /// Evaluates attack tree `id` using inherent step feasibility ratings and
+    /// returns up to `k` of the easiest minimal attack paths in descending
+    /// order of feasibility (rule A4).
+    ///
+    /// Time O((V + E) + k * V * (V + E) * log(k * d)) on trees where `d` is
+    /// the maximum gate arity; space O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_tree`](Self::evaluate_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = TreeId::new_v7();
+    /// let (root, s1, s2) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Goal"))?;
+    /// let i1 = tree.add_child(tree.root(), s1, Node::step("Hard"))?;
+    /// let i2 = tree.add_child(tree.root(), s2, Node::step("Easy"))?;
+    /// let low = m.feasibility_level("low").ok_or("no level")?;
+    /// let high = m.feasibility_level("high").ok_or("no level")?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id,
+    ///     tree,
+    ///     step_feasibility: vec![(s1, low), (s2, high)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let paths = project.top_k_tree_paths(id, 2)?;
+    /// assert_eq!(paths.len(), 2);
+    /// assert_eq!(paths[0].steps(), &[i2]);
+    /// assert_eq!(paths[1].steps(), &[i1]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn top_k_tree_paths(
+        &self,
+        id: TreeId,
+        k: usize,
+    ) -> Result<Vec<AttackPath<FeasibilityLevel>>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let eval = self.evaluate_tree(id)?;
+        Ok(eval.top_k_paths(&entry.tree, k).unwrap_or_default())
+    }
+
+    /// Evaluates attack tree `id` using residual step feasibility ratings
+    /// ([`residual_step_feasibility`](Self::residual_step_feasibility)) and
+    /// returns up to `k` of the easiest minimal attack paths in descending
+    /// order of residual feasibility (rule A4).
+    ///
+    /// Time O((V * m + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_tree`](Self::evaluate_residual_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ControlId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (very_low, med, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no level")?,
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, obd, ota) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Compromise"))?;
+    /// let i_obd = tree.add_child(tree.root(), obd, Node::step("OBD"))?;
+    /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id,
+    ///     tree,
+    ///     step_feasibility: vec![(obd, high), (ota, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "Disable OBD".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: obd, control: ctrl, feasibility: Some(very_low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.top_k_tree_paths(tree_id, 1)?[0].steps(), &[i_obd]);
+    /// assert_eq!(project.top_k_residual_tree_paths(tree_id, 1)?[0].steps(), &[i_ota]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn top_k_residual_tree_paths(
+        &self,
+        id: TreeId,
+        k: usize,
+    ) -> Result<Vec<AttackPath<FeasibilityLevel>>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let eval = self.evaluate_residual_tree(id)?;
+        Ok(eval.top_k_paths(&entry.tree, k).unwrap_or_default())
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using inherent
+    /// step feasibility ratings and returns up to `k` of the easiest minimal
+    /// attack paths in descending order of feasibility (rule A4).
+    ///
+    /// Time O(log n + (V + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_threat`](Self::evaluate_threat).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let med = m.feasibility_level("medium").ok_or("no level")?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Step"))?,
+    ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let paths = project.top_k_threat_paths(threat, 5)?;
+    /// assert_eq!(paths.len(), 1);
+    /// assert_eq!(*paths[0].feasibility(), med);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn top_k_threat_paths(
+        &self,
+        id: ThreatId,
+        k: usize,
+    ) -> Result<Vec<AttackPath<FeasibilityLevel>>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.top_k_tree_paths(tree_id, k)
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using residual
+    /// step feasibility ratings and returns up to `k` of the easiest minimal
+    /// attack paths in descending order of residual feasibility (rule A4).
+    ///
+    /// Time O(log n + (V * m + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_threat`](Self::evaluate_residual_threat).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, ControlId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let (low, high) = (
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay"))?,
+    ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "SecOC".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let paths = project.top_k_residual_threat_paths(threat, 5)?;
+    /// assert_eq!(paths.len(), 1);
+    /// assert_eq!(*paths[0].feasibility(), low);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn top_k_residual_threat_paths(
+        &self,
+        id: ThreatId,
+        k: usize,
+    ) -> Result<Vec<AttackPath<FeasibilityLevel>>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.top_k_residual_tree_paths(tree_id, k)
     }
 
     /// Combines `feasibility` with every rated `(damage, category, impact)`

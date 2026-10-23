@@ -4031,3 +4031,169 @@ fn lint_order_is_independent_of_history() {
     assert_eq!(p1, p2);
     assert_eq!(p1.lint(), p2.lint());
 }
+
+// ---------------------------------------------------------------------------
+// Job 021: top-k inherent and residual attack paths on Project.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn top_k_inherent_and_residual_paths_on_project() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let very_low = feas(&m, "very-low");
+    let low = feas(&m, "low");
+    let med = feas(&m, "medium");
+    let high = feas(&m, "high");
+
+    let a1 = asset_id(1);
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: a1,
+            name: name("Telematics unit"),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+    );
+    let t1 = threat_id(10);
+    let t_no_tree = threat_id(11);
+    let cat = threat_cat(&m, "tampering");
+    for id in [t1, t_no_tree] {
+        ok(
+            &mut p,
+            Op::AddThreatScenario {
+                id,
+                name: name("Inject command"),
+                asset: a1,
+                category: cat,
+                catalog_refs: vec![],
+                damages: vec![],
+                provenance: Provenance::default(),
+            },
+        );
+    }
+
+    // Build tree: OR(AND(s_prep, s_obd), s_ota, s_phys)
+    let (n_root, n_and, n_prep, n_obd, n_ota, n_phys) = (
+        node_id(1),
+        node_id(2),
+        node_id(3),
+        node_id(4),
+        node_id(5),
+        node_id(6),
+    );
+    let mut tree = AttackTree::new(n_root, Node::gate(GateKind::Or, "Goal")).expect("root");
+    let g_and = tree
+        .add_child(tree.root(), n_and, Node::gate(GateKind::And, "OBD chain"))
+        .expect("and");
+    let i_prep = tree
+        .add_child(g_and, n_prep, Node::step("Prep"))
+        .expect("prep");
+    let i_obd = tree
+        .add_child(g_and, n_obd, Node::step("OBD"))
+        .expect("obd");
+    let i_ota = tree
+        .add_child(tree.root(), n_ota, Node::step("OTA"))
+        .expect("ota");
+    let i_phys = tree
+        .add_child(tree.root(), n_phys, Node::step("Physical"))
+        .expect("phys");
+
+    let tr = tree_id(20);
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr,
+            tree,
+            step_feasibility: vec![(n_prep, high), (n_obd, high), (n_ota, med), (n_phys, low)],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t1,
+            tree: Some(tr),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Inherent top-3 paths: [prep, obd] (high), [ota] (medium), [phys] (low).
+    let inherent = p.top_k_threat_paths(t1, 3).expect("inherent paths");
+    assert_eq!(inherent.len(), 3);
+    assert_eq!(inherent[0].steps(), &[i_prep, i_obd]);
+    assert_eq!(*inherent[0].feasibility(), high);
+    assert_eq!(inherent[0].bottleneck(), i_prep);
+    assert_eq!(inherent[1].steps(), &[i_ota]);
+    assert_eq!(*inherent[1].feasibility(), med);
+    assert_eq!(inherent[2].steps(), &[i_phys]);
+    assert_eq!(*inherent[2].feasibility(), low);
+    assert_eq!(p.top_k_tree_paths(tr, 3).expect("tree paths"), inherent);
+
+    // Mitigate `n_obd` to `very-low`: now [ota] (medium) becomes #1, [phys] (low) #2,
+    // and [prep, obd] (very-low, bottleneck = i_obd) drops to #3.
+    let ctrl = control_id(30);
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: name("Lock OBD"),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: n_obd,
+            control: ctrl,
+            feasibility: Some(very_low),
+            provenance: Provenance::default(),
+        },
+    );
+
+    let residual = p
+        .top_k_residual_threat_paths(t1, 3)
+        .expect("residual paths");
+    assert_eq!(residual.len(), 3);
+    assert_eq!(residual[0].steps(), &[i_ota]);
+    assert_eq!(*residual[0].feasibility(), med);
+    assert_eq!(residual[1].steps(), &[i_phys]);
+    assert_eq!(*residual[1].feasibility(), low);
+    assert_eq!(residual[2].steps(), &[i_prep, i_obd]);
+    assert_eq!(*residual[2].feasibility(), very_low);
+    assert_eq!(residual[2].bottleneck(), i_obd);
+    assert_eq!(
+        p.top_k_residual_tree_paths(tr, 3)
+            .expect("residual tree paths"),
+        residual
+    );
+
+    // Error paths.
+    let missing_tree = tree_id(99);
+    let missing_threat = threat_id(99);
+    assert_eq!(
+        p.top_k_tree_paths(missing_tree, 1),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.top_k_residual_tree_paths(missing_tree, 1),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.top_k_threat_paths(missing_threat, 1),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+    assert_eq!(
+        p.top_k_residual_threat_paths(missing_threat, 1),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+    assert_eq!(
+        p.top_k_threat_paths(t_no_tree, 1),
+        Err(ModelError::NoAttackTree(t_no_tree))
+    );
+    assert_eq!(
+        p.top_k_residual_threat_paths(t_no_tree, 1),
+        Err(ModelError::NoAttackTree(t_no_tree))
+    );
+}

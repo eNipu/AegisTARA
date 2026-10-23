@@ -521,6 +521,95 @@ impl<V> Evaluation<V> {
         let start = self.derivation(idx).map(|_| idx);
         std::iter::successors(start, move |&cur| self.derivation(cur)?.decisive()).take(self.len())
     }
+
+    /// Returns a lazy iterator over the minimal leaf-step attack paths of
+    /// `tree` in descending order of feasibility (easiest for the attacker
+    /// first), guided by the node values in `self` (rule A4).
+    ///
+    /// At each [`GateKind::Or`] gate a path chooses one child branch; at each
+    /// [`GateKind::And`] or [`GateKind::SeqAnd`] gate it includes all child
+    /// branches. Returns `None` if `tree` visibly does not match `self` (a
+    /// different node count, a step recorded as a gate, a gate recorded as a
+    /// leaf, or a gate kind different from the recorded rule).
+    ///
+    /// Lazy: building the iterator costs O(V + E) time and O(V) space; each
+    /// [`Iterator::next`] call expands only the highest-bound partial paths
+    /// without materializing all $2^{\Omega(d)}$ paths in an AND/OR tree.
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, GateKind, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// let and = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::And, "and"))?;
+    /// let a = tree.add_child(and, NodeId::new_v7(), Node::step("a"))?;
+    /// let b = tree.add_child(and, NodeId::new_v7(), Node::step("b"))?;
+    /// let c = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("c"))?;
+    /// let level = |i| Some(if i == a { 5_u8 } else if i == b { 3 } else { 4 });
+    /// let eval = evaluate(&tree, &MaxMin::new(), level)?;
+    /// let paths: Vec<_> = eval
+    ///     .attack_paths(&tree)
+    ///     .ok_or(aegis_model::ModelError::UnknownNode(a))?
+    ///     .collect();
+    /// assert_eq!(paths.len(), 2);
+    /// assert_eq!(paths[0].steps(), &[c]);
+    /// assert_eq!(*paths[0].feasibility(), 4);
+    /// assert_eq!(paths[1].steps(), &[a, b]);
+    /// assert_eq!(*paths[1].feasibility(), 3);
+    /// assert_eq!(paths[1].bottleneck(), b);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_paths<'a>(
+        &'a self,
+        tree: &'a AttackTree,
+    ) -> Option<crate::paths::AttackPaths<'a, V>>
+    where
+        V: Ord + Clone,
+    {
+        crate::paths::AttackPaths::new(tree, self)
+    }
+
+    /// Collects up to `k` of the easiest minimal attack paths of `tree` in
+    /// descending order of feasibility (rule A4).
+    ///
+    /// Returns `None` if `tree` visibly does not match `self` (see
+    /// [`attack_paths`](Self::attack_paths)). When `k == 0`, returns
+    /// `Some(Vec::new())` after validating `tree`.
+    ///
+    /// Time O((V + E) + k * V * (V + E) * log(k * d)) on trees where `d` is
+    /// the maximum gate arity; space O(V + k * d * V).
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, GateKind, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// let s1 = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("s1"))?;
+    /// let s2 = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("s2"))?;
+    /// let s3 = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("s3"))?;
+    /// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |i| {
+    ///     Some(if i == s1 { 2 } else if i == s2 { 5 } else { 4 })
+    /// })?;
+    /// let top2 = eval.top_k_paths(&tree, 2).ok_or(aegis_model::ModelError::UnknownNode(s1))?;
+    /// assert_eq!(top2.len(), 2);
+    /// assert_eq!(top2[0].steps(), &[s2]);
+    /// assert_eq!(top2[1].steps(), &[s3]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn top_k_paths(
+        &self,
+        tree: &AttackTree,
+        k: usize,
+    ) -> Option<Vec<crate::paths::AttackPath<V>>>
+    where
+        V: Ord + Clone,
+    {
+        Some(self.attack_paths(tree)?.take(k).collect())
+    }
 }
 
 /// The explanation of one node's value, from [`Evaluation::explain`].

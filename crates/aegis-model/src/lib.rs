@@ -232,6 +232,7 @@ mod id;
 mod lint;
 mod methodology;
 mod op;
+mod paths;
 mod project;
 mod provenance;
 mod store;
@@ -260,6 +261,7 @@ pub use methodology::{
     RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
+pub use paths::{AttackPath, AttackPaths};
 pub use project::{MAX_NAME_CHARS, Project};
 pub use provenance::{Provenance, ProvenanceSource};
 pub use store::{

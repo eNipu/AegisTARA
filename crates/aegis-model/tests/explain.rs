@@ -787,3 +787,81 @@ fn trace_deterministic_and_deep() -> Res {
     );
     Ok(())
 }
+
+#[test]
+fn top_k_attack_paths_orders_and_explains_bottlenecks() -> Res {
+    let t = three_level()?;
+    let mut leaves = Leaves::new(&t.tree);
+    for (s, v) in t.and_steps.iter().zip([3_u8, 1, 4]) {
+        leaves.set(*s, v);
+    }
+    for (s, v) in t.sand_steps.iter().zip([5_u8, 2, 6]) {
+        leaves.set(*s, v);
+    }
+    let eval = evaluate(&t.tree, &MaxMin::<u8>::new(), |i| leaves.get(i))?;
+
+    assert_eq!(eval.top_k_paths(&t.tree, 0), Some(vec![]));
+    let top1 = eval
+        .top_k_paths(&t.tree, 1)
+        .ok_or(ModelError::UnknownNode(t.tree.root()))?;
+    assert_eq!(top1.len(), 1);
+    assert_eq!(top1[0].steps(), &t.sand_steps);
+    assert_eq!(*top1[0].feasibility(), 2);
+    assert_eq!(top1[0].bottleneck(), t.sand_steps[1]);
+    assert_eq!(top1[0].len(), 3);
+    assert!(!top1[0].is_empty());
+    assert!(top1[0].contains(t.sand_steps[0]));
+    assert!(!top1[0].contains(t.and_steps[0]));
+
+    let all = eval
+        .top_k_paths(&t.tree, 10)
+        .ok_or(ModelError::UnknownNode(t.tree.root()))?;
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0], top1[0]);
+    assert_eq!(all[1].steps(), &t.and_steps);
+    assert_eq!(*all[1].feasibility(), 1);
+    assert_eq!(all[1].bottleneck(), t.and_steps[1]);
+    Ok(())
+}
+
+#[test]
+fn top_k_attack_paths_lazy_on_exponential_and_of_or_tree() -> Res {
+    // 20 independent binary OR gates under an AND root => 2^20 = 1,048,576
+    // distinct minimal attack paths (61 nodes total). Materializing all paths
+    // would allocate over a million vectors; lazy best-first top-5 expands
+    // only a handful of states.
+    let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::And, "root"))?;
+    let r = tree.root();
+    let mut hi_steps = Vec::new();
+    for stage in 0..20_u8 {
+        let g = gate(&mut tree, r, GateKind::Or)?;
+        let s_hi = step(&mut tree, g)?;
+        let s_lo = step(&mut tree, g)?;
+        hi_steps.push((s_hi, s_lo, stage));
+    }
+    let mut leaves = Leaves::new(&tree);
+    for &(s_hi, s_lo, stage) in &hi_steps {
+        leaves.set(s_hi, 50_u8);
+        leaves.set(s_lo, 40_u8.saturating_sub(stage));
+    }
+    let eval = evaluate(&tree, &MaxMin::<u8>::new(), |i| leaves.get(i))?;
+    let top5 = eval
+        .top_k_paths(&tree, 5)
+        .ok_or(ModelError::UnknownNode(r))?;
+    assert_eq!(top5.len(), 5);
+    assert_eq!(*top5[0].feasibility(), 50);
+    assert_eq!(top5[0].len(), 20);
+    // #2 flips stage 0 to 40; #3 flips stage 1 to 39; #4 flips stages 0 and 1
+    // (min(40, 39) == 39); #5 flips stage 2 to 38.
+    assert_eq!(*top5[1].feasibility(), 40);
+    assert_eq!(top5[1].bottleneck(), hi_steps[0].1);
+    assert_eq!(*top5[2].feasibility(), 39);
+    assert_eq!(top5[2].bottleneck(), hi_steps[1].1);
+    assert!(top5[2].contains(hi_steps[0].0));
+    assert_eq!(*top5[3].feasibility(), 39);
+    assert_eq!(top5[3].bottleneck(), hi_steps[1].1);
+    assert!(top5[3].contains(hi_steps[0].1));
+    assert_eq!(*top5[4].feasibility(), 38);
+    assert_eq!(top5[4].bottleneck(), hi_steps[2].1);
+    Ok(())
+}
