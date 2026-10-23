@@ -226,6 +226,7 @@ extern crate self as aegis_model;
 mod asset;
 mod control;
 mod damage;
+mod diff;
 mod error;
 mod eval;
 mod id;
@@ -246,6 +247,7 @@ mod tree;
 pub use asset::{Asset, PropertySet};
 pub use control::{MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl, StepMitigation};
 pub use damage::DamageScenario;
+pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,

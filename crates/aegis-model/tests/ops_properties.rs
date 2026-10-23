@@ -61,6 +61,139 @@ proptest! {
     fn lint_soundness_second_methodology(seeds in seeds()) {
         accepted(&second(), &seeds, |p, _, _| check_lint_invariants(p))?;
     }
+
+    #[test]
+    fn diff_soundness_first_methodology(seeds in seeds()) {
+        check_diff_sequence(&builtin(), &seeds)?;
+    }
+
+    #[test]
+    fn diff_soundness_second_methodology(seeds in seeds()) {
+        check_diff_sequence(&second(), &seeds)?;
+    }
+}
+
+fn check_diff_sequence(
+    m: &std::sync::Arc<aegis_model::Methodology>,
+    seeds: &[common::Seed],
+) -> Result<(), TestCaseError> {
+    let first = aegis_model::Project::new(std::sync::Arc::clone(m));
+    let mut prev = first.clone();
+    accepted(m, seeds, |curr, _, _| {
+        check_diff_pair(&prev, curr)?;
+        check_diff_pair(&first, curr)?;
+        prev = curr.clone();
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn check_diff_pair(
+    base: &aegis_model::Project,
+    curr: &aegis_model::Project,
+) -> Result<(), TestCaseError> {
+    let self_diff = curr.diff(curr).expect("self diff");
+    prop_assert!(self_diff.is_empty());
+    prop_assert!(self_diff.risk_deltas().is_empty());
+
+    let fwd = base.diff(curr).expect("fwd diff");
+    let rev = curr.diff(base).expect("rev diff");
+    prop_assert_eq!(fwd.is_empty(), base == curr);
+    prop_assert_eq!(rev.is_empty(), base == curr);
+
+    // Added/removed/modified symmetry across all 5 entity arenas.
+    prop_assert_eq!(fwd.assets().added(), rev.assets().removed());
+    prop_assert_eq!(fwd.assets().removed(), rev.assets().added());
+    prop_assert_eq!(fwd.assets().modified(), rev.assets().modified());
+    prop_assert_eq!(
+        fwd.damage_scenarios().added(),
+        rev.damage_scenarios().removed()
+    );
+    prop_assert_eq!(
+        fwd.damage_scenarios().removed(),
+        rev.damage_scenarios().added()
+    );
+    prop_assert_eq!(
+        fwd.damage_scenarios().modified(),
+        rev.damage_scenarios().modified()
+    );
+    prop_assert_eq!(
+        fwd.threat_scenarios().added(),
+        rev.threat_scenarios().removed()
+    );
+    prop_assert_eq!(
+        fwd.threat_scenarios().removed(),
+        rev.threat_scenarios().added()
+    );
+    prop_assert_eq!(
+        fwd.threat_scenarios().modified(),
+        rev.threat_scenarios().modified()
+    );
+    prop_assert_eq!(fwd.attack_trees().added(), rev.attack_trees().removed());
+    prop_assert_eq!(fwd.attack_trees().removed(), rev.attack_trees().added());
+    prop_assert_eq!(fwd.attack_trees().modified(), rev.attack_trees().modified());
+    prop_assert_eq!(
+        fwd.security_controls().added(),
+        rev.security_controls().removed()
+    );
+    prop_assert_eq!(
+        fwd.security_controls().removed(),
+        rev.security_controls().added()
+    );
+    prop_assert_eq!(
+        fwd.security_controls().modified(),
+        rev.security_controls().modified()
+    );
+
+    // Risk deltas are sorted by ThreatId and symmetric between fwd and rev.
+    prop_assert!(
+        fwd.risk_deltas()
+            .windows(2)
+            .all(|w| w[0].threat() < w[1].threat())
+    );
+    prop_assert_eq!(fwd.risk_deltas().len(), rev.risk_deltas().len());
+    for (df, dr) in fwd.risk_deltas().iter().zip(rev.risk_deltas().iter()) {
+        prop_assert_eq!(df.threat(), dr.threat());
+        prop_assert_eq!(df.inherent().before(), dr.inherent().after());
+        prop_assert_eq!(df.inherent().after(), dr.inherent().before());
+        prop_assert_eq!(df.residual().before(), dr.residual().after());
+        prop_assert_eq!(df.residual().after(), dr.residual().before());
+    }
+
+    // Completeness: every threat in `base` or `curr` whose inherent or residual risk
+    // snapshot differs must appear in `fwd.changed_risks()`.
+    let changed_ids: std::collections::BTreeSet<_> =
+        fwd.changed_risks().map(|d| d.threat()).collect();
+    let all_threats: std::collections::BTreeSet<_> = base
+        .threat_scenarios()
+        .map(|(_, id, _)| id)
+        .chain(curr.threat_scenarios().map(|(_, id, _)| id))
+        .collect();
+    for id in all_threats {
+        let inh_b = base
+            .evaluate_risk(id)
+            .ok()
+            .map(|r| aegis_model::RiskSnapshot::new(r.feasibility(), r.max_risk()));
+        let inh_c = curr
+            .evaluate_risk(id)
+            .ok()
+            .map(|r| aegis_model::RiskSnapshot::new(r.feasibility(), r.max_risk()));
+        let res_b = base
+            .evaluate_residual_risk(id)
+            .ok()
+            .map(|r| aegis_model::RiskSnapshot::new(r.feasibility(), r.max_risk()));
+        let res_c = curr
+            .evaluate_residual_risk(id)
+            .ok()
+            .map(|r| aegis_model::RiskSnapshot::new(r.feasibility(), r.max_risk()));
+        prop_assert_eq!(
+            changed_ids.contains(&id),
+            inh_b != inh_c || res_b != res_c,
+            "risk delta completeness mismatch for {:?}",
+            id
+        );
+    }
+    Ok(())
 }
 
 /// Runs 256 sequences with a fixed seed and merges their statistics.
