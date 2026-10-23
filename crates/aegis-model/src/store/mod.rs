@@ -51,6 +51,7 @@ use std::fmt;
 
 pub use op_log::{LoggedOp, OpLogReader, OpLogWriter};
 
+use crate::control::MAX_STEP_MITIGATIONS;
 use crate::methodology::{
     MAX_CATALOG_SCHEMES, MAX_IMPACT_CATEGORIES, MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS,
     MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
@@ -235,6 +236,13 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// An attack step lists more than
+    /// [`MAX_STEP_MITIGATIONS`](crate::MAX_STEP_MITIGATIONS) security
+    /// control mitigations.
+    StepMitigations {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A methodology pack is larger than [`MAX_PACK_FILE_BYTES`].
     PackFileBytes {
         /// The cap, in bytes.
@@ -256,7 +264,8 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
-    /// A pack impact category declares more than 16 levels.
+    /// A pack impact category, feasibility scale, risk scale, or risk matrix
+    /// row or column has more than 16 levels.
     Levels {
         /// The cap, in items.
         max: usize,
@@ -316,6 +325,9 @@ impl Limit {
     pub(crate) const STEP_FEASIBILITY: Limit = Limit::StepFeasibility {
         max: MAX_ATTACK_TREE_NODES,
     };
+    pub(crate) const STEP_MITIGATIONS: Limit = Limit::StepMitigations {
+        max: MAX_STEP_MITIGATIONS,
+    };
     pub(crate) const PACK_FILE: Limit = Limit::PackFileBytes {
         max: MAX_PACK_FILE_BYTES,
     };
@@ -360,6 +372,9 @@ impl fmt::Display for Limit {
             Limit::AttackTreeNodes { max } => write!(f, "more than {max} attack tree nodes"),
             Limit::StepFeasibility { max } => {
                 write!(f, "more than {max} step feasibility ratings")
+            }
+            Limit::StepMitigations { max } => {
+                write!(f, "more than {max} step mitigations")
             }
             Limit::PackFileBytes { max } => {
                 write!(f, "methodology pack is larger than {max} bytes")

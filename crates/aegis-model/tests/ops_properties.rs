@@ -60,8 +60,8 @@ fn ops_generator_covers_every_op_and_most_errors() {
         let stats = coverage(&m);
         let share = stats.ok as f64 / (stats.ok + stats.failed) as f64;
         assert!((0.25..0.9).contains(&share), "valid share {share}");
-        assert_eq!(stats.ok_kinds.len(), 20, "{:?}", stats.ok_kinds);
-        assert!(stats.errors.len() >= 28, "{:?}", stats.errors);
+        assert_eq!(stats.ok_kinds.len(), 26, "{:?}", stats.ok_kinds);
+        assert!(stats.errors.len() >= 30, "{:?}", stats.errors);
         eprintln!(
             "{}: ok {} failed {} errors {:?}",
             m.key(),

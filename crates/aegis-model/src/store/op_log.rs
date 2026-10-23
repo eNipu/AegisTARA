@@ -8,11 +8,11 @@ use serde::Serialize;
 use super::wire::{
     self, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, HeaderView, HeaderWire, Ids,
     ImpactsInOrder, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys, ProvenanceView,
-    RecordWire, Required, StepFeasibilityInOrder, Text,
+    RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, Text,
 };
 use super::{Limit, MAX_ACTOR_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
 use crate::error::StoreError;
-use crate::id::{AssetId, DamageId, NodeId, ThreatId, TreeId};
+use crate::id::{AssetId, ControlId, DamageId, NodeId, ThreatId, TreeId};
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
@@ -157,6 +157,12 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetThreatFeasibility {
+        threat: Text<ThreatId>,
+        level: Option<Required<&'a str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetThreatAttackTree {
         threat: Text<ThreatId>,
         tree: Option<Text<TreeId>>,
@@ -165,6 +171,35 @@ enum OpView<'a> {
     },
     RemoveAttackTree {
         id: Text<TreeId>,
+    },
+    SetRiskTreatment {
+        threat: Text<ThreatId>,
+        treatment: Option<RiskTreatmentWire>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    AddSecurityControl {
+        id: Text<ControlId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameSecurityControl {
+        id: Text<ControlId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveSecurityControl {
+        id: Text<ControlId>,
+    },
+    SetStepMitigation {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        control: Text<ControlId>,
+        feasibility: Option<Required<&'a str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
 }
 
@@ -184,7 +219,9 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameAsset { name, .. }
         | Op::AddDamageScenario { name, .. }
         | Op::RenameDamageScenario { name, .. }
-        | Op::RenameThreatScenario { name, .. } => name_ok(name),
+        | Op::RenameThreatScenario { name, .. }
+        | Op::AddSecurityControl { name, .. }
+        | Op::RenameSecurityControl { name, .. } => name_ok(name),
         Op::AddThreatScenario {
             name,
             catalog_refs,
@@ -376,6 +413,15 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             level: level.map(|l| Required(m.feasibility_level_key(l))),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::SetThreatFeasibility {
+            threat,
+            level,
+            provenance,
+        } => OpView::SetThreatFeasibility {
+            threat: Text(*threat),
+            level: level.map(|l| Required(m.feasibility_level_key(l))),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::SetThreatAttackTree {
             threat,
             tree,
@@ -386,6 +432,47 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveAttackTree { id } => OpView::RemoveAttackTree { id: Text(*id) },
+        Op::SetRiskTreatment {
+            threat,
+            treatment,
+            provenance,
+        } => OpView::SetRiskTreatment {
+            threat: Text(*threat),
+            treatment: (*treatment).map(RiskTreatmentWire::from),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::AddSecurityControl {
+            id,
+            name,
+            provenance,
+        } => OpView::AddSecurityControl {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameSecurityControl {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameSecurityControl {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveSecurityControl { id } => OpView::RemoveSecurityControl { id: Text(*id) },
+        Op::SetStepMitigation {
+            tree,
+            node,
+            control,
+            feasibility,
+            provenance,
+        } => OpView::SetStepMitigation {
+            tree: Text(*tree),
+            node: Text(*node),
+            control: Text(*control),
+            feasibility: feasibility.map(|l| Required(m.feasibility_level_key(l))),
+            provenance: ProvenanceView::of(provenance),
+        },
     }
 }
 
@@ -583,6 +670,15 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             level: level.map(|l| l.0),
             provenance: wire::unwrap_provenance(provenance),
         },
+        OpWire::SetThreatFeasibility {
+            threat,
+            level,
+            provenance,
+        } => Op::SetThreatFeasibility {
+            threat: threat.0,
+            level: level.map(|l| l.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::SetThreatAttackTree {
             threat,
             tree,
@@ -593,6 +689,47 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveAttackTree { id } => Op::RemoveAttackTree { id: id.0 },
+        OpWire::SetRiskTreatment {
+            threat,
+            treatment,
+            provenance,
+        } => Op::SetRiskTreatment {
+            threat: threat.0,
+            treatment: treatment.map(Into::into),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::AddSecurityControl {
+            id,
+            name,
+            provenance,
+        } => Op::AddSecurityControl {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameSecurityControl {
+            id,
+            name,
+            provenance,
+        } => Op::RenameSecurityControl {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveSecurityControl { id } => Op::RemoveSecurityControl { id: id.0 },
+        OpWire::SetStepMitigation {
+            tree,
+            node,
+            control,
+            feasibility,
+            provenance,
+        } => Op::SetStepMitigation {
+            tree: tree.0,
+            node: node.0,
+            control: control.0,
+            feasibility: feasibility.map(|l| l.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
     })
 }
 

@@ -43,6 +43,23 @@ const FEASIBILITY_LEVELS: [(&str, &str); 4] = [
     ("high", "High"),
 ];
 
+/// The ISO/SAE 21434 clause 15.8 / Table H.8 risk scale, lowest first.
+const RISK_LEVELS: [(&str, &str); 5] = [
+    ("r1", "Risk 1"),
+    ("r2", "Risk 2"),
+    ("r3", "Risk 3"),
+    ("r4", "Risk 4"),
+    ("r5", "Risk 5"),
+];
+
+/// ISO/SAE 21434 Table H.8 4x4 risk matrix (`LEVELS` rows x `FEASIBILITY_LEVELS` columns).
+const RISK_MATRIX: [[&str; 4]; 4] = [
+    ["r1", "r1", "r1", "r1"],
+    ["r1", "r1", "r2", "r3"],
+    ["r1", "r2", "r3", "r4"],
+    ["r2", "r3", "r4", "r5"],
+];
+
 /// Security properties, in declaration order.
 const PROPERTIES: [(&str, &str); 6] = [
     ("confidentiality", "Confidentiality"),
@@ -93,9 +110,20 @@ fn expected() -> MethodologyDef {
                         label: s(label),
                     })
                     .collect(),
+                risk_matrix: RISK_MATRIX
+                    .iter()
+                    .map(|row| row.iter().map(|&k| s(k)).collect())
+                    .collect(),
             })
             .collect(),
         feasibility_levels: FEASIBILITY_LEVELS
+            .iter()
+            .map(|&(key, label)| LevelDef {
+                key: s(key),
+                label: s(label),
+            })
+            .collect(),
+        risk_levels: RISK_LEVELS
             .iter()
             .map(|&(key, label)| LevelDef {
                 key: s(key),
@@ -215,6 +243,37 @@ fn iso21434_vocabulary_feasibility_levels() {
     let high = m.feasibility_level("high").expect("high");
     assert!(very_low < low && low < medium && medium < high);
     assert_eq!(very_low.index(), 0);
+}
+
+#[test]
+fn iso21434_vocabulary_risk_levels_and_matrix() {
+    let m = m();
+    let keys: Vec<_> = m
+        .risk_levels()
+        .map(|(r, key, _)| {
+            assert_eq!(m.risk_level_key(r), Some(key));
+            key
+        })
+        .collect();
+    assert_eq!(keys, ["r1", "r2", "r3", "r4", "r5"]);
+    let labels: Vec<_> = m
+        .risk_levels()
+        .map(|(r, _, label)| {
+            assert_eq!(m.risk_level_label(r), Some(label));
+            label
+        })
+        .collect();
+    assert_eq!(labels, ["Risk 1", "Risk 2", "Risk 3", "Risk 4", "Risk 5"]);
+    for c in m.impact_categories() {
+        for (i_idx, (i_key, _)) in LEVELS.iter().enumerate() {
+            let impact = m.level(c, i_key).expect(i_key);
+            for (f_idx, (f_key, _)) in FEASIBILITY_LEVELS.iter().enumerate() {
+                let feas = m.feasibility_level(f_key).expect(f_key);
+                let want = m.risk_level(RISK_MATRIX[i_idx][f_idx]).expect("risk");
+                assert_eq!(m.risk_for(c, impact, feas), Some(want));
+            }
+        }
+    }
 }
 
 #[test]

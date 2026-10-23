@@ -12,10 +12,11 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, AttackTree, CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, DamageId,
-    FeasibilityLevel, GateKind, ImpactCategory, ImpactCategoryDef, Level, LevelDef, Methodology,
-    MethodologyDef, Node, NodeId, Op, Project, Property, PropertyDef, PropertySet, Provenance,
-    ProvenanceSource, SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    AssetId, AttackTree, CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, ControlId,
+    DamageId, FeasibilityLevel, GateKind, ImpactCategory, ImpactCategoryDef, Level, LevelDef,
+    Methodology, MethodologyDef, Node, NodeId, Op, Project, Property, PropertyDef, PropertySet,
+    Provenance, ProvenanceSource, RiskLevel, RiskTreatment, SegmentDef, ThreatCategory,
+    ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -47,6 +48,11 @@ fn level_defs(keys: &[&str]) -> Vec<LevelDef> {
 /// category that violates two properties; and a CAPEC-style scheme.
 pub fn second_def() -> MethodologyDef {
     let s = |k: &str| -> Arc<str> { k.into() };
+    let matrix = |rows: &[&[&str]]| -> Vec<Vec<Arc<str>>> {
+        rows.iter()
+            .map(|r| r.iter().map(|&k| s(k)).collect())
+            .collect()
+    };
     MethodologyDef {
         key: s("med-device-demo"),
         version: s("2026.1"),
@@ -56,16 +62,92 @@ pub fn second_def() -> MethodologyDef {
                 key: s("patient-harm"),
                 label: s("Patient harm"),
                 levels: level_defs(&["minor", "serious", "critical"]),
+                risk_matrix: matrix(&[
+                    &[
+                        "acceptable",
+                        "acceptable",
+                        "acceptable",
+                        "monitor",
+                        "monitor",
+                    ],
+                    &[
+                        "acceptable",
+                        "monitor",
+                        "monitor",
+                        "unacceptable",
+                        "unacceptable",
+                    ],
+                    &[
+                        "monitor",
+                        "unacceptable",
+                        "unacceptable",
+                        "unacceptable",
+                        "unacceptable",
+                    ],
+                ]),
             },
             ImpactCategoryDef {
                 key: s("data-exposure"),
                 label: s("Data exposure"),
                 levels: level_defs(&["trivial", "low", "medium", "high", "extreme"]),
+                risk_matrix: matrix(&[
+                    &[
+                        "acceptable",
+                        "acceptable",
+                        "acceptable",
+                        "acceptable",
+                        "acceptable",
+                    ],
+                    &[
+                        "acceptable",
+                        "acceptable",
+                        "acceptable",
+                        "monitor",
+                        "monitor",
+                    ],
+                    &[
+                        "acceptable",
+                        "acceptable",
+                        "monitor",
+                        "monitor",
+                        "unacceptable",
+                    ],
+                    &[
+                        "acceptable",
+                        "monitor",
+                        "monitor",
+                        "unacceptable",
+                        "unacceptable",
+                    ],
+                    &[
+                        "monitor",
+                        "monitor",
+                        "unacceptable",
+                        "unacceptable",
+                        "unacceptable",
+                    ],
+                ]),
             },
             ImpactCategoryDef {
                 key: s("service-loss"),
                 label: s("Service loss"),
                 levels: level_defs(&["tolerable", "intolerable"]),
+                risk_matrix: matrix(&[
+                    &[
+                        "acceptable",
+                        "acceptable",
+                        "acceptable",
+                        "monitor",
+                        "monitor",
+                    ],
+                    &[
+                        "monitor",
+                        "monitor",
+                        "unacceptable",
+                        "unacceptable",
+                        "unacceptable",
+                    ],
+                ]),
             },
         ],
         feasibility_levels: vec![
@@ -88,6 +170,20 @@ pub fn second_def() -> MethodologyDef {
             LevelDef {
                 key: s("frequent"),
                 label: s("Frequent"),
+            },
+        ],
+        risk_levels: vec![
+            LevelDef {
+                key: s("acceptable"),
+                label: s("Acceptable"),
+            },
+            LevelDef {
+                key: s("monitor"),
+                label: s("Monitor"),
+            },
+            LevelDef {
+                key: s("unacceptable"),
+                label: s("Unacceptable"),
             },
         ],
         properties: ["c", "i", "a"]
@@ -173,12 +269,21 @@ pub fn wide() -> Methodology {
                         label: s(format!("l{l}")),
                     })
                     .collect(),
+                risk_matrix: (0..16)
+                    .map(|l| (0..16).map(|f| s(format!("r{}", (l + f) % 16))).collect())
+                    .collect(),
             })
             .collect(),
         feasibility_levels: (0..16)
             .map(|l| LevelDef {
                 key: s(format!("f{l}")),
                 label: s(format!("f{l}")),
+            })
+            .collect(),
+        risk_levels: (0..16)
+            .map(|r| LevelDef {
+                key: s(format!("r{r}")),
+                label: s(format!("r{r}")),
             })
             .collect(),
         properties: (0..12)
@@ -230,6 +335,10 @@ pub fn node_id(n: u64) -> NodeId {
     NodeId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn control_id(n: u64) -> ControlId {
+    ControlId::from_uuid(v7(n)).expect("v7")
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -248,6 +357,10 @@ pub fn lvl(m: &Methodology, c: ImpactCategory, key: &str) -> Level {
 
 pub fn feas(m: &Methodology, key: &str) -> FeasibilityLevel {
     m.feasibility_level(key).expect(key)
+}
+
+pub fn risk(m: &Methodology, key: &str) -> RiskLevel {
+    m.risk_level(key).expect(key)
 }
 
 pub fn threat_cat(m: &Methodology, key: &str) -> ThreatCategory {
@@ -285,7 +398,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..28,
+        0u8..36,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -392,6 +505,23 @@ impl Gen {
         match nth(existing, sel / 8) {
             Some(id) if sel % 8 != 0 => id,
             _ => tree_id(self.fresh()),
+        }
+    }
+
+    fn control(&mut self, p: &Project, sel: u16) -> ControlId {
+        let existing: Vec<_> = p.security_controls().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if sel % 8 != 0 => id,
+            _ => control_id(self.fresh()),
+        }
+    }
+
+    fn treatment(&self, sel: u16) -> RiskTreatment {
+        match sel % 4 {
+            0 => RiskTreatment::Avoid,
+            1 => RiskTreatment::Reduce,
+            2 => RiskTreatment::Share,
+            _ => RiskTreatment::Retain,
         }
     }
 
@@ -796,9 +926,62 @@ impl Gen {
                 tree: (s.b % 4 != 0).then(|| self.tree(p, s.b)),
                 provenance,
             },
-            _ => Op::RemoveAttackTree {
+            27 => Op::SetThreatFeasibility {
+                threat: self.threat(p, s.a),
+                level: (s.c % 5 != 0).then(|| self.feasibility_level(s.c)),
+                provenance,
+            },
+            28 => Op::RemoveAttackTree {
                 id: self.tree(p, s.a),
             },
+            29 => Op::SetRiskTreatment {
+                threat: self.threat(p, s.a),
+                treatment: (s.c % 4 != 0).then(|| self.treatment(s.b)),
+                provenance,
+            },
+            30..=31 => Op::AddSecurityControl {
+                id: if s.a % 12 == 0 {
+                    self.control(p, s.b)
+                } else {
+                    control_id(self.fresh())
+                },
+                name: self.name(s.c),
+                provenance,
+            },
+            32 => Op::RenameSecurityControl {
+                id: self.control(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            33 => Op::RemoveSecurityControl {
+                id: self.control(p, s.a),
+            },
+            _ => {
+                let tree = self.tree(p, s.a);
+                let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
+                    Some(_) if s.b % 8 == 0 => node_id(self.fresh()),
+                    Some(t) if s.b % 8 == 1 => t.id_of(t.root()).expect("root"),
+                    Some(t) => {
+                        let steps: Vec<_> = t
+                            .iter()
+                            .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                            .map(|(_, id, _)| id)
+                            .collect();
+                        nth(steps, s.b / 8).unwrap_or_else(|| node_id(self.fresh()))
+                    }
+                    None => node_id(self.fresh()),
+                };
+                let control = self.control(p, s.c);
+                let feasibility =
+                    (s.bits % 4 != 0).then(|| self.feasibility_level((s.bits >> 8) as u16));
+                Op::SetStepMitigation {
+                    tree,
+                    node,
+                    control,
+                    feasibility,
+                    provenance,
+                }
+            }
         }
     }
 }
@@ -886,6 +1069,20 @@ pub fn replay(
 /// meaning). The key and version stay the same, so a file written under
 /// `def` must read under the result with the same meaning.
 pub fn reordered(mut def: MethodologyDef) -> MethodologyDef {
+    let unused_risk: Arc<str> = "zz-unused-risk".into();
+    for c in &mut def.impact_categories {
+        for row in &mut c.risk_matrix {
+            row.insert(0, Arc::clone(&unused_risk));
+        }
+    }
+    def.feasibility_levels.insert(
+        0,
+        LevelDef {
+            key: "zz-unused-feasibility".into(),
+            label: "Unused feasibility".into(),
+        },
+    );
+    let cols = def.feasibility_levels.len();
     def.impact_categories.reverse();
     def.impact_categories.insert(
         0,
@@ -893,13 +1090,14 @@ pub fn reordered(mut def: MethodologyDef) -> MethodologyDef {
             key: "zz-unused-impact".into(),
             label: "Unused impact".into(),
             levels: level_defs(&["u0", "u1"]),
+            risk_matrix: vec![vec![Arc::clone(&unused_risk); cols]; 2],
         },
     );
-    def.feasibility_levels.insert(
+    def.risk_levels.insert(
         0,
         LevelDef {
-            key: "zz-unused-feasibility".into(),
-            label: "Unused feasibility".into(),
+            key: unused_risk,
+            label: "Unused risk".into(),
         },
     );
     def.properties.reverse();
@@ -1042,9 +1240,13 @@ pub fn describe(p: &Project) -> Vec<String> {
             .iter()
             .filter_map(|&d| p.damage_scenario_id(d))
             .collect();
+        let direct = t
+            .direct_feasibility()
+            .and_then(|f| m.feasibility_level_key(f));
+        let treatment = t.treatment();
         let tree = t.attack_tree().and_then(|idx| p.attack_tree_id(idx));
         out.push(format!(
-            "threat {id} {:?} asset {:?} {:?} {refs:?} {damages:?} tree {tree:?} {:?}",
+            "threat {id} {:?} asset {:?} {:?} {refs:?} {damages:?} feas {direct:?} treat {treatment:?} tree {tree:?} {:?}",
             t.name(),
             p.asset_id(t.asset()),
             m.threat_category_key(t.category()),
@@ -1065,10 +1267,27 @@ pub fn describe(p: &Project) -> Vec<String> {
             .iter()
             .map(|l| l.and_then(|f| m.feasibility_level_key(f)))
             .collect();
+        let mits: Vec<_> = tree
+            .iter()
+            .map(|(n_idx, _, _)| {
+                p.step_mitigations(idx, n_idx)
+                    .iter()
+                    .map(|sm| {
+                        (
+                            p.security_control_id(sm.control()),
+                            m.feasibility_level_key(sm.feasibility()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         out.push(format!(
-            "tree {id} {nodes:?} {feas:?} {:?}",
+            "tree {id} {nodes:?} {feas:?} {mits:?} {:?}",
             p.attack_tree_provenance(idx),
         ));
+    }
+    for (_, id, c) in p.security_controls() {
+        out.push(format!("control {id} {:?} {:?}", c.name(), c.provenance()));
     }
     out
 }
@@ -1104,6 +1323,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     let (lock, sniff) = (threat_id(5), threat_id(6));
     let tree = tree_id(7);
     let (root, s1, s2) = (node_id(8), node_id(9), node_id(10));
+    let ctrl = control_id(11);
     let p_human = Provenance::human("alice", 100);
     let p_import = Provenance::import("csv", 200);
     let p_catalog = Provenance::catalog("capec", 300);
@@ -1242,6 +1462,14 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: p_ai.clone(),
         },
     );
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: sniff,
+            level: Some(feas(&m, "occasional")),
+            provenance: p_ai.clone(),
+        },
+    );
 
     // Attack tree rated on the 5-level feasibility scale.
     let mut attack_tree =
@@ -1278,6 +1506,40 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: p_human.clone(),
         },
     );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: lock,
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: "Signed firmware".into(),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::RenameSecurityControl {
+            id: ctrl,
+            name: "Signed USB firmware".into(),
+            provenance: p_ai.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree,
+            node: s1,
+            control: ctrl,
+            feasibility: Some(feas(&m, "improbable")),
+            provenance: p_human.clone(),
+        },
+    );
 
     // Check the state.
     let lock_idx = p.threat_scenario_idx(&lock).expect("lock");
@@ -1288,12 +1550,37 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Some(tree_idx)
     );
     assert_eq!(
+        p.threat_scenario(lock_idx).and_then(|t| t.treatment()),
+        Some(RiskTreatment::Reduce)
+    );
+    assert_eq!(
         p.threat_scenario(lock_idx).map(|t| t.provenance()),
         Some(&p_human)
     );
-    assert_eq!(p.attack_tree_provenance(tree_idx), Some(&p_ai));
+    assert_eq!(p.attack_tree_provenance(tree_idx), Some(&p_human));
+    let ctrl_idx = p.security_control_idx(&ctrl).expect("ctrl");
+    let ctrl_ent = p.security_control(ctrl_idx).expect("live");
+    assert_eq!(ctrl_ent.name(), "Signed USB firmware");
+    assert_eq!(ctrl_ent.provenance(), &p_ai);
     let eval = p.evaluate_threat(lock).expect("evaluate threat");
     assert_eq!(eval.root_value(), &feas(&m, "probable"));
+    let res_eval = p
+        .evaluate_residual_threat(lock)
+        .expect("evaluate residual threat");
+    assert_eq!(res_eval.root_value(), &feas(&m, "occasional"));
+    let threat_risk = p.evaluate_risk(lock).expect("evaluate risk");
+    assert_eq!(threat_risk.feasibility(), feas(&m, "probable"));
+    assert_eq!(threat_risk.max_risk(), Some(risk(&m, "unacceptable")));
+    assert_eq!(threat_risk.entries().len(), 2);
+    let deciding = threat_risk.deciding_entry().expect("deciding");
+    assert_eq!(deciding.damage(), overdose);
+    assert_eq!(deciding.category(), harm);
+    assert_eq!(deciding.risk(), risk(&m, "unacceptable"));
+    let res_risk = p
+        .evaluate_residual_risk(lock)
+        .expect("evaluate residual risk");
+    assert_eq!(res_risk.feasibility(), feas(&m, "occasional"));
+    assert_eq!(res_risk.max_risk(), Some(risk(&m, "unacceptable")));
     let sniff_idx = p.threat_scenario_idx(&sniff).expect("sniff");
     assert_eq!(p.targets(sniff_idx), Some(props(&m, &["c"])));
     let d = p
@@ -1308,7 +1595,12 @@ pub fn second_every_op(m: Arc<Methodology>) {
     assert_eq!(t.name(), "Sniff patient telemetry");
     assert_eq!(t.catalog_refs(), [cref(&m, capec, "CAPEC-157")]);
     assert_eq!(t.damages(), [p.damage_scenario_idx(&leak).expect("leak")]);
+    assert_eq!(t.direct_feasibility(), Some(feas(&m, "occasional")));
     assert_eq!(t.provenance(), &p_ai);
+    let sniff_risk = p.evaluate_risk(sniff).expect("evaluate sniff risk");
+    assert_eq!(sniff_risk.feasibility(), feas(&m, "occasional"));
+    assert!(sniff_risk.tree_evaluation().is_none());
+    assert_eq!(sniff_risk.max_risk(), Some(risk(&m, "unacceptable")));
 
     // Ransomware relies on both I and A of the pump.
     rejects(
@@ -1324,7 +1616,15 @@ pub fn second_every_op(m: Arc<Methodology>) {
             threats: 1,
         },
     );
-    // Linked attack tree blocks removal of both tree and threat.
+    // Linked attack tree, control mitigation, and risk treatment block removal.
+    rejects(
+        &mut p,
+        Op::RemoveSecurityControl { id: ctrl },
+        &aegis_model::ModelError::SecurityControlInUse {
+            control: ctrl,
+            steps: 1,
+        },
+    );
     rejects(
         &mut p,
         Op::RemoveAttackTree { id: tree },
@@ -1335,6 +1635,14 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::RemoveThreatScenario { id: lock },
         &aegis_model::ModelError::ThreatHasAttackTree { threat: lock, tree },
     );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: sniff },
+        &aegis_model::ModelError::ThreatHasDirectFeasibility {
+            threat: sniff,
+            feasibility: feas(&m, "occasional"),
+        },
+    );
 
     // Tear down with the remaining ops.
     ok(
@@ -1342,6 +1650,49 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::SetThreatAttackTree {
             threat: lock,
             tree: None,
+            provenance: Provenance::default(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveAttackTree { id: tree },
+        &aegis_model::ModelError::AttackTreeHasMitigations {
+            tree,
+            mitigations: 1,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: lock },
+        &aegis_model::ModelError::ThreatHasRiskTreatment {
+            threat: lock,
+            treatment: RiskTreatment::Reduce,
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree,
+            node: s1,
+            control: ctrl,
+            feasibility: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, Op::RemoveSecurityControl { id: ctrl });
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: lock,
+            treatment: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: sniff,
+            level: None,
             provenance: Provenance::default(),
         },
     );
@@ -1404,6 +1755,13 @@ pub fn max_def() -> MethodologyDef {
         })
         .collect();
     let all: Vec<Arc<str>> = properties.iter().map(|p| Arc::clone(&p.key)).collect();
+    let risk_levels: Vec<LevelDef> = (0..16)
+        .map(|r| {
+            let (key, label) = entry("r", r);
+            LevelDef { key, label }
+        })
+        .collect();
+    let risk_row: Vec<Arc<str>> = risk_levels.iter().map(|r| Arc::clone(&r.key)).collect();
     MethodologyDef {
         key: key_of_len("m", 0, 64),
         version: "\u{1}".repeat(64).into(),
@@ -1420,6 +1778,7 @@ pub fn max_def() -> MethodologyDef {
                             LevelDef { key, label }
                         })
                         .collect(),
+                    risk_matrix: vec![risk_row.clone(); 16],
                 }
             })
             .collect(),
@@ -1429,6 +1788,7 @@ pub fn max_def() -> MethodologyDef {
                 LevelDef { key, label }
             })
             .collect(),
+        risk_levels,
         properties,
         threat_categories: (0..64)
             .map(|i| {

@@ -22,6 +22,29 @@
             "key": "critical",
             "label": "critical"
           }
+        ],
+        "risk_matrix": [
+          [
+            "acceptable",
+            "acceptable",
+            "acceptable",
+            "monitor",
+            "monitor"
+          ],
+          [
+            "acceptable",
+            "monitor",
+            "monitor",
+            "unacceptable",
+            "unacceptable"
+          ],
+          [
+            "monitor",
+            "unacceptable",
+            "unacceptable",
+            "unacceptable",
+            "unacceptable"
+          ]
         ]
       },
       {
@@ -48,6 +71,43 @@
             "key": "extreme",
             "label": "extreme"
           }
+        ],
+        "risk_matrix": [
+          [
+            "acceptable",
+            "acceptable",
+            "acceptable",
+            "acceptable",
+            "acceptable"
+          ],
+          [
+            "acceptable",
+            "acceptable",
+            "acceptable",
+            "monitor",
+            "monitor"
+          ],
+          [
+            "acceptable",
+            "acceptable",
+            "monitor",
+            "monitor",
+            "unacceptable"
+          ],
+          [
+            "acceptable",
+            "monitor",
+            "monitor",
+            "unacceptable",
+            "unacceptable"
+          ],
+          [
+            "monitor",
+            "monitor",
+            "unacceptable",
+            "unacceptable",
+            "unacceptable"
+          ]
         ]
       },
       {
@@ -62,6 +122,22 @@
             "key": "intolerable",
             "label": "intolerable"
           }
+        ],
+        "risk_matrix": [
+          [
+            "acceptable",
+            "acceptable",
+            "acceptable",
+            "monitor",
+            "monitor"
+          ],
+          [
+            "monitor",
+            "monitor",
+            "unacceptable",
+            "unacceptable",
+            "unacceptable"
+          ]
         ]
       }
     ],
@@ -85,6 +161,20 @@
       {
         "key": "frequent",
         "label": "Frequent"
+      }
+    ],
+    "risk_levels": [
+      {
+        "key": "acceptable",
+        "label": "Acceptable"
+      },
+      {
+        "key": "monitor",
+        "label": "Monitor"
+      },
+      {
+        "key": "unacceptable",
+        "label": "Unacceptable"
       }
     ],
     "properties": [

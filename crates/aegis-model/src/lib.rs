@@ -78,8 +78,10 @@
 //! let pack = r#"{"format": "aegis-methodology-pack", "version": 1, "methodology": {
 //!   "key": "tiny", "version": "1", "label": "Tiny",
 //!   "impact_categories": [{"key": "harm", "label": "Harm", "levels": [
-//!     {"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]}],
+//!     {"key": "low", "label": "Low"}, {"key": "high", "label": "High"}],
+//!     "risk_matrix": [["r1", "r2"], ["r2", "r2"]]}],
 //!   "feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}],
+//!   "risk_levels": [{"key": "r1", "label": "Low"}, {"key": "r2", "label": "High"}],
 //!   "properties": [{"key": "integrity", "label": "Integrity"}],
 //!   "threat_categories": [{"key": "corruption", "label": "Corruption",
 //!                          "violates": ["integrity"]}],
@@ -222,6 +224,7 @@
 extern crate self as aegis_model;
 
 mod asset;
+mod control;
 mod damage;
 mod error;
 mod eval;
@@ -239,18 +242,20 @@ mod topo;
 mod tree;
 
 pub use asset::{Asset, PropertySet};
+pub use control::{MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl, StepMitigation};
 pub use damage::DamageScenario;
 pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
 };
 pub use id::{
-    AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    AssetId, AssetIdx, ControlId, ControlIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId,
+    ThreatIdx, TreeId, TreeIdx,
 };
 pub use methodology::{
     CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, FeasibilityLevel, ImpactCategory,
     ImpactCategoryDef, Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef,
-    SegmentDef, ThreatCategory, ThreatCategoryDef,
+    RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
 pub use project::{MAX_NAME_CHARS, Project};
@@ -260,5 +265,5 @@ pub use store::{
     MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,
     MAX_PROJECT_FILE_BYTES, OpLogReader, OpLogWriter, VocabKind,
 };
-pub use threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
+pub use threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
 pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node};

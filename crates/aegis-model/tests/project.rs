@@ -9,13 +9,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, AttackTree, CatalogRef, DamageId, Derivation, EntityKind, GateKind, Methodology,
-    ModelError, Node, NodeId, Op, Project, PropertySet, Provenance, ProvenanceSource, ThreatId,
-    TreeId,
+    AssetId, AttackTree, CatalogRef, DamageId, Derivation, EntityKind, GateKind,
+    MAX_STEP_MITIGATIONS, Methodology, ModelError, Node, NodeId, Op, Project, PropertySet,
+    Provenance, ProvenanceSource, RiskTreatment, ThreatId, TreeId,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, cref, damage_id, feas, lvl, node_id, prop, props, scheme,
-    second, threat_cat, threat_id, tree_id, variant, wide,
+    SENTINEL, asset_id, builtin, cat, control_id, cref, damage_id, feas, lvl, node_id, prop, props,
+    risk, scheme, second, threat_cat, threat_id, tree_id, variant, wide,
 };
 
 /// Applies `op` and expects success; returns the inverse.
@@ -822,6 +822,25 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
             },
         ),
         (
+            {
+                let mut p_direct = p.clone();
+                ok(
+                    &mut p_direct,
+                    Op::SetThreatFeasibility {
+                        threat: fx.t1,
+                        level: Some(feas(m, "low")),
+                        provenance: Provenance::default(),
+                    },
+                );
+                p_direct
+            },
+            Op::RemoveThreatScenario { id: fx.t1 },
+            ModelError::ThreatHasDirectFeasibility {
+                threat: fx.t1,
+                feasibility: feas(m, "low"),
+            },
+        ),
+        (
             full,
             Op::AddAsset {
                 id: fx.fresh_a,
@@ -837,7 +856,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
 }
 
 /// The `ModelError` variants triggered by `Project::apply`.
-const NEW_VARIANTS: [&str; 37] = [
+const NEW_VARIANTS: [&str; 38] = [
     "DuplicateAsset",
     "DuplicateDamageScenario",
     "DuplicateThreatScenario",
@@ -866,6 +885,7 @@ const NEW_VARIANTS: [&str; 37] = [
     "DamageScenarioInUse",
     "AttackTreeInUse",
     "ThreatHasAttackTree",
+    "ThreatHasDirectFeasibility",
     "DuplicateImpactCategory",
     "DuplicateStepFeasibility",
     "TooManyAttackTreeNodes",
@@ -1346,6 +1366,16 @@ fn inverse_round_trip() {
             tree: None,
             provenance: p_edit.clone(),
         },
+        Op::SetThreatFeasibility {
+            threat: fx.t1,
+            level: Some(feas(&m, "medium")),
+            provenance: p_edit.clone(),
+        },
+        Op::SetThreatFeasibility {
+            threat: fx.t1,
+            level: None,
+            provenance: p_edit.clone(),
+        },
         Op::RemoveAttackTree { id: fx.tree_free },
         // Setting a value to what it already is succeeds with an equal
         // inverse when provenance is unchanged.
@@ -1373,7 +1403,7 @@ fn inverse_round_trip() {
         assert_eq!(p, after);
         kinds.insert(variant(&op));
     }
-    assert_eq!(kinds.len(), 20, "every Op variant: {kinds:?}");
+    assert_eq!(kinds.len(), 21, "every Op variant: {kinds:?}");
 }
 
 #[test]
@@ -2195,6 +2225,8 @@ fn provenance_lifecycle_and_undo_redo_across_every_op() {
     let p_t6 = Provenance::human("alice", 360);
     let p_t7 = Provenance::human("bob", 370);
     let p_t8 = Provenance::ai("tara-assist", 380);
+    let p_t9 = Provenance::human("alice", 385);
+    let p_t10 = Provenance::ai("tara-assist", 390);
 
     let p_tree0 = Provenance::human("alice", 400);
     let p_tree1 = Provenance::ai("tara-assist", 410);
@@ -2395,6 +2427,23 @@ fn provenance_lifecycle_and_undo_redo_across_every_op() {
         p.threat_scenario(t_idx).map(|t| t.provenance()),
         Some(&p_t7)
     );
+    record(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t_id,
+            level: Some(feas(&m, "medium")),
+            provenance: p_t9.clone(),
+        },
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx).map(|t| t.provenance()),
+        Some(&p_t9)
+    );
+    assert_eq!(
+        p.threat_scenario(t_idx)
+            .and_then(|t| t.direct_feasibility()),
+        Some(feas(&m, "medium"))
+    );
 
     // Mutate AttackTree step feasibility.
     record(
@@ -2408,13 +2457,21 @@ fn provenance_lifecycle_and_undo_redo_across_every_op() {
     );
     assert_eq!(p.attack_tree_provenance(tree_idx), Some(&p_tree1));
 
-    // Unlink tree and remove all 4 entities; their inverses carry the stored provenance.
+    // Unlink tree, clear direct feasibility, and remove all 4 entities; their inverses carry the stored provenance.
     record(
         &mut p,
         Op::SetThreatAttackTree {
             threat: t_id,
             tree: None,
             provenance: p_t8.clone(),
+        },
+    );
+    record(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t_id,
+            level: None,
+            provenance: p_t10.clone(),
         },
     );
     record(&mut p, Op::RemoveAttackTree { id: tree_id });
@@ -2502,12 +2559,14 @@ fn specific_model_error_messages() {
     assert_eq!(EntityKind::ThreatScenario.as_str(), "threat scenario");
     assert_eq!(EntityKind::AttackTree.as_str(), "attack tree");
     assert_eq!(EntityKind::TreeNode.as_str(), "tree node");
+    assert_eq!(EntityKind::SecurityControl.as_str(), "security control");
     for kind in [
         EntityKind::Asset,
         EntityKind::DamageScenario,
         EntityKind::ThreatScenario,
         EntityKind::AttackTree,
         EntityKind::TreeNode,
+        EntityKind::SecurityControl,
     ] {
         assert_eq!(kind.to_string(), kind.as_str());
         assert_eq!(
@@ -2656,4 +2715,732 @@ fn specific_model_error_messages() {
         assert!(!err.to_string().contains(SENTINEL));
         assert!(!format!("{err:?}").contains(SENTINEL));
     }
+}
+
+#[test]
+fn evaluate_risk_across_damages_and_explain_why() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let safety = cat(&m, "safety");
+    let financial = cat(&m, "financial");
+    let operational = cat(&m, "operational");
+
+    let brake = asset_id(1);
+    let d_low = damage_id(10);
+    let d_high = damage_id(20);
+    let d_unrated = damage_id(30);
+    let t_spoof = threat_id(100);
+    let t_no_tree = threat_id(101);
+    let tr = tree_id(200);
+    let root = node_id(201);
+    let and_gate = node_id(202);
+    let step_obd = node_id(203);
+    let step_can = node_id(204);
+    let step_rf = node_id(205);
+
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: brake,
+            name: name("Brake controller"),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+    );
+    // d_low: operational = moderate, financial = major
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d_low,
+            name: name("Reduced assist"),
+            impacts: vec![
+                (operational, lvl(&m, operational, "moderate")),
+                (financial, lvl(&m, financial, "major")),
+            ],
+            provenance: Provenance::default(),
+        },
+    );
+    // d_high: safety = severe, financial = severe
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d_high,
+            name: name("Unintended braking"),
+            impacts: vec![
+                (safety, lvl(&m, safety, "severe")),
+                (financial, lvl(&m, financial, "severe")),
+            ],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d_unrated,
+            name: name("Unrated damage"),
+            impacts: vec![],
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Link damages out of ID order: d_high, d_unrated, d_low.
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_spoof,
+            name: name("Spoof brake torque"),
+            asset: brake,
+            category: threat_cat(&m, "spoofing"),
+            catalog_refs: vec![],
+            damages: vec![d_high, d_unrated, d_low],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_no_tree,
+            name: name("Tamper calibration"),
+            asset: brake,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![d_unrated],
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Build OR(AND(step_obd, step_can), step_rf).
+    let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Inject frame")).expect("root");
+    let g_and = tree
+        .add_child(
+            tree.root(),
+            and_gate,
+            Node::gate(GateKind::And, "Physical OBD"),
+        )
+        .expect("and");
+    tree.add_child(g_and, step_obd, Node::step("Plug into OBD"))
+        .expect("obd");
+    tree.add_child(g_and, step_can, Node::step("Send CAN frame"))
+        .expect("can");
+    let n_rf = tree
+        .add_child(
+            tree.root(),
+            step_rf,
+            Node::step("Remote telematics exploit"),
+        )
+        .expect("rf");
+
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr,
+            tree: tree.clone(),
+            step_feasibility: vec![
+                (step_obd, feas(&m, "medium")),
+                (step_can, feas(&m, "high")),
+                (step_rf, feas(&m, "low")),
+            ],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_spoof,
+            tree: Some(tr),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // AND(medium, high) = medium; OR(medium, low) = medium.
+    let res = p.evaluate_risk(t_spoof).expect("evaluate_risk");
+    assert_eq!(res.feasibility(), feas(&m, "medium"));
+    // Entries are in canonical (DamageId, ImpactCategory) order:
+    // 1. (d_low, financial=major, medium) -> r3
+    // 2. (d_low, operational=moderate, medium) -> r2
+    // 3. (d_high, safety=severe, medium) -> r4
+    // 4. (d_high, financial=severe, medium) -> r4
+    let entries: Vec<_> = res
+        .entries()
+        .iter()
+        .map(|e| {
+            (
+                e.damage(),
+                e.category(),
+                e.impact(),
+                e.feasibility(),
+                e.risk(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        vec![
+            (
+                d_low,
+                financial,
+                lvl(&m, financial, "major"),
+                feas(&m, "medium"),
+                risk(&m, "r3"),
+            ),
+            (
+                d_low,
+                operational,
+                lvl(&m, operational, "moderate"),
+                feas(&m, "medium"),
+                risk(&m, "r2"),
+            ),
+            (
+                d_high,
+                safety,
+                lvl(&m, safety, "severe"),
+                feas(&m, "medium"),
+                risk(&m, "r4"),
+            ),
+            (
+                d_high,
+                financial,
+                lvl(&m, financial, "severe"),
+                feas(&m, "medium"),
+                risk(&m, "r4"),
+            ),
+        ]
+    );
+    assert_eq!(res.max_risk(), Some(risk(&m, "r4")));
+    // Tie between (d_high, safety) and (d_high, financial) picks first in canonical order: safety.
+    let deciding = res.deciding_entry().expect("deciding");
+    assert_eq!(deciding.damage(), d_high);
+    assert_eq!(deciding.category(), safety);
+    assert_eq!(deciding.risk(), risk(&m, "r4"));
+
+    // Explain-why trace through tree_evaluation: root -> g_and -> step_obd (the bottleneck of AND).
+    let eval = res.tree_evaluation().expect("tree evaluation");
+    let why: Vec<_> = eval
+        .why_path(tree.root())
+        .map(|idx| tree.id_of(idx).expect("node id"))
+        .collect();
+    assert_eq!(why, vec![root, and_gate, step_obd]);
+    assert_ne!(n_rf, g_and);
+
+    // Threat linked only to unrated damage has empty entries and None max_risk.
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_no_tree,
+            tree: Some(tr),
+            provenance: Provenance::default(),
+        },
+    );
+    let empty_risk = p.evaluate_risk(t_no_tree).expect("unrated damage risk");
+    assert_eq!(empty_risk.feasibility(), feas(&m, "medium"));
+    assert!(empty_risk.entries().is_empty());
+    assert_eq!(empty_risk.max_risk(), None);
+    assert_eq!(empty_risk.deciding_entry(), None);
+
+    // Error cases: unknown threat, no attack tree, unrated step.
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_no_tree,
+            tree: None,
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.evaluate_risk(threat_id(999)),
+        Err(ModelError::UnknownThreatScenario(threat_id(999)))
+    );
+    assert_eq!(
+        p.evaluate_risk(t_no_tree),
+        Err(ModelError::NoAttackTree(t_no_tree))
+    );
+    ok(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree: tr,
+            node: step_rf,
+            level: None,
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.evaluate_risk(t_spoof),
+        Err(ModelError::MissingLeafValue(step_rf))
+    );
+
+    // Direct threat feasibility: fallback when no attack tree is linked, and
+    // attack-tree override when a tree is linked.
+    ok(
+        &mut p,
+        Op::LinkDamage {
+            threat: t_no_tree,
+            damage: d_high,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t_no_tree,
+            level: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+    );
+    let direct_res = p.evaluate_risk(t_no_tree).expect("direct feasibility risk");
+    assert_eq!(direct_res.feasibility(), feas(&m, "low"));
+    assert_eq!(direct_res.tree_evaluation(), None);
+    // d_high (safety=severe, financial=severe) at feasibility=low -> r3.
+    assert_eq!(direct_res.max_risk(), Some(risk(&m, "r3")));
+
+    // Fix step_rf on tr so tr evaluates to medium again, then link tr to t_no_tree.
+    // The linked attack tree (medium -> r4) overrides direct_feasibility (low -> r3),
+    // while preserving direct_feasibility on the threat scenario if the tree is later unlinked.
+    ok(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree: tr,
+            node: step_rf,
+            level: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_no_tree,
+            tree: Some(tr),
+            provenance: Provenance::default(),
+        },
+    );
+    let overridden = p.evaluate_risk(t_no_tree).expect("tree overrides direct");
+    assert_eq!(overridden.feasibility(), feas(&m, "medium"));
+    assert!(overridden.tree_evaluation().is_some());
+    assert_eq!(overridden.max_risk(), Some(risk(&m, "r4")));
+    assert_eq!(
+        p.threat_scenario(p.threat_scenario_idx(&t_no_tree).expect("idx"))
+            .and_then(|t| t.direct_feasibility()),
+        Some(feas(&m, "low"))
+    );
+
+    // Unlinking the tree falls back to direct_feasibility (low -> r3) again.
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_no_tree,
+            tree: None,
+            provenance: Provenance::default(),
+        },
+    );
+    let fallback = p.evaluate_risk(t_no_tree).expect("fallback to direct");
+    assert_eq!(fallback.feasibility(), feas(&m, "low"));
+    assert_eq!(fallback.tree_evaluation(), None);
+    assert_eq!(fallback.max_risk(), Some(risk(&m, "r3")));
+}
+
+#[test]
+fn security_controls_risk_treatment_and_residual_risk() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let safety = cat(&m, "safety");
+    let financial = cat(&m, "financial");
+
+    let brake = asset_id(1);
+    let d_severe = damage_id(10);
+    let t_spoof = threat_id(100);
+    let t_direct = threat_id(101);
+    let tr = tree_id(200);
+    let root = node_id(201);
+    let and_gate = node_id(202);
+    let step_obd = node_id(203);
+    let step_can = node_id(204);
+    let step_rf = node_id(205);
+    let c_mac = control_id(301);
+    let c_lock = control_id(302);
+    let c_fw = control_id(303);
+
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: brake,
+            name: name("Brake controller"),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d_severe,
+            name: name("Unintended braking"),
+            impacts: vec![
+                (safety, lvl(&m, safety, "severe")),
+                (financial, lvl(&m, financial, "moderate")),
+            ],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_spoof,
+            name: name("Spoof brake torque"),
+            asset: brake,
+            category: threat_cat(&m, "spoofing"),
+            catalog_refs: vec![],
+            damages: vec![d_severe],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_direct,
+            name: name("Tamper calibration"),
+            asset: brake,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![d_severe],
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Risk treatment lifecycle on t_spoof.
+    for treatment in [
+        RiskTreatment::Avoid,
+        RiskTreatment::Share,
+        RiskTreatment::Retain,
+        RiskTreatment::Reduce,
+    ] {
+        let inv = ok(
+            &mut p,
+            Op::SetRiskTreatment {
+                threat: t_spoof,
+                treatment: Some(treatment),
+                provenance: Provenance::human("lead", 10),
+            },
+        );
+        let t_idx = p.threat_scenario_idx(&t_spoof).expect("t_spoof");
+        assert_eq!(
+            p.threat_scenario(t_idx).and_then(|t| t.treatment()),
+            Some(treatment)
+        );
+        assert!(matches!(inv, Op::SetRiskTreatment { .. }));
+    }
+    rejects(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: threat_id(999),
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownThreatScenario(threat_id(999)),
+    );
+
+    // Security control lifecycle.
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c_mac,
+            name: name("SecOC message authentication"),
+            provenance: Provenance::human("architect", 20),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c_lock,
+            name: name("OBD gateway filter"),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c_fw,
+            name: name("Telematics firewall"),
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(p.security_control_count(), 3);
+    let mac_idx = p.security_control_idx(&c_mac).expect("c_mac");
+    assert_eq!(p.security_control_id(mac_idx), Some(c_mac));
+    assert_eq!(
+        p.security_control(mac_idx).map(|c| c.name()),
+        Some("SecOC message authentication")
+    );
+    rejects(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c_mac,
+            name: name("Duplicate"),
+            provenance: Provenance::default(),
+        },
+        &ModelError::DuplicateSecurityControl(c_mac),
+    );
+    rejects(
+        &mut p,
+        Op::RenameSecurityControl {
+            id: control_id(999),
+            name: name("Missing"),
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownSecurityControl(control_id(999)),
+    );
+    rejects(
+        &mut p,
+        Op::RemoveSecurityControl {
+            id: control_id(999),
+        },
+        &ModelError::UnknownSecurityControl(control_id(999)),
+    );
+
+    // Build OR(AND(step_obd=high, step_can=high), step_rf=medium).
+    let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Inject frame")).expect("root");
+    let g_and = tree
+        .add_child(
+            tree.root(),
+            and_gate,
+            Node::gate(GateKind::And, "Physical OBD"),
+        )
+        .expect("and");
+    let n_obd = tree
+        .add_child(g_and, step_obd, Node::step("Plug into OBD"))
+        .expect("obd");
+    let n_can = tree
+        .add_child(g_and, step_can, Node::step("Send CAN frame"))
+        .expect("can");
+    let n_rf = tree
+        .add_child(
+            tree.root(),
+            step_rf,
+            Node::step("Remote telematics exploit"),
+        )
+        .expect("rf");
+
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr,
+            tree: tree.clone(),
+            step_feasibility: vec![
+                (step_obd, feas(&m, "high")),
+                (step_can, feas(&m, "high")),
+                (step_rf, feas(&m, "medium")),
+            ],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_spoof,
+            tree: Some(tr),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Inherent: AND(high, high) = high; OR(high, medium) = high -> r5 on safety=severe.
+    let inherent = p.evaluate_risk(t_spoof).expect("inherent risk");
+    assert_eq!(inherent.feasibility(), feas(&m, "high"));
+    assert_eq!(inherent.max_risk(), Some(risk(&m, "r5")));
+    // Without mitigations, residual matches inherent.
+    let res0 = p.evaluate_residual_risk(t_spoof).expect("residual 0");
+    assert_eq!(res0, inherent);
+
+    // Attach c_mac to step_can, capping step_can at very-low.
+    // The AND gate (Physical OBD) drops from high to very-low,
+    // EXCEPT the OR gate at root is circumvented by step_rf (medium)!
+    // Residual feasibility is therefore medium (not very-low), and residual risk is r4.
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: step_can,
+            control: c_mac,
+            feasibility: Some(feas(&m, "very-low")),
+            provenance: Provenance::human("architect", 30),
+        },
+    );
+    let tr_idx = p.attack_tree_idx(&tr).expect("tr");
+    assert_eq!(
+        p.residual_step_feasibility(tr_idx, n_can),
+        Some(feas(&m, "very-low"))
+    );
+    assert_eq!(
+        p.residual_step_feasibility(tr_idx, n_obd),
+        Some(feas(&m, "high"))
+    );
+    let res1 = p.evaluate_residual_risk(t_spoof).expect("residual 1");
+    assert_eq!(res1.feasibility(), feas(&m, "medium"));
+    assert_eq!(res1.max_risk(), Some(risk(&m, "r4")));
+    // Explain-why on residual tree shows the attacker circumvents Physical OBD via step_rf!
+    let res1_eval = res1.tree_evaluation().expect("res1 tree");
+    let why1: Vec<_> = res1_eval
+        .why_path(tree.root())
+        .map(|idx| tree.id_of(idx).expect("id"))
+        .collect();
+    assert_eq!(why1, vec![root, step_rf]);
+    // Meanwhile inherent evaluation is untouched (still high via Physical OBD).
+    let inh_eval = p.evaluate_tree(tr).expect("inherent tree");
+    assert_eq!(inh_eval.root_value(), &feas(&m, "high"));
+
+    // Now also mitigate step_rf with c_fw down to very-low.
+    // Both OR branches are now very-low, so residual risk drops to r2!
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: step_rf,
+            control: c_fw,
+            feasibility: Some(feas(&m, "very-low")),
+            provenance: Provenance::human("architect", 40),
+        },
+    );
+    assert_eq!(
+        p.residual_step_feasibility(tr_idx, n_rf),
+        Some(feas(&m, "very-low"))
+    );
+    let res2 = p.evaluate_residual_risk(t_spoof).expect("residual 2");
+    assert_eq!(res2.feasibility(), feas(&m, "very-low"));
+    assert_eq!(res2.max_risk(), Some(risk(&m, "r2")));
+
+    // A control whose cap is weaker than inherent feasibility cannot raise feasibility.
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: step_rf,
+            control: c_lock,
+            feasibility: Some(feas(&m, "high")),
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(
+        p.residual_step_feasibility(tr_idx, n_rf),
+        Some(feas(&m, "very-low"))
+    );
+
+    // Direct feasibility threat without a tree evaluates residual risk from direct_feasibility.
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t_direct,
+            level: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+    );
+    let direct_res = p
+        .evaluate_residual_risk(t_direct)
+        .expect("direct residual risk");
+    assert_eq!(direct_res.feasibility(), feas(&m, "low"));
+    assert_eq!(direct_res.max_risk(), Some(risk(&m, "r3")));
+
+    // Rejections on SetStepMitigation: gate node, unknown node, unknown tree, unknown control,
+    // foreign feasibility level, and MAX_STEP_MITIGATIONS cap.
+    rejects(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: root,
+            control: c_mac,
+            feasibility: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+        &ModelError::NotAStep {
+            tree: tr,
+            node: root,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: node_id(999),
+            control: c_mac,
+            feasibility: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownTreeNode {
+            tree: tr,
+            node: node_id(999),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tree_id(999),
+            node: step_obd,
+            control: c_mac,
+            feasibility: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownAttackTree(tree_id(999)),
+    );
+    rejects(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: step_obd,
+            control: control_id(999),
+            feasibility: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownSecurityControl(control_id(999)),
+    );
+    for i in 0..MAX_STEP_MITIGATIONS {
+        let cid = control_id(500 + i as u64);
+        ok(
+            &mut p,
+            Op::AddSecurityControl {
+                id: cid,
+                name: name(&format!("Control {i}")),
+                provenance: Provenance::default(),
+            },
+        );
+        ok(
+            &mut p,
+            Op::SetStepMitigation {
+                tree: tr,
+                node: step_obd,
+                control: cid,
+                feasibility: Some(feas(&m, "low")),
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    let c_overflow = control_id(600);
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c_overflow,
+            name: name("Overflow control"),
+            provenance: Provenance::default(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: step_obd,
+            control: c_overflow,
+            feasibility: Some(feas(&m, "low")),
+            provenance: Provenance::default(),
+        },
+        &ModelError::TooManyStepMitigations {
+            tree: tr,
+            node: step_obd,
+            max: MAX_STEP_MITIGATIONS,
+        },
+    );
+    // Updating an already-attached control at the cap is allowed.
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: step_obd,
+            control: control_id(500),
+            feasibility: Some(feas(&m, "very-low")),
+            provenance: Provenance::default(),
+        },
+    );
 }
