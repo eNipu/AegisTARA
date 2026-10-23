@@ -13,6 +13,7 @@ use crate::id::{
     ArenaIndex, AssetId, AssetIdx, ControlId, ControlIdx, DamageId, DamageIdx, NodeId, NodeIdx,
     ThreatId, ThreatIdx, TreeId, TreeIdx,
 };
+use crate::lint::{LintCode, LintFinding};
 use crate::methodology::{
     CatalogRef, FeasibilityLevel, ImpactCategory, Level, Methodology, Property, ThreatCategory,
 };
@@ -1707,6 +1708,243 @@ impl Project {
             tree_evaluation,
             entries,
             deciding,
+        }
+    }
+
+    /// Runs completeness and consistency checks over the project and returns
+    /// all [`LintFinding`]s in canonical [`LintCode`] order, independent of
+    /// operation history (rule P4).
+    ///
+    /// When the returned slice contains no [`LintSeverity::Error`](crate::LintSeverity::Error)
+    /// findings, every attack tree in the project has non-empty gates and
+    /// rated leaf steps, and every threat scenario has a valid feasibility
+    /// source, so [`evaluate_tree`](Self::evaluate_tree),
+    /// [`evaluate_residual_tree`](Self::evaluate_residual_tree),
+    /// [`evaluate_risk`](Self::evaluate_risk), and
+    /// [`evaluate_residual_risk`](Self::evaluate_residual_risk) are all
+    /// guaranteed to succeed (as are [`evaluate_threat`](Self::evaluate_threat)
+    /// and [`evaluate_residual_threat`](Self::evaluate_residual_threat) for
+    /// every threat with a linked attack tree).
+    ///
+    /// Time: O(A * P + D + T + K * V + C + F log F), where A is
+    /// [`asset_count`](Self::asset_count), P is
+    /// [`Methodology::property_count`], D is
+    /// [`damage_scenario_count`](Self::damage_scenario_count), T is
+    /// [`threat_scenario_count`](Self::threat_scenario_count), K is
+    /// [`attack_tree_count`](Self::attack_tree_count), V is the maximum nodes
+    /// per attack tree (`<= 32`), C is
+    /// [`security_control_count`](Self::security_control_count), and F is the
+    /// number of findings returned. Space: O(F).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{
+    ///     AssetId, ControlId, DamageId, LintCode, LintFinding, Methodology, Op, Project,
+    ///     Provenance, RiskTreatment, ThreatId,
+    /// };
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// assert!(project.lint().is_empty());
+    ///
+    /// let asset = AssetId::new_v7();
+    /// let integrity = m.property("integrity").ok_or("no prop")?;
+    /// project.apply(Op::AddAsset {
+    ///     id: asset,
+    ///     name: "ECU".into(),
+    ///     properties: [integrity].into_iter().collect(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(
+    ///     project.lint(),
+    ///     vec![LintFinding::new(LintCode::AssetWithoutThreats { asset })]
+    /// );
+    ///
+    /// // Completing the threat, damage, direct feasibility, and treatment
+    /// // clears all lint findings.
+    /// let damage = DamageId::new_v7();
+    /// let safety = m.impact_category("safety").ok_or("no cat")?;
+    /// let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// project.apply(Op::AddDamageScenario {
+    ///     id: damage,
+    ///     name: "Loss of braking".into(),
+    ///     impacts: vec![(safety, severe)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let threat = ThreatId::new_v7();
+    /// let tampering = m.threat_category("tampering").ok_or("no cat")?;
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat,
+    ///     name: "Reflash".into(),
+    ///     asset,
+    ///     category: tampering,
+    ///     catalog_refs: vec![],
+    ///     damages: vec![damage],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let high = m.feasibility_level("high").ok_or("no feas")?;
+    /// project.apply(Op::SetThreatFeasibility {
+    ///     threat,
+    ///     level: Some(high),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetRiskTreatment {
+    ///     threat,
+    ///     treatment: Some(RiskTreatment::Avoid),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert!(project.lint().is_empty());
+    ///
+    /// // An unused security control triggers a warning.
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl,
+    ///     name: "Firewall".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(
+    ///     project.lint(),
+    ///     vec![LintFinding::new(LintCode::SecurityControlUnused { control: ctrl })]
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn lint(&self) -> Vec<LintFinding> {
+        let mut findings = Vec::new();
+        self.lint_assets(&mut findings);
+        self.lint_damages(&mut findings);
+        self.lint_threats(&mut findings);
+        self.lint_trees(&mut findings);
+        self.lint_controls(&mut findings);
+        findings.sort_unstable();
+        findings
+    }
+
+    fn lint_assets(&self, findings: &mut Vec<LintFinding>) {
+        for (idx, id, asset) in self.assets.iter() {
+            let threats = self.refs.assets.get(idx.index()).copied().unwrap_or(0);
+            if threats == 0 {
+                findings.push(LintFinding::new(LintCode::AssetWithoutThreats {
+                    asset: id,
+                }));
+            } else {
+                let row = self
+                    .refs
+                    .asset_properties
+                    .get(idx.index())
+                    .map_or(&[][..], Box::as_ref);
+                for property in asset.properties().iter() {
+                    if row_count(row, property) == 0 {
+                        findings.push(LintFinding::new(LintCode::AssetPropertyUntested {
+                            asset: id,
+                            property,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    fn lint_damages(&self, findings: &mut Vec<LintFinding>) {
+        for (idx, id, damage) in self.damages.iter() {
+            if damage.impacts().all(|(_, level)| level.is_none()) {
+                findings.push(LintFinding::new(LintCode::DamageScenarioWithoutImpacts {
+                    damage: id,
+                }));
+            }
+            if self.refs.damages.get(idx.index()).copied().unwrap_or(0) == 0 {
+                findings.push(LintFinding::new(LintCode::DamageScenarioUnlinked {
+                    damage: id,
+                }));
+            }
+        }
+    }
+
+    fn lint_threats(&self, findings: &mut Vec<LintFinding>) {
+        for (_idx, id, threat) in self.threats.iter() {
+            if threat.damages().is_empty() {
+                findings.push(LintFinding::new(LintCode::ThreatWithoutDamages {
+                    threat: id,
+                }));
+            }
+            match (threat.attack_tree(), threat.direct_feasibility()) {
+                (None, None) => {
+                    findings.push(LintFinding::new(LintCode::ThreatWithoutFeasibility {
+                        threat: id,
+                    }));
+                }
+                (Some(_), Some(_)) => {
+                    findings.push(LintFinding::new(LintCode::RedundantDirectFeasibility {
+                        threat: id,
+                    }));
+                }
+                (Some(_), None) | (None, Some(_)) => {}
+            }
+            match threat.treatment() {
+                None => {
+                    findings.push(LintFinding::new(LintCode::ThreatWithoutTreatment {
+                        threat: id,
+                    }));
+                }
+                Some(RiskTreatment::Reduce) => {
+                    let has_mitigations = threat
+                        .attack_tree()
+                        .and_then(|t_idx| self.trees.get(t_idx))
+                        .is_some_and(|entry| entry.step_mitigations.iter().any(|m| !m.is_empty()));
+                    if !has_mitigations {
+                        findings.push(LintFinding::new(LintCode::ReduceTreatmentWithoutControls {
+                            threat: id,
+                        }));
+                    }
+                }
+                Some(RiskTreatment::Avoid | RiskTreatment::Share | RiskTreatment::Retain) => {}
+            }
+        }
+    }
+
+    fn lint_trees(&self, findings: &mut Vec<LintFinding>) {
+        for (idx, id, entry) in self.trees.iter() {
+            if self.refs.trees.get(idx.index()).copied().unwrap_or(0) == 0 {
+                findings.push(LintFinding::new(LintCode::AttackTreeUnlinked { tree: id }));
+            }
+            for (node_idx, node_id, node) in entry.tree.iter() {
+                match node {
+                    Node::Gate { .. } => {
+                        if entry.tree.children(node_idx).is_empty() {
+                            findings.push(LintFinding::new(LintCode::AttackTreeGateEmpty {
+                                tree: id,
+                                node: node_id,
+                            }));
+                        }
+                    }
+                    Node::Step { .. } => {
+                        if entry
+                            .step_feasibility
+                            .get(node_idx.index())
+                            .copied()
+                            .flatten()
+                            .is_none()
+                        {
+                            findings.push(LintFinding::new(LintCode::AttackTreeStepUnrated {
+                                tree: id,
+                                node: node_id,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn lint_controls(&self, findings: &mut Vec<LintFinding>) {
+        for (idx, id, _control) in self.controls.iter() {
+            if self.refs.controls.get(idx.index()).copied().unwrap_or(0) == 0 {
+                findings.push(LintFinding::new(LintCode::SecurityControlUnused {
+                    control: id,
+                }));
+            }
         }
     }
 

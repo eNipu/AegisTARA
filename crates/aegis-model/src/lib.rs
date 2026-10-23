@@ -229,6 +229,7 @@ mod damage;
 mod error;
 mod eval;
 mod id;
+mod lint;
 mod methodology;
 mod op;
 mod project;
@@ -252,6 +253,7 @@ pub use id::{
     AssetId, AssetIdx, ControlId, ControlIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId,
     ThreatIdx, TreeId, TreeIdx,
 };
+pub use lint::{LintCode, LintFinding, LintSeverity};
 pub use methodology::{
     CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, FeasibilityLevel, ImpactCategory,
     ImpactCategoryDef, Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef,
