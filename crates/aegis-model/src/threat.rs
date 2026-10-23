@@ -2,8 +2,12 @@
 
 use std::sync::Arc;
 
-use crate::id::{AssetIdx, DamageIdx, TreeIdx};
-use crate::methodology::{CatalogRef, ThreatCategory};
+use crate::control::RiskTreatment;
+use crate::eval::Evaluation;
+use crate::id::{AssetIdx, DamageId, DamageIdx, TreeIdx};
+use crate::methodology::{
+    CatalogRef, FeasibilityLevel, ImpactCategory, Level, RiskLevel, ThreatCategory,
+};
 use crate::provenance::Provenance;
 
 /// Most catalog refs on one threat scenario.
@@ -70,7 +74,9 @@ pub struct ThreatScenario {
     /// Sorted by the target's `DamageId`, unique, at most
     /// [`MAX_DAMAGE_LINKS`].
     pub(crate) damages: Vec<DamageIdx>,
+    pub(crate) direct_feasibility: Option<FeasibilityLevel>,
     pub(crate) attack_tree: Option<TreeIdx>,
+    pub(crate) treatment: Option<RiskTreatment>,
     pub(crate) provenance: Provenance,
 }
 
@@ -205,6 +211,46 @@ impl ThreatScenario {
         &self.damages
     }
 
+    /// Returns the direct feasibility rating assigned to this threat
+    /// scenario (via [`Op::SetThreatFeasibility`](crate::Op::SetThreatFeasibility)),
+    /// if any. Time O(1), space O(1).
+    ///
+    /// When [`attack_tree`](Self::attack_tree) is also `Some`,
+    /// [`Project::evaluate_risk`](crate::Project::evaluate_risk) uses the
+    /// linked attack tree's evaluated feasibility while keeping this direct
+    /// rating intact on the threat scenario.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let medium = m.feasibility_level("medium").ok_or("no level")?;
+    /// project.apply(Op::SetThreatFeasibility {
+    ///     threat, level: Some(medium), provenance: Provenance::default(),
+    /// })?;
+    /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
+    /// assert_eq!(t.direct_feasibility(), Some(medium));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn direct_feasibility(&self) -> Option<FeasibilityLevel> {
+        self.direct_feasibility
+    }
+
     /// Returns the linked attack tree's arena index, if any. Time O(1),
     /// space O(1).
     ///
@@ -243,6 +289,44 @@ impl ThreatScenario {
         self.attack_tree
     }
 
+    /// Returns the risk treatment decision assigned to this threat scenario
+    /// (via [`Op::SetRiskTreatment`](crate::Op::SetRiskTreatment)), if any.
+    /// Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, Methodology, Op, Project, Provenance, RiskTreatment, ThreatId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetRiskTreatment {
+    ///     threat,
+    ///     treatment: Some(RiskTreatment::Reduce),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
+    /// assert_eq!(t.treatment(), Some(RiskTreatment::Reduce));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn treatment(&self) -> Option<RiskTreatment> {
+        self.treatment
+    }
+
     /// Returns the provenance of the last creation or modification of this
     /// threat scenario. Time O(1), space O(1).
     ///
@@ -268,5 +352,472 @@ impl ThreatScenario {
     #[must_use]
     pub fn provenance(&self) -> &Provenance {
         &self.provenance
+    }
+}
+
+/// One cell of a threat scenario's risk determination: the [`RiskLevel`]
+/// produced by looking up `(impact, feasibility)` in `category`'s 2D risk
+/// matrix for a linked damage scenario.
+///
+/// Returned inside [`ThreatRisk::entries`] and [`ThreatRisk::deciding_entry`].
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use aegis_model::{
+/// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+/// #     ThreatId, TreeId,
+/// # };
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Arc::new(Methodology::iso21434_r155()?);
+/// let mut project = Project::new(Arc::clone(&m));
+/// let asset = AssetId::new_v7();
+/// project.apply(Op::AddAsset {
+///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+///     provenance: Provenance::default(),
+/// })?;
+/// let safety = m.impact_category("safety").ok_or("no category")?;
+/// let severe = m.level(safety, "severe").ok_or("no level")?;
+/// let damage = DamageId::new_v7();
+/// project.apply(Op::AddDamageScenario {
+///     id: damage, name: "Crash".into(), impacts: vec![(safety, severe)],
+///     provenance: Provenance::default(),
+/// })?;
+/// let category = m.threat_categories().next().ok_or("none")?;
+/// let threat = ThreatId::new_v7();
+/// project.apply(Op::AddThreatScenario {
+///     id: threat, name: "Spoof".into(), asset, category,
+///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
+/// })?;
+/// let tree_id = TreeId::new_v7();
+/// let step = NodeId::new_v7();
+/// let high = m.feasibility_level("high").ok_or("no level")?;
+/// let tree = AttackTree::new(step, Node::step("Inject"))?;
+/// project.apply(Op::AddAttackTree {
+///     id: tree_id, tree, step_feasibility: vec![(step, high)],
+///     provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::SetThreatAttackTree {
+///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+/// })?;
+/// let eval = project.evaluate_risk(threat)?;
+/// let entry = eval.deciding_entry().ok_or("no entry")?;
+/// assert_eq!(entry.damage(), damage);
+/// assert_eq!(entry.category(), safety);
+/// assert_eq!(entry.impact(), severe);
+/// assert_eq!(entry.feasibility(), high);
+/// assert_eq!(entry.risk(), m.risk_level("r5").ok_or("no risk")?);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImpactRisk {
+    pub(crate) damage: DamageId,
+    pub(crate) category: ImpactCategory,
+    pub(crate) impact: Level,
+    pub(crate) feasibility: FeasibilityLevel,
+    pub(crate) risk: RiskLevel,
+}
+
+impl ImpactRisk {
+    /// Returns the damage scenario's public ID. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let safety = m.impact_category("safety").ok_or("no category")?;
+    /// # let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// let damage = DamageId::new_v7();
+    /// # project.apply(Op::AddDamageScenario { id: damage, name: "Crash".into(), impacts: vec![(safety, severe)], provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let high = m.feasibility_level("high").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// let eval = project.evaluate_risk(threat)?;
+    /// assert_eq!(eval.entries()[0].damage(), damage);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn damage(&self) -> DamageId {
+        self.damage
+    }
+
+    /// Returns the impact category. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// let safety = m.impact_category("safety").ok_or("no category")?;
+    /// # let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// # let damage = DamageId::new_v7();
+    /// # project.apply(Op::AddDamageScenario { id: damage, name: "Crash".into(), impacts: vec![(safety, severe)], provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let high = m.feasibility_level("high").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// let eval = project.evaluate_risk(threat)?;
+    /// assert_eq!(eval.entries()[0].category(), safety);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn category(&self) -> ImpactCategory {
+        self.category
+    }
+
+    /// Returns the impact rating in `category`'s scale. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let safety = m.impact_category("safety").ok_or("no category")?;
+    /// let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// # let damage = DamageId::new_v7();
+    /// # project.apply(Op::AddDamageScenario { id: damage, name: "Crash".into(), impacts: vec![(safety, severe)], provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let high = m.feasibility_level("high").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// let eval = project.evaluate_risk(threat)?;
+    /// assert_eq!(eval.entries()[0].impact(), severe);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn impact(&self) -> Level {
+        self.impact
+    }
+
+    /// Returns the threat's feasibility level used in the matrix lookup. Time
+    /// O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let safety = m.impact_category("safety").ok_or("no category")?;
+    /// # let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// # let damage = DamageId::new_v7();
+    /// # project.apply(Op::AddDamageScenario { id: damage, name: "Crash".into(), impacts: vec![(safety, severe)], provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// let high = m.feasibility_level("high").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// let eval = project.evaluate_risk(threat)?;
+    /// assert_eq!(eval.entries()[0].feasibility(), high);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn feasibility(&self) -> FeasibilityLevel {
+        self.feasibility
+    }
+
+    /// Returns the resulting risk level in the methodology's risk scale. Time
+    /// O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let safety = m.impact_category("safety").ok_or("no category")?;
+    /// # let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// # let damage = DamageId::new_v7();
+    /// # project.apply(Op::AddDamageScenario { id: damage, name: "Crash".into(), impacts: vec![(safety, severe)], provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let high = m.feasibility_level("high").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// let eval = project.evaluate_risk(threat)?;
+    /// assert_eq!(eval.entries()[0].risk(), m.risk_level("r5").ok_or("no risk")?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn risk(&self) -> RiskLevel {
+        self.risk
+    }
+}
+
+/// Risk determination for a threat scenario across all of its linked damage
+/// scenarios and their rated impact categories.
+///
+/// Returned by [`Project::evaluate_risk`](crate::Project::evaluate_risk).
+/// Entries are ordered deterministically by `(DamageId, ImpactCategory)`,
+/// and [`deciding_entry`](Self::deciding_entry) points to the first entry in
+/// that order that attains [`max_risk`](Self::max_risk).
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use aegis_model::{
+/// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+/// #     ThreatId, TreeId,
+/// # };
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Arc::new(Methodology::iso21434_r155()?);
+/// let mut project = Project::new(Arc::clone(&m));
+/// let asset = AssetId::new_v7();
+/// project.apply(Op::AddAsset {
+///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+///     provenance: Provenance::default(),
+/// })?;
+/// let safety = m.impact_category("safety").ok_or("no category")?;
+/// let financial = m.impact_category("financial").ok_or("no category")?;
+/// let severe = m.level(safety, "severe").ok_or("no level")?;
+/// let minor = m.level(financial, "moderate").ok_or("no level")?;
+/// let damage = DamageId::new_v7();
+/// project.apply(Op::AddDamageScenario {
+///     id: damage, name: "Crash".into(), impacts: vec![(safety, severe), (financial, minor)],
+///     provenance: Provenance::default(),
+/// })?;
+/// let category = m.threat_categories().next().ok_or("none")?;
+/// let threat = ThreatId::new_v7();
+/// project.apply(Op::AddThreatScenario {
+///     id: threat, name: "Spoof".into(), asset, category,
+///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
+/// })?;
+/// let tree_id = TreeId::new_v7();
+/// let step = NodeId::new_v7();
+/// let med = m.feasibility_level("medium").ok_or("no level")?;
+/// project.apply(Op::AddAttackTree {
+///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
+///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::SetThreatAttackTree {
+///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+/// })?;
+/// let risk = project.evaluate_risk(threat)?;
+/// assert_eq!(risk.feasibility(), med);
+/// assert_eq!(risk.entries().len(), 2);
+/// assert_eq!(risk.max_risk(), m.risk_level("r4"));
+/// assert_eq!(risk.deciding_entry().map(|e| e.category()), Some(safety));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreatRisk {
+    pub(crate) feasibility: FeasibilityLevel,
+    pub(crate) tree_evaluation: Option<Evaluation<FeasibilityLevel>>,
+    pub(crate) entries: Vec<ImpactRisk>,
+    pub(crate) deciding: Option<usize>,
+}
+
+impl ThreatRisk {
+    /// Returns the threat scenario's evaluated feasibility level. Time O(1),
+    /// space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// let low = m.feasibility_level("low").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// assert_eq!(project.evaluate_risk(threat)?.feasibility(), low);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn feasibility(&self) -> FeasibilityLevel {
+        self.feasibility
+    }
+
+    /// Returns the underlying attack tree evaluation if the threat's
+    /// feasibility came from an attack tree, or `None` if it came from a
+    /// direct rating on the threat scenario. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let low = m.feasibility_level("low").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// let risk = project.evaluate_risk(threat)?;
+    /// assert_eq!(risk.tree_evaluation().map(|e| *e.root_value()), Some(low));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn tree_evaluation(&self) -> Option<&Evaluation<FeasibilityLevel>> {
+        self.tree_evaluation.as_ref()
+    }
+
+    /// Returns all per-damage, per-category risk entries in canonical
+    /// `(DamageId, ImpactCategory)` order. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let low = m.feasibility_level("low").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// let risk = project.evaluate_risk(threat)?;
+    /// assert!(risk.entries().is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn entries(&self) -> &[ImpactRisk] {
+        &self.entries
+    }
+
+    /// Returns the worst-case (highest) risk level across all entries, or
+    /// `None` if no linked damage scenario has any rated impact category.
+    /// Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let low = m.feasibility_level("low").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// assert_eq!(project.evaluate_risk(threat)?.max_risk(), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn max_risk(&self) -> Option<RiskLevel> {
+        self.deciding_entry().map(ImpactRisk::risk)
+    }
+
+    /// Returns the first entry in canonical `(DamageId, ImpactCategory)`
+    /// order that attains [`max_risk`](Self::max_risk), or `None` if
+    /// [`entries`](Self::entries) is empty. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let m = Arc::new(Methodology::iso21434_r155()?);
+    /// # let mut project = Project::new(Arc::clone(&m));
+    /// # let asset = AssetId::new_v7();
+    /// # project.apply(Op::AddAsset { id: asset, name: "ECU".into(), properties: m.all_properties(), provenance: Provenance::default() })?;
+    /// # let category = m.threat_categories().next().ok_or("none")?;
+    /// # let threat = ThreatId::new_v7();
+    /// # project.apply(Op::AddThreatScenario { id: threat, name: "Spoof".into(), asset, category, catalog_refs: vec![], damages: vec![], provenance: Provenance::default() })?;
+    /// # let tree_id = TreeId::new_v7();
+    /// # let step = NodeId::new_v7();
+    /// # let low = m.feasibility_level("low").ok_or("no level")?;
+    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
+    /// assert_eq!(project.evaluate_risk(threat)?.deciding_entry(), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn deciding_entry(&self) -> Option<&ImpactRisk> {
+        self.deciding.and_then(|i| self.entries.get(i))
     }
 }

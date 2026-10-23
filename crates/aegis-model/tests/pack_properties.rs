@@ -150,9 +150,20 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
         properties_and_threats,
         schemes,
         entries(2, 16),
+        entries(2, 16),
     )
         .prop_map(
-            |(mkey, version, label, impacts, (props, threats), schemes, feasibility)| {
+            |(mkey, version, label, impacts, (props, threats), schemes, feasibility, risks)| {
+                let f_len = feasibility.len();
+                let risk_levels: Vec<LevelDef> = risks
+                    .into_iter()
+                    .enumerate()
+                    .map(|(r, (tail, label))| LevelDef {
+                        key: key("r", r, &tail),
+                        label,
+                    })
+                    .collect();
+                let r_len = risk_levels.len();
                 MethodologyDef {
                     key: key("m", 0, &mkey),
                     version,
@@ -160,17 +171,29 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
                     impact_categories: impacts
                         .into_iter()
                         .enumerate()
-                        .map(|(i, (tail, label, levels))| ImpactCategoryDef {
-                            key: key("c", i, &tail),
-                            label,
-                            levels: levels
-                                .into_iter()
-                                .enumerate()
-                                .map(|(l, (tail, label))| LevelDef {
-                                    key: key("l", l, &tail),
-                                    label,
-                                })
-                                .collect(),
+                        .map(|(i, (tail, label, levels))| {
+                            let l_len = levels.len();
+                            ImpactCategoryDef {
+                                key: key("c", i, &tail),
+                                label,
+                                levels: levels
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(l, (tail, label))| LevelDef {
+                                        key: key("l", l, &tail),
+                                        label,
+                                    })
+                                    .collect(),
+                                risk_matrix: (0..l_len)
+                                    .map(|l| {
+                                        (0..f_len)
+                                            .map(|f| {
+                                                Arc::clone(&risk_levels[(i + l + f) % r_len].key)
+                                            })
+                                            .collect()
+                                    })
+                                    .collect(),
+                            }
                         })
                         .collect(),
                     properties: props
@@ -207,6 +230,7 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
                             label,
                         })
                         .collect(),
+                    risk_levels,
                 }
             },
         )

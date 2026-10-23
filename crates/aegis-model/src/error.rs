@@ -3,10 +3,11 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId, TreeId};
+use crate::control::RiskTreatment;
+use crate::id::{AssetId, ControlId, DamageId, NodeId, NodeIdx, ThreatId, TreeId};
 use crate::methodology::{
     CatalogRef, CatalogScheme, CatalogSyntax, FeasibilityLevel, ImpactCategory, Level, Property,
-    ThreatCategory,
+    RiskLevel, ThreatCategory,
 };
 use crate::store::{Limit, VocabKind};
 
@@ -36,6 +37,8 @@ pub enum EntityKind {
     AttackTree,
     /// A node in an attack tree ([`Node`](crate::Node)).
     TreeNode,
+    /// A security control ([`SecurityControl`](crate::SecurityControl)).
+    SecurityControl,
 }
 
 impl EntityKind {
@@ -46,6 +49,7 @@ impl EntityKind {
     ///
     /// assert_eq!(EntityKind::Asset.as_str(), "asset");
     /// assert_eq!(EntityKind::TreeNode.as_str(), "tree node");
+    /// assert_eq!(EntityKind::SecurityControl.as_str(), "security control");
     /// ```
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -55,6 +59,7 @@ impl EntityKind {
             Self::ThreatScenario => "threat scenario",
             Self::AttackTree => "attack tree",
             Self::TreeNode => "tree node",
+            Self::SecurityControl => "security control",
         }
     }
 }
@@ -242,6 +247,9 @@ pub enum ModelError {
     /// An attack tree with this ID already exists in the project.
     #[error("attack tree {0} already exists in the project")]
     DuplicateAttackTree(TreeId),
+    /// A security control with this ID already exists in the project.
+    #[error("security control {0} already exists in the project")]
+    DuplicateSecurityControl(ControlId),
     /// No asset with this ID is in the project.
     #[error("asset {0} is not in the project")]
     UnknownAsset(AssetId),
@@ -254,6 +262,9 @@ pub enum ModelError {
     /// No attack tree with this ID is in the project.
     #[error("attack tree {0} is not in the project")]
     UnknownAttackTree(TreeId),
+    /// No security control with this ID is in the project.
+    #[error("security control {0} is not in the project")]
+    UnknownSecurityControl(ControlId),
     /// No node with this ID is in the attack tree.
     #[error("node {node} is not in attack tree {tree}")]
     UnknownTreeNode {
@@ -335,6 +346,9 @@ pub enum ModelError {
     /// The feasibility level index is not in the project's methodology.
     #[error("feasibility level index {} is not in the methodology", .0.index())]
     UnknownFeasibilityLevel(FeasibilityLevel),
+    /// The risk level index is not in the project's methodology.
+    #[error("risk level index {} is not in the methodology", .0.index())]
+    UnknownRiskLevel(RiskLevel),
     /// The property index is not in the project's methodology.
     #[error("property index {} is not in the methodology", .0.index())]
     UnknownProperty(Property),
@@ -404,6 +418,24 @@ pub enum ModelError {
         /// How many threats reference it.
         threats: u32,
     },
+    /// The attack tree cannot be removed while it still has security control
+    /// mitigations attached to its steps; clear the mitigations first.
+    #[error("attack tree {tree} still has {mitigations} step mitigation(s)")]
+    AttackTreeHasMitigations {
+        /// The attack tree.
+        tree: TreeId,
+        /// How many step mitigations are attached across the tree.
+        mitigations: usize,
+    },
+    /// The security control cannot be removed: `steps` step mitigations
+    /// reference it.
+    #[error("security control {control} is attached to {steps} step(s)")]
+    SecurityControlInUse {
+        /// The security control.
+        control: ControlId,
+        /// How many attack tree steps reference it.
+        steps: u32,
+    },
     /// The threat scenario cannot be removed while it still references an
     /// attack tree; unlink the tree first.
     #[error("threat scenario {threat} still references attack tree {tree}")]
@@ -412,6 +444,27 @@ pub enum ModelError {
         threat: ThreatId,
         /// The linked attack tree.
         tree: TreeId,
+    },
+    /// The threat scenario cannot be removed while it still has a direct
+    /// feasibility rating; clear the rating first.
+    #[error(
+        "threat scenario {threat} still has direct feasibility level index {}",
+        feasibility.index()
+    )]
+    ThreatHasDirectFeasibility {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The direct feasibility level on the threat scenario.
+        feasibility: FeasibilityLevel,
+    },
+    /// The threat scenario cannot be removed while it still has a risk
+    /// treatment decision; clear the treatment decision first.
+    #[error("threat scenario {threat} still has risk treatment {treatment}")]
+    ThreatHasRiskTreatment {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The risk treatment decision on the threat scenario.
+        treatment: RiskTreatment,
     },
     /// The threat scenario has no linked attack tree to evaluate.
     #[error("threat scenario {0} has no linked attack tree")]
@@ -506,6 +559,32 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// An attack step may have at most `max` security control mitigations.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, NodeId, TreeId, MAX_STEP_MITIGATIONS};
+    ///
+    /// let tree = TreeId::new_v7();
+    /// let node = NodeId::new_v7();
+    /// let err = ModelError::TooManyStepMitigations { tree, node, max: MAX_STEP_MITIGATIONS };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     format!(
+    ///         "step node {node} of attack tree {tree} would have more than 16 security control mitigations"
+    ///     ),
+    /// );
+    /// ```
+    #[error(
+        "step node {node} of attack tree {tree} would have more than {max} security control mitigations"
+    )]
+    TooManyStepMitigations {
+        /// The attack tree.
+        tree: TreeId,
+        /// The step node.
+        node: NodeId,
+        /// The limit.
+        max: usize,
+    },
     /// The project cannot hold more entities of this kind (the arena is at
     /// its slot limit, at most `u32::MAX`).
     #[error("project {kind} capacity exceeded")]
@@ -520,8 +599,9 @@ pub enum ModelError {
 ///
 /// Variants carry vocabulary keys (methodology data, not project data).
 /// Every key they hold is at most 64 bytes: keys that passed the key check
-/// are at most 64 bytes by rule, and the two variants that can hold a key
-/// that did not ([`InvalidKey`](Self::InvalidKey) and
+/// are at most 64 bytes by rule, and the variants that can hold a key
+/// that did not ([`InvalidKey`](Self::InvalidKey),
+/// [`UnknownRiskLevel`](Self::UnknownRiskLevel), and
 /// [`UnknownViolatedProperty`](Self::UnknownViolatedProperty)) keep at
 /// most 64 bytes of it, so an error built from hostile input stays small.
 ///
@@ -534,6 +614,7 @@ pub enum ModelError {
 ///     label: "Empty".into(),
 ///     impact_categories: vec![],
 ///     feasibility_levels: vec![],
+///     risk_levels: vec![],
 ///     properties: vec![],
 ///     threat_categories: vec![],
 ///     catalog_schemes: vec![],
@@ -559,6 +640,7 @@ pub enum MethodologyError {
     ///     label: "Huge".into(),
     ///     impact_categories: vec![],
     ///     feasibility_levels: vec![],
+    ///     risk_levels: vec![],
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
@@ -626,6 +708,38 @@ pub enum MethodologyError {
     /// Two feasibility levels share a key.
     #[error("duplicate feasibility level key {0:?}")]
     DuplicateFeasibilityLevel(Arc<str>),
+    /// `risk_levels` has fewer than `min` or more than `max` levels.
+    #[error("risk_levels has fewer than {min} or more than {max} levels")]
+    RiskLevelCount {
+        /// Fewest levels.
+        min: usize,
+        /// Most levels.
+        max: usize,
+    },
+    /// Two risk levels share a key.
+    #[error("duplicate risk level key {0:?}")]
+    DuplicateRiskLevel(Arc<str>),
+    /// An impact category's `risk_matrix` does not have one row per impact
+    /// level and one column per feasibility level.
+    #[error("impact category {category:?} risk_matrix must be {expected_rows}x{expected_cols}")]
+    RiskMatrixDimensions {
+        /// Key of the impact category.
+        category: Arc<str>,
+        /// Expected row count (`levels.len()`).
+        expected_rows: usize,
+        /// Expected column count (`feasibility_levels.len()`).
+        expected_cols: usize,
+    },
+    /// An impact category's `risk_matrix` names a risk level that is not
+    /// declared in `risk_levels`.
+    #[error("impact category {category:?} risk_matrix names unknown risk level {risk:?}")]
+    UnknownRiskLevel {
+        /// Key of the impact category.
+        category: Arc<str>,
+        /// The unknown risk level key, at most 64 bytes of it (cut like
+        /// [`InvalidKey`](Self::InvalidKey)'s).
+        risk: Arc<str>,
+    },
     /// No security property is declared.
     #[error("at least one security property is required")]
     NoProperty,

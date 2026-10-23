@@ -50,8 +50,9 @@ use serde::ser::{self, Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use super::{Limit, MAX_KEY_BYTES, VocabKind};
 use crate::asset::PropertySet;
+use crate::control::{MAX_STEP_MITIGATIONS, RiskTreatment, StepMitigation};
 use crate::error::{PackError, StoreError};
-use crate::id::{AssetId, DamageId, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx};
+use crate::id::{AssetId, ControlId, DamageId, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx};
 use crate::methodology::{
     CatalogRef, CatalogScheme, FeasibilityLevel, ImpactCategory, Level, MAX_IMPACT_CATEGORIES,
     MAX_PROPERTIES, Methodology, Property, ThreatCategory,
@@ -671,6 +672,143 @@ impl<'de> Deserialize<'de> for StepFeasibility {
     }
 }
 
+/// Step mitigations for one node given as an object from `ControlId` to
+/// feasibility level key: at most 16 entries ([`MAX_STEP_MITIGATIONS`]),
+/// no control ID repeated, each pair resolved as it is read.
+pub(super) struct NodeMitigations(pub(super) Vec<(ControlId, FeasibilityLevel)>);
+
+impl<'de> Deserialize<'de> for NodeMitigations {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = NodeMitigations;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of step mitigations")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<NodeMitigations, A::Error> {
+                let m = context().map_err(raise)?;
+                let mut out = Vec::new();
+                let mut seen: Vec<ControlId> = Vec::new();
+                let mut count = 0usize;
+                let mut pending = None;
+                while let Some(control) = map.next_key_seed(WithStr::new(|s: &str| {
+                    if count >= MAX_STEP_MITIGATIONS {
+                        return Err(Fault::Limit(Limit::STEP_MITIGATIONS));
+                    }
+                    if !is_canonical_uuid(s) {
+                        return Err(Fault::InvalidId);
+                    }
+                    ControlId::from_str(s).map_err(|_| Fault::InvalidId)
+                }))? {
+                    count += 1;
+                    if seen.contains(&control) {
+                        return Err(raise(Fault::Duplicate));
+                    }
+                    seen.push(control);
+                    let level = map.next_value_seed(WithStr::new(|s: &str| {
+                        check_key_len(s)?;
+                        Ok(note_unknown(
+                            m.feasibility_level(s),
+                            VocabKind::FeasibilityLevel,
+                            s,
+                            &mut pending,
+                        ))
+                    }))?;
+                    if let Some(l) = level {
+                        out.push((control, l));
+                    }
+                }
+                match pending {
+                    Some(fault) => Err(raise(fault)),
+                    None if count == 0 => Err(de::Error::custom(
+                        "step_mitigations entry for a step must not be empty",
+                    )),
+                    None => Ok(NodeMitigations(out)),
+                }
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+/// Step mitigations across an attack tree given as an object from step
+/// `NodeId` to [`NodeMitigations`]: at most 32 entries
+/// ([`MAX_ATTACK_TREE_NODES`]), no node ID repeated.
+#[derive(Default)]
+pub(super) struct StepMitigations(pub(super) Vec<(NodeId, Vec<(ControlId, FeasibilityLevel)>)>);
+
+impl<'de> Deserialize<'de> for StepMitigations {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = StepMitigations;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of step mitigations by node")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<StepMitigations, A::Error> {
+                let mut out = Vec::new();
+                let mut seen: Vec<NodeId> = Vec::new();
+                let mut count = 0usize;
+                while let Some(node) = map.next_key_seed(WithStr::new(|s: &str| {
+                    if count >= MAX_ATTACK_TREE_NODES {
+                        return Err(Fault::Limit(Limit::ATTACK_TREE_NODES));
+                    }
+                    if !is_canonical_uuid(s) {
+                        return Err(Fault::InvalidId);
+                    }
+                    NodeId::from_str(s).map_err(|_| Fault::InvalidId)
+                }))? {
+                    count += 1;
+                    if seen.contains(&node) {
+                        return Err(raise(Fault::Duplicate));
+                    }
+                    seen.push(node);
+                    let inner: NodeMitigations = map.next_value()?;
+                    out.push((node, inner.0));
+                }
+                if count == 0 {
+                    return Err(de::Error::custom(
+                        "step_mitigations must be omitted when empty",
+                    ));
+                }
+                Ok(StepMitigations(out))
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RiskTreatmentWire {
+    Avoid,
+    Reduce,
+    Share,
+    Retain,
+}
+
+impl From<RiskTreatment> for RiskTreatmentWire {
+    fn from(t: RiskTreatment) -> Self {
+        match t {
+            RiskTreatment::Avoid => Self::Avoid,
+            RiskTreatment::Reduce => Self::Reduce,
+            RiskTreatment::Share => Self::Share,
+            RiskTreatment::Retain => Self::Retain,
+        }
+    }
+}
+
+impl From<RiskTreatmentWire> for RiskTreatment {
+    fn from(t: RiskTreatmentWire) -> Self {
+        match t {
+            RiskTreatmentWire::Avoid => Self::Avoid,
+            RiskTreatmentWire::Reduce => Self::Reduce,
+            RiskTreatmentWire::Share => Self::Share,
+            RiskTreatmentWire::Retain => Self::Retain,
+        }
+    }
+}
+
 /// Deserializes `T` into `Some(T)`. Used with
 /// `#[serde(default, deserialize_with = "some")]` so an omitted field
 /// becomes `None` while an explicit `null` is rejected.
@@ -983,6 +1121,8 @@ pub(super) struct SnapshotWire {
     pub(super) threat_scenarios: Vec<ThreatWire>,
     #[serde(default)]
     pub(super) attack_trees: Vec<TreeWire>,
+    #[serde(default)]
+    pub(super) security_controls: Vec<ControlWire>,
 }
 
 /// A snapshot asset: 48 bytes plus its name.
@@ -1018,7 +1158,11 @@ pub(super) struct ThreatWire {
     pub(super) catalog_refs: BoundedVec<CatalogRefText, RefsCap>,
     pub(super) damages: BoundedVec<WireId<DamageId>, LinksCap>,
     #[serde(default, deserialize_with = "some")]
+    pub(super) direct_feasibility: Option<FeasibilityLevelKey>,
+    #[serde(default, deserialize_with = "some")]
     pub(super) attack_tree: Option<WireId<TreeId>>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) treatment: Option<RiskTreatmentWire>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -1030,6 +1174,18 @@ pub(super) struct TreeWire {
     pub(super) id: WireId<TreeId>,
     pub(super) nodes: NodesWire,
     pub(super) step_feasibility: StepFeasibility,
+    #[serde(default)]
+    pub(super) step_mitigations: StepMitigations,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot security control.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ControlWire {
+    pub(super) id: WireId<ControlId>,
+    pub(super) name: Name,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -1172,6 +1328,13 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    SetThreatFeasibility {
+        threat: WireId<ThreatId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        level: Option<FeasibilityLevelKey>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetThreatAttackTree {
         threat: WireId<ThreatId>,
         #[serde(deserialize_with = "Option::deserialize")]
@@ -1181,6 +1344,37 @@ pub(super) enum OpWire {
     },
     RemoveAttackTree {
         id: WireId<TreeId>,
+    },
+    SetRiskTreatment {
+        threat: WireId<ThreatId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        treatment: Option<RiskTreatmentWire>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    AddSecurityControl {
+        id: WireId<ControlId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameSecurityControl {
+        id: WireId<ControlId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveSecurityControl {
+        id: WireId<ControlId>,
+    },
+    SetStepMitigation {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        control: WireId<ControlId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        feasibility: Option<FeasibilityLevelKey>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
 }
 
@@ -1527,6 +1721,63 @@ impl Serialize for StepFeasibilityByNode<'_> {
             if let Some(level) = self.project.step_feasibility(self.tree_idx, node_idx) {
                 map.serialize_entry(&Text(node_id), &Required(m.feasibility_level_key(level)))?;
             }
+        }
+        map.end()
+    }
+}
+
+/// A stored attack tree's step mitigations in arena order, steps without
+/// mitigations left out, as an object mapping node ID to `{control_id:
+/// feasibility_key}`. O(V + M).
+pub(super) struct StepMitigationsByNode<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) tree_idx: TreeIdx,
+    pub(super) tree: &'a AttackTree,
+}
+
+impl StepMitigationsByNode<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.tree.iter().all(|(node_idx, _, _)| {
+            self.project
+                .step_mitigations(self.tree_idx, node_idx)
+                .is_empty()
+        })
+    }
+}
+
+impl Serialize for StepMitigationsByNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(None)?;
+        for (node_idx, node_id, _) in self.tree.iter() {
+            let mitigations = self.project.step_mitigations(self.tree_idx, node_idx);
+            if !mitigations.is_empty() {
+                map.serialize_entry(
+                    &Text(node_id),
+                    &StepMitigationsForNode {
+                        project: self.project,
+                        mitigations,
+                    },
+                )?;
+            }
+        }
+        map.end()
+    }
+}
+
+struct StepMitigationsForNode<'a> {
+    project: &'a crate::project::Project,
+    mitigations: &'a [StepMitigation],
+}
+
+impl Serialize for StepMitigationsForNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let m = self.project.methodology();
+        let mut map = s.serialize_map(Some(self.mitigations.len()))?;
+        for mt in self.mitigations {
+            map.serialize_entry(
+                &Required(self.project.security_control_id(mt.control()).map(Text)),
+                &Required(m.feasibility_level_key(mt.feasibility())),
+            )?;
         }
         map.end()
     }

@@ -137,6 +137,7 @@ struct DefWire {
     label: Label,
     impact_categories: BoundedVec<Object<ImpactCategoryWire>, ImpactCategoriesCap>,
     feasibility_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
+    risk_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
     properties: BoundedVec<Object<EntryWire>, PropertiesCap>,
     threat_categories: BoundedVec<Object<ThreatCategoryWire>, ThreatCategoriesCap>,
     catalog_schemes: BoundedVec<Object<CatalogSchemeWire>, CatalogSchemesCap>,
@@ -156,6 +157,7 @@ struct ImpactCategoryWire {
     key: Key,
     label: Label,
     levels: BoundedVec<Object<EntryWire>, LevelsCap>,
+    risk_matrix: BoundedVec<BoundedVec<Key, LevelsCap>, LevelsCap>,
 }
 
 #[derive(serde::Deserialize)]
@@ -215,10 +217,23 @@ impl From<DefWire> for MethodologyDef {
                         .map(entry)
                         .map(|(key, label)| LevelDef { key, label })
                         .collect(),
+                    risk_matrix: c
+                        .risk_matrix
+                        .0
+                        .into_iter()
+                        .map(|row| row.0.into_iter().map(|k| k.0).collect())
+                        .collect(),
                 })
                 .collect(),
             feasibility_levels: w
                 .feasibility_levels
+                .0
+                .into_iter()
+                .map(entry)
+                .map(|(key, label)| LevelDef { key, label })
+                .collect(),
+            risk_levels: w
+                .risk_levels
                 .0
                 .into_iter()
                 .map(entry)
@@ -300,15 +315,22 @@ impl Serialize for View<'_, [Arc<str>]> {
     }
 }
 
+impl Serialize for View<'_, Vec<Arc<str>>> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        View(self.0.as_slice()).serialize(s)
+    }
+}
+
 impl Serialize for View<'_, MethodologyDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("methodology", 8)?;
+        let mut st = s.serialize_struct("methodology", 9)?;
         st.serialize_field("key", &*d.key)?;
         st.serialize_field("version", &*d.version)?;
         st.serialize_field("label", &*d.label)?;
         st.serialize_field("impact_categories", &View(d.impact_categories.as_slice()))?;
         st.serialize_field("feasibility_levels", &View(d.feasibility_levels.as_slice()))?;
+        st.serialize_field("risk_levels", &View(d.risk_levels.as_slice()))?;
         st.serialize_field("properties", &View(d.properties.as_slice()))?;
         st.serialize_field("threat_categories", &View(d.threat_categories.as_slice()))?;
         st.serialize_field("catalog_schemes", &View(d.catalog_schemes.as_slice()))?;
@@ -319,10 +341,11 @@ impl Serialize for View<'_, MethodologyDef> {
 impl Serialize for View<'_, ImpactCategoryDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let c = self.0;
-        let mut st = s.serialize_struct("impact_category", 3)?;
+        let mut st = s.serialize_struct("impact_category", 4)?;
         st.serialize_field("key", &*c.key)?;
         st.serialize_field("label", &*c.label)?;
         st.serialize_field("levels", &View(c.levels.as_slice()))?;
+        st.serialize_field("risk_matrix", &View(c.risk_matrix.as_slice()))?;
         st.end()
     }
 }
@@ -436,9 +459,12 @@ impl MethodologyDef {
     ///   "methodology": {
     ///     "key": "tiny", "version": "1", "label": "Tiny",
     ///     "impact_categories": [{ "key": "harm", "label": "Harm", "levels": [
-    ///       { "key": "low", "label": "Low" }, { "key": "high", "label": "High" }] }],
+    ///       { "key": "low", "label": "Low" }, { "key": "high", "label": "High" }],
+    ///       "risk_matrix": [["r1", "r2"], ["r2", "r2"]] }],
     ///     "feasibility_levels": [
     ///       { "key": "low", "label": "Low" }, { "key": "high", "label": "High" }],
+    ///     "risk_levels": [
+    ///       { "key": "r1", "label": "Low" }, { "key": "r2", "label": "High" }],
     ///     "properties": [{ "key": "integrity", "label": "Integrity" }],
     ///     "threat_categories": [{ "key": "corruption", "label": "Corruption",
     ///                             "violates": ["integrity"] }],
@@ -525,7 +551,8 @@ impl Methodology {
     ///
     /// let text = r#"{"format": "aegis-methodology-pack", "version": 1, "methodology": {
     ///   "key": "tiny", "version": "1", "label": "Tiny", "impact_categories": [],
-    ///   "feasibility_levels": [], "properties": [], "threat_categories": [], "catalog_schemes": []}}"#;
+    ///   "feasibility_levels": [], "risk_levels": [],
+    ///   "properties": [], "threat_categories": [], "catalog_schemes": []}}"#;
     /// let err = Methodology::read_pack(text.as_bytes()).err();
     /// assert!(matches!(err, Some(PackError::Methodology(MethodologyError::NoImpactCategory))));
     /// ```
@@ -546,7 +573,7 @@ mod tests {
 
     #[test]
     fn object_rejects_array_form() {
-        let text = format!(r#"{HEAD}["k","1","L",[],[],[],[],[]]}}"#);
+        let text = format!(r#"{HEAD}["k","1","L",[],[],[],[],[],[]]}}"#);
         assert!(matches!(
             MethodologyDef::read_pack(text.as_bytes()),
             Err(PackError::Decode { line: 1, .. })
@@ -571,7 +598,7 @@ mod tests {
     fn digits_missing_null_or_set() {
         let seg = |digits: &str| {
             let text = tiny(&format!(
-                r#"{{"key":"k","version":"1","label":"L","impact_categories":[],"feasibility_levels":[],"properties":[],"threat_categories":[],"catalog_schemes":[{{"key":"s","label":"S","syntax":{{"prefix":"","required":1,"segments":[{{"min":1,"max":9{digits}}}]}}}}]}}"#
+                r#"{{"key":"k","version":"1","label":"L","impact_categories":[],"feasibility_levels":[],"risk_levels":[],"properties":[],"threat_categories":[],"catalog_schemes":[{{"key":"s","label":"S","syntax":{{"prefix":"","required":1,"segments":[{{"min":1,"max":9{digits}}}]}}}}]}}"#
             ));
             MethodologyDef::read_pack(text.as_bytes())
                 .ok()

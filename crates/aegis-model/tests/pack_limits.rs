@@ -61,7 +61,7 @@ fn key_cap_in_every_position() {
     const KEY: Limit = Limit::KeyBytes { max: 64 };
     // Each case sets one key position to `key`.
     type Set = fn(&mut MethodologyDef, Arc<str>);
-    let positions: [(&str, Set); 8] = [
+    let positions: [(&str, Set); 10] = [
         ("methodology key", |d, k| d.key = k),
         ("impact category key", |d, k| d.impact_categories[1].key = k),
         ("level key", |d, k| d.impact_categories[0].levels[2].key = k),
@@ -81,6 +81,19 @@ fn key_cap_in_every_position() {
         ("catalog scheme key", |d, k| d.catalog_schemes[0].key = k),
         ("feasibility level key", |d, k| {
             d.feasibility_levels[2].key = k
+        }),
+        ("risk level key", |d, k| {
+            d.risk_levels.push(LevelDef {
+                key: k,
+                label: "Extra".into(),
+            });
+        }),
+        ("risk matrix entry", |d, k| {
+            d.risk_levels.push(LevelDef {
+                key: Arc::clone(&k),
+                label: "Extra".into(),
+            });
+            d.impact_categories[0].risk_matrix[0][0] = k;
         }),
     ];
     for (what, set) in positions {
@@ -117,7 +130,7 @@ fn methodology_version_cap() {
 fn label_cap_in_every_position() {
     const LABEL: Limit = Limit::LabelBytes { max: 1024 };
     type Set = fn(&mut MethodologyDef, Arc<str>);
-    let positions: [(&str, Set); 7] = [
+    let positions: [(&str, Set); 8] = [
         ("methodology label", |d, l| d.label = l),
         ("impact category label", |d, l| {
             d.impact_categories[2].label = l
@@ -135,6 +148,7 @@ fn label_cap_in_every_position() {
         ("feasibility level label", |d, l| {
             d.feasibility_levels[2].label = l
         }),
+        ("risk level label", |d, l| d.risk_levels[1].label = l),
     ];
     assert_eq!(MAX_LABEL_BYTES, 1024);
     for (what, set) in positions {
@@ -174,6 +188,7 @@ fn impact_category_count_cap() {
         key: key_of_len("c", i, 6),
         label: "C".into(),
         levels: second_def().impact_categories[2].levels.clone(),
+        risk_matrix: second_def().impact_categories[2].risk_matrix.clone(),
     };
     let mut d = second_def();
     d.impact_categories = (0..32).map(category).collect();
@@ -189,7 +204,9 @@ fn level_count_cap() {
         label: "L".into(),
     };
     let mut d = second_def();
+    let row = d.impact_categories[1].risk_matrix[0].clone();
     d.impact_categories[1].levels = (0..16).map(level).collect();
+    d.impact_categories[1].risk_matrix = vec![row; 16];
     at_cap(&d, "16 levels");
     d.impact_categories[1].levels.push(level(16));
     over_cap(&d, Limit::Levels { max: 16 }, "17 levels");
@@ -203,9 +220,46 @@ fn feasibility_level_count_cap() {
     };
     let mut d = second_def();
     d.feasibility_levels = (0..16).map(level).collect();
+    for c in &mut d.impact_categories {
+        for row in &mut c.risk_matrix {
+            row.resize(16, "acceptable".into());
+        }
+    }
     at_cap(&d, "16 feasibility levels");
     d.feasibility_levels.push(level(16));
     over_cap(&d, Limit::Levels { max: 16 }, "17 feasibility levels");
+}
+
+#[test]
+fn risk_level_and_matrix_count_caps() {
+    let level = |i: usize| LevelDef {
+        key: key_of_len("r", i, 6),
+        label: "R".into(),
+    };
+    let mut d = second_def();
+    d.risk_levels = (0..16).map(level).collect();
+    let r0 = Arc::clone(&d.risk_levels[0].key);
+    for c in &mut d.impact_categories {
+        for row in &mut c.risk_matrix {
+            for cell in row {
+                *cell = Arc::clone(&r0);
+            }
+        }
+    }
+    at_cap(&d, "16 risk levels");
+    d.risk_levels.push(level(16));
+    over_cap(&d, Limit::Levels { max: 16 }, "17 risk levels");
+
+    // Matrix row and column caps.
+    let mut d = second_def();
+    d.impact_categories[0]
+        .risk_matrix
+        .resize(17, vec!["acceptable".into(); 5]);
+    over_cap(&d, Limit::Levels { max: 16 }, "17 risk matrix rows");
+
+    let mut d = second_def();
+    d.impact_categories[0].risk_matrix[0].resize(17, "acceptable".into());
+    over_cap(&d, Limit::Levels { max: 16 }, "17 risk matrix cols");
 }
 
 #[test]
@@ -362,6 +416,12 @@ fn maximal_pack_loads_below_the_file_cap() {
     assert!(def.threat_categories.iter().all(|t| t.violates.len() == 64));
     assert_eq!(def.catalog_schemes.len(), 16);
     assert_eq!(def.feasibility_levels.len(), 16);
+    assert_eq!(def.risk_levels.len(), 16);
+    assert!(
+        def.impact_categories
+            .iter()
+            .all(|c| c.risk_matrix.len() == 16 && c.risk_matrix.iter().all(|r| r.len() == 16))
+    );
     let m = Methodology::read_pack(bytes.as_slice()).expect("maximal pack loads");
     assert_eq!(Methodology::new(def).ok(), Some(m));
 }

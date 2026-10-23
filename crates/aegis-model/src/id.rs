@@ -511,6 +511,49 @@ entity_ids! {
     pub struct TreeId;
 }
 
+entity_ids! {
+    /// Internal index of a security control in a [`Project`](crate::Project)
+    /// arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::ControlIdx>(), 4);
+    /// ```
+    pub struct ControlIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = ControlId::new_v7();
+        /// project.apply(Op::AddSecurityControl {
+        ///     id,
+        ///     name: "Message authentication".into(),
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.security_control_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a security control: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::ControlId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = ControlId::new_v7();
+    /// assert_eq!(id.to_string().parse::<ControlId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct ControlId;
+}
+
 #[cfg(test)]
 mod parse {
     use super::*;
@@ -666,6 +709,11 @@ mod entity_ids {
     }
 
     #[test]
+    fn ids_control_accepts_only_v7_and_round_trips() {
+        id_checks!(ControlId);
+    }
+
+    #[test]
     fn ids_node_id_unchanged() {
         id_checks!(NodeId);
     }
@@ -676,6 +724,7 @@ mod entity_ids {
         assert_eq!(DamageIdx::from_u32(0).position(), 0);
         assert_eq!(ThreatIdx::from_u32(u32::MAX).index(), u32::MAX as usize);
         assert_eq!(TreeIdx::from_u32(42).index(), 42);
+        assert_eq!(ControlIdx::from_u32(99).index(), 99);
     }
 }
 

@@ -72,10 +72,18 @@ pub const MAX_KEY_LEN: usize = 64;
 ///             LevelDef { key: "low".into(), label: "Low".into() },
 ///             LevelDef { key: "high".into(), label: "High".into() },
 ///         ],
+///         risk_matrix: vec![
+///             vec!["r1".into(), "r2".into()],
+///             vec!["r2".into(), "r2".into()],
+///         ],
 ///     }],
 ///     feasibility_levels: vec![
 ///         LevelDef { key: "low".into(), label: "Low".into() },
 ///         LevelDef { key: "high".into(), label: "High".into() },
+///     ],
+///     risk_levels: vec![
+///         LevelDef { key: "r1".into(), label: "Risk 1".into() },
+///         LevelDef { key: "r2".into(), label: "Risk 2".into() },
 ///     ],
 ///     properties: vec![PropertyDef { key: "integrity".into(), label: "Integrity".into() }],
 ///     threat_categories: vec![ThreatCategoryDef {
@@ -104,6 +112,9 @@ pub struct MethodologyDef {
     /// first. Must hold between [`MIN_LEVELS`] (2) and [`MAX_LEVELS`] (16)
     /// levels with unique keys.
     pub feasibility_levels: Vec<LevelDef>,
+    /// Ordered scale of risk levels, lowest risk first. Must hold between
+    /// [`MIN_LEVELS`] (2) and [`MAX_LEVELS`] (16) levels with unique keys.
+    pub risk_levels: Vec<LevelDef>,
     /// Security properties, 1 to 64.
     pub properties: Vec<PropertyDef>,
     /// Threat categories, 1 to 64.
@@ -112,7 +123,7 @@ pub struct MethodologyDef {
     pub catalog_schemes: Vec<CatalogSchemeDef>,
 }
 
-/// One impact category and its ordered rating scale.
+/// One impact category, its ordered rating scale, and its 2D risk matrix.
 ///
 /// ```
 /// use aegis_model::{ImpactCategoryDef, LevelDef};
@@ -123,6 +134,10 @@ pub struct MethodologyDef {
 ///     levels: vec![
 ///         LevelDef { key: "low".into(), label: "Low".into() },
 ///         LevelDef { key: "high".into(), label: "High".into() },
+///     ],
+///     risk_matrix: vec![
+///         vec!["r1".into(), "r2".into()],
+///         vec!["r2".into(), "r2".into()],
 ///     ],
 /// };
 /// assert_eq!(c.levels.len(), 2);
@@ -135,6 +150,10 @@ pub struct ImpactCategoryDef {
     pub label: Arc<str>,
     /// The rating scale, lowest first, 2 to 16 levels.
     pub levels: Vec<LevelDef>,
+    /// 2D lookup table mapping `(impact_level, feasibility_level)` to a key
+    /// in [`MethodologyDef::risk_levels`]. Must have `levels.len()` rows and
+    /// `feasibility_levels.len()` columns per row.
+    pub risk_matrix: Vec<Vec<Arc<str>>>,
 }
 
 /// One level of a rating scale.
@@ -308,6 +327,25 @@ vocab_index! {
 }
 
 vocab_index! {
+    /// Index of a risk level inside a [`Methodology`], ordered from lowest
+    /// (`0`) to highest risk. 1 byte.
+    ///
+    /// `Ord` is the scale order (lowest risk = 0), so worst-case risk across
+    /// impact categories or damage scenarios is simply `max`.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.risk_level("r1") < m.risk_level("r5"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    RiskLevel
+}
+
+vocab_index! {
     /// Index of a security property in a [`Methodology`]. 1 byte.
     ///
     /// ```
@@ -403,6 +441,8 @@ struct CategoryData {
     entry: Entry,
     levels: Vec<Entry>,
     level_by_key: BTreeMap<Arc<str>, u8>,
+    /// Row-major `levels.len() * feasibility_levels.len()` lookup table.
+    risk_matrix: Box<[RiskLevel]>,
 }
 
 /// A validated threat category.
@@ -452,6 +492,8 @@ pub struct Methodology {
     impact_by_key: BTreeMap<Arc<str>, u8>,
     feasibility_levels: Vec<Entry>,
     feasibility_by_key: BTreeMap<Arc<str>, u8>,
+    risk_levels: Vec<Entry>,
+    risk_by_key: BTreeMap<Arc<str>, u8>,
     properties: Vec<Entry>,
     property_by_key: BTreeMap<Arc<str>, u8>,
     threat_categories: Vec<ThreatCategoryData>,
@@ -583,6 +625,7 @@ impl Methodology {
     ///     label: "Bad".into(),
     ///     impact_categories: vec![],
     ///     feasibility_levels: vec![],
+    ///     risk_levels: vec![],
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
@@ -597,8 +640,15 @@ impl Methodology {
         }
         check_label(&def.key, &def.label)?;
 
-        let impacts = Self::build_impacts(&def.impact_categories)?;
+        let mut impacts = Self::build_impacts(&def.impact_categories)?;
         let feasibility = Self::build_feasibility_levels(&def.feasibility_levels)?;
+        let risks = Self::build_risk_levels(&def.risk_levels)?;
+        Self::build_risk_matrices(
+            &def.impact_categories,
+            &mut impacts.items,
+            feasibility.items.len(),
+            &risks.by_key,
+        )?;
         let properties = Self::build_properties(&def.properties)?;
         let all_properties = (0..properties.items.len())
             .filter_map(|i| u8::try_from(i).ok().map(Property))
@@ -614,6 +664,8 @@ impl Methodology {
             impact_by_key: impacts.by_key,
             feasibility_levels: feasibility.items,
             feasibility_by_key: feasibility.by_key,
+            risk_levels: risks.items,
+            risk_by_key: risks.by_key,
             properties: properties.items,
             property_by_key: properties.by_key,
             threat_categories: threats.items,
@@ -643,6 +695,62 @@ impl Methodology {
             )?);
         }
         Ok(Vocab { items: out, by_key })
+    }
+
+    fn build_risk_levels(defs: &[LevelDef]) -> Result<Vocab<Entry>, MethodologyError> {
+        check_count(defs.len(), MIN_LEVELS, MAX_LEVELS, || {
+            MethodologyError::RiskLevelCount {
+                min: MIN_LEVELS,
+                max: MAX_LEVELS,
+            }
+        })?;
+        let mut by_key = BTreeMap::new();
+        let mut out = Vec::with_capacity(defs.len());
+        for (pos, l) in defs.iter().enumerate() {
+            out.push(add_entry(
+                &l.key,
+                &l.label,
+                pos,
+                &mut by_key,
+                MethodologyError::DuplicateRiskLevel,
+            )?);
+        }
+        Ok(Vocab { items: out, by_key })
+    }
+
+    fn build_risk_matrices(
+        defs: &[ImpactCategoryDef],
+        categories: &mut [CategoryData],
+        feasibility_count: usize,
+        risk_by_key: &BTreeMap<Arc<str>, u8>,
+    ) -> Result<(), MethodologyError> {
+        for (def, cat) in defs.iter().zip(categories.iter_mut()) {
+            let expected_rows = cat.levels.len();
+            let expected_cols = feasibility_count;
+            if def.risk_matrix.len() != expected_rows
+                || def.risk_matrix.iter().any(|row| row.len() != expected_cols)
+            {
+                return Err(MethodologyError::RiskMatrixDimensions {
+                    category: Arc::clone(&def.key),
+                    expected_rows,
+                    expected_cols,
+                });
+            }
+            let mut matrix = Vec::with_capacity(expected_rows * expected_cols);
+            for row in &def.risk_matrix {
+                for key in row {
+                    let Some(&r) = risk_by_key.get(key) else {
+                        return Err(MethodologyError::UnknownRiskLevel {
+                            category: Arc::clone(&def.key),
+                            risk: error_key_text(key),
+                        });
+                    };
+                    matrix.push(RiskLevel(r));
+                }
+            }
+            cat.risk_matrix = matrix.into_boxed_slice();
+        }
+        Ok(())
     }
 
     fn build_impacts(defs: &[ImpactCategoryDef]) -> Result<Vocab<CategoryData>, MethodologyError> {
@@ -682,6 +790,7 @@ impl Methodology {
                 entry,
                 levels,
                 level_by_key,
+                risk_matrix: Box::new([]),
             });
         }
         Ok(Vocab { items: out, by_key })
@@ -1079,6 +1188,132 @@ impl Methodology {
         self.feasibility_levels
             .get(level.index())
             .map(|e| &*e.label)
+    }
+
+    // -- Risk levels and risk matrices ----------------------------------------
+
+    /// Iterates the risk scale in declaration order, lowest risk first:
+    /// `(index, key, label)`. Time O(1) per item.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let keys: Vec<_> = m.risk_levels().map(|(_, k, _)| k).collect();
+    /// assert_eq!(keys, ["r1", "r2", "r3", "r4", "r5"]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn risk_levels(&self) -> impl ExactSizeIterator<Item = (RiskLevel, &str, &str)> + '_ {
+        self.risk_levels.iter().enumerate().map(|(i, e)| {
+            let idx = u8::try_from(i).unwrap_or(u8::MAX);
+            (RiskLevel(idx), &*e.key, &*e.label)
+        })
+    }
+
+    /// Returns the number of risk levels in this methodology's scale. Time
+    /// O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// assert_eq!(Methodology::iso21434_r155()?.risk_level_count(), 5);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn risk_level_count(&self) -> usize {
+        self.risk_levels.len()
+    }
+
+    /// Resolves a risk level key in O(log R), R <= 16; space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.risk_level("r5").map(|r| r.index()), Some(4));
+    /// assert_eq!(m.risk_level("nope"), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn risk_level(&self, key: &str) -> Option<RiskLevel> {
+        self.risk_by_key.get(key).copied().map(RiskLevel)
+    }
+
+    /// Returns the key of `level` in O(1), or `None` if `level` is outside
+    /// this methodology's risk scale. Space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let r4 = m.risk_level("r4");
+    /// assert_eq!(r4.and_then(|r| m.risk_level_key(r)), Some("r4"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn risk_level_key(&self, level: RiskLevel) -> Option<&str> {
+        self.risk_levels.get(level.index()).map(|e| &*e.key)
+    }
+
+    /// Returns the human-readable label of `level` in O(1), or `None` if
+    /// `level` is outside this methodology's risk scale. Space O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let r1 = m.risk_level("r1");
+    /// assert_eq!(r1.and_then(|r| m.risk_level_label(r)), Some("Risk 1"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn risk_level_label(&self, level: RiskLevel) -> Option<&str> {
+        self.risk_levels.get(level.index()).map(|e| &*e.label)
+    }
+
+    /// Looks up the risk level for `(category, impact, feasibility)` in
+    /// `category`'s 2D risk matrix in O(1) time and O(1) space. Returns `None`
+    /// if `category`, `impact`, or `feasibility` is out of range for this
+    /// methodology.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let safety = m.impact_category("safety").ok_or("no category")?;
+    /// let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// let high = m.feasibility_level("high").ok_or("no feasibility")?;
+    /// let r5 = m.risk_level("r5").ok_or("no risk")?;
+    /// assert_eq!(m.risk_for(safety, severe, high), Some(r5));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn risk_for(
+        &self,
+        category: ImpactCategory,
+        impact: Level,
+        feasibility: FeasibilityLevel,
+    ) -> Option<RiskLevel> {
+        let cat = self.impact_categories.get(category.index())?;
+        let cols = self.feasibility_levels.len();
+        if impact.index() >= cat.levels.len() || feasibility.index() >= cols {
+            return None;
+        }
+        cat.risk_matrix
+            .get(impact.index() * cols + feasibility.index())
+            .copied()
     }
 
     // -- Properties ----------------------------------------------------------
@@ -1521,6 +1756,16 @@ impl Methodology {
         }
     }
 
+    /// Checks that a risk level is in this methodology's scale. Time O(1).
+    #[allow(dead_code)]
+    pub(crate) fn check_risk_level(&self, level: RiskLevel) -> Result<(), ModelError> {
+        if level.index() < self.risk_levels.len() {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownRiskLevel(level))
+        }
+    }
+
     fn category_data(&self, cat: ImpactCategory) -> Option<&CategoryData> {
         self.impact_categories.get(cat.index())
     }
@@ -1561,6 +1806,19 @@ mod tests {
             key: key.into(),
             label: key.into(),
             levels: (0..levels).map(|i| level(&format!("l{i}"))).collect(),
+            risk_matrix: (0..levels)
+                .map(|r| {
+                    (0..3)
+                        .map(|c| {
+                            if r == 0 || c == 0 {
+                                "r0".into()
+                            } else {
+                                "r1".into()
+                            }
+                        })
+                        .collect()
+                })
+                .collect(),
         }
     }
 
@@ -1601,6 +1859,7 @@ mod tests {
             label: "Base".into(),
             impact_categories: vec![category("harm", 3), category("cost", 2)],
             feasibility_levels: vec![level("f0"), level("f1"), level("f2")],
+            risk_levels: vec![level("r0"), level("r1")],
             properties: vec![entry_def("c"), entry_def("i"), entry_def("a")],
             threat_categories: vec![threat("leak", &["c"]), threat("wipe", &["i", "a"])],
             catalog_schemes: vec![scheme("cat", "X-", vec![seg(1, 99, None)], 1)],
@@ -1617,6 +1876,8 @@ mod tests {
         assert_eq!(m.impact_category_count(), 2);
         assert_eq!(m.level_count(ImpactCategory(0)), 3);
         assert_eq!(m.feasibility_levels().len(), 3);
+        assert_eq!(m.risk_level_count(), 2);
+        assert_eq!(m.risk_levels().len(), 2);
         assert_eq!(m.property_count(), 3);
         assert_eq!(m.threat_category_count(), 2);
         assert_eq!(m.catalog_scheme_count(), 1);
@@ -1638,12 +1899,20 @@ mod tests {
                 let lk = m.level_key(c, l).expect("level key");
                 assert_eq!(m.level(c, lk), Some(l));
                 assert!(m.level_label(c, l).is_some());
+                for (f, _, _) in m.feasibility_levels() {
+                    assert!(m.risk_for(c, l, f).is_some());
+                }
             }
         }
         for (f, key, label) in m.feasibility_levels() {
             assert_eq!(m.feasibility_level(key), Some(f));
             assert_eq!(m.feasibility_level_key(f), Some(key));
             assert_eq!(m.feasibility_level_label(f), Some(label));
+        }
+        for (r, key, label) in m.risk_levels() {
+            assert_eq!(m.risk_level(key), Some(r));
+            assert_eq!(m.risk_level_key(r), Some(key));
+            assert_eq!(m.risk_level_label(r), Some(label));
         }
         for p in m.properties() {
             assert_eq!(m.property(m.property_key(p).expect("key")), Some(p));
@@ -1666,6 +1935,20 @@ mod tests {
         }
         assert_eq!(m.feasibility_level_key(FeasibilityLevel(3)), None);
         assert_eq!(m.feasibility_level_label(FeasibilityLevel(3)), None);
+        assert_eq!(m.risk_level_key(RiskLevel(2)), None);
+        assert_eq!(m.risk_level_label(RiskLevel(2)), None);
+        assert_eq!(
+            m.risk_for(ImpactCategory(9), Level(0), FeasibilityLevel(0)),
+            None
+        );
+        assert_eq!(
+            m.risk_for(ImpactCategory(0), Level(9), FeasibilityLevel(0)),
+            None
+        );
+        assert_eq!(
+            m.risk_for(ImpactCategory(0), Level(0), FeasibilityLevel(9)),
+            None
+        );
         assert_eq!(m.property_key(Property(3)), None);
         assert_eq!(m.level_key(ImpactCategory(1), Level(2)), None);
         assert_eq!(m.catalog_scheme_key(CatalogScheme(1)), None);
@@ -1691,6 +1974,11 @@ mod tests {
         assert_eq!(
             m.check_feasibility_level(FeasibilityLevel(3)),
             Err(ModelError::UnknownFeasibilityLevel(FeasibilityLevel(3)))
+        );
+        assert_eq!(m.check_risk_level(RiskLevel(1)), Ok(()));
+        assert_eq!(
+            m.check_risk_level(RiskLevel(2)),
+            Err(ModelError::UnknownRiskLevel(RiskLevel(2)))
         );
         assert_eq!(
             m.check_threat_category(ThreatCategory(2)),
@@ -1743,8 +2031,69 @@ mod tests {
         for len in [2, 16] {
             let mut d = base();
             d.feasibility_levels = (0..len).map(|i| level(&format!("f{i}"))).collect();
+            for cat in &mut d.impact_categories {
+                cat.risk_matrix = vec![vec!["r0".into(); len]; cat.levels.len()];
+            }
             assert!(Methodology::new(d).is_ok());
         }
+    }
+
+    #[test]
+    fn methodology_rejects_duplicate_risk_level() {
+        let mut d = base();
+        d.risk_levels.push(level("r0"));
+        rejects(d, &MethodologyError::DuplicateRiskLevel("r0".into()));
+    }
+
+    #[test]
+    fn methodology_rejects_risk_level_counts() {
+        for len in [0, 1, 17] {
+            let mut d = base();
+            d.risk_levels = (0..len).map(|i| level(&format!("r{i}"))).collect();
+            rejects(d, &MethodologyError::RiskLevelCount { min: 2, max: 16 });
+        }
+        for len in [2, 16] {
+            let mut d = base();
+            d.risk_levels = (0..len).map(|i| level(&format!("r{i}"))).collect();
+            assert!(Methodology::new(d).is_ok());
+        }
+    }
+
+    #[test]
+    fn methodology_rejects_bad_risk_matrix_dimensions() {
+        let mut d = base();
+        d.impact_categories[0].risk_matrix.pop();
+        rejects(
+            d,
+            &MethodologyError::RiskMatrixDimensions {
+                category: "harm".into(),
+                expected_rows: 3,
+                expected_cols: 3,
+            },
+        );
+        let mut d = base();
+        d.impact_categories[1].risk_matrix[0].pop();
+        rejects(
+            d,
+            &MethodologyError::RiskMatrixDimensions {
+                category: "cost".into(),
+                expected_rows: 2,
+                expected_cols: 3,
+            },
+        );
+    }
+
+    #[test]
+    fn methodology_rejects_unknown_risk_level_in_matrix() {
+        let mut d = base();
+        d.impact_categories[0].risk_matrix[1][2] = "r9".into();
+        rejects(
+            d,
+            &MethodologyError::UnknownRiskLevel {
+                category: "harm".into(),
+                risk: "r9".into(),
+            },
+        );
     }
 
     #[test]
@@ -1800,11 +2149,12 @@ mod tests {
         rejects(d, &MethodologyError::InvalidKey("L0".into()));
     }
 
-    /// The key text an error from `new` keeps, for the two variants that can
+    /// The key text an error from `new` keeps, for the variants that can
     /// hold an unvalidated key.
     fn error_key(e: &MethodologyError) -> Option<&Arc<str>> {
         match e {
             MethodologyError::InvalidKey(k) => Some(k),
+            MethodologyError::UnknownRiskLevel { risk, .. } => Some(risk),
             MethodologyError::UnknownViolatedProperty { property, .. } => Some(property),
             _ => None,
         }
@@ -1834,6 +2184,12 @@ mod tests {
             cases.push(d);
             let mut d = base();
             d.feasibility_levels[2].key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.risk_levels[1].key = Arc::clone(&huge);
+            cases.push(d);
+            let mut d = base();
+            d.impact_categories[0].risk_matrix[0][0] = Arc::clone(&huge);
             cases.push(d);
             let mut d = base();
             d.properties[2].key = Arc::clone(&huge);
@@ -2176,6 +2532,7 @@ mod tests {
         assert_eq!(size_of::<ImpactCategory>(), 1);
         assert_eq!(size_of::<Level>(), 1);
         assert_eq!(size_of::<FeasibilityLevel>(), 1);
+        assert_eq!(size_of::<RiskLevel>(), 1);
         assert_eq!(size_of::<Property>(), 1);
         assert_eq!(size_of::<ThreatCategory>(), 1);
         assert_eq!(size_of::<CatalogScheme>(), 1);

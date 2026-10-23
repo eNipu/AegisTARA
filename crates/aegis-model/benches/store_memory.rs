@@ -142,10 +142,18 @@ fn short_keys() -> Arc<Methodology> {
                             label: l.into(),
                         })
                         .collect(),
+                    risk_matrix: vec![vec!["a".into(), "b".into()], vec!["b".into(), "b".into()]],
                 }
             })
             .collect(),
         feasibility_levels: ["a", "b"]
+            .iter()
+            .map(|&l| LevelDef {
+                key: l.into(),
+                label: l.into(),
+            })
+            .collect(),
+        risk_levels: ["a", "b"]
             .iter()
             .map(|&l| LevelDef {
                 key: l.into(),

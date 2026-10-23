@@ -66,10 +66,10 @@ const TINY: &str = r#"{
 "version": 1,
 "methodology": {
 "key": "tiny", "version": "1", "label": "Tiny",
-"impact_categories": [{"key": "harm", "label": "Harm", "levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]}],
+"impact_categories": [{"key": "harm", "label": "Harm", "levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}], "risk_matrix": [["low", "high"], ["high", "high"]]}],
 "properties": [{"key": "i", "label": "I"}],
 "threat_categories": [{"key": "t", "label": "T", "violates": ["i"]}],
-"catalog_schemes": [{"key": "s", "label": "S", "syntax": {"prefix": "", "required": 1, "segments": [{"min": 1, "max": 9}]}}], "feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]
+"catalog_schemes": [{"key": "s", "label": "S", "syntax": {"prefix": "", "required": 1, "segments": [{"min": 1, "max": 9}]}}], "feasibility_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}], "risk_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]
 }
 }
 "#;
@@ -313,6 +313,28 @@ fn pack_rejects_model_rule_breaks_as_methodology_errors() {
         read(&dup_f),
         Err(PackError::Methodology(MethodologyError::DuplicateFeasibilityLevel(k))) if &*k == "low"
     ));
+    // Risk scale and matrix rules are checked too.
+    let one_r = edit(
+        r#""risk_levels": [{"key": "low", "label": "Low"}, {"key": "high", "label": "High"}]"#,
+        r#""risk_levels": [{"key": "low", "label": "Low"}]"#,
+    );
+    assert!(matches!(
+        read(&one_r),
+        Err(PackError::Methodology(MethodologyError::RiskLevelCount {
+            min: 2,
+            max: 16
+        }))
+    ));
+    let bad_matrix = edit(
+        r#""risk_matrix": [["low", "high"], ["high", "high"]]"#,
+        r#""risk_matrix": [["low", "high"], ["high", "unknown"]]"#,
+    );
+    assert!(matches!(
+        read(&bad_matrix),
+        Err(PackError::Methodology(
+            MethodologyError::UnknownRiskLevel { .. }
+        ))
+    ));
 }
 
 #[test]
@@ -350,10 +372,12 @@ fn pack_rejects_neither_missing_nor_null_digits() {
 #[test]
 fn pack_rejects_nothing_when_fields_are_reordered() {
     // Field order is free on input; the writer's order is canonical.
-    let text = r#"{"methodology": {"feasibility_levels": [{"label": "L", "key": "l"}, {"label": "H", "key": "h"}],
+    let text = r#"{"methodology": {"risk_levels": [{"label": "L", "key": "l"}, {"label": "H", "key": "h"}],
+        "feasibility_levels": [{"label": "L", "key": "l"}, {"label": "H", "key": "h"}],
         "catalog_schemes": [], "threat_categories": [{"violates": ["i"], "label": "T", "key": "t"}],
-        "properties": [{"label": "I", "key": "i"}], "impact_categories": [{"levels": [{"label": "L", "key": "l"},
-        {"label": "H", "key": "h"}], "label": "C", "key": "c"}], "label": "X", "version": "1", "key": "x"},
+        "properties": [{"label": "I", "key": "i"}], "impact_categories": [{"risk_matrix": [["l", "h"], ["h", "h"]],
+        "levels": [{"label": "L", "key": "l"}, {"label": "H", "key": "h"}], "label": "C", "key": "c"}],
+        "label": "X", "version": "1", "key": "x"},
         "version": 1, "format": "aegis-methodology-pack"}"#;
     let def = MethodologyDef::read_pack(text.as_bytes()).expect("valid");
     let canonical = pack_bytes(&def);

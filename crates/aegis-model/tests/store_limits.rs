@@ -11,11 +11,13 @@ use std::sync::Arc;
 use aegis_model::{
     AttackTree, CatalogSchemeDef, CatalogSyntax, GateKind, ImpactCategoryDef, LevelDef, Limit,
     MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES,
-    MAX_PROJECT_FILE_BYTES, Methodology, MethodologyDef, Node, Op, OpLogReader, Project,
-    PropertyDef, Provenance, SegmentDef, StoreError, ThreatCategoryDef,
+    MAX_PROJECT_FILE_BYTES, MAX_STEP_MITIGATIONS, Methodology, MethodologyDef, Node, Op,
+    OpLogReader, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef, StoreError,
+    ThreatCategoryDef,
 };
 use common::{
-    asset_id, builtin, damage_id, node_id, read_log, save, threat_id, tree_id, write_log,
+    asset_id, builtin, control_id, damage_id, node_id, read_log, save, threat_id, tree_id,
+    write_log,
 };
 use serde_json::{Value, json};
 
@@ -290,6 +292,44 @@ fn caps_step_feasibility() {
 }
 
 #[test]
+fn caps_step_mitigations() {
+    let want = Limit::StepMitigations { max: 16 };
+    let mits17: serde_json::Map<String, Value> =
+        (0..17).map(|i| (id(200 + i), json!("low"))).collect();
+    let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
+                        "step_feasibility": {},
+                        "step_mitigations": {id(100): mits17}}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
+        want,
+    );
+
+    // 33 outer nodes in step_mitigations trips Limit::AttackTreeNodes.
+    let nodes33: serde_json::Map<String, Value> = (0..33)
+        .map(|i| (id(100 + i), json!({id(200): "low"})))
+        .collect();
+    let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
+                        "step_feasibility": {},
+                        "step_mitigations": nodes33}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
+        Limit::AttackTreeNodes { max: 32 },
+    );
+}
+
+#[test]
 fn caps_keys() {
     let want = Limit::KeyBytes { max: 64 };
     let key = "k".repeat(65);
@@ -421,6 +461,16 @@ fn key64(prefix: &str, i: usize) -> Arc<str> {
 /// catalog schemes with a 16-byte prefix and 4 segments of 5 digits.
 fn maxed() -> Arc<Methodology> {
     let label = |k: &Arc<str>| k.clone();
+    let risk_levels: Vec<LevelDef> = (0..16)
+        .map(|r| {
+            let key = key64("r", r);
+            LevelDef {
+                label: label(&key),
+                key,
+            }
+        })
+        .collect();
+    let risk_row: Vec<Arc<str>> = risk_levels.iter().map(|r| Arc::clone(&r.key)).collect();
     let def = MethodologyDef {
         key: key64("maxed", 0),
         version: "\u{1d11e}".repeat(64).into(),
@@ -440,6 +490,7 @@ fn maxed() -> Arc<Methodology> {
                             }
                         })
                         .collect(),
+                    risk_matrix: vec![risk_row.clone(); 16],
                 }
             })
             .collect(),
@@ -492,6 +543,7 @@ fn maxed() -> Arc<Methodology> {
                 }
             })
             .collect(),
+        risk_levels,
     };
     Arc::new(Methodology::new(def).expect("maxed methodology is valid"))
 }
@@ -575,14 +627,40 @@ fn limits_admit_every_valid_project() {
     ops.push(Op::AddAttackTree {
         id: tree_id(1),
         tree,
-        step_feasibility,
+        step_feasibility: step_feasibility.clone(),
         provenance: max_prov.clone(),
     });
     ops.push(Op::SetThreatAttackTree {
         threat: threat_id(1),
         tree: Some(tree_id(1)),
-        provenance: max_prov,
+        provenance: max_prov.clone(),
     });
+    ops.push(Op::SetRiskTreatment {
+        threat: threat_id(1),
+        treatment: Some(RiskTreatment::Reduce),
+        provenance: max_prov.clone(),
+    });
+    let control_ids: Vec<_> = (0..MAX_STEP_MITIGATIONS as u64)
+        .map(|i| control_id(800 + i))
+        .collect();
+    for &cid in &control_ids {
+        ops.push(Op::AddSecurityControl {
+            id: cid,
+            name: long_name.clone(),
+            provenance: max_prov.clone(),
+        });
+    }
+    for &(sid, _) in &step_feasibility {
+        for &cid in &control_ids {
+            ops.push(Op::SetStepMitigation {
+                tree: tree_id(1),
+                node: sid,
+                control: cid,
+                feasibility: Some(flvl),
+                provenance: max_prov.clone(),
+            });
+        }
+    }
     let mut p = Project::new(Arc::clone(&m));
     for op in &ops {
         p.apply(op.clone()).expect("valid at every limit");

@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use aegis_model::{
     AttackTree, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter, Project,
-    Provenance, ProvenanceSource, StoreError, VocabKind,
+    Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, cref, damage_id, describe, feas, lvl, node_id, prop, props,
-    read_log, reordered, save, scheme, second, second_def, threat_cat, threat_id, tree_id, wide,
-    write_log,
+    SENTINEL, asset_id, builtin, cat, control_id, cref, damage_id, describe, feas, lvl, node_id,
+    prop, props, read_log, reordered, save, scheme, second, second_def, threat_cat, threat_id,
+    tree_id, wide, write_log,
 };
 use serde_json::Value;
 
@@ -508,6 +508,11 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             tree: Some(tree_id(7)),
             provenance: Provenance::human("alice", 900),
         },
+        Op::SetThreatFeasibility {
+            threat: threat_id(6),
+            level: Some(feas(m, "improbable")),
+            provenance: Provenance::human("bob", 950),
+        },
     ]
 }
 
@@ -714,6 +719,23 @@ fn op_log_sequencing_unencodable_op_writes_nothing() {
             id: damage_id(1),
             category: w.impact_categories().last().expect("category"),
             level: None,
+            provenance: Provenance::default(),
+        },
+        Op::SetThreatFeasibility {
+            threat: threat_id(1),
+            level: Some(w.feasibility_levels().last().expect("feasibility").0),
+            provenance: Provenance::default(),
+        },
+        Op::SetStepMitigation {
+            tree: tree_id(1),
+            node: node_id(1),
+            control: control_id(1),
+            feasibility: Some(w.feasibility_levels().last().expect("feasibility").0),
+            provenance: Provenance::default(),
+        },
+        Op::AddSecurityControl {
+            id: control_id(1),
+            name: "c".repeat(1025).into(),
             provenance: Provenance::default(),
         },
         Op::AddCatalogRef {
@@ -1328,6 +1350,33 @@ fn attack_trees_and_provenance_round_trip_and_evaluate() {
             tree: Some(tr1),
             provenance: Provenance::human("alice", 1_700_000_000_500),
         },
+        Op::SetThreatFeasibility {
+            threat: threat_id(8),
+            level: Some(feas(&m, "low")),
+            provenance: Provenance::human("alice", 1_700_000_000_600),
+        },
+        Op::SetRiskTreatment {
+            threat: threat_id(7),
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: Provenance::human("alice", 1_700_000_000_700),
+        },
+        Op::AddSecurityControl {
+            id: control_id(60),
+            name: "SecOC".into(),
+            provenance: Provenance::human("alice", 1_700_000_000_800),
+        },
+        Op::RenameSecurityControl {
+            id: control_id(60),
+            name: "SecOC v2".into(),
+            provenance: Provenance::human("bob", 1_700_000_000_900),
+        },
+        Op::SetStepMitigation {
+            tree: tr1,
+            node: s1,
+            control: control_id(60),
+            feasibility: Some(feas(&m, "very-low")),
+            provenance: Provenance::human("alice", 1_700_000_001_000),
+        },
     ]);
 
     let p = apply_all(&m, &ops);
@@ -1336,6 +1385,16 @@ fn attack_trees_and_provenance_round_trip_and_evaluate() {
     // Shared node `s1` carries `parents`, while single-parent nodes omit it.
     assert!(snap_text.contains("\"parents\":"), "{snap_text}");
     assert!(snap_text.contains("\"attack_trees\":"), "{snap_text}");
+    assert!(snap_text.contains("\"security_controls\":"), "{snap_text}");
+    assert!(snap_text.contains("\"step_mitigations\":"), "{snap_text}");
+    assert!(
+        snap_text.contains("\"treatment\":\"reduce\""),
+        "{snap_text}"
+    );
+    assert!(
+        snap_text.contains("\"direct_feasibility\":\"low\""),
+        "{snap_text}"
+    );
     assert!(snap_text.contains("\"provenance\":"), "{snap_text}");
 
     let from_snap = load(&snap, &m).expect("loads snapshot");
@@ -1348,13 +1407,26 @@ fn attack_trees_and_provenance_round_trip_and_evaluate() {
     let from_log = apply_all(&m, &reread);
     assert_eq!(from_log, p);
 
-    // Threat evaluation produces identical results and explain-why traces.
+    // Threat evaluation produces identical inherent and residual results and explain-why traces.
     let eval_orig = p.evaluate_threat(threat_id(7)).expect("eval orig");
     let eval_snap = from_snap.evaluate_threat(threat_id(7)).expect("eval snap");
     let eval_log = from_log.evaluate_threat(threat_id(7)).expect("eval log");
     assert_eq!(eval_orig.root_value(), &feas(&m, "medium"));
     assert_eq!(eval_orig, eval_snap);
     assert_eq!(eval_orig, eval_log);
+
+    let res_orig = p
+        .evaluate_residual_threat(threat_id(7))
+        .expect("res eval orig");
+    let res_snap = from_snap
+        .evaluate_residual_threat(threat_id(7))
+        .expect("res eval snap");
+    let res_log = from_log
+        .evaluate_residual_threat(threat_id(7))
+        .expect("res eval log");
+    assert_eq!(res_orig.root_value(), &feas(&m, "very-low"));
+    assert_eq!(res_orig, res_snap);
+    assert_eq!(res_orig, res_log);
 }
 
 #[test]
@@ -1443,5 +1515,70 @@ fn rejects_malformed_attack_tree_and_provenance_wire_shapes() {
     assert!(
         matches!(err, Some(StoreError::Model(ModelError::UnknownAttackTree(t))) if t == tid),
         "{err:?}"
+    );
+
+    // Snapshot with `step_mitigations` referencing an unknown control, a gate node, an unknown
+    // node, or an empty inner map fails deterministically.
+    let cid = control_id(99);
+    let with_tree = |step_mits: &str| {
+        snap.replacen(
+            "\"threat_scenarios\":[",
+            &format!(
+                "\"attack_trees\":[{{\"id\":\"{tid}\",\"nodes\":[{{\"id\":\"{n1}\",\"label\":\"g\",\"gate\":\"or\",\"children\":[\"{n2}\"]}},{{\"id\":\"{n2}\",\"label\":\"s\"}}],\"step_feasibility\":{{}}{step_mits}}}],\"threat_scenarios\":["
+            ),
+            1,
+        )
+    };
+    let unknown_ctrl = with_tree(
+        &format!(",\"step_mitigations\":{{\"{n2}\":{{\" {cid}\":\"low\"}}}}").replace(" ", ""),
+    );
+    assert!(
+        matches!(
+            load(unknown_ctrl.as_bytes(), &m).err(),
+            Some(StoreError::Model(ModelError::UnknownSecurityControl(c))) if c == cid
+        ),
+        "unknown control should fail"
+    );
+    let gate_mit = with_tree(&format!(
+        ",\"security_controls\":[{{\"id\":\"{cid}\",\"name\":\"C\"}}],\"step_mitigations\":{{\"{n1}\":{{\"{cid}\":\"low\"}}}}"
+    ));
+    // Place `security_controls` at root level for gate/unknown-node tests.
+    let with_ctrl_and_tree = |step_mits: &str| {
+        snap.replacen(
+            "\"threat_scenarios\":[",
+            &format!(
+                "\"attack_trees\":[{{\"id\":\"{tid}\",\"nodes\":[{{\"id\":\"{n1}\",\"label\":\"g\",\"gate\":\"or\",\"children\":[\"{n2}\"]}},{{\"id\":\"{n2}\",\"label\":\"s\"}}],\"step_feasibility\":{{}}{step_mits}}}],\"security_controls\":[{{\"id\":\"{cid}\",\"name\":\"C\"}}],\"threat_scenarios\":["
+            ),
+            1,
+        )
+    };
+    let _ = gate_mit;
+    let gate_snap = with_ctrl_and_tree(&format!(
+        ",\"step_mitigations\":{{\"{n1}\":{{\"{cid}\":\"low\"}}}}"
+    ));
+    assert!(
+        matches!(
+            load(gate_snap.as_bytes(), &m).err(),
+            Some(StoreError::Model(ModelError::NotAStep { tree, node })) if tree == tid && node == n1
+        ),
+        "gate node in step_mitigations should fail"
+    );
+    let unknown_node_snap = with_ctrl_and_tree(&format!(
+        ",\"step_mitigations\":{{\"{n3}\":{{\"{cid}\":\"low\"}}}}"
+    ));
+    assert!(
+        matches!(
+            load(unknown_node_snap.as_bytes(), &m).err(),
+            Some(StoreError::Model(ModelError::UnknownTreeNode { tree, node })) if tree == tid && node == n3
+        ),
+        "unknown node in step_mitigations should fail"
+    );
+    let empty_inner_snap = with_ctrl_and_tree(&format!(",\"step_mitigations\":{{\"{n2}\":{{}}}}"));
+    assert!(
+        matches!(
+            load(empty_inner_snap.as_bytes(), &m).err(),
+            Some(StoreError::Decode { .. })
+        ),
+        "empty inner map in step_mitigations should fail"
     );
 }

@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use crate::asset::PropertySet;
-use crate::id::{AssetId, DamageId, NodeId, ThreatId, TreeId};
+use crate::control::RiskTreatment;
+use crate::id::{AssetId, ControlId, DamageId, NodeId, ThreatId, TreeId};
 use crate::methodology::{CatalogRef, FeasibilityLevel, ImpactCategory, Level, ThreatCategory};
 use crate::provenance::Provenance;
 use crate::tree::AttackTree;
@@ -41,8 +42,14 @@ use crate::tree::AttackTree;
 /// | `RemoveThreatScenario` | `AddThreatScenario`, fields in stored order | O(log n + k + p) |
 /// | `AddAttackTree` | `RemoveAttackTree` | O(log n + V + E) |
 /// | `SetStepFeasibility` | the same with the old level and provenance | O(log n + log V) |
+/// | `SetThreatFeasibility` | the same with the old level and provenance | O(log n) |
 /// | `SetThreatAttackTree` | the same with the old tree and provenance | O(log n) |
+/// | `SetRiskTreatment` | the same with the old treatment and provenance | O(log n) |
 /// | `RemoveAttackTree` | `AddAttackTree`, rated steps in node order | O(log n + V) |
+/// | `AddSecurityControl` | `RemoveSecurityControl` | O(log n) |
+/// | `RenameSecurityControl` | the same with the old name and provenance | O(log n) |
+/// | `RemoveSecurityControl` | `AddSecurityControl` with the old fields and provenance | O(log n) |
+/// | `SetStepMitigation` | the same with the old feasibility and provenance | O(log n + log V + m) |
 ///
 /// ```
 /// use std::sync::Arc;
@@ -241,6 +248,22 @@ pub enum Op {
         /// Provenance of the step feasibility change.
         provenance: Provenance,
     },
+    /// Sets or clears (`None` = unrated) the direct feasibility rating of a
+    /// threat scenario.
+    ///
+    /// Used during concept-phase TARA before an attack tree is constructed.
+    /// When a threat scenario also links to an attack tree via
+    /// [`Op::SetThreatAttackTree`], [`Project::evaluate_risk`](crate::Project::evaluate_risk)
+    /// uses the attack tree's evaluated feasibility while preserving the
+    /// direct rating on the threat scenario.
+    SetThreatFeasibility {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// The new direct feasibility rating, or `None` for unrated.
+        level: Option<FeasibilityLevel>,
+        /// Provenance of the direct feasibility change.
+        provenance: Provenance,
+    },
     /// Links a threat scenario to an attack tree, replaces its linked
     /// attack tree, or unlinks it (`None`).
     SetThreatAttackTree {
@@ -251,17 +274,67 @@ pub enum Op {
         /// Provenance of linking or unlinking the attack tree.
         provenance: Provenance,
     },
-    /// Removes an attack tree that no threat scenario links to.
+    /// Sets or clears (`None`) the risk treatment decision of a threat
+    /// scenario.
+    SetRiskTreatment {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// The new risk treatment decision, or `None` to clear.
+        treatment: Option<RiskTreatment>,
+        /// Provenance of the risk treatment change.
+        provenance: Provenance,
+    },
+    /// Removes an attack tree that no threat scenario links to and that has
+    /// no attached step mitigations.
     RemoveAttackTree {
         /// Existing attack tree.
         id: TreeId,
+    },
+    /// Adds a security control.
+    AddSecurityControl {
+        /// Unused security control ID.
+        id: ControlId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Provenance of the security control creation.
+        provenance: Provenance,
+    },
+    /// Renames a security control.
+    RenameSecurityControl {
+        /// Existing security control.
+        id: ControlId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Removes a security control that is not attached to any attack step.
+    RemoveSecurityControl {
+        /// Existing security control.
+        id: ControlId,
+    },
+    /// Attaches, updates, or detaches (`None`) a [`SecurityControl`](crate::SecurityControl)
+    /// mitigation on one step node in an attack tree.
+    SetStepMitigation {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// Existing step node in `tree`.
+        node: NodeId,
+        /// Existing security control.
+        control: ControlId,
+        /// Residual feasibility cap imposed by `control` on `node`, or `None`
+        /// to detach `control` from `node`.
+        feasibility: Option<FeasibilityLevel>,
+        /// Provenance of the mitigation change.
+        provenance: Provenance,
     },
 }
 
 impl Op {
     /// Returns the provenance carried by this operation, or `None` for the
-    /// four entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
-    /// `RemoveThreatScenario`, `RemoveAttackTree`). Time O(1), space O(1).
+    /// five entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
+    /// `RemoveThreatScenario`, `RemoveAttackTree`, `RemoveSecurityControl`).
+    /// Time O(1), space O(1).
     ///
     /// ```
     /// use aegis_model::{AssetId, Op, Provenance};
@@ -294,11 +367,17 @@ impl Op {
             | Self::UnlinkDamage { provenance, .. }
             | Self::AddAttackTree { provenance, .. }
             | Self::SetStepFeasibility { provenance, .. }
-            | Self::SetThreatAttackTree { provenance, .. } => Some(provenance),
+            | Self::SetThreatFeasibility { provenance, .. }
+            | Self::SetThreatAttackTree { provenance, .. }
+            | Self::SetRiskTreatment { provenance, .. }
+            | Self::AddSecurityControl { provenance, .. }
+            | Self::RenameSecurityControl { provenance, .. }
+            | Self::SetStepMitigation { provenance, .. } => Some(provenance),
             Self::RemoveAsset { .. }
             | Self::RemoveDamageScenario { .. }
             | Self::RemoveThreatScenario { .. }
-            | Self::RemoveAttackTree { .. } => None,
+            | Self::RemoveAttackTree { .. }
+            | Self::RemoveSecurityControl { .. } => None,
         }
     }
 }

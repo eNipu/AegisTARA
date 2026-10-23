@@ -394,8 +394,22 @@ mod tests {
                         label: "High".into(),
                     },
                 ],
+                risk_matrix: vec![
+                    vec!["low".into(), "high".into()],
+                    vec!["high".into(), "high".into()],
+                ],
             }],
             feasibility_levels: vec![
+                LevelDef {
+                    key: "low".into(),
+                    label: "Low".into(),
+                },
+                LevelDef {
+                    key: "high".into(),
+                    label: "High".into(),
+                },
+            ],
+            risk_levels: vec![
                 LevelDef {
                     key: "low".into(),
                     label: "Low".into(),

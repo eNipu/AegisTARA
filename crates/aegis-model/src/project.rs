@@ -5,19 +5,20 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::asset::{Asset, PropertySet};
+use crate::control::{MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl, StepMitigation};
 use crate::damage::DamageScenario;
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, evaluate};
 use crate::id::{
-    ArenaIndex, AssetId, AssetIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId, ThreatIdx,
-    TreeId, TreeIdx,
+    ArenaIndex, AssetId, AssetIdx, ControlId, ControlIdx, DamageId, DamageIdx, NodeId, NodeIdx,
+    ThreatId, ThreatIdx, TreeId, TreeIdx,
 };
 use crate::methodology::{
     CatalogRef, FeasibilityLevel, ImpactCategory, Level, Methodology, Property, ThreatCategory,
 };
 use crate::op::Op;
 use crate::provenance::Provenance;
-use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatScenario};
+use crate::threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
 use crate::tree::{AttackTree, MAX_ATTACK_TREE_NODES, Node};
 
 /// Longest entity name, in chars.
@@ -119,12 +120,29 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
 // ---------------------------------------------------------------------------
 
 /// One attack tree in a [`Project`], paired with its per-node step
-/// feasibility ratings and provenance. Gate slots are always `None`.
+/// feasibility ratings, per-node step mitigations, and provenance. Gate
+/// slots are always `None` and empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeEntry {
     tree: AttackTree,
     step_feasibility: Vec<Option<FeasibilityLevel>>,
+    step_mitigations: Vec<Box<[StepMitigation]>>,
     provenance: Provenance,
+}
+
+impl TreeEntry {
+    fn residual_step_feasibility(&self, idx: NodeIdx) -> Option<FeasibilityLevel> {
+        let inh = self.step_feasibility.get(idx.index()).copied().flatten()?;
+        let mitigations = self
+            .step_mitigations
+            .get(idx.index())
+            .map_or(&[][..], Box::as_ref);
+        Some(
+            mitigations
+                .iter()
+                .fold(inh, |acc, m| acc.min(m.feasibility)),
+        )
+    }
 }
 
 /// One counted property on one asset: how many live threats on that asset
@@ -166,6 +184,9 @@ struct RefCounts {
     damages: Vec<u32>,
     /// Per attack tree slot: how many live threats reference it.
     trees: Vec<u32>,
+    /// Per security control slot: how many step mitigations across live
+    /// attack trees reference it.
+    controls: Vec<u32>,
 }
 
 /// Adds 1 to (or, with `up == false`, takes 1 from) `v[i]` if it exists.
@@ -362,7 +383,8 @@ pub struct Project {
     damages: Arena<DamageId, DamageIdx, DamageScenario>,
     threats: Arena<ThreatId, ThreatIdx, ThreatScenario>,
     trees: Arena<TreeId, TreeIdx, TreeEntry>,
-    /// Derived data, rebuilt from `threats` (D10).
+    controls: Arena<ControlId, ControlIdx, SecurityControl>,
+    /// Derived data, rebuilt from `threats` and `trees` (D10).
     refs: RefCounts,
 }
 
@@ -455,6 +477,7 @@ impl Project {
             damages: Arena::new(),
             threats: Arena::new(),
             trees: Arena::new(),
+            controls: Arena::new(),
             refs: RefCounts::default(),
         }
     }
@@ -1015,6 +1038,211 @@ impl Project {
         self.trees.get(tree).map(|e| e.step_feasibility.as_slice())
     }
 
+    // -- Security controls -------------------------------------------------------
+
+    /// Returns a live security control in O(1), or `None` if `idx` is out of
+    /// range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id,
+    ///     name: "Authenticated boot".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("missing")?;
+    /// assert_eq!(
+    ///     project.security_control(idx).map(|c| c.name()),
+    ///     Some("Authenticated boot"),
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn security_control(&self, idx: ControlIdx) -> Option<&SecurityControl> {
+        self.controls.get(idx)
+    }
+
+    /// Resolves a security control's public ID to its arena index in
+    /// O(log n). Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ControlId, Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.security_control_idx(&ControlId::new_v7()), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn security_control_idx(&self, id: &ControlId) -> Option<ControlIdx> {
+        self.controls.idx(id)
+    }
+
+    /// Returns a live security control's public ID in O(1), or `None` if
+    /// `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id,
+    ///     name: "Authenticated boot".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.security_control_id(idx), Some(id));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn security_control_id(&self, idx: ControlIdx) -> Option<ControlId> {
+        self.controls.id(idx)
+    }
+
+    /// Returns the number of live security controls in O(1). Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.security_control_count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn security_control_count(&self) -> usize {
+        self.controls.len()
+    }
+
+    /// Iterates live security controls in deterministic `ControlId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let (a, b) = (ControlId::new_v7(), ControlId::new_v7());
+    /// for id in [b, a] {
+    ///     project.apply(Op::AddSecurityControl {
+    ///         id,
+    ///         name: "Ctrl".into(),
+    ///         provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let ids: Vec<_> = project.security_controls().map(|(_, id, _)| id).collect();
+    /// assert_eq!(ids, [a.min(b), a.max(b)]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn security_controls(
+        &self,
+    ) -> impl Iterator<Item = (ControlIdx, ControlId, &SecurityControl)> {
+        self.controls.iter()
+    }
+
+    /// Returns the [`StepMitigation`]s attached to `node` in `tree` in
+    /// canonical `ControlId` order in O(1), or `&[]` if `tree` or `node` is
+    /// out of range, tombstoned, or has no mitigations. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ControlId, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "Rate limiter".into(), provenance: Provenance::default(),
+    /// })?;
+    /// let step = NodeId::new_v7();
+    /// let tree_id = TreeId::new_v7();
+    /// let tree = AttackTree::new(step, Node::step("Flood"))?;
+    /// let root = tree.root();
+    /// let low = m.feasibility_level("low").ok_or("no level")?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(step, low)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let tree_idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
+    /// assert_eq!(project.step_mitigations(tree_idx, root).len(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn step_mitigations(&self, tree: TreeIdx, node: NodeIdx) -> &[StepMitigation] {
+        self.trees
+            .get(tree)
+            .and_then(|e| e.step_mitigations.get(node.index()))
+            .map_or(&[], Box::as_ref)
+    }
+
+    /// Returns the residual feasibility of `node` in `tree` — the minimum of
+    /// its inherent [`step_feasibility`](Self::step_feasibility) and all
+    /// attached [`step_mitigations`](Self::step_mitigations) — or `None` if
+    /// `tree` or `node` is invalid, `node` is a gate, or the step has no
+    /// inherent feasibility rating.
+    ///
+    /// Time O(m) where `m <= 16` is the number of mitigations on `node`,
+    /// space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ControlId, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let high = m.feasibility_level("high").ok_or("no level")?;
+    /// let low = m.feasibility_level("low").ok_or("no level")?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "HSM".into(), provenance: Provenance::default(),
+    /// })?;
+    /// let step = NodeId::new_v7();
+    /// let tree_id = TreeId::new_v7();
+    /// let tree = AttackTree::new(step, Node::step("Extract key"))?;
+    /// let root = tree.root();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let tree_idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
+    /// assert_eq!(project.residual_step_feasibility(tree_idx, root), Some(high));
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.residual_step_feasibility(tree_idx, root), Some(low));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn residual_step_feasibility(
+        &self,
+        tree: TreeIdx,
+        node: NodeIdx,
+    ) -> Option<FeasibilityLevel> {
+        self.trees.get(tree)?.residual_step_feasibility(node)
+    }
+
     /// Evaluates attack tree `id` bottom-up using
     /// [`MaxMin<FeasibilityLevel>`] and its stored step feasibility ratings.
     ///
@@ -1121,6 +1349,367 @@ impl Project {
         self.evaluate_tree(tree_id)
     }
 
+    /// Evaluates the risk of threat scenario `id` across all of its linked
+    /// damage scenarios and their rated impact categories.
+    ///
+    /// If the threat has a linked attack tree, its feasibility is evaluated via
+    /// [`evaluate_threat`](Self::evaluate_threat) and recorded in
+    /// [`ThreatRisk::tree_evaluation`]; otherwise this method falls back to the
+    /// threat's [`ThreatScenario::direct_feasibility`] (`tree_evaluation` is
+    /// `None`). It then looks up `(impact, feasibility)` in each rated
+    /// category's 2D risk matrix ([`Methodology::risk_for`]). Entries are
+    /// returned in canonical `(DamageId, ImpactCategory)` order, and
+    /// [`ThreatRisk::deciding_entry`] records the first entry in that order
+    /// that attains [`ThreatRisk::max_risk`].
+    ///
+    /// Time O(log n + V + E + d * c), where `d` is the number of linked damage
+    /// scenarios (`d <= 256`) and `c` is the number of impact categories
+    /// (`c <= 32`). Space O(V + d * c).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownThreatScenario`] if `id` is not a live threat
+    /// scenario; [`ModelError::NoAttackTree`] if the threat has neither a
+    /// linked attack tree nor a [`ThreatScenario::direct_feasibility`] rating;
+    /// or any attack tree evaluation error from
+    /// [`evaluate_threat`](Self::evaluate_threat) when a tree is linked.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, DamageId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let safety = m.impact_category("safety").ok_or("no category")?;
+    /// let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// let damage = DamageId::new_v7();
+    /// project.apply(Op::AddDamageScenario {
+    ///     id: damage, name: "Crash".into(), impacts: vec![(safety, severe)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Spoof".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
+    /// })?;
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let high = m.feasibility_level("high").ok_or("no level")?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
+    ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let risk = project.evaluate_risk(threat)?;
+    /// assert_eq!(risk.max_risk(), m.risk_level("r5"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn evaluate_risk(&self, id: ThreatId) -> Result<ThreatRisk, ModelError> {
+        let t = self.threat_ref(id)?;
+        let (feasibility, tree_evaluation) = if let Some(tree_idx) = t.attack_tree {
+            let tree_id = self
+                .trees
+                .id(tree_idx)
+                .ok_or(ModelError::UnknownThreatScenario(id))?;
+            let eval = self.evaluate_tree(tree_id)?;
+            (*eval.root_value(), Some(eval))
+        } else {
+            let level = t.direct_feasibility.ok_or(ModelError::NoAttackTree(id))?;
+            (level, None)
+        };
+        Ok(self.risk_from_feasibility(t, feasibility, tree_evaluation))
+    }
+
+    /// Evaluates attack tree `id` bottom-up using
+    /// [`MaxMin<FeasibilityLevel>`] and each step's
+    /// [`residual_step_feasibility`](Self::residual_step_feasibility)
+    /// (the minimum of its inherent feasibility and all attached
+    /// [`StepMitigation`] caps).
+    ///
+    /// Comparing [`evaluate_tree`](Self::evaluate_tree) with
+    /// `evaluate_residual_tree` reveals whether security controls actually
+    /// reduce the root feasibility or whether an unmitigated `OR` branch
+    /// circumvents the controls (by inspecting [`Evaluation::why_path`]).
+    ///
+    /// Time O(V * m + E) where `m <= 16` is the number of mitigations per
+    /// step, space O(V).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownAttackTree`] if `id` is not a live attack tree in
+    /// the project; [`ModelError::MissingLeafValue`] if any step node in the
+    /// tree has no inherent feasibility rating; [`ModelError::EmptyGate`] if a
+    /// gate has no children; [`ModelError::Cycle`] if the tree contains a
+    /// cycle.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ControlId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (very_low, med, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no level")?,
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, obd, ota) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Compromise ECU"))?;
+    /// tree.add_child(tree.root(), obd, Node::step("Via OBD port"))?;
+    /// tree.add_child(tree.root(), ota, Node::step("Via OTA update"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id,
+    ///     tree,
+    ///     step_feasibility: vec![(obd, high), (ota, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "Disable OBD in production".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: obd, control: ctrl, feasibility: Some(very_low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// // Inherent path goes through OBD (high); residual path circumvents it via OTA (medium).
+    /// assert_eq!(project.evaluate_tree(tree_id)?.root_value(), &high);
+    /// assert_eq!(project.evaluate_residual_tree(tree_id)?.root_value(), &med);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn evaluate_residual_tree(
+        &self,
+        id: TreeId,
+    ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        evaluate(&entry.tree, &MaxMin::<FeasibilityLevel>::new(), |idx| {
+            entry.residual_step_feasibility(idx)
+        })
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using
+    /// [`evaluate_residual_tree`](Self::evaluate_residual_tree).
+    ///
+    /// Time O(log n + V * m + E), space O(V).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownThreatScenario`] if `id` is not a live threat
+    /// scenario in the project; [`ModelError::NoAttackTree`] if the threat has
+    /// no linked attack tree; [`ModelError::MissingLeafValue`] if any step in
+    /// the linked tree is unrated; [`ModelError::EmptyGate`] if a gate has no
+    /// children; [`ModelError::Cycle`] if the linked tree contains a cycle.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, ControlId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let (low, high) = (
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay frame"))?,
+    ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "SecOC freshness counter".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.evaluate_residual_threat(threat)?.root_value(), &low);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn evaluate_residual_threat(
+        &self,
+        id: ThreatId,
+    ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.evaluate_residual_tree(tree_id)
+    }
+
+    /// Evaluates the residual risk of threat scenario `id` across all of its
+    /// linked damage scenarios and their rated impact categories, accounting
+    /// for all [`StepMitigation`]s attached to the threat's linked attack
+    /// tree.
+    ///
+    /// If the threat has a linked attack tree, its residual feasibility is
+    /// evaluated via [`evaluate_residual_tree`](Self::evaluate_residual_tree)
+    /// and recorded in [`ThreatRisk::tree_evaluation`]; otherwise this method
+    /// falls back to [`ThreatScenario::direct_feasibility`]
+    /// (`tree_evaluation` is `None`).
+    ///
+    /// Time O(log n + V * m + E + d * c), space O(V + d * c).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownThreatScenario`] if `id` is not a live threat
+    /// scenario; [`ModelError::NoAttackTree`] if the threat has neither a
+    /// linked attack tree nor a [`ThreatScenario::direct_feasibility`] rating;
+    /// or any attack tree evaluation error from
+    /// [`evaluate_residual_tree`](Self::evaluate_residual_tree) when a tree is
+    /// linked.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, ControlId, DamageId, Methodology, Node, NodeId, Op, Project,
+    /// #     Provenance, ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let safety = m.impact_category("safety").ok_or("no category")?;
+    /// let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// let damage = DamageId::new_v7();
+    /// project.apply(Op::AddDamageScenario {
+    ///     id: damage, name: "Crash".into(), impacts: vec![(safety, severe)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Spoof".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
+    /// })?;
+    /// let (very_low, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
+    ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "SecOC".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(very_low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.evaluate_risk(threat)?.max_risk(), m.risk_level("r5"));
+    /// assert_eq!(project.evaluate_residual_risk(threat)?.max_risk(), m.risk_level("r2"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn evaluate_residual_risk(&self, id: ThreatId) -> Result<ThreatRisk, ModelError> {
+        let t = self.threat_ref(id)?;
+        let (feasibility, tree_evaluation) = if let Some(tree_idx) = t.attack_tree {
+            let tree_id = self
+                .trees
+                .id(tree_idx)
+                .ok_or(ModelError::UnknownThreatScenario(id))?;
+            let eval = self.evaluate_residual_tree(tree_id)?;
+            (*eval.root_value(), Some(eval))
+        } else {
+            let level = t.direct_feasibility.ok_or(ModelError::NoAttackTree(id))?;
+            (level, None)
+        };
+        Ok(self.risk_from_feasibility(t, feasibility, tree_evaluation))
+    }
+
+    /// Combines `feasibility` with every rated `(damage, category, impact)`
+    /// linked from `t` in canonical `(DamageId, ImpactCategory)` order.
+    /// Time O(d * c), space O(d * c).
+    fn risk_from_feasibility(
+        &self,
+        t: &ThreatScenario,
+        feasibility: FeasibilityLevel,
+        tree_evaluation: Option<Evaluation<FeasibilityLevel>>,
+    ) -> ThreatRisk {
+        let mut entries = Vec::new();
+        let mut deciding: Option<usize> = None;
+        for &damage_idx in &t.damages {
+            let (Some(damage_id), Some(damage)) =
+                (self.damages.id(damage_idx), self.damages.get(damage_idx))
+            else {
+                continue;
+            };
+            for (category, impact) in damage.impacts() {
+                let Some(impact) = impact else { continue };
+                let Some(risk) = self.methodology.risk_for(category, impact, feasibility) else {
+                    continue;
+                };
+                let is_higher = deciding
+                    .and_then(|idx| entries.get(idx))
+                    .is_none_or(|best: &ImpactRisk| risk > best.risk);
+                if is_higher {
+                    deciding = Some(entries.len());
+                }
+                entries.push(ImpactRisk {
+                    damage: damage_id,
+                    category,
+                    impact,
+                    feasibility,
+                    risk,
+                });
+            }
+        }
+        ThreatRisk {
+            feasibility,
+            tree_evaluation,
+            entries,
+            deciding,
+        }
+    }
+
     // -- Ops ---------------------------------------------------------------------------
 
     /// Checks `op` against the methodology and the referential rules
@@ -1158,6 +1747,7 @@ impl Project {
     /// # Ok(())
     /// # }
     /// ```
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self, op: &Op) -> Result<(), ModelError> {
         match op {
             Op::AddAsset {
@@ -1244,10 +1834,33 @@ impl Project {
             Op::SetStepFeasibility {
                 tree, node, level, ..
             } => self.check_set_step_feasibility(*tree, *node, *level)?,
+            Op::SetThreatFeasibility { threat, level, .. } => {
+                self.check_set_threat_feasibility(*threat, *level)?;
+            }
             Op::SetThreatAttackTree { threat, tree, .. } => {
                 self.check_set_threat_attack_tree(*threat, *tree)?;
             }
             Op::RemoveAttackTree { id } => return self.check_remove_tree(*id),
+            Op::SetRiskTreatment { threat, .. } => {
+                self.live_threat(*threat)?;
+            }
+            Op::AddSecurityControl {
+                id,
+                name,
+                provenance,
+            } => return self.check_add_control(*id, name, provenance),
+            Op::RenameSecurityControl { id, name, .. } => {
+                self.live_control(*id)?;
+                check_name(EntityKind::SecurityControl, name)?;
+            }
+            Op::RemoveSecurityControl { id } => return self.check_remove_control(*id),
+            Op::SetStepMitigation {
+                tree,
+                node,
+                control,
+                feasibility,
+                ..
+            } => self.check_set_step_mitigation(*tree, *node, *control, *feasibility)?,
         }
         op.provenance().map_or(Ok(()), check_provenance)
     }
@@ -1310,6 +1923,7 @@ impl Project {
     /// Commits a validated op. Every fallible lookup happens before the
     /// first mutation, so even an unexpected error leaves the project
     /// unchanged.
+    #[allow(clippy::too_many_lines)]
     fn commit(&mut self, op: Op) -> Result<Op, ModelError> {
         match op {
             Op::AddAsset {
@@ -1401,12 +2015,40 @@ impl Project {
                 level,
                 provenance,
             } => self.commit_set_step_feasibility(tree, node, level, provenance),
+            Op::SetThreatFeasibility {
+                threat,
+                level,
+                provenance,
+            } => self.commit_set_threat_feasibility(threat, level, provenance),
             Op::SetThreatAttackTree {
                 threat,
                 tree,
                 provenance,
             } => self.commit_set_threat_attack_tree(threat, tree, provenance),
             Op::RemoveAttackTree { id } => self.commit_remove_tree(id),
+            Op::SetRiskTreatment {
+                threat,
+                treatment,
+                provenance,
+            } => self.commit_set_risk_treatment(threat, treatment, provenance),
+            Op::AddSecurityControl {
+                id,
+                name,
+                provenance,
+            } => self.commit_add_control(id, name, provenance),
+            Op::RenameSecurityControl {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_control(id, name, provenance),
+            Op::RemoveSecurityControl { id } => self.commit_remove_control(id),
+            Op::SetStepMitigation {
+                tree,
+                node,
+                control,
+                feasibility,
+                provenance,
+            } => self.commit_set_step_mitigation(tree, node, control, feasibility, provenance),
         }
     }
 
@@ -1436,6 +2078,13 @@ impl Project {
             .ok_or(ModelError::UnknownAttackTree(id))
     }
 
+    fn control_mut(&mut self, id: ControlId) -> Result<&mut SecurityControl, ModelError> {
+        let idx = self.control_index(id)?;
+        self.controls
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownSecurityControl(id))
+    }
+
     // -- Lookups shared by checks and commits ----------------------------------
 
     fn asset_index(&self, id: AssetId) -> Result<AssetIdx, ModelError> {
@@ -1456,6 +2105,12 @@ impl Project {
 
     fn tree_index(&self, id: TreeId) -> Result<TreeIdx, ModelError> {
         self.trees.idx(&id).ok_or(ModelError::UnknownAttackTree(id))
+    }
+
+    fn control_index(&self, id: ControlId) -> Result<ControlIdx, ModelError> {
+        self.controls
+            .idx(&id)
+            .ok_or(ModelError::UnknownSecurityControl(id))
     }
 
     fn live_asset(&self, id: AssetId) -> Result<(AssetIdx, &Asset), ModelError> {
@@ -1489,6 +2144,14 @@ impl Project {
         Ok((idx, e))
     }
 
+    fn live_control(&self, id: ControlId) -> Result<ControlIdx, ModelError> {
+        let idx = self.control_index(id)?;
+        self.controls
+            .get(idx)
+            .map(|_| idx)
+            .ok_or(ModelError::UnknownSecurityControl(id))
+    }
+
     /// The live asset a live threat targets. A threat's asset is always
     /// live (removal is rejected while referenced).
     fn threat_asset(
@@ -1519,6 +2182,18 @@ impl Project {
     /// The public ID of a linked attack tree, if any.
     fn tree_key(&self, idx: Option<TreeIdx>) -> Option<TreeId> {
         idx.and_then(|i| self.trees.id(i))
+    }
+
+    /// The public ID of a referenced security control. Referenced security
+    /// controls are always live.
+    fn control_key(&self, idx: ControlIdx) -> Option<ControlId> {
+        self.controls.id(idx)
+    }
+
+    /// Finds `control` in a step's sorted mitigations: `Ok(pos)` if attached,
+    /// `Err(pos)` for the insertion point. O(log m).
+    fn find_mitigation(&self, row: &[StepMitigation], control: ControlId) -> Result<usize, usize> {
+        row.binary_search_by(|m| self.control_key(m.control).cmp(&Some(control)))
     }
 
     /// How many live threats on `a` violate `p`. O(log p).
@@ -1784,6 +2459,18 @@ impl Project {
                 .ok_or(ModelError::UnknownThreatScenario(id))?;
             return Err(ModelError::ThreatHasAttackTree { threat: id, tree });
         }
+        if let Some(feasibility) = t.direct_feasibility {
+            return Err(ModelError::ThreatHasDirectFeasibility {
+                threat: id,
+                feasibility,
+            });
+        }
+        if let Some(treatment) = t.treatment {
+            return Err(ModelError::ThreatHasRiskTreatment {
+                threat: id,
+                treatment,
+            });
+        }
         Ok(())
     }
 
@@ -1853,6 +2540,18 @@ impl Project {
         Ok(())
     }
 
+    fn check_set_threat_feasibility(
+        &self,
+        threat: ThreatId,
+        level: Option<FeasibilityLevel>,
+    ) -> Result<(), ModelError> {
+        self.live_threat(threat)?;
+        if let Some(level) = level {
+            self.methodology.check_feasibility_level(level)?;
+        }
+        Ok(())
+    }
+
     fn check_set_threat_attack_tree(
         &self,
         threat: ThreatId,
@@ -1866,10 +2565,78 @@ impl Project {
     }
 
     fn check_remove_tree(&self, id: TreeId) -> Result<(), ModelError> {
-        let (idx, _) = self.live_tree(id)?;
+        let (idx, entry) = self.live_tree(id)?;
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::AttackTreeInUse { tree: id, threats });
+        }
+        let mitigations: usize = entry.step_mitigations.iter().map(|m| m.len()).sum();
+        if mitigations > 0 {
+            return Err(ModelError::AttackTreeHasMitigations {
+                tree: id,
+                mitigations,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_add_control(
+        &self,
+        id: ControlId,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.controls.idx(&id).is_some() {
+            return Err(ModelError::DuplicateSecurityControl(id));
+        }
+        check_name(EntityKind::SecurityControl, name)?;
+        check_provenance(provenance)?;
+        if self.controls.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::SecurityControl,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_remove_control(&self, id: ControlId) -> Result<(), ModelError> {
+        let idx = self.live_control(id)?;
+        let steps = self.refs.controls.get(idx.index()).copied().unwrap_or(0);
+        if steps > 0 {
+            return Err(ModelError::SecurityControlInUse { control: id, steps });
+        }
+        Ok(())
+    }
+
+    fn check_set_step_mitigation(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        control: ControlId,
+        feasibility: Option<FeasibilityLevel>,
+    ) -> Result<(), ModelError> {
+        let (_, entry) = self.live_tree(tree)?;
+        let node_idx = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
+            return Err(ModelError::NotAStep { tree, node });
+        }
+        self.live_control(control)?;
+        if let Some(level) = feasibility {
+            self.methodology.check_feasibility_level(level)?;
+            let row = entry
+                .step_mitigations
+                .get(node_idx.index())
+                .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+            if self.find_mitigation(row, control).is_err() && row.len() >= MAX_STEP_MITIGATIONS {
+                return Err(ModelError::TooManyStepMitigations {
+                    tree,
+                    node,
+                    max: MAX_STEP_MITIGATIONS,
+                });
+            }
         }
         Ok(())
     }
@@ -2104,7 +2871,9 @@ impl Project {
             category,
             catalog_refs,
             damages,
+            direct_feasibility: None,
             attack_tree: None,
+            treatment: None,
             provenance,
         };
         let violates = self.methodology.violates(category);
@@ -2239,9 +3008,11 @@ impl Project {
                 .ok_or(ModelError::UnknownTreeNode { tree: id, node })?;
             *slot = Some(level);
         }
+        let step_mitigations = vec![Box::default(); tree.len()];
         let entry = TreeEntry {
             tree,
             step_feasibility: slots,
+            step_mitigations,
             provenance,
         };
         self.trees
@@ -2274,6 +3045,22 @@ impl Project {
         Ok(Op::SetStepFeasibility {
             tree,
             node,
+            level,
+            provenance,
+        })
+    }
+
+    fn commit_set_threat_feasibility(
+        &mut self,
+        threat: ThreatId,
+        level: Option<FeasibilityLevel>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let t = self.threat_mut(threat)?;
+        let level = std::mem::replace(&mut t.direct_feasibility, level);
+        let provenance = std::mem::replace(&mut t.provenance, provenance);
+        Ok(Op::SetThreatFeasibility {
+            threat,
             level,
             provenance,
         })
@@ -2337,6 +3124,135 @@ impl Project {
             provenance: entry.provenance,
         })
     }
+
+    fn commit_set_risk_treatment(
+        &mut self,
+        threat: ThreatId,
+        treatment: Option<RiskTreatment>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let t = self.threat_mut(threat)?;
+        let treatment = std::mem::replace(&mut t.treatment, treatment);
+        let provenance = std::mem::replace(&mut t.provenance, provenance);
+        Ok(Op::SetRiskTreatment {
+            threat,
+            treatment,
+            provenance,
+        })
+    }
+
+    fn commit_add_control(
+        &mut self,
+        id: ControlId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let control = SecurityControl { name, provenance };
+        self.controls.push(id, control, self.slot_limit).ok_or(
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::SecurityControl,
+            },
+        )?;
+        self.refs.controls.push(0);
+        Ok(Op::RemoveSecurityControl { id })
+    }
+
+    fn commit_rename_control(
+        &mut self,
+        id: ControlId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let c = self.control_mut(id)?;
+        let name = std::mem::replace(&mut c.name, name);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::RenameSecurityControl {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_remove_control(&mut self, id: ControlId) -> Result<Op, ModelError> {
+        let idx = self.control_index(id)?;
+        let c = self
+            .controls
+            .remove(idx)
+            .ok_or(ModelError::UnknownSecurityControl(id))?;
+        Ok(Op::AddSecurityControl {
+            id,
+            name: c.name,
+            provenance: c.provenance,
+        })
+    }
+
+    fn commit_set_step_mitigation(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        control: ControlId,
+        feasibility: Option<FeasibilityLevel>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let tree_idx = self.tree_index(tree)?;
+        let ctrl_idx = self.control_index(control)?;
+        let (node_idx, found) = {
+            let entry = self
+                .trees
+                .get(tree_idx)
+                .ok_or(ModelError::UnknownAttackTree(tree))?;
+            let node_idx = entry
+                .tree
+                .idx_of(&node)
+                .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+            let row = entry
+                .step_mitigations
+                .get(node_idx.index())
+                .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+            (node_idx, self.find_mitigation(row, control))
+        };
+        let entry = self
+            .trees
+            .get_mut(tree_idx)
+            .ok_or(ModelError::UnknownAttackTree(tree))?;
+        let slot = entry
+            .step_mitigations
+            .get_mut(node_idx.index())
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let mut row = std::mem::take(slot).into_vec();
+        let old = match (feasibility, found) {
+            (Some(new_f), Ok(pos)) => {
+                let old_f = std::mem::replace(&mut row[pos].feasibility, new_f);
+                Some(old_f)
+            }
+            (Some(new_f), Err(pos)) => {
+                row.insert(
+                    pos,
+                    StepMitigation {
+                        control: ctrl_idx,
+                        feasibility: new_f,
+                    },
+                );
+                bump(&mut self.refs.controls, Some(ctrl_idx.index()), true);
+                None
+            }
+            (None, Ok(pos)) => {
+                let removed = row.remove(pos);
+                bump(&mut self.refs.controls, Some(ctrl_idx.index()), false);
+                Some(removed.feasibility)
+            }
+            (None, Err(_)) => None,
+        };
+        *slot = row.into_boxed_slice();
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        Ok(Op::SetStepMitigation {
+            tree,
+            node,
+            control,
+            feasibility: old,
+            provenance,
+        })
+    }
 }
 
 impl PartialEq for Project {
@@ -2354,6 +3270,7 @@ impl PartialEq for Project {
             && self.damages.len() == other.damages.len()
             && self.threats.len() == other.threats.len()
             && self.trees.len() == other.trees.len()
+            && self.controls.len() == other.controls.len()
             && self
                 .assets()
                 .zip(other.assets())
@@ -2363,10 +3280,14 @@ impl PartialEq for Project {
                 .zip(other.damage_scenarios())
                 .all(|((_, a, x), (_, b, y))| a == b && x == y)
             && self
+                .security_controls()
+                .zip(other.security_controls())
+                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+            && self
                 .trees
                 .iter()
                 .zip(other.trees.iter())
-                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_tree(x, other, y))
             && self
                 .threat_scenarios()
                 .zip(other.threat_scenarios())
@@ -2377,12 +3298,33 @@ impl PartialEq for Project {
 impl Eq for Project {}
 
 impl Project {
+    /// Compares two trees from two projects by content, with control
+    /// references resolved to public IDs. O(V + M).
+    fn same_tree(&self, x: &TreeEntry, other: &Project, y: &TreeEntry) -> bool {
+        x.tree == y.tree
+            && x.step_feasibility == y.step_feasibility
+            && x.provenance == y.provenance
+            && x.step_mitigations.len() == y.step_mitigations.len()
+            && x.step_mitigations
+                .iter()
+                .zip(&y.step_mitigations)
+                .all(|(mx, my)| {
+                    mx.len() == my.len()
+                        && mx.iter().zip(my.iter()).all(|(a, b)| {
+                            self.control_key(a.control) == other.control_key(b.control)
+                                && a.feasibility == b.feasibility
+                        })
+                })
+    }
+
     /// Compares two threats from two projects by content, with references
     /// resolved to public IDs. O(k).
     fn same_threat(&self, x: &ThreatScenario, other: &Project, y: &ThreatScenario) -> bool {
         x.name == y.name
             && x.category == y.category
             && x.catalog_refs == y.catalog_refs
+            && x.direct_feasibility == y.direct_feasibility
+            && x.treatment == y.treatment
             && x.provenance == y.provenance
             && self.assets.id(x.asset) == other.assets.id(y.asset)
             && self.tree_key(x.attack_tree) == other.tree_key(y.attack_tree)
@@ -2402,31 +3344,9 @@ impl Project {
         arena_invariants("damage", &self.damages)?;
         arena_invariants("threat", &self.threats)?;
         arena_invariants("tree", &self.trees)?;
-
-        for (_, id, a) in self.assets() {
-            check_name(EntityKind::Asset, &a.name).map_err(|e| format!("asset {id}: {e}"))?;
-            check_provenance(&a.provenance).map_err(|e| format!("asset {id}: {e}"))?;
-            if a.properties.is_empty() {
-                return Err(format!("asset {id} has no properties"));
-            }
-            m.check_properties(a.properties)
-                .map_err(|e| format!("asset {id}: {e}"))?;
-        }
-        for (_, id, d) in self.damage_scenarios() {
-            check_name(EntityKind::DamageScenario, &d.name)
-                .map_err(|e| format!("damage {id}: {e}"))?;
-            check_provenance(&d.provenance).map_err(|e| format!("damage {id}: {e}"))?;
-            if d.impacts.len() != m.impact_category_count() {
-                return Err(format!("damage {id} has {} impact slots", d.impacts.len()));
-            }
-            for (c, l) in d.impacts() {
-                if let Some(l) = l {
-                    m.check_level(c, l)
-                        .map_err(|e| format!("damage {id}: {e}"))?;
-                }
-            }
-        }
-        self.tree_invariants()?;
+        arena_invariants("control", &self.controls)?;
+        self.entity_invariants()?;
+        let controls = self.tree_invariants()?;
 
         let mut assets = vec![0u32; self.assets.slot_count()];
         let mut damages = vec![0u32; self.damages.slot_count()];
@@ -2467,6 +3387,10 @@ impl Project {
             if !keys.windows(2).all(|w| w[0] < w[1]) {
                 return Err(format!("threat {id} damages not sorted and unique"));
             }
+            if let Some(level) = t.direct_feasibility {
+                m.check_feasibility_level(level)
+                    .map_err(|e| format!("threat {id}: {e}"))?;
+            }
             if let Some(tree) = t.attack_tree {
                 if self.trees.get(tree).is_none() {
                     return Err(format!("threat {id} links a dead tree slot"));
@@ -2492,13 +3416,49 @@ impl Project {
             assets,
             damages,
             trees,
+            controls,
         };
         self.refs_invariants(&want)
     }
 
     #[cfg(test)]
-    fn tree_invariants(&self) -> Result<(), String> {
+    fn entity_invariants(&self) -> Result<(), String> {
         let m = &*self.methodology;
+        for (_, id, a) in self.assets() {
+            check_name(EntityKind::Asset, &a.name).map_err(|e| format!("asset {id}: {e}"))?;
+            check_provenance(&a.provenance).map_err(|e| format!("asset {id}: {e}"))?;
+            if a.properties.is_empty() {
+                return Err(format!("asset {id} has no properties"));
+            }
+            m.check_properties(a.properties)
+                .map_err(|e| format!("asset {id}: {e}"))?;
+        }
+        for (_, id, d) in self.damage_scenarios() {
+            check_name(EntityKind::DamageScenario, &d.name)
+                .map_err(|e| format!("damage {id}: {e}"))?;
+            check_provenance(&d.provenance).map_err(|e| format!("damage {id}: {e}"))?;
+            if d.impacts.len() != m.impact_category_count() {
+                return Err(format!("damage {id} has {} impact slots", d.impacts.len()));
+            }
+            for (c, l) in d.impacts() {
+                if let Some(l) = l {
+                    m.check_level(c, l)
+                        .map_err(|e| format!("damage {id}: {e}"))?;
+                }
+            }
+        }
+        for (_, id, c) in self.security_controls() {
+            check_name(EntityKind::SecurityControl, &c.name)
+                .map_err(|e| format!("control {id}: {e}"))?;
+            check_provenance(&c.provenance).map_err(|e| format!("control {id}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn tree_invariants(&self) -> Result<Vec<u32>, String> {
+        let m = &*self.methodology;
+        let mut controls = vec![0u32; self.controls.slot_count()];
         for (_, id, entry) in self.trees.iter() {
             check_provenance(&entry.provenance).map_err(|e| format!("tree {id}: {e}"))?;
             if entry.step_feasibility.len() != entry.tree.len() {
@@ -2507,11 +3467,22 @@ impl Project {
                     entry.step_feasibility.len()
                 ));
             }
+            if entry.step_mitigations.len() != entry.tree.len() {
+                return Err(format!(
+                    "tree {id} has {} mitigation slots",
+                    entry.step_mitigations.len()
+                ));
+            }
             entry
                 .tree
                 .topological_order()
                 .map_err(|e| format!("tree {id}: {e}"))?;
-            for ((_, node_id, node), &level) in entry.tree.iter().zip(&entry.step_feasibility) {
+            for (((_, node_id, node), &level), mitigations) in entry
+                .tree
+                .iter()
+                .zip(&entry.step_feasibility)
+                .zip(&entry.step_mitigations)
+            {
                 check_name(EntityKind::TreeNode, node.label())
                     .map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
                 match (node, level) {
@@ -2523,9 +3494,34 @@ impl Project {
                         .map_err(|e| format!("tree {id} node {node_id}: {e}"))?,
                     _ => {}
                 }
+                if matches!(node, Node::Gate { .. }) && !mitigations.is_empty() {
+                    return Err(format!("tree {id} gate {node_id} has step mitigations"));
+                }
+                if mitigations.len() > MAX_STEP_MITIGATIONS {
+                    return Err(format!("tree {id} node {node_id} has too many mitigations"));
+                }
+                let keys: Vec<_> = mitigations
+                    .iter()
+                    .map(|mt| self.control_key(mt.control))
+                    .collect();
+                if keys.iter().any(Option::is_none) {
+                    return Err(format!(
+                        "tree {id} node {node_id} references a dead control slot"
+                    ));
+                }
+                if !keys.windows(2).all(|w| w[0] < w[1]) {
+                    return Err(format!(
+                        "tree {id} node {node_id} mitigations not sorted and unique"
+                    ));
+                }
+                for mt in mitigations {
+                    m.check_feasibility_level(mt.feasibility)
+                        .map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
+                    bump(&mut controls, Some(mt.control.index()), true);
+                }
             }
         }
-        Ok(())
+        Ok(controls)
     }
 
     /// Checks that the reference counts are canonical and equal a recount
@@ -2576,6 +3572,12 @@ impl Project {
             return Err(format!(
                 "tree counts differ from a recount: {:?} vs {:?}",
                 have.trees, want.trees
+            ));
+        }
+        if have.controls != want.controls {
+            return Err(format!(
+                "control counts differ from a recount: {:?} vs {:?}",
+                have.controls, want.controls
             ));
         }
         // The derived `==` must agree with the field-by-field checks.
