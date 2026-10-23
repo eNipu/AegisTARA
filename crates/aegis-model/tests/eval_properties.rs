@@ -713,6 +713,123 @@ fn check_first_error(built: &Built, plan: &Plan, missing: &[bool]) -> Result<(),
     Ok(())
 }
 
+/// Checks `Evaluation::attack_paths` and `top_k_paths` on `built`:
+/// 1. Yields non-empty paths in non-increasing order of feasibility, starting
+///    with `*eval.root_value()`.
+/// 2. Every path's steps are distinct `Node::Step` nodes, its feasibility is
+///    the minimum step value, and its bottleneck is the first step with that
+///    value.
+/// 3. When the number of reachable leaf steps is `<= 10`, the set of canonical
+///    step sets equals the exact minimal cut sets computed by an independent
+///    power-set oracle.
+fn check_attack_paths(built: &Built, plan: &Plan) -> Result<(), TestCaseError> {
+    let tree = &built.tree;
+    let domain = MaxMin::<u8>::new();
+    let eval = evaluate(tree, &domain, |i| Some(domain.leaf(raw(plan, i)))).map_err(fail)?;
+    let paths: Vec<_> = eval
+        .attack_paths(tree)
+        .ok_or_else(|| fail("attack_paths returned None"))?
+        .collect();
+    prop_assert!(!paths.is_empty());
+    prop_assert_eq!(paths[0].feasibility(), eval.root_value());
+    let top1 = eval
+        .top_k_paths(tree, 1)
+        .ok_or_else(|| fail("top_k_paths returned None"))?;
+    prop_assert_eq!(top1.as_slice(), &paths[..1]);
+
+    for pair in paths.windows(2) {
+        prop_assert!(pair[0].feasibility() >= pair[1].feasibility());
+    }
+
+    let mut yielded_sets = std::collections::BTreeSet::new();
+    for p in &paths {
+        prop_assert!(!p.is_empty());
+        prop_assert_eq!(p.len(), p.steps().len());
+        let mut sorted = p.steps().to_vec();
+        sorted.sort_unstable();
+        let before_dedup = sorted.len();
+        sorted.dedup();
+        prop_assert_eq!(sorted.len(), before_dedup, "duplicate step in AttackPath");
+        prop_assert!(
+            yielded_sets.insert(sorted),
+            "duplicate minimal cut set yielded"
+        );
+
+        let mut min_val = u8::MAX;
+        let mut first_min = p.steps()[0];
+        for &s in p.steps() {
+            prop_assert!(is_step(tree, s));
+            let v = *eval.get(s).ok_or_else(|| fail("missing step value"))?;
+            if v < min_val {
+                min_val = v;
+                first_min = s;
+            }
+        }
+        prop_assert_eq!(*p.feasibility(), min_val);
+        prop_assert_eq!(p.bottleneck(), first_min);
+        prop_assert!(p.contains(first_min));
+    }
+
+    let leaves: Vec<NodeIdx> = built
+        .nodes
+        .iter()
+        .copied()
+        .filter(|&n| is_step(tree, n))
+        .collect();
+    if leaves.len() <= 10 {
+        let oracle = naive_minimal_cut_sets(tree, &leaves);
+        prop_assert_eq!(yielded_sets, oracle);
+    }
+    Ok(())
+}
+
+/// Independent power-set oracle for minimal cut sets of `tree`.
+fn naive_minimal_cut_sets(
+    tree: &AttackTree,
+    leaves: &[NodeIdx],
+) -> std::collections::BTreeSet<Vec<NodeIdx>> {
+    fn sat_node(tree: &AttackTree, idx: NodeIdx, set: &[NodeIdx]) -> bool {
+        match tree.get(idx) {
+            Some(Node::Step { .. }) => set.contains(&idx),
+            Some(Node::Gate {
+                kind: GateKind::Or,
+                children,
+                ..
+            }) => children.iter().any(|&c| sat_node(tree, c, set)),
+            Some(Node::Gate {
+                kind: GateKind::And | GateKind::SeqAnd,
+                children,
+                ..
+            }) => !children.is_empty() && children.iter().all(|&c| sat_node(tree, c, set)),
+            None => false,
+        }
+    }
+
+    let mut cut_sets: Vec<Vec<NodeIdx>> = Vec::new();
+    let total_masks = 1_usize << leaves.len();
+    for mask in 1..total_masks {
+        let mut candidate: Vec<NodeIdx> = leaves
+            .iter()
+            .enumerate()
+            .filter_map(|(bit, &idx)| ((mask & (1 << bit)) != 0).then_some(idx))
+            .collect();
+        candidate.sort_unstable();
+        if sat_node(tree, tree.root(), &candidate) {
+            cut_sets.push(candidate);
+        }
+    }
+    let mut minimal = std::collections::BTreeSet::new();
+    for c in &cut_sets {
+        let has_proper_subset = cut_sets
+            .iter()
+            .any(|other| other.len() < c.len() && other.iter().all(|x| c.contains(x)));
+        if !has_proper_subset {
+            minimal.insert(c.clone());
+        }
+    }
+    minimal
+}
+
 // ---------------------------------------------------------------------------
 // Properties
 // ---------------------------------------------------------------------------
@@ -778,6 +895,15 @@ proptest! {
     ) {
         check_first_error(&build(&plan, false)?, &plan, &missing)?;
         check_first_error(&build(&plan, true)?, &plan, &missing)?;
+    }
+
+    /// Job 021: `Evaluation::attack_paths` yields all and only minimal cut
+    /// sets in non-increasing order of feasibility, matching a naive power-set
+    /// minimal-cut-set oracle.
+    #[test]
+    fn random_dag_attack_paths_match_minimal_cut_set_oracle(plan in small_plan()) {
+        let built = build(&plan, true)?;
+        check_attack_paths(&built, &plan)?;
     }
 }
 
