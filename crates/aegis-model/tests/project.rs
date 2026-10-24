@@ -14,8 +14,9 @@ use aegis_model::{
     PropertySet, Provenance, ProvenanceSource, RiskTreatment, ThreatId, TreeId,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, control_id, cref, damage_id, feas, lvl, node_id, prop, props,
-    risk, scheme, second, threat_cat, threat_id, tree_id, variant, wide,
+    SENTINEL, asset_id, builtin, cat, claim_id, control_id, cref, damage_id, factor, factor_lvl,
+    feas, goal_id, lvl, node_id, prop, props, risk, scheme, second, threat_cat, threat_id, tree_id,
+    variant, wide,
 };
 
 /// Applies `op` and expects success; returns the inverse.
@@ -3716,11 +3717,31 @@ fn lint_all_rules_and_resolutions() {
                 property: availability,
             }),
             LintFinding::new(LintCode::ReduceTreatmentWithoutControls { threat: t1 }),
+            LintFinding::new(LintCode::ReduceTreatmentWithoutGoal { threat: t1 }),
             LintFinding::new(LintCode::SecurityControlUnused { control: c1 }),
         ]
     );
 
-    // Attach c1 to s_rated: resolves both ReduceTreatmentWithoutControls and SecurityControlUnused.
+    // Attach c1 to s_rated and link a cybersecurity goal g1 (backed by c1) to t1:
+    // resolves ReduceTreatmentWithoutControls, ReduceTreatmentWithoutGoal, and SecurityControlUnused.
+    let g1 = goal_id(50);
+    ok(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: name("Verify CAN message authenticity"),
+            controls: vec![c1],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatGoal {
+            threat: t1,
+            goal: Some(g1),
+            provenance: Provenance::default(),
+        },
+    );
     ok(
         &mut p,
         Op::SetStepMitigation {
@@ -3769,20 +3790,38 @@ fn lint_all_rules_and_resolutions() {
             provenance: Provenance::default(),
         },
     );
-    // Reduce on a direct-feasibility threat (no tree) also triggers ReduceTreatmentWithoutControls.
+    // Reduce on a direct-feasibility threat (no tree, no goal) triggers both Reduce warnings.
     assert_eq!(
         p.lint(),
-        vec![LintFinding::new(LintCode::ReduceTreatmentWithoutControls {
-            threat: t2
-        })]
+        vec![
+            LintFinding::new(LintCode::ReduceTreatmentWithoutControls { threat: t2 }),
+            LintFinding::new(LintCode::ReduceTreatmentWithoutGoal { threat: t2 }),
+        ]
     );
 
-    // Switching t2 to Retain clears the last finding.
+    // Switching t2 to Retain and linking a claim clears the remaining findings.
+    let cl1 = claim_id(60);
+    ok(
+        &mut p,
+        Op::AddCybersecurityClaim {
+            id: cl1,
+            name: name("Bus flood mitigated by controller hardware filter"),
+            provenance: Provenance::default(),
+        },
+    );
     ok(
         &mut p,
         Op::SetRiskTreatment {
             threat: t2,
             treatment: Some(RiskTreatment::Retain),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatClaim {
+            threat: t2,
+            claim: Some(cl1),
             provenance: Provenance::default(),
         },
     );
@@ -3835,15 +3874,54 @@ fn lint_never_contains_names_or_actors() {
     tree1
         .add_child(r1, node_id(23), Node::step(SENTINEL))
         .expect("step");
+    let s_incomplete = node_id(25);
+    let s_redundant = node_id(26);
+    tree1
+        .add_child(r1, s_incomplete, Node::step(SENTINEL))
+        .expect("step incomplete");
+    tree1
+        .add_child(r1, s_redundant, Node::step(SENTINEL))
+        .expect("step redundant");
     ok(
         &mut p,
         Op::AddAttackTree {
             id: tr_unlinked,
             tree: tree1,
-            step_feasibility: vec![],
+            step_feasibility: vec![(s_redundant, feas(&m, "medium"))],
             provenance: prov.clone(),
         },
     );
+    let f_elapsed = factor(&m, "elapsed-time");
+    ok(
+        &mut p,
+        Op::SetStepFactor {
+            tree: tr_unlinked,
+            node: s_incomplete,
+            factor: f_elapsed,
+            level: Some(factor_lvl(&m, f_elapsed, "le-1d")),
+            provenance: prov.clone(),
+        },
+    );
+    for (fk, lk) in [
+        ("elapsed-time", "le-1d"),
+        ("expertise", "layman"),
+        ("knowledge", "public"),
+        ("window-of-opportunity", "unlimited"),
+        ("equipment", "standard"),
+    ] {
+        let f = factor(&m, fk);
+        let l = factor_lvl(&m, f, lk);
+        ok(
+            &mut p,
+            Op::SetStepFactor {
+                tree: tr_unlinked,
+                node: s_redundant,
+                factor: f,
+                level: Some(l),
+                provenance: prov.clone(),
+            },
+        );
+    }
 
     let tree2 = AttackTree::new(node_id(24), Node::gate(GateKind::And, SENTINEL)).expect("tree2");
     ok(
@@ -3856,8 +3934,49 @@ fn lint_never_contains_names_or_actors() {
         },
     );
 
+    let g_linked = goal_id(50);
+    let g_unlinked = goal_id(51);
+    ok(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g_linked,
+            name: name(SENTINEL),
+            controls: vec![],
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g_unlinked,
+            name: name(SENTINEL),
+            controls: vec![],
+            provenance: prov.clone(),
+        },
+    );
+
+    let cl_linked = claim_id(60);
+    let cl_unlinked = claim_id(61);
+    ok(
+        &mut p,
+        Op::AddCybersecurityClaim {
+            id: cl_linked,
+            name: name(SENTINEL),
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddCybersecurityClaim {
+            id: cl_unlinked,
+            name: name(SENTINEL),
+            provenance: prov.clone(),
+        },
+    );
+
     let t_bare = threat_id(30);
     let t_redundant = threat_id(31);
+    let t_retain = threat_id(32);
     ok(
         &mut p,
         Op::AddThreatScenario {
@@ -3906,6 +4025,43 @@ fn lint_never_contains_names_or_actors() {
             provenance: prov.clone(),
         },
     );
+    ok(
+        &mut p,
+        Op::SetThreatClaim {
+            threat: t_redundant,
+            claim: Some(cl_linked),
+            provenance: prov.clone(),
+        },
+    );
+
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t_retain,
+            name: name(SENTINEL),
+            asset: a_partial,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t_retain,
+            treatment: Some(RiskTreatment::Retain),
+            provenance: prov.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatGoal {
+            threat: t_retain,
+            goal: Some(g_linked),
+            provenance: prov.clone(),
+        },
+    );
 
     let c_unused = control_id(40);
     ok(
@@ -3919,7 +4075,7 @@ fn lint_never_contains_names_or_actors() {
 
     let findings = p.lint();
     let kinds: BTreeSet<String> = findings.iter().map(|f| variant(&f.code())).collect();
-    assert_eq!(kinds.len(), 13, "expected all 13 lint variants: {kinds:?}");
+    assert_eq!(kinds.len(), 22, "expected all 22 lint variants: {kinds:?}");
     for finding in &findings {
         for rendered in [
             finding.to_string(),
@@ -4481,4 +4637,613 @@ fn project_diff_tracks_structural_changes_and_risk_deltas() {
         !debug_text.contains(sentinel),
         "diff leaked sentinel: {debug_text}"
     );
+}
+
+#[test]
+fn cybersecurity_goals_claims_lifecycle_lint_and_diff() {
+    use aegis_model::{EntityKind, LintCode, LintFinding, MAX_GOAL_CONTROLS};
+    use common::{claim_id, control_id, goal_id};
+
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let a1 = asset_id(1);
+    let d1 = damage_id(1);
+    let t_reduce = threat_id(1);
+    let t_retain = threat_id(2);
+    let t_avoid = threat_id(3);
+    let c1 = control_id(1);
+    let c2 = control_id(2);
+    let g1 = goal_id(1);
+    let g2 = goal_id(2);
+    let cl1 = claim_id(1);
+    let cl2 = claim_id(2);
+    let spoof = threat_cat(&m, "spoofing");
+    let safety = cat(&m, "safety");
+    let moderate = lvl(&m, safety, "moderate");
+    let high = feas(&m, "high");
+
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: a1,
+            name: name("Brake ECU"),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d1,
+            name: name("Collision"),
+            impacts: vec![(safety, moderate)],
+            provenance: Provenance::default(),
+        },
+    );
+    for (tid, label) in [
+        (t_reduce, "Spoof CAN frame"),
+        (t_retain, "Physical tap"),
+        (t_avoid, "Debug port"),
+    ] {
+        ok(
+            &mut p,
+            Op::AddThreatScenario {
+                id: tid,
+                name: name(label),
+                asset: a1,
+                category: spoof,
+                catalog_refs: vec![],
+                damages: vec![d1],
+                provenance: Provenance::default(),
+            },
+        );
+        ok(
+            &mut p,
+            Op::SetThreatFeasibility {
+                threat: tid,
+                level: Some(high),
+                provenance: Provenance::default(),
+            },
+        );
+    }
+
+    // Add controls, goals, and claims.
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c1,
+            name: name("SecOC"),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c2,
+            name: name("HSM key store"),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Goal validation errors: empty name, duplicate control, unknown control, > MAX_GOAL_CONTROLS.
+    rejects(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: "  ".into(),
+            controls: vec![],
+            provenance: Provenance::default(),
+        },
+        &ModelError::EmptyName {
+            kind: EntityKind::CybersecurityGoal,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: name("Goal"),
+            controls: vec![c1, c1],
+            provenance: Provenance::default(),
+        },
+        &ModelError::DuplicateGoalControl {
+            goal: g1,
+            control: c1,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: name("Goal"),
+            controls: vec![control_id(99)],
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownSecurityControl(control_id(99)),
+    );
+    let too_many: Vec<_> = (0..=MAX_GOAL_CONTROLS as u64)
+        .map(|i| control_id(100 + i))
+        .collect();
+    rejects(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: name("Goal"),
+            controls: too_many,
+            provenance: Provenance::default(),
+        },
+        &ModelError::TooManyGoalControls {
+            goal: g1,
+            max: MAX_GOAL_CONTROLS,
+        },
+    );
+
+    // Add g1 with [c2, c1] out of order -> canonicalized to [c1, c2].
+    let inv_add_g1 = ok(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: name("Ensure CAN frame authenticity"),
+            controls: vec![c2, c1],
+            provenance: Provenance::default(),
+        },
+    );
+    assert_eq!(inv_add_g1, Op::RemoveCybersecurityGoal { id: g1 });
+    let g1_idx = p.cybersecurity_goal_idx(&g1).expect("g1");
+    let c1_idx = p.security_control_idx(&c1).expect("c1");
+    let c2_idx = p.security_control_idx(&c2).expect("c2");
+    assert_eq!(
+        p.cybersecurity_goal(g1_idx).expect("g1").controls(),
+        &[c1_idx, c2_idx]
+    );
+
+    // Duplicate goal rejected.
+    rejects(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: name("Dup"),
+            controls: vec![],
+            provenance: Provenance::default(),
+        },
+        &ModelError::DuplicateCybersecurityGoal(g1),
+    );
+
+    // Add g2 without controls, cl1 and cl2.
+    ok(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: g2,
+            name: name("Unlinked empty goal"),
+            controls: vec![],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddCybersecurityClaim {
+            id: cl1,
+            name: name("Harness is inside locked cabin"),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddCybersecurityClaim {
+            id: cl2,
+            name: name("Unlinked claim"),
+            provenance: Provenance::default(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::AddCybersecurityClaim {
+            id: cl1,
+            name: name("Dup"),
+            provenance: Provenance::default(),
+        },
+        &ModelError::DuplicateCybersecurityClaim(cl1),
+    );
+
+    // Set treatments on t_reduce (Reduce), t_retain (Retain), t_avoid (Avoid).
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t_reduce,
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t_retain,
+            treatment: Some(RiskTreatment::Retain),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: t_avoid,
+            treatment: Some(RiskTreatment::Avoid),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Before linking goals/claims to threats, lint reports:
+    // - ReduceTreatmentWithoutGoal on t_reduce
+    // - RetainOrShareTreatmentWithoutClaim on t_retain
+    // - CybersecurityGoalUnlinked on g1 and g2
+    // - CybersecurityGoalWithoutControls on g2
+    // - CybersecurityClaimUnlinked on cl1 and cl2
+    let findings = p.lint();
+    assert!(
+        findings.contains(&LintFinding::new(LintCode::ReduceTreatmentWithoutGoal {
+            threat: t_reduce
+        }))
+    );
+    assert!(findings.contains(&LintFinding::new(
+        LintCode::RetainOrShareTreatmentWithoutClaim { threat: t_retain }
+    )));
+    assert!(
+        findings.contains(&LintFinding::new(LintCode::CybersecurityGoalUnlinked {
+            goal: g1,
+        }))
+    );
+    assert!(findings.contains(&LintFinding::new(
+        LintCode::CybersecurityGoalWithoutControls { goal: g2 }
+    )));
+    assert!(
+        findings.contains(&LintFinding::new(LintCode::CybersecurityClaimUnlinked {
+            claim: cl1,
+        }))
+    );
+
+    // Link g1 to t_reduce and cl1 to t_retain; also link g1 and cl1 to t_avoid (triggers mismatch warnings).
+    let base = p.clone();
+    ok(
+        &mut p,
+        Op::SetThreatGoal {
+            threat: t_reduce,
+            goal: Some(g1),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatClaim {
+            threat: t_retain,
+            claim: Some(cl1),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatGoal {
+            threat: t_avoid,
+            goal: Some(g1),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatClaim {
+            threat: t_avoid,
+            claim: Some(cl1),
+            provenance: Provenance::default(),
+        },
+    );
+
+    let findings2 = p.lint();
+    assert!(!findings2.iter().any(|f| {
+        matches!(
+            f.code(),
+            LintCode::ReduceTreatmentWithoutGoal { .. }
+                | LintCode::RetainOrShareTreatmentWithoutClaim { .. }
+        )
+    }));
+    assert!(
+        findings2.contains(&LintFinding::new(LintCode::GoalOnNonReduceThreat {
+            threat: t_avoid,
+            goal: g1,
+        }))
+    );
+    assert!(
+        findings2.contains(&LintFinding::new(LintCode::ClaimOnNonRetainOrShareThreat {
+            threat: t_avoid,
+            claim: cl1,
+        }))
+    );
+    assert!(
+        !findings2.contains(&LintFinding::new(LintCode::CybersecurityGoalUnlinked {
+            goal: g1,
+        })),
+        "g1 is now linked"
+    );
+    assert!(
+        !findings2.contains(&LintFinding::new(LintCode::CybersecurityClaimUnlinked {
+            claim: cl1,
+        })),
+        "cl1 is now linked"
+    );
+
+    // Diff between `base` and `p` reports modified threats.
+    let diff = base.diff(&p).expect("diff");
+    assert_eq!(
+        diff.threat_scenarios().modified(),
+        &[t_reduce, t_retain, t_avoid]
+    );
+    assert!(diff.cybersecurity_goals().is_empty());
+    assert!(diff.cybersecurity_claims().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Job 025: Incremental evaluation cache (`ProjectEvalCache` + `apply_cached`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn project_eval_cache_incremental_updates_and_counters() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+
+    let a1 = asset_id(1);
+    let d1 = damage_id(1);
+    let d2 = damage_id(2);
+    let tr1 = tree_id(1);
+    let tr2 = tree_id(2);
+    let t1 = threat_id(1);
+    let t2 = threat_id(2);
+    let c1 = control_id(1);
+    let g1 = goal_id(1);
+    let cl1 = claim_id(1);
+
+    let r1 = node_id(10);
+    let mid1 = node_id(11);
+    let s1 = node_id(12);
+    let s2 = node_id(13);
+    let s3 = node_id(14);
+    let mut tree1 = AttackTree::new(r1, Node::gate(GateKind::Or, "Root")).expect("root");
+    let g_mid = tree1
+        .add_child(tree1.root(), mid1, Node::gate(GateKind::And, "Mid"))
+        .expect("mid");
+    tree1.add_child(g_mid, s1, Node::step("S1")).expect("s1");
+    tree1.add_child(g_mid, s2, Node::step("S2")).expect("s2");
+    tree1
+        .add_child(tree1.root(), s3, Node::step("S3"))
+        .expect("s3");
+
+    let r2 = node_id(20);
+    let s20 = node_id(21);
+    let mut tree2 = AttackTree::new(r2, Node::gate(GateKind::Or, "Root2")).expect("root2");
+    tree2
+        .add_child(tree2.root(), s20, Node::step("S20"))
+        .expect("s20");
+
+    let safety = cat(&m, "safety");
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: a1,
+            name: "ECU".into(),
+            properties: props(&m, &["integrity"]),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d1,
+            name: "Braking loss".into(),
+            impacts: vec![(safety, lvl(&m, safety, "severe"))],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d2,
+            name: "Minor fault".into(),
+            impacts: vec![(safety, lvl(&m, safety, "negligible"))],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr1,
+            tree: tree1,
+            step_feasibility: vec![
+                (s1, feas(&m, "medium")),
+                (s2, feas(&m, "medium")),
+                (s3, feas(&m, "low")),
+            ],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr2,
+            tree: tree2,
+            step_feasibility: vec![(s20, feas(&m, "low"))],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t1,
+            name: "Threat 1".into(),
+            asset: a1,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![d1],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t1,
+            tree: Some(tr1),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddThreatScenario {
+            id: t2,
+            name: "Threat 2".into(),
+            asset: a1,
+            category: threat_cat(&m, "tampering"),
+            catalog_refs: vec![],
+            damages: vec![d2],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t2,
+            tree: Some(tr2),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: c1,
+            name: "HSM".into(),
+            provenance: Provenance::default(),
+        },
+    );
+
+    let mut cache = p.eval_cache();
+    assert_eq!(cache.evaluate_tree(&p, tr1).cloned(), p.evaluate_tree(tr1));
+    assert_eq!(cache.evaluate_risk(&p, t1).cloned(), p.evaluate_risk(t1));
+    assert_eq!(cache.evaluate_risk(&p, t2).cloned(), p.evaluate_risk(t2));
+
+    // 1. Metadata / governance ops do zero recomputation.
+    cache.reset_counters();
+    p.apply_cached(
+        Op::RenameThreatScenario {
+            id: t1,
+            name: "Threat 1 renamed".into(),
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("rename");
+    p.apply_cached(
+        Op::AddCybersecurityGoal {
+            id: g1,
+            name: "Goal 1".into(),
+            controls: vec![c1],
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("add goal");
+    p.apply_cached(
+        Op::AddCybersecurityClaim {
+            id: cl1,
+            name: "Claim 1".into(),
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("add claim");
+    p.apply_cached(
+        Op::SetRiskTreatment {
+            threat: t1,
+            treatment: Some(RiskTreatment::Reduce),
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("set treatment");
+    p.apply_cached(
+        Op::SetThreatGoal {
+            threat: t1,
+            goal: Some(g1),
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("set goal");
+    assert_eq!(cache.recomputed_nodes(), 0);
+    assert_eq!(cache.recomputed_threats(), 0);
+
+    // 2. Raising s1 from medium to high under AND(s1, s2=medium) leaves Mid at medium (early cutoff!).
+    // Inherent + residual each update s1 and fold Mid (2 nodes each = 4 nodes total), and Root is NOT refolded.
+    cache.reset_counters();
+    p.apply_cached(
+        Op::SetStepFeasibility {
+            tree: tr1,
+            node: s1,
+            level: Some(feas(&m, "high")),
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("set s1 high");
+    assert_eq!(cache.recomputed_nodes(), 4);
+    // Root value didn't change, and only Mid's tie-break (still s2=medium vs s1=high -> s2) changed,
+    // wait: s1 went from medium (tied with s2, so Selected(s1)) to high (so AND picks s2 -> Selected(s2))!
+    // Thus Mid's derivation changed, so t1's tree_evaluation is synced in O(1), while t2 is untouched.
+    assert_eq!(cache.recomputed_threats(), 2); // t1 inherent + t1 residual; t2 untouched
+    assert_eq!(cache.evaluate_tree(&p, tr1).cloned(), p.evaluate_tree(tr1));
+    assert_eq!(cache.evaluate_risk(&p, t1).cloned(), p.evaluate_risk(t1));
+
+    // 3. SetStepMitigation only touches residual evaluation of tr1 and residual evaluation of t1.
+    cache.reset_counters();
+    p.apply_cached(
+        Op::SetStepMitigation {
+            tree: tr1,
+            node: s2,
+            control: c1,
+            feasibility: Some(feas(&m, "very-low")),
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("mitigate s2");
+    assert_eq!(cache.recomputed_nodes(), 3); // residual only: s2 + Mid + Root
+    assert_eq!(cache.recomputed_threats(), 1); // t1 residual only!
+    assert_eq!(
+        cache.evaluate_residual_tree(&p, tr1).cloned(),
+        p.evaluate_residual_tree(tr1)
+    );
+    assert_eq!(
+        cache.evaluate_residual_risk(&p, t1).cloned(),
+        p.evaluate_residual_risk(t1)
+    );
+
+    // 4. SetImpact on d1 only recomputes t1 (2 evaluations: inherent + residual), 0 tree nodes.
+    cache.reset_counters();
+    p.apply_cached(
+        Op::SetImpact {
+            id: d1,
+            category: safety,
+            level: Some(lvl(&m, safety, "moderate")),
+            provenance: Provenance::default(),
+        },
+        &mut cache,
+    )
+    .expect("set impact");
+    assert_eq!(cache.recomputed_nodes(), 0);
+    assert_eq!(cache.recomputed_threats(), 2);
+    assert_eq!(cache.evaluate_risk(&p, t1).cloned(), p.evaluate_risk(t1));
+    assert_eq!(
+        cache.evaluate_residual_risk(&p, t1).cloned(),
+        p.evaluate_residual_risk(t1)
+    );
+
+    // 5. Failed op via apply_cached leaves project and cache unchanged and counters at 0.
+    cache.reset_counters();
+    let err = p.apply_cached(Op::RemoveAsset { id: asset_id(999) }, &mut cache);
+    assert!(err.is_err());
+    assert_eq!(cache.recomputed_nodes(), 0);
+    assert_eq!(cache.recomputed_threats(), 0);
 }

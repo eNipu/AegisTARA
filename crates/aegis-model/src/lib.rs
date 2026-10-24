@@ -245,26 +245,33 @@ mod topo;
 mod tree;
 
 pub use asset::{Asset, PropertySet};
-pub use control::{MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl, StepMitigation};
+pub use control::{
+    CybersecurityClaim, CybersecurityGoal, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
+    SecurityControl, StepMitigation,
+};
 pub use damage::DamageScenario;
 pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
-    AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, evaluate,
+    AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, TreeEvalCache,
+    evaluate,
 };
 pub use id::{
-    AssetId, AssetIdx, ControlId, ControlIdx, DamageId, DamageIdx, NodeId, NodeIdx, ThreatId,
-    ThreatIdx, TreeId, TreeIdx,
+    AssetId, AssetIdx, ClaimId, ClaimIdx, ControlId, ControlIdx, DamageId, DamageIdx, GoalId,
+    GoalIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
 };
 pub use lint::{LintCode, LintFinding, LintSeverity};
 pub use methodology::{
-    CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, FeasibilityLevel, ImpactCategory,
-    ImpactCategoryDef, Level, LevelDef, Methodology, MethodologyDef, Property, PropertyDef,
-    RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
+    AttackPotential, AttackPotentialDef, CatalogRef, CatalogScheme, CatalogSchemeDef,
+    CatalogSyntax, FactorContribution, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor,
+    FeasibilityLevel, ImpactCategory, ImpactCategoryDef, Level, LevelDef, MAX_FACTOR_POINTS,
+    MAX_FEASIBILITY_FACTORS, MIN_FEASIBILITY_FACTORS, Methodology, MethodologyDef, PotentialBand,
+    PotentialBandDef, Property, PropertyDef, RiskLevel, SegmentDef, ThreatCategory,
+    ThreatCategoryDef,
 };
 pub use op::Op;
 pub use paths::{AttackPath, AttackPaths};
-pub use project::{MAX_NAME_CHARS, Project};
+pub use project::{MAX_NAME_CHARS, Project, ProjectEvalCache};
 pub use provenance::{Provenance, ProvenanceSource};
 pub use store::{
     Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,

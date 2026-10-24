@@ -9,15 +9,16 @@ use std::io::Read;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackTree, CatalogSchemeDef, CatalogSyntax, GateKind, ImpactCategoryDef, LevelDef, Limit,
-    MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES,
+    AttackPotentialDef, AttackTree, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
+    GateKind, ImpactCategoryDef, LevelDef, Limit, MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS,
+    MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES,
     MAX_PROJECT_FILE_BYTES, MAX_STEP_MITIGATIONS, Methodology, MethodologyDef, Node, Op,
-    OpLogReader, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef, StoreError,
-    ThreatCategoryDef,
+    OpLogReader, PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef,
+    StoreError, ThreatCategoryDef,
 };
 use common::{
-    asset_id, builtin, control_id, damage_id, node_id, read_log, save, threat_id, tree_id,
-    write_log,
+    asset_id, builtin, claim_id, control_id, damage_id, goal_id, node_id, read_log, save,
+    threat_id, tree_id, write_log,
 };
 use serde_json::{Value, json};
 
@@ -213,6 +214,8 @@ fn caps_actor() {
         json!({"op": "rename_asset", "id": id(1), "name": "a", "provenance": prov}),
         json!({"op": "set_step_feasibility", "tree": id(1), "node": id(2),
                "level": "low", "provenance": prov}),
+        json!({"op": "set_step_factor", "tree": id(1), "node": id(2),
+               "factor": "elapsed-time", "level": "le-1d", "provenance": prov}),
         json!({"op": "set_threat_attack_tree", "threat": id(1), "tree": id(2),
                "provenance": prov}),
     ] {
@@ -330,6 +333,58 @@ fn caps_step_mitigations() {
 }
 
 #[test]
+fn caps_goal_controls() {
+    let want = Limit::GoalControls { max: 16 };
+    let ctrls17: Vec<Value> = (0..17).map(|i| json!(id(200 + i))).collect();
+    let op = json!({"op": "add_cybersecurity_goal", "id": id(10),
+                    "name": "g", "controls": ctrls17});
+    assert_limit(&log_error(&log_with(&op)), want);
+
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    s["cybersecurity_goals"] = json!([{"id": id(10), "name": "g", "controls": ctrls17}]);
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+#[test]
+fn caps_step_factors() {
+    let want = Limit::FeasibilityFactors { max: 16 };
+    let factors17: serde_json::Map<String, Value> =
+        (0..17).map(|i| (format!("f{i}"), json!("le-1d"))).collect();
+    let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
+                        "step_feasibility": {},
+                        "step_factors": {id(100): factors17}}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
+        want,
+    );
+
+    // 33 outer nodes in step_factors trips Limit::AttackTreeNodes.
+    let nodes33: serde_json::Map<String, Value> = (0..33)
+        .map(|i| (id(100 + i), json!({"elapsed-time": "le-1d"})))
+        .collect();
+    let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
+                        "step_feasibility": {},
+                        "step_factors": nodes33}]);
+    assert_limit(
+        &snapshot_error(&snapshot_with_trees(
+            "0.1.0",
+            json!([]),
+            json!([]),
+            json!([]),
+            trees,
+        )),
+        Limit::AttackTreeNodes { max: 32 },
+    );
+}
+
+#[test]
 fn caps_keys() {
     let want = Limit::KeyBytes { max: 64 };
     let key = "k".repeat(65);
@@ -344,6 +399,10 @@ fn caps_keys() {
                "nodes": [{"id": id(2), "label": "s"}],
                "step_feasibility": {id(2): key}}),
         json!({"op": "set_step_feasibility", "tree": id(1), "node": id(2), "level": key}),
+        json!({"op": "set_step_factor", "tree": id(1), "node": id(2),
+               "factor": key, "level": null}),
+        json!({"op": "set_step_factor", "tree": id(1), "node": id(2),
+               "factor": "elapsed-time", "level": key}),
     ] {
         assert_limit(&log_error(&log_with(&op)), want);
     }
@@ -367,6 +426,24 @@ fn caps_keys() {
         )),
         want,
     );
+    for bad_factors in [
+        json!({id(2): {&key: "le-1d"}}),
+        json!({id(2): {"elapsed-time": &key}}),
+    ] {
+        let trees = json!([{"id": id(1), "nodes": [{"id": id(2), "label": "s"}],
+                            "step_feasibility": {},
+                            "step_factors": bad_factors}]);
+        assert_limit(
+            &snapshot_error(&snapshot_with_trees(
+                "0.1.0",
+                json!([]),
+                json!([]),
+                json!([]),
+                trees,
+            )),
+            want,
+        );
+    }
     let s = snapshot("0.1.0", json!([]), json!([]), json!([])).replace("iso21434-r155", &key);
     assert_limit(&snapshot_error(&s), want);
 }
@@ -544,6 +621,34 @@ fn maxed() -> Arc<Methodology> {
             })
             .collect(),
         risk_levels,
+        attack_potential: Some(AttackPotentialDef {
+            factors: (0..16)
+                .map(|i| {
+                    let key = key64("af", 15 - i);
+                    FactorDef {
+                        label: label(&key),
+                        key,
+                        levels: (0..16)
+                            .map(|l| {
+                                let key = key64("al", l);
+                                FactorLevelDef {
+                                    label: label(&key),
+                                    key,
+                                    points: 1000,
+                                }
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
+            bands: (0..16)
+                .map(|b| PotentialBandDef {
+                    min: (b * 1000) as u16,
+                    max: (b < 15).then_some(((b + 1) * 1000 - 1) as u16),
+                    feasibility: key64("f", 15 - b),
+                })
+                .collect(),
+        }),
     };
     Arc::new(Methodology::new(def).expect("maxed methodology is valid"))
 }
@@ -650,7 +755,39 @@ fn limits_admit_every_valid_project() {
             provenance: max_prov.clone(),
         });
     }
+    assert_eq!(control_ids.len(), MAX_GOAL_CONTROLS);
+    ops.push(Op::AddCybersecurityGoal {
+        id: goal_id(1),
+        name: long_name.clone(),
+        controls: control_ids.iter().rev().copied().collect(),
+        provenance: max_prov.clone(),
+    });
+    ops.push(Op::AddCybersecurityClaim {
+        id: claim_id(1),
+        name: long_name.clone(),
+        provenance: max_prov.clone(),
+    });
+    ops.push(Op::SetThreatGoal {
+        threat: threat_id(1),
+        goal: Some(goal_id(1)),
+        provenance: max_prov.clone(),
+    });
+    ops.push(Op::SetThreatClaim {
+        threat: threat_id(1),
+        claim: Some(claim_id(1)),
+        provenance: max_prov.clone(),
+    });
     for &(sid, _) in &step_feasibility {
+        for f in m.feasibility_factors() {
+            let fl = m.factor_levels(f).last().expect("factor level");
+            ops.push(Op::SetStepFactor {
+                tree: tree_id(1),
+                node: sid,
+                factor: f,
+                level: Some(fl),
+                provenance: max_prov.clone(),
+            });
+        }
         for &cid in &control_ids {
             ops.push(Op::SetStepMitigation {
                 tree: tree_id(1),

@@ -36,6 +36,12 @@ pub const MAX_PROPERTIES: usize = 64;
 pub const MAX_THREAT_CATEGORIES: usize = 64;
 /// Most catalog schemes a methodology may declare.
 pub const MAX_CATALOG_SCHEMES: usize = 16;
+/// Fewest factors an `attack_potential` scheme may declare.
+pub const MIN_FEASIBILITY_FACTORS: usize = 1;
+/// Most factors an `attack_potential` scheme may declare.
+pub const MAX_FEASIBILITY_FACTORS: usize = 16;
+/// Highest point value a factor level may declare.
+pub const MAX_FACTOR_POINTS: u16 = 1_000;
 /// Longest label, in chars.
 pub const MAX_LABEL_CHARS: usize = 256;
 /// Longest version string, in chars.
@@ -92,6 +98,7 @@ pub const MAX_KEY_LEN: usize = 64;
 ///         violates: vec!["integrity".into()],
 ///     }],
 ///     catalog_schemes: vec![],
+///     attack_potential: None,
 /// };
 /// let m = Methodology::new(def)?;
 /// assert_eq!(m.key(), "tiny");
@@ -121,6 +128,9 @@ pub struct MethodologyDef {
     pub threat_categories: Vec<ThreatCategoryDef>,
     /// Catalog schemes, 0 to 16.
     pub catalog_schemes: Vec<CatalogSchemeDef>,
+    /// Optional multi-factor attack potential scheme, mapping per-factor
+    /// ratings on an attack step to a [`FeasibilityLevel`].
+    pub attack_potential: Option<AttackPotentialDef>,
 }
 
 /// One impact category, its ordered rating scale, and its 2D risk matrix.
@@ -234,6 +244,103 @@ pub struct CatalogSchemeDef {
     pub label: Arc<str>,
     /// The ID syntax.
     pub syntax: CatalogSyntax,
+}
+
+/// A methodology's multi-factor attack potential scheme: the factors rated
+/// on an attack step and the score bands that map the point sum to a
+/// [`FeasibilityLevel`].
+///
+/// ```
+/// use aegis_model::{AttackPotentialDef, FactorDef, FactorLevelDef, PotentialBandDef};
+///
+/// let ap = AttackPotentialDef {
+///     factors: vec![FactorDef {
+///         key: "skill".into(),
+///         label: "Skill".into(),
+///         levels: vec![
+///             FactorLevelDef { key: "low".into(), label: "Low".into(), points: 0 },
+///             FactorLevelDef { key: "high".into(), label: "High".into(), points: 5 },
+///         ],
+///     }],
+///     bands: vec![
+///         PotentialBandDef { min: 0, max: Some(4), feasibility: "high".into() },
+///         PotentialBandDef { min: 5, max: None, feasibility: "low".into() },
+///     ],
+/// };
+/// assert_eq!(ap.factors.len(), 1);
+/// assert_eq!(ap.bands.len(), 2);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttackPotentialDef {
+    /// Factors rated on each attack step, 1 to 16.
+    pub factors: Vec<FactorDef>,
+    /// Contiguous score bands partitioning `0..`, 1 to 16.
+    pub bands: Vec<PotentialBandDef>,
+}
+
+/// One factor in an [`AttackPotentialDef`] and its ordered rating scale.
+///
+/// ```
+/// use aegis_model::{FactorDef, FactorLevelDef};
+///
+/// let f = FactorDef {
+///     key: "skill".into(),
+///     label: "Skill".into(),
+///     levels: vec![
+///         FactorLevelDef { key: "low".into(), label: "Low".into(), points: 0 },
+///         FactorLevelDef { key: "high".into(), label: "High".into(), points: 5 },
+///     ],
+/// };
+/// assert_eq!(&*f.key, "skill");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FactorDef {
+    /// Stable key, unique among attack potential factors.
+    pub key: Arc<str>,
+    /// Display label.
+    pub label: Arc<str>,
+    /// Ordered scale of factor levels, 2 to 16.
+    pub levels: Vec<FactorLevelDef>,
+}
+
+/// One choice in a [`FactorDef`]'s rating scale and its point contribution.
+///
+/// ```
+/// use aegis_model::FactorLevelDef;
+///
+/// let fl = FactorLevelDef { key: "expert".into(), label: "Expert".into(), points: 6 };
+/// assert_eq!(fl.points, 6);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FactorLevelDef {
+    /// Stable key, unique within its factor.
+    pub key: Arc<str>,
+    /// Display label.
+    pub label: Arc<str>,
+    /// Point contribution toward total attack potential, at most
+    /// [`MAX_FACTOR_POINTS`].
+    pub points: u16,
+}
+
+/// One score band in an [`AttackPotentialDef`], mapping an inclusive point
+/// range `[min, max]` (or `[min, ∞)` for the final band) to a key in
+/// [`MethodologyDef::feasibility_levels`].
+///
+/// ```
+/// use aegis_model::PotentialBandDef;
+///
+/// let b = PotentialBandDef { min: 0, max: Some(13), feasibility: "high".into() };
+/// assert_eq!(b.max, Some(13));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PotentialBandDef {
+    /// Inclusive lower bound of the band's score range.
+    pub min: u16,
+    /// Inclusive upper bound of the band's score range, or `None` for the
+    /// final open-ended band (`score >= min`).
+    pub max: Option<u16>,
+    /// Key of the [`FeasibilityLevel`] assigned to scores in this band.
+    pub feasibility: Arc<str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +497,337 @@ vocab_index! {
     CatalogScheme
 }
 
+vocab_index! {
+    /// Index of an attack potential factor in a [`Methodology`]. 1 byte.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.feasibility_factor("expertise").map(|f| f.index()), Some(1));
+    /// # Ok(())
+    /// # }
+    /// ```
+    FeasibilityFactor
+}
+
+vocab_index! {
+    /// A position in one attack potential factor's rating scale. 1 byte.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let exp = m.feasibility_factor("expertise").ok_or("no factor")?;
+    /// assert_eq!(m.factor_level(exp, "expert").map(|l| l.index()), Some(2));
+    /// # Ok(())
+    /// # }
+    /// ```
+    FactorLevel
+}
+
+/// One validated score band in a [`Methodology`]'s attack potential scheme.
+///
+/// ```
+/// use aegis_model::Methodology;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Methodology::iso21434_r155()?;
+/// let band = m.potential_band_for_score(15).ok_or("no band")?;
+/// assert_eq!(band.min(), 14);
+/// assert_eq!(band.max(), Some(19));
+/// assert!(band.contains(15));
+/// assert_eq!(m.feasibility_level_key(band.feasibility()), Some("medium"));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PotentialBand {
+    min: u16,
+    max: Option<u16>,
+    feasibility: FeasibilityLevel,
+}
+
+impl PotentialBand {
+    /// Returns the inclusive lower bound of this band's score range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.potential_bands().first().map(|b| b.min()), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn min(self) -> u16 {
+        self.min
+    }
+
+    /// Returns the inclusive upper bound of this band's score range, or `None`
+    /// for the final open-ended band. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.potential_bands().last().and_then(|b| b.max()), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn max(self) -> Option<u16> {
+        self.max
+    }
+
+    /// Returns the [`FeasibilityLevel`] assigned to scores in this band. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let first = m.potential_bands().first().ok_or("no band")?;
+    /// assert_eq!(m.feasibility_level_key(first.feasibility()), Some("high"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility(self) -> FeasibilityLevel {
+        self.feasibility
+    }
+
+    /// Returns `true` if `score` falls within `[min, max]` (or `>= min` when
+    /// `max` is `None`). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let first = m.potential_bands().first().ok_or("no band")?;
+    /// assert!(first.contains(0));
+    /// assert!(first.contains(13));
+    /// assert!(!first.contains(14));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn contains(self, score: u32) -> bool {
+        score >= u32::from(self.min) && self.max.is_none_or(|m| score <= u32::from(m))
+    }
+}
+
+/// One factor's contribution to an attack step's [`AttackPotential`].
+///
+/// ```
+/// use aegis_model::Methodology;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Methodology::iso21434_r155()?;
+/// let ratings: Vec<_> = m
+///     .feasibility_factors()
+///     .map(|f| m.factor_levels(f).next())
+///     .collect();
+/// let ap = m.resolve_attack_potential(&ratings).ok_or("no potential")?;
+/// let first = ap.factors().first().ok_or("no factor")?;
+/// assert_eq!(first.factor().index(), 0);
+/// assert_eq!(first.level().index(), 0);
+/// assert_eq!(first.points(), 0);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FactorContribution {
+    factor: FeasibilityFactor,
+    level: FactorLevel,
+    points: u16,
+}
+
+impl FactorContribution {
+    /// Returns the rated [`FeasibilityFactor`]. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).next())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+    /// assert_eq!(m.feasibility_factor_key(ap.factors()[0].factor()), Some("elapsed-time"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn factor(&self) -> FeasibilityFactor {
+        self.factor
+    }
+
+    /// Returns the chosen [`FactorLevel`]. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).next())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+    /// let c = ap.factors()[0];
+    /// assert_eq!(m.factor_level_key(c.factor(), c.level()), Some("le-1d"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn level(&self) -> FactorLevel {
+        self.level
+    }
+
+    /// Returns the point contribution of this factor rating. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).last())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+    /// assert_eq!(ap.factors()[0].points(), 19);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn points(&self) -> u16 {
+        self.points
+    }
+}
+
+/// Full breakdown of an attack step's multi-factor attack potential rating:
+/// each factor's rated level and point contribution, the summed score, the
+/// matched [`PotentialBand`], and the derived [`FeasibilityLevel`].
+///
+/// ```
+/// use aegis_model::Methodology;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Methodology::iso21434_r155()?;
+/// let ratings: Vec<_> = m
+///     .feasibility_factors()
+///     .map(|f| m.factor_levels(f).last())
+///     .collect();
+/// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+/// assert_eq!(ap.score(), 57);
+/// assert_eq!(m.feasibility_level_key(ap.feasibility()), Some("very-low"));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttackPotential {
+    factors: Box<[FactorContribution]>,
+    score: u32,
+    band: PotentialBand,
+    feasibility: FeasibilityLevel,
+}
+
+impl AttackPotential {
+    /// Returns each factor's rating and point contribution in methodology
+    /// declaration order. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).next())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+    /// assert_eq!(ap.factors().len(), 5);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn factors(&self) -> &[FactorContribution] {
+        &self.factors
+    }
+
+    /// Returns the total attack potential score (sum of factor points). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).next())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+    /// assert_eq!(ap.score(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn score(&self) -> u32 {
+        self.score
+    }
+
+    /// Returns the [`PotentialBand`] matched by [`score`](Self::score). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).next())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+    /// assert_eq!(ap.band().max(), Some(13));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn band(&self) -> PotentialBand {
+        self.band
+    }
+
+    /// Returns the [`FeasibilityLevel`] derived from [`band`](Self::band). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).next())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("ap")?;
+    /// assert_eq!(m.feasibility_level_key(ap.feasibility()), Some("high"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn feasibility(&self) -> FeasibilityLevel {
+        self.feasibility
+    }
+}
+
 // Raw constructors, only where the crate needs them. A [`Methodology`] hands
 // out every index; these serve entity views that rebuild an index from a
 // stored position, and tests that need an out-of-range index.
@@ -424,6 +862,22 @@ impl CatalogScheme {
     }
 }
 
+#[cfg(test)]
+impl FeasibilityFactor {
+    /// Wraps a raw position, for tests.
+    pub(crate) fn new(i: u8) -> Self {
+        FeasibilityFactor(i)
+    }
+}
+
+#[cfg(test)]
+impl FactorLevel {
+    /// Wraps a raw position, for tests.
+    pub(crate) fn new(i: u8) -> Self {
+        FactorLevel(i)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Validated methodology.
 // ---------------------------------------------------------------------------
@@ -433,6 +887,21 @@ impl CatalogScheme {
 struct Entry {
     key: Arc<str>,
     label: Arc<str>,
+}
+
+/// One validated factor level.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FactorLevelData {
+    entry: Entry,
+    points: u16,
+}
+
+/// One validated attack potential factor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FactorData {
+    entry: Entry,
+    levels: Vec<FactorLevelData>,
+    level_by_key: BTreeMap<Arc<str>, u8>,
 }
 
 /// A validated impact category.
@@ -500,6 +969,9 @@ pub struct Methodology {
     threat_by_key: BTreeMap<Arc<str>, u8>,
     schemes: Vec<SchemeData>,
     scheme_by_key: BTreeMap<Arc<str>, u8>,
+    factors: Vec<FactorData>,
+    factor_by_key: BTreeMap<Arc<str>, u8>,
+    potential_bands: Vec<PotentialBand>,
     /// Every declared property.
     all_properties: PropertySet,
 }
@@ -629,6 +1101,7 @@ impl Methodology {
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
+    ///     attack_potential: None,
     /// };
     /// assert_eq!(Methodology::new(def), Err(MethodologyError::InvalidKey("Not-A-Key".into())));
     /// ```
@@ -655,6 +1128,16 @@ impl Methodology {
             .collect();
         let threats = Self::build_threats(&def.threat_categories, &properties.by_key)?;
         let schemes = Self::build_schemes(&def.catalog_schemes)?;
+        let (factors, potential_bands) = match &def.attack_potential {
+            Some(ap) => Self::build_attack_potential(ap, &feasibility.by_key)?,
+            None => (
+                Vocab {
+                    items: Vec::new(),
+                    by_key: BTreeMap::new(),
+                },
+                Vec::new(),
+            ),
+        };
 
         Ok(Methodology {
             key: def.key,
@@ -672,6 +1155,9 @@ impl Methodology {
             threat_by_key: threats.by_key,
             schemes: schemes.items,
             scheme_by_key: schemes.by_key,
+            factors: factors.items,
+            factor_by_key: factors.by_key,
+            potential_bands,
             all_properties,
         })
     }
@@ -880,6 +1366,109 @@ impl Methodology {
             });
         }
         Ok(Vocab { items: out, by_key })
+    }
+
+    fn build_attack_potential(
+        ap: &AttackPotentialDef,
+        feasibility_by_key: &BTreeMap<Arc<str>, u8>,
+    ) -> Result<(Vocab<FactorData>, Vec<PotentialBand>), MethodologyError> {
+        check_count(
+            ap.factors.len(),
+            MIN_FEASIBILITY_FACTORS,
+            MAX_FEASIBILITY_FACTORS,
+            || MethodologyError::FeasibilityFactorCount {
+                min: MIN_FEASIBILITY_FACTORS,
+                max: MAX_FEASIBILITY_FACTORS,
+            },
+        )?;
+        let mut factor_by_key = BTreeMap::new();
+        let mut factors = Vec::with_capacity(ap.factors.len());
+        for (pos, f) in ap.factors.iter().enumerate() {
+            let entry = add_entry(
+                &f.key,
+                &f.label,
+                pos,
+                &mut factor_by_key,
+                MethodologyError::DuplicateFeasibilityFactor,
+            )?;
+            check_count(f.levels.len(), MIN_LEVELS, MAX_LEVELS, || {
+                MethodologyError::FactorLevelCount {
+                    factor: Arc::clone(&f.key),
+                    min: MIN_LEVELS,
+                    max: MAX_LEVELS,
+                }
+            })?;
+            let mut level_by_key = BTreeMap::new();
+            let mut levels = Vec::with_capacity(f.levels.len());
+            for (lpos, fl) in f.levels.iter().enumerate() {
+                let level_entry = add_entry(&fl.key, &fl.label, lpos, &mut level_by_key, |k| {
+                    MethodologyError::DuplicateFactorLevel {
+                        factor: Arc::clone(&f.key),
+                        level: k,
+                    }
+                })?;
+                if fl.points > MAX_FACTOR_POINTS {
+                    return Err(MethodologyError::FactorPointsTooLarge {
+                        factor: Arc::clone(&f.key),
+                        level: Arc::clone(&fl.key),
+                        max: MAX_FACTOR_POINTS,
+                    });
+                }
+                levels.push(FactorLevelData {
+                    entry: level_entry,
+                    points: fl.points,
+                });
+            }
+            factors.push(FactorData {
+                entry,
+                levels,
+                level_by_key,
+            });
+        }
+
+        check_count(ap.bands.len(), 1, MAX_LEVELS, || {
+            MethodologyError::PotentialBandCount {
+                min: 1,
+                max: MAX_LEVELS,
+            }
+        })?;
+        let mut bands = Vec::with_capacity(ap.bands.len());
+        let mut expected_min: u32 = 0;
+        for (i, b) in ap.bands.iter().enumerate() {
+            if u32::from(b.min) != expected_min {
+                return Err(MethodologyError::PotentialBandRange { band: i });
+            }
+            if i + 1 < ap.bands.len() {
+                let Some(m) = b.max else {
+                    return Err(MethodologyError::PotentialBandRange { band: i });
+                };
+                if m < b.min {
+                    return Err(MethodologyError::PotentialBandRange { band: i });
+                }
+                expected_min = u32::from(m) + 1;
+            } else if b.max.is_some() {
+                return Err(MethodologyError::PotentialBandRange { band: i });
+            }
+            let Some(&f) = feasibility_by_key.get(&b.feasibility) else {
+                return Err(MethodologyError::UnknownBandFeasibilityLevel {
+                    band: i,
+                    feasibility: error_key_text(&b.feasibility),
+                });
+            };
+            bands.push(PotentialBand {
+                min: b.min,
+                max: b.max,
+                feasibility: FeasibilityLevel(f),
+            });
+        }
+
+        Ok((
+            Vocab {
+                items: factors,
+                by_key: factor_by_key,
+            },
+            bands,
+        ))
     }
 
     // -- Identity ----------------------------------------------------------
@@ -1686,6 +2275,349 @@ impl Methodology {
         }
     }
 
+    // -- Attack potential factors and bands ------------------------------------
+
+    /// Iterates the attack potential factors in declaration order. Empty if the
+    /// methodology declares no `attack_potential` scheme. Time O(1) per item.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let keys: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .filter_map(|f| m.feasibility_factor_key(f))
+    ///     .collect();
+    /// assert_eq!(
+    ///     keys,
+    ///     [
+    ///         "elapsed-time",
+    ///         "expertise",
+    ///         "knowledge",
+    ///         "window-of-opportunity",
+    ///         "equipment",
+    ///     ]
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn feasibility_factors(&self) -> impl ExactSizeIterator<Item = FeasibilityFactor> + use<> {
+        index_range(self.factors.len()).map(FeasibilityFactor)
+    }
+
+    /// Returns the number of attack potential factors (0 if the methodology
+    /// declares no `attack_potential` scheme). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// assert_eq!(Methodology::iso21434_r155()?.feasibility_factor_count(), 5);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_factor_count(&self) -> usize {
+        self.factors.len()
+    }
+
+    /// Resolves an attack potential factor key in O(log F), F <= 16.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.feasibility_factor("equipment").map(|f| f.index()), Some(4));
+    /// assert_eq!(m.feasibility_factor("nope"), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_factor(&self, key: &str) -> Option<FeasibilityFactor> {
+        self.factor_by_key.get(key).copied().map(FeasibilityFactor)
+    }
+
+    /// Returns an attack potential factor's key, or `None` if `factor` is
+    /// outside this methodology. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let f = m.feasibility_factor("knowledge");
+    /// assert_eq!(f.and_then(|f| m.feasibility_factor_key(f)), Some("knowledge"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_factor_key(&self, factor: FeasibilityFactor) -> Option<&str> {
+        self.factor_data(factor).map(|f| &*f.entry.key)
+    }
+
+    /// Returns an attack potential factor's display label, or `None` if
+    /// `factor` is outside this methodology. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let f = m.feasibility_factor("knowledge");
+    /// assert_eq!(
+    ///     f.and_then(|f| m.feasibility_factor_label(f)),
+    ///     Some("Knowledge of the item")
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_factor_label(&self, factor: FeasibilityFactor) -> Option<&str> {
+        self.factor_data(factor).map(|f| &*f.entry.label)
+    }
+
+    /// Iterates the levels of one attack potential factor's scale in
+    /// declaration order. Empty if `factor` is not in this methodology. Time
+    /// O(1) per item.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let exp = m.feasibility_factor("expertise").ok_or("no factor")?;
+    /// let keys: Vec<_> = m
+    ///     .factor_levels(exp)
+    ///     .filter_map(|l| m.factor_level_key(exp, l))
+    ///     .collect();
+    /// assert_eq!(keys, ["layman", "proficient", "expert", "multiple-experts"]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn factor_levels(
+        &self,
+        factor: FeasibilityFactor,
+    ) -> impl ExactSizeIterator<Item = FactorLevel> + use<> {
+        index_range(self.factor_level_count(factor)).map(FactorLevel)
+    }
+
+    /// Returns the number of levels in `factor`'s scale, or 0 if `factor` is
+    /// not in this methodology. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let et = m.feasibility_factor("elapsed-time").ok_or("no factor")?;
+    /// assert_eq!(m.factor_level_count(et), 5);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn factor_level_count(&self, factor: FeasibilityFactor) -> usize {
+        self.factor_data(factor).map_or(0, |f| f.levels.len())
+    }
+
+    /// Resolves a level key within one attack potential factor's scale in
+    /// O(log L), L <= 16.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
+    /// assert_eq!(m.factor_level(eq, "bespoke").map(|l| l.index()), Some(2));
+    /// assert_eq!(m.factor_level(eq, "nope"), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn factor_level(&self, factor: FeasibilityFactor, key: &str) -> Option<FactorLevel> {
+        self.factor_data(factor)
+            .and_then(|f| f.level_by_key.get(key).copied())
+            .map(FactorLevel)
+    }
+
+    /// Returns a factor level's key, or `None` if `factor` or `level` is out of
+    /// range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
+    /// let top = m.factor_levels(eq).last().ok_or("no level")?;
+    /// assert_eq!(m.factor_level_key(eq, top), Some("multiple-bespoke"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn factor_level_key(&self, factor: FeasibilityFactor, level: FactorLevel) -> Option<&str> {
+        self.factor_level_data(factor, level).map(|d| &*d.entry.key)
+    }
+
+    /// Returns a factor level's display label, or `None` if `factor` or `level`
+    /// is out of range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
+    /// let first = m.factor_levels(eq).next().ok_or("no level")?;
+    /// assert_eq!(m.factor_level_label(eq, first), Some("Standard"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn factor_level_label(
+        &self,
+        factor: FeasibilityFactor,
+        level: FactorLevel,
+    ) -> Option<&str> {
+        self.factor_level_data(factor, level)
+            .map(|d| &*d.entry.label)
+    }
+
+    /// Returns the point contribution of `(factor, level)`, or `None` if out of
+    /// range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
+    /// let bespoke = m.factor_level(eq, "bespoke").ok_or("no level")?;
+    /// assert_eq!(m.factor_level_points(eq, bespoke), Some(7));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn factor_level_points(
+        &self,
+        factor: FeasibilityFactor,
+        level: FactorLevel,
+    ) -> Option<u16> {
+        self.factor_level_data(factor, level).map(|d| d.points)
+    }
+
+    /// Returns the score bands of this methodology's attack potential scheme
+    /// (empty if the methodology declares no `attack_potential` scheme). Time
+    /// O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.potential_bands().len(), 4);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn potential_bands(&self) -> &[PotentialBand] {
+        &self.potential_bands
+    }
+
+    /// Looks up the [`PotentialBand`] that contains `score`, or `None` if this
+    /// methodology declares no `attack_potential` scheme. Time O(B), B <= 16.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let b = m.potential_band_for_score(22).ok_or("no band")?;
+    /// assert_eq!(m.feasibility_level_key(b.feasibility()), Some("low"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn potential_band_for_score(&self, score: u32) -> Option<PotentialBand> {
+        self.potential_bands
+            .iter()
+            .copied()
+            .find(|b| b.contains(score))
+    }
+
+    /// Evaluates a complete per-factor rating slice into an [`AttackPotential`]
+    /// breakdown. Returns `None` if this methodology declares no
+    /// `attack_potential` scheme, if `ratings.len() != self.factors.len()`, or
+    /// if any factor in `ratings` is `None` or out of range. Time O(F), F <= 16.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let ratings: Vec<_> = m
+    ///     .feasibility_factors()
+    ///     .map(|f| m.factor_levels(f).next())
+    ///     .collect();
+    /// let ap = m.resolve_attack_potential(&ratings).ok_or("incomplete")?;
+    /// assert_eq!(ap.score(), 0);
+    /// assert_eq!(m.feasibility_level_key(ap.feasibility()), Some("high"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn resolve_attack_potential(
+        &self,
+        ratings: &[Option<FactorLevel>],
+    ) -> Option<AttackPotential> {
+        if self.factors.is_empty() || ratings.len() != self.factors.len() {
+            return None;
+        }
+        let mut factors = Vec::with_capacity(self.factors.len());
+        let mut score: u32 = 0;
+        for (i, (&opt_level, factor_data)) in ratings.iter().zip(&self.factors).enumerate() {
+            let level = opt_level?;
+            let level_data = factor_data.levels.get(level.index())?;
+            let factor = FeasibilityFactor(u8::try_from(i).ok()?);
+            score += u32::from(level_data.points);
+            factors.push(FactorContribution {
+                factor,
+                level,
+                points: level_data.points,
+            });
+        }
+        let band = self.potential_band_for_score(score)?;
+        Some(AttackPotential {
+            factors: factors.into_boxed_slice(),
+            score,
+            band,
+            feasibility: band.feasibility(),
+        })
+    }
+
+    /// Evaluates a complete per-factor rating slice directly to its derived
+    /// [`FeasibilityLevel`] without allocating the factor breakdown. Returns
+    /// `None` under the same conditions as [`Self::resolve_attack_potential`].
+    /// Time O(F), F <= 16; space O(1).
+    pub(crate) fn resolve_attack_potential_feasibility(
+        &self,
+        ratings: &[Option<FactorLevel>],
+    ) -> Option<FeasibilityLevel> {
+        if self.factors.is_empty() || ratings.len() != self.factors.len() {
+            return None;
+        }
+        let mut score: u32 = 0;
+        for (&opt_level, factor_data) in ratings.iter().zip(&self.factors) {
+            let level = opt_level?;
+            let level_data = factor_data.levels.get(level.index())?;
+            score += u32::from(level_data.points);
+        }
+        self.potential_band_for_score(score)
+            .map(PotentialBand::feasibility)
+    }
+
     // -- Checks used by the project -------------------------------------------
 
     /// Checks that a catalog ref names a declared scheme and satisfies its
@@ -1766,6 +2698,33 @@ impl Methodology {
         }
     }
 
+    /// Checks that an attack potential factor is declared in this methodology.
+    /// Time O(1).
+    pub(crate) fn check_feasibility_factor(
+        &self,
+        factor: FeasibilityFactor,
+    ) -> Result<(), ModelError> {
+        if factor.index() < self.factors.len() {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownFeasibilityFactor(factor))
+        }
+    }
+
+    /// Checks that a factor level is in a declared factor's scale. Time O(1).
+    pub(crate) fn check_factor_level(
+        &self,
+        factor: FeasibilityFactor,
+        level: FactorLevel,
+    ) -> Result<(), ModelError> {
+        self.check_feasibility_factor(factor)?;
+        if level.index() < self.factor_level_count(factor) {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownFactorLevel { factor, level })
+        }
+    }
+
     fn category_data(&self, cat: ImpactCategory) -> Option<&CategoryData> {
         self.impact_categories.get(cat.index())
     }
@@ -1773,6 +2732,19 @@ impl Methodology {
     fn level_entry(&self, cat: ImpactCategory, level: Level) -> Option<&Entry> {
         self.category_data(cat)
             .and_then(|c| c.levels.get(level.index()))
+    }
+
+    fn factor_data(&self, factor: FeasibilityFactor) -> Option<&FactorData> {
+        self.factors.get(factor.index())
+    }
+
+    fn factor_level_data(
+        &self,
+        factor: FeasibilityFactor,
+        level: FactorLevel,
+    ) -> Option<&FactorLevelData> {
+        self.factor_data(factor)
+            .and_then(|f| f.levels.get(level.index()))
     }
 }
 
@@ -1851,6 +2823,47 @@ mod tests {
         SegmentDef { min, max, digits }
     }
 
+    fn factor_level_def(key: &str, points: u16) -> FactorLevelDef {
+        FactorLevelDef {
+            key: key.into(),
+            label: key.into(),
+            points,
+        }
+    }
+
+    fn factor_def(key: &str, levels: &[(&str, u16)]) -> FactorDef {
+        FactorDef {
+            key: key.into(),
+            label: key.into(),
+            levels: levels
+                .iter()
+                .map(|&(k, p)| factor_level_def(k, p))
+                .collect(),
+        }
+    }
+
+    fn band_def(min: u16, max: Option<u16>, feasibility: &str) -> PotentialBandDef {
+        PotentialBandDef {
+            min,
+            max,
+            feasibility: feasibility.into(),
+        }
+    }
+
+    fn sample_attack_potential() -> AttackPotentialDef {
+        AttackPotentialDef {
+            factors: vec![
+                factor_def("time", &[("fast", 0), ("slow", 5)]),
+                factor_def("skill", &[("low", 0), ("high", 7)]),
+            ],
+            bands: vec![
+                band_def(0, Some(4), "f2"),
+                band_def(5, Some(10), "f1"),
+                band_def(11, None, "f0"),
+            ],
+        }
+    }
+
     /// A small valid definition that each test breaks in one way.
     fn base() -> MethodologyDef {
         MethodologyDef {
@@ -1860,6 +2873,7 @@ mod tests {
             impact_categories: vec![category("harm", 3), category("cost", 2)],
             feasibility_levels: vec![level("f0"), level("f1"), level("f2")],
             risk_levels: vec![level("r0"), level("r1")],
+            attack_potential: None,
             properties: vec![entry_def("c"), entry_def("i"), entry_def("a")],
             threat_categories: vec![threat("leak", &["c"]), threat("wipe", &["i", "a"])],
             catalog_schemes: vec![scheme("cat", "X-", vec![seg(1, 99, None)], 1)],
@@ -2156,6 +3170,7 @@ mod tests {
             MethodologyError::InvalidKey(k) => Some(k),
             MethodologyError::UnknownRiskLevel { risk, .. } => Some(risk),
             MethodologyError::UnknownViolatedProperty { property, .. } => Some(property),
+            MethodologyError::UnknownBandFeasibilityLevel { feasibility, .. } => Some(feasibility),
             _ => None,
         }
     }
@@ -2206,6 +3221,21 @@ mod tests {
             cases.push(d);
             let mut d = base();
             d.threat_categories[0].violates = vec!["x".repeat(MIB).into()];
+            cases.push(d);
+            let mut d = base();
+            let mut ap = sample_attack_potential();
+            ap.factors[0].key = Arc::clone(&huge);
+            d.attack_potential = Some(ap);
+            cases.push(d);
+            let mut d = base();
+            let mut ap = sample_attack_potential();
+            ap.factors[0].levels[1].key = Arc::clone(&huge);
+            d.attack_potential = Some(ap);
+            cases.push(d);
+            let mut d = base();
+            let mut ap = sample_attack_potential();
+            ap.bands[0].feasibility = Arc::clone(&huge);
+            d.attack_potential = Some(ap);
             cases.push(d);
             for (i, d) in cases.into_iter().enumerate() {
                 let (e, k) = key_error(d);
@@ -2527,12 +3557,243 @@ mod tests {
     }
 
     #[test]
+    fn attack_potential_validation_and_resolution() {
+        let mut d = base();
+        d.attack_potential = Some(sample_attack_potential());
+        let m = Methodology::new(d).expect("valid attack potential");
+        assert_eq!(m.feasibility_factor_count(), 2);
+        assert_eq!(m.feasibility_factors().len(), 2);
+        assert_eq!(m.potential_bands().len(), 3);
+
+        let time = m.feasibility_factor("time").expect("time");
+        let skill = m.feasibility_factor("skill").expect("skill");
+        assert_eq!(m.feasibility_factor_key(time), Some("time"));
+        assert_eq!(m.feasibility_factor_label(time), Some("time"));
+        assert_eq!(m.factor_level_count(time), 2);
+        assert_eq!(m.factor_level_count(FeasibilityFactor(9)), 0);
+        assert_eq!(m.factor_levels(FeasibilityFactor(9)).count(), 0);
+
+        let fast = m.factor_level(time, "fast").expect("fast");
+        let slow = m.factor_level(time, "slow").expect("slow");
+        let low = m.factor_level(skill, "low").expect("low");
+        let high = m.factor_level(skill, "high").expect("high");
+        assert_eq!(m.factor_level_key(time, slow), Some("slow"));
+        assert_eq!(m.factor_level_label(time, slow), Some("slow"));
+        assert_eq!(m.factor_level_points(time, slow), Some(5));
+        assert_eq!(m.factor_level_points(FeasibilityFactor(9), slow), None);
+        assert_eq!(m.factor_level_points(time, FactorLevel(9)), None);
+
+        assert_eq!(m.check_feasibility_factor(time), Ok(()));
+        assert_eq!(
+            m.check_feasibility_factor(FeasibilityFactor(2)),
+            Err(ModelError::UnknownFeasibilityFactor(FeasibilityFactor(2)))
+        );
+        assert_eq!(m.check_factor_level(time, slow), Ok(()));
+        assert_eq!(
+            m.check_factor_level(time, FactorLevel(2)),
+            Err(ModelError::UnknownFactorLevel {
+                factor: time,
+                level: FactorLevel(2),
+            })
+        );
+
+        let ap0 = m
+            .resolve_attack_potential(&[Some(fast), Some(low)])
+            .expect("resolved");
+        assert_eq!(ap0.score(), 0);
+        assert_eq!(ap0.feasibility(), FeasibilityLevel(2));
+        assert_eq!(ap0.band().min(), 0);
+        assert_eq!(ap0.band().max(), Some(4));
+        assert_eq!(ap0.band().feasibility(), FeasibilityLevel(2));
+        assert!(ap0.band().contains(4));
+        assert!(!ap0.band().contains(5));
+        assert_eq!(ap0.factors().len(), 2);
+        assert_eq!(ap0.factors()[0].factor(), time);
+        assert_eq!(ap0.factors()[0].level(), fast);
+        assert_eq!(ap0.factors()[0].points(), 0);
+
+        let ap5 = m
+            .resolve_attack_potential(&[Some(slow), Some(low)])
+            .expect("resolved");
+        assert_eq!(ap5.score(), 5);
+        assert_eq!(ap5.feasibility(), FeasibilityLevel(1));
+
+        let ap12 = m
+            .resolve_attack_potential(&[Some(slow), Some(high)])
+            .expect("resolved");
+        assert_eq!(ap12.score(), 12);
+        assert_eq!(ap12.feasibility(), FeasibilityLevel(0));
+        assert_eq!(ap12.band().max(), None);
+        assert!(ap12.band().contains(999_999));
+
+        assert!(m.resolve_attack_potential(&[Some(fast), None]).is_none());
+        assert!(m.resolve_attack_potential(&[Some(fast)]).is_none());
+        assert!(
+            m.resolve_attack_potential(&[Some(FactorLevel(9)), Some(low)])
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn methodology_rejects_invalid_attack_potential() {
+        // Empty factors
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.factors.clear();
+        d.attack_potential = Some(ap);
+        rejects(
+            d,
+            &MethodologyError::FeasibilityFactorCount { min: 1, max: 16 },
+        );
+
+        // 17 factors
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.factors = (0..17)
+            .map(|i| factor_def(&format!("f{i}"), &[("a", 0), ("b", 1)]))
+            .collect();
+        d.attack_potential = Some(ap);
+        rejects(
+            d,
+            &MethodologyError::FeasibilityFactorCount { min: 1, max: 16 },
+        );
+
+        // Duplicate factor
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.factors.push(factor_def("time", &[("a", 0), ("b", 1)]));
+        d.attack_potential = Some(ap);
+        rejects(
+            d,
+            &MethodologyError::DuplicateFeasibilityFactor("time".into()),
+        );
+
+        // Factor level count out of 2..=16
+        for len in [0, 1, 17] {
+            let mut d = base();
+            let mut ap = sample_attack_potential();
+            ap.factors[0].levels = (0..len)
+                .map(|i| factor_level_def(&format!("l{i}"), 1))
+                .collect();
+            d.attack_potential = Some(ap);
+            rejects(
+                d,
+                &MethodologyError::FactorLevelCount {
+                    factor: "time".into(),
+                    min: 2,
+                    max: 16,
+                },
+            );
+        }
+
+        // Duplicate factor level
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.factors[0].levels.push(factor_level_def("fast", 2));
+        d.attack_potential = Some(ap);
+        rejects(
+            d,
+            &MethodologyError::DuplicateFactorLevel {
+                factor: "time".into(),
+                level: "fast".into(),
+            },
+        );
+
+        // Factor points > MAX_FACTOR_POINTS
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.factors[0].levels[1].points = MAX_FACTOR_POINTS + 1;
+        d.attack_potential = Some(ap);
+        rejects(
+            d,
+            &MethodologyError::FactorPointsTooLarge {
+                factor: "time".into(),
+                level: "slow".into(),
+                max: MAX_FACTOR_POINTS,
+            },
+        );
+
+        // Band count out of 1..=16
+        for len in [0, 17] {
+            let mut d = base();
+            let mut ap = sample_attack_potential();
+            ap.bands = (0..len)
+                .map(|i| {
+                    let min = u16::try_from(i).unwrap_or(0);
+                    let max = (i + 1 < len).then_some(min);
+                    band_def(min, max, "f0")
+                })
+                .collect();
+            d.attack_potential = Some(ap);
+            rejects(d, &MethodologyError::PotentialBandCount { min: 1, max: 16 });
+        }
+
+        // Band 0 min != 0
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.bands[0].min = 1;
+        d.attack_potential = Some(ap);
+        rejects(d, &MethodologyError::PotentialBandRange { band: 0 });
+
+        // Band gap: band 0 ends at 3, band 1 starts at 5
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.bands[0].max = Some(3);
+        d.attack_potential = Some(ap);
+        rejects(d, &MethodologyError::PotentialBandRange { band: 1 });
+
+        // Band overlap: band 0 ends at 5, band 1 starts at 5
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.bands[0].max = Some(5);
+        d.attack_potential = Some(ap);
+        rejects(d, &MethodologyError::PotentialBandRange { band: 1 });
+
+        // Band min > max
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.bands[1].min = 11;
+        d.attack_potential = Some(ap);
+        rejects(d, &MethodologyError::PotentialBandRange { band: 1 });
+
+        // Non-last band has max == None
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.bands[0].max = None;
+        d.attack_potential = Some(ap);
+        rejects(d, &MethodologyError::PotentialBandRange { band: 0 });
+
+        // Last band has max == Some(...)
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.bands[2].max = Some(99);
+        d.attack_potential = Some(ap);
+        rejects(d, &MethodologyError::PotentialBandRange { band: 2 });
+
+        // Unknown band feasibility level
+        let mut d = base();
+        let mut ap = sample_attack_potential();
+        ap.bands[1].feasibility = "f9".into();
+        d.attack_potential = Some(ap);
+        rejects(
+            d,
+            &MethodologyError::UnknownBandFeasibilityLevel {
+                band: 1,
+                feasibility: "f9".into(),
+            },
+        );
+    }
+
+    #[test]
     fn value_sizes() {
         use std::mem::size_of;
         assert_eq!(size_of::<ImpactCategory>(), 1);
         assert_eq!(size_of::<Level>(), 1);
         assert_eq!(size_of::<FeasibilityLevel>(), 1);
         assert_eq!(size_of::<RiskLevel>(), 1);
+        assert_eq!(size_of::<FeasibilityFactor>(), 1);
+        assert_eq!(size_of::<FactorLevel>(), 1);
         assert_eq!(size_of::<Property>(), 1);
         assert_eq!(size_of::<ThreatCategory>(), 1);
         assert_eq!(size_of::<CatalogScheme>(), 1);

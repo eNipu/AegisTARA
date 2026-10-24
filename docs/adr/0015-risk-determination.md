@@ -59,18 +59,17 @@ exact and local.
 
 - `MethodologyDef` gains `pub risk_levels: Vec<LevelDef>`, ordered from lowest
   risk (`RiskLevel(0)`) to highest risk (`RiskLevel(n - 1)`), capped at
-  `1..=MAX_VOCAB` (`Limit::RiskLevels { max: 32 }`,
+  `MIN_LEVELS..=MAX_LEVELS` (`2..=16`, `Limit::LEVELS { max: 16 }`,
   `MethodologyError::RiskLevelCount`).
 - `ImpactCategoryDef` gains `pub risk_matrix: Vec<Vec<Arc<str>>>`, where row
   `r` corresponds to `category.levels[r]` and column `c` corresponds to
   `def.feasibility_levels[c]`. Each cell is a `risk_levels` key.
 - Decode-time caps in `src/methodology/pack.rs`:
-  - `Limit::RiskLevels { max: 32 }`
-  - `Limit::RiskMatrixRows { max: 32 }`
-  - `Limit::RiskMatrixCols { max: 32 }`
+  - `Limit::LEVELS` (`Limit::Levels { max: 16 }`) bounds `risk_levels` as well
+    as `risk_matrix` outer rows and inner columns.
 - Validation in `Methodology::new`:
-  - `MethodologyError::RiskLevelCount(usize)` when `risk_levels` has `0` or
-    `> 32` entries.
+  - `MethodologyError::RiskLevelCount(usize)` when `risk_levels` has `< 2` or
+    `> 16` entries.
   - `MethodologyError::DuplicateRiskLevel(usize)` when two risk levels share a
     key.
   - `MethodologyError::RiskMatrixDimensions { category, rows, expected_rows, cols, expected_cols }`

@@ -12,11 +12,12 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, AttackTree, CatalogRef, CatalogScheme, CatalogSchemeDef, CatalogSyntax, ControlId,
-    DamageId, FeasibilityLevel, GateKind, ImpactCategory, ImpactCategoryDef, Level, LevelDef,
-    Methodology, MethodologyDef, Node, NodeId, Op, Project, Property, PropertyDef, PropertySet,
-    Provenance, ProvenanceSource, RiskLevel, RiskTreatment, SegmentDef, ThreatCategory,
-    ThreatCategoryDef, ThreatId, TreeId,
+    AssetId, AttackPotentialDef, AttackTree, CatalogRef, CatalogScheme, CatalogSchemeDef,
+    CatalogSyntax, ClaimId, ControlId, DamageId, FactorDef, FactorLevel, FactorLevelDef,
+    FeasibilityFactor, FeasibilityLevel, GateKind, GoalId, ImpactCategory, ImpactCategoryDef,
+    Level, LevelDef, Methodology, MethodologyDef, Node, NodeId, Op, PotentialBandDef, Project,
+    Property, PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment,
+    SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -228,6 +229,105 @@ pub fn second_def() -> MethodologyDef {
                 required: 1,
             },
         }],
+        attack_potential: Some(AttackPotentialDef {
+            factors: vec![
+                FactorDef {
+                    key: s("exposure"),
+                    label: s("Exposure"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("open"),
+                            label: s("Open"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("local"),
+                            label: s("Local"),
+                            points: 2,
+                        },
+                        FactorLevelDef {
+                            key: s("isolated"),
+                            label: s("Isolated"),
+                            points: 4,
+                        },
+                    ],
+                },
+                FactorDef {
+                    key: s("skill"),
+                    label: s("Skill"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("novice"),
+                            label: s("Novice"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("trained"),
+                            label: s("Trained"),
+                            points: 1,
+                        },
+                        FactorLevelDef {
+                            key: s("specialist"),
+                            label: s("Specialist"),
+                            points: 3,
+                        },
+                        FactorLevelDef {
+                            key: s("expert"),
+                            label: s("Expert"),
+                            points: 5,
+                        },
+                    ],
+                },
+                FactorDef {
+                    key: s("resources"),
+                    label: s("Resources"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("none"),
+                            label: s("None"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("standard"),
+                            label: s("Standard"),
+                            points: 1,
+                        },
+                        FactorLevelDef {
+                            key: s("bespoke"),
+                            label: s("Bespoke"),
+                            points: 3,
+                        },
+                    ],
+                },
+            ],
+            bands: vec![
+                PotentialBandDef {
+                    min: 0,
+                    max: Some(2),
+                    feasibility: s("frequent"),
+                },
+                PotentialBandDef {
+                    min: 3,
+                    max: Some(5),
+                    feasibility: s("probable"),
+                },
+                PotentialBandDef {
+                    min: 6,
+                    max: Some(8),
+                    feasibility: s("occasional"),
+                },
+                PotentialBandDef {
+                    min: 9,
+                    max: Some(11),
+                    feasibility: s("remote"),
+                },
+                PotentialBandDef {
+                    min: 12,
+                    max: None,
+                    feasibility: s("improbable"),
+                },
+            ],
+        }),
     }
 }
 
@@ -300,6 +400,28 @@ pub fn wide() -> Methodology {
             })
             .collect(),
         catalog_schemes: vec![scheme("w0"), scheme("w1"), scheme("w2")],
+        attack_potential: Some(AttackPotentialDef {
+            factors: (0..16)
+                .map(|i| FactorDef {
+                    key: s(format!("ff{i}")),
+                    label: s(format!("ff{i}")),
+                    levels: (0..16)
+                        .map(|l| FactorLevelDef {
+                            key: s(format!("fl{l}")),
+                            label: s(format!("fl{l}")),
+                            points: l as u16,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            bands: (0..16)
+                .map(|b| PotentialBandDef {
+                    min: b as u16,
+                    max: (b < 15).then_some(b as u16),
+                    feasibility: s(format!("f{}", 15 - b)),
+                })
+                .collect(),
+        }),
     })
     .expect("wide methodology is valid")
 }
@@ -339,6 +461,14 @@ pub fn control_id(n: u64) -> ControlId {
     ControlId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn goal_id(n: u64) -> GoalId {
+    GoalId::from_uuid(v7(n)).expect("v7")
+}
+
+pub fn claim_id(n: u64) -> ClaimId {
+    ClaimId::from_uuid(v7(n)).expect("v7")
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -357,6 +487,14 @@ pub fn lvl(m: &Methodology, c: ImpactCategory, key: &str) -> Level {
 
 pub fn feas(m: &Methodology, key: &str) -> FeasibilityLevel {
     m.feasibility_level(key).expect(key)
+}
+
+pub fn factor(m: &Methodology, key: &str) -> FeasibilityFactor {
+    m.feasibility_factor(key).expect(key)
+}
+
+pub fn factor_lvl(m: &Methodology, f: FeasibilityFactor, key: &str) -> FactorLevel {
+    m.factor_level(f, key).expect(key)
 }
 
 pub fn risk(m: &Methodology, key: &str) -> RiskLevel {
@@ -398,7 +536,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..36,
+        0u8..48,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -516,6 +654,22 @@ impl Gen {
         }
     }
 
+    fn goal(&mut self, p: &Project, sel: u16) -> GoalId {
+        let existing: Vec<_> = p.cybersecurity_goals().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if sel % 8 != 0 => id,
+            _ => goal_id(self.fresh()),
+        }
+    }
+
+    fn claim(&mut self, p: &Project, sel: u16) -> ClaimId {
+        let existing: Vec<_> = p.cybersecurity_claims().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if sel % 8 != 0 => id,
+            _ => claim_id(self.fresh()),
+        }
+    }
+
     fn treatment(&self, sel: u16) -> RiskTreatment {
         match sel % 4 {
             0 => RiskTreatment::Avoid,
@@ -600,6 +754,39 @@ impl Gen {
                 .expect("wide level")
         } else {
             self.m.levels(c).nth(usize::from(sel) % n).expect("level")
+        }
+    }
+
+    fn feasibility_factor(&self, sel: u16) -> FeasibilityFactor {
+        let n = self.m.feasibility_factor_count();
+        if n == 0 || sel % 12 == 0 {
+            let extra = self.wide.feasibility_factor_count() - n;
+            self.wide
+                .feasibility_factors()
+                .nth(n + usize::from(sel / 12) % extra)
+                .expect("wide factor")
+        } else {
+            self.m
+                .feasibility_factors()
+                .nth(usize::from(sel) % n)
+                .expect("factor")
+        }
+    }
+
+    /// A factor level for `f`, out of that factor's scale about 1 time in 10.
+    fn factor_level(&self, f: FeasibilityFactor, sel: u16) -> FactorLevel {
+        let n = self.m.factor_level_count(f);
+        let w = self.wide.feasibility_factors().next().expect("wide factor");
+        if n == 0 || sel % 10 == 0 {
+            self.wide
+                .factor_levels(w)
+                .nth(n + usize::from(sel / 10) % (16 - n))
+                .expect("wide factor level")
+        } else {
+            self.m
+                .factor_levels(f)
+                .nth(usize::from(sel) % n)
+                .expect("factor level")
         }
     }
 
@@ -816,7 +1003,15 @@ impl Gen {
                 provenance,
             },
             20 => {
-                let threat = self.threat(p, s.a);
+                let with_damages: Vec<_> = p
+                    .threat_scenarios()
+                    .filter(|(_, _, t)| !t.damages().is_empty())
+                    .map(|(_, id, _)| id)
+                    .collect();
+                let threat = match nth(with_damages, s.a) {
+                    Some(id) if s.c % 3 != 0 => id,
+                    _ => self.threat(p, s.a),
+                };
                 let linked: Vec<_> = p
                     .threat_scenario_idx(&threat)
                     .and_then(|t| p.threat_scenario(t))
@@ -956,7 +1151,33 @@ impl Gen {
             33 => Op::RemoveSecurityControl {
                 id: self.control(p, s.a),
             },
-            _ => {
+            34..=35 => {
+                let tree = self.tree(p, s.a);
+                let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
+                    Some(_) if s.b % 8 == 0 => node_id(self.fresh()),
+                    Some(t) if s.b % 8 == 1 => t.id_of(t.root()).expect("root"),
+                    Some(t) => {
+                        let steps: Vec<_> = t
+                            .iter()
+                            .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                            .map(|(_, id, _)| id)
+                            .collect();
+                        nth(steps, s.b / 8).unwrap_or_else(|| node_id(self.fresh()))
+                    }
+                    None => node_id(self.fresh()),
+                };
+                let factor = self.feasibility_factor(s.c);
+                let level =
+                    (s.bits % 5 != 0).then(|| self.factor_level(factor, (s.bits >> 8) as u16));
+                Op::SetStepFactor {
+                    tree,
+                    node,
+                    factor,
+                    level,
+                    provenance,
+                }
+            }
+            36..=37 => {
                 let tree = self.tree(p, s.a);
                 let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
                     Some(_) if s.b % 8 == 0 => node_id(self.fresh()),
@@ -982,6 +1203,85 @@ impl Gen {
                     provenance,
                 }
             }
+            38 => {
+                let controls = if s.bits % 64 == 0 {
+                    (0..17).map(|_| control_id(self.fresh())).collect()
+                } else {
+                    s.list.iter().map(|&x| self.control(p, x)).collect()
+                };
+                Op::AddCybersecurityGoal {
+                    id: if s.a % 12 == 0 {
+                        self.goal(p, s.b)
+                    } else {
+                        goal_id(self.fresh())
+                    },
+                    name: self.name(s.c),
+                    controls,
+                    provenance,
+                }
+            }
+            39 => Op::RenameCybersecurityGoal {
+                id: self.goal(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            40 => Op::LinkGoalControl {
+                goal: self.goal(p, s.a),
+                control: self.control(p, s.b),
+                provenance,
+            },
+            41 => {
+                let goal = self.goal(p, s.a);
+                let linked: Vec<_> = p
+                    .cybersecurity_goal_idx(&goal)
+                    .and_then(|g| p.cybersecurity_goal(g))
+                    .map(|g| {
+                        g.controls()
+                            .iter()
+                            .filter_map(|&c| p.security_control_id(c))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let control = match nth(linked, s.b) {
+                    Some(c) if s.c % 3 != 0 => c,
+                    _ => self.control(p, s.b),
+                };
+                Op::UnlinkGoalControl {
+                    goal,
+                    control,
+                    provenance,
+                }
+            }
+            42 => Op::RemoveCybersecurityGoal {
+                id: self.goal(p, s.a),
+            },
+            43 => Op::AddCybersecurityClaim {
+                id: if s.a % 12 == 0 {
+                    self.claim(p, s.b)
+                } else {
+                    claim_id(self.fresh())
+                },
+                name: self.name(s.c),
+                provenance,
+            },
+            44 => Op::RenameCybersecurityClaim {
+                id: self.claim(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            45 => Op::RemoveCybersecurityClaim {
+                id: self.claim(p, s.a),
+            },
+            46 => Op::SetThreatGoal {
+                threat: self.threat(p, s.a),
+                goal: (s.b % 4 != 0).then(|| self.goal(p, s.b)),
+                provenance,
+            },
+            _ => Op::SetThreatClaim {
+                threat: self.threat(p, s.a),
+                claim: (s.b % 4 != 0).then(|| self.claim(p, s.b)),
+                provenance,
+            },
         }
     }
 }
@@ -1137,6 +1437,38 @@ pub fn reordered(mut def: MethodologyDef) -> MethodologyDef {
             },
         },
     );
+    if let Some(ap) = &mut def.attack_potential {
+        for f in &mut ap.factors {
+            f.levels.insert(
+                0,
+                FactorLevelDef {
+                    key: "zz-unused-factor-level".into(),
+                    label: "Unused factor level".into(),
+                    points: 0,
+                },
+            );
+        }
+        ap.factors.reverse();
+        ap.factors.insert(
+            0,
+            FactorDef {
+                key: "zz-unused-factor".into(),
+                label: "Unused factor".into(),
+                levels: vec![
+                    FactorLevelDef {
+                        key: "u0".into(),
+                        label: "U0".into(),
+                        points: 0,
+                    },
+                    FactorLevelDef {
+                        key: "u1".into(),
+                        label: "U1".into(),
+                        points: 1,
+                    },
+                ],
+            },
+        );
+    }
     def
 }
 
@@ -1244,9 +1576,11 @@ pub fn describe(p: &Project) -> Vec<String> {
             .direct_feasibility()
             .and_then(|f| m.feasibility_level_key(f));
         let treatment = t.treatment();
+        let goal = t.goal().and_then(|idx| p.cybersecurity_goal_id(idx));
+        let claim = t.claim().and_then(|idx| p.cybersecurity_claim_id(idx));
         let tree = t.attack_tree().and_then(|idx| p.attack_tree_id(idx));
         out.push(format!(
-            "threat {id} {:?} asset {:?} {:?} {refs:?} {damages:?} feas {direct:?} treat {treatment:?} tree {tree:?} {:?}",
+            "threat {id} {:?} asset {:?} {:?} {refs:?} {damages:?} feas {direct:?} treat {treatment:?} goal {goal:?} claim {claim:?} tree {tree:?} {:?}",
             t.name(),
             p.asset_id(t.asset()),
             m.threat_category_key(t.category()),
@@ -1267,6 +1601,23 @@ pub fn describe(p: &Project) -> Vec<String> {
             .iter()
             .map(|l| l.and_then(|f| m.feasibility_level_key(f)))
             .collect();
+        let factors: Vec<_> = tree
+            .iter()
+            .map(|(n_idx, _, _)| {
+                let mut rated: Vec<_> = p
+                    .step_factors(idx, n_idx)
+                    .filter_map(|(f, l)| {
+                        Some(format!(
+                            "{}={}",
+                            m.feasibility_factor_key(f)?,
+                            m.factor_level_key(f, l)?
+                        ))
+                    })
+                    .collect();
+                rated.sort_unstable();
+                rated
+            })
+            .collect();
         let mits: Vec<_> = tree
             .iter()
             .map(|(n_idx, _, _)| {
@@ -1282,12 +1633,27 @@ pub fn describe(p: &Project) -> Vec<String> {
             })
             .collect();
         out.push(format!(
-            "tree {id} {nodes:?} {feas:?} {mits:?} {:?}",
+            "tree {id} {nodes:?} {feas:?} {factors:?} {mits:?} {:?}",
             p.attack_tree_provenance(idx),
         ));
     }
     for (_, id, c) in p.security_controls() {
         out.push(format!("control {id} {:?} {:?}", c.name(), c.provenance()));
+    }
+    for (_, id, g) in p.cybersecurity_goals() {
+        let controls: Vec<_> = g
+            .controls()
+            .iter()
+            .filter_map(|&c| p.security_control_id(c))
+            .collect();
+        out.push(format!(
+            "goal {id} {:?} {controls:?} {:?}",
+            g.name(),
+            g.provenance()
+        ));
+    }
+    for (_, id, cl) in p.cybersecurity_claims() {
+        out.push(format!("claim {id} {:?} {:?}", cl.name(), cl.provenance()));
     }
     out
 }
@@ -1323,7 +1689,9 @@ pub fn second_every_op(m: Arc<Methodology>) {
     let (lock, sniff) = (threat_id(5), threat_id(6));
     let tree = tree_id(7);
     let (root, s1, s2) = (node_id(8), node_id(9), node_id(10));
-    let ctrl = control_id(11);
+    let (ctrl, ctrl2) = (control_id(11), control_id(12));
+    let goal = goal_id(13);
+    let claim = claim_id(14);
     let p_human = Provenance::human("alice", 100);
     let p_import = Provenance::import("csv", 200);
     let p_catalog = Provenance::catalog("capec", 300);
@@ -1498,6 +1866,48 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: p_ai.clone(),
         },
     );
+    let f_exp = factor(&m, "exposure");
+    let f_skill = factor(&m, "skill");
+    let f_res = factor(&m, "resources");
+    ok(
+        &mut p,
+        Op::SetStepFeasibility {
+            tree,
+            node: s2,
+            level: None,
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepFactor {
+            tree,
+            node: s2,
+            factor: f_exp,
+            level: Some(factor_lvl(&m, f_exp, "local")),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepFactor {
+            tree,
+            node: s2,
+            factor: f_skill,
+            level: Some(factor_lvl(&m, f_skill, "specialist")),
+            provenance: p_ai.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepFactor {
+            tree,
+            node: s2,
+            factor: f_res,
+            level: Some(factor_lvl(&m, f_res, "standard")),
+            provenance: p_human.clone(),
+        },
+    );
     ok(
         &mut p,
         Op::SetThreatAttackTree {
@@ -1540,6 +1950,79 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: p_human.clone(),
         },
     );
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: ctrl2,
+            name: "Audit logging".into(),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddCybersecurityGoal {
+            id: goal,
+            name: "Prevent unauthorized firmware modification".into(),
+            controls: vec![ctrl],
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::RenameCybersecurityGoal {
+            id: goal,
+            name: "Ensure pump firmware authenticity".into(),
+            provenance: p_ai.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::LinkGoalControl {
+            goal,
+            control: ctrl2,
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatGoal {
+            threat: lock,
+            goal: Some(goal),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddCybersecurityClaim {
+            id: claim,
+            name: "Bedside LAN is physically isolated".into(),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::RenameCybersecurityClaim {
+            id: claim,
+            name: "Telemetry LAN is isolated and monitored".into(),
+            provenance: p_import.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: sniff,
+            treatment: Some(RiskTreatment::Retain),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatClaim {
+            threat: sniff,
+            claim: Some(claim),
+            provenance: p_human.clone(),
+        },
+    );
 
     // Check the state.
     let lock_idx = p.threat_scenario_idx(&lock).expect("lock");
@@ -1553,15 +2036,45 @@ pub fn second_every_op(m: Arc<Methodology>) {
         p.threat_scenario(lock_idx).and_then(|t| t.treatment()),
         Some(RiskTreatment::Reduce)
     );
+    let goal_idx = p.cybersecurity_goal_idx(&goal).expect("goal");
+    assert_eq!(
+        p.threat_scenario(lock_idx).and_then(|t| t.goal()),
+        Some(goal_idx)
+    );
+    let goal_ent = p.cybersecurity_goal(goal_idx).expect("live goal");
+    assert_eq!(goal_ent.name(), "Ensure pump firmware authenticity");
+    assert_eq!(goal_ent.provenance(), &p_human);
+    let ctrl_idx = p.security_control_idx(&ctrl).expect("ctrl");
+    let ctrl2_idx = p.security_control_idx(&ctrl2).expect("ctrl2");
+    assert_eq!(goal_ent.controls(), [ctrl_idx, ctrl2_idx]);
     assert_eq!(
         p.threat_scenario(lock_idx).map(|t| t.provenance()),
         Some(&p_human)
     );
     assert_eq!(p.attack_tree_provenance(tree_idx), Some(&p_human));
-    let ctrl_idx = p.security_control_idx(&ctrl).expect("ctrl");
+    let s2_idx = p
+        .attack_tree(tree_idx)
+        .and_then(|t| t.idx_of(&s2))
+        .expect("s2");
+    assert_eq!(p.step_feasibility(tree_idx, s2_idx), None);
+    assert_eq!(
+        p.step_factor(tree_idx, s2_idx, f_skill),
+        Some(factor_lvl(&m, f_skill, "specialist"))
+    );
+    let ap = p.step_attack_potential(tree_idx, s2_idx).expect("ap");
+    assert_eq!(ap.score(), 6);
+    assert_eq!(ap.feasibility(), feas(&m, "occasional"));
+    assert_eq!(
+        p.effective_step_feasibility(tree_idx, s2_idx),
+        Some(feas(&m, "occasional"))
+    );
     let ctrl_ent = p.security_control(ctrl_idx).expect("live");
     assert_eq!(ctrl_ent.name(), "Signed USB firmware");
     assert_eq!(ctrl_ent.provenance(), &p_ai);
+    let claim_idx = p.cybersecurity_claim_idx(&claim).expect("claim");
+    let claim_ent = p.cybersecurity_claim(claim_idx).expect("live claim");
+    assert_eq!(claim_ent.name(), "Telemetry LAN is isolated and monitored");
+    assert_eq!(claim_ent.provenance(), &p_import);
     let eval = p.evaluate_threat(lock).expect("evaluate threat");
     assert_eq!(eval.root_value(), &feas(&m, "probable"));
     let res_eval = p
@@ -1596,7 +2109,9 @@ pub fn second_every_op(m: Arc<Methodology>) {
     assert_eq!(t.catalog_refs(), [cref(&m, capec, "CAPEC-157")]);
     assert_eq!(t.damages(), [p.damage_scenario_idx(&leak).expect("leak")]);
     assert_eq!(t.direct_feasibility(), Some(feas(&m, "occasional")));
-    assert_eq!(t.provenance(), &p_ai);
+    assert_eq!(t.treatment(), Some(RiskTreatment::Retain));
+    assert_eq!(t.claim(), Some(claim_idx));
+    assert_eq!(t.provenance(), &p_human);
     let sniff_risk = p.evaluate_risk(sniff).expect("evaluate sniff risk");
     assert_eq!(sniff_risk.feasibility(), feas(&m, "occasional"));
     assert!(sniff_risk.tree_evaluation().is_none());
@@ -1616,7 +2131,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
             threats: 1,
         },
     );
-    // Linked attack tree, control mitigation, and risk treatment block removal.
+    // Linked attack tree, control mitigation, goal, claim, and risk treatment block removal.
     rejects(
         &mut p,
         Op::RemoveSecurityControl { id: ctrl },
@@ -1624,6 +2139,24 @@ pub fn second_every_op(m: Arc<Methodology>) {
             control: ctrl,
             steps: 1,
         },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveSecurityControl { id: ctrl2 },
+        &aegis_model::ModelError::SecurityControlInGoal {
+            control: ctrl2,
+            goals: 1,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveCybersecurityGoal { id: goal },
+        &aegis_model::ModelError::CybersecurityGoalInUse { goal, threats: 1 },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveCybersecurityClaim { id: claim },
+        &aegis_model::ModelError::CybersecurityClaimInUse { claim, threats: 1 },
     );
     rejects(
         &mut p,
@@ -1656,6 +2189,23 @@ pub fn second_every_op(m: Arc<Methodology>) {
     rejects(
         &mut p,
         Op::RemoveAttackTree { id: tree },
+        &aegis_model::ModelError::AttackTreeHasFactors { tree, factors: 3 },
+    );
+    for f in [f_exp, f_skill, f_res] {
+        ok(
+            &mut p,
+            Op::SetStepFactor {
+                tree,
+                node: s2,
+                factor: f,
+                level: None,
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    rejects(
+        &mut p,
+        Op::RemoveAttackTree { id: tree },
         &aegis_model::ModelError::AttackTreeHasMitigations {
             tree,
             mitigations: 1,
@@ -1679,7 +2229,23 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: Provenance::default(),
         },
     );
-    ok(&mut p, Op::RemoveSecurityControl { id: ctrl });
+    rejects(
+        &mut p,
+        Op::RemoveSecurityControl { id: ctrl },
+        &aegis_model::ModelError::SecurityControlInGoal {
+            control: ctrl,
+            goals: 1,
+        },
+    );
+    ok(
+        &mut p,
+        Op::UnlinkGoalControl {
+            goal,
+            control: ctrl2,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, Op::RemoveSecurityControl { id: ctrl2 });
     ok(
         &mut p,
         Op::SetRiskTreatment {
@@ -1688,6 +2254,21 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: Provenance::default(),
         },
     );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: lock },
+        &aegis_model::ModelError::ThreatHasGoal { threat: lock, goal },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatGoal {
+            threat: lock,
+            goal: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, Op::RemoveCybersecurityGoal { id: goal });
+    ok(&mut p, Op::RemoveSecurityControl { id: ctrl });
     ok(
         &mut p,
         Op::SetThreatFeasibility {
@@ -1696,6 +2277,31 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: Provenance::default(),
         },
     );
+    ok(
+        &mut p,
+        Op::SetRiskTreatment {
+            threat: sniff,
+            treatment: None,
+            provenance: Provenance::default(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: sniff },
+        &aegis_model::ModelError::ThreatHasClaim {
+            threat: sniff,
+            claim,
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatClaim {
+            threat: sniff,
+            claim: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, Op::RemoveCybersecurityClaim { id: claim });
     ok(&mut p, Op::RemoveAttackTree { id: tree });
     ok(
         &mut p,
@@ -1755,6 +2361,12 @@ pub fn max_def() -> MethodologyDef {
         })
         .collect();
     let all: Vec<Arc<str>> = properties.iter().map(|p| Arc::clone(&p.key)).collect();
+    let feasibility_levels: Vec<LevelDef> = (0..16)
+        .map(|l| {
+            let (key, label) = entry("f", l);
+            LevelDef { key, label }
+        })
+        .collect();
     let risk_levels: Vec<LevelDef> = (0..16)
         .map(|r| {
             let (key, label) = entry("r", r);
@@ -1782,12 +2394,7 @@ pub fn max_def() -> MethodologyDef {
                 }
             })
             .collect(),
-        feasibility_levels: (0..16)
-            .map(|l| {
-                let (key, label) = entry("f", l);
-                LevelDef { key, label }
-            })
-            .collect(),
+        feasibility_levels: feasibility_levels.clone(),
         risk_levels,
         properties,
         threat_categories: (0..64)
@@ -1821,5 +2428,33 @@ pub fn max_def() -> MethodologyDef {
                 }
             })
             .collect(),
+        attack_potential: Some(AttackPotentialDef {
+            factors: (0..16)
+                .map(|i| {
+                    let (key, label) = entry("af", i);
+                    FactorDef {
+                        key,
+                        label,
+                        levels: (0..16)
+                            .map(|l| {
+                                let (key, label) = entry("al", l);
+                                FactorLevelDef {
+                                    key,
+                                    label,
+                                    points: 1000,
+                                }
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
+            bands: (0..16u16)
+                .map(|b| PotentialBandDef {
+                    min: b * 1000,
+                    max: (b < 15).then_some(b * 1000 + 999),
+                    feasibility: Arc::clone(&feasibility_levels[b as usize].key),
+                })
+                .collect(),
+        }),
     }
 }

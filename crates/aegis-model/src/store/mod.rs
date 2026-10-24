@@ -51,10 +51,11 @@ use std::fmt;
 
 pub use op_log::{LoggedOp, OpLogReader, OpLogWriter};
 
-use crate::control::MAX_STEP_MITIGATIONS;
+use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS};
 use crate::methodology::{
-    MAX_CATALOG_SCHEMES, MAX_IMPACT_CATEGORIES, MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS,
-    MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
+    MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_KEY_LEN,
+    MAX_LABEL_CHARS, MAX_LEVELS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS,
+    MAX_THREAT_CATEGORIES,
 };
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_ATTACK_TREE_NODES;
@@ -243,6 +244,12 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A cybersecurity goal or op lists more than
+    /// [`MAX_GOAL_CONTROLS`](crate::MAX_GOAL_CONTROLS) security controls.
+    GoalControls {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A methodology pack is larger than [`MAX_PACK_FILE_BYTES`].
     PackFileBytes {
         /// The cap, in bytes.
@@ -282,6 +289,13 @@ pub enum Limit {
     },
     /// A pack catalog syntax has more than 4 segments.
     CatalogSegments {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A pack `attack_potential.factors` list or a snapshot's per-step
+    /// factor map has more than
+    /// [`MAX_FEASIBILITY_FACTORS`](crate::MAX_FEASIBILITY_FACTORS) factors.
+    FeasibilityFactors {
         /// The cap, in items.
         max: usize,
     },
@@ -328,6 +342,9 @@ impl Limit {
     pub(crate) const STEP_MITIGATIONS: Limit = Limit::StepMitigations {
         max: MAX_STEP_MITIGATIONS,
     };
+    pub(crate) const GOAL_CONTROLS: Limit = Limit::GoalControls {
+        max: MAX_GOAL_CONTROLS,
+    };
     pub(crate) const PACK_FILE: Limit = Limit::PackFileBytes {
         max: MAX_PACK_FILE_BYTES,
     };
@@ -348,6 +365,9 @@ impl Limit {
         max: MAX_CATALOG_SCHEMES,
     };
     pub(crate) const CATALOG_SEGMENTS: Limit = Limit::CatalogSegments { max: MAX_SEGMENTS };
+    pub(crate) const FEASIBILITY_FACTORS: Limit = Limit::FeasibilityFactors {
+        max: MAX_FEASIBILITY_FACTORS,
+    };
 }
 
 impl fmt::Display for Limit {
@@ -376,6 +396,9 @@ impl fmt::Display for Limit {
             Limit::StepMitigations { max } => {
                 write!(f, "more than {max} step mitigations")
             }
+            Limit::GoalControls { max } => {
+                write!(f, "more than {max} goal controls")
+            }
             Limit::PackFileBytes { max } => {
                 write!(f, "methodology pack is larger than {max} bytes")
             }
@@ -388,6 +411,9 @@ impl fmt::Display for Limit {
             Limit::ThreatCategories { max } => write!(f, "more than {max} threat categories"),
             Limit::CatalogSchemes { max } => write!(f, "more than {max} catalog schemes"),
             Limit::CatalogSegments { max } => write!(f, "more than {max} catalog ID segments"),
+            Limit::FeasibilityFactors { max } => {
+                write!(f, "more than {max} feasibility factors")
+            }
         }
     }
 }
@@ -409,6 +435,10 @@ pub enum VocabKind {
     Level,
     /// A level of the methodology's feasibility scale.
     FeasibilityLevel,
+    /// An attack potential factor.
+    FeasibilityFactor,
+    /// A level of an attack potential factor's scale.
+    FactorLevel,
     /// A security property.
     Property,
     /// A threat category.
@@ -423,6 +453,8 @@ impl fmt::Display for VocabKind {
             VocabKind::ImpactCategory => "impact category",
             VocabKind::Level => "level",
             VocabKind::FeasibilityLevel => "feasibility level",
+            VocabKind::FeasibilityFactor => "feasibility factor",
+            VocabKind::FactorLevel => "factor level",
             VocabKind::Property => "property",
             VocabKind::ThreatCategory => "threat category",
             VocabKind::CatalogScheme => "catalog scheme",
@@ -456,6 +488,8 @@ mod tests {
             Limit::PROPERTIES,
             Limit::ATTACK_TREE_NODES,
             Limit::STEP_FEASIBILITY,
+            Limit::STEP_MITIGATIONS,
+            Limit::GOAL_CONTROLS,
         ] {
             assert_ne!(l.to_string(), "");
         }
@@ -472,6 +506,7 @@ mod tests {
             Limit::THREAT_CATEGORIES,
             Limit::CATALOG_SCHEMES,
             Limit::CATALOG_SEGMENTS,
+            Limit::FEASIBILITY_FACTORS,
         ]
         .iter()
         .map(ToString::to_string)
@@ -487,6 +522,7 @@ mod tests {
                 "more than 64 threat categories",
                 "more than 16 catalog schemes",
                 "more than 4 catalog ID segments",
+                "more than 16 feasibility factors",
             ]
         );
         assert_eq!(MAX_LABEL_BYTES, 1024);
@@ -498,6 +534,8 @@ mod tests {
             VocabKind::ImpactCategory,
             VocabKind::Level,
             VocabKind::FeasibilityLevel,
+            VocabKind::FeasibilityFactor,
+            VocabKind::FactorLevel,
             VocabKind::Property,
             VocabKind::ThreatCategory,
             VocabKind::CatalogScheme,
@@ -509,6 +547,8 @@ mod tests {
                 "impact category",
                 "level",
                 "feasibility level",
+                "feasibility factor",
+                "factor level",
                 "property",
                 "threat category",
                 "catalog scheme"

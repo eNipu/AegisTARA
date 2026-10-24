@@ -71,6 +71,96 @@ proptest! {
     fn diff_soundness_second_methodology(seeds in seeds()) {
         check_diff_sequence(&second(), &seeds)?;
     }
+
+    #[test]
+    fn eval_cache_soundness_first_methodology(seeds in seeds()) {
+        check_eval_cache_sequence(&builtin(), &seeds)?;
+    }
+
+    #[test]
+    fn eval_cache_soundness_second_methodology(seeds in seeds()) {
+        check_eval_cache_sequence(&second(), &seeds)?;
+    }
+}
+
+fn assert_cache_agrees_with_project(
+    p: &aegis_model::Project,
+    cache: &aegis_model::ProjectEvalCache,
+) -> Result<(), TestCaseError> {
+    for (_, id, _) in p.attack_trees() {
+        prop_assert_eq!(cache.evaluate_tree(p, id).cloned(), p.evaluate_tree(id));
+        prop_assert_eq!(
+            cache.evaluate_residual_tree(p, id).cloned(),
+            p.evaluate_residual_tree(id)
+        );
+    }
+    let unknown_tree = common::tree_id(999_999);
+    prop_assert_eq!(
+        cache.evaluate_tree(p, unknown_tree).cloned(),
+        p.evaluate_tree(unknown_tree)
+    );
+    prop_assert_eq!(
+        cache.evaluate_residual_tree(p, unknown_tree).cloned(),
+        p.evaluate_residual_tree(unknown_tree)
+    );
+
+    for (_, id, _) in p.threat_scenarios() {
+        prop_assert_eq!(cache.evaluate_threat(p, id).cloned(), p.evaluate_threat(id));
+        prop_assert_eq!(
+            cache.evaluate_residual_threat(p, id).cloned(),
+            p.evaluate_residual_threat(id)
+        );
+        prop_assert_eq!(cache.evaluate_risk(p, id).cloned(), p.evaluate_risk(id));
+        prop_assert_eq!(
+            cache.evaluate_residual_risk(p, id).cloned(),
+            p.evaluate_residual_risk(id)
+        );
+    }
+    let unknown_threat = common::threat_id(999_999);
+    prop_assert_eq!(
+        cache.evaluate_threat(p, unknown_threat).cloned(),
+        p.evaluate_threat(unknown_threat)
+    );
+    prop_assert_eq!(
+        cache.evaluate_residual_threat(p, unknown_threat).cloned(),
+        p.evaluate_residual_threat(unknown_threat)
+    );
+    prop_assert_eq!(
+        cache.evaluate_risk(p, unknown_threat).cloned(),
+        p.evaluate_risk(unknown_threat)
+    );
+    prop_assert_eq!(
+        cache.evaluate_residual_risk(p, unknown_threat).cloned(),
+        p.evaluate_residual_risk(unknown_threat)
+    );
+    Ok(())
+}
+
+fn check_eval_cache_sequence(
+    m: &std::sync::Arc<aegis_model::Methodology>,
+    seeds: &[common::Seed],
+) -> Result<(), TestCaseError> {
+    let mut cache_fwd =
+        aegis_model::ProjectEvalCache::new(&aegis_model::Project::new(std::sync::Arc::clone(m)));
+    let mut cache_inv = cache_fwd.clone();
+    let mut inverses = Vec::new();
+    let mut final_project = accepted(m, seeds, |curr, op, inv| {
+        cache_fwd.update(curr, op);
+        cache_inv.update(curr, inv);
+        assert_cache_agrees_with_project(curr, &cache_fwd)?;
+        assert_cache_agrees_with_project(curr, &cache_inv)?;
+        inverses.push(inv.clone());
+        Ok(())
+    })?;
+
+    // Undo every accepted op in reverse using `apply_cached` and verify cache agreement at every step.
+    for inv in inverses.into_iter().rev() {
+        final_project
+            .apply_cached(inv, &mut cache_fwd)
+            .map_err(|e| TestCaseError::fail(format!("undo failed: {e}")))?;
+        assert_cache_agrees_with_project(&final_project, &cache_fwd)?;
+    }
+    Ok(())
 }
 
 fn check_diff_sequence(
@@ -143,6 +233,30 @@ fn check_diff_pair(
     prop_assert_eq!(
         fwd.security_controls().modified(),
         rev.security_controls().modified()
+    );
+    prop_assert_eq!(
+        fwd.cybersecurity_goals().added(),
+        rev.cybersecurity_goals().removed()
+    );
+    prop_assert_eq!(
+        fwd.cybersecurity_goals().removed(),
+        rev.cybersecurity_goals().added()
+    );
+    prop_assert_eq!(
+        fwd.cybersecurity_goals().modified(),
+        rev.cybersecurity_goals().modified()
+    );
+    prop_assert_eq!(
+        fwd.cybersecurity_claims().added(),
+        rev.cybersecurity_claims().removed()
+    );
+    prop_assert_eq!(
+        fwd.cybersecurity_claims().removed(),
+        rev.cybersecurity_claims().added()
+    );
+    prop_assert_eq!(
+        fwd.cybersecurity_claims().modified(),
+        rev.cybersecurity_claims().modified()
     );
 
     // Risk deltas are sorted by ThreatId and symmetric between fwd and rev.
@@ -231,8 +345,8 @@ fn ops_generator_covers_every_op_and_most_errors() {
         let stats = coverage(&m);
         let share = stats.ok as f64 / (stats.ok + stats.failed) as f64;
         assert!((0.25..0.9).contains(&share), "valid share {share}");
-        assert_eq!(stats.ok_kinds.len(), 26, "{:?}", stats.ok_kinds);
-        assert!(stats.errors.len() >= 30, "{:?}", stats.errors);
+        assert_eq!(stats.ok_kinds.len(), 37, "{:?}", stats.ok_kinds);
+        assert!(stats.errors.len() >= 38, "{:?}", stats.errors);
         eprintln!(
             "{}: ok {} failed {} errors {:?}",
             m.key(),

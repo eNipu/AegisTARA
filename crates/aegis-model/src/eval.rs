@@ -17,6 +17,7 @@
 //! a later engine crate unchanged. See `docs/adr/0005-tree-evaluation.md`
 //! and `docs/adr/0006-explain-why-traces.md`.
 
+use std::collections::BinaryHeap;
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -610,6 +611,53 @@ impl<V> Evaluation<V> {
     {
         Some(self.attack_paths(tree)?.take(k).collect())
     }
+
+    /// Updates `idx`'s value and derivation in place, returning `(value_changed, any_changed)`.
+    fn set_node(&mut self, idx: NodeIdx, value: V, how: Derivation) -> (bool, bool)
+    where
+        V: PartialEq,
+    {
+        let deriv_changed = match self.derivations.get_mut(idx.index()) {
+            Some(slot) => {
+                let changed = *slot != how;
+                *slot = how;
+                changed
+            }
+            None => false,
+        };
+        let val_changed = if idx == self.root {
+            let changed = self.root_value != value;
+            self.root_value = value;
+            changed
+        } else if let Some(slot) = self.values.get_mut(idx.index()) {
+            let changed = slot.as_ref() != Some(&value);
+            *slot = Some(value);
+            changed
+        } else {
+            false
+        };
+        (val_changed, val_changed || deriv_changed)
+    }
+
+    /// Synchronizes only `nodes` (and `root_value`) from `source` into `self`
+    /// in O(|nodes|) time without reallocating.
+    pub(crate) fn sync_nodes(&mut self, source: &Self, nodes: &[NodeIdx])
+    where
+        V: Clone,
+    {
+        self.root = source.root;
+        self.root_value = source.root_value.clone();
+        for &idx in nodes {
+            let i = idx.index();
+            if let (Some(dst), Some(src)) = (self.values.get_mut(i), source.values.get(i)) {
+                dst.clone_from(src);
+            }
+            if let (Some(dst), Some(src)) = (self.derivations.get_mut(i), source.derivations.get(i))
+            {
+                *dst = *src;
+            }
+        }
+    }
 }
 
 /// The explanation of one node's value, from [`Evaluation::explain`].
@@ -854,6 +902,21 @@ impl<'a, V> Explanation<'a, V> {
 pub fn evaluate<D, F>(
     tree: &AttackTree,
     domain: &D,
+    leaf: F,
+) -> Result<Evaluation<D::Value>, ModelError>
+where
+    D: AttributeDomain,
+    F: FnMut(NodeIdx) -> Option<D::Value>,
+{
+    let order = tree.topological_order()?;
+    evaluate_with_order(tree, &order, domain, leaf)
+}
+
+/// Evaluates `tree` given a precomputed parent-first topological `order`.
+fn evaluate_with_order<D, F>(
+    tree: &AttackTree,
+    order: &[NodeIdx],
+    domain: &D,
     mut leaf: F,
 ) -> Result<Evaluation<D::Value>, ModelError>
 where
@@ -863,7 +926,6 @@ where
     // Kahn's algorithm gives parents first; walking it backwards gives a
     // children-first order, the classic memoized bottom-up evaluation of an
     // attribute domain over a DAG (Mauw and Oostdijk 2005).
-    let order = tree.topological_order()?;
     let mut values: Vec<Option<D::Value>> = Vec::with_capacity(tree.len());
     values.resize_with(tree.len(), || None);
     // Every slot is overwritten below, because the order lists every node.
@@ -916,6 +978,335 @@ where
     }
 }
 
+/// Dependency-tracked incremental evaluation cache over an [`AttackTree`]
+/// (rules A1, A2, D10).
+///
+/// Keeps derived node values and derivations separate from [`AttackTree`]
+/// alongside each node's unique position in [`AttackTree::topological_order`]
+/// (`rank[parent] < rank[child]` for every directed edge `parent -> child`).
+///
+/// When one or more step ratings change, [`recompute_steps`](Self::recompute_steps)
+/// re-evaluates only the changed steps and the ancestor gates whose input
+/// values changed, visiting each affected gate at most once in bottom-up
+/// topological rank order and cutting off propagation as soon as a gate's
+/// output value equals its previous value. The updated [`Evaluation`] is
+/// bit-for-bit identical to running [`evaluate`] from scratch.
+///
+/// ```
+/// use aegis_model::{
+///     evaluate, AttackTree, GateKind, MaxMin, ModelError, Node, NodeId, TreeEvalCache,
+/// };
+///
+/// # fn main() -> Result<(), ModelError> {
+/// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+/// let left = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::And, "left"))?;
+/// let a = tree.add_child(left, NodeId::new_v7(), Node::step("a"))?;
+/// let b = tree.add_child(left, NodeId::new_v7(), Node::step("b"))?;
+/// let c = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("c"))?;
+///
+/// let mut ratings = vec![0_u8; tree.len()];
+/// ratings[a.index()] = 2;
+/// ratings[b.index()] = 4;
+/// ratings[c.index()] = 1;
+///
+/// let domain = MaxMin::<u8>::new();
+/// let mut cache = TreeEvalCache::new(&tree, &domain, |i| ratings.get(i.index()).copied())?;
+/// assert_eq!(*cache.evaluation().root_value(), 2);
+///
+/// // Raise step `a` from 2 to 5: `left = min(5, 4) = 4`, `root = max(4, 1) = 4`.
+/// ratings[a.index()] = 5;
+/// let recomputed = cache.recompute_steps(&tree, &domain, [a], |i| ratings.get(i.index()).copied())?;
+/// assert_eq!(recomputed, 3); // step `a`, gate `left`, and `root` (step `b` and `c` untouched)
+/// assert_eq!(*cache.evaluation().root_value(), 4);
+/// assert_eq!(
+///     cache.evaluation(),
+///     &evaluate(&tree, &domain, |i| ratings.get(i.index()).copied())?
+/// );
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeEvalCache<V> {
+    eval: Evaluation<V>,
+    rank: Box<[u32]>,
+    edge_count: usize,
+}
+
+impl<V> TreeEvalCache<V> {
+    /// Builds an incremental evaluation cache for `tree` over `domain`.
+    ///
+    /// Time O(V + E) plus V leaf evaluations, space O(V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate`]: [`ModelError::Cycle`],
+    /// [`ModelError::MissingLeafValue`], or [`ModelError::EmptyGate`].
+    ///
+    /// ```
+    /// use aegis_model::{AttackTree, MaxMin, ModelError, Node, NodeId, TreeEvalCache};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("only"))?;
+    /// let cache = TreeEvalCache::new(&tree, &MaxMin::<u8>::new(), |_| Some(3))?;
+    /// assert_eq!(*cache.evaluation().root_value(), 3);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new<D, F>(tree: &AttackTree, domain: &D, leaf: F) -> Result<Self, ModelError>
+    where
+        D: AttributeDomain<Value = V>,
+        F: FnMut(NodeIdx) -> Option<V>,
+    {
+        let order = tree.topological_order()?;
+        let mut rank = vec![0_u32; tree.len()];
+        for (pos, &idx) in order.iter().enumerate() {
+            if let Some(slot) = rank.get_mut(idx.index()) {
+                *slot = u32::try_from(pos).unwrap_or(u32::MAX);
+            }
+        }
+        let eval = evaluate_with_order(tree, &order, domain, leaf)?;
+        Ok(Self {
+            eval,
+            rank: rank.into_boxed_slice(),
+            edge_count: count_edges(tree),
+        })
+    }
+
+    /// Borrows the current memoized [`Evaluation`]. Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{AttackTree, MaxMin, ModelError, Node, NodeId, TreeEvalCache};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("only"))?;
+    /// let cache = TreeEvalCache::new(&tree, &MaxMin::<u8>::new(), |_| Some(7))?;
+    /// assert_eq!(cache.evaluation().get(tree.root()), Some(&7));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn evaluation(&self) -> &Evaluation<V> {
+        &self.eval
+    }
+
+    /// Consumes the cache and returns the inner [`Evaluation`] without
+    /// cloning. Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{AttackTree, MaxMin, ModelError, Node, NodeId, TreeEvalCache};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("only"))?;
+    /// let cache = TreeEvalCache::new(&tree, &MaxMin::<u8>::new(), |_| Some(7))?;
+    /// let eval = cache.into_evaluation();
+    /// assert_eq!(*eval.root_value(), 7);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn into_evaluation(self) -> Evaluation<V> {
+        self.eval
+    }
+
+    /// Incrementally recomputes `steps` and any ancestor gates in `tree`
+    /// whose input values changed, returning the total number of nodes
+    /// (steps + gates) re-evaluated.
+    ///
+    /// Each unique step in `steps` is queried via `leaf` once before `self`
+    /// is mutated, so an error leaves `self` unchanged. Ancestor gates are
+    /// visited in bottom-up topological rank order at most once (rule A2),
+    /// and upward propagation stops at any gate whose folded value equals
+    /// its previous value (after updating its [`Derivation`]).
+    ///
+    /// If `tree` was structurally modified since [`TreeEvalCache::new`]
+    /// (node count, root, or edge count differs), `recompute_steps` falls
+    /// back to a full rebuild after validating `steps`.
+    ///
+    /// Time O((|S| + A) log(|S| + A) + sum_{u in A} (children(u) + parents(u)))
+    /// where `S` is the unique set of input steps and `A` is the set of
+    /// ancestor gates whose at least one child value changed; for a single
+    /// step rating change, O(depth x fan-out of changed path) (rule A1).
+    ///
+    /// # Errors
+    ///
+    /// - [`ModelError::UnknownNode`] if any index in `steps` is not a step
+    ///   node in `tree`;
+    /// - [`ModelError::MissingLeafValue`] if `leaf` returns `None` for any
+    ///   step in `steps`.
+    ///
+    /// ```
+    /// use aegis_model::{
+    ///     AttackTree, GateKind, MaxMin, ModelError, Node, NodeId, TreeEvalCache,
+    /// };
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// let hi = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("hi"))?;
+    /// let lo = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("lo"))?;
+    /// let domain = MaxMin::<u8>::new();
+    /// let mut cache = TreeEvalCache::new(&tree, &domain, |i| Some(if i == hi { 4 } else { 1 }))?;
+    ///
+    /// // Changing `lo` from 1 to 2 updates `lo` and folds `root`, which stays 4.
+    /// let count = cache.recompute_steps(&tree, &domain, [lo], |i| Some(if i == hi { 4 } else { 2 }))?;
+    /// assert_eq!(count, 2);
+    /// assert_eq!(*cache.evaluation().root_value(), 4);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn recompute_steps<D, I, F>(
+        &mut self,
+        tree: &AttackTree,
+        domain: &D,
+        steps: I,
+        leaf: F,
+    ) -> Result<usize, ModelError>
+    where
+        D: AttributeDomain<Value = V>,
+        V: PartialEq + Clone,
+        I: IntoIterator<Item = NodeIdx>,
+        F: FnMut(NodeIdx) -> Option<V>,
+    {
+        let mut touched = Vec::new();
+        let (recomputed, _) =
+            self.recompute_steps_recording(tree, domain, steps, leaf, &mut touched)?;
+        Ok(recomputed)
+    }
+
+    /// Same as [`recompute_steps`](Self::recompute_steps), additionally
+    /// recording every node whose value or derivation changed in `touched`
+    /// and returning `(recomputed_nodes, was_full_rebuild)`.
+    pub(crate) fn recompute_steps_recording<D, I, F>(
+        &mut self,
+        tree: &AttackTree,
+        domain: &D,
+        steps: I,
+        mut leaf: F,
+        touched: &mut Vec<NodeIdx>,
+    ) -> Result<(usize, bool), ModelError>
+    where
+        D: AttributeDomain<Value = V>,
+        V: PartialEq + Clone,
+        I: IntoIterator<Item = NodeIdx>,
+        F: FnMut(NodeIdx) -> Option<V>,
+    {
+        touched.clear();
+        let input_steps: Vec<NodeIdx> = steps.into_iter().collect();
+        for &step in &input_steps {
+            match tree.get(step) {
+                Some(Node::Step { .. }) => {}
+                Some(Node::Gate { .. }) | None => return Err(ModelError::UnknownNode(step)),
+            }
+        }
+
+        if !self.topology_matches(tree) {
+            *self = Self::new(tree, domain, leaf)?;
+            return Ok((tree.len(), true));
+        }
+
+        let mut ranked_steps: Vec<(u32, NodeIdx)> = Vec::with_capacity(input_steps.len());
+        for step in input_steps {
+            let Some(&r) = self.rank.get(step.index()) else {
+                *self = Self::new(tree, domain, leaf)?;
+                return Ok((tree.len(), true));
+            };
+            if self.eval.derivation(step) != Some(Derivation::Leaf) {
+                *self = Self::new(tree, domain, leaf)?;
+                return Ok((tree.len(), true));
+            }
+            ranked_steps.push((r, step));
+        }
+        ranked_steps.sort_unstable_by(|a, b| b.cmp(a));
+        ranked_steps.dedup();
+
+        // Evaluate and validate all dirty steps before mutating `self.eval`.
+        let mut staged: Vec<(NodeIdx, V)> = Vec::with_capacity(ranked_steps.len());
+        for &(_, step) in &ranked_steps {
+            match leaf(step) {
+                Some(v) => staged.push((step, v)),
+                None => return Err(ModelError::MissingLeafValue(id_of(tree, step)?)),
+            }
+        }
+
+        let mut heap: BinaryHeap<(u32, NodeIdx)> = BinaryHeap::new();
+        let mut recomputed = staged.len();
+        for (step, val) in staged {
+            let (val_changed, any_changed) = self.eval.set_node(step, val, Derivation::Leaf);
+            if any_changed {
+                touched.push(step);
+            }
+            if val_changed {
+                for p in tree.parents(step) {
+                    if let Some(&pr) = self.rank.get(p.index()) {
+                        heap.push((pr, p));
+                    }
+                }
+            }
+        }
+
+        while let Some((r, u)) = heap.pop() {
+            while heap.peek() == Some(&(r, u)) {
+                heap.pop();
+            }
+            let Some(Node::Gate { kind, children, .. }) = tree.get(u) else {
+                // Topology changed beneath the cache; rebuild from scratch.
+                *self = Self::new(tree, domain, leaf)?;
+                touched.clear();
+                return Ok((tree.len(), true));
+            };
+            let rule = *kind;
+            let folded = match rule {
+                GateKind::Or => fold_with(
+                    |c| self.eval.get(c),
+                    children,
+                    rule,
+                    |a, v| domain.or_kept(a, v),
+                ),
+                GateKind::And => fold_with(
+                    |c| self.eval.get(c),
+                    children,
+                    rule,
+                    |a, v| domain.and_kept(a, v),
+                ),
+                GateKind::SeqAnd => fold_with(
+                    |c| self.eval.get(c),
+                    children,
+                    rule,
+                    |a, v| domain.seq_and_kept(a, v),
+                ),
+            };
+            let (value, how) = match folded {
+                Ok(Some(done)) => done,
+                Ok(None) => return Err(ModelError::EmptyGate(id_of(tree, u)?)),
+                Err(missing) => return Err(ModelError::UnknownNode(missing)),
+            };
+            recomputed += 1;
+            let (val_changed, any_changed) = self.eval.set_node(u, value, how);
+            if any_changed {
+                touched.push(u);
+            }
+            if val_changed {
+                for p in tree.parents(u) {
+                    if let Some(&pr) = self.rank.get(p.index()) {
+                        heap.push((pr, p));
+                    }
+                }
+            }
+        }
+
+        Ok((recomputed, false))
+    }
+
+    fn topology_matches(&self, tree: &AttackTree) -> bool {
+        tree.len() == self.rank.len()
+            && tree.root() == self.eval.root
+            && count_edges(tree) == self.edge_count
+    }
+}
+
+fn count_edges(tree: &AttackTree) -> usize {
+    tree.edge_count()
+}
+
 /// Left fold of the children's memoized values: a clone of the first, then
 /// `combine(acc, &v)` for the rest, in stored order. Also runs the trace
 /// state machine (see [`Derivation`]): start at `Selected(c1)`; per step,
@@ -932,17 +1323,31 @@ fn fold<V: Clone>(
     values: &[Option<V>],
     children: &[NodeIdx],
     rule: GateKind,
+    combine: impl FnMut(V, &V) -> (V, Kept),
+) -> Result<Option<(V, Derivation)>, NodeIdx> {
+    fold_with(
+        |c: NodeIdx| values.get(c.index()).and_then(Option::as_ref),
+        children,
+        rule,
+        combine,
+    )
+}
+
+fn fold_with<'a, V: Clone + 'a>(
+    value: impl Fn(NodeIdx) -> Option<&'a V>,
+    children: &[NodeIdx],
+    rule: GateKind,
     mut combine: impl FnMut(V, &V) -> (V, Kept),
 ) -> Result<Option<(V, Derivation)>, NodeIdx> {
-    let value = |c: NodeIdx| values.get(c.index()).and_then(Option::as_ref).ok_or(c);
+    let get = |c: NodeIdx| value(c).ok_or(c);
     let mut rest = children.iter();
     let Some(&first) = rest.next() else {
         return Ok(None);
     };
-    let mut acc = value(first)?.clone();
+    let mut acc = get(first)?.clone();
     let mut how = Derivation::Selected { rule, child: first };
     for &c in rest {
-        let (next, kept) = combine(acc, value(c)?);
+        let (next, kept) = combine(acc, get(c)?);
         acc = next;
         match kept {
             Kept::Acc => {}
@@ -1312,6 +1717,241 @@ mod tests {
         assert!(text.starts_with("Explanation"), "{text}");
         assert!(text.contains("value: 4"), "{text}");
         assert!(text.contains(&format!("{s:?}")), "{text}");
+        Ok(())
+    }
+
+    #[test]
+    fn tree_eval_cache_single_step_and_early_cutoff() -> Result<(), ModelError> {
+        // Root(OR) -> Mid(OR) -> [s1, s2], plus Root -> s3.
+        let mut tree = AttackTree::new(
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "root"),
+        )?;
+        let mid = tree.add_child(
+            tree.root(),
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "mid"),
+        )?;
+        let s1 = tree.add_child(mid, crate::id::NodeId::new_v7(), Node::step("s1"))?;
+        let s2 = tree.add_child(mid, crate::id::NodeId::new_v7(), Node::step("s2"))?;
+        let s3 = tree.add_child(tree.root(), crate::id::NodeId::new_v7(), Node::step("s3"))?;
+
+        let d = MaxMin::<u8>::new();
+        let mut cache = TreeEvalCache::new(&tree, &d, |i| {
+            Some(if i == s1 {
+                4
+            } else if i == s2 {
+                1
+            } else if i == s3 {
+                3
+            } else {
+                0
+            })
+        })?;
+        assert_eq!(*cache.evaluation().root_value(), 4);
+
+        // Changing s2 from 1 to 2 updates s2 and folds mid (stays 4 -> early cutoff before root!).
+        let recomputed = cache.recompute_steps(&tree, &d, [s2], |i| {
+            Some(if i == s1 {
+                4
+            } else if i == s2 {
+                2
+            } else if i == s3 {
+                3
+            } else {
+                0
+            })
+        })?;
+        assert_eq!(recomputed, 2); // s2 + mid; root is not folded because mid stayed 4
+        let oracle = evaluate(&tree, &d, |i| {
+            Some(if i == s1 {
+                4
+            } else if i == s2 {
+                2
+            } else if i == s3 {
+                3
+            } else {
+                0
+            })
+        })?;
+        assert_eq!(cache.evaluation(), &oracle);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_eval_cache_tie_break_updates_derivation_on_value_cutoff() -> Result<(), ModelError> {
+        // Root(OR) -> Mid(OR) -> [s1, s2].
+        // Initially s1 = 2, s2 = 4 -> Mid = 4 (selected s2), Root = 4.
+        // Raise s1 to 4 -> Mid stays 4 (early cutoff before Root!), but Mid's derivation
+        // shifts from Selected(s2) to Selected(s1) because s1 is the earlier child.
+        let mut tree = AttackTree::new(
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "root"),
+        )?;
+        let mid = tree.add_child(
+            tree.root(),
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "mid"),
+        )?;
+        let s1 = tree.add_child(mid, crate::id::NodeId::new_v7(), Node::step("s1"))?;
+        let s2 = tree.add_child(mid, crate::id::NodeId::new_v7(), Node::step("s2"))?;
+
+        let d = MaxMin::<u8>::new();
+        let mut cache = TreeEvalCache::new(&tree, &d, |i| Some(if i == s1 { 2 } else { 4 }))?;
+        assert_eq!(
+            cache.evaluation().derivation(mid),
+            Some(Derivation::Selected {
+                rule: GateKind::Or,
+                child: s2
+            })
+        );
+
+        let recomputed = cache.recompute_steps(&tree, &d, [s1], |_| Some(4))?;
+        assert_eq!(recomputed, 2); // s1 + mid; root not refolded because mid's value stayed 4
+        assert_eq!(
+            cache.evaluation().derivation(mid),
+            Some(Derivation::Selected {
+                rule: GateKind::Or,
+                child: s1
+            })
+        );
+        let oracle = evaluate(&tree, &d, |_| Some(4))?;
+        assert_eq!(cache.evaluation(), &oracle);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_eval_cache_shared_dag_visits_each_ancestor_once() -> Result<(), ModelError> {
+        // Diamond DAG: Root(AND) -> [Left(OR), Right(OR)], both linking shared step `s`.
+        let mut tree = AttackTree::new(
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::And, "root"),
+        )?;
+        let left = tree.add_child(
+            tree.root(),
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "left"),
+        )?;
+        let right = tree.add_child(
+            tree.root(),
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "right"),
+        )?;
+        let s = tree.add_child(left, crate::id::NodeId::new_v7(), Node::step("shared"))?;
+        tree.link(right, s)?;
+
+        let d = MaxMin::<u8>::new();
+        let mut cache = TreeEvalCache::new(&tree, &d, |_| Some(1))?;
+        assert_eq!(*cache.evaluation().root_value(), 1);
+
+        // Passing duplicate [s, s] still evaluates s once, left once, right once, root once = 4.
+        let recomputed = cache.recompute_steps(&tree, &d, [s, s], |_| Some(3))?;
+        assert_eq!(recomputed, 4);
+        let oracle = evaluate(&tree, &d, |_| Some(3))?;
+        assert_eq!(cache.evaluation(), &oracle);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_eval_cache_error_rollback_leaves_cache_unchanged() -> Result<(), ModelError> {
+        let mut tree = AttackTree::new(
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "root"),
+        )?;
+        let s1 = tree.add_child(tree.root(), crate::id::NodeId::new_v7(), Node::step("s1"))?;
+        let s2 = tree.add_child(tree.root(), crate::id::NodeId::new_v7(), Node::step("s2"))?;
+        let d = MaxMin::<u8>::new();
+        let mut cache = TreeEvalCache::new(&tree, &d, |_| Some(2))?;
+        let before = cache.evaluation().clone();
+
+        // Gate passed as a step -> UnknownNode, cache untouched.
+        let err = cache.recompute_steps(&tree, &d, [tree.root()], |_| Some(5));
+        assert_eq!(err, Err(ModelError::UnknownNode(tree.root())));
+        assert_eq!(cache.evaluation(), &before);
+
+        // Missing leaf value on second step -> MissingLeafValue, first step not mutated.
+        let s2_id = tree.id_of(s2).ok_or(ModelError::UnknownNode(s2))?;
+        let err = cache.recompute_steps(
+            &tree,
+            &d,
+            [s1, s2],
+            |i| if i == s1 { Some(9) } else { None },
+        );
+        assert_eq!(err, Err(ModelError::MissingLeafValue(s2_id)));
+        assert_eq!(cache.evaluation(), &before);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_eval_cache_structural_fallback_and_into_evaluation() -> Result<(), ModelError> {
+        let mut tree = AttackTree::new(
+            crate::id::NodeId::new_v7(),
+            Node::gate(GateKind::Or, "root"),
+        )?;
+        let s1 = tree.add_child(tree.root(), crate::id::NodeId::new_v7(), Node::step("s1"))?;
+        let d = MaxMin::<u8>::new();
+        let mut cache = TreeEvalCache::new(&tree, &d, |_| Some(2))?;
+
+        // Mutate topology by adding a second step, then call recompute_steps:
+        // cache detects the topology change and rebuilds cleanly.
+        let s2 = tree.add_child(tree.root(), crate::id::NodeId::new_v7(), Node::step("s2"))?;
+        let recomputed =
+            cache.recompute_steps(&tree, &d, [s1, s2], |i| Some(if i == s2 { 7 } else { 2 }))?;
+        assert_eq!(recomputed, tree.len());
+        let oracle = evaluate(&tree, &d, |i| Some(if i == s2 { 7 } else { 2 }))?;
+        assert_eq!(&cache.into_evaluation(), &oracle);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_eval_cache_100k_nodes_single_step_under_5ms() -> Result<(), ModelError> {
+        // Balanced 4-ary tree with 100,001 nodes (25,000 internal gates + 75,001 leaf steps).
+        const GATES: usize = 25_000;
+        const ARITY: usize = 4;
+        let mut tree = AttackTree::new(crate::id::NodeId::new_v7(), Node::gate(GateKind::Or, "g"))?;
+        let mut queue = Vec::with_capacity(GATES * ARITY + 1);
+        queue.push(tree.root());
+        let mut gates_created = 1usize;
+        let mut target_step = None;
+
+        let mut head = 0usize;
+        while head < queue.len() {
+            let parent = queue[head];
+            head += 1;
+            for c in 0..ARITY {
+                let id = crate::id::NodeId::new_v7();
+                if gates_created < GATES {
+                    let kind = if (gates_created + c) % 2 == 0 {
+                        GateKind::Or
+                    } else {
+                        GateKind::And
+                    };
+                    let g = tree.add_child(parent, id, Node::gate(kind, "g"))?;
+                    queue.push(g);
+                    gates_created += 1;
+                } else {
+                    let s = tree.add_child(parent, id, Node::step("s"))?;
+                    target_step = Some(s);
+                }
+            }
+        }
+        assert_eq!(tree.len(), 100_001);
+        let step = target_step.ok_or(ModelError::UnknownNode(tree.root()))?;
+
+        let d = MaxMin::<u8>::new();
+        let mut cache = TreeEvalCache::new(&tree, &d, |_| Some(1))?;
+
+        let start = std::time::Instant::now();
+        let recomputed =
+            cache.recompute_steps(&tree, &d, [step], |i| Some(if i == step { 3 } else { 1 }))?;
+        let elapsed = start.elapsed();
+
+        // Depth of a 4-ary tree with 25,000 gates is at most 9, so <= 10 nodes are recomputed.
+        assert!(recomputed <= 12, "recomputed={recomputed}");
+        assert!(
+            elapsed < std::time::Duration::from_millis(5),
+            "100k-node incremental recomputation took {elapsed:?} (> 5ms budget)"
+        );
         Ok(())
     }
 }

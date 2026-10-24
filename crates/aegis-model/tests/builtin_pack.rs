@@ -12,8 +12,9 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    CatalogSchemeDef, CatalogSyntax, ImpactCategoryDef, LevelDef, Methodology, MethodologyDef,
-    ModelError, PropertyDef, SegmentDef, ThreatCategoryDef,
+    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
+    ImpactCategoryDef, LevelDef, Methodology, MethodologyDef, ModelError, PotentialBandDef,
+    PropertyDef, SegmentDef, ThreatCategoryDef,
 };
 
 /// The shipped pack bytes.
@@ -165,6 +166,167 @@ fn expected() -> MethodologyDef {
                 required: 1,
             },
         }],
+        attack_potential: Some(AttackPotentialDef {
+            factors: vec![
+                FactorDef {
+                    key: s("elapsed-time"),
+                    label: s("Elapsed time"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("le-1d"),
+                            label: s("<= 1 day"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("le-1w"),
+                            label: s("<= 1 week"),
+                            points: 1,
+                        },
+                        FactorLevelDef {
+                            key: s("le-1m"),
+                            label: s("<= 1 month"),
+                            points: 4,
+                        },
+                        FactorLevelDef {
+                            key: s("le-6m"),
+                            label: s("<= 6 months"),
+                            points: 17,
+                        },
+                        FactorLevelDef {
+                            key: s("gt-6m"),
+                            label: s("> 6 months"),
+                            points: 19,
+                        },
+                    ],
+                },
+                FactorDef {
+                    key: s("expertise"),
+                    label: s("Expertise"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("layman"),
+                            label: s("Layman"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("proficient"),
+                            label: s("Proficient"),
+                            points: 3,
+                        },
+                        FactorLevelDef {
+                            key: s("expert"),
+                            label: s("Expert"),
+                            points: 6,
+                        },
+                        FactorLevelDef {
+                            key: s("multiple-experts"),
+                            label: s("Multiple experts"),
+                            points: 8,
+                        },
+                    ],
+                },
+                FactorDef {
+                    key: s("knowledge"),
+                    label: s("Knowledge of the item"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("public"),
+                            label: s("Public"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("restricted"),
+                            label: s("Restricted"),
+                            points: 3,
+                        },
+                        FactorLevelDef {
+                            key: s("confidential"),
+                            label: s("Confidential"),
+                            points: 7,
+                        },
+                        FactorLevelDef {
+                            key: s("strictly-confidential"),
+                            label: s("Strictly confidential"),
+                            points: 11,
+                        },
+                    ],
+                },
+                FactorDef {
+                    key: s("window-of-opportunity"),
+                    label: s("Window of opportunity"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("unlimited"),
+                            label: s("Unlimited"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("easy"),
+                            label: s("Easy"),
+                            points: 1,
+                        },
+                        FactorLevelDef {
+                            key: s("moderate"),
+                            label: s("Moderate"),
+                            points: 4,
+                        },
+                        FactorLevelDef {
+                            key: s("difficult"),
+                            label: s("Difficult"),
+                            points: 10,
+                        },
+                    ],
+                },
+                FactorDef {
+                    key: s("equipment"),
+                    label: s("Equipment"),
+                    levels: vec![
+                        FactorLevelDef {
+                            key: s("standard"),
+                            label: s("Standard"),
+                            points: 0,
+                        },
+                        FactorLevelDef {
+                            key: s("specialized"),
+                            label: s("Specialized"),
+                            points: 4,
+                        },
+                        FactorLevelDef {
+                            key: s("bespoke"),
+                            label: s("Bespoke"),
+                            points: 7,
+                        },
+                        FactorLevelDef {
+                            key: s("multiple-bespoke"),
+                            label: s("Multiple bespoke"),
+                            points: 9,
+                        },
+                    ],
+                },
+            ],
+            bands: vec![
+                PotentialBandDef {
+                    min: 0,
+                    max: Some(13),
+                    feasibility: s("high"),
+                },
+                PotentialBandDef {
+                    min: 14,
+                    max: Some(19),
+                    feasibility: s("medium"),
+                },
+                PotentialBandDef {
+                    min: 20,
+                    max: Some(24),
+                    feasibility: s("low"),
+                },
+                PotentialBandDef {
+                    min: 25,
+                    max: None,
+                    feasibility: s("very-low"),
+                },
+            ],
+        }),
     }
 }
 
@@ -373,4 +535,60 @@ fn catalog_syntax_r155_order() {
         .map(|r| m.display_catalog_ref(r).to_string())
         .collect();
     assert_eq!(shown, ["4", "4.1", "4.2", "5"]);
+}
+
+#[test]
+fn iso21434_vocabulary_attack_potential() {
+    let m = m();
+    let fkeys: Vec<_> = m
+        .feasibility_factors()
+        .map(|f| m.feasibility_factor_key(f).expect("f"))
+        .collect();
+    assert_eq!(
+        fkeys,
+        [
+            "elapsed-time",
+            "expertise",
+            "knowledge",
+            "window-of-opportunity",
+            "equipment"
+        ]
+    );
+    let bands: Vec<_> = m
+        .potential_bands()
+        .iter()
+        .map(|b| {
+            (
+                b.min(),
+                b.max(),
+                m.feasibility_level_key(b.feasibility()).expect("feas"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        bands,
+        [
+            (0, Some(13), "high"),
+            (14, Some(19), "medium"),
+            (20, Some(24), "low"),
+            (25, None, "very-low"),
+        ]
+    );
+    let min_levels: Vec<_> = m
+        .feasibility_factors()
+        .map(|f| Some(m.factor_levels(f).next().expect("min")))
+        .collect();
+    let ap_min = m.resolve_attack_potential(&min_levels).expect("min ap");
+    assert_eq!(ap_min.score(), 0);
+    assert_eq!(m.feasibility_level_key(ap_min.feasibility()), Some("high"));
+    let max_levels: Vec<_> = m
+        .feasibility_factors()
+        .map(|f| Some(m.factor_levels(f).last().expect("max")))
+        .collect();
+    let ap_max = m.resolve_attack_potential(&max_levels).expect("max ap");
+    assert_eq!(ap_max.score(), 19 + 8 + 11 + 10 + 9);
+    assert_eq!(
+        m.feasibility_level_key(ap_max.feasibility()),
+        Some("very-low")
+    );
 }

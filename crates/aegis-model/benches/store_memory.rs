@@ -181,6 +181,7 @@ fn short_keys() -> Arc<Methodology> {
             })
             .collect(),
         catalog_schemes: vec![],
+        attack_potential: None,
     };
     match Methodology::new(def) {
         Ok(m) => Arc::new(m),

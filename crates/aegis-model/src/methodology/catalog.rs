@@ -419,6 +419,7 @@ mod tests {
                     label: "High".into(),
                 },
             ],
+            attack_potential: None,
             properties: vec![PropertyDef {
                 key: "i".into(),
                 label: "I".into(),

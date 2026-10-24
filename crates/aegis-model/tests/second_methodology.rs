@@ -63,6 +63,12 @@ fn second_methodology_is_valid_data() {
         fkeys,
         ["improbable", "remote", "occasional", "probable", "frequent"]
     );
+    let factor_scales: Vec<_> = m
+        .feasibility_factors()
+        .map(|f| m.factor_level_count(f))
+        .collect();
+    assert_eq!(factor_scales, [3, 4, 3]);
+    assert_eq!(m.potential_bands().len(), 5);
     // The same definition gives an equal methodology.
     assert_eq!(Methodology::new(def), Ok(m));
 }
@@ -244,6 +250,49 @@ fn second_methodology_rejects_foreign_indices() {
             provenance: Provenance::default(),
         },
         &ModelError::UnknownFeasibilityLevel(f5),
+    );
+    // Feasibility factor index 4 ("equipment" in the 5-factor built-in
+    // methodology) is out of range in the 3-factor medical methodology.
+    let factor4 = first.feasibility_factors().nth(4).expect("factor 4");
+    rejects(
+        &mut p,
+        Op::SetStepFactor {
+            tree,
+            node: step,
+            factor: factor4,
+            level: None,
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownFeasibilityFactor(factor4),
+    );
+    // Factor level index 3 is out of range in the 3-level "exposure" factor,
+    // though valid in the 4-level "skill" factor.
+    let exp = common::factor(&m, "exposure");
+    let skill = common::factor(&m, "skill");
+    let flvl3 = m.factor_levels(skill).nth(3).expect("level 3");
+    rejects(
+        &mut p,
+        Op::SetStepFactor {
+            tree,
+            node: step,
+            factor: exp,
+            level: Some(flvl3),
+            provenance: Provenance::default(),
+        },
+        &ModelError::UnknownFactorLevel {
+            factor: exp,
+            level: flvl3,
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepFactor {
+            tree,
+            node: step,
+            factor: skill,
+            level: Some(flvl3),
+            provenance: Provenance::default(),
+        },
     );
     rejects(
         &mut p,

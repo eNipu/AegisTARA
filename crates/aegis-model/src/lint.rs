@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use crate::id::{AssetId, ControlId, DamageId, NodeId, ThreatId, TreeId};
+use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
 use crate::methodology::Property;
 
 /// Severity of a [`LintFinding`].
@@ -132,6 +132,36 @@ pub enum LintCode {
         /// The threat scenario whose `Reduce` treatment has no control mitigations.
         threat: ThreatId,
     },
+    /// A threat scenario has a [`RiskTreatment::Reduce`](crate::RiskTreatment::Reduce)
+    /// decision, but has no linked [`CybersecurityGoal`](crate::CybersecurityGoal).
+    ReduceTreatmentWithoutGoal {
+        /// The threat scenario lacking a linked cybersecurity goal.
+        threat: ThreatId,
+    },
+    /// A threat scenario has a [`RiskTreatment::Retain`](crate::RiskTreatment::Retain)
+    /// or [`RiskTreatment::Share`](crate::RiskTreatment::Share) decision, but
+    /// has no linked [`CybersecurityClaim`](crate::CybersecurityClaim).
+    RetainOrShareTreatmentWithoutClaim {
+        /// The threat scenario lacking a linked cybersecurity claim.
+        threat: ThreatId,
+    },
+    /// A threat scenario links to a [`CybersecurityGoal`](crate::CybersecurityGoal),
+    /// but its risk treatment is not [`RiskTreatment::Reduce`](crate::RiskTreatment::Reduce).
+    GoalOnNonReduceThreat {
+        /// The threat scenario linking a goal without reduce treatment.
+        threat: ThreatId,
+        /// The linked cybersecurity goal.
+        goal: GoalId,
+    },
+    /// A threat scenario links to a [`CybersecurityClaim`](crate::CybersecurityClaim),
+    /// but its risk treatment is neither [`RiskTreatment::Retain`](crate::RiskTreatment::Retain)
+    /// nor [`RiskTreatment::Share`](crate::RiskTreatment::Share).
+    ClaimOnNonRetainOrShareThreat {
+        /// The threat scenario linking a claim without retain or share treatment.
+        threat: ThreatId,
+        /// The linked cybersecurity claim.
+        claim: ClaimId,
+    },
     /// An attack tree in the project is not linked to any threat scenario.
     AttackTreeUnlinked {
         /// The unlinked attack tree.
@@ -146,17 +176,50 @@ pub enum LintCode {
         node: NodeId,
     },
     /// A leaf step node in a project attack tree has no inherent feasibility
-    /// rating, preventing tree evaluation.
+    /// rating (neither complete attack potential factor ratings nor a direct
+    /// step feasibility rating), preventing tree evaluation.
     AttackTreeStepUnrated {
         /// The attack tree containing the unrated step.
         tree: TreeId,
         /// The unrated step node.
         node: NodeId,
     },
+    /// A leaf step node in a project attack tree has some, but not all, of the
+    /// methodology's attack potential factors rated (`0 < rated < factor_count`).
+    AttackTreeStepIncompleteFactors {
+        /// The attack tree containing the partially factor-rated step.
+        tree: TreeId,
+        /// The step node with incomplete factor ratings.
+        node: NodeId,
+    },
+    /// A leaf step node in a project attack tree has both a complete set of
+    /// attack potential factor ratings and a direct step feasibility rating;
+    /// the resolved attack potential overrides the direct rating.
+    RedundantStepFeasibility {
+        /// The attack tree containing the step with a shadowed direct rating.
+        tree: TreeId,
+        /// The step node whose direct feasibility rating is shadowed.
+        node: NodeId,
+    },
     /// A security control in the project is not attached to any attack step.
     SecurityControlUnused {
         /// The unused security control.
         control: ControlId,
+    },
+    /// A cybersecurity goal links to zero security controls.
+    CybersecurityGoalWithoutControls {
+        /// The cybersecurity goal with an empty control list.
+        goal: GoalId,
+    },
+    /// A cybersecurity goal in the project is not linked by any threat scenario.
+    CybersecurityGoalUnlinked {
+        /// The unlinked cybersecurity goal.
+        goal: GoalId,
+    },
+    /// A cybersecurity claim in the project is not linked by any threat scenario.
+    CybersecurityClaimUnlinked {
+        /// The unlinked cybersecurity claim.
+        claim: ClaimId,
     },
 }
 
@@ -187,7 +250,16 @@ impl LintCode {
             | Self::RedundantDirectFeasibility { .. }
             | Self::ThreatWithoutTreatment { .. }
             | Self::AttackTreeUnlinked { .. }
-            | Self::SecurityControlUnused { .. } => LintSeverity::Warning,
+            | Self::AttackTreeStepIncompleteFactors { .. }
+            | Self::RedundantStepFeasibility { .. }
+            | Self::SecurityControlUnused { .. }
+            | Self::ReduceTreatmentWithoutGoal { .. }
+            | Self::RetainOrShareTreatmentWithoutClaim { .. }
+            | Self::GoalOnNonReduceThreat { .. }
+            | Self::ClaimOnNonRetainOrShareThreat { .. }
+            | Self::CybersecurityGoalWithoutControls { .. }
+            | Self::CybersecurityGoalUnlinked { .. }
+            | Self::CybersecurityClaimUnlinked { .. } => LintSeverity::Warning,
             Self::ThreatWithoutFeasibility { .. }
             | Self::ReduceTreatmentWithoutControls { .. }
             | Self::AttackTreeGateEmpty { .. }
@@ -243,9 +315,45 @@ impl fmt::Display for LintCode {
                 f,
                 "attack tree {tree} step {node} has no feasibility rating"
             ),
+            Self::AttackTreeStepIncompleteFactors { tree, node } => write!(
+                f,
+                "attack tree {tree} step {node} has incomplete attack potential factor ratings"
+            ),
+            Self::RedundantStepFeasibility { tree, node } => write!(
+                f,
+                "attack tree {tree} step {node} has a direct feasibility rating shadowed by its attack potential factors"
+            ),
             Self::SecurityControlUnused { control } => write!(
                 f,
                 "security control {control} is not attached to any attack step"
+            ),
+            Self::ReduceTreatmentWithoutGoal { threat } => write!(
+                f,
+                "threat scenario {threat} has reduce treatment without a linked cybersecurity goal"
+            ),
+            Self::RetainOrShareTreatmentWithoutClaim { threat } => write!(
+                f,
+                "threat scenario {threat} has retain or share treatment without a linked cybersecurity claim"
+            ),
+            Self::GoalOnNonReduceThreat { threat, goal } => write!(
+                f,
+                "threat scenario {threat} links cybersecurity goal {goal} without reduce treatment"
+            ),
+            Self::ClaimOnNonRetainOrShareThreat { threat, claim } => write!(
+                f,
+                "threat scenario {threat} links cybersecurity claim {claim} without retain or share treatment"
+            ),
+            Self::CybersecurityGoalWithoutControls { goal } => write!(
+                f,
+                "cybersecurity goal {goal} has no linked security controls"
+            ),
+            Self::CybersecurityGoalUnlinked { goal } => write!(
+                f,
+                "cybersecurity goal {goal} is not linked to any threat scenario"
+            ),
+            Self::CybersecurityClaimUnlinked { claim } => write!(
+                f,
+                "cybersecurity claim {claim} is not linked to any threat scenario"
             ),
         }
     }
@@ -372,6 +480,8 @@ mod tests {
         let tree = crate::testkit::tree_id(4);
         let node = crate::testkit::node_id(5);
         let control = crate::testkit::control_id(6);
+        let goal = GoalId::new_v7();
+        let claim = ClaimId::new_v7();
 
         let warnings = [
             LintCode::AssetWithoutThreats { asset },
@@ -385,7 +495,16 @@ mod tests {
             LintCode::RedundantDirectFeasibility { threat },
             LintCode::ThreatWithoutTreatment { threat },
             LintCode::AttackTreeUnlinked { tree },
+            LintCode::AttackTreeStepIncompleteFactors { tree, node },
+            LintCode::RedundantStepFeasibility { tree, node },
             LintCode::SecurityControlUnused { control },
+            LintCode::ReduceTreatmentWithoutGoal { threat },
+            LintCode::RetainOrShareTreatmentWithoutClaim { threat },
+            LintCode::GoalOnNonReduceThreat { threat, goal },
+            LintCode::ClaimOnNonRetainOrShareThreat { threat, claim },
+            LintCode::CybersecurityGoalWithoutControls { goal },
+            LintCode::CybersecurityGoalUnlinked { goal },
+            LintCode::CybersecurityClaimUnlinked { claim },
         ];
         for code in warnings {
             let f = LintFinding::new(code);

@@ -177,6 +177,104 @@
         "label": "Unacceptable"
       }
     ],
+    "attack_potential": {
+      "factors": [
+        {
+          "key": "exposure",
+          "label": "Exposure",
+          "levels": [
+            {
+              "key": "open",
+              "label": "Open",
+              "points": 0
+            },
+            {
+              "key": "local",
+              "label": "Local",
+              "points": 2
+            },
+            {
+              "key": "isolated",
+              "label": "Isolated",
+              "points": 4
+            }
+          ]
+        },
+        {
+          "key": "skill",
+          "label": "Skill",
+          "levels": [
+            {
+              "key": "novice",
+              "label": "Novice",
+              "points": 0
+            },
+            {
+              "key": "trained",
+              "label": "Trained",
+              "points": 1
+            },
+            {
+              "key": "specialist",
+              "label": "Specialist",
+              "points": 3
+            },
+            {
+              "key": "expert",
+              "label": "Expert",
+              "points": 5
+            }
+          ]
+        },
+        {
+          "key": "resources",
+          "label": "Resources",
+          "levels": [
+            {
+              "key": "none",
+              "label": "None",
+              "points": 0
+            },
+            {
+              "key": "standard",
+              "label": "Standard",
+              "points": 1
+            },
+            {
+              "key": "bespoke",
+              "label": "Bespoke",
+              "points": 3
+            }
+          ]
+        }
+      ],
+      "bands": [
+        {
+          "min": 0,
+          "max": 2,
+          "feasibility": "frequent"
+        },
+        {
+          "min": 3,
+          "max": 5,
+          "feasibility": "probable"
+        },
+        {
+          "min": 6,
+          "max": 8,
+          "feasibility": "occasional"
+        },
+        {
+          "min": 9,
+          "max": 11,
+          "feasibility": "remote"
+        },
+        {
+          "min": 12,
+          "feasibility": "improbable"
+        }
+      ]
+    },
     "properties": [
       {
         "key": "c",
