@@ -846,11 +846,17 @@ impl Property {
     }
 }
 
-#[cfg(test)]
 impl Level {
-    /// Wraps a raw position, for tests.
+    /// Wraps a raw position (used by sensitivity analysis and tests).
     pub(crate) fn new(i: u8) -> Self {
         Level(i)
+    }
+}
+
+impl FeasibilityLevel {
+    /// Wraps a raw position (used by sensitivity analysis).
+    pub(crate) fn new(i: u8) -> Self {
+        FeasibilityLevel(i)
     }
 }
 

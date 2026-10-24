@@ -81,6 +81,169 @@ proptest! {
     fn eval_cache_soundness_second_methodology(seeds in seeds()) {
         check_eval_cache_sequence(&second(), &seeds)?;
     }
+
+    #[test]
+    fn sensitivity_and_choke_points_first_methodology(seeds in seeds()) {
+        let final_p = accepted(&builtin(), &seeds, |_, _, _| Ok(()))?;
+        check_sensitivity_and_choke_points(&final_p)?;
+    }
+
+    #[test]
+    fn sensitivity_and_choke_points_second_methodology(seeds in seeds()) {
+        let final_p = accepted(&second(), &seeds, |_, _, _| Ok(()))?;
+        check_sensitivity_and_choke_points(&final_p)?;
+    }
+}
+
+fn check_sensitivity_and_choke_points(p: &aegis_model::Project) -> Result<(), TestCaseError> {
+    let m = p.methodology();
+    let feas_levels: Vec<_> = m.feasibility_levels().map(|(l, _, _)| l).collect();
+
+    for (tree_idx, tree_id, tree) in p.attack_trees() {
+        if let Ok(eval) = p.evaluate_tree(tree_id) {
+            prop_assert_eq!(
+                p.tree_choke_points(tree_id, 4).ok(),
+                eval.choke_points(tree, 4)
+            );
+            prop_assert_eq!(
+                p.tree_hitting_set(tree_id, 4).ok(),
+                eval.top_k_hitting_set(tree, 4)
+            );
+            let tips = p
+                .tree_tipping_points(tree_id)
+                .map_err(|e| TestCaseError::fail(format!("tree_tipping_points: {e}")))?;
+            for tip in &tips {
+                prop_assert_eq!(tip.from_root(), *eval.root_value());
+                prop_assert_ne!(tip.to_root(), tip.from_root());
+                let perturbed = aegis_model::evaluate(
+                    tree,
+                    &aegis_model::MaxMin::<aegis_model::FeasibilityLevel>::new(),
+                    |idx| {
+                        if idx == tip.step() {
+                            Some(tip.to_step())
+                        } else {
+                            p.effective_step_feasibility(tree_idx, idx)
+                        }
+                    },
+                )
+                .map_err(|e| TestCaseError::fail(format!("perturbed eval: {e}")))?;
+                prop_assert_eq!(*perturbed.root_value(), tip.to_root());
+            }
+        }
+        if let Ok(res_eval) = p.evaluate_residual_tree(tree_id) {
+            prop_assert_eq!(
+                p.residual_tree_choke_points(tree_id, 4).ok(),
+                res_eval.choke_points(tree, 4)
+            );
+            prop_assert_eq!(
+                p.residual_tree_hitting_set(tree_id, 4).ok(),
+                res_eval.top_k_hitting_set(tree, 4)
+            );
+            let res_tips = p
+                .residual_tree_tipping_points(tree_id)
+                .map_err(|e| TestCaseError::fail(format!("residual_tree_tipping_points: {e}")))?;
+            for tip in &res_tips {
+                prop_assert_eq!(tip.from_root(), *res_eval.root_value());
+                prop_assert_ne!(tip.to_root(), tip.from_root());
+            }
+        }
+    }
+
+    for (_, threat_id, threat) in p.threat_scenarios() {
+        if let Ok(risk) = p.evaluate_risk(threat_id) {
+            let sens = p
+                .threat_sensitivity(threat_id)
+                .map_err(|e| TestCaseError::fail(format!("threat_sensitivity: {e}")))?;
+            prop_assert_eq!(sens.feasibility(), risk.feasibility());
+            prop_assert_eq!(sens.max_risk(), risk.max_risk());
+            prop_assert_eq!(
+                sens.is_stable(),
+                sens.feasibility_tipping_points().is_empty()
+                    && sens.impact_tipping_points().is_empty()
+            );
+
+            // Check direct feasibility tipping points against a clone oracle.
+            if threat.attack_tree().is_none()
+                && let Some(from_risk) = risk.max_risk()
+            {
+                let cur = risk.feasibility().index();
+                let mut expected_feas_tips = 0_usize;
+                for next_idx in [cur.checked_sub(1), cur.checked_add(1)]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(&to_f) = feas_levels.get(next_idx) {
+                        let mut clone = p.clone();
+                        clone
+                            .apply(aegis_model::Op::SetThreatFeasibility {
+                                threat: threat_id,
+                                level: Some(to_f),
+                                provenance: aegis_model::Provenance::default(),
+                            })
+                            .expect("set threat feas");
+                        let new_risk = clone
+                            .evaluate_risk(threat_id)
+                            .expect("eval risk")
+                            .max_risk();
+                        if new_risk.is_some_and(|r| r != from_risk) {
+                            expected_feas_tips += 1;
+                        }
+                    }
+                }
+                prop_assert_eq!(sens.feasibility_tipping_points().len(), expected_feas_tips);
+            }
+
+            // Check impact tipping points against a clone oracle.
+            if let Some(from_risk) = risk.max_risk() {
+                let mut expected_impact_tips = 0_usize;
+                for &d_idx in threat.damages() {
+                    let Some(d_id) = p.damage_scenario_id(d_idx) else {
+                        continue;
+                    };
+                    let Some(d) = p.damage_scenario(d_idx) else {
+                        continue;
+                    };
+                    for (cat, imp) in d.impacts() {
+                        let Some(from_imp) = imp else { continue };
+                        let levels: Vec<_> = m.levels(cat).collect();
+                        let cur = from_imp.index();
+                        for next_idx in [cur.checked_sub(1), cur.checked_add(1)]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if let Some(&to_imp) = levels.get(next_idx) {
+                                let mut clone = p.clone();
+                                clone
+                                    .apply(aegis_model::Op::SetImpact {
+                                        id: d_id,
+                                        category: cat,
+                                        level: Some(to_imp),
+                                        provenance: aegis_model::Provenance::default(),
+                                    })
+                                    .expect("set impact");
+                                let new_risk = clone
+                                    .evaluate_risk(threat_id)
+                                    .expect("eval risk")
+                                    .max_risk();
+                                if new_risk.is_some_and(|r| r != from_risk) {
+                                    expected_impact_tips += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                prop_assert_eq!(sens.impact_tipping_points().len(), expected_impact_tips);
+            }
+        }
+        if let Ok(res_risk) = p.evaluate_residual_risk(threat_id) {
+            let res_sens = p
+                .residual_threat_sensitivity(threat_id)
+                .map_err(|e| TestCaseError::fail(format!("residual_threat_sensitivity: {e}")))?;
+            prop_assert_eq!(res_sens.feasibility(), res_risk.feasibility());
+            prop_assert_eq!(res_sens.max_risk(), res_risk.max_risk());
+        }
+    }
+    Ok(())
 }
 
 fn assert_cache_agrees_with_project(

@@ -20,11 +20,14 @@ use crate::id::{
 use crate::lint::{LintCode, LintFinding};
 use crate::methodology::{
     AttackPotential, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
-    Level, Methodology, Property, ThreatCategory,
+    Level, Methodology, Property, RiskLevel, ThreatCategory,
 };
 use crate::op::Op;
-use crate::paths::AttackPath;
+use crate::paths::{AttackPath, ChokePoint};
 use crate::provenance::Provenance;
+use crate::sensitivity::{
+    FeasibilityTippingPoint, ImpactTippingPoint, StepTippingPoint, ThreatSensitivity,
+};
 use crate::threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
 use crate::tree::{AttackTree, MAX_ATTACK_TREE_NODES, Node};
 
@@ -247,6 +250,32 @@ fn row_count(row: &[PropertyCount], p: Property) -> u32 {
         .ok()
         .and_then(|i| row.get(i))
         .map_or(0, |c| c.threats)
+}
+
+fn adjacent_feasibility(cur: FeasibilityLevel, count: usize) -> [Option<FeasibilityLevel>; 2] {
+    let idx = cur.index();
+    [
+        idx.checked_sub(1)
+            .and_then(|prev| u8::try_from(prev).ok())
+            .map(FeasibilityLevel::new),
+        idx.checked_add(1)
+            .filter(|&next| next < count)
+            .and_then(|next| u8::try_from(next).ok())
+            .map(FeasibilityLevel::new),
+    ]
+}
+
+fn adjacent_impact(cur: Level, count: usize) -> [Option<Level>; 2] {
+    let idx = cur.index();
+    [
+        idx.checked_sub(1)
+            .and_then(|prev| u8::try_from(prev).ok())
+            .map(Level::new),
+        idx.checked_add(1)
+            .filter(|&next| next < count)
+            .and_then(|next| u8::try_from(next).ok())
+            .map(Level::new),
+    ]
 }
 
 /// Counts the properties in `violates` in (`up`) or out of one sorted
@@ -2364,6 +2393,965 @@ impl Project {
             .id(tree_idx)
             .ok_or(ModelError::UnknownThreatScenario(id))?;
         self.top_k_residual_tree_paths(tree_id, k)
+    }
+
+    /// Evaluates attack tree `id` using inherent step feasibility ratings and
+    /// ranks its leaf steps by how many of the top-`k` easiest minimal attack
+    /// paths each one lies on (rule A4).
+    ///
+    /// Time O((V + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_tree`](Self::evaluate_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (med, high) = (
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, x, or_id, y, z) = (
+    ///     NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7(),
+    /// );
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::And, "Goal"))?;
+    /// let ix = tree.add_child(tree.root(), x, Node::step("X"))?;
+    /// let i_or = tree.add_child(tree.root(), or_id, Node::gate(GateKind::Or, "Or"))?;
+    /// tree.add_child(i_or, y, Node::step("Y"))?;
+    /// tree.add_child(i_or, z, Node::step("Z"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id,
+    ///     tree,
+    ///     step_feasibility: vec![(x, high), (y, med), (z, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let choke = project.tree_choke_points(tree_id, 2)?;
+    /// assert_eq!(choke[0].step(), ix);
+    /// assert_eq!(choke[0].path_count(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn tree_choke_points(
+        &self,
+        id: TreeId,
+        k: usize,
+    ) -> Result<Vec<ChokePoint<FeasibilityLevel>>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let eval = self.evaluate_tree(id)?;
+        Ok(eval.choke_points(&entry.tree, k).unwrap_or_default())
+    }
+
+    /// Evaluates attack tree `id` using residual step feasibility ratings and
+    /// ranks its leaf steps by how many of the top-`k` easiest residual
+    /// minimal attack paths each one lies on (rule A4).
+    ///
+    /// Time O((V * m + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_tree`](Self::evaluate_residual_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ControlId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (very_low, med, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no level")?,
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, obd, ota) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Compromise"))?;
+    /// tree.add_child(tree.root(), obd, Node::step("OBD"))?;
+    /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "Disable OBD".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: obd, control: ctrl, feasibility: Some(very_low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let choke = project.residual_tree_choke_points(tree_id, 1)?;
+    /// assert_eq!(choke.len(), 1);
+    /// assert_eq!(choke[0].step(), i_ota);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn residual_tree_choke_points(
+        &self,
+        id: TreeId,
+        k: usize,
+    ) -> Result<Vec<ChokePoint<FeasibilityLevel>>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let eval = self.evaluate_residual_tree(id)?;
+        Ok(eval.choke_points(&entry.tree, k).unwrap_or_default())
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using inherent
+    /// step feasibility ratings and ranks its leaf steps by how many of the
+    /// top-`k` easiest minimal attack paths each one lies on (rule A4).
+    ///
+    /// Time O(log n + (V + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_threat`](Self::evaluate_threat).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let med = m.feasibility_level("medium").ok_or("no level")?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Step"))?,
+    ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let choke = project.threat_choke_points(threat, 5)?;
+    /// assert_eq!(choke.len(), 1);
+    /// assert_eq!(choke[0].path_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn threat_choke_points(
+        &self,
+        id: ThreatId,
+        k: usize,
+    ) -> Result<Vec<ChokePoint<FeasibilityLevel>>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.tree_choke_points(tree_id, k)
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using residual
+    /// step feasibility ratings and ranks its leaf steps by how many of the
+    /// top-`k` easiest residual minimal attack paths each one lies on (rule A4).
+    ///
+    /// Time O(log n + (V * m + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_threat`](Self::evaluate_residual_threat).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, ControlId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let (low, high) = (
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay"))?,
+    ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "SecOC".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let choke = project.residual_threat_choke_points(threat, 5)?;
+    /// assert_eq!(choke.len(), 1);
+    /// assert_eq!(*choke[0].easiest_path_feasibility(), low);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn residual_threat_choke_points(
+        &self,
+        id: ThreatId,
+        k: usize,
+    ) -> Result<Vec<ChokePoint<FeasibilityLevel>>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.residual_tree_choke_points(tree_id, k)
+    }
+
+    /// Evaluates attack tree `id` using inherent step feasibility ratings and
+    /// returns a greedy hitting set of leaf steps covering all of the top-`k`
+    /// easiest minimal attack paths (rule A4; see
+    /// [`Evaluation::top_k_hitting_set`]).
+    ///
+    /// Time O((V + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_tree`](Self::evaluate_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let high = m.feasibility_level("high").ok_or("no level")?;
+    /// let (root, x, y) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::And, "Goal"))?;
+    /// let ix = tree.add_child(tree.root(), x, Node::step("X"))?;
+    /// tree.add_child(tree.root(), y, Node::step("Y"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(x, high), (y, high)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.tree_hitting_set(tree_id, 5)?, vec![ix]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn tree_hitting_set(&self, id: TreeId, k: usize) -> Result<Vec<NodeIdx>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let eval = self.evaluate_tree(id)?;
+        Ok(eval.top_k_hitting_set(&entry.tree, k).unwrap_or_default())
+    }
+
+    /// Evaluates attack tree `id` using residual step feasibility ratings and
+    /// returns a greedy hitting set of leaf steps covering all of the top-`k`
+    /// easiest residual minimal attack paths (rule A4).
+    ///
+    /// Time O((V * m + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_tree`](Self::evaluate_residual_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ControlId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (very_low, med, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no level")?,
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, obd, ota) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Compromise"))?;
+    /// tree.add_child(tree.root(), obd, Node::step("OBD"))?;
+    /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "Disable OBD".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: obd, control: ctrl, feasibility: Some(very_low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.residual_tree_hitting_set(tree_id, 1)?, vec![i_ota]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn residual_tree_hitting_set(
+        &self,
+        id: TreeId,
+        k: usize,
+    ) -> Result<Vec<NodeIdx>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let eval = self.evaluate_residual_tree(id)?;
+        Ok(eval.top_k_hitting_set(&entry.tree, k).unwrap_or_default())
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using inherent
+    /// step feasibility ratings and returns a greedy hitting set of leaf steps
+    /// covering all of the top-`k` easiest minimal attack paths (rule A4).
+    ///
+    /// Time O(log n + (V + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_threat`](Self::evaluate_threat).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let tree = AttackTree::new(step, Node::step("Step"))?;
+    /// let root_idx = tree.root();
+    /// let med = m.feasibility_level("medium").ok_or("no level")?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(step, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.threat_hitting_set(threat, 5)?, vec![root_idx]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn threat_hitting_set(&self, id: ThreatId, k: usize) -> Result<Vec<NodeIdx>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.tree_hitting_set(tree_id, k)
+    }
+
+    /// Evaluates the attack tree linked to threat scenario `id` using residual
+    /// step feasibility ratings and returns a greedy hitting set of leaf steps
+    /// covering all of the top-`k` easiest residual minimal attack paths
+    /// (rule A4).
+    ///
+    /// Time O(log n + (V * m + E) + k * V * (V + E) * log(k * d)), space
+    /// O(V + k * d * V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_threat`](Self::evaluate_residual_threat).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, ControlId, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let (low, high) = (
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// let tree = AttackTree::new(step, Node::step("Replay"))?;
+    /// let root_idx = tree.root();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "SecOC".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.residual_threat_hitting_set(threat, 5)?, vec![root_idx]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn residual_threat_hitting_set(
+        &self,
+        id: ThreatId,
+        k: usize,
+    ) -> Result<Vec<NodeIdx>, ModelError> {
+        let t = self.threat_ref(id)?;
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.residual_tree_hitting_set(tree_id, k)
+    }
+
+    /// Identifies every leaf step of attack tree `id` where a $\pm 1$ move on
+    /// the methodology's feasibility scale changes the tree's inherent root
+    /// feasibility.
+    ///
+    /// Uses [`TreeEvalCache`] so each candidate $\pm 1$ perturbation
+    /// recomputes only the dirty ancestors of that step in
+    /// $O(\text{depth} \times \text{fan-out})$ time (rule A1).
+    ///
+    /// Time O((V + E) + S * depth * fan-out) where `S <= V` is the number of
+    /// leaf steps, space O(V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_tree`](Self::evaluate_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (low, med, high) = (
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, s1, s2) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Goal"))?;
+    /// tree.add_child(tree.root(), s1, Node::step("Hard"))?;
+    /// tree.add_child(tree.root(), s2, Node::step("Dominant"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(s1, low), (s2, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let tips = project.tree_tipping_points(tree_id)?;
+    /// // Only `s2` (medium) is a tipping point: moving it to `low` or `high` changes the root.
+    /// assert_eq!(tips.len(), 2);
+    /// assert!(tips.iter().all(|t| t.node() == s2));
+    /// assert_eq!((tips[0].to_step(), tips[0].to_root()), (low, low));
+    /// assert_eq!((tips[1].to_step(), tips[1].to_root()), (high, high));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn tree_tipping_points(&self, id: TreeId) -> Result<Vec<StepTippingPoint>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let (_, tips) = self.entry_tipping_points(entry, false)?;
+        Ok(tips)
+    }
+
+    /// Identifies every leaf step of attack tree `id` where a $\pm 1$ move on
+    /// the methodology's feasibility scale from the step's effective residual
+    /// feasibility changes the tree's residual root feasibility.
+    ///
+    /// Time O((V * m + E) + S * depth * fan-out * m), space O(V).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_tree`](Self::evaluate_residual_tree).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ControlId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance,
+    /// #     TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (very_low, low, med, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no level")?,
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, obd, ota) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Compromise"))?;
+    /// tree.add_child(tree.root(), obd, Node::step("OBD"))?;
+    /// tree.add_child(tree.root(), ota, Node::step("OTA"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "Disable OBD".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: obd, control: ctrl, feasibility: Some(very_low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// // Residually, `ota` (medium) dominates `obd` (very-low), so `ota` is the tipping point.
+    /// let tips = project.residual_tree_tipping_points(tree_id)?;
+    /// assert_eq!(tips.len(), 2);
+    /// assert!(tips.iter().all(|t| t.node() == ota));
+    /// assert_eq!((tips[0].to_step(), tips[0].to_root()), (low, low));
+    /// assert_eq!((tips[1].to_step(), tips[1].to_root()), (high, high));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn residual_tree_tipping_points(
+        &self,
+        id: TreeId,
+    ) -> Result<Vec<StepTippingPoint>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        let (_, tips) = self.entry_tipping_points(entry, true)?;
+        Ok(tips)
+    }
+
+    /// Computes the inherent single-step ($\pm 1$) tipping-point sensitivity
+    /// of threat scenario `id` across its feasibility source (linked attack
+    /// tree leaf steps or direct threat feasibility) and all rated impact
+    /// categories on its linked damage scenarios.
+    ///
+    /// Time O(log n + (V + E) + S * (depth * fan-out + d * c) + d * c), space
+    /// O(V + S + d * c).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_risk`](Self::evaluate_risk).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, DamageId, GateKind, Methodology, Node, NodeId, Op, Project,
+    /// #     Provenance, ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let safety = m.impact_category("safety").ok_or("no category")?;
+    /// let major = m.level(safety, "major").ok_or("no level")?;
+    /// let damage = DamageId::new_v7();
+    /// project.apply(Op::AddDamageScenario {
+    ///     id: damage, name: "Brake loss".into(), impacts: vec![(safety, major)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Spoof".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
+    /// })?;
+    /// let (med, high) = (
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let (root, s1, s2) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::And, "Goal"))?;
+    /// tree.add_child(tree.root(), s1, Node::step("Bottleneck"))?;
+    /// tree.add_child(tree.root(), s2, Node::step("Easy"))?;
+    /// let tree_id = TreeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(s1, med), (s2, high)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let sens = project.threat_sensitivity(threat)?;
+    /// assert_eq!(sens.max_risk(), m.risk_level("r3"));
+    /// assert!(!sens.is_stable());
+    /// assert_eq!(sens.feasibility_tipping_points().len(), 2);
+    /// assert_eq!(sens.impact_tipping_points().len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn threat_sensitivity(&self, id: ThreatId) -> Result<ThreatSensitivity, ModelError> {
+        self.threat_sensitivity_inner(id, false)
+    }
+
+    /// Computes the residual single-step ($\pm 1$) tipping-point sensitivity
+    /// of threat scenario `id`, accounting for all [`StepMitigation`]s on its
+    /// linked attack tree.
+    ///
+    /// Time O(log n + (V * m + E) + S * (depth * fan-out * m + d * c) + d * c),
+    /// space O(V + S + d * c).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`evaluate_residual_risk`](Self::evaluate_residual_risk).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, AttackTree, ControlId, DamageId, Methodology, Node, NodeId, Op, Project,
+    /// #     Provenance, ThreatId, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let safety = m.impact_category("safety").ok_or("no category")?;
+    /// let severe = m.level(safety, "severe").ok_or("no level")?;
+    /// let damage = DamageId::new_v7();
+    /// project.apply(Op::AddDamageScenario {
+    ///     id: damage, name: "Crash".into(), impacts: vec![(safety, severe)],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Spoof".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![damage], provenance: Provenance::default(),
+    /// })?;
+    /// let (very_low, low, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no level")?,
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let tree_id = TreeId::new_v7();
+    /// let step = NodeId::new_v7();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
+    ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatAttackTree {
+    ///     threat, tree: Some(tree_id), provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "SecOC".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(very_low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let sens = project.residual_threat_sensitivity(threat)?;
+    /// assert_eq!(sens.feasibility(), very_low);
+    /// assert_eq!(sens.max_risk(), m.risk_level("r2"));
+    /// assert_eq!(sens.feasibility_tipping_points().len(), 1);
+    /// assert_eq!(sens.feasibility_tipping_points()[0].to_step_feasibility(), low);
+    /// assert_eq!(sens.feasibility_tipping_points()[0].to_risk(), m.risk_level("r3").ok_or("no r3")?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn residual_threat_sensitivity(
+        &self,
+        id: ThreatId,
+    ) -> Result<ThreatSensitivity, ModelError> {
+        self.threat_sensitivity_inner(id, true)
+    }
+
+    fn entry_tipping_points(
+        &self,
+        entry: &TreeEntry,
+        residual: bool,
+    ) -> Result<(FeasibilityLevel, Vec<StepTippingPoint>), ModelError> {
+        let domain = MaxMin::<FeasibilityLevel>::new();
+        let mut cache = TreeEvalCache::new(&entry.tree, &domain, |idx| {
+            if residual {
+                entry.residual_step_feasibility(&self.methodology, idx)
+            } else {
+                entry.effective_step_feasibility(&self.methodology, idx)
+            }
+        })?;
+        let baseline_root = *cache.evaluation().root_value();
+        let feas_count = self.methodology.feasibility_levels().len();
+        let mut out = Vec::new();
+        for (step_idx, node_id, node) in entry.tree.iter() {
+            if !matches!(node, Node::Step { .. }) {
+                continue;
+            }
+            let Some(&from_step) = cache.evaluation().get(step_idx) else {
+                continue;
+            };
+            let neighbors = adjacent_feasibility(from_step, feas_count);
+            for to_step in neighbors.into_iter().flatten() {
+                cache.recompute_steps(&entry.tree, &domain, [step_idx], |idx| {
+                    if idx == step_idx {
+                        Some(to_step)
+                    } else if residual {
+                        entry.residual_step_feasibility(&self.methodology, idx)
+                    } else {
+                        entry.effective_step_feasibility(&self.methodology, idx)
+                    }
+                })?;
+                let to_root = *cache.evaluation().root_value();
+                cache.recompute_steps(&entry.tree, &domain, [step_idx], |idx| {
+                    if idx == step_idx {
+                        Some(from_step)
+                    } else if residual {
+                        entry.residual_step_feasibility(&self.methodology, idx)
+                    } else {
+                        entry.effective_step_feasibility(&self.methodology, idx)
+                    }
+                })?;
+                if to_root != baseline_root {
+                    out.push(StepTippingPoint {
+                        step: step_idx,
+                        node: node_id,
+                        from_step,
+                        to_step,
+                        from_root: baseline_root,
+                        to_root,
+                    });
+                }
+            }
+        }
+        Ok((baseline_root, out))
+    }
+
+    fn max_risk_for_feasibility(
+        &self,
+        t: &ThreatScenario,
+        feasibility: FeasibilityLevel,
+    ) -> Option<RiskLevel> {
+        let mut best: Option<RiskLevel> = None;
+        for &damage_idx in &t.damages {
+            let Some(damage) = self.damages.get(damage_idx) else {
+                continue;
+            };
+            for (category, impact) in damage.impacts() {
+                let Some(impact) = impact else { continue };
+                let Some(risk) = self.methodology.risk_for(category, impact, feasibility) else {
+                    continue;
+                };
+                if best.is_none_or(|b| risk > b) {
+                    best = Some(risk);
+                }
+            }
+        }
+        best
+    }
+
+    fn threat_sensitivity_inner(
+        &self,
+        id: ThreatId,
+        residual: bool,
+    ) -> Result<ThreatSensitivity, ModelError> {
+        let t = self.threat_ref(id)?;
+        let feas_count = self.methodology.feasibility_levels().len();
+        let mut feasibility_tipping_points = Vec::new();
+
+        let (baseline_feasibility, baseline_risk) = if let Some(tree_idx) = t.attack_tree {
+            let entry = self
+                .trees
+                .get(tree_idx)
+                .ok_or(ModelError::UnknownThreatScenario(id))?;
+            let (base_f, step_tips) = self.entry_tipping_points(entry, residual)?;
+            let base_r = self.max_risk_for_feasibility(t, base_f);
+            if let Some(from_risk) = base_r {
+                for st in step_tips {
+                    if let Some(to_risk) = self.max_risk_for_feasibility(t, st.to_root)
+                        && to_risk != from_risk
+                    {
+                        feasibility_tipping_points.push(FeasibilityTippingPoint {
+                            step: Some(st.step),
+                            node: Some(st.node),
+                            from_step_feasibility: st.from_step,
+                            to_step_feasibility: st.to_step,
+                            from_threat_feasibility: st.from_root,
+                            to_threat_feasibility: st.to_root,
+                            from_risk,
+                            to_risk,
+                        });
+                    }
+                }
+            }
+            (base_f, base_r)
+        } else {
+            let base_f = t.direct_feasibility.ok_or(ModelError::NoAttackTree(id))?;
+            let base_r = self.max_risk_for_feasibility(t, base_f);
+            if let Some(from_risk) = base_r {
+                let neighbors = adjacent_feasibility(base_f, feas_count);
+                for to_f in neighbors.into_iter().flatten() {
+                    if let Some(to_risk) = self.max_risk_for_feasibility(t, to_f)
+                        && to_risk != from_risk
+                    {
+                        feasibility_tipping_points.push(FeasibilityTippingPoint {
+                            step: None,
+                            node: None,
+                            from_step_feasibility: base_f,
+                            to_step_feasibility: to_f,
+                            from_threat_feasibility: base_f,
+                            to_threat_feasibility: to_f,
+                            from_risk,
+                            to_risk,
+                        });
+                    }
+                }
+            }
+            (base_f, base_r)
+        };
+
+        let impact_tipping_points = baseline_risk
+            .map(|from_risk| self.impact_tipping_points_for(t, baseline_feasibility, from_risk))
+            .unwrap_or_default();
+
+        Ok(ThreatSensitivity {
+            feasibility: baseline_feasibility,
+            max_risk: baseline_risk,
+            feasibility_tipping_points,
+            impact_tipping_points,
+        })
+    }
+
+    fn impact_tipping_points_for(
+        &self,
+        t: &ThreatScenario,
+        baseline_feasibility: FeasibilityLevel,
+        from_risk: RiskLevel,
+    ) -> Vec<ImpactTippingPoint> {
+        let mut rated_entries = Vec::new();
+        let mut max1: Option<RiskLevel> = None;
+        let mut max1_count = 0_usize;
+        let mut max2: Option<RiskLevel> = None;
+        for &damage_idx in &t.damages {
+            let (Some(damage_id), Some(damage)) =
+                (self.damages.id(damage_idx), self.damages.get(damage_idx))
+            else {
+                continue;
+            };
+            for (category, impact) in damage.impacts() {
+                let Some(from_impact) = impact else { continue };
+                let Some(risk) =
+                    self.methodology
+                        .risk_for(category, from_impact, baseline_feasibility)
+                else {
+                    continue;
+                };
+                match max1 {
+                    None => {
+                        max1 = Some(risk);
+                        max1_count = 1;
+                    }
+                    Some(m1) if risk > m1 => {
+                        max2 = Some(m1);
+                        max1 = Some(risk);
+                        max1_count = 1;
+                    }
+                    Some(m1) if risk == m1 => {
+                        max1_count += 1;
+                    }
+                    Some(_) => {
+                        if max2.is_none_or(|m2| risk > m2) {
+                            max2 = Some(risk);
+                        }
+                    }
+                }
+                rated_entries.push((damage_id, category, from_impact, risk));
+            }
+        }
+
+        let mut out = Vec::new();
+        for (damage_id, category, from_impact, entry_risk) in rated_entries {
+            let other_max = if Some(entry_risk) == max1 && max1_count == 1 {
+                max2
+            } else {
+                max1
+            };
+            let cat_count = self.methodology.level_count(category);
+            let neighbors = adjacent_impact(from_impact, cat_count);
+            for to_impact in neighbors.into_iter().flatten() {
+                let Some(new_entry_risk) =
+                    self.methodology
+                        .risk_for(category, to_impact, baseline_feasibility)
+                else {
+                    continue;
+                };
+                let to_risk = other_max.map_or(new_entry_risk, |other| other.max(new_entry_risk));
+                if to_risk != from_risk {
+                    out.push(ImpactTippingPoint {
+                        damage: damage_id,
+                        category,
+                        from_impact,
+                        to_impact,
+                        from_risk,
+                        to_risk,
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Combines `feasibility` with every rated `(damage, category, impact)`

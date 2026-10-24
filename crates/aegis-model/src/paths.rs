@@ -196,6 +196,124 @@ impl<V> AttackPath<V> {
     }
 }
 
+/// One leaf step's coverage across the top-$k$ easiest attack paths of a
+/// tree, produced by [`Evaluation::choke_points`](crate::Evaluation::choke_points).
+///
+/// A step that appears on many of the easiest paths is a **choke point**:
+/// a control attached there (via
+/// [`Op::SetStepMitigation`](crate::Op::SetStepMitigation)) removes more of
+/// the attacker's best options than the same control anywhere else. Holds
+/// only [`NodeIdx`] indices and path values, never user-supplied labels or
+/// names (rule R6).
+///
+/// ```
+/// use aegis_model::{evaluate, AttackTree, GateKind, MaxMin, Node, NodeId};
+///
+/// # fn main() -> Result<(), aegis_model::ModelError> {
+/// // root = AND(x, OR(y, z)): `x` lies on both of the two easiest paths.
+/// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::And, "root"))?;
+/// let x = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("x"))?;
+/// let or = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::Or, "or"))?;
+/// let y = tree.add_child(or, NodeId::new_v7(), Node::step("y"))?;
+/// let z = tree.add_child(or, NodeId::new_v7(), Node::step("z"))?;
+/// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |i| {
+///     Some(if i == y { 2 } else if i == z { 3 } else { 4 })
+/// })?;
+/// let choke = eval.choke_points(&tree, 2).ok_or(aegis_model::ModelError::UnknownNode(x))?;
+/// assert_eq!(choke[0].step(), x);
+/// assert_eq!(choke[0].path_count(), 2);
+/// assert_eq!(choke[0].bottleneck_count(), 0);
+/// assert_eq!(*choke[0].easiest_path_feasibility(), 3);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChokePoint<V> {
+    pub(crate) step: NodeIdx,
+    pub(crate) path_count: usize,
+    pub(crate) bottleneck_count: usize,
+    pub(crate) easiest_path_feasibility: V,
+}
+
+impl<V> ChokePoint<V> {
+    /// Returns the covered leaf step. Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("only"))?;
+    /// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |_| Some(4))?;
+    /// let choke = eval.choke_points(&tree, 1).ok_or(aegis_model::ModelError::UnknownNode(tree.root()))?;
+    /// assert_eq!(choke[0].step(), tree.root());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn step(&self) -> NodeIdx {
+        self.step
+    }
+
+    /// Returns how many of the top-$k$ paths contain
+    /// [`step`](Self::step) (always `>= 1`). Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("only"))?;
+    /// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |_| Some(4))?;
+    /// let choke = eval.choke_points(&tree, 1).ok_or(aegis_model::ModelError::UnknownNode(tree.root()))?;
+    /// assert_eq!(choke[0].path_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn path_count(&self) -> usize {
+        self.path_count
+    }
+
+    /// Returns how many of the top-$k$ paths have
+    /// [`step`](Self::step) as their bottleneck (the step whose value equals
+    /// the path's feasibility). Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("only"))?;
+    /// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |_| Some(4))?;
+    /// let choke = eval.choke_points(&tree, 1).ok_or(aegis_model::ModelError::UnknownNode(tree.root()))?;
+    /// assert_eq!(choke[0].bottleneck_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn bottleneck_count(&self) -> usize {
+        self.bottleneck_count
+    }
+
+    /// Returns the feasibility of the easiest (first-enumerated) top-$k$ path
+    /// that contains [`step`](Self::step), the most the attacker keeps while
+    /// `step` stays at its current value. Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("only"))?;
+    /// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |_| Some(4))?;
+    /// let choke = eval.choke_points(&tree, 1).ok_or(aegis_model::ModelError::UnknownNode(tree.root()))?;
+    /// assert_eq!(*choke[0].easiest_path_feasibility(), 4);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn easiest_path_feasibility(&self) -> &V {
+        &self.easiest_path_feasibility
+    }
+}
+
 /// Partial or complete attack path state in the best-first search heap.
 #[derive(Clone, Debug)]
 struct SearchState<V> {
@@ -617,5 +735,82 @@ mod tests {
         t3.add_child(t3.root(), node_id(2), Node::step("s1"))
             .expect("s1");
         assert!(eval.attack_paths(&t3).is_none());
+        assert!(eval.choke_points(&t2, 3).is_none());
+        assert!(eval.choke_points(&t3, 3).is_none());
+        assert!(eval.top_k_hitting_set(&t2, 3).is_none());
+        assert!(eval.top_k_hitting_set(&t3, 3).is_none());
+    }
+
+    #[test]
+    fn choke_points_and_hitting_set_rank_shared_steps_and_cover_paths() {
+        // root = OR(AND(s_shared, s_a), AND(s_shared, s_b), s_solo)
+        // Values: s_shared = 3, s_a = 4, s_b = 2, s_solo = 1
+        // Minimal paths:
+        //   1. [s_shared, s_a] -> feasibility 3, bottleneck s_shared
+        //   2. [s_shared, s_b] -> feasibility 2, bottleneck s_b
+        //   3. [s_solo]        -> feasibility 1, bottleneck s_solo
+        let mut tree = AttackTree::new(node_id(1), Node::gate(GateKind::Or, "root")).expect("ok");
+        let root = tree.root();
+        let g1 = tree
+            .add_child(root, node_id(2), Node::gate(GateKind::And, "g1"))
+            .expect("g1");
+        let g2 = tree
+            .add_child(root, node_id(3), Node::gate(GateKind::And, "g2"))
+            .expect("g2");
+        let s_shared = tree
+            .add_child(g1, node_id(4), Node::step("shared"))
+            .expect("shared");
+        let s_a = tree.add_child(g1, node_id(5), Node::step("a")).expect("a");
+        tree.link(g2, s_shared).expect("link shared");
+        let s_b = tree.add_child(g2, node_id(6), Node::step("b")).expect("b");
+        let s_solo = tree
+            .add_child(root, node_id(7), Node::step("solo"))
+            .expect("solo");
+
+        let eval = evaluate(&tree, &MaxMin::<u8>::new(), |i| {
+            Some(if i == s_shared {
+                3
+            } else if i == s_a {
+                4
+            } else if i == s_b {
+                2
+            } else {
+                u8::from(i == s_solo)
+            })
+        })
+        .expect("eval");
+
+        assert_eq!(eval.choke_points(&tree, 0), Some(vec![]));
+        assert_eq!(eval.top_k_hitting_set(&tree, 0), Some(vec![]));
+
+        let cp = eval.choke_points(&tree, 3).expect("choke points");
+        assert_eq!(cp.len(), 4);
+        // #1: s_shared (in 2 paths, bottleneck in 1, easiest path feasibility = 3)
+        assert_eq!(cp[0].step(), s_shared);
+        assert_eq!(cp[0].path_count(), 2);
+        assert_eq!(cp[0].bottleneck_count(), 1);
+        assert_eq!(*cp[0].easiest_path_feasibility(), 3);
+        // #2 and #3: s_b (1 path, 1 bottleneck, feas 2) and s_solo (1 path, 1 bottleneck, feas 1)
+        // Ordered by bottleneck_count desc (tied at 1), then step asc (s_b < s_solo).
+        assert_eq!(cp[1].step(), s_b);
+        assert_eq!(cp[1].path_count(), 1);
+        assert_eq!(cp[1].bottleneck_count(), 1);
+        assert_eq!(*cp[1].easiest_path_feasibility(), 2);
+        assert_eq!(cp[2].step(), s_solo);
+        assert_eq!(cp[2].path_count(), 1);
+        assert_eq!(cp[2].bottleneck_count(), 1);
+        assert_eq!(*cp[2].easiest_path_feasibility(), 1);
+        // #4: s_a (1 path, 0 bottlenecks, feas 3)
+        assert_eq!(cp[3].step(), s_a);
+        assert_eq!(cp[3].path_count(), 1);
+        assert_eq!(cp[3].bottleneck_count(), 0);
+        assert_eq!(*cp[3].easiest_path_feasibility(), 3);
+
+        // Hitting set for top 2 paths needs only [s_shared]; for top 3 needs [s_shared, s_solo].
+        assert_eq!(eval.top_k_hitting_set(&tree, 2), Some(vec![s_shared]));
+        assert_eq!(
+            eval.top_k_hitting_set(&tree, 3),
+            Some(vec![s_shared, s_solo])
+        );
     }
 }
