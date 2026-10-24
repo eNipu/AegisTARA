@@ -440,6 +440,22 @@
       "history": [],
       "decision": "APPROVE",
       "updated": "2026-10-26T16:00:00Z"
+    },
+    {
+      "id": "026-choke-points-and-sensitivity",
+      "title": "Choke points, hitting set, and sensitivity analysis in aegis-model",
+      "branch": "factory/026-choke-points-and-sensitivity",
+      "stage": "merged",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "APPROVE",
+      "updated": "2026-10-26T18:00:00Z"
     }
   ]
 }

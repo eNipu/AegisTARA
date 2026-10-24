@@ -5247,3 +5247,464 @@ fn project_eval_cache_incremental_updates_and_counters() {
     assert_eq!(cache.recomputed_nodes(), 0);
     assert_eq!(cache.recomputed_threats(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Job 026: Choke points, hitting set, and tipping-point sensitivity.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn choke_points_and_hitting_set_on_project() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let (very_low, low, med, high) = (
+        feas(&m, "very-low"),
+        feas(&m, "low"),
+        feas(&m, "medium"),
+        feas(&m, "high"),
+    );
+
+    let asset = asset_id(1);
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: asset,
+            name: name(SENTINEL),
+            properties: props(&m, &["integrity"]),
+            provenance: Provenance::default(),
+        },
+    );
+    let t1 = threat_id(10);
+    let t_no_tree = threat_id(11);
+    for id in [t1, t_no_tree] {
+        ok(
+            &mut p,
+            Op::AddThreatScenario {
+                id,
+                name: name(SENTINEL),
+                asset,
+                category: threat_cat(&m, "tampering"),
+                catalog_refs: vec![],
+                damages: vec![],
+                provenance: Provenance::default(),
+            },
+        );
+    }
+
+    // Build shared-step DAG: OR(AND(s_shared, s_obd), AND(s_shared, s_ota), s_phys)
+    let (n_root, n_g1, n_g2, n_shared, n_obd, n_ota, n_phys) = (
+        node_id(1),
+        node_id(2),
+        node_id(3),
+        node_id(4),
+        node_id(5),
+        node_id(6),
+        node_id(7),
+    );
+    let mut tree = AttackTree::new(n_root, Node::gate(GateKind::Or, SENTINEL)).expect("root");
+    let g1 = tree
+        .add_child(tree.root(), n_g1, Node::gate(GateKind::And, SENTINEL))
+        .expect("g1");
+    let g2 = tree
+        .add_child(tree.root(), n_g2, Node::gate(GateKind::And, SENTINEL))
+        .expect("g2");
+    let i_shared = tree
+        .add_child(g1, n_shared, Node::step(SENTINEL))
+        .expect("shared");
+    let _i_obd = tree
+        .add_child(g1, n_obd, Node::step(SENTINEL))
+        .expect("obd");
+    tree.link(g2, i_shared).expect("link shared");
+    let _i_ota = tree
+        .add_child(g2, n_ota, Node::step(SENTINEL))
+        .expect("ota");
+    let i_phys = tree
+        .add_child(tree.root(), n_phys, Node::step(SENTINEL))
+        .expect("phys");
+
+    let tr = tree_id(20);
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr,
+            tree,
+            step_feasibility: vec![(n_shared, high), (n_obd, high), (n_ota, med), (n_phys, low)],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t1,
+            tree: Some(tr),
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Inherent top-3 paths: [shared, obd] (high), [shared, ota] (med), [phys] (low).
+    let cp = p.threat_choke_points(t1, 3).expect("choke points");
+    assert_eq!(p.tree_choke_points(tr, 3).expect("tree cp"), cp);
+    assert_eq!(cp.len(), 4);
+    assert_eq!(cp[0].step(), i_shared);
+    assert_eq!(cp[0].path_count(), 2);
+    assert_eq!(cp[0].bottleneck_count(), 1);
+    assert_eq!(*cp[0].easiest_path_feasibility(), high);
+    // Rule R6: Debug contains no user-supplied names/labels.
+    assert!(!format!("{cp:?}").contains(SENTINEL));
+
+    // Hitting set: top-2 paths covered by [i_shared], top-3 covered by [i_shared, i_phys].
+    assert_eq!(p.threat_hitting_set(t1, 2), Ok(vec![i_shared]));
+    assert_eq!(p.tree_hitting_set(tr, 2), Ok(vec![i_shared]));
+    assert_eq!(p.threat_hitting_set(t1, 3), Ok(vec![i_shared, i_phys]));
+    assert_eq!(p.tree_hitting_set(tr, 3), Ok(vec![i_shared, i_phys]));
+
+    // Mitigate `n_shared` to `very-low`: now top-1 path is [i_phys] (low)!
+    let ctrl = control_id(30);
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: name(SENTINEL),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: n_shared,
+            control: ctrl,
+            feasibility: Some(very_low),
+            provenance: Provenance::default(),
+        },
+    );
+
+    let res_cp1 = p.residual_threat_choke_points(t1, 1).expect("res cp 1");
+    assert_eq!(
+        p.residual_tree_choke_points(tr, 1).expect("res tree cp 1"),
+        res_cp1
+    );
+    assert_eq!(res_cp1.len(), 1);
+    assert_eq!(res_cp1[0].step(), i_phys);
+    assert_eq!(*res_cp1[0].easiest_path_feasibility(), low);
+    assert_eq!(p.residual_threat_hitting_set(t1, 1), Ok(vec![i_phys]));
+    assert_eq!(p.residual_tree_hitting_set(tr, 1), Ok(vec![i_phys]));
+
+    // Error paths.
+    let missing_tree = tree_id(99);
+    let missing_threat = threat_id(99);
+    assert_eq!(
+        p.tree_choke_points(missing_tree, 1),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.residual_tree_choke_points(missing_tree, 1),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.threat_choke_points(missing_threat, 1),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+    assert_eq!(
+        p.residual_threat_choke_points(missing_threat, 1),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+    assert_eq!(
+        p.threat_choke_points(t_no_tree, 1),
+        Err(ModelError::NoAttackTree(t_no_tree))
+    );
+    assert_eq!(
+        p.residual_threat_choke_points(t_no_tree, 1),
+        Err(ModelError::NoAttackTree(t_no_tree))
+    );
+    assert_eq!(
+        p.tree_hitting_set(missing_tree, 1),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.residual_tree_hitting_set(missing_tree, 1),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.threat_hitting_set(missing_threat, 1),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+    assert_eq!(
+        p.residual_threat_hitting_set(missing_threat, 1),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+    assert_eq!(
+        p.threat_hitting_set(t_no_tree, 1),
+        Err(ModelError::NoAttackTree(t_no_tree))
+    );
+    assert_eq!(
+        p.residual_threat_hitting_set(t_no_tree, 1),
+        Err(ModelError::NoAttackTree(t_no_tree))
+    );
+}
+
+#[test]
+fn sensitivity_and_tipping_points_on_project() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let (very_low, low, med, high) = (
+        feas(&m, "very-low"),
+        feas(&m, "low"),
+        feas(&m, "medium"),
+        feas(&m, "high"),
+    );
+    let safety = cat(&m, "safety");
+    let financial = cat(&m, "financial");
+    let (neg, mod_lvl, maj, sev) = (
+        lvl(&m, safety, "negligible"),
+        lvl(&m, safety, "moderate"),
+        lvl(&m, safety, "major"),
+        lvl(&m, safety, "severe"),
+    );
+
+    let asset = asset_id(1);
+    ok(
+        &mut p,
+        Op::AddAsset {
+            id: asset,
+            name: name(SENTINEL),
+            properties: props(&m, &["integrity"]),
+            provenance: Provenance::default(),
+        },
+    );
+    let d1 = damage_id(2);
+    let d2 = damage_id(3);
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d1,
+            name: name(SENTINEL),
+            impacts: vec![(safety, maj)],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::AddDamageScenario {
+            id: d2,
+            name: name(SENTINEL),
+            impacts: vec![],
+            provenance: Provenance::default(),
+        },
+    );
+
+    let t_tree = threat_id(10);
+    let t_direct = threat_id(11);
+    let t_unrated = threat_id(12);
+    for id in [t_tree, t_direct, t_unrated] {
+        ok(
+            &mut p,
+            Op::AddThreatScenario {
+                id,
+                name: name(SENTINEL),
+                asset,
+                category: threat_cat(&m, "tampering"),
+                catalog_refs: vec![],
+                damages: vec![],
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    ok(
+        &mut p,
+        Op::LinkDamage {
+            threat: t_tree,
+            damage: d1,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::LinkDamage {
+            threat: t_direct,
+            damage: d1,
+            provenance: Provenance::default(),
+        },
+    );
+
+    // Tree: AND(s1=med, s2=high) => root = med.
+    // Perturbing s1 by -1 -> low (root becomes low); by +1 -> high (root becomes high).
+    // Perturbing s2 by -1 -> med (root stays med); by +1 -> none (at top of scale).
+    let (n_root, n_s1, n_s2) = (node_id(1), node_id(2), node_id(3));
+    let mut tree = AttackTree::new(n_root, Node::gate(GateKind::And, SENTINEL)).expect("root");
+    let i_s1 = tree
+        .add_child(tree.root(), n_s1, Node::step(SENTINEL))
+        .expect("s1");
+    let _i_s2 = tree
+        .add_child(tree.root(), n_s2, Node::step(SENTINEL))
+        .expect("s2");
+    let tr = tree_id(20);
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            id: tr,
+            tree,
+            step_feasibility: vec![(n_s1, med), (n_s2, high)],
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatAttackTree {
+            threat: t_tree,
+            tree: Some(tr),
+            provenance: Provenance::default(),
+        },
+    );
+
+    let tips = p.tree_tipping_points(tr).expect("tree tips");
+    assert_eq!(tips.len(), 2);
+    assert_eq!(tips[0].step(), i_s1);
+    assert_eq!(tips[0].node(), n_s1);
+    assert_eq!(tips[0].from_step(), med);
+    assert_eq!(tips[0].to_step(), low);
+    assert_eq!(tips[0].from_root(), med);
+    assert_eq!(tips[0].to_root(), low);
+    assert_eq!(tips[1].step(), i_s1);
+    assert_eq!(tips[1].to_step(), high);
+    assert_eq!(tips[1].to_root(), high);
+    assert!(!format!("{tips:?}").contains(SENTINEL));
+
+    // Threat sensitivity on tree-linked threat (d1: safety=major, feas=medium => risk=r3).
+    let sens = p.threat_sensitivity(t_tree).expect("sens");
+    assert_eq!(sens.feasibility(), med);
+    assert_eq!(sens.max_risk(), Some(risk(&m, "r3")));
+    assert!(!sens.is_stable());
+    assert_eq!(sens.feasibility_tipping_points().len(), 2);
+    assert_eq!(sens.feasibility_tipping_points()[0].step(), Some(i_s1));
+    assert_eq!(sens.feasibility_tipping_points()[0].node(), Some(n_s1));
+    assert_eq!(
+        sens.feasibility_tipping_points()[0].from_risk(),
+        risk(&m, "r3")
+    );
+    assert_eq!(
+        sens.feasibility_tipping_points()[0].to_risk(),
+        risk(&m, "r2")
+    );
+    assert_eq!(
+        sens.feasibility_tipping_points()[1].to_risk(),
+        risk(&m, "r4")
+    );
+    // Impact tipping points on d1 (safety=major at feas=medium: -1 -> moderate gives risk=r2, +1 -> severe gives risk=r4).
+    assert_eq!(sens.impact_tipping_points().len(), 2);
+    assert_eq!(sens.impact_tipping_points()[0].damage(), d1);
+    assert_eq!(sens.impact_tipping_points()[0].category(), safety);
+    assert_eq!(sens.impact_tipping_points()[0].from_impact(), maj);
+    assert_eq!(sens.impact_tipping_points()[0].to_impact(), mod_lvl);
+    assert_eq!(sens.impact_tipping_points()[0].to_risk(), risk(&m, "r2"));
+    assert_eq!(sens.impact_tipping_points()[1].to_impact(), sev);
+    assert_eq!(sens.impact_tipping_points()[1].to_risk(), risk(&m, "r4"));
+    assert!(!format!("{sens:?}").contains(SENTINEL));
+
+    // Mitigate s2 to `very-low`: now s2 is the sole bottleneck of AND(s1=med, s2=very_low)!
+    let ctrl = control_id(30);
+    ok(
+        &mut p,
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: name(SENTINEL),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepMitigation {
+            tree: tr,
+            node: n_s2,
+            control: ctrl,
+            feasibility: Some(very_low),
+            provenance: Provenance::default(),
+        },
+    );
+    let res_tips = p.residual_tree_tipping_points(tr).expect("res tips");
+    assert_eq!(res_tips.len(), 1);
+    assert_eq!(res_tips[0].node(), n_s2);
+    assert_eq!(res_tips[0].from_step(), very_low);
+    assert_eq!(res_tips[0].to_step(), low);
+    let res_sens = p.residual_threat_sensitivity(t_tree).expect("res sens");
+    assert_eq!(res_sens.feasibility(), very_low);
+    assert_eq!(res_sens.max_risk(), Some(risk(&m, "r1")));
+
+    // Direct feasibility threat: step and node are None on feasibility_tipping_points.
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t_direct,
+            level: Some(med),
+            provenance: Provenance::default(),
+        },
+    );
+    let direct_sens = p.threat_sensitivity(t_direct).expect("direct sens");
+    assert_eq!(direct_sens.feasibility_tipping_points().len(), 2);
+    assert_eq!(direct_sens.feasibility_tipping_points()[0].step(), None);
+    assert_eq!(direct_sens.feasibility_tipping_points()[0].node(), None);
+
+    // Tied deciding impact entries: link d2 with financial=major (also risk=r3 at feas=medium).
+    // Now lowering d1 or d2 alone by -1 keeps max_risk at r3 (no downward tipping point!),
+    // while raising either to severe raises max_risk to r4.
+    ok(
+        &mut p,
+        Op::SetImpact {
+            id: d2,
+            category: financial,
+            level: Some(lvl(&m, financial, "major")),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::LinkDamage {
+            threat: t_direct,
+            damage: d2,
+            provenance: Provenance::default(),
+        },
+    );
+    let tied_sens = p.threat_sensitivity(t_direct).expect("tied sens");
+    assert_eq!(tied_sens.impact_tipping_points().len(), 2);
+    for it in tied_sens.impact_tipping_points() {
+        assert_eq!(it.from_risk(), risk(&m, "r3"));
+        assert_eq!(it.to_risk(), risk(&m, "r4"));
+    }
+
+    // Threat with no rated damages: max_risk is None, tipping points are empty, is_stable is true.
+    ok(
+        &mut p,
+        Op::SetThreatFeasibility {
+            threat: t_unrated,
+            level: Some(neg_feas(&m)),
+            provenance: Provenance::default(),
+        },
+    );
+    let unrated_sens = p.threat_sensitivity(t_unrated).expect("unrated sens");
+    assert_eq!(unrated_sens.max_risk(), None);
+    assert!(unrated_sens.is_stable());
+    let _ = neg;
+
+    // Error cases.
+    let missing_tree = tree_id(99);
+    let missing_threat = threat_id(99);
+    assert_eq!(
+        p.tree_tipping_points(missing_tree),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.residual_tree_tipping_points(missing_tree),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+    assert_eq!(
+        p.threat_sensitivity(missing_threat),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+    assert_eq!(
+        p.residual_threat_sensitivity(missing_threat),
+        Err(ModelError::UnknownThreatScenario(missing_threat))
+    );
+}
+
+fn neg_feas(m: &Methodology) -> aegis_model::FeasibilityLevel {
+    feas(m, "very-low")
+}

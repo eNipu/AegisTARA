@@ -236,6 +236,7 @@ mod op;
 mod paths;
 mod project;
 mod provenance;
+mod sensitivity;
 mod store;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
@@ -270,9 +271,12 @@ pub use methodology::{
     ThreatCategoryDef,
 };
 pub use op::Op;
-pub use paths::{AttackPath, AttackPaths};
+pub use paths::{AttackPath, AttackPaths, ChokePoint};
 pub use project::{MAX_NAME_CHARS, Project, ProjectEvalCache};
 pub use provenance::{Provenance, ProvenanceSource};
+pub use sensitivity::{
+    FeasibilityTippingPoint, ImpactTippingPoint, StepTippingPoint, ThreatSensitivity,
+};
 pub use store::{
     Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
     MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,

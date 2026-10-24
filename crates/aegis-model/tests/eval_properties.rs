@@ -780,6 +780,59 @@ fn check_attack_paths(built: &Built, plan: &Plan) -> Result<(), TestCaseError> {
         let oracle = naive_minimal_cut_sets(tree, &leaves);
         prop_assert_eq!(yielded_sets, oracle);
     }
+
+    // Job 026: choke_points and top_k_hitting_set over top-k paths.
+    prop_assert_eq!(eval.choke_points(tree, 0), Some(vec![]));
+    prop_assert_eq!(eval.top_k_hitting_set(tree, 0), Some(vec![]));
+    for k in [1_usize, 3, 8] {
+        let top_k = eval
+            .top_k_paths(tree, k)
+            .ok_or_else(|| fail("top_k_paths returned None"))?;
+        let cp = eval
+            .choke_points(tree, k)
+            .ok_or_else(|| fail("choke_points returned None"))?;
+        for pair in cp.windows(2) {
+            let ord = pair[1]
+                .path_count()
+                .cmp(&pair[0].path_count())
+                .then_with(|| pair[1].bottleneck_count().cmp(&pair[0].bottleneck_count()))
+                .then_with(|| pair[0].step().cmp(&pair[1].step()));
+            prop_assert!(ord.is_lt(), "choke_points not strictly ordered: {cp:?}");
+        }
+        for c in &cp {
+            let step = c.step();
+            prop_assert!(is_step(tree, step));
+            let expected_paths = top_k.iter().filter(|p| p.contains(step)).count();
+            let expected_bneck = top_k.iter().filter(|p| p.bottleneck() == step).count();
+            let expected_easiest = top_k
+                .iter()
+                .filter(|p| p.contains(step))
+                .map(|p| *p.feasibility())
+                .max();
+            prop_assert_eq!(c.path_count(), expected_paths);
+            prop_assert_eq!(c.bottleneck_count(), expected_bneck);
+            prop_assert_eq!(Some(*c.easiest_path_feasibility()), expected_easiest);
+        }
+
+        let hs = eval
+            .top_k_hitting_set(tree, k)
+            .ok_or_else(|| fail("top_k_hitting_set returned None"))?;
+        let mut hs_dedup = hs.clone();
+        hs_dedup.sort_unstable();
+        hs_dedup.dedup();
+        prop_assert_eq!(hs_dedup.len(), hs.len(), "duplicate step in hitting set");
+        for &s in &hs {
+            prop_assert!(is_step(tree, s));
+        }
+        for p in &top_k {
+            prop_assert!(
+                p.steps().iter().any(|s| hs.contains(s)),
+                "path {:?} not hit by hitting set {:?}",
+                p.steps(),
+                hs
+            );
+        }
+    }
     Ok(())
 }
 

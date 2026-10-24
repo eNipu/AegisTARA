@@ -17,7 +17,7 @@
 //! a later engine crate unchanged. See `docs/adr/0005-tree-evaluation.md`
 //! and `docs/adr/0006-explain-why-traces.md`.
 
-use std::collections::BinaryHeap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -610,6 +610,197 @@ impl<V> Evaluation<V> {
         V: Ord + Clone,
     {
         Some(self.attack_paths(tree)?.take(k).collect())
+    }
+
+    /// Ranks the leaf steps of `tree` by how many of the top-`k` easiest
+    /// minimal attack paths each one lies on (choke points, rule A4).
+    ///
+    /// Each returned [`ChokePoint`](crate::ChokePoint) counts, across the up
+    /// to `k` paths [`top_k_paths`](Self::top_k_paths) yields, how many
+    /// contain the step, how many have it as their bottleneck, and the
+    /// feasibility of the easiest containing path. Steps that lie on none of
+    /// the top-`k` paths are omitted; `k == 0` yields an empty ranking. The
+    /// ranking is sorted by path coverage descending, then bottleneck count
+    /// descending, then by arena position ascending, so it is deterministic
+    /// (rule P4).
+    ///
+    /// Time O((V + E) + k * V * (V + E) * log(k * d)) to enumerate the paths
+    /// (inherited from [`attack_paths`](Self::attack_paths)) plus O(k * S)
+    /// counting and O(C log C) sorting, where S is the mean path length and
+    /// C <= V is the number of covered steps. Space O(V + k * d * V).
+    ///
+    /// Returns `None` if `tree` visibly does not match `self` (see
+    /// [`attack_paths`](Self::attack_paths)).
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, GateKind, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// let s1 = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("s1"))?;
+    /// let s2 = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("s2"))?;
+    /// let s3 = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("s3"))?;
+    /// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |i| {
+    ///     Some(if i == s1 { 2 } else if i == s2 { 5 } else { 4 })
+    /// })?;
+    /// let choke = eval.choke_points(&tree, 2).ok_or(aegis_model::ModelError::UnknownNode(s1))?;
+    /// // Only the two easiest paths ([s2] and [s3]) are counted, so `s1` is absent.
+    /// assert_eq!(choke.iter().map(|c| c.step()).collect::<Vec<_>>(), [s2, s3]);
+    /// assert!(choke.iter().all(|c| c.path_count() == 1));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn choke_points(
+        &self,
+        tree: &AttackTree,
+        k: usize,
+    ) -> Option<Vec<crate::paths::ChokePoint<V>>>
+    where
+        V: Ord + Clone,
+    {
+        let mut counts = vec![0_usize; tree.len()];
+        let mut bottlenecks = vec![0_usize; tree.len()];
+        // Because paths are yielded in descending order of feasibility, the
+        // first path containing a step is that step's easiest containing path.
+        let mut easiest: Vec<Option<V>> = vec![None; tree.len()];
+        for path in self.attack_paths(tree)?.take(k) {
+            for &s in path.steps() {
+                if let Some(slot) = counts.get_mut(s.index()) {
+                    *slot += 1;
+                }
+                let slot = easiest.get_mut(s.index())?;
+                if slot.is_none() {
+                    *slot = Some(path.feasibility().clone());
+                }
+            }
+            if let Some(slot) = bottlenecks.get_mut(path.bottleneck().index()) {
+                *slot += 1;
+            }
+        }
+
+        let mut out = Vec::new();
+        for (idx, _, node) in tree.iter() {
+            if !matches!(node, Node::Step { .. }) {
+                continue;
+            }
+            let Some(&count) = counts.get(idx.index()) else {
+                continue;
+            };
+            if count == 0 {
+                continue;
+            }
+            let bottleneck_count = bottlenecks.get(idx.index()).copied().unwrap_or(0);
+            let Some(easiest_path_feasibility) = easiest.get(idx.index()).cloned().flatten() else {
+                continue;
+            };
+            out.push(crate::paths::ChokePoint {
+                step: idx,
+                path_count: count,
+                bottleneck_count,
+                easiest_path_feasibility,
+            });
+        }
+        out.sort_by(|a, b| {
+            b.path_count()
+                .cmp(&a.path_count())
+                .then_with(|| b.bottleneck_count().cmp(&a.bottleneck_count()))
+                .then_with(|| a.step().cmp(&b.step()))
+        });
+        Some(out)
+    }
+
+    /// Returns a small set of leaf steps that together hits (contains at
+    /// least one step of) every one of the top-`k` easiest minimal attack
+    /// paths of `tree`: mitigating all of them leaves the attacker no path
+    /// among those `k` best options (rule A4).
+    ///
+    /// The set is built with the classic greedy heuristic for set cover
+    /// (V. Chvátal, "A greedy heuristic for the set-covering problem",
+    /// *Mathematics of Operations Research* 4(3), 1979), applied to the
+    /// dual hitting-set instance: each round picks the step that lies on
+    /// the most still-unhit paths, breaking ties by the smallest arena
+    /// position, so the result is deterministic (rule P4). The result is a
+    /// heuristic: it is within a factor of $H(k) \le \ln k + 1$ of the
+    /// smallest possible hitting set over those same paths, and it is not
+    /// guaranteed to be minimum. Steps are returned in pick order (most
+    /// coverage first). `k == 0` yields an empty set.
+    ///
+    /// Time O((V + E) + k * V * (V + E) * log(k * d)) to enumerate the paths
+    /// plus O(R * U * S * log S) for the greedy rounds, where R <= k is the
+    /// number of picks, U <= k the still-unhit paths per round, and S the
+    /// mean path length. Space O(V + k * d * V).
+    ///
+    /// Returns `None` if `tree` visibly does not match `self` (see
+    /// [`attack_paths`](Self::attack_paths)).
+    ///
+    /// ```
+    /// use aegis_model::{evaluate, AttackTree, GateKind, MaxMin, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// // root = OR(AND(a, b), AND(a, c), d): `a` hits the first two paths
+    /// // on its own, so the greedy picks cover all three with [a, d].
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// let and1 = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::And, "and1"))?;
+    /// let a = tree.add_child(and1, NodeId::new_v7(), Node::step("a"))?;
+    /// let _b = tree.add_child(and1, NodeId::new_v7(), Node::step("b"))?;
+    /// let and2 = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::And, "and2"))?;
+    /// tree.link(and2, a)?;
+    /// let _c = tree.add_child(and2, NodeId::new_v7(), Node::step("c"))?;
+    /// let d = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("d"))?;
+    /// let eval = evaluate(&tree, &MaxMin::<u8>::new(), |_| Some(3))?;
+    /// let set = eval
+    ///     .top_k_hitting_set(&tree, 3)
+    ///     .ok_or(aegis_model::ModelError::UnknownNode(a))?;
+    /// assert_eq!(set, vec![a, d]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn top_k_hitting_set(&self, tree: &AttackTree, k: usize) -> Option<Vec<NodeIdx>>
+    where
+        V: Ord + Clone,
+    {
+        let paths: Vec<Box<[NodeIdx]>> = self
+            .attack_paths(tree)?
+            .take(k)
+            .map(|p| p.steps().to_vec().into_boxed_slice())
+            .collect();
+        let mut covered = vec![false; paths.len()];
+        let mut chosen: Vec<NodeIdx> = Vec::new();
+        loop {
+            // Count, per step, how many still-unhit paths contain it. A
+            // `BTreeMap` iterates in ascending `NodeIdx` order, and only a
+            // strictly greater count replaces the current best, so ties keep
+            // the smallest arena position.
+            let mut counts: BTreeMap<NodeIdx, usize> = BTreeMap::new();
+            for (pi, steps) in paths.iter().enumerate() {
+                if covered.get(pi).copied().unwrap_or(true) {
+                    continue;
+                }
+                for &s in steps {
+                    *counts.entry(s).or_insert(0) += 1;
+                }
+            }
+            let mut best: Option<(NodeIdx, usize)> = None;
+            for (&step, &count) in &counts {
+                if best.is_none_or(|(_, bc)| count > bc) {
+                    best = Some((step, count));
+                }
+            }
+            let Some((best_step, _)) = best else {
+                break;
+            };
+            chosen.push(best_step);
+            for (pi, steps) in paths.iter().enumerate() {
+                if steps.contains(&best_step)
+                    && let Some(slot) = covered.get_mut(pi)
+                {
+                    *slot = true;
+                }
+            }
+        }
+        Some(chosen)
     }
 
     /// Updates `idx`'s value and derivation in place, returning `(value_changed, any_changed)`.
