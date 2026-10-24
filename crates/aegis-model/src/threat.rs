@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::control::RiskTreatment;
 use crate::eval::Evaluation;
-use crate::id::{AssetIdx, DamageId, DamageIdx, TreeIdx};
+use crate::id::{AssetIdx, ClaimIdx, DamageId, DamageIdx, GoalIdx, TreeIdx};
 use crate::methodology::{
     CatalogRef, FeasibilityLevel, ImpactCategory, Level, RiskLevel, ThreatCategory,
 };
@@ -77,6 +77,8 @@ pub struct ThreatScenario {
     pub(crate) direct_feasibility: Option<FeasibilityLevel>,
     pub(crate) attack_tree: Option<TreeIdx>,
     pub(crate) treatment: Option<RiskTreatment>,
+    pub(crate) goal: Option<GoalIdx>,
+    pub(crate) claim: Option<ClaimIdx>,
     pub(crate) provenance: Provenance,
 }
 
@@ -325,6 +327,88 @@ impl ThreatScenario {
     #[must_use]
     pub fn treatment(&self) -> Option<RiskTreatment> {
         self.treatment
+    }
+
+    /// Returns the linked [`CybersecurityGoal`](crate::CybersecurityGoal)'s
+    /// arena index (assigned via [`Op::SetThreatGoal`](crate::Op::SetThreatGoal)),
+    /// if any. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, GoalId, Methodology, Op, Project, Provenance, ThreatId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let goal = GoalId::new_v7();
+    /// project.apply(Op::AddCybersecurityGoal {
+    ///     id: goal, name: "Authenticate messages".into(), controls: vec![],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatGoal {
+    ///     threat, goal: Some(goal), provenance: Provenance::default(),
+    /// })?;
+    /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
+    /// assert_eq!(t.goal(), project.cybersecurity_goal_idx(&goal));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn goal(&self) -> Option<GoalIdx> {
+        self.goal
+    }
+
+    /// Returns the linked [`CybersecurityClaim`](crate::CybersecurityClaim)'s
+    /// arena index (assigned via [`Op::SetThreatClaim`](crate::Op::SetThreatClaim)),
+    /// if any. Time O(1), space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AssetId, ClaimId, Methodology, Op, Project, Provenance, ThreatId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let category = m.threat_categories().next().ok_or("none")?;
+    /// let threat = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id: threat, name: "Replay".into(), asset, category,
+    ///     catalog_refs: vec![], damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let claim = ClaimId::new_v7();
+    /// project.apply(Op::AddCybersecurityClaim {
+    ///     id: claim, name: "Diagnostic bus disabled in field".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetThreatClaim {
+    ///     threat, claim: Some(claim), provenance: Provenance::default(),
+    /// })?;
+    /// let (_, _, t) = project.threat_scenarios().next().ok_or("missing")?;
+    /// assert_eq!(t.claim(), project.cybersecurity_claim_idx(&claim));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn claim(&self) -> Option<ClaimIdx> {
+        self.claim
     }
 
     /// Returns the provenance of the last creation or modification of this

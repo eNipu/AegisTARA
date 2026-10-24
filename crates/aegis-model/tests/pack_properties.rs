@@ -7,8 +7,9 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    CatalogSchemeDef, CatalogSyntax, ImpactCategoryDef, LevelDef, Methodology, MethodologyDef,
-    PropertyDef, SegmentDef, ThreatCategoryDef,
+    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
+    ImpactCategoryDef, LevelDef, Methodology, MethodologyDef, PotentialBandDef, PropertyDef,
+    SegmentDef, ThreatCategoryDef,
 };
 use common::{max_def, pack_bytes, second_def};
 use proptest::collection::vec;
@@ -125,6 +126,22 @@ fn entries(min: usize, max: usize) -> impl Strategy<Value = Vec<(String, Arc<str
     count(min, max).prop_flat_map(|n| vec((key_tail(), label()), n))
 }
 
+type FactorSeed = (String, Arc<str>, Vec<(String, Arc<str>, u16)>);
+type AttackPotentialSeed = Option<(Vec<FactorSeed>, Vec<(u16, usize)>)>;
+
+fn factor_levels() -> impl Strategy<Value = Vec<(String, Arc<str>, u16)>> {
+    count(2, 16).prop_flat_map(|n| vec((key_tail(), label(), 0u16..=1000), n))
+}
+
+fn attack_potential_seed() -> impl Strategy<Value = AttackPotentialSeed> {
+    let factors = count(1, 16).prop_flat_map(|n| vec((key_tail(), label(), factor_levels()), n));
+    let bands = count(1, 16).prop_flat_map(|n| vec((0u16..=50, 0usize..16), n));
+    prop_oneof![
+        1 => Just(None),
+        3 => (factors, bands).prop_map(Some),
+    ]
+}
+
 /// A valid definition: every vocabulary from 1 entry (0 schemes) up to its
 /// maximum, random keys, labels, and syntaxes.
 fn valid_def() -> impl Strategy<Value = MethodologyDef> {
@@ -151,10 +168,29 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
         schemes,
         entries(2, 16),
         entries(2, 16),
+        attack_potential_seed(),
     )
         .prop_map(
-            |(mkey, version, label, impacts, (props, threats), schemes, feasibility, risks)| {
-                let f_len = feasibility.len();
+            |(
+                mkey,
+                version,
+                label,
+                impacts,
+                (props, threats),
+                schemes,
+                feasibility,
+                risks,
+                ap_seed,
+            )| {
+                let feasibility_levels: Vec<LevelDef> = feasibility
+                    .into_iter()
+                    .enumerate()
+                    .map(|(l, (tail, label))| LevelDef {
+                        key: key("f", l, &tail),
+                        label,
+                    })
+                    .collect();
+                let f_len = feasibility_levels.len();
                 let risk_levels: Vec<LevelDef> = risks
                     .into_iter()
                     .enumerate()
@@ -164,6 +200,44 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
                     })
                     .collect();
                 let r_len = risk_levels.len();
+                let attack_potential = ap_seed.map(|(factors, band_spans)| {
+                    let b_len = band_spans.len();
+                    let mut min = 0u16;
+                    let bands = band_spans
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, (span, f_pick))| {
+                            let max = (idx + 1 < b_len).then_some(min + span);
+                            let band = PotentialBandDef {
+                                min,
+                                max,
+                                feasibility: Arc::clone(&feasibility_levels[f_pick % f_len].key),
+                            };
+                            min = min + span + 1;
+                            band
+                        })
+                        .collect();
+                    AttackPotentialDef {
+                        factors: factors
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (tail, label, levels))| FactorDef {
+                                key: key("af", i, &tail),
+                                label,
+                                levels: levels
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(l, (tail, label, points))| FactorLevelDef {
+                                        key: key("al", l, &tail),
+                                        label,
+                                        points,
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                        bands,
+                    }
+                });
                 MethodologyDef {
                     key: key("m", 0, &mkey),
                     version,
@@ -222,15 +296,9 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
                             syntax,
                         })
                         .collect(),
-                    feasibility_levels: feasibility
-                        .into_iter()
-                        .enumerate()
-                        .map(|(l, (tail, label))| LevelDef {
-                            key: key("f", l, &tail),
-                            label,
-                        })
-                        .collect(),
+                    feasibility_levels,
                     risk_levels,
+                    attack_potential,
                 }
             },
         )
@@ -306,7 +374,8 @@ proptest! {
 
     #[test]
     fn hostile_truncated_pack(which in 0usize..2, cut in any::<prop::sample::Index>()) {
-        let pack = &sample_packs()[which];
+        let packs = sample_packs();
+        let pack = packs[which].trim_ascii_end();
         let end = cut.index(pack.len());
         let r = Methodology::read_pack(&pack[..end]);
         prop_assert!(r.is_err(), "a cut pack must not load");

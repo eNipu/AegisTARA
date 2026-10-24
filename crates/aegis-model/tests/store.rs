@@ -11,9 +11,9 @@ use aegis_model::{
     Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, control_id, cref, damage_id, describe, feas, lvl, node_id,
-    prop, props, read_log, reordered, save, scheme, second, second_def, threat_cat, threat_id,
-    tree_id, wide, write_log,
+    SENTINEL, asset_id, builtin, cat, control_id, cref, damage_id, describe, factor, factor_lvl,
+    feas, lvl, node_id, prop, props, read_log, reordered, save, scheme, second, second_def,
+    threat_cat, threat_id, tree_id, wide, write_log,
 };
 use serde_json::Value;
 
@@ -316,6 +316,20 @@ fn save_is_deterministic() {
                 step_feasibility: vec![(s2, feas(&m, "high")), (s1, feas(&m, "low"))],
                 provenance: p_tree.clone(),
             },
+            Op::SetStepFactor {
+                tree: tr1,
+                node: s1,
+                factor: factor(&m, "knowledge"),
+                level: Some(factor_lvl(&m, factor(&m, "knowledge"), "public")),
+                provenance: p_tree.clone(),
+            },
+            Op::SetStepFactor {
+                tree: tr1,
+                node: s1,
+                factor: factor(&m, "elapsed-time"),
+                level: Some(factor_lvl(&m, factor(&m, "elapsed-time"), "le-1w")),
+                provenance: p_tree.clone(),
+            },
             Op::SetThreatAttackTree {
                 threat: t1,
                 tree: Some(tr1),
@@ -339,6 +353,20 @@ fn save_is_deterministic() {
                 tree: tr1,
                 node: s1,
                 level: Some(feas(&m, "low")),
+                provenance: Provenance::default(),
+            },
+            Op::SetStepFactor {
+                tree: tr1,
+                node: s1,
+                factor: factor(&m, "elapsed-time"),
+                level: Some(factor_lvl(&m, factor(&m, "elapsed-time"), "le-1w")),
+                provenance: Provenance::default(),
+            },
+            Op::SetStepFactor {
+                tree: tr1,
+                node: s1,
+                factor: factor(&m, "knowledge"),
+                level: Some(factor_lvl(&m, factor(&m, "knowledge"), "public")),
                 provenance: Provenance::default(),
             },
             Op::SetStepFeasibility {
@@ -503,6 +531,27 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             level: Some(feas(m, "probable")),
             provenance: Provenance::ai("tara-assist", 800),
         },
+        Op::SetStepFactor {
+            tree: tree_id(7),
+            node: s1,
+            factor: factor(m, "exposure"),
+            level: Some(factor_lvl(m, factor(m, "exposure"), "local")),
+            provenance: Provenance::human("alice", 810),
+        },
+        Op::SetStepFactor {
+            tree: tree_id(7),
+            node: s1,
+            factor: factor(m, "skill"),
+            level: Some(factor_lvl(m, factor(m, "skill"), "expert")),
+            provenance: Provenance::human("alice", 820),
+        },
+        Op::SetStepFactor {
+            tree: tree_id(7),
+            node: s1,
+            factor: factor(m, "resources"),
+            level: Some(factor_lvl(m, factor(m, "resources"), "standard")),
+            provenance: Provenance::human("alice", 830),
+        },
         Op::SetThreatAttackTree {
             threat: threat_id(5),
             tree: Some(tree_id(7)),
@@ -536,6 +585,14 @@ fn reordered_methodology_keeps_meaning() {
         r.threat_category("ransomware")
     );
     assert_ne!(m.catalog_scheme("capec"), r.catalog_scheme("capec"));
+    assert_ne!(
+        m.feasibility_factor("exposure"),
+        r.feasibility_factor("exposure")
+    );
+    assert_ne!(
+        m.factor_level(factor(&m, "skill"), "expert"),
+        r.factor_level(factor(&r, "skill"), "expert")
+    );
 
     // Snapshot: same keys per entity, identical bytes when saved again.
     let ops = second_ops(&m);
@@ -1580,5 +1637,33 @@ fn rejects_malformed_attack_tree_and_provenance_wire_shapes() {
             Some(StoreError::Decode { .. })
         ),
         "empty inner map in step_mitigations should fail"
+    );
+
+    // Snapshot with a threat pointing to a missing goal or claim fails with UnknownCybersecurityGoal / UnknownCybersecurityClaim.
+    let gid = common::goal_id(98);
+    let clid = common::claim_id(99);
+    let bad_goal_snap = snap.replacen(
+        "\"damages\":[",
+        &format!("\"goal\":\"{gid}\",\"damages\":["),
+        1,
+    );
+    assert!(
+        matches!(
+            load(bad_goal_snap.as_bytes(), &m).err(),
+            Some(StoreError::Model(ModelError::UnknownCybersecurityGoal(g))) if g == gid
+        ),
+        "unknown goal on threat should fail"
+    );
+    let bad_claim_snap = snap.replacen(
+        "\"damages\":[",
+        &format!("\"claim\":\"{clid}\",\"damages\":["),
+        1,
+    );
+    assert!(
+        matches!(
+            load(bad_claim_snap.as_bytes(), &m).err(),
+            Some(StoreError::Model(ModelError::UnknownCybersecurityClaim(cl))) if cl == clid
+        ),
+        "unknown claim on threat should fail"
     );
 }

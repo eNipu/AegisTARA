@@ -50,12 +50,15 @@ use serde::ser::{self, Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use super::{Limit, MAX_KEY_BYTES, VocabKind};
 use crate::asset::PropertySet;
-use crate::control::{MAX_STEP_MITIGATIONS, RiskTreatment, StepMitigation};
+use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment, StepMitigation};
 use crate::error::{PackError, StoreError};
-use crate::id::{AssetId, ControlId, DamageId, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx};
+use crate::id::{
+    AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx,
+};
 use crate::methodology::{
-    CatalogRef, CatalogScheme, FeasibilityLevel, ImpactCategory, Level, MAX_IMPACT_CATEGORIES,
-    MAX_PROPERTIES, Methodology, Property, ThreatCategory,
+    CatalogRef, CatalogScheme, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
+    Level, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_PROPERTIES, Methodology, Property,
+    ThreatCategory,
 };
 use crate::provenance::{Provenance, ProvenanceSource};
 use crate::tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, WireNodeParts};
@@ -316,6 +319,7 @@ caps! {
     RefsCap = crate::threat::MAX_CATALOG_REFS, Limit::CATALOG_REFS;
     LinksCap = crate::threat::MAX_DAMAGE_LINKS, Limit::DAMAGE_LINKS;
     AttackTreeNodesCap = crate::tree::MAX_ATTACK_TREE_NODES, Limit::ATTACK_TREE_NODES;
+    GoalControlsCap = MAX_GOAL_CONTROLS, Limit::GOAL_CONTROLS;
 }
 
 /// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
@@ -477,6 +481,22 @@ impl<'de> Deserialize<'de> for FeasibilityLevelKey {
                 .feasibility_level(s)
                 .map(FeasibilityLevelKey)
                 .ok_or_else(|| unknown_key(VocabKind::FeasibilityLevel, s))
+        })
+        .deserialize(d)
+    }
+}
+
+/// A feasibility factor key, resolved as it is read.
+pub(super) struct FeasibilityFactorKey(pub(super) FeasibilityFactor);
+
+impl<'de> Deserialize<'de> for FeasibilityFactorKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .feasibility_factor(s)
+                .map(FeasibilityFactorKey)
+                .ok_or_else(|| unknown_key(VocabKind::FeasibilityFactor, s))
         })
         .deserialize(d)
     }
@@ -772,6 +792,122 @@ impl<'de> Deserialize<'de> for StepMitigations {
                     ));
                 }
                 Ok(StepMitigations(out))
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+/// Step factor ratings for one node given as an object from feasibility
+/// factor key to factor level key: at most 16 entries
+/// ([`MAX_FEASIBILITY_FACTORS`]), no factor repeated, each pair resolved
+/// as it is read.
+pub(super) struct NodeFactors(pub(super) Vec<(FeasibilityFactor, FactorLevel)>);
+
+impl<'de> Deserialize<'de> for NodeFactors {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = NodeFactors;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of step factor ratings")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<NodeFactors, A::Error> {
+                let m = context().map_err(raise)?;
+                let mut out = Vec::new();
+                let mut seen = 0u64;
+                let mut count = 0usize;
+                let mut pending = None;
+                while let Some(factor) = map.next_key_seed(WithStr::new(|s: &str| {
+                    check_key_len(s)?;
+                    Ok(note_unknown(
+                        m.feasibility_factor(s),
+                        VocabKind::FeasibilityFactor,
+                        s,
+                        &mut pending,
+                    ))
+                }))? {
+                    count += 1;
+                    if count > MAX_FEASIBILITY_FACTORS {
+                        return Err(raise(Fault::Limit(Limit::FEASIBILITY_FACTORS)));
+                    }
+                    if let Some(f) = factor {
+                        let bit = u32::try_from(f.index())
+                            .ok()
+                            .and_then(|i| 1u64.checked_shl(i))
+                            .unwrap_or(0);
+                        if bit == 0 || seen & bit != 0 {
+                            return Err(raise(Fault::Duplicate));
+                        }
+                        seen |= bit;
+                    }
+                    let level = map.next_value_seed(WithStr::new(|s: &str| {
+                        check_key_len(s)?;
+                        Ok(factor.and_then(|f| {
+                            note_unknown(
+                                m.factor_level(f, s),
+                                VocabKind::FactorLevel,
+                                s,
+                                &mut pending,
+                            )
+                        }))
+                    }))?;
+                    if let (Some(f), Some(l)) = (factor, level) {
+                        out.push((f, l));
+                    }
+                }
+                match pending {
+                    Some(fault) => Err(raise(fault)),
+                    None if count == 0 => Err(de::Error::custom(
+                        "step_factors entry for a step must not be empty",
+                    )),
+                    None => Ok(NodeFactors(out)),
+                }
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+/// Step factor ratings across an attack tree given as an object from step
+/// `NodeId` to [`NodeFactors`]: at most 32 entries
+/// ([`MAX_ATTACK_TREE_NODES`]), no node ID repeated.
+#[derive(Default)]
+pub(super) struct StepFactors(pub(super) Vec<(NodeId, Vec<(FeasibilityFactor, FactorLevel)>)>);
+
+impl<'de> Deserialize<'de> for StepFactors {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = StepFactors;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of step factors by node")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<StepFactors, A::Error> {
+                let mut out = Vec::new();
+                let mut seen: Vec<NodeId> = Vec::new();
+                let mut count = 0usize;
+                while let Some(node) = map.next_key_seed(WithStr::new(|s: &str| {
+                    if count >= MAX_ATTACK_TREE_NODES {
+                        return Err(Fault::Limit(Limit::ATTACK_TREE_NODES));
+                    }
+                    if !is_canonical_uuid(s) {
+                        return Err(Fault::InvalidId);
+                    }
+                    NodeId::from_str(s).map_err(|_| Fault::InvalidId)
+                }))? {
+                    count += 1;
+                    if seen.contains(&node) {
+                        return Err(raise(Fault::Duplicate));
+                    }
+                    seen.push(node);
+                    let inner: NodeFactors = map.next_value()?;
+                    out.push((node, inner.0));
+                }
+                if count == 0 {
+                    return Err(de::Error::custom("step_factors must be omitted when empty"));
+                }
+                Ok(StepFactors(out))
             }
         }
         d.deserialize_map(V)
@@ -1123,6 +1259,10 @@ pub(super) struct SnapshotWire {
     pub(super) attack_trees: Vec<TreeWire>,
     #[serde(default)]
     pub(super) security_controls: Vec<ControlWire>,
+    #[serde(default)]
+    pub(super) cybersecurity_goals: Vec<GoalWire>,
+    #[serde(default)]
+    pub(super) cybersecurity_claims: Vec<ClaimWire>,
 }
 
 /// A snapshot asset: 48 bytes plus its name.
@@ -1164,6 +1304,10 @@ pub(super) struct ThreatWire {
     #[serde(default, deserialize_with = "some")]
     pub(super) treatment: Option<RiskTreatmentWire>,
     #[serde(default, deserialize_with = "some")]
+    pub(super) goal: Option<WireId<GoalId>>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) claim: Option<WireId<ClaimId>>,
+    #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
@@ -1175,6 +1319,8 @@ pub(super) struct TreeWire {
     pub(super) nodes: NodesWire,
     pub(super) step_feasibility: StepFeasibility,
     #[serde(default)]
+    pub(super) step_factors: StepFactors,
+    #[serde(default)]
     pub(super) step_mitigations: StepMitigations,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
@@ -1185,6 +1331,27 @@ pub(super) struct TreeWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct ControlWire {
     pub(super) id: WireId<ControlId>,
+    pub(super) name: Name,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot cybersecurity goal.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct GoalWire {
+    pub(super) id: WireId<GoalId>,
+    pub(super) name: Name,
+    pub(super) controls: BoundedVec<WireId<ControlId>, GoalControlsCap>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot cybersecurity claim.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ClaimWire {
+    pub(super) id: WireId<ClaimId>,
     pub(super) name: Name,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
@@ -1328,6 +1495,15 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    SetStepFactor {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        factor: FeasibilityFactorKey,
+        #[serde(deserialize_with = "Option::deserialize")]
+        level: Option<Key>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetThreatFeasibility {
         threat: WireId<ThreatId>,
         #[serde(deserialize_with = "Option::deserialize")]
@@ -1376,6 +1552,63 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    AddCybersecurityGoal {
+        id: WireId<GoalId>,
+        name: Name,
+        controls: BoundedVec<WireId<ControlId>, GoalControlsCap>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameCybersecurityGoal {
+        id: WireId<GoalId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    LinkGoalControl {
+        goal: WireId<GoalId>,
+        control: WireId<ControlId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkGoalControl {
+        goal: WireId<GoalId>,
+        control: WireId<ControlId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveCybersecurityGoal {
+        id: WireId<GoalId>,
+    },
+    AddCybersecurityClaim {
+        id: WireId<ClaimId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameCybersecurityClaim {
+        id: WireId<ClaimId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveCybersecurityClaim {
+        id: WireId<ClaimId>,
+    },
+    SetThreatGoal {
+        threat: WireId<ThreatId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        goal: Option<WireId<GoalId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetThreatClaim {
+        threat: WireId<ThreatId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        claim: Option<WireId<ClaimId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
 }
 
 /// Resolves the `SetImpact` level key within its category. Time O(log m).
@@ -1388,6 +1621,19 @@ pub(super) fn resolve_level(
         kind: VocabKind::Level,
         key: Arc::clone(&key.0),
     })
+}
+
+/// Resolves the `SetStepFactor` level key within its factor. Time O(log m).
+pub(super) fn resolve_factor_level(
+    m: &Methodology,
+    factor: FeasibilityFactor,
+    key: &Key,
+) -> Result<FactorLevel, StoreError> {
+    m.factor_level(factor, &key.0)
+        .ok_or_else(|| StoreError::UnknownKey {
+            kind: VocabKind::FactorLevel,
+            key: Arc::clone(&key.0),
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1407,6 +1653,8 @@ pub(super) struct KeyOrder {
     impact_categories: Vec<ImpactCategory>,
     /// Catalog schemes sorted by key.
     catalog_schemes: Vec<CatalogScheme>,
+    /// Feasibility factors sorted by key.
+    feasibility_factors: Vec<FeasibilityFactor>,
 }
 
 impl KeyOrder {
@@ -1423,11 +1671,14 @@ impl KeyOrder {
         impact_categories.sort_by_key(|&c| m.impact_category_key(c));
         let mut catalog_schemes: Vec<CatalogScheme> = m.catalog_schemes().collect();
         catalog_schemes.sort_by_key(|&s| m.catalog_scheme_key(s));
+        let mut feasibility_factors: Vec<FeasibilityFactor> = m.feasibility_factors().collect();
+        feasibility_factors.sort_by_key(|&f| m.feasibility_factor_key(f));
         KeyOrder {
             property_rank,
             properties,
             impact_categories,
             catalog_schemes,
+            feasibility_factors,
         }
     }
 
@@ -1721,6 +1972,73 @@ impl Serialize for StepFeasibilityByNode<'_> {
             if let Some(level) = self.project.step_feasibility(self.tree_idx, node_idx) {
                 map.serialize_entry(&Text(node_id), &Required(m.feasibility_level_key(level)))?;
             }
+        }
+        map.end()
+    }
+}
+
+/// A stored attack tree's step factor ratings in arena order, steps without
+/// factor ratings left out, as an object mapping node ID to `{factor_key:
+/// factor_level_key}` in key order. O(V * F).
+pub(super) struct StepFactorsByNode<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) order: &'a KeyOrder,
+    pub(super) tree_idx: TreeIdx,
+    pub(super) tree: &'a AttackTree,
+}
+
+impl StepFactorsByNode<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.tree.iter().all(|(node_idx, _, _)| {
+            self.project
+                .step_factor_slice(self.tree_idx, node_idx)
+                .is_empty()
+        })
+    }
+}
+
+impl Serialize for StepFactorsByNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(None)?;
+        for (node_idx, node_id, _) in self.tree.iter() {
+            let factors = self.project.step_factor_slice(self.tree_idx, node_idx);
+            if !factors.is_empty() {
+                map.serialize_entry(
+                    &Text(node_id),
+                    &StepFactorsForNode {
+                        m: self.project.methodology(),
+                        order: self.order,
+                        factors,
+                    },
+                )?;
+            }
+        }
+        map.end()
+    }
+}
+
+struct StepFactorsForNode<'a> {
+    m: &'a Methodology,
+    order: &'a KeyOrder,
+    factors: &'a [Option<FactorLevel>],
+}
+
+impl Serialize for StepFactorsForNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let rated = self.factors.iter().filter(|l| l.is_some()).count();
+        let mut map = s.serialize_map(Some(rated))?;
+        let mut written = 0usize;
+        for &f in &self.order.feasibility_factors {
+            if let Some(&Some(l)) = self.factors.get(f.index()) {
+                map.serialize_entry(
+                    &Required(self.m.feasibility_factor_key(f)),
+                    &Required(self.m.factor_level_key(f, l)),
+                )?;
+                written += 1;
+            }
+        }
+        if written != rated {
+            return Err(ser::Error::custom("factor rating not in the methodology"));
         }
         map.end()
     }
@@ -2165,5 +2483,59 @@ mod tests {
         let wide = testkit::wide();
         let foreign = wide.all_properties();
         assert!(order.sorted_properties(foreign).is_none());
+        let factors: Vec<_> = order
+            .feasibility_factors
+            .iter()
+            .filter_map(|&f| m.feasibility_factor_key(f))
+            .collect();
+        assert_eq!(factors, ["exposure", "resources", "skill"]);
+    }
+
+    #[test]
+    fn step_factors_decode_and_reject_invalid() {
+        let m = testkit::second();
+        let n1 = testkit::node_id(1);
+        let exp = testkit::factor(&m, "exposure");
+        let local = testkit::factor_lvl(&m, exp, "local");
+        let ok = format!(r#"{{"{n1}":{{"exposure":"local"}}}}"#);
+        assert_eq!(
+            de::<StepFactors>(&ok).map(|s| s.0).ok(),
+            Some(vec![(n1, vec![(exp, local)])])
+        );
+
+        // Empty outer map is rejected.
+        assert!(matches!(
+            de::<StepFactors>("{}").err(),
+            Some(StoreError::Decode { .. })
+        ));
+        // Empty inner map is rejected.
+        assert!(matches!(
+            de::<StepFactors>(&format!(r#"{{"{n1}":{{}}}}"#)).err(),
+            Some(StoreError::Decode { .. })
+        ));
+        // Duplicate factor key is rejected.
+        assert!(matches!(
+            de::<StepFactors>(&format!(
+                r#"{{"{n1}":{{"exposure":"local","exposure":"open"}}}}"#
+            ))
+            .err(),
+            Some(StoreError::DuplicateEntry)
+        ));
+        // Unknown factor key.
+        assert!(matches!(
+            de::<StepFactors>(&format!(r#"{{"{n1}":{{"nope":"local"}}}}"#)).err(),
+            Some(StoreError::UnknownKey {
+                kind: VocabKind::FeasibilityFactor,
+                key,
+            }) if &*key == "nope"
+        ));
+        // Unknown factor level key.
+        assert!(matches!(
+            de::<StepFactors>(&format!(r#"{{"{n1}":{{"exposure":"nope"}}}}"#)).err(),
+            Some(StoreError::UnknownKey {
+                kind: VocabKind::FactorLevel,
+                key,
+            }) if &*key == "nope"
+        ));
     }
 }

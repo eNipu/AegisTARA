@@ -210,6 +210,8 @@ pub struct AttackTree {
     by_id: HashMap<NodeId, NodeIdx>,
     /// Index of the root node.
     root: NodeIdx,
+    /// Number of extra edges added by [`link`](Self::link).
+    link_count: u32,
 }
 
 impl AttackTree {
@@ -244,6 +246,7 @@ impl AttackTree {
             linked_parents: vec![Vec::new()],
             by_id,
             root: root_idx,
+            link_count: 0,
         })
     }
 
@@ -390,6 +393,7 @@ impl AttackTree {
         ) {
             children.push(child);
             linked.push(parent);
+            self.link_count = self.link_count.saturating_add(1);
         }
         Ok(())
     }
@@ -794,6 +798,8 @@ impl AttackTree {
 
         crate::topo::topological_order(&nodes).ok()?;
         let root = NodeIdx::try_from_usize(0)?;
+        let link_count =
+            u32::try_from(linked_parents.iter().map(Vec::len).sum::<usize>()).unwrap_or(u32::MAX);
         Some(Self {
             nodes,
             ids,
@@ -801,7 +807,16 @@ impl AttackTree {
             linked_parents,
             by_id,
             root,
+            link_count,
         })
+    }
+
+    /// Total number of directed edges (`parent -> child`) in this tree.
+    ///
+    /// Time O(1).
+    #[must_use]
+    pub(crate) fn edge_count(&self) -> usize {
+        self.len().saturating_sub(1) + (self.link_count as usize)
     }
 
     /// Checks every structural invariant. Used by unit tests. Time O(n).
@@ -866,6 +881,13 @@ impl AttackTree {
                     ));
                 }
             }
+        }
+        let expected_links: usize = self.linked_parents.iter().map(Vec::len).sum();
+        if self.link_count as usize != expected_links {
+            return Err(format!(
+                "link_count {} != linked_parents sum {expected_links}",
+                self.link_count
+            ));
         }
         if let Err(e) = self.topological_order() {
             return Err(format!("graph has a cycle: {e}"));

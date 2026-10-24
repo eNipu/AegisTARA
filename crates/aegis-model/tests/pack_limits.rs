@@ -12,9 +12,9 @@ use std::io::Read;
 use std::sync::Arc;
 
 use aegis_model::{
-    CatalogSchemeDef, ImpactCategoryDef, LevelDef, Limit, MAX_LABEL_BYTES, MAX_PACK_FILE_BYTES,
-    Methodology, MethodologyDef, MethodologyError, PackError, PropertyDef, SegmentDef,
-    ThreatCategoryDef,
+    AttackPotentialDef, CatalogSchemeDef, FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef,
+    Limit, MAX_LABEL_BYTES, MAX_PACK_FILE_BYTES, Methodology, MethodologyDef, MethodologyError,
+    PackError, PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
 };
 use common::{key_of_len, max_def, pack_bytes, second_def};
 
@@ -61,7 +61,7 @@ fn key_cap_in_every_position() {
     const KEY: Limit = Limit::KeyBytes { max: 64 };
     // Each case sets one key position to `key`.
     type Set = fn(&mut MethodologyDef, Arc<str>);
-    let positions: [(&str, Set); 10] = [
+    let positions: [(&str, Set); 13] = [
         ("methodology key", |d, k| d.key = k),
         ("impact category key", |d, k| d.impact_categories[1].key = k),
         ("level key", |d, k| d.impact_categories[0].levels[2].key = k),
@@ -80,7 +80,8 @@ fn key_cap_in_every_position() {
         }),
         ("catalog scheme key", |d, k| d.catalog_schemes[0].key = k),
         ("feasibility level key", |d, k| {
-            d.feasibility_levels[2].key = k
+            d.feasibility_levels[2].key = Arc::clone(&k);
+            d.attack_potential.as_mut().expect("ap").bands[2].feasibility = k;
         }),
         ("risk level key", |d, k| {
             d.risk_levels.push(LevelDef {
@@ -94,6 +95,24 @@ fn key_cap_in_every_position() {
                 label: "Extra".into(),
             });
             d.impact_categories[0].risk_matrix[0][0] = k;
+        }),
+        ("feasibility factor key", |d, k| {
+            d.attack_potential.as_mut().expect("ap").factors[1].key = k;
+        }),
+        ("factor level key", |d, k| {
+            d.attack_potential.as_mut().expect("ap").factors[1].levels[2].key = k;
+        }),
+        ("potential band feasibility key", |d, k| {
+            d.feasibility_levels.push(LevelDef {
+                key: Arc::clone(&k),
+                label: "Extra".into(),
+            });
+            for c in &mut d.impact_categories {
+                for row in &mut c.risk_matrix {
+                    row.push("acceptable".into());
+                }
+            }
+            d.attack_potential.as_mut().expect("ap").bands[0].feasibility = k;
         }),
     ];
     for (what, set) in positions {
@@ -130,7 +149,7 @@ fn methodology_version_cap() {
 fn label_cap_in_every_position() {
     const LABEL: Limit = Limit::LabelBytes { max: 1024 };
     type Set = fn(&mut MethodologyDef, Arc<str>);
-    let positions: [(&str, Set); 8] = [
+    let positions: [(&str, Set); 10] = [
         ("methodology label", |d, l| d.label = l),
         ("impact category label", |d, l| {
             d.impact_categories[2].label = l
@@ -149,6 +168,12 @@ fn label_cap_in_every_position() {
             d.feasibility_levels[2].label = l
         }),
         ("risk level label", |d, l| d.risk_levels[1].label = l),
+        ("feasibility factor label", |d, l| {
+            d.attack_potential.as_mut().expect("ap").factors[0].label = l
+        }),
+        ("factor level label", |d, l| {
+            d.attack_potential.as_mut().expect("ap").factors[0].levels[1].label = l
+        }),
     ];
     assert_eq!(MAX_LABEL_BYTES, 1024);
     for (what, set) in positions {
@@ -225,9 +250,63 @@ fn feasibility_level_count_cap() {
             row.resize(16, "acceptable".into());
         }
     }
+    let f0 = Arc::clone(&d.feasibility_levels[0].key);
+    for b in &mut d.attack_potential.as_mut().expect("ap").bands {
+        b.feasibility = Arc::clone(&f0);
+    }
     at_cap(&d, "16 feasibility levels");
     d.feasibility_levels.push(level(16));
     over_cap(&d, Limit::Levels { max: 16 }, "17 feasibility levels");
+}
+
+#[test]
+fn feasibility_factor_and_band_count_caps() {
+    let factor = |i: usize| FactorDef {
+        key: key_of_len("af", i, 6),
+        label: "AF".into(),
+        levels: second_def().attack_potential.expect("ap").factors[0]
+            .levels
+            .clone(),
+    };
+    let mut d = second_def();
+    d.attack_potential.as_mut().expect("ap").factors = (0..16).map(factor).collect();
+    at_cap(&d, "16 feasibility factors");
+    d.attack_potential
+        .as_mut()
+        .expect("ap")
+        .factors
+        .push(factor(16));
+    over_cap(
+        &d,
+        Limit::FeasibilityFactors { max: 16 },
+        "17 feasibility factors",
+    );
+
+    // Factor levels cap.
+    let flvl = |i: usize| FactorLevelDef {
+        key: key_of_len("al", i, 6),
+        label: "AL".into(),
+        points: i as u16,
+    };
+    let mut d = second_def();
+    d.attack_potential.as_mut().expect("ap").factors[0].levels = (0..16).map(flvl).collect();
+    at_cap(&d, "16 factor levels");
+    d.attack_potential.as_mut().expect("ap").factors[0]
+        .levels
+        .push(flvl(16));
+    over_cap(&d, Limit::Levels { max: 16 }, "17 factor levels");
+
+    // Potential bands cap.
+    let band = |i: usize, last: bool| PotentialBandDef {
+        min: i as u16,
+        max: (!last).then_some(i as u16),
+        feasibility: "frequent".into(),
+    };
+    let mut d = second_def();
+    d.attack_potential.as_mut().expect("ap").bands = (0..16).map(|i| band(i, i == 15)).collect();
+    at_cap(&d, "16 potential bands");
+    d.attack_potential.as_mut().expect("ap").bands = (0..17).map(|i| band(i, i == 16)).collect();
+    over_cap(&d, Limit::Levels { max: 16 }, "17 potential bands");
 }
 
 #[test]
@@ -417,6 +496,10 @@ fn maximal_pack_loads_below_the_file_cap() {
     assert_eq!(def.catalog_schemes.len(), 16);
     assert_eq!(def.feasibility_levels.len(), 16);
     assert_eq!(def.risk_levels.len(), 16);
+    let ap: &AttackPotentialDef = def.attack_potential.as_ref().expect("ap");
+    assert_eq!(ap.factors.len(), 16);
+    assert!(ap.factors.iter().all(|f| f.levels.len() == 16));
+    assert_eq!(ap.bands.len(), 16);
     assert!(
         def.impact_categories
             .iter()

@@ -9,10 +9,10 @@ use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
     self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
     NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
-    StepFeasibilityByNode, StepMitigationsByNode, Text,
+    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, Text,
 };
 use crate::error::StoreError;
-use crate::id::{AssetId, ControlId, DamageId, ThreatId, TreeId};
+use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::project::Project;
@@ -31,6 +31,10 @@ struct SnapshotView<'a> {
     attack_trees: Trees<'a>,
     #[serde(skip_serializing_if = "Controls::is_empty")]
     security_controls: Controls<'a>,
+    #[serde(skip_serializing_if = "Goals::is_empty")]
+    cybersecurity_goals: Goals<'a>,
+    #[serde(skip_serializing_if = "Claims::is_empty")]
+    cybersecurity_claims: Claims<'a>,
 }
 
 /// What every entity view needs.
@@ -44,18 +48,32 @@ struct Ctx<'a> {
 struct Assets<'a>(Ctx<'a>);
 struct Damages<'a>(Ctx<'a>);
 struct Threats<'a>(Ctx<'a>);
-struct Trees<'a>(&'a Project);
+struct Trees<'a>(Ctx<'a>);
 struct Controls<'a>(&'a Project);
+struct Goals<'a>(&'a Project);
+struct Claims<'a>(&'a Project);
 
 impl Trees<'_> {
     fn is_empty(&self) -> bool {
-        self.0.attack_tree_count() == 0
+        self.0.p.attack_tree_count() == 0
     }
 }
 
 impl Controls<'_> {
     fn is_empty(&self) -> bool {
         self.0.security_control_count() == 0
+    }
+}
+
+impl Goals<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.cybersecurity_goal_count() == 0
+    }
+}
+
+impl Claims<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.cybersecurity_claim_count() == 0
     }
 }
 
@@ -92,6 +110,10 @@ struct ThreatView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     treatment: Option<RiskTreatmentWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    goal: Option<Required<Text<GoalId>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claim: Option<Required<Text<ClaimId>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
 
@@ -100,6 +122,8 @@ struct TreeView<'a> {
     id: Text<TreeId>,
     nodes: NodesView<'a>,
     step_feasibility: StepFeasibilityByNode<'a>,
+    #[serde(skip_serializing_if = "StepFactorsByNode::is_empty")]
+    step_factors: StepFactorsByNode<'a>,
     #[serde(skip_serializing_if = "StepMitigationsByNode::is_empty")]
     step_mitigations: StepMitigationsByNode<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,10 +138,33 @@ struct ControlView<'a> {
     provenance: Option<ProvenanceView<'a>>,
 }
 
+#[derive(Serialize)]
+struct GoalView<'a> {
+    id: Text<GoalId>,
+    name: &'a str,
+    controls: LinkedControls<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+#[derive(Serialize)]
+struct ClaimView<'a> {
+    id: Text<ClaimId>,
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
 /// A threat's damage links as public IDs, in stored (ID) order.
 struct LinkedDamages<'a> {
     p: &'a Project,
     links: &'a [crate::id::DamageIdx],
+}
+
+/// A goal's control links as public IDs, in stored (ID) order.
+struct LinkedControls<'a> {
+    p: &'a Project,
+    links: &'a [crate::id::ControlIdx],
 }
 
 impl Serialize for Assets<'_> {
@@ -177,6 +224,12 @@ impl Serialize for Threats<'_> {
                     .attack_tree()
                     .map(|idx| Required(p.attack_tree_id(idx).map(Text))),
                 treatment: t.treatment().map(RiskTreatmentWire::from),
+                goal: t
+                    .goal()
+                    .map(|idx| Required(p.cybersecurity_goal_id(idx).map(Text))),
+                claim: t
+                    .claim()
+                    .map(|idx| Required(p.cybersecurity_claim_id(idx).map(Text))),
                 provenance: ProvenanceView::of(t.provenance()),
             }
         }))
@@ -185,13 +238,19 @@ impl Serialize for Threats<'_> {
 
 impl Serialize for Trees<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let p = self.0;
+        let Ctx { p, order, .. } = self.0;
         s.collect_seq(p.attack_trees().map(|(tree_idx, id, tree)| {
             TreeView {
                 id: Text(id),
                 nodes: NodesView(tree),
                 step_feasibility: StepFeasibilityByNode {
                     project: p,
+                    tree_idx,
+                    tree,
+                },
+                step_factors: StepFactorsByNode {
+                    project: p,
+                    order,
                     tree_idx,
                     tree,
                 },
@@ -219,12 +278,48 @@ impl Serialize for Controls<'_> {
     }
 }
 
+impl Serialize for Goals<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(p.cybersecurity_goals().map(|(_, id, g)| GoalView {
+            id: Text(id),
+            name: g.name(),
+            controls: LinkedControls {
+                p,
+                links: g.controls(),
+            },
+            provenance: ProvenanceView::of(g.provenance()),
+        }))
+    }
+}
+
+impl Serialize for Claims<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(p.cybersecurity_claims().map(|(_, id, cl)| ClaimView {
+            id: Text(id),
+            name: cl.name(),
+            provenance: ProvenanceView::of(cl.provenance()),
+        }))
+    }
+}
+
 impl Serialize for LinkedDamages<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_seq(
             self.links
                 .iter()
                 .map(|&d| Required(self.p.damage_scenario_id(d).map(Text))),
+        )
+    }
+}
+
+impl Serialize for LinkedControls<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.links
+                .iter()
+                .map(|&c| Required(self.p.security_control_id(c).map(Text))),
         )
     }
 }
@@ -294,8 +389,10 @@ impl Project {
             assets: Assets(ctx),
             damage_scenarios: Damages(ctx),
             threat_scenarios: Threats(ctx),
-            attack_trees: Trees(self),
+            attack_trees: Trees(ctx),
             security_controls: Controls(self),
+            cybersecurity_goals: Goals(self),
+            cybersecurity_claims: Claims(self),
         };
         let mut out = BufWriter::new(w);
         serde_json::to_writer(&mut out, &view).map_err(wire::encode_error)?;
@@ -413,17 +510,42 @@ impl Project {
                 provenance: wire::unwrap_provenance(c.provenance),
             })?;
         }
+        for g in snapshot.cybersecurity_goals {
+            project.apply(Op::AddCybersecurityGoal {
+                id: g.id.0,
+                name: g.name.0,
+                controls: g.controls.0.into_iter().map(|c| c.0).collect(),
+                provenance: wire::unwrap_provenance(g.provenance),
+            })?;
+        }
+        for cl in snapshot.cybersecurity_claims {
+            project.apply(Op::AddCybersecurityClaim {
+                id: cl.id.0,
+                name: cl.name.0,
+                provenance: wire::unwrap_provenance(cl.provenance),
+            })?;
+        }
         for tr in snapshot.attack_trees {
             let provenance = wire::unwrap_provenance(tr.provenance);
             let id = tr.id.0;
-            let step_mitigations = tr.step_mitigations.0;
             project.apply(Op::AddAttackTree {
                 id,
                 tree: tr.nodes.0,
                 step_feasibility: tr.step_feasibility.0,
                 provenance: provenance.clone(),
             })?;
-            for (node, mitigations) in step_mitigations {
+            for (node, factors) in tr.step_factors.0 {
+                for (factor, level) in factors {
+                    project.apply(Op::SetStepFactor {
+                        tree: id,
+                        node,
+                        factor,
+                        level: Some(level),
+                        provenance: provenance.clone(),
+                    })?;
+                }
+            }
+            for (node, mitigations) in tr.step_mitigations.0 {
                 for (control, feasibility) in mitigations {
                     project.apply(Op::SetStepMitigation {
                         tree: id,
@@ -436,44 +558,65 @@ impl Project {
             }
         }
         for t in snapshot.threat_scenarios {
-            let provenance = wire::unwrap_provenance(t.provenance);
-            let id = t.id.0;
-            let direct_feasibility = t.direct_feasibility.map(|w| w.0);
-            let attack_tree = t.attack_tree.map(|w| w.0);
-            let treatment = t.treatment.map(Into::into);
-            project.apply(Op::AddThreatScenario {
-                id,
-                name: t.name.0,
-                asset: t.asset.0,
-                category: t.category.0,
-                catalog_refs: t.catalog_refs.0.into_iter().map(|r| r.0).collect(),
-                damages: t.damages.0.into_iter().map(|d| d.0).collect(),
-                provenance: provenance.clone(),
-            })?;
-            if let Some(level) = direct_feasibility {
-                project.apply(Op::SetThreatFeasibility {
-                    threat: id,
-                    level: Some(level),
-                    provenance: provenance.clone(),
-                })?;
-            }
-            if let Some(tree) = attack_tree {
-                project.apply(Op::SetThreatAttackTree {
-                    threat: id,
-                    tree: Some(tree),
-                    provenance: provenance.clone(),
-                })?;
-            }
-            if let Some(treatment) = treatment {
-                project.apply(Op::SetRiskTreatment {
-                    threat: id,
-                    treatment: Some(treatment),
-                    provenance,
-                })?;
-            }
+            apply_snapshot_threat(&mut project, t)?;
         }
         Ok(project)
     }
+}
+
+fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(), StoreError> {
+    let provenance = wire::unwrap_provenance(t.provenance);
+    let id = t.id.0;
+    let direct_feasibility = t.direct_feasibility.map(|w| w.0);
+    let attack_tree = t.attack_tree.map(|w| w.0);
+    let treatment = t.treatment.map(Into::into);
+    let goal = t.goal.map(|w| w.0);
+    let claim = t.claim.map(|w| w.0);
+    project.apply(Op::AddThreatScenario {
+        id,
+        name: t.name.0,
+        asset: t.asset.0,
+        category: t.category.0,
+        catalog_refs: t.catalog_refs.0.into_iter().map(|r| r.0).collect(),
+        damages: t.damages.0.into_iter().map(|d| d.0).collect(),
+        provenance: provenance.clone(),
+    })?;
+    if let Some(level) = direct_feasibility {
+        project.apply(Op::SetThreatFeasibility {
+            threat: id,
+            level: Some(level),
+            provenance: provenance.clone(),
+        })?;
+    }
+    if let Some(tree) = attack_tree {
+        project.apply(Op::SetThreatAttackTree {
+            threat: id,
+            tree: Some(tree),
+            provenance: provenance.clone(),
+        })?;
+    }
+    if let Some(treatment) = treatment {
+        project.apply(Op::SetRiskTreatment {
+            threat: id,
+            treatment: Some(treatment),
+            provenance: provenance.clone(),
+        })?;
+    }
+    if let Some(goal) = goal {
+        project.apply(Op::SetThreatGoal {
+            threat: id,
+            goal: Some(goal),
+            provenance: provenance.clone(),
+        })?;
+    }
+    if let Some(claim) = claim {
+        project.apply(Op::SetThreatClaim {
+            threat: id,
+            claim: Some(claim),
+            provenance,
+        })?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

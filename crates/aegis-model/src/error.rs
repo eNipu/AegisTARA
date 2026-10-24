@@ -4,10 +4,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::control::RiskTreatment;
-use crate::id::{AssetId, ControlId, DamageId, NodeId, NodeIdx, ThreatId, TreeId};
+use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, NodeIdx, ThreatId, TreeId};
 use crate::methodology::{
-    CatalogRef, CatalogScheme, CatalogSyntax, FeasibilityLevel, ImpactCategory, Level, Property,
-    RiskLevel, ThreatCategory,
+    CatalogRef, CatalogScheme, CatalogSyntax, FactorLevel, FeasibilityFactor, FeasibilityLevel,
+    ImpactCategory, Level, Property, RiskLevel, ThreatCategory,
 };
 use crate::store::{Limit, VocabKind};
 
@@ -39,6 +39,10 @@ pub enum EntityKind {
     TreeNode,
     /// A security control ([`SecurityControl`](crate::SecurityControl)).
     SecurityControl,
+    /// A cybersecurity goal ([`CybersecurityGoal`](crate::CybersecurityGoal)).
+    CybersecurityGoal,
+    /// A cybersecurity claim ([`CybersecurityClaim`](crate::CybersecurityClaim)).
+    CybersecurityClaim,
 }
 
 impl EntityKind {
@@ -50,6 +54,8 @@ impl EntityKind {
     /// assert_eq!(EntityKind::Asset.as_str(), "asset");
     /// assert_eq!(EntityKind::TreeNode.as_str(), "tree node");
     /// assert_eq!(EntityKind::SecurityControl.as_str(), "security control");
+    /// assert_eq!(EntityKind::CybersecurityGoal.as_str(), "cybersecurity goal");
+    /// assert_eq!(EntityKind::CybersecurityClaim.as_str(), "cybersecurity claim");
     /// ```
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -60,6 +66,8 @@ impl EntityKind {
             Self::AttackTree => "attack tree",
             Self::TreeNode => "tree node",
             Self::SecurityControl => "security control",
+            Self::CybersecurityGoal => "cybersecurity goal",
+            Self::CybersecurityClaim => "cybersecurity claim",
         }
     }
 }
@@ -250,6 +258,12 @@ pub enum ModelError {
     /// A security control with this ID already exists in the project.
     #[error("security control {0} already exists in the project")]
     DuplicateSecurityControl(ControlId),
+    /// A cybersecurity goal with this ID already exists in the project.
+    #[error("cybersecurity goal {0} already exists in the project")]
+    DuplicateCybersecurityGoal(GoalId),
+    /// A cybersecurity claim with this ID already exists in the project.
+    #[error("cybersecurity claim {0} already exists in the project")]
+    DuplicateCybersecurityClaim(ClaimId),
     /// No asset with this ID is in the project.
     #[error("asset {0} is not in the project")]
     UnknownAsset(AssetId),
@@ -265,6 +279,12 @@ pub enum ModelError {
     /// No security control with this ID is in the project.
     #[error("security control {0} is not in the project")]
     UnknownSecurityControl(ControlId),
+    /// No cybersecurity goal with this ID is in the project.
+    #[error("cybersecurity goal {0} is not in the project")]
+    UnknownCybersecurityGoal(GoalId),
+    /// No cybersecurity claim with this ID is in the project.
+    #[error("cybersecurity claim {0} is not in the project")]
+    UnknownCybersecurityClaim(ClaimId),
     /// No node with this ID is in the attack tree.
     #[error("node {node} is not in attack tree {tree}")]
     UnknownTreeNode {
@@ -346,6 +366,21 @@ pub enum ModelError {
     /// The feasibility level index is not in the project's methodology.
     #[error("feasibility level index {} is not in the methodology", .0.index())]
     UnknownFeasibilityLevel(FeasibilityLevel),
+    /// The attack potential factor index is not in the project's methodology.
+    #[error("feasibility factor index {} is not in the methodology", .0.index())]
+    UnknownFeasibilityFactor(FeasibilityFactor),
+    /// The factor level index is not in that attack potential factor's scale.
+    #[error(
+        "factor level index {} is not in the scale of feasibility factor index {}",
+        .level.index(),
+        .factor.index()
+    )]
+    UnknownFactorLevel {
+        /// The attack potential factor.
+        factor: FeasibilityFactor,
+        /// The out-of-range factor level.
+        level: FactorLevel,
+    },
     /// The risk level index is not in the project's methodology.
     #[error("risk level index {} is not in the methodology", .0.index())]
     UnknownRiskLevel(RiskLevel),
@@ -427,6 +462,15 @@ pub enum ModelError {
         /// How many step mitigations are attached across the tree.
         mitigations: usize,
     },
+    /// The attack tree cannot be removed while it still has attack potential
+    /// factor ratings attached to its steps; clear the factor ratings first.
+    #[error("attack tree {tree} still has {factors} step factor rating(s)")]
+    AttackTreeHasFactors {
+        /// The attack tree.
+        tree: TreeId,
+        /// How many step factor ratings are attached across the tree.
+        factors: usize,
+    },
     /// The security control cannot be removed: `steps` step mitigations
     /// reference it.
     #[error("security control {control} is attached to {steps} step(s)")]
@@ -435,6 +479,33 @@ pub enum ModelError {
         control: ControlId,
         /// How many attack tree steps reference it.
         steps: u32,
+    },
+    /// The security control cannot be removed: `goals` cybersecurity goals
+    /// link to it.
+    #[error("security control {control} is linked by {goals} cybersecurity goal(s)")]
+    SecurityControlInGoal {
+        /// The security control.
+        control: ControlId,
+        /// How many cybersecurity goals link to it.
+        goals: u32,
+    },
+    /// The cybersecurity goal cannot be removed: `threats` threat scenarios
+    /// reference it.
+    #[error("cybersecurity goal {goal} is referenced by {threats} threat(s)")]
+    CybersecurityGoalInUse {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// How many threat scenarios reference it.
+        threats: u32,
+    },
+    /// The cybersecurity claim cannot be removed: `threats` threat scenarios
+    /// reference it.
+    #[error("cybersecurity claim {claim} is referenced by {threats} threat(s)")]
+    CybersecurityClaimInUse {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// How many threat scenarios reference it.
+        threats: u32,
     },
     /// The threat scenario cannot be removed while it still references an
     /// attack tree; unlink the tree first.
@@ -466,6 +537,24 @@ pub enum ModelError {
         /// The risk treatment decision on the threat scenario.
         treatment: RiskTreatment,
     },
+    /// The threat scenario cannot be removed while it still references a
+    /// cybersecurity goal; unlink the goal first.
+    #[error("threat scenario {threat} still references cybersecurity goal {goal}")]
+    ThreatHasGoal {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The linked cybersecurity goal.
+        goal: GoalId,
+    },
+    /// The threat scenario cannot be removed while it still references a
+    /// cybersecurity claim; unlink the claim first.
+    #[error("threat scenario {threat} still references cybersecurity claim {claim}")]
+    ThreatHasClaim {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The linked cybersecurity claim.
+        claim: ClaimId,
+    },
     /// The threat scenario has no linked attack tree to evaluate.
     #[error("threat scenario {0} has no linked attack tree")]
     NoAttackTree(ThreatId),
@@ -496,6 +585,42 @@ pub enum ModelError {
         threat: ThreatId,
         /// The damage scenario.
         damage: DamageId,
+    },
+    /// The cybersecurity goal already links to this security control, or an op
+    /// lists it twice.
+    #[error("cybersecurity goal {goal} already links security control {control}")]
+    DuplicateGoalControl {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// The security control.
+        control: ControlId,
+    },
+    /// The cybersecurity goal does not link to this security control.
+    #[error("cybersecurity goal {goal} does not link security control {control}")]
+    GoalControlNotLinked {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// The security control.
+        control: ControlId,
+    },
+    /// A cybersecurity goal may link to at most `max` security controls.
+    ///
+    /// ```
+    /// use aegis_model::{GoalId, ModelError, MAX_GOAL_CONTROLS};
+    ///
+    /// let goal = GoalId::new_v7();
+    /// let err = ModelError::TooManyGoalControls { goal, max: MAX_GOAL_CONTROLS };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     format!("cybersecurity goal {goal} would link more than 16 security controls"),
+    /// );
+    /// ```
+    #[error("cybersecurity goal {goal} would link more than {max} security controls")]
+    TooManyGoalControls {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// The limit.
+        max: usize,
     },
     /// The threat does not have this catalog ref.
     #[error("threat scenario {threat} does not have catalog ref {catalog_ref}")]
@@ -648,6 +773,7 @@ pub enum ModelError {
 ///     properties: vec![],
 ///     threat_categories: vec![],
 ///     catalog_schemes: vec![],
+///     attack_potential: None,
 /// };
 /// assert_eq!(Methodology::new(def), Err(MethodologyError::NoImpactCategory));
 /// ```
@@ -674,6 +800,7 @@ pub enum MethodologyError {
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
+    ///     attack_potential: None,
     /// };
     /// let kept = format!("{}...", "K".repeat(61));
     /// assert_eq!(Methodology::new(def), Err(MethodologyError::InvalidKey(kept.into())));
@@ -860,6 +987,74 @@ pub enum MethodologyError {
     CatalogPrefix {
         /// Key of the scheme.
         scheme: Arc<str>,
+    },
+    /// `attack_potential.factors` has fewer than `min` or more than `max`
+    /// factors.
+    #[error("attack_potential must declare {min} to {max} factors")]
+    FeasibilityFactorCount {
+        /// Fewest factors.
+        min: usize,
+        /// Most factors.
+        max: usize,
+    },
+    /// Two attack potential factors share a key.
+    #[error("feasibility factor key {0:?} is declared twice")]
+    DuplicateFeasibilityFactor(Arc<str>),
+    /// An attack potential factor has fewer than `min` or more than `max`
+    /// levels.
+    #[error("feasibility factor {factor:?} must have {min} to {max} levels")]
+    FactorLevelCount {
+        /// Key of the factor.
+        factor: Arc<str>,
+        /// Fewest levels.
+        min: usize,
+        /// Most levels.
+        max: usize,
+    },
+    /// Two levels of one attack potential factor share a key.
+    #[error("factor level key {level:?} is declared twice in feasibility factor {factor:?}")]
+    DuplicateFactorLevel {
+        /// Key of the factor.
+        factor: Arc<str>,
+        /// The repeated factor level key.
+        level: Arc<str>,
+    },
+    /// A factor level declares a point score above `max`.
+    #[error("factor level {level:?} of feasibility factor {factor:?} exceeds max points {max}")]
+    FactorPointsTooLarge {
+        /// Key of the factor.
+        factor: Arc<str>,
+        /// Key of the factor level.
+        level: Arc<str>,
+        /// Maximum allowed points per factor level.
+        max: u16,
+    },
+    /// `attack_potential.bands` has fewer than `min` or more than `max` bands.
+    #[error("attack_potential must declare {min} to {max} score bands")]
+    PotentialBandCount {
+        /// Fewest bands.
+        min: usize,
+        /// Most bands.
+        max: usize,
+    },
+    /// A score band in `attack_potential.bands` does not form a contiguous,
+    /// non-overlapping partition of `0..` ending with an open-ended band.
+    #[error("score band {band} in attack_potential has invalid or non-contiguous range")]
+    PotentialBandRange {
+        /// Position of the invalid band.
+        band: usize,
+    },
+    /// A score band in `attack_potential.bands` names a feasibility level
+    /// that is not declared in `feasibility_levels`.
+    #[error(
+        "score band {band} in attack_potential names unknown feasibility level {feasibility:?}"
+    )]
+    UnknownBandFeasibilityLevel {
+        /// Position of the band.
+        band: usize,
+        /// The unknown feasibility level key, at most 64 bytes of it (cut like
+        /// [`InvalidKey`](Self::InvalidKey)'s).
+        feasibility: Arc<str>,
     },
 }
 

@@ -239,6 +239,166 @@
         "label": "Risk 5"
       }
     ],
+    "attack_potential": {
+      "factors": [
+        {
+          "key": "elapsed-time",
+          "label": "Elapsed time",
+          "levels": [
+            {
+              "key": "le-1d",
+              "label": "<= 1 day",
+              "points": 0
+            },
+            {
+              "key": "le-1w",
+              "label": "<= 1 week",
+              "points": 1
+            },
+            {
+              "key": "le-1m",
+              "label": "<= 1 month",
+              "points": 4
+            },
+            {
+              "key": "le-6m",
+              "label": "<= 6 months",
+              "points": 17
+            },
+            {
+              "key": "gt-6m",
+              "label": "> 6 months",
+              "points": 19
+            }
+          ]
+        },
+        {
+          "key": "expertise",
+          "label": "Expertise",
+          "levels": [
+            {
+              "key": "layman",
+              "label": "Layman",
+              "points": 0
+            },
+            {
+              "key": "proficient",
+              "label": "Proficient",
+              "points": 3
+            },
+            {
+              "key": "expert",
+              "label": "Expert",
+              "points": 6
+            },
+            {
+              "key": "multiple-experts",
+              "label": "Multiple experts",
+              "points": 8
+            }
+          ]
+        },
+        {
+          "key": "knowledge",
+          "label": "Knowledge of the item",
+          "levels": [
+            {
+              "key": "public",
+              "label": "Public",
+              "points": 0
+            },
+            {
+              "key": "restricted",
+              "label": "Restricted",
+              "points": 3
+            },
+            {
+              "key": "confidential",
+              "label": "Confidential",
+              "points": 7
+            },
+            {
+              "key": "strictly-confidential",
+              "label": "Strictly confidential",
+              "points": 11
+            }
+          ]
+        },
+        {
+          "key": "window-of-opportunity",
+          "label": "Window of opportunity",
+          "levels": [
+            {
+              "key": "unlimited",
+              "label": "Unlimited",
+              "points": 0
+            },
+            {
+              "key": "easy",
+              "label": "Easy",
+              "points": 1
+            },
+            {
+              "key": "moderate",
+              "label": "Moderate",
+              "points": 4
+            },
+            {
+              "key": "difficult",
+              "label": "Difficult",
+              "points": 10
+            }
+          ]
+        },
+        {
+          "key": "equipment",
+          "label": "Equipment",
+          "levels": [
+            {
+              "key": "standard",
+              "label": "Standard",
+              "points": 0
+            },
+            {
+              "key": "specialized",
+              "label": "Specialized",
+              "points": 4
+            },
+            {
+              "key": "bespoke",
+              "label": "Bespoke",
+              "points": 7
+            },
+            {
+              "key": "multiple-bespoke",
+              "label": "Multiple bespoke",
+              "points": 9
+            }
+          ]
+        }
+      ],
+      "bands": [
+        {
+          "min": 0,
+          "max": 13,
+          "feasibility": "high"
+        },
+        {
+          "min": 14,
+          "max": 19,
+          "feasibility": "medium"
+        },
+        {
+          "min": 20,
+          "max": 24,
+          "feasibility": "low"
+        },
+        {
+          "min": 25,
+          "feasibility": "very-low"
+        }
+      ]
+    },
     "properties": [
       {
         "key": "confidentiality",

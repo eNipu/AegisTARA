@@ -4,8 +4,11 @@ use std::sync::Arc;
 
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
-use crate::id::{AssetId, ControlId, DamageId, NodeId, ThreatId, TreeId};
-use crate::methodology::{CatalogRef, FeasibilityLevel, ImpactCategory, Level, ThreatCategory};
+use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
+use crate::methodology::{
+    CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory, Level,
+    ThreatCategory,
+};
 use crate::provenance::Provenance;
 use crate::tree::AttackTree;
 
@@ -42,6 +45,7 @@ use crate::tree::AttackTree;
 /// | `RemoveThreatScenario` | `AddThreatScenario`, fields in stored order | O(log n + k + p) |
 /// | `AddAttackTree` | `RemoveAttackTree` | O(log n + V + E) |
 /// | `SetStepFeasibility` | the same with the old level and provenance | O(log n + log V) |
+/// | `SetStepFactor` | the same with the old level and provenance | O(log n + log V + F) |
 /// | `SetThreatFeasibility` | the same with the old level and provenance | O(log n) |
 /// | `SetThreatAttackTree` | the same with the old tree and provenance | O(log n) |
 /// | `SetRiskTreatment` | the same with the old treatment and provenance | O(log n) |
@@ -50,6 +54,16 @@ use crate::tree::AttackTree;
 /// | `RenameSecurityControl` | the same with the old name and provenance | O(log n) |
 /// | `RemoveSecurityControl` | `AddSecurityControl` with the old fields and provenance | O(log n) |
 /// | `SetStepMitigation` | the same with the old feasibility and provenance | O(log n + log V + m) |
+/// | `AddCybersecurityGoal` | `RemoveCybersecurityGoal` | O(m log n + m log m) |
+/// | `RenameCybersecurityGoal` | the same with the old name and provenance | O(log n) |
+/// | `LinkGoalControl` | `UnlinkGoalControl` with the old provenance | O(log n + m) |
+/// | `UnlinkGoalControl` | `LinkGoalControl` with the old provenance | O(log n + m) |
+/// | `RemoveCybersecurityGoal` | `AddCybersecurityGoal`, controls in stored order | O(log n + m) |
+/// | `AddCybersecurityClaim` | `RemoveCybersecurityClaim` | O(log n) |
+/// | `RenameCybersecurityClaim` | the same with the old name and provenance | O(log n) |
+/// | `RemoveCybersecurityClaim` | `AddCybersecurityClaim` with the old fields and provenance | O(log n) |
+/// | `SetThreatGoal` | the same with the old goal and provenance | O(log n) |
+/// | `SetThreatClaim` | the same with the old claim and provenance | O(log n) |
 ///
 /// ```
 /// use std::sync::Arc;
@@ -248,6 +262,27 @@ pub enum Op {
         /// Provenance of the step feasibility change.
         provenance: Provenance,
     },
+    /// Sets or clears (`None` = unrated) the rating of one attack potential
+    /// factor on one step node in an attack tree.
+    ///
+    /// When every factor in the methodology's attack potential vocabulary is
+    /// rated on `node`, [`Project::step_attack_potential`](crate::Project::step_attack_potential)
+    /// resolves the step's score, band, and feasibility, and
+    /// [`Project::effective_step_feasibility`](crate::Project::effective_step_feasibility)
+    /// prefers that resolved feasibility over any direct
+    /// [`Op::SetStepFeasibility`] rating.
+    SetStepFactor {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// Existing step node in `tree`.
+        node: NodeId,
+        /// The attack potential factor.
+        factor: FeasibilityFactor,
+        /// The new factor rating, or `None` for unrated.
+        level: Option<FactorLevel>,
+        /// Provenance of the step factor change.
+        provenance: Provenance,
+    },
     /// Sets or clears (`None` = unrated) the direct feasibility rating of a
     /// threat scenario.
     ///
@@ -285,7 +320,7 @@ pub enum Op {
         provenance: Provenance,
     },
     /// Removes an attack tree that no threat scenario links to and that has
-    /// no attached step mitigations.
+    /// no attached step mitigations or step factor ratings.
     RemoveAttackTree {
         /// Existing attack tree.
         id: TreeId,
@@ -328,12 +363,101 @@ pub enum Op {
         /// Provenance of the mitigation change.
         provenance: Provenance,
     },
+    /// Adds a cybersecurity goal.
+    AddCybersecurityGoal {
+        /// Unused cybersecurity goal ID.
+        id: GoalId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Linked security controls, unique, at most 16, in any order
+        /// (stored sorted by ID).
+        controls: Vec<ControlId>,
+        /// Provenance of the cybersecurity goal creation.
+        provenance: Provenance,
+    },
+    /// Renames a cybersecurity goal.
+    RenameCybersecurityGoal {
+        /// Existing cybersecurity goal.
+        id: GoalId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Links a cybersecurity goal to a security control. A goal links at most
+    /// 16 controls.
+    LinkGoalControl {
+        /// Existing cybersecurity goal.
+        goal: GoalId,
+        /// Existing security control, not yet linked on `goal`.
+        control: ControlId,
+        /// Provenance of linking the security control.
+        provenance: Provenance,
+    },
+    /// Unlinks a cybersecurity goal from a security control.
+    UnlinkGoalControl {
+        /// Existing cybersecurity goal.
+        goal: GoalId,
+        /// A security control linked on `goal`.
+        control: ControlId,
+        /// Provenance of unlinking the security control.
+        provenance: Provenance,
+    },
+    /// Removes a cybersecurity goal that no threat scenario references.
+    RemoveCybersecurityGoal {
+        /// Existing cybersecurity goal.
+        id: GoalId,
+    },
+    /// Adds a cybersecurity claim.
+    AddCybersecurityClaim {
+        /// Unused cybersecurity claim ID.
+        id: ClaimId,
+        /// Statement/name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Provenance of the cybersecurity claim creation.
+        provenance: Provenance,
+    },
+    /// Renames a cybersecurity claim.
+    RenameCybersecurityClaim {
+        /// Existing cybersecurity claim.
+        id: ClaimId,
+        /// New statement/name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Removes a cybersecurity claim that no threat scenario references.
+    RemoveCybersecurityClaim {
+        /// Existing cybersecurity claim.
+        id: ClaimId,
+    },
+    /// Links a threat scenario to a cybersecurity goal, replaces its linked
+    /// goal, or unlinks it (`None`).
+    SetThreatGoal {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// Existing cybersecurity goal, or `None` to unlink.
+        goal: Option<GoalId>,
+        /// Provenance of linking or unlinking the cybersecurity goal.
+        provenance: Provenance,
+    },
+    /// Links a threat scenario to a cybersecurity claim, replaces its linked
+    /// claim, or unlinks it (`None`).
+    SetThreatClaim {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// Existing cybersecurity claim, or `None` to unlink.
+        claim: Option<ClaimId>,
+        /// Provenance of linking or unlinking the cybersecurity claim.
+        provenance: Provenance,
+    },
 }
 
 impl Op {
     /// Returns the provenance carried by this operation, or `None` for the
-    /// five entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
-    /// `RemoveThreatScenario`, `RemoveAttackTree`, `RemoveSecurityControl`).
+    /// seven entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
+    /// `RemoveThreatScenario`, `RemoveAttackTree`, `RemoveSecurityControl`,
+    /// `RemoveCybersecurityGoal`, `RemoveCybersecurityClaim`).
     /// Time O(1), space O(1).
     ///
     /// ```
@@ -367,17 +491,28 @@ impl Op {
             | Self::UnlinkDamage { provenance, .. }
             | Self::AddAttackTree { provenance, .. }
             | Self::SetStepFeasibility { provenance, .. }
+            | Self::SetStepFactor { provenance, .. }
             | Self::SetThreatFeasibility { provenance, .. }
             | Self::SetThreatAttackTree { provenance, .. }
             | Self::SetRiskTreatment { provenance, .. }
             | Self::AddSecurityControl { provenance, .. }
             | Self::RenameSecurityControl { provenance, .. }
-            | Self::SetStepMitigation { provenance, .. } => Some(provenance),
+            | Self::SetStepMitigation { provenance, .. }
+            | Self::AddCybersecurityGoal { provenance, .. }
+            | Self::RenameCybersecurityGoal { provenance, .. }
+            | Self::LinkGoalControl { provenance, .. }
+            | Self::UnlinkGoalControl { provenance, .. }
+            | Self::AddCybersecurityClaim { provenance, .. }
+            | Self::RenameCybersecurityClaim { provenance, .. }
+            | Self::SetThreatGoal { provenance, .. }
+            | Self::SetThreatClaim { provenance, .. } => Some(provenance),
             Self::RemoveAsset { .. }
             | Self::RemoveDamageScenario { .. }
             | Self::RemoveThreatScenario { .. }
             | Self::RemoveAttackTree { .. }
-            | Self::RemoveSecurityControl { .. } => None,
+            | Self::RemoveSecurityControl { .. }
+            | Self::RemoveCybersecurityGoal { .. }
+            | Self::RemoveCybersecurityClaim { .. } => None,
         }
     }
 }

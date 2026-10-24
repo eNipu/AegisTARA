@@ -22,7 +22,9 @@
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 
-use aegis_model::{AttackTree, GateKind, MaxMin, ModelError, Node, NodeId, NodeIdx, evaluate};
+use aegis_model::{
+    AttackTree, GateKind, MaxMin, ModelError, Node, NodeId, NodeIdx, TreeEvalCache, evaluate,
+};
 use divan::counter::ItemsCount;
 use divan::{Bencher, black_box};
 
@@ -59,6 +61,7 @@ impl Rng {
 struct Fixture {
     tree: AttackTree,
     levels: Vec<u8>,
+    steps: Vec<NodeIdx>,
 }
 
 /// Builds a tree of exactly `n` nodes, breadth-first, in which every gate
@@ -114,7 +117,11 @@ fn build(n: usize, seed: u64) -> Result<Fixture, ModelError> {
     for s in &steps {
         levels[s.index()] = u8::try_from(rng.below(5)).unwrap_or(0);
     }
-    Ok(Fixture { tree, levels })
+    Ok(Fixture {
+        tree,
+        levels,
+        steps,
+    })
 }
 
 /// The fixture for `n` nodes, built once per process outside timing.
@@ -168,4 +175,34 @@ fn topological_order_only(bencher: Bencher, n: usize) {
     bencher
         .counter(ItemsCount::new(f.tree.len()))
         .bench_local(|| black_box(&f.tree).topological_order());
+}
+
+/// Incremental evaluation of a single step rating change via `TreeEvalCache`
+/// against the "Incremental recompute on one rating change" budget (<= 5 ms
+/// at `large` = 100,000 nodes).
+#[divan::bench(args = SIZES, sample_count = 100, max_time = 10)]
+fn incremental_single_step(bencher: Bencher, n: usize) {
+    let Some(f) = fixture(n) else {
+        return;
+    };
+    let domain = MaxMin::<u8>::new();
+    let leaf = |i: NodeIdx| f.levels.get(i.index()).copied();
+    let Ok(mut cache) = TreeEvalCache::new(&f.tree, &domain, leaf) else {
+        return;
+    };
+    let mut cursor = 0usize;
+    let mut alt_val = 0u8;
+    bencher.bench_local(|| {
+        let step = f.steps[cursor % f.steps.len()];
+        cursor = cursor.wrapping_add(1);
+        alt_val = (alt_val + 1) % 5;
+        let v = alt_val;
+        cache.recompute_steps(black_box(&f.tree), &domain, [step], |i| {
+            if i == step {
+                Some(v)
+            } else {
+                f.levels.get(i.index()).copied()
+            }
+        })
+    });
 }

@@ -85,7 +85,7 @@ use std::fmt;
 
 use aegis_model::{
     AttackTree, AttributeDomain, Derivation, Evaluation, GateKind, MaxMin, MinTime, ModelError,
-    Node, NodeId, NodeIdx, evaluate,
+    Node, NodeId, NodeIdx, TreeEvalCache, evaluate,
 };
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -830,6 +830,64 @@ fn naive_minimal_cut_sets(
     minimal
 }
 
+/// Checks that `TreeEvalCache::recompute_steps` matches a fresh `evaluate`
+/// on every node's value and derivation across a sequence of single-step and
+/// multi-step leaf value edits.
+fn check_incremental_cache_domain<D: Oracle>(
+    built: &Built,
+    domain: &D,
+    plan: &Plan,
+    edits: &[(Vec<usize>, Vec<u64>)],
+) -> Result<(), TestCaseError> {
+    let steps: Vec<NodeIdx> = built
+        .nodes
+        .iter()
+        .copied()
+        .filter(|&n| matches!(built.tree.get(n), Some(Node::Step { .. })))
+        .collect();
+    if steps.is_empty() {
+        return Ok(());
+    }
+
+    let mut current_raw: Vec<u64> = built.nodes.iter().map(|&n| raw(plan, n)).collect();
+    let mut cache = TreeEvalCache::new(&built.tree, domain, |n| {
+        current_raw.get(n.index()).copied().map(|r| domain.leaf(r))
+    })
+    .map_err(fail)?;
+    let initial = evaluate(&built.tree, domain, |n| {
+        current_raw.get(n.index()).copied().map(|r| domain.leaf(r))
+    })
+    .map_err(fail)?;
+    prop_assert_eq!(cache.evaluation(), &initial);
+
+    for (step_picks, new_vals) in edits {
+        let mut dirty = Vec::with_capacity(step_picks.len());
+        for (i, &pick) in step_picks.iter().enumerate() {
+            let step = steps[pick % steps.len()];
+            let val = new_vals
+                .get(i % new_vals.len().max(1))
+                .copied()
+                .unwrap_or(0);
+            if let Some(slot) = current_raw.get_mut(step.index()) {
+                *slot = val;
+            }
+            dirty.push(step);
+        }
+        let recomputed = cache
+            .recompute_steps(&built.tree, domain, dirty, |n| {
+                current_raw.get(n.index()).copied().map(|r| domain.leaf(r))
+            })
+            .map_err(fail)?;
+        prop_assert!(recomputed <= built.tree.len());
+        let expected = evaluate(&built.tree, domain, |n| {
+            current_raw.get(n.index()).copied().map(|r| domain.leaf(r))
+        })
+        .map_err(fail)?;
+        prop_assert_eq!(cache.evaluation(), &expected);
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Properties
 // ---------------------------------------------------------------------------
@@ -904,6 +962,26 @@ proptest! {
     fn random_dag_attack_paths_match_minimal_cut_set_oracle(plan in small_plan()) {
         let built = build(&plan, true)?;
         check_attack_paths(&built, &plan)?;
+    }
+
+    /// Job 025: `TreeEvalCache::recompute_steps` matches a fresh `evaluate`
+    /// on every node's value and derivation across sequences of single-step
+    /// and multi-step mutations on all three domains.
+    #[test]
+    fn random_dag_incremental_cache_matches_full_evaluate(
+        plan in small_plan(),
+        edits in prop::collection::vec(
+            (
+                prop::collection::vec(0usize..128, 1..=4),
+                prop::collection::vec(any::<u64>(), 1..=4),
+            ),
+            1..=10,
+        ),
+    ) {
+        let built = build(&plan, true)?;
+        check_incremental_cache_domain(&built, &MaxMin::<u8>::new(), &plan, &edits)?;
+        check_incremental_cache_domain(&built, &MinTime, &plan, &edits)?;
+        check_incremental_cache_domain(&built, &Poly, &plan, &edits)?;
     }
 }
 

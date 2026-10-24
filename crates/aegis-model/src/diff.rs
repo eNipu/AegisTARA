@@ -21,7 +21,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::id::{AssetId, ControlId, DamageId, ThreatId, TreeId};
+use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
 use crate::methodology::{FeasibilityLevel, RiskLevel};
 
 /// Added, removed, and modified entity IDs of one entity kind between a
@@ -557,6 +557,8 @@ pub struct ProjectDiff {
     pub(crate) threat_scenarios: EntityDiff<ThreatId>,
     pub(crate) attack_trees: EntityDiff<TreeId>,
     pub(crate) security_controls: EntityDiff<ControlId>,
+    pub(crate) cybersecurity_goals: EntityDiff<GoalId>,
+    pub(crate) cybersecurity_claims: EntityDiff<ClaimId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
 }
 
@@ -636,6 +638,36 @@ impl ProjectDiff {
         &self.security_controls
     }
 
+    /// Returns the added, removed, and modified [`GoalId`]s in canonical
+    /// order.
+    ///
+    /// Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(ProjectDiff::default().cybersecurity_goals().is_empty());
+    /// ```
+    #[must_use]
+    pub fn cybersecurity_goals(&self) -> &EntityDiff<GoalId> {
+        &self.cybersecurity_goals
+    }
+
+    /// Returns the added, removed, and modified [`ClaimId`]s in canonical
+    /// order.
+    ///
+    /// Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(ProjectDiff::default().cybersecurity_claims().is_empty());
+    /// ```
+    #[must_use]
+    pub fn cybersecurity_claims(&self) -> &EntityDiff<ClaimId> {
+        &self.cybersecurity_claims
+    }
+
     /// Returns the [`ThreatRiskDelta`]s for all threat scenarios affected by
     /// the diff (added, removed, or modified threat scenarios, or threat
     /// scenarios referencing a modified asset, damage scenario, attack tree,
@@ -685,6 +717,8 @@ impl ProjectDiff {
             && self.threat_scenarios.is_empty()
             && self.attack_trees.is_empty()
             && self.security_controls.is_empty()
+            && self.cybersecurity_goals.is_empty()
+            && self.cybersecurity_claims.is_empty()
     }
 }
 

@@ -24,9 +24,11 @@ use serde::de::{Deserialize, Deserializer, Visitor};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 use super::{
-    CatalogSchemeDef, CatalogSyntax, ImpactCategoryDef, LevelDef, MAX_CATALOG_SCHEMES,
+    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
+    ImpactCategoryDef, LevelDef, MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS,
     MAX_IMPACT_CATEGORIES, MAX_LEVELS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS,
-    MAX_THREAT_CATEGORIES, Methodology, MethodologyDef, PropertyDef, SegmentDef, ThreatCategoryDef,
+    MAX_THREAT_CATEGORIES, Methodology, MethodologyDef, PotentialBandDef, PropertyDef, SegmentDef,
+    ThreatCategoryDef,
 };
 use crate::error::PackError;
 use crate::store::wire::{
@@ -58,6 +60,7 @@ pack_caps! {
     PrefixCap = MAX_PREFIX_LEN, Limit::CATALOG_PREFIX;
     ImpactCategoriesCap = MAX_IMPACT_CATEGORIES, Limit::IMPACT_CATEGORIES;
     LevelsCap = MAX_LEVELS, Limit::LEVELS;
+    FeasibilityFactorsCap = MAX_FEASIBILITY_FACTORS, Limit::FEASIBILITY_FACTORS;
     PropertiesCap = MAX_PROPERTIES, Limit::PROPERTIES;
     ThreatCategoriesCap = MAX_THREAT_CATEGORIES, Limit::THREAT_CATEGORIES;
     CatalogSchemesCap = MAX_CATALOG_SCHEMES, Limit::CATALOG_SCHEMES;
@@ -138,6 +141,8 @@ struct DefWire {
     impact_categories: BoundedVec<Object<ImpactCategoryWire>, ImpactCategoriesCap>,
     feasibility_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
     risk_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
+    #[serde(default)]
+    attack_potential: Option<Object<AttackPotentialWire>>,
     properties: BoundedVec<Object<EntryWire>, PropertiesCap>,
     threat_categories: BoundedVec<Object<ThreatCategoryWire>, ThreatCategoriesCap>,
     catalog_schemes: BoundedVec<Object<CatalogSchemeWire>, CatalogSchemesCap>,
@@ -149,6 +154,40 @@ struct DefWire {
 struct EntryWire {
     key: Key,
     label: Label,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttackPotentialWire {
+    factors: BoundedVec<Object<FactorWire>, FeasibilityFactorsCap>,
+    bands: BoundedVec<Object<PotentialBandWire>, LevelsCap>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FactorWire {
+    key: Key,
+    label: Label,
+    levels: BoundedVec<Object<FactorLevelWire>, LevelsCap>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FactorLevelWire {
+    key: Key,
+    label: Label,
+    points: u16,
+}
+
+/// One score band. `max` may be missing or `null`; both mean `None`
+/// (unbounded upper end).
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PotentialBandWire {
+    min: u16,
+    #[serde(default)]
+    max: Option<u16>,
+    feasibility: Key,
 }
 
 #[derive(serde::Deserialize)]
@@ -192,6 +231,42 @@ struct SegmentWire {
     max: u16,
     #[serde(default)]
     digits: Option<u8>,
+}
+
+impl From<AttackPotentialWire> for AttackPotentialDef {
+    fn from(ap: AttackPotentialWire) -> Self {
+        AttackPotentialDef {
+            factors: ap
+                .factors
+                .0
+                .into_iter()
+                .map(|Object(f)| FactorDef {
+                    key: f.key.0,
+                    label: f.label.0,
+                    levels: f
+                        .levels
+                        .0
+                        .into_iter()
+                        .map(|Object(fl)| FactorLevelDef {
+                            key: fl.key.0,
+                            label: fl.label.0,
+                            points: fl.points,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            bands: ap
+                .bands
+                .0
+                .into_iter()
+                .map(|Object(b)| PotentialBandDef {
+                    min: b.min,
+                    max: b.max,
+                    feasibility: b.feasibility.0,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Moves the decoded values into a definition: no string is copied, only
@@ -239,6 +314,7 @@ impl From<DefWire> for MethodologyDef {
                 .map(entry)
                 .map(|(key, label)| LevelDef { key, label })
                 .collect(),
+            attack_potential: w.attack_potential.map(|Object(ap)| ap.into()),
             properties: w
                 .properties
                 .0
@@ -324,16 +400,66 @@ impl Serialize for View<'_, Vec<Arc<str>>> {
 impl Serialize for View<'_, MethodologyDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("methodology", 9)?;
+        let mut st = s.serialize_struct("methodology", 10)?;
         st.serialize_field("key", &*d.key)?;
         st.serialize_field("version", &*d.version)?;
         st.serialize_field("label", &*d.label)?;
         st.serialize_field("impact_categories", &View(d.impact_categories.as_slice()))?;
         st.serialize_field("feasibility_levels", &View(d.feasibility_levels.as_slice()))?;
         st.serialize_field("risk_levels", &View(d.risk_levels.as_slice()))?;
+        match &d.attack_potential {
+            Some(ap) => st.serialize_field("attack_potential", &View(ap))?,
+            None => st.skip_field("attack_potential")?,
+        }
         st.serialize_field("properties", &View(d.properties.as_slice()))?;
         st.serialize_field("threat_categories", &View(d.threat_categories.as_slice()))?;
         st.serialize_field("catalog_schemes", &View(d.catalog_schemes.as_slice()))?;
+        st.end()
+    }
+}
+
+impl Serialize for View<'_, AttackPotentialDef> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let ap = self.0;
+        let mut st = s.serialize_struct("attack_potential", 2)?;
+        st.serialize_field("factors", &View(ap.factors.as_slice()))?;
+        st.serialize_field("bands", &View(ap.bands.as_slice()))?;
+        st.end()
+    }
+}
+
+impl Serialize for View<'_, FactorDef> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let f = self.0;
+        let mut st = s.serialize_struct("factor", 3)?;
+        st.serialize_field("key", &*f.key)?;
+        st.serialize_field("label", &*f.label)?;
+        st.serialize_field("levels", &View(f.levels.as_slice()))?;
+        st.end()
+    }
+}
+
+impl Serialize for View<'_, FactorLevelDef> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let fl = self.0;
+        let mut st = s.serialize_struct("factor_level", 3)?;
+        st.serialize_field("key", &*fl.key)?;
+        st.serialize_field("label", &*fl.label)?;
+        st.serialize_field("points", &fl.points)?;
+        st.end()
+    }
+}
+
+impl Serialize for View<'_, PotentialBandDef> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let b = self.0;
+        let mut st = s.serialize_struct("potential_band", 3)?;
+        st.serialize_field("min", &b.min)?;
+        match b.max {
+            Some(m) => st.serialize_field("max", &m)?,
+            None => st.skip_field("max")?,
+        }
+        st.serialize_field("feasibility", &*b.feasibility)?;
         st.end()
     }
 }

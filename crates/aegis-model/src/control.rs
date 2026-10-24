@@ -1,4 +1,5 @@
-//! Security controls, step mitigations, and risk treatment decisions.
+//! Security controls, step mitigations, risk treatment decisions,
+//! cybersecurity goals, and cybersecurity claims.
 
 use std::fmt;
 use std::sync::Arc;
@@ -9,6 +10,13 @@ use crate::provenance::Provenance;
 
 /// Maximum number of [`StepMitigation`]s attached to one attack step.
 pub const MAX_STEP_MITIGATIONS: usize = 16;
+
+/// Maximum number of [`SecurityControl`]s a [`CybersecurityGoal`] may link to.
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_GOAL_CONTROLS, 16);
+/// ```
+pub const MAX_GOAL_CONTROLS: usize = 16;
 
 /// A security control (countermeasure or safeguard) in a
 /// [`Project`](crate::Project).
@@ -305,5 +313,225 @@ impl RiskTreatment {
 impl fmt::Display for RiskTreatment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// A cybersecurity goal in a [`Project`](crate::Project) (ISO/SAE 21434
+/// Clause 15.5).
+///
+/// A cybersecurity goal is a top-level security requirement associated with one
+/// or more threat scenarios treated with [`RiskTreatment::Reduce`] and
+/// realized by linking one or more [`SecurityControl`]s (sorted by
+/// [`ControlId`](crate::ControlId), unique, at most [`MAX_GOAL_CONTROLS`]).
+///
+/// Built and changed only through [`Project::apply`](crate::Project::apply).
+///
+/// ```
+/// use std::sync::Arc;
+/// use aegis_model::{ControlId, GoalId, Methodology, Op, Project, Provenance};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+/// let ctrl = ControlId::new_v7();
+/// project.apply(Op::AddSecurityControl {
+///     id: ctrl,
+///     name: "SecOC message authentication".into(),
+///     provenance: Provenance::default(),
+/// })?;
+/// let goal = GoalId::new_v7();
+/// project.apply(Op::AddCybersecurityGoal {
+///     id: goal,
+///     name: "Prevent unauthorized brake actuation commands".into(),
+///     controls: vec![ctrl],
+///     provenance: Provenance::default(),
+/// })?;
+/// let idx = project.cybersecurity_goal_idx(&goal).ok_or("missing")?;
+/// let g = project.cybersecurity_goal(idx).ok_or("missing")?;
+/// assert_eq!(g.name(), "Prevent unauthorized brake actuation commands");
+/// assert_eq!(g.controls(), [project.security_control_idx(&ctrl).ok_or("missing")?]);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CybersecurityGoal {
+    pub(crate) name: Arc<str>,
+    /// Sorted by the target's `ControlId`, unique, at most [`MAX_GOAL_CONTROLS`].
+    pub(crate) controls: Vec<ControlIdx>,
+    pub(crate) provenance: Provenance,
+}
+
+impl CybersecurityGoal {
+    /// Returns the cybersecurity goal's name. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{GoalId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = GoalId::new_v7();
+    /// project.apply(Op::AddCybersecurityGoal {
+    ///     id,
+    ///     name: "Ensure firmware authenticity".into(),
+    ///     controls: vec![],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.cybersecurity_goal_idx(&id).ok_or("missing")?;
+    /// let g = project.cybersecurity_goal(idx).ok_or("missing")?;
+    /// assert_eq!(g.name(), "Ensure firmware authenticity");
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the linked security controls, sorted by public ID and unique.
+    /// Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ControlId, GoalId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl,
+    ///     name: "Secure boot".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let id = GoalId::new_v7();
+    /// project.apply(Op::AddCybersecurityGoal {
+    ///     id,
+    ///     name: "Ensure firmware authenticity".into(),
+    ///     controls: vec![ctrl],
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.cybersecurity_goal_idx(&id).ok_or("missing")?;
+    /// let g = project.cybersecurity_goal(idx).ok_or("missing")?;
+    /// assert_eq!(g.controls(), [project.security_control_idx(&ctrl).ok_or("missing")?]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn controls(&self) -> &[ControlIdx] {
+        &self.controls
+    }
+
+    /// Returns the provenance of the last [`Op`](crate::Op) that created or
+    /// modified this cybersecurity goal. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{GoalId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = GoalId::new_v7();
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// project.apply(Op::AddCybersecurityGoal {
+    ///     id,
+    ///     name: "Ensure firmware authenticity".into(),
+    ///     controls: vec![],
+    ///     provenance: prov.clone(),
+    /// })?;
+    /// let idx = project.cybersecurity_goal_idx(&id).ok_or("missing")?;
+    /// let g = project.cybersecurity_goal(idx).ok_or("missing")?;
+    /// assert_eq!(g.provenance(), &prov);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
+}
+
+/// A cybersecurity claim in a [`Project`](crate::Project) (ISO/SAE 21434
+/// Clause 15.5).
+///
+/// A cybersecurity claim records the rationale and assumptions justifying a
+/// [`RiskTreatment::Retain`] or [`RiskTreatment::Share`] decision on one or
+/// more threat scenarios.
+///
+/// Built and changed only through [`Project::apply`](crate::Project::apply).
+///
+/// ```
+/// use std::sync::Arc;
+/// use aegis_model::{ClaimId, Methodology, Op, Project, Provenance};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+/// let id = ClaimId::new_v7();
+/// project.apply(Op::AddCybersecurityClaim {
+///     id,
+///     name: "Backend PKI is operated by certified TSP under SLA".into(),
+///     provenance: Provenance::default(),
+/// })?;
+/// let idx = project.cybersecurity_claim_idx(&id).ok_or("missing")?;
+/// let cl = project.cybersecurity_claim(idx).ok_or("missing")?;
+/// assert_eq!(cl.name(), "Backend PKI is operated by certified TSP under SLA");
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CybersecurityClaim {
+    pub(crate) name: Arc<str>,
+    pub(crate) provenance: Provenance,
+}
+
+impl CybersecurityClaim {
+    /// Returns the cybersecurity claim's statement/name. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ClaimId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ClaimId::new_v7();
+    /// project.apply(Op::AddCybersecurityClaim {
+    ///     id,
+    ///     name: "Physical access requires locked enclosure key".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.cybersecurity_claim_idx(&id).ok_or("missing")?;
+    /// let cl = project.cybersecurity_claim(idx).ok_or("missing")?;
+    /// assert_eq!(cl.name(), "Physical access requires locked enclosure key");
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the provenance of the last [`Op`](crate::Op) that created or
+    /// modified this cybersecurity claim. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ClaimId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ClaimId::new_v7();
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// project.apply(Op::AddCybersecurityClaim {
+    ///     id,
+    ///     name: "Physical access requires locked enclosure key".into(),
+    ///     provenance: prov.clone(),
+    /// })?;
+    /// let idx = project.cybersecurity_claim_idx(&id).ok_or("missing")?;
+    /// let cl = project.cybersecurity_claim(idx).ok_or("missing")?;
+    /// assert_eq!(cl.provenance(), &prov);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
     }
 }

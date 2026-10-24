@@ -554,6 +554,93 @@ entity_ids! {
     pub struct ControlId;
 }
 
+entity_ids! {
+    /// Internal index of a cybersecurity goal in a [`Project`](crate::Project)
+    /// arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::GoalIdx>(), 4);
+    /// ```
+    pub struct GoalIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{GoalId, Methodology, Op, Project, Provenance};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = GoalId::new_v7();
+        /// project.apply(Op::AddCybersecurityGoal {
+        ///     id,
+        ///     name: "Ensure brake command integrity".into(),
+        ///     controls: vec![],
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.cybersecurity_goal_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a cybersecurity goal: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::GoalId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = GoalId::new_v7();
+    /// assert_eq!(id.to_string().parse::<GoalId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct GoalId;
+}
+
+entity_ids! {
+    /// Internal index of a cybersecurity claim in a [`Project`](crate::Project)
+    /// arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::ClaimIdx>(), 4);
+    /// ```
+    pub struct ClaimIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{ClaimId, Methodology, Op, Project, Provenance};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = ClaimId::new_v7();
+        /// project.apply(Op::AddCybersecurityClaim {
+        ///     id,
+        ///     name: "Physical access requires workshop teardown".into(),
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.cybersecurity_claim_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a cybersecurity claim: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::ClaimId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = ClaimId::new_v7();
+    /// assert_eq!(id.to_string().parse::<ClaimId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct ClaimId;
+}
+
 #[cfg(test)]
 mod parse {
     use super::*;
@@ -714,6 +801,16 @@ mod entity_ids {
     }
 
     #[test]
+    fn ids_goal_accepts_only_v7_and_round_trips() {
+        id_checks!(GoalId);
+    }
+
+    #[test]
+    fn ids_claim_accepts_only_v7_and_round_trips() {
+        id_checks!(ClaimId);
+    }
+
+    #[test]
     fn ids_node_id_unchanged() {
         id_checks!(NodeId);
     }
@@ -725,6 +822,8 @@ mod entity_ids {
         assert_eq!(ThreatIdx::from_u32(u32::MAX).index(), u32::MAX as usize);
         assert_eq!(TreeIdx::from_u32(42).index(), 42);
         assert_eq!(ControlIdx::from_u32(99).index(), 99);
+        assert_eq!(GoalIdx::from_u32(12).index(), 12);
+        assert_eq!(ClaimIdx::from_u32(34).index(), 34);
     }
 }
 

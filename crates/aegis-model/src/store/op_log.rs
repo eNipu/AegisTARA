@@ -11,8 +11,9 @@ use super::wire::{
     RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, Text,
 };
 use super::{Limit, MAX_ACTOR_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
+use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
-use crate::id::{AssetId, ControlId, DamageId, NodeId, ThreatId, TreeId};
+use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
@@ -157,6 +158,14 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetStepFactor {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        factor: Required<&'a str>,
+        level: Option<Required<&'a str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetThreatFeasibility {
         threat: Text<ThreatId>,
         level: Option<Required<&'a str>>,
@@ -201,6 +210,61 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    AddCybersecurityGoal {
+        id: Text<GoalId>,
+        name: &'a str,
+        controls: Ids<'a, ControlId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameCybersecurityGoal {
+        id: Text<GoalId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    LinkGoalControl {
+        goal: Text<GoalId>,
+        control: Text<ControlId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkGoalControl {
+        goal: Text<GoalId>,
+        control: Text<ControlId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveCybersecurityGoal {
+        id: Text<GoalId>,
+    },
+    AddCybersecurityClaim {
+        id: Text<ClaimId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameCybersecurityClaim {
+        id: Text<ClaimId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveCybersecurityClaim {
+        id: Text<ClaimId>,
+    },
+    SetThreatGoal {
+        threat: Text<ThreatId>,
+        goal: Option<Text<GoalId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetThreatClaim {
+        threat: Text<ThreatId>,
+        claim: Option<Text<ClaimId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
 }
 
 /// Refuses a name, provenance actor, or list the reader would refuse, so
@@ -221,7 +285,13 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameDamageScenario { name, .. }
         | Op::RenameThreatScenario { name, .. }
         | Op::AddSecurityControl { name, .. }
-        | Op::RenameSecurityControl { name, .. } => name_ok(name),
+        | Op::RenameSecurityControl { name, .. }
+        | Op::RenameCybersecurityGoal { name, .. }
+        | Op::AddCybersecurityClaim { name, .. }
+        | Op::RenameCybersecurityClaim { name, .. } => name_ok(name),
+        Op::AddCybersecurityGoal { name, controls, .. } => {
+            name_ok(name) && controls.len() <= MAX_GOAL_CONTROLS
+        }
         Op::AddThreatScenario {
             name,
             catalog_refs,
@@ -413,6 +483,19 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             level: level.map(|l| Required(m.feasibility_level_key(l))),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::SetStepFactor {
+            tree,
+            node,
+            factor,
+            level,
+            provenance,
+        } => OpView::SetStepFactor {
+            tree: Text(*tree),
+            node: Text(*node),
+            factor: Required(m.feasibility_factor_key(*factor)),
+            level: level.map(|l| Required(m.factor_level_key(*factor, l))),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::SetThreatFeasibility {
             threat,
             level,
@@ -471,6 +554,82 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             node: Text(*node),
             control: Text(*control),
             feasibility: feasibility.map(|l| Required(m.feasibility_level_key(l))),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::AddCybersecurityGoal {
+            id,
+            name,
+            controls,
+            provenance,
+        } => OpView::AddCybersecurityGoal {
+            id: Text(*id),
+            name,
+            controls: Ids(controls),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameCybersecurityGoal {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameCybersecurityGoal {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::LinkGoalControl {
+            goal,
+            control,
+            provenance,
+        } => OpView::LinkGoalControl {
+            goal: Text(*goal),
+            control: Text(*control),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkGoalControl {
+            goal,
+            control,
+            provenance,
+        } => OpView::UnlinkGoalControl {
+            goal: Text(*goal),
+            control: Text(*control),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveCybersecurityGoal { id } => OpView::RemoveCybersecurityGoal { id: Text(*id) },
+        Op::AddCybersecurityClaim {
+            id,
+            name,
+            provenance,
+        } => OpView::AddCybersecurityClaim {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameCybersecurityClaim {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameCybersecurityClaim {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveCybersecurityClaim { id } => OpView::RemoveCybersecurityClaim { id: Text(*id) },
+        Op::SetThreatGoal {
+            threat,
+            goal,
+            provenance,
+        } => OpView::SetThreatGoal {
+            threat: Text(*threat),
+            goal: goal.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetThreatClaim {
+            threat,
+            claim,
+            provenance,
+        } => OpView::SetThreatClaim {
+            threat: Text(*threat),
+            claim: claim.map(Text),
             provenance: ProvenanceView::of(provenance),
         },
     }
@@ -670,6 +829,22 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             level: level.map(|l| l.0),
             provenance: wire::unwrap_provenance(provenance),
         },
+        OpWire::SetStepFactor {
+            tree,
+            node,
+            factor,
+            level,
+            provenance,
+        } => Op::SetStepFactor {
+            tree: tree.0,
+            node: node.0,
+            factor: factor.0,
+            level: level
+                .as_ref()
+                .map(|l| wire::resolve_factor_level(m, factor.0, l))
+                .transpose()?,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::SetThreatFeasibility {
             threat,
             level,
@@ -728,6 +903,82 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             node: node.0,
             control: control.0,
             feasibility: feasibility.map(|l| l.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::AddCybersecurityGoal {
+            id,
+            name,
+            controls,
+            provenance,
+        } => Op::AddCybersecurityGoal {
+            id: id.0,
+            name: name.0,
+            controls: controls.0.into_iter().map(|c| c.0).collect(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameCybersecurityGoal {
+            id,
+            name,
+            provenance,
+        } => Op::RenameCybersecurityGoal {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::LinkGoalControl {
+            goal,
+            control,
+            provenance,
+        } => Op::LinkGoalControl {
+            goal: goal.0,
+            control: control.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkGoalControl {
+            goal,
+            control,
+            provenance,
+        } => Op::UnlinkGoalControl {
+            goal: goal.0,
+            control: control.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveCybersecurityGoal { id } => Op::RemoveCybersecurityGoal { id: id.0 },
+        OpWire::AddCybersecurityClaim {
+            id,
+            name,
+            provenance,
+        } => Op::AddCybersecurityClaim {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameCybersecurityClaim {
+            id,
+            name,
+            provenance,
+        } => Op::RenameCybersecurityClaim {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveCybersecurityClaim { id } => Op::RemoveCybersecurityClaim { id: id.0 },
+        OpWire::SetThreatGoal {
+            threat,
+            goal,
+            provenance,
+        } => Op::SetThreatGoal {
+            threat: threat.0,
+            goal: goal.map(|g| g.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetThreatClaim {
+            threat,
+            claim,
+            provenance,
+        } => Op::SetThreatClaim {
+            threat: threat.0,
+            claim: claim.map(|cl| cl.0),
             provenance: wire::unwrap_provenance(provenance),
         },
     })
