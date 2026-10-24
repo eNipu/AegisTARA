@@ -4039,13 +4039,13 @@ impl Project {
         }
         let mut refs = catalog_refs.to_vec();
         refs.sort_unstable();
-        if let Some(w) = refs.windows(2).find(|w| w.first() == w.get(1)) {
-            if let Some(&catalog_ref) = w.first() {
-                return Err(ModelError::DuplicateCatalogRef {
-                    threat: id,
-                    catalog_ref,
-                });
-            }
+        if let Some(w) = refs.windows(2).find(|w| w.first() == w.get(1))
+            && let Some(&catalog_ref) = w.first()
+        {
+            return Err(ModelError::DuplicateCatalogRef {
+                threat: id,
+                catalog_ref,
+            });
         }
         if damages.len() > MAX_DAMAGE_LINKS {
             return Err(ModelError::TooManyDamageLinks {
@@ -4058,10 +4058,10 @@ impl Project {
         }
         let mut ids = damages.to_vec();
         ids.sort_unstable();
-        if let Some(w) = ids.windows(2).find(|w| w.first() == w.get(1)) {
-            if let Some(&damage) = w.first() {
-                return Err(ModelError::DuplicateDamageLink { threat: id, damage });
-            }
+        if let Some(w) = ids.windows(2).find(|w| w.first() == w.get(1))
+            && let Some(&damage) = w.first()
+        {
+            return Err(ModelError::DuplicateDamageLink { threat: id, damage });
         }
         check_provenance(provenance)?;
         if self.threats.next_idx(self.slot_limit).is_none() {
@@ -6078,10 +6078,10 @@ impl ProjectEvalCache {
             ) else {
                 continue;
             };
-            if let Some(tree_idx) = t.attack_tree {
-                if let Some(list) = self.tree_threats.get_mut(tree_idx.index()) {
-                    insert_sorted_unique(list, threat_idx);
-                }
+            if let Some(tree_idx) = t.attack_tree
+                && let Some(list) = self.tree_threats.get_mut(tree_idx.index())
+            {
+                insert_sorted_unique(list, threat_idx);
             }
             for &damage_idx in &t.damages {
                 if let Some(list) = self.damage_threats.get_mut(damage_idx.index()) {
@@ -6977,10 +6977,10 @@ impl ProjectEvalCache {
         let Some(t) = project.threats.get(threat_idx) else {
             return;
         };
-        if let Some(tree_idx) = t.attack_tree {
-            if let Some(list) = self.tree_threats.get_mut(tree_idx.index()) {
-                insert_sorted_unique(list, threat_idx);
-            }
+        if let Some(tree_idx) = t.attack_tree
+            && let Some(list) = self.tree_threats.get_mut(tree_idx.index())
+        {
+            insert_sorted_unique(list, threat_idx);
         }
         for &damage_idx in &t.damages {
             if let Some(list) = self.damage_threats.get_mut(damage_idx.index()) {

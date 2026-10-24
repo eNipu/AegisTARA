@@ -617,7 +617,7 @@ impl Gen {
     fn asset(&mut self, p: &Project, sel: u16) -> AssetId {
         let existing: Vec<_> = p.assets().map(|(_, id, _)| id).collect();
         match nth(existing, sel / 8) {
-            Some(id) if sel % 8 != 0 => id,
+            Some(id) if !sel.is_multiple_of(8) => id,
             _ => asset_id(self.fresh()),
         }
     }
@@ -625,7 +625,7 @@ impl Gen {
     fn damage(&mut self, p: &Project, sel: u16) -> DamageId {
         let existing: Vec<_> = p.damage_scenarios().map(|(_, id, _)| id).collect();
         match nth(existing, sel / 8) {
-            Some(id) if sel % 8 != 0 => id,
+            Some(id) if !sel.is_multiple_of(8) => id,
             _ => damage_id(self.fresh()),
         }
     }
@@ -633,7 +633,7 @@ impl Gen {
     fn threat(&mut self, p: &Project, sel: u16) -> ThreatId {
         let existing: Vec<_> = p.threat_scenarios().map(|(_, id, _)| id).collect();
         match nth(existing, sel / 8) {
-            Some(id) if sel % 8 != 0 => id,
+            Some(id) if !sel.is_multiple_of(8) => id,
             _ => threat_id(self.fresh()),
         }
     }
@@ -641,7 +641,7 @@ impl Gen {
     fn tree(&mut self, p: &Project, sel: u16) -> TreeId {
         let existing: Vec<_> = p.attack_trees().map(|(_, id, _)| id).collect();
         match nth(existing, sel / 8) {
-            Some(id) if sel % 8 != 0 => id,
+            Some(id) if !sel.is_multiple_of(8) => id,
             _ => tree_id(self.fresh()),
         }
     }
@@ -649,7 +649,7 @@ impl Gen {
     fn control(&mut self, p: &Project, sel: u16) -> ControlId {
         let existing: Vec<_> = p.security_controls().map(|(_, id, _)| id).collect();
         match nth(existing, sel / 8) {
-            Some(id) if sel % 8 != 0 => id,
+            Some(id) if !sel.is_multiple_of(8) => id,
             _ => control_id(self.fresh()),
         }
     }
@@ -657,7 +657,7 @@ impl Gen {
     fn goal(&mut self, p: &Project, sel: u16) -> GoalId {
         let existing: Vec<_> = p.cybersecurity_goals().map(|(_, id, _)| id).collect();
         match nth(existing, sel / 8) {
-            Some(id) if sel % 8 != 0 => id,
+            Some(id) if !sel.is_multiple_of(8) => id,
             _ => goal_id(self.fresh()),
         }
     }
@@ -665,7 +665,7 @@ impl Gen {
     fn claim(&mut self, p: &Project, sel: u16) -> ClaimId {
         let existing: Vec<_> = p.cybersecurity_claims().map(|(_, id, _)| id).collect();
         match nth(existing, sel / 8) {
-            Some(id) if sel % 8 != 0 => id,
+            Some(id) if !sel.is_multiple_of(8) => id,
             _ => claim_id(self.fresh()),
         }
     }
@@ -681,7 +681,7 @@ impl Gen {
 
     fn feasibility_level(&self, sel: u16) -> FeasibilityLevel {
         let n = self.m.feasibility_levels().count();
-        if sel % 10 == 0 {
+        if sel.is_multiple_of(10) {
             let extra = self.wide.feasibility_levels().count() - n;
             self.wide
                 .feasibility_levels()
@@ -700,7 +700,7 @@ impl Gen {
     /// A property, out of range for the methodology about 1 time in 12.
     fn property(&self, sel: u16) -> Property {
         let n = self.m.property_count();
-        if sel % 12 == 0 {
+        if sel.is_multiple_of(12) {
             let extra = self.wide.property_count() - n;
             self.wide
                 .properties()
@@ -729,7 +729,7 @@ impl Gen {
 
     fn impact_category(&self, sel: u16) -> ImpactCategory {
         let n = self.m.impact_category_count();
-        if sel % 12 == 0 {
+        if sel.is_multiple_of(12) {
             let extra = self.wide.impact_category_count() - n;
             self.wide
                 .impact_categories()
@@ -747,7 +747,7 @@ impl Gen {
     fn level(&self, c: ImpactCategory, sel: u16) -> Level {
         let n = self.m.level_count(c);
         let w = self.wide.impact_categories().next().expect("wide category");
-        if n == 0 || sel % 10 == 0 {
+        if n == 0 || sel.is_multiple_of(10) {
             self.wide
                 .levels(w)
                 .nth(n + usize::from(sel / 10) % (16 - n))
@@ -759,7 +759,7 @@ impl Gen {
 
     fn feasibility_factor(&self, sel: u16) -> FeasibilityFactor {
         let n = self.m.feasibility_factor_count();
-        if n == 0 || sel % 12 == 0 {
+        if n == 0 || sel.is_multiple_of(12) {
             let extra = self.wide.feasibility_factor_count() - n;
             self.wide
                 .feasibility_factors()
@@ -777,7 +777,7 @@ impl Gen {
     fn factor_level(&self, f: FeasibilityFactor, sel: u16) -> FactorLevel {
         let n = self.m.factor_level_count(f);
         let w = self.wide.feasibility_factors().next().expect("wide factor");
-        if n == 0 || sel % 10 == 0 {
+        if n == 0 || sel.is_multiple_of(10) {
             self.wide
                 .factor_levels(w)
                 .nth(n + usize::from(sel / 10) % (16 - n))
@@ -792,7 +792,7 @@ impl Gen {
 
     fn threat_category(&self, sel: u16) -> ThreatCategory {
         let n = self.m.threat_category_count();
-        if sel % 12 == 0 {
+        if sel.is_multiple_of(12) {
             let extra = self.wide.threat_category_count() - n;
             self.wide
                 .threat_categories()
@@ -818,7 +818,7 @@ impl Gen {
             .filter(|&t| props.is_some_and(|ps| self.m.violates(t).is_subset(ps)))
             .collect();
         match nth(fitting, sel / 4) {
-            Some(t) if sel % 4 != 0 => t,
+            Some(t) if !sel.is_multiple_of(4) => t,
             _ => self.threat_category(sel),
         }
     }
@@ -828,7 +828,7 @@ impl Gen {
     /// out of range.
     fn catalog_ref(&self, sel: u16, bits: u64) -> CatalogRef {
         let schemes: Vec<_> = self.m.catalog_schemes().collect();
-        if let Some(s) = nth(schemes, sel).filter(|_| sel % 10 != 0) {
+        if let Some(s) = nth(schemes, sel).filter(|_| !sel.is_multiple_of(10)) {
             let syntax = self.m.catalog_syntax(s).expect("syntax");
             let required = usize::from(syntax.required);
             let len = required + (bits as usize) % (syntax.segments.len() - required + 1);
@@ -866,7 +866,7 @@ impl Gen {
         let provenance = self.provenance(s.c.rotate_left(3), s.bits);
         match s.kind {
             0..=2 => Op::AddAsset {
-                id: if s.a % 16 == 0 {
+                id: if s.a.is_multiple_of(16) {
                     self.asset(p, s.b)
                 } else {
                     asset_id(self.fresh())
@@ -885,7 +885,7 @@ impl Gen {
                     })
                     .collect();
                 Op::AddDamageScenario {
-                    id: if s.a % 16 == 0 {
+                    id: if s.a.is_multiple_of(16) {
                         self.damage(p, s.b)
                     } else {
                         damage_id(self.fresh())
@@ -898,7 +898,7 @@ impl Gen {
             6..=8 => {
                 let asset = self.asset(p, s.b);
                 let category = self.fitting_category(p, asset, s.a);
-                let n_refs = if s.bits % 64 == 0 {
+                let n_refs = if s.bits.is_multiple_of(64) {
                     17
                 } else {
                     s.list.len() % 3
@@ -911,7 +911,7 @@ impl Gen {
                     .collect();
                 let damages = s.list.iter().skip(1).map(|&x| self.damage(p, x)).collect();
                 Op::AddThreatScenario {
-                    id: if s.c % 16 == 0 {
+                    id: if s.c.is_multiple_of(16) {
                         self.threat(p, s.a)
                     } else {
                         threat_id(self.fresh())
@@ -947,7 +947,7 @@ impl Gen {
                 Op::SetImpact {
                     id: self.damage(p, s.a),
                     category,
-                    level: (s.c % 5 != 0).then(|| self.level(category, s.c)),
+                    level: (!s.c.is_multiple_of(5)).then(|| self.level(category, s.c)),
                     provenance,
                 }
             }
@@ -988,7 +988,7 @@ impl Gen {
                     .map(|t| t.catalog_refs().to_vec())
                     .unwrap_or_default();
                 let catalog_ref = match nth(existing, s.b) {
-                    Some(r) if s.c % 3 != 0 => r,
+                    Some(r) if !s.c.is_multiple_of(3) => r,
                     _ => self.catalog_ref(s.b, s.bits),
                 };
                 Op::RemoveCatalogRef {
@@ -1009,7 +1009,7 @@ impl Gen {
                     .map(|(_, id, _)| id)
                     .collect();
                 let threat = match nth(with_damages, s.a) {
-                    Some(id) if s.c % 3 != 0 => id,
+                    Some(id) if !s.c.is_multiple_of(3) => id,
                     _ => self.threat(p, s.a),
                 };
                 let linked: Vec<_> = p
@@ -1023,7 +1023,7 @@ impl Gen {
                     })
                     .unwrap_or_default();
                 let damage = match nth(linked, s.b) {
-                    Some(d) if s.c % 3 != 0 => d,
+                    Some(d) if !s.c.is_multiple_of(3) => d,
                     _ => self.damage(p, s.b),
                 };
                 Op::UnlinkDamage {
@@ -1051,7 +1051,7 @@ impl Gen {
                     .expect("valid s1");
                 tree.add_child(tree.root(), s2, Node::step(format!("{SENTINEL}-s2")))
                     .expect("valid s2");
-                if s.c % 32 == 0 {
+                if s.c.is_multiple_of(32) {
                     for i in 0..30 {
                         let extra = node_id(self.fresh());
                         tree.add_child(tree.root(), extra, Node::step(format!("{SENTINEL}-e{i}")))
@@ -1084,7 +1084,7 @@ impl Gen {
                     ],
                 };
                 Op::AddAttackTree {
-                    id: if s.a % 12 == 0 {
+                    id: if s.a.is_multiple_of(12) {
                         self.tree(p, s.b)
                     } else {
                         tree_id(self.fresh())
@@ -1097,7 +1097,7 @@ impl Gen {
             24..=25 => {
                 let tree = self.tree(p, s.a);
                 let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
-                    Some(_) if s.b % 8 == 0 => node_id(self.fresh()),
+                    Some(_) if s.b.is_multiple_of(8) => node_id(self.fresh()),
                     Some(t) if s.b % 8 == 1 => t.id_of(t.root()).expect("root"),
                     Some(t) => {
                         let steps: Vec<_> = t
@@ -1112,18 +1112,18 @@ impl Gen {
                 Op::SetStepFeasibility {
                     tree,
                     node,
-                    level: (s.c % 5 != 0).then(|| self.feasibility_level(s.c)),
+                    level: (!s.c.is_multiple_of(5)).then(|| self.feasibility_level(s.c)),
                     provenance,
                 }
             }
             26 => Op::SetThreatAttackTree {
                 threat: self.threat(p, s.a),
-                tree: (s.b % 4 != 0).then(|| self.tree(p, s.b)),
+                tree: (!s.b.is_multiple_of(4)).then(|| self.tree(p, s.b)),
                 provenance,
             },
             27 => Op::SetThreatFeasibility {
                 threat: self.threat(p, s.a),
-                level: (s.c % 5 != 0).then(|| self.feasibility_level(s.c)),
+                level: (!s.c.is_multiple_of(5)).then(|| self.feasibility_level(s.c)),
                 provenance,
             },
             28 => Op::RemoveAttackTree {
@@ -1131,11 +1131,11 @@ impl Gen {
             },
             29 => Op::SetRiskTreatment {
                 threat: self.threat(p, s.a),
-                treatment: (s.c % 4 != 0).then(|| self.treatment(s.b)),
+                treatment: (!s.c.is_multiple_of(4)).then(|| self.treatment(s.b)),
                 provenance,
             },
             30..=31 => Op::AddSecurityControl {
-                id: if s.a % 12 == 0 {
+                id: if s.a.is_multiple_of(12) {
                     self.control(p, s.b)
                 } else {
                     control_id(self.fresh())
@@ -1154,7 +1154,7 @@ impl Gen {
             34..=35 => {
                 let tree = self.tree(p, s.a);
                 let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
-                    Some(_) if s.b % 8 == 0 => node_id(self.fresh()),
+                    Some(_) if s.b.is_multiple_of(8) => node_id(self.fresh()),
                     Some(t) if s.b % 8 == 1 => t.id_of(t.root()).expect("root"),
                     Some(t) => {
                         let steps: Vec<_> = t
@@ -1167,8 +1167,8 @@ impl Gen {
                     None => node_id(self.fresh()),
                 };
                 let factor = self.feasibility_factor(s.c);
-                let level =
-                    (s.bits % 5 != 0).then(|| self.factor_level(factor, (s.bits >> 8) as u16));
+                let level = (!s.bits.is_multiple_of(5))
+                    .then(|| self.factor_level(factor, (s.bits >> 8) as u16));
                 Op::SetStepFactor {
                     tree,
                     node,
@@ -1180,7 +1180,7 @@ impl Gen {
             36..=37 => {
                 let tree = self.tree(p, s.a);
                 let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
-                    Some(_) if s.b % 8 == 0 => node_id(self.fresh()),
+                    Some(_) if s.b.is_multiple_of(8) => node_id(self.fresh()),
                     Some(t) if s.b % 8 == 1 => t.id_of(t.root()).expect("root"),
                     Some(t) => {
                         let steps: Vec<_> = t
@@ -1193,8 +1193,8 @@ impl Gen {
                     None => node_id(self.fresh()),
                 };
                 let control = self.control(p, s.c);
-                let feasibility =
-                    (s.bits % 4 != 0).then(|| self.feasibility_level((s.bits >> 8) as u16));
+                let feasibility = (!s.bits.is_multiple_of(4))
+                    .then(|| self.feasibility_level((s.bits >> 8) as u16));
                 Op::SetStepMitigation {
                     tree,
                     node,
@@ -1204,13 +1204,13 @@ impl Gen {
                 }
             }
             38 => {
-                let controls = if s.bits % 64 == 0 {
+                let controls = if s.bits.is_multiple_of(64) {
                     (0..17).map(|_| control_id(self.fresh())).collect()
                 } else {
                     s.list.iter().map(|&x| self.control(p, x)).collect()
                 };
                 Op::AddCybersecurityGoal {
-                    id: if s.a % 12 == 0 {
+                    id: if s.a.is_multiple_of(12) {
                         self.goal(p, s.b)
                     } else {
                         goal_id(self.fresh())
@@ -1243,7 +1243,7 @@ impl Gen {
                     })
                     .unwrap_or_default();
                 let control = match nth(linked, s.b) {
-                    Some(c) if s.c % 3 != 0 => c,
+                    Some(c) if !s.c.is_multiple_of(3) => c,
                     _ => self.control(p, s.b),
                 };
                 Op::UnlinkGoalControl {
@@ -1256,7 +1256,7 @@ impl Gen {
                 id: self.goal(p, s.a),
             },
             43 => Op::AddCybersecurityClaim {
-                id: if s.a % 12 == 0 {
+                id: if s.a.is_multiple_of(12) {
                     self.claim(p, s.b)
                 } else {
                     claim_id(self.fresh())
@@ -1274,12 +1274,12 @@ impl Gen {
             },
             46 => Op::SetThreatGoal {
                 threat: self.threat(p, s.a),
-                goal: (s.b % 4 != 0).then(|| self.goal(p, s.b)),
+                goal: (!s.b.is_multiple_of(4)).then(|| self.goal(p, s.b)),
                 provenance,
             },
             _ => Op::SetThreatClaim {
                 threat: self.threat(p, s.a),
-                claim: (s.b % 4 != 0).then(|| self.claim(p, s.b)),
+                claim: (!s.b.is_multiple_of(4)).then(|| self.claim(p, s.b)),
                 provenance,
             },
         }

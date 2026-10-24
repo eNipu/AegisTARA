@@ -101,7 +101,7 @@ pub fn ops(m: &Methodology) -> Vec<Op> {
     }
     let mut i = 0u64;
     while ops.len() < LOG_OPS {
-        ops.push(if i % 2 == 0 {
+        ops.push(if i.is_multiple_of(2) {
             Op::RenameThreatScenario {
                 id: threat(i % THREATS),
                 name: format!("Threat scenario {i}, revised").into(),

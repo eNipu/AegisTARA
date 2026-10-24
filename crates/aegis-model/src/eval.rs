@@ -1921,7 +1921,7 @@ mod tests {
             for c in 0..ARITY {
                 let id = crate::id::NodeId::new_v7();
                 if gates_created < GATES {
-                    let kind = if (gates_created + c) % 2 == 0 {
+                    let kind = if (gates_created + c).is_multiple_of(2) {
                         GateKind::Or
                     } else {
                         GateKind::And

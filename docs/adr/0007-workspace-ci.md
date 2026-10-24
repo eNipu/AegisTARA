@@ -82,8 +82,9 @@ No `rust-toolchain.toml` is added, so local toolchains do not change. Local
 runs on a newer compiler may show lints that CI does not yet see; that is the
 signal to bump the pin.
 
-The `msrv` job installs `RUST_MSRV: "1.85"` (the `rust-version` in each
-crate's `Cargo.toml`) and runs `cargo check --locked` in each crate. It checks
+The `msrv` job installs `RUST_MSRV: "1.99.1"` (the `rust-version` in each
+crate's `Cargo.toml`, updated from `1.85` to `1.99.1` on 2026-10-24) and runs
+`cargo check --locked` in each crate. It checks
 the library only: dev-dependencies such as `divan` and `proptest` may need a
 newer compiler, and they never ship. The loop uses the same glob as
 `scripts/ci.sh`. If this job fails after a dependency update, the fix is to
@@ -233,8 +234,8 @@ actionlint .github/workflows/ci.yml
 time scripts/ci.sh
 scripts/deny.sh
 tools/deny-fixtures/run.sh
-rustup toolchain install 1.85 --profile minimal
-(cd crates/aegis-model && cargo +1.85 check --locked)
+rustup toolchain install 1.99.1 --profile minimal
+(cd crates/aegis-model && cargo +1.99.1 check --locked)
 # D5 license of every action in the workflow
 for r in actions/checkout dtolnay/rust-toolchain actions/cache taiki-e/install-action; do
     echo "$r $(gh api "repos/$r/license" --jq .license.spdx_id)"
