@@ -487,7 +487,7 @@ fn matches_naive() -> Res {
         // Some huge times so that SAND saturates in places.
         let time = |i: NodeIdx| {
             let i = i.index() as u64;
-            Some(if (i + shift) % 11 == 0 {
+            Some(if (i + shift).is_multiple_of(11) {
                 u64::MAX / 2
             } else {
                 (i * 13 + shift) % 100

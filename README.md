@@ -25,7 +25,7 @@ Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/
 on each production crate (`crates/*`): `cargo fmt --check`,
 `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`,
 the `cargo-deny` policy below, and `cargo check --locked` at the minimum
-supported Rust version (1.85). Rationale: [docs/adr/0007-workspace-ci.md](docs/adr/0007-workspace-ci.md).
+supported Rust version (1.99.1). Rationale: [docs/adr/0007-workspace-ci.md](docs/adr/0007-workspace-ci.md).
 
 Run the same gates locally before you push:
 

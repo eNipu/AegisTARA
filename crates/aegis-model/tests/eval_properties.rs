@@ -1048,10 +1048,10 @@ fn generator_coverage() -> Result<(), TestCaseError> {
         shared3 += usize::from(max_parents >= 3);
         let mut seen = [false; 3];
         for (idx, _, node) in tree.iter() {
-            if let (true, Some(kind)) = (idx != tree.root(), node.gate_kind()) {
-                if let Some(s) = seen.get_mut(kind_slot(kind)) {
-                    *s = true;
-                }
+            if let (true, Some(kind)) = (idx != tree.root(), node.gate_kind())
+                && let Some(s) = seen.get_mut(kind_slot(kind))
+            {
+                *s = true;
             }
         }
         for (k, s) in kinds.iter_mut().zip(seen) {

@@ -32,7 +32,7 @@ env:
   # purpose, in its own commit, so new lints never turn CI red by surprise.
   RUST_TOOLCHAIN: "1.99.1"
   # Minimum supported Rust version: rust-version in each crate's Cargo.toml.
-  RUST_MSRV: "1.85"
+  RUST_MSRV: "1.99.1"
 
 jobs:
   check:
