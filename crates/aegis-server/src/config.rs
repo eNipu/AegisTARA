@@ -67,7 +67,7 @@ impl Default for ServerConfig {
             observer_buffer: 1024,
             recent_ops: 1024,
             snapshot_every: 1000,
-            max_batch_ops: 256,
+            max_batch_ops: 1024,
             max_open_projects: 256,
             chunk_bytes: 256 * 1024,
             max_projects: 10_000,

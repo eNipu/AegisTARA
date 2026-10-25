@@ -25,6 +25,7 @@ fn ui_for(ws: &Workspace) -> UiState {
         selected_threat: Some(rows[0].id),
         selected_node: None,
         show_residual: false,
+        ..UiState::default()
     }
 }
 

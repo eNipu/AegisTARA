@@ -37,6 +37,11 @@ use aegis_model::{Methodology, ModelError, Op, Project, ProjectEvalCache};
 pub const MAX_PENDING_BATCHES: usize = 1024;
 /// Most steps kept for undo.
 pub const MAX_UNDO_STEPS: usize = 1000;
+/// Most ops sent in one `SubmitOps` call. The server's limit is
+/// `ServerConfig::max_batch_ops` (1024); one edit larger than this is
+/// refused before it is applied, and queued edits are sent in submissions of
+/// at most this many ops.
+pub const MAX_SUBMIT_OPS: usize = 1024;
 
 /// Why an operation on the workspace was refused.
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -53,6 +58,14 @@ pub enum WorkspaceError {
     /// Too many edits wait for the server.
     #[error("too many edits are waiting for the server")]
     TooManyPending,
+    /// One edit has more ops than one submission may carry.
+    #[error("the change is too large to save in one step ({ops} changes, at most {max})")]
+    TooLarge {
+        /// Ops in the edit.
+        ops: usize,
+        /// The limit.
+        max: usize,
+    },
     /// The server's answer does not match what was sent: resync.
     #[error("server sequence is {found}, expected {expected}")]
     Desync {
@@ -192,6 +205,12 @@ impl Workspace {
         if self.pending.len() >= MAX_PENDING_BATCHES {
             return Err(WorkspaceError::TooManyPending);
         }
+        if ops.len() > MAX_SUBMIT_OPS {
+            return Err(WorkspaceError::TooLarge {
+                ops: ops.len(),
+                max: MAX_SUBMIT_OPS,
+            });
+        }
         let mut inverses = Vec::with_capacity(ops.len());
         for op in ops.iter().cloned() {
             match self.project.apply_cached(op, &mut self.cache) {
@@ -238,20 +257,27 @@ impl Workspace {
             .inspect_err(|_| self.redo.push(entry))
     }
 
-    /// Takes every edit not yet sent as one submission, or `None` if a call
-    /// is already in flight or nothing waits.
+    /// Takes the oldest edits not yet sent, as many whole edits as fit in
+    /// [`MAX_SUBMIT_OPS`], as one submission; `None` if a call is already in
+    /// flight or nothing waits. The rest follow after the answer.
     pub fn next_submission(&mut self) -> Option<Submission> {
         if self.in_flight > 0 || self.pending.is_empty() {
             return None;
         }
-        self.in_flight = self.pending.len();
+        let mut ops = Vec::new();
+        let mut batches = 0;
+        for batch in &self.pending {
+            // Every batch fits on its own (checked in `apply`).
+            if batches > 0 && ops.len() + batch.ops.len() > MAX_SUBMIT_OPS {
+                break;
+            }
+            ops.extend(batch.ops.iter().cloned());
+            batches += 1;
+        }
+        self.in_flight = batches;
         Some(Submission {
             base_seq: self.confirmed_seq,
-            ops: self
-                .pending
-                .iter()
-                .flat_map(|b| b.ops.iter().cloned())
-                .collect(),
+            ops,
         })
     }
 
@@ -582,6 +608,34 @@ mod tests {
             ws.apply(vec![rename(1, "one too many")], Origin::Edit),
             Err(WorkspaceError::TooManyPending)
         );
+    }
+
+    #[test]
+    fn queued_edits_are_sent_in_submissions_the_server_accepts() {
+        let mut ws = Workspace::empty(methodology());
+        ws.apply(vec![add(1, "a")], Origin::Edit).expect("add");
+        // Three edits of 400 renames each: 1 + 400 fit, then 400 + 400, ...
+        for round in 0..3 {
+            let ops = (0..400)
+                .map(|i| rename(1, &format!("n{round}-{i}")))
+                .collect();
+            ws.apply(ops, Origin::Edit).expect("rename batch");
+        }
+        let mut seq = 0;
+        let mut sizes = Vec::new();
+        while let Some(sub) = ws.next_submission() {
+            assert!(sub.ops.len() <= MAX_SUBMIT_OPS);
+            sizes.push(sub.ops.len());
+            seq += sub.ops.len() as u64;
+            ws.on_accepted(seq).expect("accepted");
+        }
+        assert_eq!(sizes, [801, 400]);
+        assert_eq!(ws.pending_batches(), 0);
+        let too_big = (0..=MAX_SUBMIT_OPS).map(|_| rename(1, "x")).collect();
+        assert!(matches!(
+            ws.apply(too_big, Origin::Edit),
+            Err(WorkspaceError::TooLarge { .. })
+        ));
     }
 
     #[test]

@@ -5,7 +5,12 @@ use std::sync::Arc;
 use aegis_canvas::Scene;
 use aegis_model::NodeIdx;
 
-use crate::view::{Inspector, ThreatRow, TreeView};
+use crate::pages::{
+    AssetDetail, AssetRow, ClaimRow, Comparison, ControlDetail, ControlRow, DamageDetail,
+    DamageRow, GoalDetail, GoalRowOf, Overview, ProblemRow, RiskRow, ThreatDetail, TreeRow,
+    Vocabulary,
+};
+use crate::view::{Inspector, Page, ThreatRow, TreeView};
 
 /// How the client stands with the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,6 +170,102 @@ pub struct Notice {
     pub text: String,
 }
 
+/// The data of the page on screen. Only the fields of that page are
+/// filled; the rest stay empty (the session builds one page per change).
+#[derive(Clone, Debug, Default)]
+pub struct PageData {
+    /// Overview page.
+    pub overview: Option<Overview>,
+    /// Assets page (and the asset choices of the threats page).
+    pub assets: Vec<AssetRow>,
+    /// The selected asset.
+    pub asset: Option<AssetDetail>,
+    /// Damage page.
+    pub damages: Vec<DamageRow>,
+    /// The selected damage scenario.
+    pub damage: Option<DamageDetail>,
+    /// The selected threat (threats and risks pages).
+    pub threat: Option<ThreatDetail>,
+    /// Trees page.
+    pub trees: Vec<TreeRow>,
+    /// The outline of the tree on the canvas, for the editor.
+    pub outline: Option<String>,
+    /// Risks page, worst first.
+    pub risks: Vec<RiskRow>,
+    /// Controls page.
+    pub controls: Vec<ControlRow>,
+    /// The selected control.
+    pub control: Option<ControlDetail>,
+    /// Goals page: goals.
+    pub goals: Vec<GoalRowOf<aegis_model::GoalId>>,
+    /// The selected goal.
+    pub goal: Option<GoalDetail<aegis_model::GoalId>>,
+    /// Goals page: claims.
+    pub claims: Vec<ClaimRow>,
+    /// The selected claim.
+    pub claim: Option<GoalDetail<aegis_model::ClaimId>>,
+    /// Problems page (and the overview's counts).
+    pub problems: Vec<ProblemRow>,
+}
+
+/// One baseline in the versions list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaselineRow {
+    /// ID, as the server writes it.
+    pub id: String,
+    /// Name.
+    pub name: String,
+    /// The change number it freezes.
+    pub seq: u64,
+    /// Who made it.
+    pub created_by: String,
+    /// When, as text.
+    pub created: String,
+}
+
+/// One accepted change in the history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryRow {
+    /// Change number.
+    pub seq: u64,
+    /// Who.
+    pub actor: String,
+    /// When, as text.
+    pub when: String,
+    /// What kind of change, in words.
+    pub kind: String,
+}
+
+/// Who the server says the user is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Me {
+    /// Login subject.
+    pub subject: String,
+    /// Shown name.
+    pub display_name: String,
+    /// Administrator.
+    pub admin: bool,
+    /// `password`, `oidc` or `development`.
+    pub method: String,
+}
+
+/// One user on the administration page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserRow {
+    /// Login name.
+    pub username: String,
+    /// Shown name.
+    pub display_name: String,
+    /// Administrator.
+    pub admin: bool,
+    /// Disabled.
+    pub disabled: bool,
+    /// Last login, as text.
+    pub last_login: String,
+    /// Open sessions.
+    pub sessions: u32,
+}
+
 /// The open project.
 pub struct ProjectView {
     /// Which project.
@@ -198,6 +299,20 @@ pub struct ProjectView {
     /// The newest sequence number at which this computer's risk numbers
     /// were found equal to the server's own. `None` until the first check.
     pub risks_verified_seq: Option<u64>,
+    /// The page on screen.
+    pub page: Page,
+    /// The methodology's labels.
+    pub vocab: Arc<Vocabulary>,
+    /// The page's rows.
+    pub data: PageData,
+    /// The project's baselines, oldest first (versions page).
+    pub baselines: Vec<BaselineRow>,
+    /// The comparison with a baseline, when one is chosen.
+    pub comparison: Option<Comparison>,
+    /// Recent changes, newest first (history page).
+    pub history: Vec<HistoryRow>,
+    /// The last file written by an export.
+    pub last_export: Option<String>,
 }
 
 impl ProjectView {
@@ -222,6 +337,12 @@ pub struct ViewModel {
     pub notices: Vec<Notice>,
     /// Who the user is, for display.
     pub user: String,
+    /// Who the server says the user is, once known.
+    pub me: Option<Me>,
+    /// Users, for administrators (password login).
+    pub users: Vec<UserRow>,
+    /// The last result of an administration action, in words.
+    pub admin_text: Option<String>,
 }
 
 #[cfg(test)]
