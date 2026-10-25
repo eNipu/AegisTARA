@@ -249,6 +249,23 @@ pub struct Me {
     pub method: String,
 }
 
+/// Whether the risk numbers shown were checked against the server's own
+/// (two engines must agree, ADR 0033). Follows the confirmed change, so an
+/// edit makes it `Checking` until the server has recomputed and agreed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumbersCheck {
+    /// The server's numbers for the state on screen are equal to this
+    /// computer's.
+    Checked,
+    /// Waiting for the server's numbers for the state on screen.
+    Checking,
+    /// This computer's numbers differed once; the server's are shown.
+    ServerNumbersShown,
+    /// The server runs another engine version, so numbers cannot be
+    /// compared. Editing is off in this case.
+    NotComparable,
+}
+
 /// The server's login switch (job 045), as the administration page shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServerSettingsView {
@@ -307,7 +324,10 @@ pub struct ProjectView {
     pub confirmed_seq: u64,
     /// The newest sequence number at which this computer's risk numbers
     /// were found equal to the server's own. `None` until the first check.
+    /// May lag behind `confirmed_seq`; `numbers` is what the window shows.
     pub risks_verified_seq: Option<u64>,
+    /// Whether the numbers on screen are checked against the server's (G15).
+    pub numbers: NumbersCheck,
     /// The page on screen.
     pub page: Page,
     /// The methodology's labels.

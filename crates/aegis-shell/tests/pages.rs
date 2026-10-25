@@ -6,7 +6,7 @@ mod common;
 
 use std::time::Duration;
 
-use aegis_client::state::{Mode, SyncView, ViewModel};
+use aegis_client::state::{Mode, NumbersCheck, SyncView, ViewModel};
 use aegis_client::view::Page;
 use common::{App, TestServer, save};
 use slint::Model;
@@ -73,6 +73,17 @@ async fn a_tara_is_built_page_by_page_from_the_window() {
             .is_some_and(|a| a.name == "Brake request on CAN-2" && !a.properties[0])
     })
     .await;
+    // The header says the numbers were checked against the server's (G15).
+    app.until("numbers checked", |vm| {
+        project(vm).numbers == NumbersCheck::Checked
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(app.window.get_numbers_kind(), 0);
+    assert_eq!(
+        app.window.get_numbers_text().as_str(),
+        "Numbers checked with the server"
+    );
     save(&app.frame(), "p01-assets");
 
     // Damage: add and rate safety at the highest level.

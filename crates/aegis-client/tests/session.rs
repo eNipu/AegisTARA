@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use aegis_client::commands::{Command, Edit};
 use aegis_client::connection::DevLogin;
 use aegis_client::session::{Session, SessionConfig};
-use aegis_client::state::{ConnectionView, Mode, Severity, SyncView, ViewModel};
+use aegis_client::state::{ConnectionView, Mode, NumbersCheck, Severity, SyncView, ViewModel};
 use aegis_server::auth_layer::{AuthLayer, DevAuthn};
 use aegis_server::config::ServerConfig;
 use aegis_server::methodologies::Methodologies;
@@ -518,6 +518,19 @@ async fn rating_a_step_updates_the_risks_immediately_and_undo_restores_them() {
 
     // Saved, then undone: the risk comes back and the undo is saved too.
     until(&alice, "saved", project_ready).await;
+    // The server recomputes after the edit, and the mark follows the
+    // confirmed change: it never says "checked" for a state the server has
+    // not agreed on (G15).
+    until(&alice, "numbers checked after the edit", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            assert!(
+                p.numbers != NumbersCheck::Checked || p.risks_verified_seq == Some(p.confirmed_seq),
+                "a stale check must not show as checked"
+            );
+            p.numbers == NumbersCheck::Checked && p.confirmed_seq == SAMPLE_OPS + 1
+        })
+    })
+    .await;
     alice.send(Command::Undo).expect("sent");
     let view = until(&alice, "restored", |vm| {
         vm.project
@@ -580,6 +593,10 @@ async fn a_second_user_follows_the_editor_live_and_cannot_edit() {
         },
     )
     .await;
+    assert_eq!(
+        view.project.as_ref().expect("project").numbers,
+        NumbersCheck::Checked
+    );
     assert!(
         !view.notices.iter().any(|n| n.text.contains("differ")),
         "{:?}",

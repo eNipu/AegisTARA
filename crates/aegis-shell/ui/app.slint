@@ -105,6 +105,10 @@ export component AppWindow inherits Window {
     // 0 read-only (free), 1 read-only (someone else edits), 2 editing
     in property <int> band-kind;
     in property <string> sync-text;
+    // Whether the risk numbers are checked against the server's (G15):
+    // 0 checked, 1 checking, 2 the server's numbers are shown, 3 not comparable.
+    in property <int> numbers-kind;
+    in property <string> numbers-text;
     in property <bool> can-undo;
     in property <bool> can-redo;
     in property <bool> show-residual;
@@ -792,6 +796,24 @@ export component AppWindow inherits Window {
                     color: Theme.graphite;
                     font-size: 13px;
                     vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    accessible-role: text;
+                    accessible-label: root.numbers-text;
+                    Image {
+                        source: root.numbers-kind == 0 ? @image-url("icons/badge-check.svg") : root.numbers-kind == 1 ? @image-url("icons/refresh-cw.svg") : @image-url("icons/triangle-alert.svg");
+                        colorize: root.numbers-kind == 0 ? Theme.very-low : root.numbers-kind == 1 ? Theme.graphite : Theme.high;
+                        width: 16px;
+                        height: 16px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        text: root.numbers-text;
+                        color: root.numbers-kind == 0 ? Theme.ink : root.numbers-kind == 1 ? Theme.graphite : Theme.high;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
                 }
                 Button { text: "Undo"; icon: @image-url("icons/undo-2.svg"); enabled: root.can-undo && root.editing; clicked => { root.undo(); } }
                 Button { text: "Redo"; icon: @image-url("icons/redo-2.svg"); enabled: root.can-redo && root.editing; clicked => { root.redo(); } }
