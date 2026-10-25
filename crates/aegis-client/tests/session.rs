@@ -329,6 +329,8 @@ async fn a_user_without_a_free_seat_can_look_but_is_told_why_they_cannot_edit() 
     })
     .await;
     assert_eq!(view.project.as_ref().expect("project").mode, Mode::ReadOnly);
+    drop(alice);
+    drop(bob);
     server.stop().await;
 }
 
@@ -535,6 +537,23 @@ async fn a_second_user_follows_the_editor_live_and_cannot_edit() {
     assert_eq!(
         view.project.as_ref().expect("project").confirmed_seq,
         SAMPLE_OPS
+    );
+    // The server sends its recomputed risks after the batch; Bob's own
+    // numbers match them, which his view records, with no complaint.
+    let view = until(
+        &bob,
+        "bob's numbers are checked against the server's",
+        |vm| {
+            vm.project
+                .as_ref()
+                .is_some_and(|p| p.risks_verified_seq == Some(SAMPLE_OPS))
+        },
+    )
+    .await;
+    assert!(
+        !view.notices.iter().any(|n| n.text.contains("differ")),
+        "{:?}",
+        view.notices
     );
 
     // Bob asks for the lock and is told no.

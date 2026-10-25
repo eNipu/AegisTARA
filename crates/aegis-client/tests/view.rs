@@ -5,7 +5,9 @@ use std::sync::Arc;
 use aegis_canvas::Tone;
 use aegis_client::commands::Edit;
 use aegis_client::sample::sample_ops;
-use aegis_client::view::{UiState, inspector, threat_rows, tree_view};
+use aegis_client::view::{
+    UiState, inspector, local_risk_keys, risks_differ, threat_rows, tree_view, use_server_risks,
+};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::Methodology;
 
@@ -222,4 +224,79 @@ fn edits_turn_into_typed_ops_and_change_what_the_view_shows() {
         .to_ops(ws.project(), "d", 1)
         .is_err()
     );
+}
+
+/// What a correct server sends for this workspace.
+fn server_event(ws: &Workspace) -> aegis_proto::RisksEvent {
+    let mut threats: Vec<_> = local_risk_keys(ws)
+        .into_iter()
+        .map(|(id, (inherent, residual))| aegis_proto::ThreatRiskEntry {
+            threat_id: id,
+            inherent_risk: inherent,
+            residual_risk: residual,
+        })
+        .collect();
+    threats.sort_by(|a, b| a.threat_id.cmp(&b.threat_id));
+    aegis_proto::RisksEvent {
+        as_of_seq: 16,
+        threats,
+    }
+}
+
+#[test]
+fn matching_server_numbers_are_not_a_difference() {
+    let ws = workspace();
+    let event = server_event(&ws);
+    assert_eq!(event.threats.len(), 2);
+    assert!(!event.threats[0].inherent_risk.is_empty());
+    assert!(!risks_differ(&ws, &event));
+}
+
+#[test]
+fn a_changed_missing_or_extra_threat_is_a_difference() {
+    let ws = workspace();
+
+    let mut changed = server_event(&ws);
+    changed.threats[0].inherent_risk = "no-such-level".into();
+    assert!(risks_differ(&ws, &changed));
+
+    let mut residual = server_event(&ws);
+    residual.threats[1].residual_risk = "other".into();
+    assert!(risks_differ(&ws, &residual));
+
+    let mut missing = server_event(&ws);
+    missing.threats.pop();
+    assert!(risks_differ(&ws, &missing));
+
+    let mut extra = server_event(&ws);
+    extra.threats.push(aegis_proto::ThreatRiskEntry {
+        threat_id: "not-a-threat-of-ours".into(),
+        inherent_risk: String::new(),
+        residual_risk: String::new(),
+    });
+    assert!(risks_differ(&ws, &extra));
+}
+
+#[test]
+fn server_numbers_replace_the_local_ones_in_the_list() {
+    let ws = workspace();
+    let mut rows = threat_rows(&ws);
+    let local_first = rows[0].inherent.clone().expect("rated");
+    // The server says the first threat has the lowest risk.
+    let m = ws.project().methodology();
+    let lowest = m.risk_levels().next().expect("level").1.to_owned();
+    let mut event = server_event(&ws);
+    for entry in &mut event.threats {
+        if entry.threat_id == rows[0].id.to_string() {
+            entry.inherent_risk = lowest.clone();
+            entry.residual_risk = String::new();
+        }
+    }
+    use_server_risks(&ws, &mut rows, &event);
+    let shown = rows[0].inherent.clone().expect("shown");
+    assert_ne!(shown.label, local_first.label);
+    assert_eq!(rows[0].residual, None, "an empty key means not computable");
+    // The other threat keeps what the server sent, which equals ours.
+    let again = threat_rows(&ws);
+    assert_eq!(rows[1].inherent, again[1].inherent);
 }
