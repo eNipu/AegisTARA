@@ -3,8 +3,10 @@
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
+use crate::envelope;
 use crate::error::LicenseError;
-use crate::license::{FILE_PREFIX, License, b64_encode};
+use crate::license::{DOMAIN as LICENSE_DOMAIN, FILE_PREFIX, License};
+use crate::manifest::{DOMAIN as MANIFEST_DOMAIN, MANIFEST_PREFIX, Manifest, ManifestError};
 
 /// Holds a signing key and produces license files.
 pub struct Issuer {
@@ -51,11 +53,27 @@ impl Issuer {
     pub fn sign(&self, license: &License) -> Result<String, LicenseError> {
         license.check()?;
         let payload = license.payload()?;
-        let signature = self.pair.sign(&License::signed_bytes(&payload));
-        Ok(format!(
-            "{FILE_PREFIX}.{}.{}",
-            b64_encode(&payload),
-            b64_encode(signature.as_ref())
+        Ok(envelope::seal(
+            &self.pair,
+            FILE_PREFIX,
+            LICENSE_DOMAIN,
+            &payload,
+        ))
+    }
+
+    /// Signs an update manifest, after checking it.
+    ///
+    /// # Errors
+    ///
+    /// The manifest's own error, or [`ManifestError::Signing`].
+    pub fn sign_manifest(&self, manifest: &Manifest) -> Result<String, ManifestError> {
+        manifest.check()?;
+        let payload = manifest.payload()?;
+        Ok(envelope::seal(
+            &self.pair,
+            MANIFEST_PREFIX,
+            MANIFEST_DOMAIN,
+            &payload,
         ))
     }
 }

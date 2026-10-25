@@ -20,6 +20,10 @@ Run this list for every release build. Tick each line in the release notes.
       An empty file means the build accepts no license.
 - [ ] The private key is offline and not in any repository or CI secret that
       builds pull requests.
+- [ ] `crates/aegis-license/keys/update.keys` holds the production **update**
+      public key. It is a different key from the license key.
+- [ ] The update private key is offline too, and held by fewer people than
+      the license key.
 - [ ] The server is built without the `dev-license` feature
       (`cargo tree -p aegis-server -e features | grep dev-license` prints nothing).
 - [ ] `aegis-license inspect` reads a license made with the production key
@@ -43,12 +47,20 @@ Run this list for every release build. Tick each line in the release notes.
       release.
 - [ ] The server starts only with TLS terminated in front of it, or on
       loopback (backlog 037 tracks TLS to PostgreSQL).
-- [ ] The container image runs as a non-root user and has a health check.
+- [ ] `docker build -f deploy/Dockerfile .` succeeds from a clean checkout,
+      the container runs as a non-root user, and a TCP probe of port 50051
+      succeeds. (The image was not built when it was written.)
+- [ ] `docker compose -f deploy/compose.yaml config` passes with a filled
+      `deploy/.env`, and a fresh `up` creates the schema.
 
 ## Signing and publishing
 
-- [ ] Artifacts are signed. The update manifest is signed with the release
-      key, and the client refuses an unsigned or older manifest.
+- [ ] The update manifest is signed with the update key
+      (`aegis-license sign-update`), and `aegis-license inspect-update` reads
+      it back against `update.keys`.
+- [ ] A test client on the previous release is offered this release, and a
+      test client on this release is not offered it again. The installer
+      passes `verify_download`.
 - [ ] SHA-256 sums are published next to the artifacts.
 - [ ] The release notes list the engine version (`ENGINE_VERSION`) and the
       oplog format version.
