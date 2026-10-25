@@ -1,0 +1,1173 @@
+# AegisTARA Current Implementation Architecture (`crates/aegis-model`)
+
+- **Date:** 2026-10-25
+- **Baseline Commit:** `b7ca167` (`026-choke-points-and-sensitivity`)
+- **Scope:** Complete architectural, UML class/struct, and activity interaction reference for `crates/aegis-model`.
+
+---
+
+## 1. High-Level Architecture Overview
+
+`aegis-model` is organized into six layers. Source state lives exclusively in `Methodology`, `AttackTree`, and `Project` (mutated only through validated `Op`s), while all derived state (`RefCounts`, `Evaluation<V>`, `TreeEvalCache<V>`, `ProjectEvalCache`, `ThreatRisk`, `AttackPaths`, `ChokePoint<V>`, `ThreatSensitivity`, `LintFinding`, `ProjectDiff`) is computed deterministically from the source state or maintained as an explicit, rebuildable cache (rule D10).
+
+```mermaid
+flowchart TB
+    subgraph L1["1. Foundation: IDs, Provenance & Methodology (id.rs, provenance.rs, methodology/)"]
+        ID["Typed IDs & Arena Indices\n(NodeIdx/Id, AssetIdx/Id, DamageIdx/Id,\nThreatIdx/Id, TreeIdx/Id, ControlIdx/Id,\nGoalIdx/Id, ClaimIdx/Id)"]
+        PROV["Provenance\n(actor, timestamp_ms, source)"]
+        METH["Methodology & Pack Loader\n(ImpactCategory, Level, FeasibilityLevel,\nRiskLevel, Property, ThreatCategory,\nCatalogScheme, AttackPotential)"]
+    end
+
+    subgraph L2["2. Attack Tree DAG & Pluggable Evaluator (tree.rs, eval.rs)"]
+        TREE["AttackTree\n(nodes, ids, owners,\nlinked_parents, by_id, root)"]
+        EVAL["evaluate() & Evaluation<V>\n(values, derivations, root_value,\nexplain, why_path)"]
+        TCACHE["TreeEvalCache<V>\n(eval, rank, edge_count,\nrecompute_steps)"]
+    end
+
+    subgraph L3["3. Project Aggregate & Typed Operations (project.rs, op.rs, asset.rs, damage.rs, threat.rs, control.rs)"]
+        PROJ["Project\n(7 Arenas + RefCounts +\nArc<Methodology>)"]
+        OP["Op (37 variants)\nvalidate(&op) / apply(op) -> inv_op"]
+    end
+
+    subgraph L4["4. Risk & Incremental Project Cache (threat.rs, project.rs)"]
+        RISK["ThreatRisk & ImpactRisk\n(inherent & residual)"]
+        PCACHE["ProjectEvalCache\n(trees, threats, tree_threats,\ndamage_threats, apply_cached)"]
+    end
+
+    subgraph L5["5. Analytical Engines (paths.rs, sensitivity.rs, lint.rs, diff.rs)"]
+        PATHS["AttackPaths & ChokePoint<V>\n(top_k_paths, choke_points,\ntop_k_hitting_set)"]
+        SENS["Tipping-Point Sensitivity\n(StepTippingPoint, FeasibilityTippingPoint,\nImpactTippingPoint, ThreatSensitivity)"]
+        LINT["Completeness Linter\n(LintFinding, LintCode)"]
+        DIFF["Version Diff & Risk Delta\n(ProjectDiff, ThreatRiskDelta)"]
+    end
+
+    subgraph L6["6. Wire Persistence (store/snapshot.rs, store/op_log.rs)"]
+        SNAP["Snapshot Store\n(Project::save / Project::load)"]
+        OPLOG["Append-Only OpLog\n(OpLogWriter / OpLogReader)"]
+    end
+
+    ID --> TREE
+    ID --> PROJ
+    PROV --> PROJ
+    METH --> PROJ
+    TREE --> EVAL
+    EVAL --> TCACHE
+    OP --> PROJ
+    PROJ --> RISK
+    TCACHE --> PCACHE
+    PROJ --> PCACHE
+    EVAL --> PATHS
+    TCACHE --> SENS
+    PROJ --> SENS
+    PROJ --> LINT
+    PROJ --> DIFF
+    PROJ --> SNAP
+    OP --> OPLOG
+```
+
+### Module Inventory (`crates/aegis-model/src/`)
+
+| Module | Primary Types | Responsibility |
+|---|---|---|
+| `id.rs` | `NodeIdx`..`ClaimIdx` (`u32`), `NodeId`..`ClaimId` (`Uuid` v7) | 4-byte arena indices for $O(1)$ slice access and 16-byte time-ordered UUIDv7 external identifiers. |
+| `provenance.rs` | `Provenance`, `ProvenanceSource` | Tracks `actor`, `timestamp_ms`, and `source` (`Human`, `Import`, `Catalog`, `Ai`) on every entity and mutation. |
+| `methodology/` | `Methodology`, `MethodologyDef`, `AttackPotential`, `PotentialBand`, `CatalogRef`, `PropertySet`, scale `u8` newtypes | Validates and compiles methodology packs (including built-in ISO/SAE 21434 + UN R155 Annex 5), 2D risk matrices, catalog syntax, and CEM multi-factor attack potential scoring. |
+| `tree.rs` | `AttackTree`, `Node`, `GateKind` | Arena-allocated rooted DAG with `And`, `Or`, and `SeqAnd` gates, eager DFS cycle prevention on `link()`, and iterative Kahn's `topological_order()`. |
+| `eval.rs` | `AttributeDomain`, `MaxMin<T>`, `MinTime`, `Evaluation<V>`, `Derivation`, `Explanation`, `TreeEvalCache<V>` | Single-pass bottom-up DAG evaluator, step-by-step explain-why traces, and rank-ordered incremental tree evaluation cache with value-change early cutoff. |
+| `asset.rs` | `Asset` | Item asset holding a `PropertySet` bitset of security properties and `Provenance`. |
+| `damage.rs` | `DamageScenario` | Adverse consequence rated across methodology impact categories (`Box<[Option<Level>]>`). |
+| `threat.rs` | `ThreatScenario`, `ImpactRisk`, `ThreatRisk` | Threat targeting an `Asset`, violating `PropertySet`, linked to `CatalogRef`s, `DamageScenario`s, optional `AttackTree` / `direct_feasibility`, `RiskTreatment`, `CybersecurityGoal`, and `CybersecurityClaim`. |
+| `control.rs` | `SecurityControl`, `StepMitigation`, `RiskTreatment`, `CybersecurityGoal`, `CybersecurityClaim` | Security controls, per-step feasibility mitigations, treatment decisions (`Avoid`, `Reduce`, `Share`, `Retain`), goals, and claims. |
+| `op.rs` | `Op` (37 variants) | Complete set of validated, single-op-invertible project mutations. |
+| `project.rs` | `Project`, `Arena<Id, Idx, T>`, `TreeEntry`, `RefCounts`, `ProjectEvalCache` | Aggregate root owning the 7 entity arenas, sparse reference counts (`RefCounts`), and incremental project evaluation cache (`ProjectEvalCache`). |
+| `paths.rs` | `AttackPath<V>`, `AttackPaths<V>`, `ChokePoint<V>` | Lazy best-first minimal cut-set enumeration (`BinaryHeap<SearchState<V>>`), choke-point ranking, and greedy top-$k$ hitting sets. |
+| `sensitivity.rs` | `StepTippingPoint`, `FeasibilityTippingPoint`, `ImpactTippingPoint`, `ThreatSensitivity` | Single-parameter $\pm 1$ tipping-point sensitivity analysis for attack trees and threat scenarios. |
+| `lint.rs` | `LintSeverity`, `LintCode` (22 variants: 4 `Error`, 18 `Warning`), `LintFinding` | Deterministic completeness and consistency linter over `Project` (zero entity names in output, rule R6). |
+| `diff.rs` | `EntityDiff<Id>`, `RiskSnapshot`, `RiskChange`, `RiskDelta`, `ThreatRiskDelta`, `ProjectDiff` | Deterministic structural and inherent/residual risk delta comparison between two `Project` versions. |
+| `store/` | `OpLogWriter<W>`, `OpLogReader<R>`, `StoreError` | Key-based JSON snapshot (`aegis-project`) and JSON Lines append-only operation log (`aegis-oplog`) with decode-time size caps (rule R3). |
+| `error.rs` | `ModelError` | Structured error enum for all domain, graph, capacity, and validation failures. |
+
+---
+
+## 2. Complete UML Class Diagrams (All Structs, Enums, Fields & Methods)
+
+### 2.1 Identity, Provenance & Methodology (`id.rs`, `provenance.rs`, `methodology/`)
+
+- **In-memory arena indices (`*Idx(u32)`)**: `NodeIdx(u32)`, `AssetIdx(u32)`, `DamageIdx(u32)`, `ThreatIdx(u32)`, `TreeIdx(u32)`, `ControlIdx(u32)`, `GoalIdx(u32)`, `ClaimIdx(u32)`. Each implements the crate-private `ArenaIndex` trait (`from_u32(i: u32) -> Self`, `position(self) -> usize`).
+- **Public stable IDs (`*Id(Uuid)`)**: `NodeId(Uuid)`, `AssetId(Uuid)`, `DamageId(Uuid)`, `ThreatId(Uuid)`, `TreeId(Uuid)`, `ControlId(Uuid)`, `GoalId(Uuid)`, `ClaimId(Uuid)`. Each validates RFC 9562 UUIDv7 on construction (`new_v7()`, `from_uuid(Uuid) -> Result<Self, IdError>`, `as_uuid(self) -> Uuid`).
+- **Vocabulary scale indices (`u8` newtypes)**: `ImpactCategory(u8)`, `Level(u8)`, `FeasibilityLevel(u8)`, `RiskLevel(u8)`, `Property(u8)`, `ThreatCategory(u8)`, `CatalogScheme(u8)`, `FeasibilityFactor(u8)`, `FactorLevel(u8)`.
+
+```mermaid
+classDiagram
+    direction TB
+
+    class Provenance {
+        <<tuple struct>>
+        -0: Option~Arc_ProvenanceInner~~
+        +new(actor, timestamp_ms: u64, source: ProvenanceSource) Self
+        +human(actor, timestamp_ms: u64) Self
+        +import(actor, timestamp_ms: u64) Self
+        +catalog(actor, timestamp_ms: u64) Self
+        +ai(actor, timestamp_ms: u64) Self
+        +actor() &str
+        +timestamp_ms() u64
+        +source() ProvenanceSource
+        +is_default() bool
+    }
+
+    class ProvenanceInner {
+        -actor: Arc~str~
+        -timestamp_ms: u64
+        -source: ProvenanceSource
+    }
+
+    class ProvenanceSource {
+        <<enumeration>>
+        Human
+        Import
+        Catalog
+        Ai
+        +as_str() &str
+    }
+
+    class PropertySet {
+        -bits: u64
+        +empty() Self
+        +with(self, p: Property) Self
+        +contains(self, p: Property) bool
+        +is_subset(self, other: Self) bool
+        +iter(self) impl Iterator~Item = Property~
+        +len(self) usize
+        +is_empty(self) bool
+    }
+
+    class Methodology {
+        -key: Arc~str~
+        -version: Arc~str~
+        -label: Arc~str~
+        -impact_categories: Vec~CategoryData~
+        -impact_by_key: BTreeMap~Arc_str, u8~
+        -feasibility_levels: Vec~Entry~
+        -feasibility_by_key: BTreeMap~Arc_str, u8~
+        -risk_levels: Vec~Entry~
+        -risk_by_key: BTreeMap~Arc_str, u8~
+        -properties: Vec~Entry~
+        -property_by_key: BTreeMap~Arc_str, u8~
+        -threat_categories: Vec~ThreatCategoryData~
+        -threat_by_key: BTreeMap~Arc_str, u8~
+        -schemes: Vec~SchemeData~
+        -scheme_by_key: BTreeMap~Arc_str, u8~
+        -factors: Vec~FactorData~
+        -factor_by_key: BTreeMap~Arc_str, u8~
+        -potential_bands: Vec~PotentialBand~
+        -all_properties: PropertySet
+        +new(def: MethodologyDef) Result~Self, MethodologyError~
+        +iso21434_r155() Result~Self, PackError~
+        +read_pack(reader: R) Result~Self, PackError~
+        +impact_category(key: &str) Option~ImpactCategory~
+        +level(cat: ImpactCategory, key: &str) Option~Level~
+        +level_count(cat: ImpactCategory) usize
+        +feasibility_levels() ExactSizeIterator
+        +feasibility_level(key: &str) Option~FeasibilityLevel~
+        +risk_levels() ExactSizeIterator
+        +risk_level(key: &str) Option~RiskLevel~
+        +risk_for(cat: ImpactCategory, impact: Level, feasibility: FeasibilityLevel) Option~RiskLevel~
+        +property(key: &str) Option~Property~
+        +all_properties() PropertySet
+        +threat_category(key: &str) Option~ThreatCategory~
+        +violates(cat: ThreatCategory) Option~PropertySet~
+        +parse_catalog_ref(scheme: CatalogScheme, text: &str) Result~CatalogRef, ModelError~
+        +display_catalog_ref(r: &CatalogRef) impl Display
+        +resolve_attack_potential(ratings: &[Option~FactorLevel~]) Option~AttackPotential~
+        +resolve_attack_potential_feasibility(ratings: &[Option~FactorLevel~]) Option~FeasibilityLevel~
+    }
+
+    class CategoryData {
+        -entry: Entry
+        -levels: Vec~Entry~
+        -level_by_key: BTreeMap~Arc_str, u8~
+        -risk_matrix: Box~[RiskLevel]~
+    }
+
+    class FactorData {
+        -entry: Entry
+        -levels: Vec~FactorLevelEntry~
+        -level_by_key: BTreeMap~Arc_str, u8~
+    }
+
+    class PotentialBand {
+        -min: u16
+        -max: u16
+        -feasibility: FeasibilityLevel
+        +min() u16
+        +max() u16
+        +feasibility() FeasibilityLevel
+        +contains(score: u16) bool
+    }
+
+    class AttackPotential {
+        -factors: Box~[FactorContribution]~
+        -score: u16
+        -band: PotentialBand
+        +factors() &[FactorContribution]
+        +score() u16
+        +band() PotentialBand
+        +feasibility() FeasibilityLevel
+    }
+
+    class FactorContribution {
+        -factor: FeasibilityFactor
+        -level: FactorLevel
+        -points: u16
+        +factor() FeasibilityFactor
+        +level() FactorLevel
+        +points() u16
+    }
+
+    class CatalogRef {
+        -scheme: CatalogScheme
+        -len: u8
+        -segments: [u16; MAX_SEGMENTS]
+        +scheme() CatalogScheme
+        +segments() &[u16]
+    }
+
+    Provenance *-- ProvenanceInner
+    ProvenanceInner *-- ProvenanceSource
+    Methodology *-- CategoryData
+    Methodology *-- FactorData
+    Methodology *-- PotentialBand
+    Methodology *-- PropertySet
+    AttackPotential *-- FactorContribution
+    AttackPotential *-- PotentialBand
+```
+
+---
+
+### 2.2 Attack Tree DAG & Evaluation Engine (`tree.rs`, `eval.rs`)
+
+`AttackTree` stores nodes in parallel `Vec` arenas indexed by `NodeIdx(u32)`. Every non-root node has one primary `owner: Option<NodeIdx>` (forming a spanning tree) plus zero or more secondary DAG parents in `linked_parents: Vec<Vec<NodeIdx>>`.
+
+```mermaid
+classDiagram
+    direction TB
+
+    class AttackTree {
+        -nodes: Vec~Node~
+        -ids: Vec~NodeId~
+        -owners: Vec~Option_NodeIdx~
+        -linked_parents: Vec~Vec_NodeIdx~
+        -by_id: HashMap~NodeId, NodeIdx~
+        -root: NodeIdx
+        -link_count: u32
+        +new(root_id: NodeId, root: Node) Result~Self, ModelError~
+        +add_child(parent: NodeIdx, id: NodeId, node: Node) Result~NodeIdx, ModelError~
+        +link(parent: NodeIdx, child: NodeIdx) Result~(), ModelError~
+        +root() NodeIdx
+        +len() usize
+        +edge_count() usize
+        +get(idx: NodeIdx) Option~&Node~
+        +id(idx: NodeIdx) Option~NodeId~
+        +idx(id: &NodeId) Option~NodeIdx~
+        +owner(idx: NodeIdx) Option~NodeIdx~
+        +children(idx: NodeIdx) &[NodeIdx]
+        +parents(idx: NodeIdx) impl Iterator~Item = NodeIdx~
+        +iter() impl Iterator~Item = (NodeIdx, NodeId, &Node)~
+        +topological_order() Result~Vec_NodeIdx, ModelError~
+        +check_acyclic() Result~(), ModelError~
+    }
+
+    class Node {
+        <<enumeration>>
+        Gate(kind: GateKind, label: Arc~str~, children: Vec~NodeIdx~)
+        Step(label: Arc~str~)
+        +gate(kind: GateKind, label) Self
+        +step(label) Self
+        +label() &str
+        +gate_kind() Option~GateKind~
+        +children() &[NodeIdx]
+    }
+
+    class GateKind {
+        <<enumeration>>
+        And
+        Or
+        SeqAnd
+    }
+
+    class AttributeDomain~V~ {
+        <<trait>>
+        +or(&self, acc: V, next: &V) V
+        +and(&self, acc: V, next: &V) V
+        +seq_and(&self, acc: V, next: &V) V
+        +or_kept(&self, acc: V, next: &V) Kept
+        +and_kept(&self, acc: V, next: &V) Kept
+        +seq_and_kept(&self, acc: V, next: &V) Kept
+    }
+
+    class MaxMin~T~ {
+        -_marker: PhantomData~fn() -> T~
+        +new() Self
+    }
+
+    class MinTime {
+        +or(acc: u64, next: &u64) u64
+        +and(acc: u64, next: &u64) u64
+        +seq_and(acc: u64, next: &u64) u64
+    }
+
+    class Evaluation~V~ {
+        -values: Vec~Option_V~~
+        -derivations: Vec~Derivation~
+        -root: NodeIdx
+        -root_value: V
+        +get(idx: NodeIdx) Option~&V~
+        +root_value() &V
+        +len() usize
+        +is_empty() bool
+        +iter() impl Iterator~Item = (NodeIdx, &V)~
+        +derivation(idx: NodeIdx) Option~Derivation~
+        +explain(tree: &AttackTree, idx: NodeIdx) Option~Explanation_V~
+        +why_path(tree: &AttackTree) Option~Vec_NodeIdx~
+        +attack_paths(tree: &AttackTree) Option~AttackPaths_V~
+        +top_k_paths(tree: &AttackTree, k: usize) Option~Vec_AttackPath_V~
+        +choke_points(tree: &AttackTree, k: usize) Option~Vec_ChokePoint_V~
+        +top_k_hitting_set(tree: &AttackTree, k: usize) Option~Vec_NodeIdx~
+        ~set_node(idx: NodeIdx, root: NodeIdx, value: V, derivation: Derivation) bool~
+        ~sync_nodes(other: &Self, touched: &[NodeIdx], root: NodeIdx)~
+    }
+
+    class Derivation {
+        <<enumeration>>
+        Leaf
+        Selected(rule: GateKind, child: NodeIdx)
+        Combined(rule: GateKind)
+    }
+
+    class Explanation~a, V~ {
+        -eval: &a Evaluation~V~
+        -node: NodeIdx
+        -value: &a V
+        -derivation: Derivation
+        -children: &a [NodeIdx]
+        +node() NodeIdx
+        +value() &a V
+        +derivation() Derivation
+        +rule() Option~GateKind~
+        +decisive() Option~NodeIdx~
+        +inputs() impl Iterator~Item = (NodeIdx, &a V)~
+    }
+
+    class TreeEvalCache~V~ {
+        -eval: Evaluation~V~
+        -rank: Box~[u32]~
+        -edge_count: usize
+        +new(tree: &AttackTree, domain: &D, leaf: F) Result~Self, ModelError~
+        +evaluation() &Evaluation~V~
+        +into_evaluation(self) Evaluation~V~
+        +recompute_steps(tree: &AttackTree, domain: &D, steps: I, leaf: F) Result~usize, ModelError~
+        ~recompute_steps_recording(tree: &AttackTree, domain: &D, steps: I, leaf: F, touched: &mut Vec_NodeIdx) Result~usize, ModelError~~
+    }
+
+    AttackTree *-- Node
+    Node *-- GateKind
+    AttributeDomain <|.. MaxMin
+    AttributeDomain <|.. MinTime
+    Evaluation *-- Derivation
+    Evaluation ..> Explanation : creates
+    TreeEvalCache *-- Evaluation
+```
+
+---
+
+### 2.3 Domain Entities, `Project` Aggregate, `Arena` & `RefCounts` (`project.rs`, `asset.rs`, `damage.rs`, `threat.rs`, `control.rs`, `op.rs`)
+
+```mermaid
+classDiagram
+    direction TB
+
+    class Arena~Id, Idx, T~ {
+        -slots: Vec~Option_T~
+        -ids: Vec~Id~
+        -by_id: BTreeMap~Id, Idx~
+        -get(idx: Idx) Option~&T~
+        -get_mut(idx: Idx) Option~&mut T~
+        -idx(id: &Id) Option~Idx~
+        -id(idx: Idx) Option~Id~
+        -len() usize
+        -slot_count() usize
+        -next_idx(limit: u32) Option~Idx~
+        -push(id: Id, value: T, limit: u32) Option~Idx~
+        -remove(idx: Idx) Option~T~
+        -iter() impl Iterator~Item = (Idx, Id, &T)~
+    }
+
+    class Project {
+        -methodology: Arc~Methodology~
+        -slot_limit: u32
+        -assets: Arena~AssetId, AssetIdx, Asset~
+        -damages: Arena~DamageId, DamageIdx, DamageScenario~
+        -threats: Arena~ThreatId, ThreatIdx, ThreatScenario~
+        -trees: Arena~TreeId, TreeIdx, TreeEntry~
+        -controls: Arena~ControlId, ControlIdx, SecurityControl~
+        -goals: Arena~GoalId, GoalIdx, CybersecurityGoal~
+        -claims: Arena~ClaimId, ClaimIdx, CybersecurityClaim~
+        -refs: RefCounts
+        +new(methodology: Arc~Methodology~) Self
+        +with_slot_limit(methodology: Arc~Methodology~, slot_limit: u32) Self
+        +methodology() &Arc~Methodology~
+        +validate(op: &Op) Result~(), ModelError~
+        +apply(op: Op) Result~Op, ModelError~
+        +apply_cached(op: Op, cache: &mut ProjectEvalCache) Result~Op, ModelError~
+        +eval_cache() ProjectEvalCache
+        +evaluate_tree(id: TreeId) Result~Evaluation_FeasibilityLevel, ModelError~
+        +evaluate_residual_tree(id: TreeId) Result~Evaluation_FeasibilityLevel, ModelError~
+        +evaluate_threat(id: ThreatId) Result~Evaluation_FeasibilityLevel, ModelError~
+        +evaluate_residual_threat(id: ThreatId) Result~Evaluation_FeasibilityLevel, ModelError~
+        +evaluate_risk(id: ThreatId) Result~ThreatRisk, ModelError~
+        +evaluate_residual_risk(id: ThreatId) Result~ThreatRisk, ModelError~
+        +top_k_tree_paths(id: TreeId, k: usize) Result~Vec_AttackPath, ModelError~
+        +top_k_residual_tree_paths(id: TreeId, k: usize) Result~Vec_AttackPath, ModelError~
+        +top_k_threat_paths(id: ThreatId, k: usize) Result~Vec_AttackPath, ModelError~
+        +top_k_residual_threat_paths(id: ThreatId, k: usize) Result~Vec_AttackPath, ModelError~
+        +tree_choke_points(id: TreeId, k: usize) Result~Vec_ChokePoint, ModelError~
+        +residual_tree_choke_points(id: TreeId, k: usize) Result~Vec_ChokePoint, ModelError~
+        +threat_choke_points(id: ThreatId, k: usize) Result~Vec_ChokePoint, ModelError~
+        +residual_threat_choke_points(id: ThreatId, k: usize) Result~Vec_ChokePoint, ModelError~
+        +tree_hitting_set(id: TreeId, k: usize) Result~Vec_NodeIdx, ModelError~
+        +residual_tree_hitting_set(id: TreeId, k: usize) Result~Vec_NodeIdx, ModelError~
+        +threat_hitting_set(id: ThreatId, k: usize) Result~Vec_NodeIdx, ModelError~
+        +residual_threat_hitting_set(id: ThreatId, k: usize) Result~Vec_NodeIdx, ModelError~
+        +tree_tipping_points(id: TreeId) Result~Vec_StepTippingPoint, ModelError~
+        +residual_tree_tipping_points(id: TreeId) Result~Vec_StepTippingPoint, ModelError~
+        +threat_sensitivity(id: ThreatId) Result~ThreatSensitivity, ModelError~
+        +residual_threat_sensitivity(id: ThreatId) Result~ThreatSensitivity, ModelError~
+        +lint() Vec~LintFinding~
+        +diff(current: &Project) Result~ProjectDiff, ModelError~
+        +save(writer: W) Result~(), StoreError~
+        +load(methodology: Arc~Methodology~, reader: R) Result~Self, StoreError~
+    }
+
+    class Asset {
+        -name: Arc~str~
+        -properties: PropertySet
+        -provenance: Provenance
+        +name() &str
+        +properties() PropertySet
+        +provenance() &Provenance
+    }
+
+    class DamageScenario {
+        -name: Arc~str~
+        -impacts: Box~[Option_Level]~
+        -provenance: Provenance
+        +name() &str
+        +impact(category: ImpactCategory) Option~Level~
+        +impacts() impl ExactSizeIterator~Item = (ImpactCategory, Option_Level)~
+        +provenance() &Provenance
+    }
+
+    class ThreatScenario {
+        -name: Arc~str~
+        -asset: AssetIdx
+        -category: ThreatCategory
+        -catalog_refs: Vec~CatalogRef~
+        -damages: Vec~DamageIdx~
+        -direct_feasibility: Option~FeasibilityLevel~
+        -attack_tree: Option~TreeIdx~
+        -treatment: Option~RiskTreatment~
+        -goal: Option~GoalIdx~
+        -claim: Option~ClaimIdx~
+        -provenance: Provenance
+        +name() &str
+        +asset() AssetIdx
+        +category() ThreatCategory
+        +catalog_refs() &[CatalogRef]
+        +damages() &[DamageIdx]
+        +direct_feasibility() Option~FeasibilityLevel~
+        +attack_tree() Option~TreeIdx~
+        +treatment() Option~RiskTreatment~
+        +goal() Option~GoalIdx~
+        +claim() Option~ClaimIdx~
+        +provenance() &Provenance
+    }
+
+    class TreeEntry {
+        -tree: AttackTree
+        -step_feasibility: Vec~Option_FeasibilityLevel~
+        -step_factors: Vec~Box_Slice_Option_FactorLevel~~
+        -step_mitigations: Vec~Box_Slice_StepMitigation~~
+        -provenance: Provenance
+        -step_attack_potential(m: &Methodology, idx: NodeIdx) Option~AttackPotential~
+        -effective_step_feasibility(m: &Methodology, idx: NodeIdx) Option~FeasibilityLevel~
+        -residual_step_feasibility(m: &Methodology, idx: NodeIdx) Option~FeasibilityLevel~
+    }
+
+    class SecurityControl {
+        -name: Arc~str~
+        -provenance: Provenance
+        +name() &str
+        +provenance() &Provenance
+    }
+
+    class StepMitigation {
+        -control: ControlIdx
+        -feasibility: FeasibilityLevel
+        +control() ControlIdx
+        +feasibility() FeasibilityLevel
+    }
+
+    class CybersecurityGoal {
+        -name: Arc~str~
+        -controls: Vec~ControlIdx~
+        -provenance: Provenance
+        +name() &str
+        +controls() &[ControlIdx]
+        +provenance() &Provenance
+    }
+
+    class CybersecurityClaim {
+        -name: Arc~str~
+        -provenance: Provenance
+        +name() &str
+        +provenance() &Provenance
+    }
+
+    class RefCounts {
+        -asset_properties: Vec~Box_Slice_PropertyCount~~
+        -assets: Vec~u32~
+        -damages: Vec~u32~
+        -trees: Vec~u32~
+        -controls: Vec~u32~
+        -control_goals: Vec~u32~
+        -goals: Vec~u32~
+        -claims: Vec~u32~
+        -threat(t: &ThreatScenario, violates: PropertySet, up: bool)
+        -properties(a: AssetIdx, violates: PropertySet, up: bool)
+        -property(a: AssetIdx, p: Property) u32
+    }
+
+    class PropertyCount {
+        -property: Property
+        -threats: u32
+    }
+
+    Project *-- Arena
+    Project *-- RefCounts
+    RefCounts *-- PropertyCount
+    Arena o-- Asset
+    Arena o-- DamageScenario
+    Arena o-- ThreatScenario
+    Arena o-- TreeEntry
+    Arena o-- SecurityControl
+    Arena o-- CybersecurityGoal
+    Arena o-- CybersecurityClaim
+    TreeEntry *-- AttackTree
+    TreeEntry *-- StepMitigation
+```
+
+---
+
+### 2.4 Risk, Incremental Project Cache, Attack Paths, Choke Points & Sensitivity (`threat.rs`, `project.rs`, `paths.rs`, `sensitivity.rs`)
+
+```mermaid
+classDiagram
+    direction TB
+
+    class ThreatRisk {
+        -feasibility: FeasibilityLevel
+        -tree_evaluation: Option~Evaluation_FeasibilityLevel~
+        -entries: Vec~ImpactRisk~
+        -deciding: Option~usize~
+        +feasibility() FeasibilityLevel
+        +tree_evaluation() Option~&Evaluation_FeasibilityLevel~
+        +entries() &[ImpactRisk]
+        +max_risk() Option~RiskLevel~
+        +deciding_entry() Option~&ImpactRisk~
+    }
+
+    class ImpactRisk {
+        -damage: DamageId
+        -category: ImpactCategory
+        -impact: Level
+        -feasibility: FeasibilityLevel
+        -risk: RiskLevel
+        +damage() DamageId
+        +category() ImpactCategory
+        +impact() Level
+        +feasibility() FeasibilityLevel
+        +risk() RiskLevel
+    }
+
+    class ProjectEvalCache {
+        -trees: Vec~Option_CachedTreeEval~
+        -threats: Vec~Option_CachedThreatEval~
+        -tree_threats: Vec~Vec_ThreatIdx~
+        -damage_threats: Vec~Vec_ThreatIdx~
+        -recomputed_nodes: u64
+        -recomputed_threats: u64
+        +new(project: &Project) Self
+        +rebuild(project: &Project)
+        +update(project: &Project, op: &Op)
+        +evaluate_tree(project: &Project, id: TreeId) Result~&Evaluation, ModelError~
+        +evaluate_residual_tree(project: &Project, id: TreeId) Result~&Evaluation, ModelError~
+        +evaluate_threat(project: &Project, id: ThreatId) Result~&Evaluation, ModelError~
+        +evaluate_residual_threat(project: &Project, id: ThreatId) Result~&Evaluation, ModelError~
+        +evaluate_risk(project: &Project, id: ThreatId) Result~&ThreatRisk, ModelError~
+        +evaluate_residual_risk(project: &Project, id: ThreatId) Result~&ThreatRisk, ModelError~
+        +recomputed_nodes() u64
+        +recomputed_threats() u64
+        +reset_counters()
+    }
+
+    class AttackPath~V~ {
+        -steps: Box~[NodeIdx]~
+        -feasibility: V
+        -bottleneck: NodeIdx
+        +steps() &[NodeIdx]
+        +bottleneck() NodeIdx
+        +feasibility() &V
+        +len() usize
+        +is_empty() bool
+        +contains(step: NodeIdx) bool
+    }
+
+    class AttackPaths~a, V~ {
+        -tree: &a AttackTree
+        -eval: &a Evaluation~V~
+        -topo: Vec~NodeIdx~
+        -has_shared: bool
+        -heap: BinaryHeap~SearchState_V~~
+        -yielded: BTreeSet~Box_Slice_NodeIdx~~
+        +next() Option~AttackPath_V~
+    }
+
+    class SearchState~V~ {
+        <<struct>>
+        -bound: V
+        -choices: Vec~u32~
+        -steps: Vec~NodeIdx~
+        -next_or: Option~NodeIdx~
+        -worklist: Vec~NodeIdx~
+        -expanded: Vec~bool~
+    }
+
+    class ChokePoint~V~ {
+        -step: NodeIdx
+        -path_count: usize
+        -bottleneck_count: usize
+        -easiest_path_feasibility: V
+        +step() NodeIdx
+        +path_count() usize
+        +bottleneck_count() usize
+        +easiest_path_feasibility() &V
+    }
+
+    class StepTippingPoint {
+        -step: NodeIdx
+        -node: NodeId
+        -from_step: FeasibilityLevel
+        -to_step: FeasibilityLevel
+        -from_root: FeasibilityLevel
+        -to_root: FeasibilityLevel
+        +step() NodeIdx
+        +node() NodeId
+        +from_step() FeasibilityLevel
+        +to_step() FeasibilityLevel
+        +from_root() FeasibilityLevel
+        +to_root() FeasibilityLevel
+    }
+
+    class FeasibilityTippingPoint {
+        -step: Option~NodeIdx~
+        -node: Option~NodeId~
+        -from_step_feasibility: FeasibilityLevel
+        -to_step_feasibility: FeasibilityLevel
+        -from_threat_feasibility: FeasibilityLevel
+        -to_threat_feasibility: FeasibilityLevel
+        -from_risk: RiskLevel
+        -to_risk: RiskLevel
+        +step() Option~NodeIdx~
+        +node() Option~NodeId~
+        +from_step_feasibility() FeasibilityLevel
+        +to_step_feasibility() FeasibilityLevel
+        +from_threat_feasibility() FeasibilityLevel
+        +to_threat_feasibility() FeasibilityLevel
+        +from_risk() RiskLevel
+        +to_risk() RiskLevel
+    }
+
+    class ImpactTippingPoint {
+        -damage: DamageId
+        -category: ImpactCategory
+        -from_impact: Level
+        -to_impact: Level
+        -from_risk: RiskLevel
+        -to_risk: RiskLevel
+        +damage() DamageId
+        +category() ImpactCategory
+        +from_impact() Level
+        +to_impact() Level
+        +from_risk() RiskLevel
+        +to_risk() RiskLevel
+    }
+
+    class ThreatSensitivity {
+        -feasibility: FeasibilityLevel
+        -max_risk: Option~RiskLevel~
+        -feasibility_tipping_points: Vec~FeasibilityTippingPoint~
+        -impact_tipping_points: Vec~ImpactTippingPoint~
+        +feasibility() FeasibilityLevel
+        +max_risk() Option~RiskLevel~
+        +feasibility_tipping_points() &[FeasibilityTippingPoint]
+        +impact_tipping_points() &[ImpactTippingPoint]
+        +is_stable() bool
+    }
+
+    ThreatRisk *-- ImpactRisk
+    AttackPaths ..> AttackPath : yields
+    ThreatSensitivity *-- FeasibilityTippingPoint
+    ThreatSensitivity *-- ImpactTippingPoint
+```
+
+---
+
+### 2.5 Linter, Version Diff & Wire Persistence (`lint.rs`, `diff.rs`, `store/`)
+
+```mermaid
+classDiagram
+    direction TB
+
+    class LintFinding {
+        -code: LintCode
+        +new(code: LintCode) Self
+        +code() &LintCode
+        +severity() LintSeverity
+        +is_error() bool
+        +is_warning() bool
+    }
+
+    class LintCode {
+        <<enumeration>>
+        AssetWithoutThreats(asset: AssetId)
+        AssetPropertyUntested(asset: AssetId, property: Property)
+        DamageScenarioWithoutImpacts(damage: DamageId)
+        DamageScenarioUnlinked(damage: DamageId)
+        ThreatWithoutDamages(threat: ThreatId)
+        ThreatWithoutFeasibility(threat: ThreatId) Error
+        RedundantDirectFeasibility(threat: ThreatId)
+        ThreatWithoutTreatment(threat: ThreatId)
+        ReduceTreatmentWithoutControls(threat: ThreatId) Error
+        ReduceTreatmentWithoutGoal(threat: ThreatId)
+        RetainOrShareTreatmentWithoutClaim(threat: ThreatId)
+        GoalOnNonReduceThreat(threat: ThreatId, goal: GoalId)
+        ClaimOnNonRetainOrShareThreat(threat: ThreatId, claim: ClaimId)
+        AttackTreeUnlinked(tree: TreeId)
+        AttackTreeGateEmpty(tree: TreeId, node: NodeId) Error
+        AttackTreeStepUnrated(tree: TreeId, node: NodeId) Error
+        AttackTreeStepIncompleteFactors(tree: TreeId, node: NodeId)
+        RedundantStepFeasibility(tree: TreeId, node: NodeId)
+        SecurityControlUnused(control: ControlId)
+        CybersecurityGoalWithoutControls(goal: GoalId)
+        CybersecurityGoalUnlinked(goal: GoalId)
+        CybersecurityClaimUnlinked(claim: ClaimId)
+        +severity() LintSeverity
+    }
+
+    class ProjectDiff {
+        -assets: EntityDiff~AssetId~
+        -damage_scenarios: EntityDiff~DamageId~
+        -threat_scenarios: EntityDiff~ThreatId~
+        -attack_trees: EntityDiff~TreeId~
+        -security_controls: EntityDiff~ControlId~
+        -cybersecurity_goals: EntityDiff~GoalId~
+        -cybersecurity_claims: EntityDiff~ClaimId~
+        -risk_deltas: Vec~ThreatRiskDelta~
+        +assets() &EntityDiff~AssetId~
+        +damage_scenarios() &EntityDiff~DamageId~
+        +threat_scenarios() &EntityDiff~ThreatId~
+        +attack_trees() &EntityDiff~TreeId~
+        +security_controls() &EntityDiff~ControlId~
+        +cybersecurity_goals() &EntityDiff~GoalId~
+        +cybersecurity_claims() &EntityDiff~ClaimId~
+        +risk_deltas() &[ThreatRiskDelta]
+        +changed_risks() impl Iterator~Item = &ThreatRiskDelta~
+        +is_empty() bool
+    }
+
+    class EntityDiff~Id~ {
+        -added: Vec~Id~
+        -removed: Vec~Id~
+        -modified: Vec~Id~
+        +added() &[Id]
+        +removed() &[Id]
+        +modified() &[Id]
+        +is_empty() bool
+        +len() usize
+    }
+
+    class ThreatRiskDelta {
+        -threat: ThreatId
+        -inherent: RiskDelta
+        -residual: RiskDelta
+        +threat() ThreatId
+        +inherent() RiskDelta
+        +residual() RiskDelta
+        +is_risk_changed() bool
+    }
+
+    class RiskDelta {
+        -before: Option~RiskSnapshot~
+        -after: Option~RiskSnapshot~
+        -change: RiskChange
+        +before() Option~RiskSnapshot~
+        +after() Option~RiskSnapshot~
+        +change() RiskChange
+        +is_changed() bool
+    }
+
+    class RiskSnapshot {
+        -feasibility: FeasibilityLevel
+        -max_risk: Option~RiskLevel~
+        +feasibility() FeasibilityLevel
+        +max_risk() Option~RiskLevel~
+    }
+
+    class OpLogWriter~W: Write~ {
+        -w: W
+        -m: Arc~Methodology~
+        -order: KeyOrder
+        -last_seq: u64
+        -buf: Vec~u8~
+        +create(w: W, m: Arc~Methodology~) Result~Self, StoreError~
+        +resume(w: W, m: Arc~Methodology~, last_seq: u64) Self
+        +append(op: &Op) Result~u64, StoreError~
+        +last_seq() u64
+        +into_inner(self) Result~W, StoreError~
+    }
+
+    class OpLogReader~R: BufRead~ {
+        -r: R
+        -m: Arc~Methodology~
+        -version: Arc~str~
+        -last_seq: u64
+        -line: u64
+        -buf: Vec~u8~
+        -done: bool
+        +open(r: R, m: Arc~Methodology~) Result~Self, StoreError~
+        +methodology_version() &str
+        +last_seq() u64
+        +line() u64
+        +next() Option~Result~LoggedOp, StoreError~~
+    }
+
+    class LoggedOp {
+        <<struct, public fields>>
+        +seq: u64
+        +op: Op
+    }
+
+    LintFinding *-- LintCode
+    ProjectDiff *-- EntityDiff
+    ProjectDiff *-- ThreatRiskDelta
+    ThreatRiskDelta *-- RiskDelta
+    RiskDelta *-- RiskSnapshot
+    OpLogReader ..> LoggedOp : yields
+```
+
+---
+
+## 3. Detailed Activity Views & Function Call Interactions
+
+### Activity 1: Validated Project Mutation & Single-Op Undo (`Project::apply`)
+
+**Why these components interact:**
+Every change to `Project` goes through `Project::apply(op: Op) -> Result<Op, ModelError>`. To guarantee strong exception safety (a failed `Op` leaves `Project` bit-for-bit untouched) and single-op invertibility (every `apply` returns a single `Op` that undoes the mutation in $O(\text{size of op})$ time, restoring original provenance), `apply` separates validation from mutation:
+1. `Project::validate(&self, op: &Op)` checks name bounds (`check_name`), provenance actor bounds (`check_provenance`), methodology membership (`check_property_set`, `check_impacts`, `check_catalog_refs`, `check_step_feasibility`), referential integrity (`refs.assets`, `refs.damages`, `refs.trees`, `refs.controls`, `refs.goals`, `refs.claims`, `refs.property`), and arena slot capacity (`arena.next_idx(self.slot_limit)`).
+2. Only after `validate` returns `Ok(())` does `apply` mutate the target `Arena`, update `self.refs: RefCounts` in place, and construct the exact inverse `Op`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Caller
+    participant P as Project
+    participant M as Methodology
+    participant A as Arena<Id, Idx, T>
+    participant R as RefCounts
+
+    Caller->>P: apply(op: Op)
+    P->>P: validate(&op)
+    alt Op is AddThreatScenario { id, name, asset, category, catalog_refs, damages, provenance }
+        P->>A: threats.idx(&id) (must be None)
+        P->>P: check_name(ThreatScenario, &name)
+        P->>P: check_provenance(&provenance)
+        P->>A: assets.idx(&asset) -> asset_idx
+        P->>A: assets.get(asset_idx) -> asset_ref
+        P->>M: violates(category) -> PropertySet
+        Note over P,M: Verify (asset.properties & violates) is non-empty
+        P->>P: check_catalog_refs(&catalog_refs)
+        P->>P: check_damage_links(&damages) -> Vec<DamageIdx>
+        P->>A: threats.next_idx(slot_limit)
+    end
+    P-->>P: Ok(())
+    P->>A: threats.push(id, ThreatScenario { .. }, slot_limit) -> ThreatIdx
+    P->>R: threat(&t, violates, up = true)
+    R->>R: bump(&mut assets, Some(t.asset.index()), true)
+    R->>R: properties(t.asset, violates, true) -> count_row()
+    R->>R: bump(&mut damages, Some(d.index()), true)
+    P-->>Caller: Ok(Op::RemoveThreatScenario { id })
+```
+
+---
+
+### Activity 2: Attack Tree DAG Construction, Cycle Detection & Single-Pass Evaluation (`AttackTree` & `evaluate`)
+
+**Why these components interact:**
+An `AttackTree` is a rooted DAG: `add_child(parent, id, node)` adds a tree edge (`owners[child] = Some(parent)`), while `link(parent, child)` adds a shared DAG edge (`linked_parents[child].push(parent)`).
+- **Why `link` calls `can_reach(child, parent)`:** Adding `parent -> child` creates a cycle if and only if `child` can already reach `parent`. `link` checks this before mutating `children` or `linked_parents` and returns `Err(ModelError::WouldCreateCycle { parent, child })` on a cycle.
+- **Why `evaluate` calls `topological_order()`:** Kahn's algorithm orders nodes top-down (`root` first, leaves last). Iterating that order in reverse (`order.iter().rev()`) visits every child before its parents, so each node is evaluated **exactly once** (rule A2) in $O(V + E)$ time:
+  - Leaf (`Node::Step`): invokes caller closure `leaf(idx) -> Option<V>` and stores `Derivation::Leaf`.
+  - Gate (`Node::Gate { kind, children }`): calls `fold(domain, kind, children, &values)` which calls `AttributeDomain::or_kept` / `and_kept` / `seq_and_kept` across children, recording `Derivation::Selected { rule: kind, child: best_idx }` (for `MaxMin` and `MinTime` OR/AND) or `Derivation::Combined { rule: kind }` (for `MinTime` SeqAnd).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Caller
+    participant Eval as eval::evaluate()
+    participant Tree as AttackTree
+    participant Dom as AttributeDomain (MaxMin / MinTime)
+
+    Caller->>Eval: evaluate(tree, domain, leaf_fn)
+    Eval->>Tree: topological_order()
+    Note over Tree: Kahn's algorithm over in-degrees:<br/>owners[i] + linked_parents[i].len()
+    Tree-->>Eval: Ok(order: Vec<NodeIdx>)
+    loop For each &idx in order.iter().rev() (bottom-up)
+        Eval->>Tree: get(idx) -> &Node
+        alt Node::Step
+            Eval->>Caller: leaf_fn(idx) -> Option<V>
+            Note over Eval: values[idx] = val<br/>derivations[idx] = Derivation::Leaf
+        else Node::Gate { kind, children }
+            Eval->>Eval: fold(domain, kind, children, &values)
+            loop For each &c in &children[1..]
+                Eval->>Dom: or_kept / and_kept / seq_and_kept(acc, &values[c])
+                Dom-->>Eval: Kept::First(v) | Kept::Next(v) | Kept::Combined(v)
+            end
+            Note over Eval: values[idx] = folded_val<br/>derivations[idx] = Selected { rule, child } | Combined { rule }
+        end
+    end
+    Eval-->>Caller: Ok(Evaluation { values, derivations, root_value })
+```
+
+---
+
+### Activity 3: Inherent vs. Residual Feasibility & 2D Risk Determination (`evaluate_risk` & `evaluate_residual_risk`)
+
+**Why these components interact:**
+A `ThreatScenario` obtains its feasibility either from a linked `AttackTree` (`t.attack_tree: Option<TreeIdx>`) or, if no tree is linked, from `t.direct_feasibility: Option<FeasibilityLevel>`.
+- **Step feasibility resolution (`TreeEntry::effective_step_feasibility`):** If all 5 CEM/ISO 21434 attack potential factors (`step_factors[idx]`) are rated, `Methodology::resolve_attack_potential_feasibility` sums the factor points (`u16`) and maps the score through `potential_bands` to a `FeasibilityLevel`; otherwise it falls back to the coarse `step_feasibility[idx]`.
+- **Residual mitigation (`TreeEntry::residual_step_feasibility`):** Takes `effective_step_feasibility(m, idx)` and folds `step_mitigations[idx]` with `.min(m.feasibility)` so security controls cap the step's residual feasibility. Evaluating the full DAG under `MaxMin<FeasibilityLevel>` automatically reveals whether another unmitigated OR branch bypasses the control.
+- **2D Risk matrix lookup (`Project::risk_from_feasibility`):** Iterates `t.damages` (already sorted by `DamageId`), and for each rated `(ImpactCategory, Level)` calls `Methodology::risk_for(category, impact, feasibility) -> Option<RiskLevel>`, recording each `ImpactRisk` entry and tracking the first entry that achieves the maximum `RiskLevel` (`deciding: Option<usize>`).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Caller
+    participant P as Project
+    participant TE as TreeEntry
+    participant M as Methodology
+    participant E as eval::evaluate()
+
+    Caller->>P: evaluate_residual_risk(threat_id: ThreatId)
+    P->>P: threat_ref(threat_id) -> &ThreatScenario
+    alt t.attack_tree is Some(tree_idx)
+        P->>E: evaluate(&entry.tree, &MaxMin, |idx| entry.residual_step_feasibility(&m, idx))
+        loop Each leaf step idx
+            E->>TE: residual_step_feasibility(&m, idx)
+            TE->>TE: effective_step_feasibility(&m, idx)
+            TE->>M: resolve_attack_potential_feasibility(&step_factors[idx])
+            Note over TE: Fallback to step_feasibility[idx],<br/>then fold step_mitigations[idx] with min()
+        end
+        E-->>P: Ok(tree_eval: Evaluation<FeasibilityLevel>)
+        Note over P: feasibility = *tree_eval.root_value()
+    else t.attack_tree is None
+        Note over P: feasibility = t.direct_feasibility.ok_or(NoAttackTree)?
+    end
+    P->>P: risk_from_feasibility(t, feasibility, Some(tree_eval))
+    loop For each &damage_idx in &t.damages
+        loop For each (category, Some(impact)) in damage.impacts()
+            P->>M: risk_for(category, impact, feasibility)
+            M-->>P: Some(risk: RiskLevel)
+            Note over P: Push ImpactRisk { damage, category, impact, feasibility, risk }<br/>Update deciding if risk > best_risk
+        end
+    end
+    P-->>Caller: Ok(ThreatRisk { feasibility, tree_evaluation, entries, deciding })
+```
+
+---
+
+### Activity 4: Incremental Evaluation Cache (`TreeEvalCache::recompute_steps` & `ProjectEvalCache::update`)
+
+**Why these components interact:**
+On a 100,000-node project (`large`), re-evaluating an entire `AttackTree` and cloning its 100,000-element `Evaluation` into every linked `ThreatRisk` on each keystroke costs milliseconds and megabytes of allocation.
+- **Why `TreeEvalCache` stores `rank: Box<[u32]>` and uses a max-heap `BinaryHeap<(u32, NodeIdx)>`:** `rank` is the node's position in `topological_order()`, so `rank[parent] < rank[child]` for every edge. Popping dirty ancestor gates in **descending** `rank` order guarantees that all changed descendants of gate `u` are updated before `u` is folded, so every affected ancestor gate is folded at most once (rule A2).
+- **Why value-change early cutoff works:** A parent gate's `fold` depends only on its children's *values*, never their `Derivation`s. When gate `u`'s folded value equals its previous value (`new_val == old_val`), `u` updates its own `Derivation` and stops pushing its parents to the heap.
+- **Why `ProjectEvalCache` calls `Evaluation::sync_nodes`:** Instead of cloning the entire `Evaluation<FeasibilityLevel>` into each dependent `ThreatRisk`, `recompute_steps_recording` records the tiny slice of `touched: Vec<NodeIdx>` ($O(\text{depth})$ nodes) and `sync_nodes` copies only those indices into `ThreatRisk::tree_evaluation` in place with zero heap allocations.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Caller
+    participant P as Project
+    participant PC as ProjectEvalCache
+    participant TC as TreeEvalCache<FeasibilityLevel>
+    participant TR as ThreatRisk
+
+    Caller->>P: apply_cached(Op::SetStepMitigation { tree, node, control, feasibility, .. }, &mut cache)
+    P->>P: apply(op.clone()) -> Ok(inverse_op)
+    P->>PC: update(&self, &op)
+    Note over PC: SetStepMitigation only affects residual evaluation!<br/>Inherent TreeEvalCache & ThreatRisk are untouched.
+    PC->>TC: residual.recompute_steps_recording(&entry.tree, &MaxMin, [node_idx], residual_fn, &mut touched)
+    Note over TC: 1. Validate & evaluate leaf(node_idx)<br/>2. Push (rank[p], p) for p in tree.parents(node_idx)<br/>3. Pop max-rank gate u, fold children, record u in touched<br/>4. Cutoff propagation if u's value is unchanged
+    TC-->>PC: Ok(recomputed_node_count)
+    loop For each &threat_idx in &tree_threats[tree_idx.index()]
+        PC->>TR: sync_cached_threat_from_tree(residual_slot, &touched, root_changed)
+        TR->>TR: tree_evaluation.sync_nodes(tc.evaluation(), &touched, root)
+        opt root_changed == true
+            TR->>TR: Recompute entries & deciding in place for new root feasibility
+        end
+    end
+    P-->>Caller: Ok(inverse_op)
+```
+
+---
+
+### Activity 5: Lazy Top-$k$ Attack Paths, Choke Points & Greedy Hitting Set (`AttackPaths`, `choke_points`, `top_k_hitting_set`)
+
+**Why these components interact:**
+An attack tree with $m$ binary OR gates under an AND gate has $2^m$ minimal cut sets (attack paths). Materializing all paths before sorting would blow up memory and time (violating rule A4).
+- **How `AttackPaths` enumerates paths lazily:** It uses an AND/OR best-first search over a max-heap `BinaryHeap<SearchState<V>>` seeded with a single `SearchState` whose `worklist` starts at `tree.root()` and whose feasibility upper `bound` is `eval.root_value()`.
+  - Each step pops the highest-bound `SearchState` and expands its `next_or` gate `g` (the next unexpanded `Or` in pre-order).
+  - If `g` is `GateKind::Or`, it branches: for each child `c` of `g`, it pushes a successor `SearchState` that records the chosen rank in `choices` and tightens the successor's `bound` via `eval.get(c)`.
+  - `GateKind::And` / `GateKind::SeqAnd` nodes met along the way are expanded in place: their `tree.children(g)` are pushed onto the `worklist` (reverse pre-order, so `pop` visits the next node in O(1)) and their leaf steps are appended to `steps`.
+  - When a popped state has `next_or == None` and an empty `worklist`, its `steps` form a complete cut set. The `yielded: BTreeSet<Box<[NodeIdx]>>` set dedupes already-emitted paths, and the per-state `expanded: Vec<bool>` bitmask guarantees DAG-shared nodes are expanded at most once per path realization.
+- **How `choke_points(tree, k)` works:** Calls `self.attack_paths(tree)?.take(k)`, counting in a `BTreeMap<NodeIdx, (usize, usize, V)>` how many of the top-$k$ paths contain each step (`path_count`), how many have `path.bottleneck() == step` (`bottleneck_count`), and the first (highest) path feasibility (`easiest_path_feasibility`), then sorts by `(path_count desc, bottleneck_count desc, step asc)`.
+- **How `top_k_hitting_set(tree, k)` works:** Calls `self.top_k_paths(tree, k)?` and runs Chvátal's greedy set-cover loop: at each iteration it counts step frequencies across all still-uncovered paths, picks the step with maximum uncovered count (tie-breaking by lowest `NodeIdx`), marks those paths covered, and repeats until all top-$k$ paths are hit.
+
+```mermaid
+flowchart LR
+    subgraph EvalPaths["Evaluation<V> Path & Cut-Set Analysis (paths.rs, eval.rs)"]
+        AP["eval.attack_paths(tree)\nLazy BinaryHeap<SearchState<V>>"]
+        TOPK["eval.top_k_paths(tree, k)\nattack_paths(tree).take(k).collect()"]
+        CP["eval.choke_points(tree, k)\nCounts (path_count, bottleneck_count,\neasiest_path_feasibility) per NodeIdx\nSorted: (path_count desc, bottleneck_count desc, step asc)"]
+        HS["eval.top_k_hitting_set(tree, k)\nGreedy set cover over top_k_paths:\nIteratively picks step hitting most\nuncovered paths (tie-break: NodeIdx asc)"]
+    end
+
+    AP -->|"take(k)"| TOPK
+    AP -->|"take(k)"| CP
+    TOPK -->|"Vec<AttackPath<V>>"| HS
+```
+
+---
+
+### Activity 6: Single-Parameter $\pm 1$ Tipping-Point Sensitivity (`tree_tipping_points` & `threat_sensitivity`)
+
+**Why these components interact:**
+Analysts need to know whether a $\pm 1$ step change on any single leaf step's feasibility, direct threat feasibility, or damage scenario impact rating flips the tree's root feasibility or the threat's `max_risk`.
+- **Why `entry_tipping_points` uses `TreeEvalCache`:** Instead of running a full $O(V + E)$ `evaluate()` for every step perturbation, `entry_tipping_points` builds one `TreeEvalCache` over `entry.tree`, iterates each leaf `Node::Step`, computes its $\pm 1$ adjacent scale levels via `adjacent_feasibility(from_step, feas_count)`, calls `cache.recompute_steps(&entry.tree, &domain, [step_idx], ...)` to propagate the perturbation in $O(\text{depth} \times \text{fan-out})$ time, checks if `to_root != baseline_root`, and restores `from_step` via `cache.recompute_steps`.
+- **Why `impact_tipping_points_for` tracks `(max1, max1_count, max2)`:** A threat can link to up to 256 damage scenarios across multiple impact categories. If two `(damage, category)` entries are tied at the highest risk `max1` (`max1_count >= 2`), lowering only one of them by $-1$ leaves the threat's overall `max_risk` unchanged at `max1`. By precomputing `max1`, `max1_count`, and the strictly second-highest risk `max2` in one linear pass, the maximum risk of all *other* entries when perturbing entry `e` is:
+  $$\text{other\_max}(e) = \begin{cases} \text{max2} & \text{if } \text{risk}(e) = \text{max1} \text{ and } \text{max1\_count} = 1 \\ \text{max1} & \text{otherwise} \end{cases}$$
+  Then for each $\pm 1$ adjacent impact level `to_impact`, the new worst-case threat risk is simply `other_max.max(methodology.risk_for(category, to_impact, baseline_feasibility))` in $O(1)$ time.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Caller
+    participant P as Project
+    participant TC as TreeEvalCache<FeasibilityLevel>
+    participant M as Methodology
+
+    Caller->>P: threat_sensitivity(threat_id: ThreatId)
+    P->>P: threat_sensitivity_inner(threat_id, residual = false)
+    alt Threat has linked AttackTree (entry)
+        P->>P: entry_tipping_points(entry, residual = false)
+        P->>TC: TreeEvalCache::new(&entry.tree, &MaxMin, effective_step_feasibility)
+        loop For each leaf (step_idx, node_id, Node::Step)
+            P->>P: adjacent_feasibility(from_step, feas_count) -> [prev, next]
+            loop For each neighbor to_step
+                P->>TC: recompute_steps([step_idx], override step_idx -> to_step)
+                Note over P,TC: Read to_root = *cache.evaluation().root_value()
+                P->>TC: recompute_steps([step_idx], restore step_idx -> from_step)
+                opt to_root != baseline_root
+                    Note over P: Record StepTippingPoint { step, node, from_step, to_step, from_root, to_root }
+                end
+            end
+        end
+        loop For each StepTippingPoint st
+            P->>P: max_risk_for_feasibility(t, st.to_root) -> Option<RiskLevel>
+            opt to_risk != from_risk
+                Note over P: Push FeasibilityTippingPoint (step: Some(st.step), node: Some(st.node), ..)
+            end
+        end
+    else Threat uses direct_feasibility
+        P->>P: adjacent_feasibility(base_f, feas_count)
+        loop For each neighbor to_f
+            P->>P: max_risk_for_feasibility(t, to_f)
+            opt to_risk != from_risk
+                Note over P: Push FeasibilityTippingPoint (step: None, node: None, ..)
+            end
+        end
+    end
+    opt baseline_risk is Some(from_risk)
+        P->>P: impact_tipping_points_for(t, baseline_feasibility, from_risk)
+        Note over P: Pass 1: Collect rated (damage_id, category, from_impact, entry_risk)<br/>and compute (max1, max1_count, max2)
+        loop Pass 2: For each (damage_id, category, from_impact, entry_risk)
+            Note over P: other_max = if entry_risk == max1 && max1_count == 1 { max2 } else { max1 }
+            P->>P: adjacent_impact(from_impact, m.level_count(category))
+            loop For each neighbor to_impact
+                P->>M: risk_for(category, to_impact, baseline_feasibility) -> new_entry_risk
+                Note over P: to_risk = other_max.max(new_entry_risk)<br/>If to_risk != from_risk, push ImpactTippingPoint
+            end
+        end
+    end
+    P-->>Caller: Ok(ThreatSensitivity { feasibility, max_risk, feasibility_tipping_points, impact_tipping_points })
+```
+
+---
+
+### Activity 7: Completeness Linter, Version Diff & Wire Persistence (`lint`, `diff`, `store/`)
+
+**Why these components interact:**
+1. **`Project::lint(&self) -> Vec<LintFinding>` (`lint.rs`, `project.rs`):**
+   - Scans all 7 arenas in public-ID order (`assets`, `damages`, `threats`, `trees`, `controls`, `goals`, `claims`) and inspects `self.refs: RefCounts` to emit findings across 22 deterministic `LintCode` variants (4 `Error`s and 18 `Warning`s).
+   - **Why `refs` is used:** Checking whether an asset, asset property, damage scenario, attack tree, control, goal, or claim is referenced is an $O(1)$ or $O(\log r)$ lookup in `self.refs` rather than a quadratic cross-arena scan.
+   - Sorts all findings by `(LintSeverity, LintCode)` before returning so output order is 100% deterministic and never contains entity names (rule R6).
+2. **`Project::diff(&self, current: &Project) -> Result<ProjectDiff, ModelError>` (`diff.rs`, `project.rs`):**
+   - Verifies `self.methodology == current.methodology` (returning `Err(ModelError::MethodologyMismatch)` otherwise).
+   - Runs a two-pointer merge scan (`diff_arena`) over the `BTreeMap<Id, Idx>` keys of each of the 7 arenas to classify IDs into `added`, `removed`, and `modified` (comparing logical entity content, resolving internal `*Idx` links to public `*Id`s via `threat_content_eq`, `tree_entry_eq`, and `goal_content_eq`).
+   - For every threat in `self` or `current`, evaluates inherent and residual `(feasibility, max_risk)` snapshots (`eval_risk_snapshot`) and records `ThreatRiskDelta` whenever a threat is added, removed, or has a changed inherent/residual risk snapshot.
+3. **Wire Persistence (`store/snapshot.rs`, `store/op_log.rs`):**
+   - **Why vocabulary items are stored by string key (`&str`) instead of `u8` index:** Reordering a methodology pack's vocabulary must never silently change the meaning of saved projects or oplogs.
+   - **Why decode-time caps (`Limit`, `BoundedReader`, `CapSeq`) run inside `serde::Deserialize`:** Untrusted files or oplog lines are rejected during deserialization before allocating unbounded `Vec`s or strings (`MAX_PROJECT_FILE_BYTES = 64 MiB`, `MAX_OP_RECORD_BYTES = 64 KiB`, `MAX_ATTACK_TREE_NODES = 32`, `MAX_DAMAGE_LINKS = 256`, `MAX_CATALOG_REFS = 16`, `MAX_STEP_MITIGATIONS = 16`, `MAX_GOAL_CONTROLS = 16`, rule R3).
+
+```mermaid
+flowchart TB
+    subgraph LinterFlow["Project::lint(&self) -> Vec<LintFinding>"]
+        L_SCAN["Iterate arenas in BTreeMap ID order\n(assets, damages, threats, trees, controls, goals, claims)"]
+        L_REFS["Query self.refs: RefCounts in O(1) / O(log r)\nfor unreferenced entities & untested properties"]
+        L_SORT["Sort findings by (LintSeverity, LintCode)\n(Errors first, then Warnings; UUIDv7 tie-break)"]
+        L_SCAN --> L_REFS --> L_SORT
+    end
+
+    subgraph DiffFlow["Project::diff(&self, current: &Project) -> Result<ProjectDiff, ModelError>"]
+        D_METH["Check self.methodology == current.methodology"]
+        D_ARENA["diff_arena() across all 7 arenas\n(two-pointer merge over BTreeMap keys -> added, removed, modified)"]
+        D_RISK["eval_risk_snapshot() for union of ThreatIds\nCompute inherent & residual RiskDelta -> ThreatRiskDelta"]
+        D_METH --> D_ARENA --> D_RISK
+    end
+
+    subgraph StoreFlow["Persistence (store/snapshot.rs & store/op_log.rs)"]
+        S_SAVE["Project::save(W) / OpLogWriter::append(&Op)\nMap *Idx -> UUIDv7 & vocab u8 -> string key\nWrite aegis-project / aegis-oplog JSON"]
+        S_LOAD["Project::load(M, R) / OpLogReader::open(R, M)\nEnforce BoundedReader + CapSeq decode caps (Rule R3)\nResolve string keys via Methodology & replay through Project::apply"]
+        S_SAVE -.->|"JSON / JSONL"| S_LOAD
+    end
+```
