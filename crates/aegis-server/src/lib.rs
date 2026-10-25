@@ -18,11 +18,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod accounts;
 pub mod actor;
 pub mod auth;
 pub mod auth_layer;
 pub mod config;
 pub mod error;
+pub mod health;
 pub mod ids;
 pub mod lease;
 pub mod license;

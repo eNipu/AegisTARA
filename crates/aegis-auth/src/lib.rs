@@ -21,6 +21,7 @@ pub mod session;
 pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod tls;
 pub mod validate;
 
 pub use clock::{Clock, system_clock};

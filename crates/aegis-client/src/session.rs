@@ -715,7 +715,7 @@ impl<P: CredentialProvider> Actor<P> {
                     Some(Event::Lock(lock)) => self.on_lock_event(&lock.holder),
                     Some(Event::Op(op)) => self.on_remote_op(op),
                     Some(Event::Risks(risks)) => self.on_server_risks(risks),
-                    None => {}
+                    Some(Event::Heartbeat(_)) | None => {}
                 }
             }
         }

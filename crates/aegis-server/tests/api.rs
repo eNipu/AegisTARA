@@ -524,6 +524,7 @@ async fn a_new_observer_gets_the_current_risks_after_the_backlog() {
             Some(Event::Lock(_)) => "lock".to_owned(),
             Some(Event::Op(op)) => format!("op{}", op.seq),
             Some(Event::Risks(r)) => format!("risks@{}", r.as_of_seq),
+            Some(Event::Heartbeat(_)) => "heartbeat".to_owned(),
             None => "none".to_owned(),
         });
     }

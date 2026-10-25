@@ -26,7 +26,8 @@ divan = "0.1.21"
 proptest = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-stream = { version = "0.1", features = ["net"] }
-tonic = { version = "0.14", default-features = false, features = ["codegen", "transport", "router"] }
+tonic = { version = "0.14", default-features = false, features = ["codegen", "transport", "router", "tls-ring", "tls-native-roots"] }
+tonic-web = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 prost = "0.14"
@@ -37,6 +38,11 @@ deadpool-postgres = "0.14"
 sha2 = "0.10"
 base64 = "0.22"
 ring = "0.17"
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "http2", "native-tokio", "tls12", "logging"] }
+tokio-postgres-rustls = "0.13"
 http = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "server", "http1"] }
@@ -68,3 +74,11 @@ insta = "1"
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# Password hashing is deliberately slow; unoptimized it takes seconds per
+# hash and makes the login tests crawl. Optimize just these crates in dev.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

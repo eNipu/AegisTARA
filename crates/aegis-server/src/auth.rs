@@ -10,14 +10,40 @@ use std::sync::Arc;
 
 use tonic::{Request, Status};
 
+/// How a caller proved who they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthMethod {
+    /// A password session of this server (`AEGIS_AUTH=password`).
+    Password,
+    /// An OIDC access token from the company identity provider.
+    Oidc,
+    /// The development header. No proof at all.
+    Development,
+}
+
+impl AuthMethod {
+    /// The name `WhoAmI` reports.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuthMethod::Password => "password",
+            AuthMethod::Oidc => "oidc",
+            AuthMethod::Development => "development",
+        }
+    }
+}
+
 /// The authenticated caller.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Principal {
-    /// Stable subject: the identity provider's `sub` claim, or the
-    /// development user name. Used as the audit actor and the lease holder.
+    /// Stable subject: the identity provider's `sub` claim, the password
+    /// user name, or the development user name. Used as the audit actor and
+    /// the lease holder.
     pub subject: Arc<str>,
-    /// May break other users' edit leases.
+    /// May break other users' edit leases, manage users, verify audits.
     pub admin: bool,
+    /// How the caller logged in.
+    pub method: AuthMethod,
 }
 
 impl Principal {
@@ -27,6 +53,7 @@ impl Principal {
         Principal {
             subject: subject.into(),
             admin: false,
+            method: AuthMethod::Development,
         }
     }
 
@@ -36,6 +63,7 @@ impl Principal {
         Principal {
             subject: subject.into(),
             admin: true,
+            method: AuthMethod::Development,
         }
     }
 
@@ -83,6 +111,7 @@ pub fn dev_interceptor(mut request: Request<()>) -> Result<Request<()>, Status> 
     request.extensions_mut().insert(Principal {
         subject: user.into(),
         admin,
+        method: AuthMethod::Development,
     });
     Ok(request)
 }

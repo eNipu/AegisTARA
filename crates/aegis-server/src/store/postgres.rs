@@ -18,11 +18,16 @@
 //! Bounds (R6): the pool waits at most 5 s for a connection, connects within
 //! 5 s, and the server cancels any statement after 30 s.
 //!
-//! The connection is plain TCP. A database on another host should be
-//! reached over a private network or a TLS-terminating proxy until native
-//! TLS is added (tracked in the backlog).
+//! Transport (backlog 037): plain TCP by default, for a database on the
+//! same host or a private network (the Compose file and Railway's private
+//! network). [`DbTls::Verify`] encrypts and checks the server certificate
+//! against the OS trust store and the host name (libpq `verify-full`);
+//! [`DbTls::Encrypt`] encrypts without checking the certificate (libpq
+//! `require`), for managed databases with self-signed certificates. Both
+//! use rustls with ring (`aegis_auth::tls`).
 
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime, Timeouts};
@@ -32,13 +37,119 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
-use super::{LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot};
+use super::{
+    BaselineMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
+};
 use crate::config::system_clock_ms;
 use crate::ids::ProjectId;
 
 /// Migrations in order. A database that has applied a version this build
 /// does not know is refused (it was written by a newer server).
-const MIGRATIONS: &[(i32, &str)] = &[(1, include_str!("../../migrations/001_init.sql"))];
+const MIGRATIONS: &[(i32, &str)] = &[
+    (1, include_str!("../../migrations/001_init.sql")),
+    (
+        2,
+        include_str!("../../migrations/002_accounts_baselines.sql"),
+    ),
+];
+
+/// How the server talks to PostgreSQL.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DbTls {
+    /// Plain TCP. Only for a database on a private network.
+    #[default]
+    Off,
+    /// TLS without a certificate check (libpq `sslmode=require`). Protects
+    /// against eavesdropping, not against an active attacker.
+    Encrypt,
+    /// TLS with the certificate checked against the OS trust store and the
+    /// host name (libpq `sslmode=verify-full`).
+    Verify,
+}
+
+impl std::str::FromStr for DbTls {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "off" | "disable" => Ok(DbTls::Off),
+            "encrypt" | "require" => Ok(DbTls::Encrypt),
+            "verify" | "verify-full" => Ok(DbTls::Verify),
+            _ => Err("expected off, encrypt or verify".to_owned()),
+        }
+    }
+}
+
+/// Accepts any server certificate, for [`DbTls::Encrypt`]. The handshake
+/// signatures are still checked, so the session keys are genuine; only the
+/// identity of the server is not.
+#[derive(Debug)]
+struct AnyCertificate(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+fn rustls_config(tls: DbTls) -> Result<rustls::ClientConfig, StoreFault> {
+    match tls {
+        DbTls::Off => Err(backend("TLS is off")),
+        DbTls::Verify => aegis_auth::tls::client_config()
+            .map(|c| (*c).clone())
+            .map_err(backend),
+        DbTls::Encrypt => {
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            Ok(
+                rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+                    .with_safe_default_protocol_versions()
+                    .map_err(backend)?
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(AnyCertificate(provider)))
+                    .with_no_client_auth(),
+            )
+        }
+    }
+}
 
 /// Serializes concurrent migrators (several servers starting together).
 const MIGRATION_LOCK: i64 = 0x4145_4749_5354_4152; // "AEGISTAR"
@@ -55,6 +166,8 @@ pub struct PostgresOptions {
     pub acquire_timeout: Duration,
     /// Statements running longer than this are cancelled by the server.
     pub statement_timeout: Duration,
+    /// Transport security.
+    pub tls: DbTls,
 }
 
 impl Default for PostgresOptions {
@@ -64,6 +177,7 @@ impl Default for PostgresOptions {
             org_id: Uuid::nil(),
             acquire_timeout: Duration::from_secs(5),
             statement_timeout: Duration::from_secs(30),
+            tls: DbTls::Off,
         }
     }
 }
@@ -135,13 +249,17 @@ impl PostgresStore {
         };
         config.options(merged);
 
-        let manager = Manager::from_config(
-            config,
-            NoTls,
-            ManagerConfig {
-                recycling_method: RecyclingMethod::Fast,
-            },
-        );
+        let manager_config = ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        };
+        let manager = match options.tls {
+            DbTls::Off => Manager::from_config(config, NoTls, manager_config),
+            tls => {
+                config.ssl_mode(tokio_postgres::config::SslMode::Require);
+                let connector = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config(tls)?);
+                Manager::from_config(config, connector, manager_config)
+            }
+        };
         let pool = Pool::builder(manager)
             .max_size(options.pool_size.max(1))
             .runtime(Runtime::Tokio1)
@@ -162,6 +280,18 @@ impl PostgresStore {
 
     async fn client(&self) -> Result<deadpool_postgres::Object, StoreFault> {
         self.pool.get().await.map_err(backend)
+    }
+
+    /// The connection pool, shared with the account store.
+    #[must_use]
+    pub fn pool(&self) -> Pool {
+        self.pool.clone()
+    }
+
+    /// The organization this store serves.
+    #[must_use]
+    pub fn org(&self) -> Uuid {
+        self.org
     }
 
     /// Applies the migrations this build knows and the database lacks.
@@ -452,6 +582,194 @@ impl ProjectStore for PostgresStore {
         }
         Ok(verifier.finish(&claimed))
     }
+
+    async fn rename(&self, id: ProjectId, name: &str) -> Result<(), StoreFault> {
+        let client = self.client().await?;
+        let n = client
+            .execute(
+                "UPDATE aegis_project SET name = $3 WHERE project_id = $1 AND org_id = $2",
+                &[&id.as_uuid(), &self.org, &name],
+            )
+            .await
+            .map_err(backend)?;
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(StoreFault::Missing)
+        }
+    }
+
+    async fn delete(&self, id: ProjectId) -> Result<(), StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(backend)?;
+        let found = tx
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2 FOR UPDATE",
+                &[&id.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if found.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        for sql in [
+            "DELETE FROM aegis_baseline WHERE project_id = $1",
+            "DELETE FROM aegis_project_op WHERE project_id = $1",
+            "DELETE FROM aegis_project WHERE project_id = $1",
+        ] {
+            tx.execute(sql, &[&id.as_uuid()]).await.map_err(backend)?;
+        }
+        tx.commit().await.map_err(backend)
+    }
+
+    async fn recent_ops(&self, id: ProjectId, limit: usize) -> Result<Vec<StoredOp>, StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&id.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        let limit = to_i64(limit as u64)?;
+        client
+            .query(
+                "SELECT seq, actor, timestamp_ms, op FROM aegis_project_op
+                 WHERE project_id = $1 ORDER BY seq DESC LIMIT $2",
+                &[&id.as_uuid(), &limit],
+            )
+            .await
+            .map_err(backend)?
+            .iter()
+            .map(stored_op)
+            .collect()
+    }
+
+    async fn active_editors(&self, since_ms: u64) -> Result<Vec<(String, u64)>, StoreFault> {
+        let client = self.client().await?;
+        let since = to_i64(since_ms)?;
+        client
+            .query(
+                "SELECT o.actor, max(o.timestamp_ms) FROM aegis_project_op o
+                 JOIN aegis_project p ON p.project_id = o.project_id
+                 WHERE p.org_id = $1 AND o.timestamp_ms >= $2
+                 GROUP BY o.actor ORDER BY o.actor",
+                &[&self.org, &since],
+            )
+            .await
+            .map_err(backend)?
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.try_get(0).map_err(backend)?,
+                    to_u64(row.try_get(1).map_err(backend)?)?,
+                ))
+            })
+            .collect()
+    }
+
+    async fn create_baseline(
+        &self,
+        meta: &BaselineMeta,
+        snapshot: &[u8],
+    ) -> Result<(), StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&meta.project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        let n = client
+            .execute(
+                "INSERT INTO aegis_baseline
+                     (baseline_id, project_id, name, seq, created_by, created_ms, snapshot)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (baseline_id) DO NOTHING",
+                &[
+                    &meta.id,
+                    &meta.project.as_uuid(),
+                    &meta.name,
+                    &to_i64(meta.seq)?,
+                    &meta.created_by,
+                    &to_i64(meta.created_ms)?,
+                    &snapshot,
+                ],
+            )
+            .await
+            .map_err(backend)?;
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(StoreFault::Exists)
+        }
+    }
+
+    async fn list_baselines(&self, project: ProjectId) -> Result<Vec<BaselineMeta>, StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        client
+            .query(
+                "SELECT baseline_id, project_id, name, seq, created_by, created_ms,
+                        octet_length(snapshot)::bigint
+                 FROM aegis_baseline WHERE project_id = $1 ORDER BY baseline_id",
+                &[&project.as_uuid()],
+            )
+            .await
+            .map_err(backend)?
+            .iter()
+            .map(baseline_of)
+            .collect()
+    }
+
+    async fn load_baseline(
+        &self,
+        project: ProjectId,
+        id: Uuid,
+    ) -> Result<Option<(BaselineMeta, Vec<u8>)>, StoreFault> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT b.baseline_id, b.project_id, b.name, b.seq, b.created_by, b.created_ms,
+                        octet_length(b.snapshot)::bigint, b.snapshot
+                 FROM aegis_baseline b JOIN aegis_project p ON p.project_id = b.project_id
+                 WHERE b.project_id = $1 AND b.baseline_id = $2 AND p.org_id = $3",
+                &[&project.as_uuid(), &id, &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        row.map(|row| Ok((baseline_of(&row)?, row.try_get(7).map_err(backend)?)))
+            .transpose()
+    }
+}
+
+fn baseline_of(row: &Row) -> Result<BaselineMeta, StoreFault> {
+    let project: Uuid = row.try_get(1).map_err(backend)?;
+    Ok(BaselineMeta {
+        id: row.try_get(0).map_err(backend)?,
+        project: ProjectId::from_uuid(project),
+        name: row.try_get(2).map_err(backend)?,
+        seq: to_u64(row.try_get(3).map_err(backend)?)?,
+        created_by: row.try_get(4).map_err(backend)?,
+        created_ms: to_u64(row.try_get(5).map_err(backend)?)?,
+        snapshot_bytes: to_u64(row.try_get(6).map_err(backend)?)?,
+    })
 }
 
 fn meta_of(row: &Row) -> Result<ProjectMeta, StoreFault> {

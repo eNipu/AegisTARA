@@ -112,6 +112,15 @@ impl LicenseGate {
         }
     }
 
+    /// Puts back seats from before a restart (see
+    /// [`SeatLedger::restore`]). `seen` holds `(subject, seconds)`.
+    pub fn restore(&self, seen: impl IntoIterator<Item = (String, u64)>) {
+        self.seats
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .restore(seen);
+    }
+
     /// The summary users and admins see in `GetServerInfo`.
     #[must_use]
     pub fn info(&self) -> pb::LicenseInfo {
