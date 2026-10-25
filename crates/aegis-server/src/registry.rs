@@ -20,6 +20,7 @@ use crate::actor::{self, Loaded, ProjectHandle};
 use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::ids::ProjectId;
+use crate::license::LicenseGate;
 use crate::methodologies::Methodologies;
 use crate::store::{ChainReport, ProjectMeta, ProjectStore, StoreFault};
 
@@ -30,6 +31,7 @@ pub struct Registry<S> {
     store: Arc<S>,
     methodologies: Arc<Methodologies>,
     config: Arc<ServerConfig>,
+    license: Option<Arc<LicenseGate>>,
     open: Mutex<HashMap<ProjectId, Cell>>,
 }
 
@@ -45,8 +47,23 @@ impl<S: ProjectStore> Registry<S> {
             store,
             methodologies,
             config,
+            license: None,
             open: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Puts the registry behind a license gate. Without one, nothing is
+    /// checked (library use and tests); `main` always sets one.
+    #[must_use]
+    pub fn with_license(mut self, gate: Arc<LicenseGate>) -> Self {
+        self.license = Some(gate);
+        self
+    }
+
+    /// The license gate, if the server has one.
+    #[must_use]
+    pub fn license(&self) -> Option<&LicenseGate> {
+        self.license.as_deref()
     }
 
     /// The server's limits.

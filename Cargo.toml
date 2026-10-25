@@ -56,6 +56,7 @@ aegis-canvas = { path = "crates/aegis-canvas" }
 aegis-client = { path = "crates/aegis-client" }
 aegis-server = { path = "crates/aegis-server" }
 aegis-shell = { path = "crates/aegis-shell" }
+aegis-license = { path = "crates/aegis-license" }
 png = "0.18"
 rstar = "0.12"
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-path", "accessibility"] }

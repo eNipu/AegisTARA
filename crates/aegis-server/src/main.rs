@@ -13,6 +13,8 @@
 //! | `AEGIS_ADMIN_CLAIM` / `AEGIS_ADMIN_VALUE` | `roles` / `aegis-admin` | Token claim that grants admin |
 //! | `AEGIS_DEV_AUTH` | unset | `1` trusts the `x-aegis-dev-user` header. **Development only.** |
 //! | `AEGIS_DATABASE_URL` | unset | PostgreSQL connection string. Unset keeps projects in memory only. |
+//! | `AEGIS_LICENSE_FILE` | (required) | Path of the signed license file. The server does not start without a valid one. |
+//! | `AEGIS_DEV_LICENSE` | unset | `1` skips the check. Only in builds with the `dev-license` feature. |
 //! | `AEGIS_DB_POOL` | `16` | Database connections held open |
 //! | `AEGIS_PACKS_DIR` | unset | Directory of extra methodology pack files |
 //! | `RUST_LOG` | `info` | Log filter |
@@ -30,12 +32,16 @@ use aegis_auth::http::HyperClient;
 use aegis_auth::jwks::JwksCache;
 use aegis_auth::validate::{AdminRule, Authenticator, DpopPolicy, ValidatorConfig};
 use aegis_auth::{oidc, system_clock};
+use aegis_license::{DAY, LicenseState, TrustedKeys};
 use aegis_server::auth::Principal;
 use aegis_server::auth_layer::{AuthLayer, Authn, DevAuthn, OidcAuthn, RequestInfo};
 use aegis_server::config::ServerConfig;
+use aegis_server::license::system_clock_arc;
 use aegis_server::methodologies::Methodologies;
 use aegis_server::store::PostgresOptions;
-use aegis_server::{AegisService, MemoryStore, PostgresStore, ProjectStore, Registry, server};
+use aegis_server::{
+    AegisService, LicenseGate, MemoryStore, PostgresStore, ProjectStore, Registry, server,
+};
 use tracing_subscriber::EnvFilter;
 
 /// How callers are authenticated, chosen at startup.
@@ -115,11 +121,42 @@ async fn authentication() -> Result<(Mode, String), String> {
     Err("no authentication is configured; set AEGIS_OIDC_ISSUER (or AEGIS_DEV_AUTH=1 for development)".to_owned())
 }
 
+/// Loads and checks the license. The server does not start without one.
+fn license() -> Result<Option<Arc<LicenseGate>>, String> {
+    #[cfg(feature = "dev-license")]
+    if var("AEGIS_DEV_LICENSE").as_deref() == Some("1") {
+        tracing::warn!("AEGIS_DEV_LICENSE=1: no license is checked. Development only.");
+        return Ok(None);
+    }
+    let path = required("AEGIS_LICENSE_FILE")?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read the license file {path}: {e}"))?;
+    let gate = LicenseGate::load(&text, &TrustedKeys::vendor(), system_clock_arc())
+        .map_err(|e| format!("the license file {path} cannot be used: {e}"))?;
+    let info = gate.info();
+    match gate.state() {
+        LicenseState::Grace { ends_in } => tracing::warn!(
+            customer = %info.customer,
+            days_left = ends_in / DAY,
+            "the license has expired and is in its grace period; renew it"
+        ),
+        LicenseState::Active { expires_in } if expires_in < 30 * DAY => tracing::warn!(
+            customer = %info.customer,
+            days_left = expires_in / DAY,
+            "the license expires soon"
+        ),
+        _ => {}
+    }
+    tracing::info!(customer = %info.customer, seats = info.seats, "licensed");
+    Ok(Some(Arc::new(gate)))
+}
+
 async fn run() -> Result<(), String> {
     let listen: SocketAddr = var("AEGIS_LISTEN")
         .unwrap_or_else(|| "127.0.0.1:50051".to_owned())
         .parse()
         .map_err(|e| format!("AEGIS_LISTEN is not an address: {e}"))?;
+    let license = license()?;
     let (mode, public_url) = authentication().await?;
 
     let mut methodologies = Methodologies::builtin().map_err(|e| e.to_string())?;
@@ -149,7 +186,10 @@ async fn run() -> Result<(), String> {
                 .map_err(|e| format!("cannot open the database: {e}"))?;
             tracing::info!("using PostgreSQL");
             serve(
-                Arc::new(Registry::new(Arc::new(store), methodologies, config)),
+                with_license(
+                    Registry::new(Arc::new(store), methodologies, config),
+                    license,
+                ),
                 listen,
                 layer,
             )
@@ -160,17 +200,26 @@ async fn run() -> Result<(), String> {
                 "AEGIS_DATABASE_URL is unset: projects are kept in memory and are lost on exit"
             );
             serve(
-                Arc::new(Registry::new(
-                    Arc::new(MemoryStore::new()),
-                    methodologies,
-                    config,
-                )),
+                with_license(
+                    Registry::new(Arc::new(MemoryStore::new()), methodologies, config),
+                    license,
+                ),
                 listen,
                 layer,
             )
             .await
         }
     }
+}
+
+fn with_license<S: ProjectStore>(
+    registry: Registry<S>,
+    license: Option<Arc<LicenseGate>>,
+) -> Arc<Registry<S>> {
+    Arc::new(match license {
+        Some(gate) => registry.with_license(gate),
+        None => registry,
+    })
 }
 
 async fn serve<S: ProjectStore>(

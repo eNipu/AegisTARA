@@ -46,7 +46,8 @@ use crate::connection::{Connection, ServerInfo};
 use crate::error::{ClientError, ServerCode};
 use crate::sample::sample_ops;
 use crate::state::{
-    ConnectionView, Mode, Notice, ProjectEntry, ProjectView, Severity, SyncView, ViewModel,
+    ConnectionView, LicenseView, Mode, Notice, ProjectEntry, ProjectView, Severity, SyncView,
+    ViewModel,
 };
 use crate::view::{UiState, inspector, threat_rows, tree_view};
 use crate::workspace::{Origin, Workspace, WorkspaceError};
@@ -79,6 +80,10 @@ impl SessionConfig {
             retry_delay: Duration::from_secs(2),
         }
     }
+}
+
+fn unix_secs() -> u64 {
+    system_clock_ms() / 1000
 }
 
 fn system_clock_ms() -> u64 {
@@ -218,7 +223,7 @@ enum WatchItem {
 }
 
 enum Internal<P> {
-    Connected(Result<(Connection<P>, ServerInfo), ClientError>),
+    Connected(Box<Result<(Connection<P>, ServerInfo), ClientError>>),
     Projects(Result<Vec<pb::ProjectSummary>, ClientError>),
     Created(Result<pb::ProjectSummary, ClientError>),
     Opened {
@@ -368,7 +373,7 @@ impl<P: CredentialProvider> Actor<P> {
                 Ok((conn, info))
             }
             .await;
-            let _ = events.send(Internal::Connected(result)).await;
+            let _ = events.send(Internal::Connected(Box::new(result))).await;
         });
     }
 
@@ -386,9 +391,17 @@ impl<P: CredentialProvider> Actor<P> {
                         ),
                     );
                 }
+                let license = info
+                    .license
+                    .as_ref()
+                    .and_then(|l| LicenseView::from_info(l, unix_secs()));
+                if let Some((severity, text)) = license.as_ref().and_then(LicenseView::reminder) {
+                    self.notice(severity, text);
+                }
                 self.connection = ConnectionView::Online {
                     server_version: info.server_version.clone(),
                     engine_ok,
+                    license,
                 };
                 self.conn = Some(conn);
                 self.info = Some(info);
@@ -439,7 +452,7 @@ impl<P: CredentialProvider> Actor<P> {
 
     fn on_event(&mut self, event: Internal<P>) {
         match event {
-            Internal::Connected(result) => self.on_connected(result),
+            Internal::Connected(result) => self.on_connected(*result),
             Internal::Reconnect => self.connect(),
             Internal::Projects(Ok(list)) => {
                 self.projects = list.into_iter().map(entry_of).collect();
@@ -758,6 +771,18 @@ impl<P: CredentialProvider> Actor<P> {
         };
         open.acquiring = false;
         match result {
+            Err(e) if matches!(e.code(), Some(ServerCode::LicenseExpired)) => {
+                self.notice(
+                    Severity::Warning,
+                    "The license has expired, so editing is off. You can still read. Ask your administrator to renew it.",
+                );
+            }
+            Err(e) if matches!(e.code(), Some(ServerCode::LicenseSeatsFull)) => {
+                self.notice(
+                    Severity::Warning,
+                    "All licensed seats are in use by other people, so you can look but not change anything. Ask your administrator for more seats.",
+                );
+            }
             Err(e) => {
                 let held = matches!(e.code(), Some(ServerCode::LockHeld));
                 if held {

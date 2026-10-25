@@ -19,6 +19,7 @@ use crate::auth::Principal;
 use crate::error::ServerError;
 use crate::ids::ProjectId;
 use crate::lease::Grant;
+use crate::license::LicenseGate;
 use crate::pb;
 use crate::registry::Registry;
 use crate::store::{ProjectMeta, ProjectStore};
@@ -198,6 +199,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             engine_version: aegis_model::ENGINE_VERSION.to_owned(),
             methodologies,
             lease_ms: u64::try_from(self.registry.config().lease.as_millis()).unwrap_or(u64::MAX),
+            license: self.registry.license().map(LicenseGate::info),
         }))
     }
 
@@ -265,6 +267,10 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
     ) -> Result<Response<pb::Lease>, Status> {
         let who = Principal::of(&request)?.clone();
         let id = project_id(&request.get_ref().project_id)?;
+        // Taking the lease is what uses a seat. Reading is never gated.
+        if let Some(gate) = self.registry.license() {
+            gate.admit_editor(&who.subject)?;
+        }
         let grant = self
             .registry
             .with(id, |h| {

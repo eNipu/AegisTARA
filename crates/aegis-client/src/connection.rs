@@ -34,6 +34,8 @@ pub struct ServerInfo {
     pub methodologies: Vec<pb::MethodologyInfo>,
     /// Lease length.
     pub lease: Duration,
+    /// The server's license summary, if it has one.
+    pub license: Option<pb::LicenseInfo>,
 }
 
 /// A project as downloaded.
@@ -103,6 +105,7 @@ impl<P: CredentialProvider> Connection<P> {
             engine_version: r.engine_version,
             methodologies: r.methodologies,
             lease: Duration::from_millis(r.lease_ms),
+            license: r.license,
         })
     }
 

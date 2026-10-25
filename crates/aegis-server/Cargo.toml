@@ -7,8 +7,14 @@ publish.workspace = true
 description = "AegisTARA server: gRPC API over the aegis-model engine, edit leases, live observers."
 license.workspace = true
 
+[features]
+# Lets `AEGIS_DEV_LICENSE=1` start the server without a license file. Never
+# enable it in a shipped binary (docs/release-checklist.md).
+dev-license = []
+
 [dependencies]
 aegis-auth.workspace = true
+aegis-license.workspace = true
 aegis-model.workspace = true
 aegis-proto.workspace = true
 bytes.workspace = true
@@ -27,4 +33,5 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 aegis-auth = { workspace = true, features = ["test-support"] }
+aegis-license = { workspace = true, features = ["issuer"] }
 tokio = { workspace = true, features = ["test-util"] }

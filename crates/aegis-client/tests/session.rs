@@ -100,14 +100,25 @@ struct TestServer {
 
 impl TestServer {
     async fn start(submit_delay: Duration) -> Self {
-        let registry = Arc::new(Registry::new(
+        Self::start_with(submit_delay, None).await
+    }
+
+    async fn start_with(
+        submit_delay: Duration,
+        gate: Option<Arc<aegis_server::LicenseGate>>,
+    ) -> Self {
+        let registry = Registry::new(
             Arc::new(MemoryStore::new()),
             Arc::new(Methodologies::builtin().expect("builtin")),
             Arc::new(ServerConfig {
                 lease: Duration::from_secs(30),
                 ..ServerConfig::default()
             }),
-        ));
+        );
+        let registry = Arc::new(match gate {
+            Some(gate) => registry.with_license(gate),
+            None => registry,
+        });
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
         let (stop, stopped) = oneshot::channel::<()>();
@@ -225,6 +236,99 @@ async fn connecting_shows_the_server_and_lists_projects() {
     ));
     assert_eq!(view.user, "alice");
     drop(alice);
+    server.stop().await;
+}
+
+/// A one-seat license that ended `days_ago` days ago with `grace` days of
+/// grace, signed by a throwaway key.
+fn gate(seats: u32, ends_in_days: i64, grace: u32) -> Arc<aegis_server::LicenseGate> {
+    use aegis_license::{DAY, Issuer, License, TrustedKeys};
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    let ends = now
+        .checked_add_signed(ends_in_days * DAY as i64)
+        .expect("date");
+    let (pkcs8, public) = Issuer::generate().expect("key");
+    let issuer = Issuer::from_pkcs8(&pkcs8).expect("issuer");
+    let file = issuer
+        .sign(&License {
+            version: 1,
+            id: "t".into(),
+            kid: "t".into(),
+            customer: "Example Motors".into(),
+            seats,
+            issued_at: now - 400 * DAY,
+            expires_at: ends,
+            grace_days: grace,
+            features: vec![],
+        })
+        .expect("signs");
+    let keys = TrustedKeys::single("t", public).expect("keys");
+    Arc::new(
+        aegis_server::LicenseGate::load(&file, &keys, aegis_server::license::system_clock_arc())
+            .expect("loads"),
+    )
+}
+
+#[tokio::test]
+async fn the_license_shows_in_the_view_and_a_lapsed_one_raises_a_notice() {
+    use aegis_client::state::LicenseKind;
+    let server = TestServer::start_with(Duration::ZERO, Some(gate(3, -5, 20))).await;
+    let alice = server.session("alice", false);
+    let view = until(&alice, "online", online).await;
+    let ConnectionView::Online {
+        license: Some(license),
+        ..
+    } = &view.connection
+    else {
+        panic!("the server reports its license");
+    };
+    assert_eq!(license.kind, LicenseKind::Grace);
+    assert_eq!((license.seats, license.seats_used), (3, 0));
+    // 15 days of grace are left; the clock may have ticked past the second.
+    let days = license.days_left.expect("grace has an end");
+    assert!((14..=15).contains(&days), "{days}");
+    assert_eq!(license.customer, "Example Motors");
+    assert!(
+        view.notices
+            .iter()
+            .any(|n| n.severity == Severity::Warning
+                && n.text.contains(&format!("{days} more days"))),
+        "{:?}",
+        view.notices
+    );
+    drop(alice);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_user_without_a_free_seat_can_look_but_is_told_why_they_cannot_edit() {
+    let server = TestServer::start_with(Duration::ZERO, Some(gate(1, 200, 0))).await;
+    let alice = server.session("alice", false);
+    let bob = server.session("bob", false);
+    let id = create_and_open(&alice, "Seats").await;
+    start_editing(&alice).await;
+    alice.send(Command::EndEdit).expect("sent");
+    until(&alice, "released", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::ReadOnly && p.lock_holder.is_none())
+    })
+    .await;
+
+    until(&bob, "online", online).await;
+    bob.send(Command::OpenProject { id }).expect("sent");
+    until(&bob, "bob sees the project", |vm| vm.project.is_some()).await;
+    bob.send(Command::BeginEdit).expect("sent");
+    let view = until(&bob, "seats notice", |vm| {
+        vm.notices
+            .iter()
+            .any(|n| n.text.contains("seats are in use"))
+    })
+    .await;
+    assert_eq!(view.project.as_ref().expect("project").mode, Mode::ReadOnly);
     server.stop().await;
 }
 

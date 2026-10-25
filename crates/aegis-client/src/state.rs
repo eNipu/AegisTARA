@@ -20,6 +20,8 @@ pub enum ConnectionView {
         /// numbers shown here may differ from the server's and editing is
         /// off.
         engine_ok: bool,
+        /// The server's license, if it reports one.
+        license: Option<LicenseView>,
     },
     /// Not reachable; the session keeps retrying.
     Offline {
@@ -28,6 +30,83 @@ pub enum ConnectionView {
     },
     /// The server needs a login.
     LoginRequired,
+}
+
+/// Where the server's license stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LicenseKind {
+    /// In the paid period.
+    Active,
+    /// Past the paid period; everything still works for a while.
+    Grace,
+    /// Over: reading works, editing does not.
+    Expired,
+}
+
+/// What a user needs to know about the server's license.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LicenseView {
+    /// The licensed organisation.
+    pub customer: String,
+    /// Where the license stands.
+    pub kind: LicenseKind,
+    /// Seats in the license.
+    pub seats: u32,
+    /// Seats in use.
+    pub seats_used: u32,
+    /// Whole days until the paid period ends (active) or the grace period
+    /// ends (grace). `None` once expired.
+    pub days_left: Option<u64>,
+}
+
+impl LicenseView {
+    /// Days after which the app starts to remind users that the license ends.
+    pub const REMIND_DAYS: u64 = 30;
+
+    /// Reads the server's summary. `now_secs` is this computer's clock; it
+    /// only decides how many days to say, never whether editing is allowed
+    /// (the server decides that).
+    #[must_use]
+    pub fn from_info(info: &aegis_proto::LicenseInfo, now_secs: u64) -> Option<LicenseView> {
+        use aegis_proto::license_info::State;
+        let (kind, end) = match info.state() {
+            State::Active => (LicenseKind::Active, info.expires_at),
+            State::Grace => (LicenseKind::Grace, info.grace_ends_at),
+            State::Expired => (LicenseKind::Expired, 0),
+            State::Unspecified => return None,
+        };
+        Some(LicenseView {
+            customer: info.customer.clone(),
+            kind,
+            seats: info.seats,
+            seats_used: info.seats_used,
+            days_left: (kind != LicenseKind::Expired)
+                .then(|| end.saturating_sub(now_secs) / 86_400),
+        })
+    }
+
+    /// A sentence to show when the license needs attention, with how bad it is.
+    #[must_use]
+    pub fn reminder(&self) -> Option<(Severity, String)> {
+        match (self.kind, self.days_left) {
+            (LicenseKind::Expired, _) => Some((
+                Severity::Error,
+                "The license has expired. You can read projects but not change them. Ask your administrator to renew it.".to_owned(),
+            )),
+            (LicenseKind::Grace, days) => Some((
+                Severity::Warning,
+                format!(
+                    "The license has expired. Everything works for {} more days. Ask your administrator to renew it.",
+                    days.unwrap_or(0)
+                ),
+            )),
+            (LicenseKind::Active, Some(days)) if days <= Self::REMIND_DAYS => Some((
+                Severity::Info,
+                format!("The license ends in {days} days. Ask your administrator to renew it."),
+            )),
+            (LicenseKind::Active, _) => None,
+        }
+    }
 }
 
 /// Whether the user may change the open project.
@@ -140,4 +219,61 @@ pub struct ViewModel {
     pub notices: Vec<Notice>,
     /// Who the user is, for display.
     pub user: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use aegis_proto::LicenseInfo;
+    use aegis_proto::license_info::State;
+
+    use super::*;
+
+    fn info(state: State, expires_at: u64, grace_ends_at: u64) -> LicenseInfo {
+        LicenseInfo {
+            state: state.into(),
+            customer: "Example".into(),
+            seats: 4,
+            seats_used: 1,
+            expires_at,
+            grace_ends_at,
+            features: vec![],
+        }
+    }
+
+    #[test]
+    fn days_are_counted_to_the_right_end() {
+        let day = 86_400;
+        let active = LicenseView::from_info(&info(State::Active, 10 * day, 20 * day), 3 * day)
+            .expect("view");
+        assert_eq!(
+            (active.kind, active.days_left),
+            (LicenseKind::Active, Some(7))
+        );
+        let grace = LicenseView::from_info(&info(State::Grace, 10 * day, 20 * day), 12 * day)
+            .expect("view");
+        assert_eq!((grace.kind, grace.days_left), (LicenseKind::Grace, Some(8)));
+        let over = LicenseView::from_info(&info(State::Expired, 10 * day, 20 * day), 99 * day)
+            .expect("view");
+        assert_eq!((over.kind, over.days_left), (LicenseKind::Expired, None));
+        assert!(LicenseView::from_info(&info(State::Unspecified, 0, 0), 0).is_none());
+    }
+
+    #[test]
+    fn reminders_start_at_thirty_days_and_get_louder() {
+        let day = 86_400;
+        let at = |now_days: u64, state| {
+            LicenseView::from_info(&info(state, 100 * day, 120 * day), now_days * day)
+                .expect("view")
+                .reminder()
+        };
+        assert_eq!(at(10, State::Active), None);
+        assert_eq!(at(70, State::Active).map(|r| r.0), Some(Severity::Info));
+        assert_eq!(
+            at(70, State::Active).expect("reminder").1,
+            "The license ends in 30 days. Ask your administrator to renew it."
+        );
+        assert_eq!(at(69, State::Active), None);
+        assert_eq!(at(105, State::Grace).map(|r| r.0), Some(Severity::Warning));
+        assert_eq!(at(130, State::Expired).map(|r| r.0), Some(Severity::Error));
+    }
 }

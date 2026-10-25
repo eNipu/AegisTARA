@@ -183,6 +183,7 @@ version = "0.1.0"
 dependencies = [
  "aegis-auth",
  "aegis-canvas",
+ "aegis-license",
  "aegis-model",
  "aegis-proto",
  "aegis-server",
@@ -195,6 +196,19 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+]
+
+[[package]]
+name = "aegis-license"
+version = "0.1.0"
+dependencies = [
+ "aegis-license",
+ "base64 0.22.1",
+ "proptest",
+ "ring",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -227,6 +241,7 @@ name = "aegis-server"
 version = "0.1.0"
 dependencies = [
  "aegis-auth",
+ "aegis-license",
  "aegis-model",
  "aegis-proto",
  "bytes",

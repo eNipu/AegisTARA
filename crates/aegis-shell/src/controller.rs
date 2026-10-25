@@ -392,13 +392,20 @@ impl Controller {
         w.set_engine_text(s(&match &view.connection {
             ConnectionView::Online {
                 server_version,
-                engine_ok: true,
-            } => format!("Server {server_version}"),
-            ConnectionView::Online {
-                server_version,
-                engine_ok: false,
+                engine_ok,
+                license,
             } => {
-                format!("Server {server_version}. Engine differs: update AegisTARA")
+                let mut text = format!("Server {server_version}");
+                if !engine_ok {
+                    text.push_str(". Engine differs: update AegisTARA");
+                }
+                if let Some(license) = license {
+                    text.push_str(&format!(
+                        " \u{b7} Licensed to {} \u{b7} {} of {} seats",
+                        license.customer, license.seats_used, license.seats
+                    ));
+                }
+                text
             }
             _ => String::new(),
         }));

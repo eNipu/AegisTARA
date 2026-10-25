@@ -24,5 +24,6 @@ tracing.workspace = true
 http = "1"
 aegis-auth = { workspace = true, features = ["test-support"] }
 aegis-server.workspace = true
+aegis-license = { workspace = true, features = ["issuer"] }
 proptest.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
