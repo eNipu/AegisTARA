@@ -38,3 +38,4 @@
 - [ ] Offline license tokens: the `aegis-license` crate signs and verifies Ed25519 license files (customer, seats, expiry, feature flags) with no network call, and the server refuses to start without a valid one (direction section 12) (034-license-tokens)
 - [ ] Live read-only observers: the server streams accepted ops and recomputed results to every open client, and the client core renders an observer view that follows the editor (direction section 7) (035-live-observers)
 - [ ] Release readiness scaffolding: release build profile (LTO, strip), container image for the server, Docker Compose file with PostgreSQL, and a signed update manifest check in the client (direction sections 2 and 10) (036-release-scaffolding)
+- [ ] TLS to PostgreSQL: add rustls-based `tokio-postgres` TLS to `PostgresStore` after a D5 review of the crypto crates (ring or aws-lc-rs) and their licenses, with a `sslmode` URL option and a test against a TLS-only database (037-postgres-tls)

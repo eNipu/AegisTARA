@@ -12,7 +12,7 @@ use aegis_server::auth::{DEV_ADMIN_HEADER, DEV_USER_HEADER, dev_interceptor};
 use aegis_server::config::ServerConfig;
 use aegis_server::methodologies::Methodologies;
 use aegis_server::pb::aegis_client::AegisClient;
-use aegis_server::{AegisService, MemoryStore, Registry, pb, server};
+use aegis_server::{AegisService, MemoryStore, ProjectStore, Registry, pb, server};
 use bytes::Bytes;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -44,21 +44,23 @@ impl Interceptor for DevUser {
 
 pub type Client = AegisClient<InterceptedService<Channel, DevUser>>;
 
-pub struct TestServer {
+pub struct TestServer<S: ProjectStore = MemoryStore> {
     pub addr: std::net::SocketAddr,
-    pub registry: Arc<Registry<MemoryStore>>,
-    pub store: Arc<MemoryStore>,
+    pub registry: Arc<Registry<S>>,
+    pub store: Arc<S>,
     stop: Option<oneshot::Sender<()>>,
     done: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl TestServer {
+impl TestServer<MemoryStore> {
     pub async fn start(config: ServerConfig) -> Self {
         Self::start_on(Arc::new(MemoryStore::new()), config).await
     }
+}
 
+impl<S: ProjectStore> TestServer<S> {
     /// Starts a server over an existing store (to test restarts).
-    pub async fn start_on(store: Arc<MemoryStore>, config: ServerConfig) -> Self {
+    pub async fn start_on(store: Arc<S>, config: ServerConfig) -> Self {
         let registry = Arc::new(Registry::new(
             Arc::clone(&store),
             Arc::new(Methodologies::builtin().expect("builtin")),
@@ -287,4 +289,75 @@ pub fn expected_project(m: &Arc<Methodology>, ops: &[Op]) -> Project {
         p.apply(op.clone()).expect("applies");
     }
     p
+}
+
+/// The restart scenario: ops accepted by one server process are all there,
+/// identically, in the next process over the same storage.
+pub async fn restart_keeps_every_project_identical<S: ProjectStore>(store: Arc<S>) {
+    let m = methodology();
+    let codec = OpCodec::new(m.clone());
+    let fx = fixture(&m);
+
+    let first = TestServer::start_on(Arc::clone(&store), fast_config()).await;
+    let mut alice = first.client("alice").await;
+    let id = create_project(&mut alice, "p").await;
+    let lease = lock(&mut alice, &id).await;
+    submit(&mut alice, &id, &lease, 0, &fx.ops, &codec)
+        .await
+        .expect("accepted");
+    let (_, before) = open(&mut alice, &id, &m).await;
+    first.stop().await;
+
+    let second = TestServer::start_on(store, fast_config()).await;
+    let mut alice = second.client("alice").await;
+    let (seq, after) = open(&mut alice, &id, &m).await;
+    assert_eq!(seq, fx.ops.len() as u64);
+    assert_eq!(after, before);
+    assert_eq!(after, expected_project(&m, &fx.ops));
+    let lease = lock(&mut alice, &id).await;
+    let more = Op::RenameAsset {
+        id: fx.asset,
+        name: "Brake control unit".into(),
+        provenance: Provenance::default(),
+    };
+    let last = submit(&mut alice, &id, &lease, seq, &[more], &codec)
+        .await
+        .expect("accepted");
+    assert_eq!(last, seq + 1);
+    second.stop().await;
+}
+
+/// The audit scenario: admins verify an intact chain over gRPC; others may not.
+pub async fn audit_is_verifiable_by_admins_only<S: ProjectStore>(store: Arc<S>) {
+    let m = methodology();
+    let codec = OpCodec::new(m.clone());
+    let fx = fixture(&m);
+    let server = TestServer::start_on(store, fast_config()).await;
+    let mut alice = server.client("alice").await;
+    let mut root = server.admin("root").await;
+    let id = create_project(&mut alice, "p").await;
+    let lease = lock(&mut alice, &id).await;
+    submit(&mut alice, &id, &lease, 0, &fx.ops, &codec)
+        .await
+        .expect("accepted");
+
+    let err = alice
+        .verify_audit(pb::VerifyAuditRequest {
+            project_id: id.clone(),
+        })
+        .await
+        .expect_err("not admin");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    let report = root
+        .verify_audit(pb::VerifyAuditRequest {
+            project_id: id.clone(),
+        })
+        .await
+        .expect("verifies")
+        .into_inner();
+    assert!(report.intact);
+    assert_eq!(report.verified_ops, fx.ops.len() as u64);
+    assert_eq!(report.first_bad_seq, 0);
+    assert_eq!(report.head_hash.len(), 32);
+    server.stop().await;
 }

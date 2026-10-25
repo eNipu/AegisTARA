@@ -32,6 +32,9 @@ tonic-prost-build = "0.14"
 prost = "0.14"
 bytes = "1"
 protox = "0.10"
+tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
+deadpool-postgres = "0.14"
+sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 aegis-model = { path = "crates/aegis-model" }

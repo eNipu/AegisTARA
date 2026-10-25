@@ -43,6 +43,10 @@ service Aegis {
 
   // The official recomputed risks of every threat scenario.
   rpc GetRisks(GetRisksRequest) returns (GetRisksResponse);
+
+  // Admin only. Recomputes the audit hash chain over the project's stored
+  // op history and reports whether it is intact.
+  rpc VerifyAudit(VerifyAuditRequest) returns (VerifyAuditResponse);
 }
 
 message GetServerInfoRequest {}
@@ -191,4 +195,19 @@ message ThreatRiskEntry {
   // (for example a threat with no damage scenario).
   string inherent_risk = 2;
   string residual_risk = 3;
+}
+
+message VerifyAuditRequest {
+  string project_id = 1;
+}
+
+message VerifyAuditResponse {
+  bool intact = 1;
+  // Ops whose chain links checked out, counted from sequence 1.
+  uint64 verified_ops = 2;
+  // Sequence number of the first broken link, 0 if intact.
+  uint64 first_bad_seq = 3;
+  // Hash of the last verified op. Export it to a system the database admin
+  // cannot write, to detect a full rewrite of the history.
+  bytes head_hash = 4;
 }

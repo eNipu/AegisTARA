@@ -360,6 +360,23 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
+    async fn verify_audit(
+        &self,
+        request: Request<pb::VerifyAuditRequest>,
+    ) -> Result<Response<pb::VerifyAuditResponse>, Status> {
+        if !Principal::of(&request)?.admin {
+            return Err(ServerError::NotAdmin.into());
+        }
+        let id = project_id(&request.get_ref().project_id)?;
+        let report = self.registry.verify_audit(id).await?;
+        Ok(Response::new(pb::VerifyAuditResponse {
+            intact: report.is_intact(),
+            verified_ops: report.verified,
+            first_bad_seq: report.first_bad.unwrap_or(0),
+            head_hash: Bytes::copy_from_slice(&report.head),
+        }))
+    }
+
     async fn get_risks(
         &self,
         request: Request<pb::GetRisksRequest>,

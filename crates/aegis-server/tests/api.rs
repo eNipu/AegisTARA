@@ -11,7 +11,7 @@ use aegis_server::pb;
 use aegis_server::store::ProjectStore;
 use bytes::Bytes;
 use common::{
-    Fixture, METHODOLOGY, TestServer, create_project, expected_project, fast_config, fixture, lock,
+    METHODOLOGY, TestServer, create_project, expected_project, fast_config, fixture, lock,
     methodology, open, submit,
 };
 use tonic::Code;
@@ -578,42 +578,18 @@ async fn watch_streams_outlive_the_call_timeout() {
 
 #[tokio::test]
 async fn projects_survive_a_server_restart_identically() {
-    let m = methodology();
-    let codec = OpCodec::new(m.clone());
-    let fx: Fixture = fixture(&m);
+    common::restart_keeps_every_project_identical(std::sync::Arc::new(
+        aegis_server::MemoryStore::new(),
+    ))
+    .await;
+}
 
-    let first = TestServer::start(fast_config()).await;
-    let store = std::sync::Arc::clone(&first.store);
-    let mut alice = first.client("alice").await;
-    let id = create_project(&mut alice, "p").await;
-    let lease = lock(&mut alice, &id).await;
-    submit(&mut alice, &id, &lease, 0, &fx.ops, &codec)
-        .await
-        .expect("accepted");
-    let (_, before) = open(&mut alice, &id, &m).await;
-    first.stop().await;
-
-    // A new server process over the same storage.
-    let second = TestServer::start_on(store, fast_config()).await;
-    let mut alice = second.client("alice").await;
-    let (seq, after) = open(&mut alice, &id, &m).await;
-    assert_eq!(seq, fx.ops.len() as u64);
-    assert_eq!(after, before);
-    assert_eq!(after, expected_project(&m, &fx.ops));
-    // And editing continues from where it stopped.
-    let lease = lock(&mut alice, &id).await;
-    let more = Op::RenameAsset {
-        id: fx.asset,
-        name: "Brake control unit".into(),
-        provenance: Provenance::default(),
-    };
-    assert_eq!(
-        submit(&mut alice, &id, &lease, seq, &[more], &codec)
-            .await
-            .expect("accepted"),
-        seq + 1
-    );
-    second.stop().await;
+#[tokio::test]
+async fn audit_is_verifiable_by_admins_only() {
+    common::audit_is_verifiable_by_admins_only(std::sync::Arc::new(
+        aegis_server::MemoryStore::new(),
+    ))
+    .await;
 }
 
 #[tokio::test]

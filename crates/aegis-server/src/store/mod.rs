@@ -16,12 +16,18 @@
 //!   exactly (`StoreFault::Sequence`), so two writers can never interleave.
 //! - `load` returns ops with `seq > snapshot.seq`, in order, gap free.
 //! - Nothing is acknowledged before it is durable.
+//! - Every stored op is linked into a per-project hash chain (`audit.rs`),
+//!   and `verify_chain` recomputes it.
 
+mod audit;
 mod memory;
+mod postgres;
 
 use std::future::Future;
 
+pub use audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 pub use memory::MemoryStore;
+pub use postgres::{PostgresOptions, PostgresStore};
 
 use crate::ids::ProjectId;
 
@@ -136,6 +142,17 @@ pub trait ProjectStore: Send + Sync + 'static {
         id: ProjectId,
         ops: &[StoredOp],
     ) -> impl Future<Output = Result<(), StoreFault>> + Send;
+
+    /// Recomputes the project's audit hash chain from its stored ops.
+    /// Streams the history; memory use does not grow with its length.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault::Missing`] if the project does not exist.
+    fn verify_chain(
+        &self,
+        id: ProjectId,
+    ) -> impl Future<Output = Result<ChainReport, StoreFault>> + Send;
 
     /// Replaces the snapshot with a newer one. Ops up to `seq` may then be
     /// dropped from replay (a backend may keep them for audit).

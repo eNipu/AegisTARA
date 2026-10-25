@@ -39,6 +39,23 @@ jobs:
     name: fmt, clippy, test
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The PostgreSQL store tests (crates/aegis-server/tests/postgres.rs) run
+    # against a throwaway database. The password is a CI-only placeholder for
+    # a container that lives for this job.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+          POSTGRES_DB: aegis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,6 +88,8 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
       - name: scripts/ci.sh
+        env:
+          AEGIS_TEST_DATABASE_URL: postgres://aegis:aegis@127.0.0.1:5432/aegis_test
         run: scripts/ci.sh
       # Only master writes the cache, and only after a green run. Branches and
       # pull requests restore the master entry but never save their own, so

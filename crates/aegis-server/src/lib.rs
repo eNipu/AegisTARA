@@ -36,7 +36,7 @@ pub use error::ServerError;
 pub use ids::ProjectId;
 pub use registry::Registry;
 pub use service::AegisService;
-pub use store::{MemoryStore, ProjectStore};
+pub use store::{MemoryStore, PostgresStore, ProjectStore};
 
 /// Generated protobuf messages and the gRPC service and client.
 #[allow(missing_docs, clippy::all, clippy::pedantic)]

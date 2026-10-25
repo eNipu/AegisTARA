@@ -7,6 +7,8 @@
 //! |---|---|---|
 //! | `AEGIS_LISTEN` | `127.0.0.1:50051` | Address to serve gRPC on |
 //! | `AEGIS_PACKS_DIR` | unset | Directory of extra methodology pack files |
+//! | `AEGIS_DATABASE_URL` | unset | PostgreSQL connection string. Unset keeps projects in memory only. |
+//! | `AEGIS_DB_POOL` | `16` | Database connections held open |
 //! | `AEGIS_DEV_AUTH` | unset | `1` trusts the `x-aegis-dev-user` header. **Development only.** |
 //! | `RUST_LOG` | `info` | Log filter |
 //!
@@ -21,7 +23,8 @@ use std::sync::Arc;
 use aegis_server::auth::dev_interceptor;
 use aegis_server::config::ServerConfig;
 use aegis_server::methodologies::Methodologies;
-use aegis_server::{AegisService, MemoryStore, Registry, server};
+use aegis_server::store::PostgresOptions;
+use aegis_server::{AegisService, MemoryStore, PostgresStore, ProjectStore, Registry, server};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -60,16 +63,53 @@ async fn run() -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
-    tracing::warn!("projects are kept in memory only and are lost on exit");
-    let registry = Arc::new(Registry::new(
-        Arc::new(MemoryStore::new()),
-        Arc::new(methodologies),
-        Arc::new(ServerConfig::default()),
-    ));
-    let service = AegisService::new(Arc::clone(&registry)).into_server();
+    let methodologies = Arc::new(methodologies);
+    let config = Arc::new(ServerConfig::default());
+    match std::env::var("AEGIS_DATABASE_URL") {
+        Ok(url) => {
+            let pool_size = match std::env::var("AEGIS_DB_POOL") {
+                Ok(v) => v
+                    .parse()
+                    .map_err(|_| "AEGIS_DB_POOL is not a number".to_owned())?,
+                Err(_) => PostgresOptions::default().pool_size,
+            };
+            let options = PostgresOptions {
+                pool_size,
+                ..PostgresOptions::default()
+            };
+            let store = PostgresStore::connect(&url, &options)
+                .await
+                .map_err(|e| format!("cannot open the database: {e}"))?;
+            tracing::info!("using PostgreSQL");
+            serve(
+                Arc::new(Registry::new(Arc::new(store), methodologies, config)),
+                listen,
+            )
+            .await
+        }
+        Err(_) => {
+            tracing::warn!(
+                "AEGIS_DATABASE_URL is unset: projects are kept in memory and are lost on exit"
+            );
+            serve(
+                Arc::new(Registry::new(
+                    Arc::new(MemoryStore::new()),
+                    methodologies,
+                    config,
+                )),
+                listen,
+            )
+            .await
+        }
+    }
+}
 
+async fn serve<S: ProjectStore>(
+    registry: Arc<Registry<S>>,
+    listen: SocketAddr,
+) -> Result<(), String> {
+    let service = AegisService::new(Arc::clone(&registry)).into_server();
     tracing::info!(%listen, "serving");
-    let on_stop = Arc::clone(&registry);
     server::builder()
         .layer(tonic::service::InterceptorLayer::new(dev_interceptor))
         .add_service(service)
@@ -78,7 +118,7 @@ async fn run() -> Result<(), String> {
             tracing::info!("shutting down");
             // Unloading the projects writes their snapshots and ends every
             // `Watch` stream, which lets the graceful drain finish.
-            on_stop.shutdown().await;
+            registry.shutdown().await;
         })
         .await
         .map_err(|e| format!("server failed: {e}"))
