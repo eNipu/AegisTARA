@@ -46,6 +46,17 @@ tab Variables.
 Or skip the server screen with
 `AEGIS_URL=https://aegis-server-production-2bf0.up.railway.app cargo run -p aegis-shell --release`.
 
+## Check it from a terminal
+
+```sh
+AEGIS_URL=https://aegis-server-production-2bf0.up.railway.app \
+AEGIS_USER=admin AEGIS_PASSWORD='the password' \
+  cargo run -p aegis-client --example smoke
+```
+
+It asks how to log in, logs in over gRPC-Web, asks who you are, lists the
+projects, logs out, and prints `ok`. The first failure prints its reason.
+
 ## Operate
 
 - **Logs:** Railway dashboard, service `aegis-server`, Deployments, View logs.

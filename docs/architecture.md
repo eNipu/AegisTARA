@@ -1546,6 +1546,7 @@ ops inside the window, from the `aegis_project_op_time` index) and calls
 | `settings.rs` | `Settings { server_url, transport, username, export_dir }`, `export_file_name()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic write. Never a password or token. |
 | `time.rs` | `date_ms()`, `date_time_ms()` | UTC dates without a time crate. |
 | `updates.rs` | `UpdateChecker`, `UpdateOffer`, `UpdateStatus` | Signed update manifest check. |
+| `examples/smoke.rs` | | Smoke test of a running server: login options, password login, `WhoAmI`, `ListProjects`, logout (`docs/railway.md`). |
 
 ### II.5.2 Edit flow
 

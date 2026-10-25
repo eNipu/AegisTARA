@@ -40,7 +40,11 @@ cargo test -p aegis-shell
 ls target/shell-screenshots/
 
 # The full stack locally: server with password login and PostgreSQL
-docker compose -f deploy/compose.test.yaml up --build
+AEGIS_ADMIN_PASSWORD='choose a long one' docker compose -f deploy/compose.test.yaml up --build
+
+# Smoke test of any running server (login, who am I, projects, logout)
+AEGIS_URL=http://127.0.0.1:50051 AEGIS_USER=admin AEGIS_PASSWORD='...' \
+  cargo run -p aegis-client --example smoke
 ```
 
 The test server on Railway (`docs/railway.md`) runs the same branch.
@@ -187,8 +191,9 @@ Use the screenshots in `target/shell-screenshots/` and the running app.
 - [ ] Menu bar: groups, order, shortcuts shown, Lucide icons match the
       action and are the same size and weight everywhere.
 - [ ] Sidebar: TARA steps in order, counts, selected state.
-- [ ] Each page: alignment, spacing, column widths (risk table columns are
-      known to truncate at small window sizes), empty states.
+- [ ] Each page: alignment, spacing, column widths, empty states. The risk
+      table gives its short columns a minimum width; check long threat names
+      at small window sizes.
 - [ ] Inspector: labels, field widths, long names.
 - [ ] Login screens: layout at 1100 x 760 and at a small window.
 - [ ] Colors: risk levels are told apart without color alone.
