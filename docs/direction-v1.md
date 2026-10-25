@@ -101,7 +101,7 @@ If web technology inside a desktop app is acceptable, Tauri would make the UI fa
 | License | MIT | Apache-2.0 | MIT / Apache-2.0 | GPL-3.0, royalty-free with attribution, or commercial |
 | Learning value | High: clean architecture | Medium | High: fast results | Medium |
 
-### Recommendation
+### Recommendation (superseded by D7: Slint was chosen)
 
 - **Lead: iced.** Its message-update-view loop maps directly onto our design: every UI action is a typed message, and a message becomes an operation for the server. Proven in a commercial trading app and a full desktop environment. MIT license.
 - **Challenger: GPUI with gpui-component.** The most polished look and the richest pro widgets. The risk is API churn and thin documentation.

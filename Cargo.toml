@@ -1,0 +1,33 @@
+# Root of the Cargo workspace (job 027, docs/adr/0025-cargo-workspace.md).
+#
+# Every production crate lives under crates/ and is found by glob, the same
+# rule scripts/ci.sh and scripts/deny.sh use. Spikes, deny fixtures, and the
+# fuzz crate keep their own roots and are excluded.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["spikes", "tools", "crates/aegis-model/fuzz"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+license = "LicenseRef-Proprietary"
+
+# One version per dependency for the whole product (standards Q7). A crate
+# opts in with `name.workspace = true`.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v7"] }
+dhat = "0.3.3"
+divan = "0.1.21"
+proptest = "1"
+aegis-model = { path = "crates/aegis-model" }
+
+# Shipped binaries (standards R10). Tests and benches use the dev profile.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
