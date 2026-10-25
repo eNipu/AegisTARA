@@ -58,6 +58,31 @@ message GetServerInfoResponse {
   string engine_version = 2;
   repeated MethodologyInfo methodologies = 3;
   uint64 lease_ms = 4;
+  // The server's license, as far as a user needs to know. Absent when the
+  // server runs without license checking (development builds).
+  LicenseInfo license = 5;
+}
+
+message LicenseInfo {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // In the paid period.
+    ACTIVE = 1;
+    // Past the paid period, inside the grace period. Everything works.
+    GRACE = 2;
+    // Over. Reading works; taking the edit lease is refused.
+    EXPIRED = 3;
+  }
+  State state = 1;
+  string customer = 2;
+  uint32 seats = 3;
+  // Named users holding a seat now.
+  uint32 seats_used = 4;
+  // Unix seconds.
+  uint64 expires_at = 5;
+  // Unix seconds. Equal to expires_at when there is no grace period.
+  uint64 grace_ends_at = 6;
+  repeated string features = 7;
 }
 
 message MethodologyInfo {

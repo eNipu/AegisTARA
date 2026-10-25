@@ -56,16 +56,36 @@ impl TestServer<MemoryStore> {
     pub async fn start(config: ServerConfig) -> Self {
         Self::start_on(Arc::new(MemoryStore::new()), config).await
     }
+
+    /// A server behind a license gate.
+    pub async fn start_licensed(
+        config: ServerConfig,
+        gate: Arc<aegis_server::LicenseGate>,
+    ) -> Self {
+        Self::start_with(Arc::new(MemoryStore::new()), config, Some(gate)).await
+    }
 }
 
 impl<S: ProjectStore> TestServer<S> {
     /// Starts a server over an existing store (to test restarts).
     pub async fn start_on(store: Arc<S>, config: ServerConfig) -> Self {
-        let registry = Arc::new(Registry::new(
+        Self::start_with(store, config, None).await
+    }
+
+    async fn start_with(
+        store: Arc<S>,
+        config: ServerConfig,
+        gate: Option<Arc<aegis_server::LicenseGate>>,
+    ) -> Self {
+        let registry = Registry::new(
             Arc::clone(&store),
             Arc::new(Methodologies::builtin().expect("builtin")),
             Arc::new(config),
-        ));
+        );
+        let registry = Arc::new(match gate {
+            Some(gate) => registry.with_license(gate),
+            None => registry,
+        });
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let (stop, stopped) = oneshot::channel::<()>();

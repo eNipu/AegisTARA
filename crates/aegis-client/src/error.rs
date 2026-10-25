@@ -34,6 +34,10 @@ pub enum ServerCode {
     UnknownProject,
     /// The caller may not do this.
     NotAdmin,
+    /// The server's license is over: no editing.
+    LicenseExpired,
+    /// Every seat of the license is taken by other users.
+    LicenseSeatsFull,
     /// The server is temporarily unable (storage, unloading project).
     Unavailable,
     /// Anything else, with the raw code.
@@ -133,6 +137,8 @@ impl From<tonic::Status> for ClientError {
             "busy" => ServerCode::Busy,
             "unknown_project" => ServerCode::UnknownProject,
             "not_admin" => ServerCode::NotAdmin,
+            "license_expired" => ServerCode::LicenseExpired,
+            "license_seats" => ServerCode::LicenseSeatsFull,
             "storage" | "unloaded" => ServerCode::Unavailable,
             other => ServerCode::Other(other.to_owned()),
         };

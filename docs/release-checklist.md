@@ -14,6 +14,17 @@ Run this list for every release build. Tick each line in the release notes.
 - [ ] The owner has confirmed D4 and D7. If D7 was rejected, `aegis-shell`
       and its `deny.toml` exceptions are gone.
 
+## License keys
+
+- [ ] `crates/aegis-license/keys/vendor.keys` holds the production public key.
+      An empty file means the build accepts no license.
+- [ ] The private key is offline and not in any repository or CI secret that
+      builds pull requests.
+- [ ] The server is built without the `dev-license` feature
+      (`cargo tree -p aegis-server -e features | grep dev-license` prints nothing).
+- [ ] `aegis-license inspect` reads a license made with the production key
+      against the shipped `vendor.keys`.
+
 ## Build
 
 - [ ] Built from a clean checkout of a tag, with the pinned toolchain

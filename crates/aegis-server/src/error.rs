@@ -74,6 +74,13 @@ pub enum ServerError {
         /// Sequence number asked for.
         after: u64,
     },
+    /// The license is over (past its grace period): reading works, editing
+    /// does not.
+    #[error("the license has expired")]
+    LicenseExpired,
+    /// Every seat of the license is held by other users.
+    #[error("all licensed seats are in use")]
+    LicenseSeats,
     /// The project's queue or the server's project table is full.
     #[error("server is busy")]
     Busy,
@@ -106,6 +113,8 @@ impl ServerError {
             ServerError::MalformedOp { .. } => "malformed_op",
             ServerError::RejectedOp { .. } => "rejected_op",
             ServerError::OutOfRange { .. } => "out_of_range",
+            ServerError::LicenseExpired => "license_expired",
+            ServerError::LicenseSeats => "license_seats",
             ServerError::Busy => "busy",
             ServerError::Store(_) => "storage",
             ServerError::Unloaded => "unloaded",
@@ -125,9 +134,10 @@ impl ServerError {
             ServerError::LockHeld { .. }
             | ServerError::NotLocked
             | ServerError::LockInvalid
-            | ServerError::StaleBase { .. } => Code::FailedPrecondition,
+            | ServerError::StaleBase { .. }
+            | ServerError::LicenseExpired => Code::FailedPrecondition,
             ServerError::OutOfRange { .. } => Code::OutOfRange,
-            ServerError::Busy => Code::ResourceExhausted,
+            ServerError::Busy | ServerError::LicenseSeats => Code::ResourceExhausted,
             ServerError::Store(_) | ServerError::Unloaded => Code::Unavailable,
             ServerError::Internal => Code::Internal,
         }
