@@ -60,6 +60,9 @@ pub struct Grant {
     pub holder: Arc<str>,
     /// Time left, at the moment of the grant.
     pub expires_in: Duration,
+    /// The project's sequence number at the moment of the grant. The lease
+    /// state knows nothing of sequence numbers; the project actor fills it in.
+    pub last_seq: u64,
 }
 
 #[derive(Debug)]
@@ -130,6 +133,7 @@ impl LeaseState {
             token: held.token.clone(),
             holder: Arc::clone(&held.holder),
             expires_in: self.length,
+            last_seq: 0,
         };
         self.held = Some(held);
         Ok(grant)
@@ -154,6 +158,7 @@ impl LeaseState {
             token: held.token.clone(),
             holder: Arc::clone(&held.holder),
             expires_in: length,
+            last_seq: 0,
         })
     }
 

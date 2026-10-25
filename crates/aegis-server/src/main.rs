@@ -180,7 +180,8 @@ async fn serve<S: ProjectStore>(
 ) -> Result<(), String> {
     let service = AegisService::new(Arc::clone(&registry)).into_server();
     tracing::info!(%listen, "serving");
-    server::builder()
+    let (stopping, stop_requested) = tokio::sync::oneshot::channel::<()>();
+    let serving = server::builder()
         .layer(layer)
         .add_service(service)
         .serve_with_shutdown(listen, async move {
@@ -189,10 +190,25 @@ async fn serve<S: ProjectStore>(
             // Unloading the projects writes their snapshots and ends every
             // `Watch` stream, which lets the graceful drain finish.
             registry.shutdown().await;
-        })
-        .await
-        .map_err(|e| format!("server failed: {e}"))
+            let _ = stopping.send(());
+        });
+    // A client that keeps a stream open must not keep the process alive for
+    // ever (R6): after the grace period the server exits anyway. Everything
+    // acknowledged is already stored, so nothing is lost.
+    tokio::select! {
+        result = serving => result.map_err(|e| format!("server failed: {e}")),
+        () = async {
+            let _ = stop_requested.await;
+            tokio::time::sleep(SHUTDOWN_GRACE).await;
+        } => {
+            tracing::warn!("connections did not close in time; exiting");
+            Ok(())
+        }
+    }
 }
+
+/// How long open connections get to finish after a stop signal.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Resolves on Ctrl-C, or on SIGTERM where it exists.
 async fn stop_signal() {

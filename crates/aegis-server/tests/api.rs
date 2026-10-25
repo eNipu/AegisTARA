@@ -162,6 +162,34 @@ async fn ops_are_applied_stored_and_visible_to_every_client() {
 }
 
 #[tokio::test]
+async fn a_lease_reports_the_sequence_number_it_was_granted_at() {
+    let server = TestServer::start(fast_config()).await;
+    let m = methodology();
+    let codec = OpCodec::new(m.clone());
+    let mut alice = server.client("alice").await;
+    let id = create_project(&mut alice, "p").await;
+    let fx = fixture(&m);
+    let lease = lock(&mut alice, &id).await;
+    assert_eq!(lease.last_seq, 0);
+    submit(&mut alice, &id, &lease, 0, &fx.ops, &codec)
+        .await
+        .expect("accepted");
+    let renewed = alice
+        .renew_lock(pb::RenewLockRequest {
+            project_id: id.clone(),
+            token: lease.token.clone(),
+        })
+        .await
+        .expect("renew")
+        .into_inner();
+    assert_eq!(renewed.last_seq, fx.ops.len() as u64);
+    // A client that last saw an older sequence knows it must resync.
+    let again = lock(&mut alice, &id).await;
+    assert_eq!(again.last_seq, fx.ops.len() as u64);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn only_the_lease_holder_may_submit() {
     let server = TestServer::start(fast_config()).await;
     let m = methodology();

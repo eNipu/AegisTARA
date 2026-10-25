@@ -11,11 +11,7 @@ use tonic::{Code, Status};
 use crate::ids::ProjectId;
 use crate::store::StoreFault;
 
-/// Metadata key carrying a machine-readable error code on failed calls.
-pub const ERROR_CODE_HEADER: &str = "x-aegis-error";
-/// Metadata key carrying the project's current sequence number on
-/// `stale_base` errors.
-pub const CURRENT_SEQ_HEADER: &str = "x-aegis-current-seq";
+pub use aegis_proto::{CURRENT_SEQ_HEADER, ERROR_CODE_HEADER};
 
 /// Everything the server can refuse or fail at.
 #[derive(Debug, thiserror::Error)]

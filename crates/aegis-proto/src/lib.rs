@@ -10,3 +10,10 @@
 #![allow(missing_docs, clippy::all, clippy::pedantic)]
 
 tonic::include_proto!("aegis.v1");
+
+/// Metadata key carrying a machine-readable error code on failed calls
+/// (for example `lock_invalid`, `stale_base`). Clients branch on it.
+pub const ERROR_CODE_HEADER: &str = "x-aegis-error";
+/// Metadata key carrying the project's current sequence number on
+/// `stale_base` errors.
+pub const CURRENT_SEQ_HEADER: &str = "x-aegis-current-seq";

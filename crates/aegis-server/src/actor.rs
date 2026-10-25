@@ -463,14 +463,23 @@ impl<S: ProjectStore> Actor<S> {
                 let _ = reply.send(r);
             }
             Cmd::Acquire(who, reply) => {
-                let r = self.lease.acquire(Instant::now(), &who);
+                let seq = self.seq;
+                let r = self
+                    .lease
+                    .acquire(Instant::now(), &who)
+                    .map(|g| Grant { last_seq: seq, ..g });
                 if r.is_ok() {
                     self.emit(Event::Lock(Arc::clone(&who.subject)));
                 }
                 let _ = reply.send(r);
             }
             Cmd::Renew(who, token, reply) => {
-                let _ = reply.send(self.lease.renew(Instant::now(), &who, &token));
+                let seq = self.seq;
+                let r = self
+                    .lease
+                    .renew(Instant::now(), &who, &token)
+                    .map(|g| Grant { last_seq: seq, ..g });
+                let _ = reply.send(r);
             }
             Cmd::Release(who, token, reply) => {
                 let r = self.lease.release(Instant::now(), &who, &token).map(|_| ());
