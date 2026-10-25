@@ -1274,14 +1274,16 @@ export component AppWindow inherits Window {
                         PageTitle { title: "Risks and treatment"; subtitle: "Every threat scenario, worst risk first, with the decision on what to do about it."; icon: @image-url("icons/gauge.svg"); }
                         Table {
                             label: "Risk register";
-                            columns: [{ title: "Threat scenario", horizontal-stretch: 3 }, { title: "Deciding damage", horizontal-stretch: 2 }, { title: "Impact", horizontal-stretch: 1 }, { title: "Feasibility", horizontal-stretch: 1 }, { title: "Before", horizontal-stretch: 1 }, { title: "After", horizontal-stretch: 1 }, { title: "Treatment", horizontal-stretch: 1 }];
+                            // The short columns get a minimum width so their titles and values
+                            // ("not rated") are never cut; the names take the rest.
+                            columns: [{ title: "Threat scenario", horizontal-stretch: 3, min-width: 110px }, { title: "Deciding damage", horizontal-stretch: 2, min-width: 136px }, { title: "Impact", horizontal-stretch: 0, min-width: 84px }, { title: "Feasibility", horizontal-stretch: 0, min-width: 104px }, { title: "Before", horizontal-stretch: 0, min-width: 80px }, { title: "After", horizontal-stretch: 0, min-width: 76px }, { title: "Treatment", horizontal-stretch: 0, min-width: 104px }];
                             rows: root.risk-rows;
                             selected: root.risk-selected;
                             picked(i) => { root.pick-risk(i); }
                         }
                     }
                     if root.has-threat-detail: Panel {
-                        width: 400px;
+                        width: 360px;
                         Text { text: root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 8px;
