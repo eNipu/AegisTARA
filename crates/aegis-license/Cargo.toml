@@ -1,0 +1,29 @@
+[package]
+name = "aegis-license"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "AegisTARA license files: Ed25519 signed, checked offline, with a grace period and a seat ledger."
+license.workspace = true
+
+[features]
+# Signing. Only the vendor's tooling needs it; the server and the client
+# verify and never carry a signing path.
+issuer = []
+
+[dependencies]
+base64.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[[bin]]
+name = "aegis-license"
+path = "src/bin/aegis-license.rs"
+required-features = ["issuer"]
+
+[dev-dependencies]
+aegis-license = { path = ".", features = ["issuer"] }
+proptest.workspace = true

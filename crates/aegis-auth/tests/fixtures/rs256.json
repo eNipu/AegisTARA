@@ -1,0 +1,17 @@
+{
+  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InJzYS1maXh0dXJlIn0.eyJpc3MiOiJodHRwczovL2lkcC5maXh0dXJlLnRlc3QiLCJzdWIiOiJmaXh0dXJlLXVzZXIiLCJhdWQiOiJhZWdpcy1zZXJ2ZXIiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDEwMjQ0NDgwMCwicm9sZXMiOlsiYWVnaXMtYWRtaW4iXX0.il2GBfwRCI3veRBKiitWwb252G6M5uDM2ESohzBUtfo4tJLAeVIuFe1gaNrSDq58Pb_fWP4fwZXwdyyMBmkRJd0ELweH4bcNVPpTaF6wuK8d7y9tv3fPuRVyjrlUADp6Fj_q8pg-1ZPw8ESYAfZqZgBNw9yIiDQVVxUDPTPmMWEdbQmO-c8B6Ezzp3v6aKi1FKT_JwNndVXYz_nPh72u3QM-NPyiFDgKZDZEOsWt09aCC-ESs1DqSmxfmO0s1sGjFkDlnSeBq6H_nT-FRut_jzGh7v_rbe1bof7LhigAetafRFl_NWDZhfvDHerRCzg8KO0ENCz5fKr8znzxluKyUA",
+  "jwks": {
+    "keys": [
+      {
+        "kty": "RSA",
+        "use": "sig",
+        "alg": "RS256",
+        "kid": "rsa-fixture",
+        "n": "qGtZ7SaWKG3dNiNgEYKrReSsOg98WjYPfRn-jXBcxcq1nSRwjwCR7LrjKCW7aovP9mCMF4DqoDOwBP8Wk4eOvtO6LG9gMjY_nMOB_jiGSgIfafd80wkVFwfJF_tG73i6HXHAgCVOxTo9M2EXGtBARgFs1175XxeEc3jJh5lqBFGnDNvgYwsIULgvcqdJzcvPntXEmRY6gJr6zfzMXIF7BSydEl_evz1stpknX4BiIG9O2RIRsSJwkXCh_nbNO14MPEzEZLDEOUhsg_DoaItrw06TtwRd_jkOdrvs3enQKn4b_gIIFEdhOQL8YVoSc6YJyJ0NRxvnw3YaygGuSkg1pQ",
+        "e": "AQAB"
+      }
+    ]
+  },
+  "issuer": "https://idp.fixture.test",
+  "audience": "aegis-server"
+}

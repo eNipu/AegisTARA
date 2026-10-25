@@ -39,6 +39,23 @@ jobs:
     name: fmt, clippy, test
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The PostgreSQL store tests (crates/aegis-server/tests/postgres.rs) run
+    # against a throwaway database. The password is a CI-only placeholder for
+    # a container that lives for this job.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+          POSTGRES_DB: aegis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,10 +64,17 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-      # One cache entry holds the cargo registry and git sources plus every
-      # crate's own target/ (no workspace yet). The path list is built with the
-      # same glob as scripts/ci.sh, and the key hashes every crates/*/Cargo.lock,
-      # so a new crate is cached with no workflow edit.
+      # aegis-shell builds Slint's winit backend, whose font code needs the
+      # fontconfig headers and pkg-config. Windowing libraries are loaded at
+      # run time, so nothing else is needed to build and to run the headless
+      # UI tests.
+      - name: Install system libraries for aegis-shell
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
+      # One cache entry holds the cargo registry and git sources plus the
+      # workspace target/ (ADR 0025). The key hashes the root Cargo.lock, so a
+      # new crate or dependency changes the key with no workflow edit.
       - name: List cache paths
         id: crates
         run: |
@@ -60,10 +84,7 @@ jobs:
             echo "$cargo_home/registry/index/"
             echo "$cargo_home/registry/cache/"
             echo "$cargo_home/git/db/"
-            for manifest in crates/*/Cargo.toml; do
-              [ -f "$manifest" ] || continue
-              echo "$(dirname "$manifest")/target/"
-            done
+            echo "target/"
             echo 'CRATES_EOF'
           } >> "$GITHUB_OUTPUT"
       - name: Restore cargo cache
@@ -71,10 +92,12 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.crates.outputs.paths }}
-          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('crates/*/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
       - name: scripts/ci.sh
+        env:
+          AEGIS_TEST_DATABASE_URL: postgres://aegis:aegis@127.0.0.1:5432/aegis_test
         run: scripts/ci.sh
       # Only master writes the cache, and only after a green run. Branches and
       # pull requests restore the master entry but never save their own, so
@@ -122,6 +145,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ env.RUST_MSRV }}
+      # aegis-shell builds Slint's winit backend, whose font code needs the
+      # fontconfig headers and pkg-config. Windowing libraries are loaded at
+      # run time, so nothing else is needed to build and to run the headless
+      # UI tests.
+      - name: Install system libraries for aegis-shell
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
       # Library only: dev-dependencies (divan, proptest) may need a newer
       # compiler than the crate itself. Same discovery rule as scripts/ci.sh.
       - name: cargo check --locked (each crate)

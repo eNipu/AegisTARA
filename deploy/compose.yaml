@@ -1,0 +1,67 @@
+# AegisTARA server with PostgreSQL (job 036, docs/deployment.md).
+#
+#   cp deploy/.env.example deploy/.env      # then edit it
+#   cp /path/to/license.aegis deploy/license.aegis
+#   docker compose -f deploy/compose.yaml --env-file deploy/.env up --build
+#
+# Nothing here is a default secret: every password and identity setting must
+# come from .env, and compose stops with a message if one is missing.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: aegis
+    volumes:
+      - aegis-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis -d aegis"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - backend
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AEGIS_LISTEN: 0.0.0.0:50051
+      # The password must be URL safe (letters, digits, `-`, `_`, `.`).
+      AEGIS_DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres/aegis
+      AEGIS_OIDC_ISSUER: ${AEGIS_OIDC_ISSUER:?set AEGIS_OIDC_ISSUER in deploy/.env}
+      AEGIS_OIDC_AUDIENCE: ${AEGIS_OIDC_AUDIENCE:?set AEGIS_OIDC_AUDIENCE in deploy/.env}
+      AEGIS_PUBLIC_URL: ${AEGIS_PUBLIC_URL:?set AEGIS_PUBLIC_URL in deploy/.env}
+      AEGIS_LICENSE_FILE: /etc/aegis/license.aegis
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./license.aegis:/etc/aegis/license.aegis:ro
+    # Bound to the host's loopback: put a TLS terminating proxy in front.
+    ports:
+      - "127.0.0.1:50051:50051"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+      - edge
+
+networks:
+  # The database is reachable only from the server.
+  backend:
+    internal: true
+  # The server needs to reach the identity provider.
+  edge: {}
+
+volumes:
+  aegis-db: {}

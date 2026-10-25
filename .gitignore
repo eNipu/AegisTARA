@@ -29,3 +29,7 @@ factory/worktrees/
 # cargo-deny fixtures: lock files and build output are generated per run
 tools/deny-fixtures/**/Cargo.lock
 tools/deny-fixtures/**/target/
+
+# Deployment secrets (deploy/compose.yaml)
+deploy/.env
+deploy/license.aegis
