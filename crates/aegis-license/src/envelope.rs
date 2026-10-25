@@ -15,6 +15,8 @@ use ring::signature::{ED25519, UnparsedPublicKey};
 
 use crate::error::LicenseError;
 
+// Used by the issuer and by tests; verification only decodes.
+#[cfg(any(feature = "issuer", test))]
 pub(crate) fn b64_encode(bytes: impl AsRef<[u8]>) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }

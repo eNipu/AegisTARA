@@ -63,7 +63,11 @@ update key, the manifest signing step, and the image checks.
 
 - The image and compose file are not exercised in CI. The authoring
   environment had no container daemon, so the Dockerfile was not built and the
-  compose file was only checked with `docker compose config`. A CI job that
+  compose file was only checked with `docker compose config`. What the image
+  runs was checked natively: `cargo build --release --locked -p aegis-server`
+  takes about 2.5 minutes, gives a 6.0 MB binary, and links only `libc`,
+  `libm` and `libgcc_s`, which the distroless `cc` base provides. The server
+  also starts, refuses to start without a valid license, and logs why. A CI job that
   builds the image is a follow-up for when a runner with a daemon is chosen.
 - A real deployment still needs backlog 037 (TLS to PostgreSQL) and 038
   (`https://` identity provider and update fetching). `docs/deployment.md`
