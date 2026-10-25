@@ -1,0 +1,21 @@
+[package]
+name = "aegis-canvas"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "AegisTARA canvas engine: attack tree layout, hit testing, and a toolkit-neutral display list."
+license.workspace = true
+
+[dependencies]
+aegis-model.workspace = true
+rstar.workspace = true
+
+[dev-dependencies]
+divan.workspace = true
+insta.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "canvas"
+harness = false

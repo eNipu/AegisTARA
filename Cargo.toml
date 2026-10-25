@@ -52,6 +52,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 aegis-model = { path = "crates/aegis-model" }
 aegis-auth = { path = "crates/aegis-auth" }
 aegis-proto = { path = "crates/aegis-proto" }
+aegis-canvas = { path = "crates/aegis-canvas" }
+rstar = "0.12"
+insta = "1"
 
 # Shipped binaries (standards R10). Tests and benches use the dev profile.
 [profile.release]
