@@ -1,0 +1,28 @@
+[package]
+name = "aegis-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "AegisTARA client core: optimistic editing, undo, sync, and the view model. No UI toolkit."
+license.workspace = true
+
+[dependencies]
+aegis-auth.workspace = true
+aegis-canvas.workspace = true
+aegis-model.workspace = true
+aegis-proto.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tower.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+http = "1"
+aegis-auth = { workspace = true, features = ["test-support"] }
+aegis-server.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

@@ -54,6 +54,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-client"
+version = "0.1.0"
+dependencies = [
+ "aegis-auth",
+ "aegis-canvas",
+ "aegis-model",
+ "aegis-proto",
+ "aegis-server",
+ "bytes",
+ "http",
+ "proptest",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "aegis-model"
 version = "0.1.0"
 dependencies = [

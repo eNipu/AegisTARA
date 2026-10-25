@@ -155,9 +155,14 @@ where
                 HeaderValue::from_str(text)
                     .map_err(|_| Box::new(SigningFailed(AuthError::Malformed)) as BoxError)
             };
-            let mut authorization = value(&creds.authorization)?;
-            authorization.set_sensitive(true);
-            headers.insert(http::header::AUTHORIZATION, authorization);
+            if !creds.authorization.is_empty() {
+                let mut authorization = value(&creds.authorization)?;
+                authorization.set_sensitive(true);
+                headers.insert(http::header::AUTHORIZATION, authorization);
+            }
+            for (name, text) in &creds.extra {
+                headers.insert(*name, value(text)?);
+            }
             if let Some(proof) = &creds.dpop {
                 let mut proof = value(proof)?;
                 proof.set_sensitive(true);
@@ -205,6 +210,7 @@ mod tests {
         let creds = Credentials {
             authorization: "DPoP tok".into(),
             dpop: Some("proof".into()),
+            extra: vec![("x-extra", "1".into())],
         };
         let layer = SignRequests::new(Arc::new(Fixed(Ok(creds))), "https://h/");
         let mut service = layer.layer(Echo);
@@ -216,6 +222,7 @@ mod tests {
         assert!(headers["authorization"].is_sensitive());
         assert_eq!(headers["dpop"], "proof");
         assert!(headers["dpop"].is_sensitive());
+        assert_eq!(headers["x-extra"], "1");
     }
 
     #[tokio::test]
@@ -223,6 +230,7 @@ mod tests {
         let creds = Credentials {
             authorization: "Bearer tok".into(),
             dpop: None,
+            extra: Vec::new(),
         };
         let mut service = SignRequests::new(Arc::new(Fixed(Ok(creds))), "https://h").layer(Echo);
         let headers = service

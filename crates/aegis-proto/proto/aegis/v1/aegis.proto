@@ -139,6 +139,9 @@ message Lease {
   string holder = 3;
   // Milliseconds until the lease expires. Renew well before this.
   uint64 expires_in_ms = 4;
+  // The project's sequence number at the moment of the grant. A client whose
+  // copy is older must reopen the project before it edits.
+  uint64 last_seq = 5;
 }
 
 message SubmitOpsRequest {

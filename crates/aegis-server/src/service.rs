@@ -77,6 +77,7 @@ fn lease(project: ProjectId, grant: &Grant) -> pb::Lease {
         token: grant.token.as_str().to_owned(),
         holder: grant.holder.to_string(),
         expires_in_ms: u64::try_from(grant.expires_in.as_millis()).unwrap_or(u64::MAX),
+        last_seq: grant.last_seq,
     }
 }
 

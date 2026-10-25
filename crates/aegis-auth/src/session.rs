@@ -68,6 +68,9 @@ pub struct Credentials {
     pub authorization: String,
     /// Value of the `DPoP` header, for bound tokens.
     pub dpop: Option<String>,
+    /// Further headers to send as they are. Empty in production; the
+    /// development login uses it for its user header.
+    pub extra: Vec<(&'static str, String)>,
 }
 
 impl std::fmt::Debug for Credentials {
@@ -213,11 +216,13 @@ impl<H: HttpClient, S: SecretStore> Session<H, S> {
             Ok(Credentials {
                 authorization: format!("DPoP {}", tokens.access_token),
                 dpop: Some(proof),
+                extra: Vec::new(),
             })
         } else {
             Ok(Credentials {
                 authorization: format!("Bearer {}", tokens.access_token),
                 dpop: None,
+                extra: Vec::new(),
             })
         }
     }
