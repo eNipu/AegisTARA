@@ -30,6 +30,18 @@ impl TrustedKeys {
         Self::parse(include_str!("../keys/vendor.keys")).expect("keys/vendor.keys is well formed")
     }
 
+    /// The keys that may sign update manifests (`keys/update.keys`). A
+    /// different list from [`vendor`](Self::vendor), so a license key cannot
+    /// ship code.
+    ///
+    /// # Panics
+    ///
+    /// If the shipped key file is malformed; a test parses it.
+    #[must_use]
+    pub fn updates() -> Self {
+        Self::parse(include_str!("../keys/update.keys")).expect("keys/update.keys is well formed")
+    }
+
     /// One key, for tests and tools.
     ///
     /// # Errors
@@ -63,7 +75,7 @@ impl TrustedKeys {
                 ));
             };
             check_key_id(id)?;
-            let bytes = crate::license::b64_decode(key)
+            let bytes = crate::envelope::b64_decode(key)
                 .map_err(|_| LicenseError::BadKeyList("a public key is not base64url"))?;
             let key: [u8; 32] = bytes
                 .try_into()
@@ -110,13 +122,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_shipped_key_file_parses() {
+    fn the_shipped_key_files_parse() {
         let _ = TrustedKeys::vendor();
+        let _ = TrustedKeys::updates();
     }
 
     #[test]
     fn parses_comments_and_rejects_bad_lines() {
-        let key = crate::license::b64_encode([7u8; 32]);
+        let key = crate::envelope::b64_encode([7u8; 32]);
         let ok = TrustedKeys::parse(&format!("# c\n\nk1 {key}\n")).expect("parses");
         assert_eq!(ok.get("k1"), Some(&[7u8; 32]));
         assert!(TrustedKeys::parse("k1").is_err());
@@ -128,7 +141,7 @@ mod tests {
 
     #[test]
     fn the_list_is_bounded() {
-        let key = crate::license::b64_encode([1u8; 32]);
+        let key = crate::envelope::b64_encode([1u8; 32]);
         let many: String = (0..=MAX_TRUSTED_KEYS)
             .map(|i| format!("k{i} {key}\n"))
             .collect();

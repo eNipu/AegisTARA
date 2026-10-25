@@ -6,7 +6,13 @@
 //!                    --seats N --days N [--grace-days N] [--feature NAME]...
 //!                    [--start UNIX_SECONDS]
 //! aegis-license inspect FILE --keys KEYS_FILE
+//! aegis-license sign-update --key KEYFILE --key-id ID --in MANIFEST.json
+//! aegis-license inspect-update FILE --keys KEYS_FILE
 //! ```
+//!
+//! `sign-update` reads the manifest as JSON (the `Manifest` fields; its
+//! `kid` is set from `--key-id`) and prints the signed file. Use a different
+//! key for updates than for licenses.
 //!
 //! `sign` prints the license file. `keygen` writes the private key (mode
 //! 0600 where the system has modes) and prints the line for `vendor.keys`.
@@ -14,7 +20,7 @@
 
 use std::process::ExitCode;
 
-use aegis_license::{DAY, Issuer, License, LicenseState, TrustedKeys};
+use aegis_license::{DAY, Issuer, License, LicenseState, Manifest, TrustedKeys};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -62,7 +68,12 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("keygen") => keygen(args),
         Some("sign") => sign(args),
         Some("inspect") => inspect(args),
-        _ => Err("use keygen, sign, or inspect (see the top of this file)".to_owned()),
+        Some("sign-update") => sign_update(args),
+        Some("inspect-update") => inspect_update(args),
+        _ => Err(
+            "use keygen, sign, inspect, sign-update, or inspect-update (see the top of this file)"
+                .to_owned(),
+        ),
     }
 }
 
@@ -157,5 +168,45 @@ fn inspect(args: &[String]) -> Result<(), String> {
         LicenseState::Expired => "expired".to_owned(),
     };
     println!("state:     {state}");
+    Ok(())
+}
+
+fn sign_update(args: &[String]) -> Result<(), String> {
+    let key =
+        std::fs::read(need(args, "--key")?).map_err(|e| format!("cannot read the key: {e}"))?;
+    let issuer = Issuer::from_pkcs8(&key).map_err(|e| e.to_string())?;
+    let path = need(args, "--in")?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{path} is not JSON: {e}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or("the manifest must be a JSON object")?;
+    object.insert("version".into(), 1.into());
+    object.insert("kid".into(), need(args, "--key-id")?.into());
+    let manifest: Manifest =
+        serde_json::from_value(value).map_err(|e| format!("bad manifest: {e}"))?;
+    println!(
+        "{}",
+        issuer.sign_manifest(&manifest).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+fn inspect_update(args: &[String]) -> Result<(), String> {
+    let file = args.get(1).ok_or("inspect-update needs a manifest file")?;
+    let text = std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let keys_text = std::fs::read_to_string(need(args, "--keys")?)
+        .map_err(|e| format!("cannot read the key list: {e}"))?;
+    let keys = TrustedKeys::parse(&keys_text).map_err(|e| e.to_string())?;
+    let manifest = Manifest::verify(&text, &keys).map_err(|e| e.to_string())?;
+    println!("release:   {}", manifest.release);
+    println!("published: {}", manifest.published_at);
+    for a in &manifest.artifacts {
+        println!(
+            "{:<16} {} bytes  {}  {}",
+            a.platform, a.bytes, a.sha256, a.url
+        );
+    }
     Ok(())
 }

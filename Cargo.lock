@@ -190,6 +190,7 @@ dependencies = [
  "bytes",
  "http",
  "proptest",
+ "ring",
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",

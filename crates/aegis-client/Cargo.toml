@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 aegis-auth.workspace = true
+aegis-license.workspace = true
 aegis-canvas.workspace = true
 aegis-model.workspace = true
 aegis-proto.workspace = true
@@ -26,4 +27,5 @@ aegis-auth = { workspace = true, features = ["test-support"] }
 aegis-server.workspace = true
 aegis-license = { workspace = true, features = ["issuer"] }
 proptest.workspace = true
+ring.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

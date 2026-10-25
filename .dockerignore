@@ -1,0 +1,12 @@
+# Keep the build context small and free of local state.
+.git
+target
+spikes
+tools
+docs
+factory
+**/target
+*.png
+.env
+deploy/.env
+deploy/license.aegis

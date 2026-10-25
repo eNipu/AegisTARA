@@ -12,11 +12,9 @@
 //! canonical-JSON problem, and the prefix stops a signature made for another
 //! purpose from being replayed as a license.
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::envelope;
 use crate::error::LicenseError;
 use crate::keys::TrustedKeys;
 
@@ -36,7 +34,8 @@ pub const MAX_SEATS: u32 = 1_000_000;
 /// The start of every license file.
 pub const FILE_PREFIX: &str = "AEGIS-LICENSE-1";
 
-const SIGNED_PREFIX: &[u8] = b"aegis-license-v1\0";
+/// What is put in front of the payload before signing.
+pub(crate) const DOMAIN: &[u8] = b"aegis-license-v1\0";
 const FORMAT_VERSION: u32 = 1;
 const MAX_CUSTOMER_CHARS: usize = 200;
 const MAX_ID: usize = 64;
@@ -44,16 +43,6 @@ const MAX_KID: usize = 32;
 const MAX_FEATURE: usize = 64;
 
 #[cfg(any(feature = "issuer", test))]
-pub(crate) fn b64_encode(bytes: impl AsRef<[u8]>) -> String {
-    URL_SAFE_NO_PAD.encode(bytes)
-}
-
-pub(crate) fn b64_decode(text: &str) -> Result<Vec<u8>, LicenseError> {
-    URL_SAFE_NO_PAD
-        .decode(text)
-        .map_err(|_| LicenseError::Malformed)
-}
-
 /// What a license grants. Times are seconds since the Unix epoch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,21 +109,7 @@ impl License {
     ///
     /// A [`LicenseError`] naming the first thing wrong.
     pub fn verify(file: &str, keys: &TrustedKeys) -> Result<License, LicenseError> {
-        if file.len() > MAX_FILE_BYTES {
-            return Err(LicenseError::TooLarge);
-        }
-        let file = file.trim();
-        let mut parts = file.split('.');
-        let (Some(prefix), Some(payload), Some(signature), None) =
-            (parts.next(), parts.next(), parts.next(), parts.next())
-        else {
-            return Err(LicenseError::Malformed);
-        };
-        if prefix != FILE_PREFIX {
-            return Err(LicenseError::Malformed);
-        }
-        let payload = b64_decode(payload)?;
-        let signature = b64_decode(signature)?;
+        let (payload, signature) = envelope::split(file, FILE_PREFIX, MAX_FILE_BYTES)?;
         // Read the record first only to learn which key signed it. Nothing
         // from it is trusted until the signature checks out.
         let license: License =
@@ -143,12 +118,7 @@ impl License {
             return Err(LicenseError::UnsupportedVersion(license.version));
         }
         let key = keys.get(&license.kid).ok_or(LicenseError::UnknownKey)?;
-        let mut signed = Vec::with_capacity(SIGNED_PREFIX.len() + payload.len());
-        signed.extend_from_slice(SIGNED_PREFIX);
-        signed.extend_from_slice(&payload);
-        UnparsedPublicKey::new(&ED25519, key)
-            .verify(&signed, &signature)
-            .map_err(|_| LicenseError::BadSignature)?;
+        envelope::verify(key, DOMAIN, &payload, &signature)?;
         license.check()?;
         Ok(license)
     }
@@ -229,20 +199,6 @@ impl License {
             .binary_search_by(|f| f.as_str().cmp(name))
             .is_ok()
     }
-
-    /// The bytes that are signed, and the encoded file, for the issuer.
-    #[cfg(feature = "issuer")]
-    pub(crate) fn payload(&self) -> Result<Vec<u8>, LicenseError> {
-        serde_json::to_vec(self).map_err(|_| LicenseError::Signing)
-    }
-
-    #[cfg(feature = "issuer")]
-    pub(crate) fn signed_bytes(payload: &[u8]) -> Vec<u8> {
-        let mut signed = Vec::with_capacity(SIGNED_PREFIX.len() + payload.len());
-        signed.extend_from_slice(SIGNED_PREFIX);
-        signed.extend_from_slice(payload);
-        signed
-    }
 }
 
 /// Letters, digits, `-`, `_` and `.`; non-empty and bounded. Used for IDs and
@@ -253,6 +209,14 @@ fn simple_token(text: &str, max: usize) -> bool {
         && text
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+impl License {
+    /// The JSON that is signed.
+    #[cfg(feature = "issuer")]
+    pub(crate) fn payload(&self) -> Result<Vec<u8>, LicenseError> {
+        serde_json::to_vec(self).map_err(|_| LicenseError::Signing)
+    }
 }
 
 #[cfg(test)]
