@@ -59,6 +59,8 @@ pub enum ServerCode {
     LastAdmin,
     /// The server does not use password login.
     PasswordLoginOff,
+    /// Password login cannot be turned off: the server has no company login.
+    NoCompanyLogin,
     /// Anything else, with the raw code.
     Other(String),
 }
@@ -173,6 +175,7 @@ impl From<tonic::Status> for ClientError {
             "user_exists" => ServerCode::UserExists,
             "last_admin" => ServerCode::LastAdmin,
             "password_login_off" => ServerCode::PasswordLoginOff,
+            "no_company_login" => ServerCode::NoCompanyLogin,
             other => ServerCode::Other(other.to_owned()),
         };
         ClientError::Server {

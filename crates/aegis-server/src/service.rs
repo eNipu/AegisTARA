@@ -74,6 +74,21 @@ impl<S: ProjectStore> AegisService<S> {
         Ok((self.accounts()?, who))
     }
 
+    /// The switch as clients see it. Without password accounts (company
+    /// login only) password login is simply off.
+    fn server_settings(&self) -> pb::ServerSettings {
+        match &self.accounts {
+            Some(a) => pb::ServerSettings {
+                password_login_enabled: a.password_login_enabled(),
+                company_login_available: a.company_login_available(),
+            },
+            None => pb::ServerSettings {
+                password_login_enabled: false,
+                company_login_available: true,
+            },
+        }
+    }
+
     async fn audit(&self, who: &Principal, kind: AuditKind, target: &str, detail: &str) {
         match &self.accounts {
             Some(a) => a.audit(&who.subject, kind, target, detail).await,
@@ -591,6 +606,25 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             )
             .await?;
         Ok(Response::new(pb::ChangePasswordResponse {}))
+    }
+
+    async fn get_server_settings(
+        &self,
+        request: Request<pb::GetServerSettingsRequest>,
+    ) -> Result<Response<pb::ServerSettings>, Status> {
+        Principal::of(&request)?;
+        Ok(Response::new(self.server_settings()))
+    }
+
+    async fn set_password_login(
+        &self,
+        request: Request<pb::SetPasswordLoginRequest>,
+    ) -> Result<Response<pb::ServerSettings>, Status> {
+        let (accounts, who) = self.admin_accounts(&request)?;
+        accounts
+            .set_password_login(&who.subject, request.get_ref().enabled)
+            .await?;
+        Ok(Response::new(self.server_settings()))
     }
 
     async fn list_users(

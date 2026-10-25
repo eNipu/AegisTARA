@@ -67,6 +67,15 @@ service Aegis {
   rpc UpdateUser(UpdateUserRequest) returns (UserInfo);
   rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
 
+  // ---- login switch (job 045, docs/adr/0039-password-login-switch.md) ----
+
+  // Any logged-in user may read the switch.
+  rpc GetServerSettings(GetServerSettingsRequest) returns (ServerSettings);
+  // Admin only. Turning password login off ends every password session at
+  // once. Refused with `no_company_login` when the server has no company
+  // login to fall back on.
+  rpc SetPasswordLogin(SetPasswordLoginRequest) returns (ServerSettings);
+
   // ---- baselines (job 039, docs/adr/0037-baselines-and-reports.md) ----
 
   // Freezes the project's current state under a name. Needs no lease.
@@ -120,6 +129,11 @@ message GetLoginOptionsResponse {
   string oidc_resource = 4;
   // Shown on the login screen, for example the company name.
   string server_name = 5;
+  // True when a user name and password are also accepted. Always true for
+  // PASSWORD, false for DEVELOPMENT, and for OIDC it follows the admin
+  // setting (job 045). A client shows the company login first and offers
+  // the password form only when this is set.
+  bool password_enabled = 6;
 }
 
 message LogInRequest {
@@ -469,4 +483,17 @@ message VerifyAuditResponse {
   // Hash of the last verified op. Export it to a system the database admin
   // cannot write, to detect a full rewrite of the history.
   bytes head_hash = 4;
+}
+
+message GetServerSettingsRequest {}
+
+message ServerSettings {
+  // Password login is accepted now.
+  bool password_login_enabled = 1;
+  // The server has a company login (OIDC), so the switch may be turned off.
+  bool company_login_available = 2;
+}
+
+message SetPasswordLoginRequest {
+  bool enabled = 1;
 }

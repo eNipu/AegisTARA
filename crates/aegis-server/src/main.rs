@@ -7,7 +7,8 @@
 //! |---|---|---|
 //! | `AEGIS_LISTEN` | `127.0.0.1:50051` | Address to serve on |
 //! | `PORT` | unset | Set by hosting platforms (Railway): serve on `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset |
-//! | `AEGIS_AUTH` | from the variables below | `password`, `oidc` or `dev`: how callers log in |
+//! | `AEGIS_AUTH` | from the variables below | `password`, `oidc`, `both` or `dev`: how callers log in. `both` is company login plus password login, which an admin can turn off in the app |
+//! | `AEGIS_PASSWORD_LOGIN` | unset | With `both`: `on` or `off` forces the switch at start (the way back in when the company login is broken) |
 //! | `AEGIS_ADMIN_USERNAME` | `admin` | Password login: name of the first administrator |
 //! | `AEGIS_ADMIN_PASSWORD` | (required while no user exists) | Password login: password of the first administrator, used only when the user table is empty |
 //! | `AEGIS_SESSION_HOURS` | `12` | Password login: how long a session lasts |
@@ -49,7 +50,9 @@ use aegis_server::accounts::{
     AccountBackend, Accounts, AccountsConfig, MemoryAccounts, PostgresAccounts, spawn_purger,
 };
 use aegis_server::auth::Principal;
-use aegis_server::auth_layer::{AuthLayer, Authn, DevAuthn, OidcAuthn, PasswordAuthn, RequestInfo};
+use aegis_server::auth_layer::{
+    AuthLayer, Authn, DevAuthn, HybridAuthn, OidcAuthn, PasswordAuthn, RequestInfo,
+};
 use aegis_server::config::ServerConfig;
 use aegis_server::license::system_clock_arc;
 use aegis_server::methodologies::Methodologies;
@@ -64,6 +67,7 @@ use tracing_subscriber::EnvFilter;
 enum Mode {
     Oidc(OidcAuthn<HyperClient>),
     Password(PasswordAuthn),
+    Both(HybridAuthn<HyperClient>),
     Dev(DevAuthn),
 }
 
@@ -72,6 +76,7 @@ impl Authn for Mode {
         match self {
             Mode::Oidc(a) => a.authenticate(request).await,
             Mode::Password(a) => a.authenticate(request).await,
+            Mode::Both(a) => a.authenticate(request).await,
             Mode::Dev(a) => a.authenticate(request).await,
         }
     }
@@ -82,6 +87,8 @@ impl Authn for Mode {
 enum AuthKind {
     Password,
     Oidc,
+    /// Company login plus password login, which an admin may turn off.
+    Both,
     Dev,
 }
 
@@ -113,8 +120,9 @@ fn auth_kind() -> Result<AuthKind, String> {
     match var("AEGIS_AUTH").as_deref() {
         Some("password") => Ok(AuthKind::Password),
         Some("oidc") => Ok(AuthKind::Oidc),
+        Some("both") => Ok(AuthKind::Both),
         Some("dev" | "development") => Ok(AuthKind::Dev),
-        Some(_) => Err("AEGIS_AUTH must be password, oidc or dev".to_owned()),
+        Some(_) => Err("AEGIS_AUTH must be password, oidc, both or dev".to_owned()),
         None if var("AEGIS_OIDC_ISSUER").is_some() => Ok(AuthKind::Oidc),
         None if var("AEGIS_DEV_AUTH").as_deref() == Some("1") => Ok(AuthKind::Dev),
         None => Err(
@@ -172,7 +180,10 @@ fn server_name() -> String {
 }
 
 /// Opens the password accounts and makes sure an administrator exists.
-async fn password_accounts(backend: AccountBackend) -> Result<Arc<Accounts>, String> {
+async fn password_accounts(
+    backend: AccountBackend,
+    company_login: bool,
+) -> Result<Arc<Accounts>, String> {
     let hours: u64 = match var("AEGIS_SESSION_HOURS") {
         Some(v) => v
             .parse()
@@ -183,6 +194,7 @@ async fn password_accounts(backend: AccountBackend) -> Result<Arc<Accounts>, Str
     };
     let config = AccountsConfig {
         session_ttl: Duration::from_secs(hours * 3600),
+        company_login,
         ..AccountsConfig::default()
     };
     let accounts = Accounts::open(backend, config)
@@ -204,7 +216,25 @@ async fn password_accounts(backend: AccountBackend) -> Result<Arc<Accounts>, Str
             "AEGIS_ADMIN_PASSWORD is ignored: users exist already. Change passwords in the app."
         );
     }
-    tracing::info!(users = accounts.user_count(), "login: password");
+    if company_login {
+        match var("AEGIS_PASSWORD_LOGIN").as_deref() {
+            None => {}
+            Some("on") => accounts
+                .set_password_login("startup", true)
+                .await
+                .map_err(|e| e.to_string())?,
+            Some("off") => accounts
+                .set_password_login("startup", false)
+                .await
+                .map_err(|e| e.to_string())?,
+            Some(_) => return Err("AEGIS_PASSWORD_LOGIN must be on or off".to_owned()),
+        }
+    }
+    tracing::info!(
+        users = accounts.user_count(),
+        enabled = accounts.password_login_enabled(),
+        "login: password"
+    );
     Ok(Arc::new(accounts))
 }
 
@@ -341,8 +371,25 @@ async fn start<S: ProjectStore>(
             let (mode, url, options) = oidc_mode().await?;
             (mode, url, options, None)
         }
+        AuthKind::Both => {
+            let (Mode::Oidc(oidc), url, options) = oidc_mode().await? else {
+                return Err("internal: oidc_mode returned another mode".to_owned());
+            };
+            let accounts = password_accounts(account_backend, true).await?;
+            service = service.with_accounts(Arc::clone(&accounts));
+            tracing::info!("login: company login and password login");
+            (
+                Mode::Both(HybridAuthn {
+                    password: PasswordAuthn(Arc::clone(&accounts)),
+                    oidc,
+                }),
+                url,
+                options,
+                Some(accounts),
+            )
+        }
         AuthKind::Password => {
-            let accounts = password_accounts(account_backend).await?;
+            let accounts = password_accounts(account_backend, false).await?;
             service = service.with_accounts(Arc::clone(&accounts));
             (
                 Mode::Password(PasswordAuthn(Arc::clone(&accounts))),

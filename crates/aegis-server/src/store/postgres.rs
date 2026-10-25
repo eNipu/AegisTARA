@@ -51,6 +51,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
         2,
         include_str!("../../migrations/002_accounts_baselines.sql"),
     ),
+    (3, include_str!("../../migrations/003_settings.sql")),
 ];
 
 /// How the server talks to PostgreSQL.

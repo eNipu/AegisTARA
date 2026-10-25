@@ -295,7 +295,7 @@ async fn migrations_are_idempotent_and_refuse_newer_databases() {
         .query("SELECT version FROM aegis_schema_migration", &[])
         .await
         .expect("rows");
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
 
     // A database migrated by a newer build is refused.
     f.raw
@@ -542,4 +542,42 @@ async fn tls_encrypt_works_and_verify_refuses_a_self_signed_certificate() {
         .err()
         .expect("the certificate is not trusted");
     assert!(matches!(refused, StoreFault::Backend(_)));
+}
+
+#[tokio::test]
+async fn the_password_login_switch_survives_a_restart_in_postgres() {
+    let Some(f) = fresh().await else { return };
+    let backend = || AccountBackend::Postgres(PostgresAccounts::new(f.store.pool(), f.store.org()));
+    let config = || AccountsConfig {
+        company_login: true,
+        ..AccountsConfig::default()
+    };
+    let accounts = Accounts::open(backend(), config()).await.expect("open");
+    assert!(
+        accounts.password_login_enabled(),
+        "on until an admin says otherwise"
+    );
+    accounts
+        .set_password_login("carol", false)
+        .await
+        .expect("off");
+
+    let again = Accounts::open(backend(), config()).await.expect("reopen");
+    assert!(
+        !again.password_login_enabled(),
+        "off stays off after a restart"
+    );
+    again.set_password_login("carol", true).await.expect("on");
+    let third = Accounts::open(backend(), config()).await.expect("reopen");
+    assert!(third.password_login_enabled());
+
+    let events = third.recent_events(10).await.expect("events");
+    let kinds: Vec<_> = events.iter().map(|e| (e.kind, e.detail.as_str())).collect();
+    assert_eq!(
+        kinds,
+        [
+            (AuditKind::PasswordLoginChanged, "on"),
+            (AuditKind::PasswordLoginChanged, "off")
+        ]
+    );
 }

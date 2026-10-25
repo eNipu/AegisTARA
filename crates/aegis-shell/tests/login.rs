@@ -11,6 +11,7 @@ use aegis_server::accounts::{AccountBackend, Accounts, AccountsConfig, MemoryAcc
 use aegis_server::auth_layer::{AuthLayer, PasswordAuthn};
 use aegis_server::config::ServerConfig;
 use aegis_server::methodologies::Methodologies;
+use aegis_server::pb::get_login_options_response::Method;
 use aegis_server::{AegisService, MemoryStore, Registry, server};
 use aegis_shell::AppWindow;
 use aegis_shell::headless::Headless;
@@ -20,6 +21,17 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 
 async fn password_server() -> (String, tokio::sync::oneshot::Sender<()>) {
+    server_with(LoginOptions::password("Test server"), false)
+        .await
+        .0
+}
+
+/// A server whose public login is `options`. With `company_login` the admin
+/// may turn password login off (job 045). Returns the accounts too.
+async fn server_with(
+    options: LoginOptions,
+    company_login: bool,
+) -> ((String, tokio::sync::oneshot::Sender<()>), Arc<Accounts>) {
     let registry = Arc::new(Registry::new(
         Arc::new(MemoryStore::new()),
         Arc::new(Methodologies::builtin().expect("builtin")),
@@ -28,7 +40,10 @@ async fn password_server() -> (String, tokio::sync::oneshot::Sender<()>) {
     let accounts = Arc::new(
         Accounts::open(
             AccountBackend::Memory(MemoryAccounts::new()),
-            AccountsConfig::default(),
+            AccountsConfig {
+                company_login,
+                ..AccountsConfig::default()
+            },
         )
         .await
         .expect("accounts"),
@@ -40,11 +55,8 @@ async fn password_server() -> (String, tokio::sync::oneshot::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let url = format!("http://{}", listener.local_addr().expect("addr"));
     let service = AegisService::new(Arc::clone(&registry)).with_accounts(Arc::clone(&accounts));
-    let public = AccountsService::new(
-        Some(Arc::clone(&accounts)),
-        LoginOptions::password("Test server"),
-    );
-    let auth = AuthLayer::new(Arc::new(PasswordAuthn(accounts)), "");
+    let public = AccountsService::new(Some(Arc::clone(&accounts)), options);
+    let auth = AuthLayer::new(Arc::new(PasswordAuthn(Arc::clone(&accounts))), "");
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(async move {
         server::router(service, public, auth)
@@ -55,7 +67,7 @@ async fn password_server() -> (String, tokio::sync::oneshot::Sender<()>) {
             .await
             .expect("serve");
     });
-    (url, stop)
+    ((url, stop), accounts)
 }
 
 async fn until(
@@ -157,6 +169,107 @@ async fn a_user_logs_in_with_a_password_and_out_again() {
     // Change server: back to the server screen.
     window.invoke_change_server();
     assert_eq!(window.get_connection(), 4);
+
+    drop(launcher);
+    let _ = stop.send(());
+}
+
+/// A server with company login and a password form: the company login leads,
+/// the password form is one click away, and after an admin turns it off the
+/// app shows only the company login (job 045).
+#[tokio::test(flavor = "current_thread")]
+async fn the_password_form_disappears_when_an_admin_turns_it_off() {
+    let options = LoginOptions {
+        method: Method::Oidc,
+        // Nothing listens here: the test never signs in with the company login.
+        oidc_issuer: "http://127.0.0.1:1".into(),
+        oidc_client_id: "app".into(),
+        oidc_resource: String::new(),
+        server_name: "Both ways".into(),
+    };
+    let ((url, stop), accounts) = server_with(options, true).await;
+    let headless = Headless::install(1100, 760);
+    let window = AppWindow::new().expect("window");
+    window
+        .window()
+        .set_size(slint::PhysicalSize::new(1100, 760));
+    let launcher = Launcher::new(
+        &window,
+        tokio::runtime::Handle::current(),
+        None,
+        Arc::new(|| {}),
+    );
+    window.show().expect("show");
+    launcher.start();
+
+    // The company login leads, with a way to the password form.
+    window.invoke_connect_server(url.as_str().into(), 2);
+    until(&headless, &launcher, "company login", || {
+        window.get_connection() == 3 && window.get_login_method() == 0
+    })
+    .await;
+    assert!(window.get_password_also());
+    common_save(&headless.render(), "l04-company-with-password");
+
+    // One click opens the password form; it can go back.
+    window.invoke_use_password_login();
+    assert_eq!(window.get_login_method(), 1);
+    assert!(window.get_password_also());
+    common_save(&headless.render(), "l05-password-with-company");
+    window.invoke_use_company_login();
+    until(&headless, &launcher, "back to company", || {
+        window.get_connection() == 3 && window.get_login_method() == 0
+    })
+    .await;
+
+    // Log in with the password and turn the form off from the admin page.
+    window.invoke_use_password_login();
+    window.invoke_password_log_in("admin".into(), "a long admin password".into(), false);
+    until(&headless, &launcher, "online as admin", || {
+        window.get_connection() == 1 && window.get_is_admin()
+    })
+    .await;
+    window.invoke_create_project("Gateway".into());
+    until(&headless, &launcher, "project", || window.get_has_project()).await;
+    window.invoke_show_page(12);
+    until(&headless, &launcher, "settings loaded", || {
+        window.get_settings_known() && window.get_password_login_on()
+    })
+    .await;
+    assert!(window.get_company_login_available());
+    common_save(&headless.render(), "l06-admin-login-switch");
+    window.invoke_set_password_login(false);
+    until(&headless, &launcher, "switched off", || {
+        !accounts.password_login_enabled()
+    })
+    .await;
+    // The admin's own password session ended with it.
+    until(&headless, &launcher, "login required", || {
+        window.get_connection() == 3
+    })
+    .await;
+
+    // Trying the password form now says why, and shows the company login only.
+    window.invoke_password_log_in("admin".into(), "a long admin password".into(), false);
+    until(&headless, &launcher, "company login only", || {
+        window.get_login_method() == 0 && !window.get_password_also()
+    })
+    .await;
+    assert!(
+        window.get_login_error().contains("turned off"),
+        "{}",
+        window.get_login_error()
+    );
+    common_save(&headless.render(), "l07-company-only");
+
+    // Turned on again, a new connection offers the password form once more.
+    accounts.set_password_login("test", true).await.expect("on");
+    window.invoke_change_server();
+    window.invoke_connect_server(url.as_str().into(), 2);
+    until(&headless, &launcher, "both again", || {
+        window.get_connection() == 3 && window.get_password_also()
+    })
+    .await;
 
     drop(launcher);
     let _ = stop.send(());

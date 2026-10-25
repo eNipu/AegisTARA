@@ -49,7 +49,7 @@ use crate::report::{ExportKind, ReportContext};
 use crate::sample::sample_ops;
 use crate::state::{
     BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, Mode, Notice, PageData, ProjectEntry,
-    ProjectView, Severity, SyncView, UserRow, ViewModel,
+    ProjectView, ServerSettingsView, Severity, SyncView, UserRow, ViewModel,
 };
 use crate::time::format_ms;
 use crate::view::{
@@ -163,6 +163,7 @@ impl Session {
             me: None,
             users: Vec::new(),
             admin_text: None,
+            settings: None,
         });
         let (view_tx, view) = watch::channel(initial);
         let actor = Actor {
@@ -189,6 +190,7 @@ impl Session {
             me: None,
             users: Vec::new(),
             admin_text: None,
+            settings: None,
         };
         let task = tokio::spawn(actor.run());
         (Session { commands, view }, task)
@@ -348,6 +350,8 @@ enum Internal<P> {
         result: Result<(), ClientError>,
     },
     Users(Result<Vec<pb::UserInfo>, ClientError>),
+    Settings(Result<pb::ServerSettings, ClientError>),
+    SettingsSet(Result<pb::ServerSettings, ClientError>),
     AdminDone {
         what: String,
         result: Result<(), ClientError>,
@@ -387,6 +391,7 @@ struct Actor<P: CredentialProvider> {
     me: Option<Me>,
     users: Vec<UserRow>,
     admin_text: Option<String>,
+    settings: Option<ServerSettingsView>,
 }
 
 impl<P: CredentialProvider> Actor<P> {
@@ -735,6 +740,40 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 Err(e) => self.on_failure("Could not load the users", &e),
             },
+            Internal::Settings(result) => match result {
+                Ok(s) => self.settings = Some(settings_view(&s)),
+                Err(e) => self.on_failure("Could not load the server settings", &e),
+            },
+            Internal::SettingsSet(result) => match result {
+                Ok(s) => {
+                    let text = if s.password_login_enabled {
+                        "Password login is on."
+                    } else {
+                        "Password login is off. Everyone logs in with the company account."
+                    };
+                    self.admin_text = Some(text.to_owned());
+                    self.notice(Severity::Info, text);
+                    self.settings = Some(settings_view(&s));
+                    // The server ended every password session, this one too.
+                    // Say so now instead of at the next failed request.
+                    if !s.password_login_enabled
+                        && self.me.as_ref().is_some_and(|m| m.method == "password")
+                    {
+                        self.on_event(Internal::LoggedOut);
+                    }
+                }
+                Err(e) => {
+                    let text = match e.code() {
+                        Some(ServerCode::NoCompanyLogin) => {
+                            "Password login stays on: this server has no company login to use instead."
+                                .to_owned()
+                        }
+                        _ => format!("The login setting was not changed: {e}"),
+                    };
+                    self.admin_text = Some(text.clone());
+                    self.notice(Severity::Error, text);
+                }
+            },
             Internal::AdminDone {
                 what,
                 result,
@@ -789,6 +828,7 @@ impl<P: CredentialProvider> Actor<P> {
                 self.conn = None;
                 self.me = None;
                 self.users.clear();
+                self.settings = None;
                 self.projects.clear();
                 if let Some(hook) = &self.config.on_log_out {
                     (hook.0)();
@@ -835,7 +875,19 @@ impl<P: CredentialProvider> Actor<P> {
         }
     }
 
+    fn load_settings(&self) {
+        if self.me.as_ref().is_some_and(|m| m.admin) {
+            self.spawn(|conn| async move { Internal::Settings(conn.server_settings().await) });
+        }
+    }
+
     fn admin(&self, action: AdminAction) {
+        if let AdminAction::SetPasswordLogin { enabled } = action {
+            self.spawn(move |conn| async move {
+                Internal::SettingsSet(conn.set_password_login(enabled).await)
+            });
+            return;
+        }
         let (what, reload) = match &action {
             AdminAction::CreateUser { username, .. } => (format!("Create user {username}"), true),
             AdminAction::SetAdmin { username, admin } => (
@@ -856,6 +908,7 @@ impl<P: CredentialProvider> Actor<P> {
                 (format!("Set a new password for {username}"), true)
             }
             AdminAction::DeleteUser { username } => (format!("Delete user {username}"), true),
+            AdminAction::SetPasswordLogin { .. } => return,
         };
         self.spawn(move |conn| async move {
             let result = match action {
@@ -898,6 +951,8 @@ impl<P: CredentialProvider> Actor<P> {
                     .await
                     .map(|_| ()),
                 AdminAction::DeleteUser { username } => conn.delete_user(&username).await,
+                // Sent as `Internal::SettingsSet` above; never reaches here.
+                AdminAction::SetPasswordLogin { .. } => Ok(()),
             };
             Internal::AdminDone {
                 what,
@@ -1687,7 +1742,10 @@ impl<P: CredentialProvider> Actor<P> {
             Command::CompareWith(Some(baseline)) => self.compare_with(baseline),
             Command::LoadHistory => self.load_history(),
             Command::Export { kind, path } => self.export(kind, path),
-            Command::LoadUsers => self.load_users(),
+            Command::LoadUsers => {
+                self.load_users();
+                self.load_settings();
+            }
             Command::Admin(action) => self.admin(action),
             Command::BreakLock => {
                 let Some(open) = self.open.as_ref() else {
@@ -1844,7 +1902,10 @@ impl<P: CredentialProvider> Actor<P> {
         match page {
             Page::Versions => self.load_baselines(),
             Page::History => self.load_history(),
-            Page::Admin => self.load_users(),
+            Page::Admin => {
+                self.load_users();
+                self.load_settings();
+            }
             _ => {}
         }
     }
@@ -1999,6 +2060,7 @@ impl<P: CredentialProvider> Actor<P> {
             me: self.me.clone(),
             users: self.users.clone(),
             admin_text: self.admin_text.clone(),
+            settings: self.settings,
         }));
     }
 }
@@ -2095,5 +2157,12 @@ fn entry_of(summary: pb::ProjectSummary) -> ProjectEntry {
         id: summary.project_id,
         name: summary.name,
         methodology: summary.methodology_key,
+    }
+}
+
+fn settings_view(s: &pb::ServerSettings) -> ServerSettingsView {
+    ServerSettingsView {
+        password_login_enabled: s.password_login_enabled,
+        company_login_available: s.company_login_available,
     }
 }

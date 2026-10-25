@@ -93,6 +93,30 @@ impl Authn for PasswordAuthn {
     }
 }
 
+/// Company login and password login side by side (`AEGIS_AUTH=both`, job
+/// 045). A bearer token with the `ats_` prefix is a password session; anything
+/// else goes to OIDC. The prefix cannot appear in a JWT, so one kind of
+/// credential is never tried as the other. When an admin turns password login
+/// off, [`Accounts::authenticate`] answers `None` and password tokens fail.
+pub struct HybridAuthn<H> {
+    /// Password sessions.
+    pub password: PasswordAuthn,
+    /// Company login.
+    pub oidc: OidcAuthn<H>,
+}
+
+impl<H: HttpClient> Authn for HybridAuthn<H> {
+    async fn authenticate(&self, request: &RequestInfo) -> Result<Principal, String> {
+        let is_password =
+            bearer(&request.headers).is_some_and(|t| t.starts_with(crate::accounts::TOKEN_PREFIX));
+        if is_password {
+            self.password.authenticate(request).await
+        } else {
+            self.oidc.authenticate(request).await
+        }
+    }
+}
+
 /// Trusts the `x-aegis-dev-user` header. **Development only**: it checks
 /// nothing. The binary enables it only with `AEGIS_DEV_AUTH=1`.
 pub struct DevAuthn;
