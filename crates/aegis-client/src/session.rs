@@ -90,11 +90,17 @@ pub struct SessionConfig {
     pub transport: crate::transport::TransportKind,
     /// Called after [`Command::LogOut`].
     pub on_log_out: Option<LogOutHook>,
+    /// Longest a `Watch` stream may stay silent before it is treated as
+    /// broken and restarted (R6). The server sends a heartbeat every 20 s,
+    /// so only a dead connection that no one closed (a proxy dropping it
+    /// without a reset) reaches this.
+    pub watch_silence: Duration,
 }
 
 impl SessionConfig {
-    /// Defaults for `user`: system clock, 2 s retry delay, the default
-    /// transport for the server address (decided at start).
+    /// Defaults for `user`: system clock, 2 s retry delay, 60 s watch
+    /// silence, the default transport for the server address (decided at
+    /// start).
     #[must_use]
     pub fn new(user: &str) -> Self {
         SessionConfig {
@@ -103,6 +109,7 @@ impl SessionConfig {
             retry_delay: Duration::from_secs(2),
             transport: crate::transport::TransportKind::Grpc,
             on_log_out: None,
+            watch_silence: Duration::from_secs(60),
         }
     }
 
@@ -1133,6 +1140,7 @@ impl<P: CredentialProvider> Actor<P> {
         }
         let (id, after) = (open.id.clone(), open.ws.confirmed_seq());
         let events = self.events.clone();
+        let silence = self.config.watch_silence;
         open.watch = Some(tokio::spawn(async move {
             let mut stream = match conn.watch(&id, after).await {
                 Ok(s) => s,
@@ -1147,10 +1155,13 @@ impl<P: CredentialProvider> Actor<P> {
                 }
             };
             loop {
-                let item = match stream.message().await {
-                    Ok(Some(event)) => WatchItem::Event(event),
-                    Ok(None) => WatchItem::Ended(None),
-                    Err(status) => WatchItem::Ended(Some(status.into())),
+                let item = match tokio::time::timeout(silence, stream.message()).await {
+                    Ok(Ok(Some(event))) => WatchItem::Event(event),
+                    Ok(Ok(None)) => WatchItem::Ended(None),
+                    Ok(Err(status)) => WatchItem::Ended(Some(status.into())),
+                    Err(_) => WatchItem::Ended(Some(ClientError::Transport(
+                        "no live updates from the server for too long".into(),
+                    ))),
                 };
                 let ended = matches!(item, WatchItem::Ended(_));
                 if events.send(Internal::Watch { epoch, item }).await.is_err() || ended {
