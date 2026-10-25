@@ -8,7 +8,24 @@ A learning project: a Threat Analysis and Risk Assessment (TARA) tool, written f
 - Visual attack trees with feasibility scoring, explain-why for every number, versions and baselines, and executive reports.
 - AI features are planned in the backlog.
 
-Status: direction set. No code yet.
+## Status
+
+The deterministic core is built and verified; the server and desktop client
+are being built on top of it. Roadmap and open items:
+[docs/status-and-roadmap.md](docs/status-and-roadmap.md).
+
+| Crate | Role |
+|---|---|
+| [`aegis-model`](crates/aegis-model) | Domain model, risk engine, analysis, persistence formats |
+
+Every struct, field, and call flow of `aegis-model` is documented in
+[docs/architecture.md](docs/architecture.md). Build and test from the repo
+root:
+
+```sh
+cargo build --workspace
+cargo test --workspace
+```
 
 ## Documents
 
@@ -16,13 +33,15 @@ Status: direction set. No code yet.
 2. [docs/direction-v1.md](docs/direction-v1.md): desktop client, customer-hosted server, login, v1 scope.
 3. [docs/ai-backlog.md](docs/ai-backlog.md): how AI features fit, and in which order.
 4. [docs/engineering-standards.md](docs/engineering-standards.md): coding requirements for performance, data structures, algorithms, and learning.
-5. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
-6. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
+5. [docs/status-and-roadmap.md](docs/status-and-roadmap.md): project status and the handoff roadmap.
+6. [docs/architecture.md](docs/architecture.md): reference for `aegis-model`.
+7. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
+8. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
 
 ## Continuous integration
 
 Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-on each production crate (`crates/*`): `cargo fmt --check`,
+on each production crate (`crates/*`, one Cargo workspace, ADR 0025): `cargo fmt --check`,
 `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`,
 the `cargo-deny` policy below, and `cargo check --locked` at the minimum
 supported Rust version (1.99.1). Rationale: [docs/adr/0007-workspace-ci.md](docs/adr/0007-workspace-ci.md).

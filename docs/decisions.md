@@ -78,7 +78,17 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Why:** AegisTARA is both a product and a way to learn software engineering. Large attack graphs need efficient data layout and incremental algorithms from the start, and every choice should be measured and explained.
 - **Consequence:** Spike code is not promoted to production. Budgets are checked by benchmarks in CI. Every non-trivial choice gets a decision record with numbers.
 
+## D9. Working assumptions while D4 and D7 await the owner
+
+- **Date:** 2026-10-25
+- **Context:** the roadmap (docs/status-and-roadmap.md, G4 and G5) lists D4 and D7 as open. Phases 1 and 2 cannot start without an answer, so the build proceeds on the safest reading of each, and each one is cheap to reverse.
+- **D4 (edit lock):** the interpretation is built as written. Many users share one server, one editor holds a project's lease at a time, others observe read-only. The lease is 2 minutes and is renewed by the client. The lock lives behind one small trait in `aegis-server`, so per-module locks or co-editing replace it without touching the op path.
+- **D7 (Slint):** the shell is built on Slint under the Royalty-free License 2.0. The condition is met by default: the app has an "About Slint" notice, and `docs/release-checklist.md` lists the download-page badge. The Slint crates are the only entry in `deny.toml` `[licenses] exceptions` that is not tooling, it names `slint` and cites this decision, and it applies to `crates/aegis-shell` only. All UI-independent logic lives in `aegis-client`, so switching to iced or buying the commercial license rewrites only `aegis-shell`.
+- **Still needed from the owner:** a yes or no on both. If D7 is rejected, delete `crates/aegis-shell` and its exception.
+- **Housekeeping (G3):** the branches `claude/pipeline-tasks-3ca78e`, `factory/016-store-trees-and-provenance`, `factory/jobs-013-015` and `factory/jobs-017-019` are fully merged into `master` (0 commits ahead, checked 2026-10-25). The mockup content is in `docs/design/`. No local worktree exists. Deleting remote branches is left to the owner.
+
 ## Open
 
-- Confirm D4 interpretation.
-- Accept or reject the Slint attribution condition (D7).
+- Confirm D4 interpretation (working assumption in D9).
+- Accept or reject the Slint attribution condition (D7, working assumption in D9).
+- Delete the four merged remote branches listed in D9.

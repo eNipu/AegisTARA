@@ -47,10 +47,9 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-      # One cache entry holds the cargo registry and git sources plus every
-      # crate's own target/ (no workspace yet). The path list is built with the
-      # same glob as scripts/ci.sh, and the key hashes every crates/*/Cargo.lock,
-      # so a new crate is cached with no workflow edit.
+      # One cache entry holds the cargo registry and git sources plus the
+      # workspace target/ (ADR 0025). The key hashes the root Cargo.lock, so a
+      # new crate or dependency changes the key with no workflow edit.
       - name: List cache paths
         id: crates
         run: |
@@ -60,10 +59,7 @@ jobs:
             echo "$cargo_home/registry/index/"
             echo "$cargo_home/registry/cache/"
             echo "$cargo_home/git/db/"
-            for manifest in crates/*/Cargo.toml; do
-              [ -f "$manifest" ] || continue
-              echo "$(dirname "$manifest")/target/"
-            done
+            echo "target/"
             echo 'CRATES_EOF'
           } >> "$GITHUB_OUTPUT"
       - name: Restore cargo cache
@@ -71,7 +67,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.crates.outputs.paths }}
-          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('crates/*/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
       - name: scripts/ci.sh
