@@ -64,6 +64,8 @@ pub enum Event {
     Op(Arc<Accepted>),
     /// The lease changed hands. Empty holder: the lock is free.
     Lock(Arc<str>),
+    /// The recomputed risks after an accepted batch.
+    Risks(Arc<RiskReport>),
 }
 
 /// A serialized project and the sequence number it is current as of.
@@ -88,10 +90,13 @@ pub struct Subscription {
     pub live: broadcast::Receiver<Event>,
     /// Lease holder at subscription time.
     pub lock_holder: Option<Arc<str>>,
+    /// The risks as of the current sequence number, when the project is
+    /// small enough to send them. Sent after the backlog.
+    pub risks: Option<Arc<RiskReport>>,
 }
 
 /// The official risk of each threat scenario at one sequence number.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RiskReport {
     /// The sequence number the numbers are current as of.
     pub as_of_seq: u64,
@@ -346,6 +351,7 @@ pub fn spawn<S: ProjectStore>(
         idle_check_at: now + config.idle_unload,
         snapshot_every: config.snapshot_every.max(1),
         recent_cap: config.recent_ops,
+        risks_max_threats: config.risks_event_max_threats,
         max_batch: config.max_batch_ops,
         wall_clock: config.wall_clock,
         broken: false,
@@ -383,6 +389,7 @@ struct Actor<S> {
     idle_check_at: Instant,
     snapshot_every: u64,
     recent_cap: usize,
+    risks_max_threats: usize,
     max_batch: usize,
     wall_clock: fn() -> u64,
     /// Memory no longer matches storage; stop and let the next request
@@ -590,6 +597,7 @@ impl<S: ProjectStore> Actor<S> {
             backlog,
             live: self.events.subscribe(),
             lock_holder: self.lease.holder(Instant::now()).cloned(),
+            risks: self.observer_risks(),
         })
     }
 
@@ -676,7 +684,22 @@ impl<S: ProjectStore> Actor<S> {
             }
             self.emit(Event::Op(accepted));
         }
+        // One recomputation per batch, and only when someone is watching.
+        // The cache is incremental, so this reads results that the batch
+        // already invalidated and refilled.
+        if self.events.receiver_count() > 0
+            && let Some(report) = self.observer_risks()
+        {
+            self.emit(Event::Risks(report));
+        }
         Ok(self.seq)
+    }
+
+    /// The risks for observers, or `None` for a project too large to send
+    /// them for. Time O(threats).
+    fn observer_risks(&self) -> Option<Arc<RiskReport>> {
+        (self.project.threat_scenario_count() <= self.risks_max_threats)
+            .then(|| Arc::new(self.risks()))
     }
 
     /// Undoes applied ops, newest first. If an inverse is refused the

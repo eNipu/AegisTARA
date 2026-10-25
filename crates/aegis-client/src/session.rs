@@ -49,7 +49,7 @@ use crate::state::{
     ConnectionView, LicenseView, Mode, Notice, ProjectEntry, ProjectView, Severity, SyncView,
     ViewModel,
 };
-use crate::view::{UiState, inspector, threat_rows, tree_view};
+use crate::view::{UiState, inspector, risks_differ, threat_rows, tree_view, use_server_risks};
 use crate::workspace::{Origin, Workspace, WorkspaceError};
 
 /// Most notices kept.
@@ -126,6 +126,9 @@ impl Session {
             config,
             conn: None,
             info: None,
+            server_risks: None,
+            verified: None,
+            distrusted: None,
             commands: command_rx,
             events,
             event_rx,
@@ -264,6 +267,14 @@ struct Actor<P: CredentialProvider> {
     config: SessionConfig,
     conn: Option<Connection<P>>,
     info: Option<ServerInfo>,
+    /// The latest recomputed risks the server sent, and for which project.
+    server_risks: Option<(String, pb::RisksEvent)>,
+    /// The project and the sequence number at which the local numbers last
+    /// matched the server's.
+    verified: Option<(String, u64)>,
+    /// A project whose local numbers disagreed with the server's: its
+    /// numbers come from the server from then on.
+    distrusted: Option<String>,
     commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Internal<P>>,
     event_rx: mpsc::Receiver<Internal<P>>,
@@ -703,6 +714,7 @@ impl<P: CredentialProvider> Actor<P> {
                 match event.event {
                     Some(Event::Lock(lock)) => self.on_lock_event(&lock.holder),
                     Some(Event::Op(op)) => self.on_remote_op(op),
+                    Some(Event::Risks(risks)) => self.on_server_risks(risks),
                     None => {}
                 }
             }
@@ -719,6 +731,41 @@ impl<P: CredentialProvider> Actor<P> {
         if open.mode == Mode::Editing && holder != me {
             self.lose_lease("An administrator took the edit lock, or it expired.");
         }
+    }
+
+    /// The server's recomputed risks. When they describe exactly the state
+    /// shown here, they are checked against this engine's numbers (accuracy:
+    /// two engines must agree). A difference means one of them is wrong; the
+    /// server's is the official one, so the project is reloaded once and, if
+    /// it persists, the server's numbers are shown.
+    fn on_server_risks(&mut self, risks: pb::RisksEvent) {
+        let engine_ok = self.engine_ok();
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let id = open.id.clone();
+        let comparable = !open.resyncing
+            && open.ws.pending_batches() == 0
+            && risks.as_of_seq == open.ws.confirmed_seq();
+        let differs = engine_ok && comparable && risks_differ(&open.ws, &risks);
+        let verified_seq = risks.as_of_seq;
+        self.server_risks = Some((id.clone(), risks));
+        if !differs {
+            if engine_ok && comparable {
+                self.verified = Some((id, verified_seq));
+            }
+            return;
+        }
+        if self.distrusted.as_deref() == Some(id.as_str()) {
+            return;
+        }
+        self.distrusted = Some(id);
+        tracing::error!("the local risk numbers differ from the server's");
+        self.notice(
+            Severity::Error,
+            "The risk numbers on this computer differ from the server's. The project was reloaded and the server's numbers are shown. Please report this.",
+        );
+        self.resync("the local risks differ from the server's");
     }
 
     fn on_remote_op(&mut self, op: pb::AcceptedOp) {
@@ -1215,9 +1262,21 @@ impl<P: CredentialProvider> Actor<P> {
 
     fn publish(&mut self) {
         self.ensure_selection();
+        let engine_ok = self.engine_ok();
         self.revision += 1;
         let project = self.open.as_ref().map(|open| {
-            let threats = threat_rows(&open.ws);
+            let mut threats = threat_rows(&open.ws);
+            // This engine's numbers are shown, except when it cannot be
+            // trusted: it differs from the server's, or disagreed with it.
+            let distrust = !engine_ok || self.distrusted.as_deref() == Some(open.id.as_str());
+            if distrust
+                && let Some((project, risks)) = &self.server_risks
+                && *project == open.id
+                && risks.as_of_seq == open.ws.confirmed_seq()
+                && open.ws.pending_batches() == 0
+            {
+                use_server_risks(&open.ws, &mut threats, risks);
+            }
             let selected_threat = open
                 .ui
                 .selected_threat
@@ -1243,6 +1302,11 @@ impl<P: CredentialProvider> Actor<P> {
                 can_redo: open.ws.can_redo(),
                 show_residual: open.ui.show_residual,
                 confirmed_seq: open.ws.confirmed_seq(),
+                risks_verified_seq: self
+                    .verified
+                    .as_ref()
+                    .filter(|(project, _)| *project == open.id)
+                    .map(|(_, seq)| *seq),
                 threats,
                 selected_threat,
                 tree,

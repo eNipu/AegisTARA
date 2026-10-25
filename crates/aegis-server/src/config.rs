@@ -31,6 +31,10 @@ pub struct ServerConfig {
     pub chunk_bytes: usize,
     /// Most projects the server hosts.
     pub max_projects: usize,
+    /// Observers are sent recomputed risks only for projects with at most
+    /// this many threat scenarios. Larger projects get ops only, and the
+    /// observer computes its own numbers (R4: bounded event size).
+    pub risks_event_max_threats: usize,
     /// Longest project name, in chars.
     pub max_project_name_chars: usize,
     /// Wall clock in milliseconds since the Unix epoch, for audit
@@ -60,6 +64,7 @@ impl Default for ServerConfig {
             max_open_projects: 256,
             chunk_bytes: 256 * 1024,
             max_projects: 10_000,
+            risks_event_max_threats: 2_000,
             max_project_name_chars: 256,
             wall_clock: system_clock_ms,
         }

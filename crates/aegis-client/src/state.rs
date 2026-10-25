@@ -195,6 +195,9 @@ pub struct ProjectView {
     pub is_empty: bool,
     /// The last sequence number the server confirmed.
     pub confirmed_seq: u64,
+    /// The newest sequence number at which this computer's risk numbers
+    /// were found equal to the server's own. `None` until the first check.
+    pub risks_verified_seq: Option<u64>,
 }
 
 impl ProjectView {

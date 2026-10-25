@@ -11,12 +11,15 @@
 //! workspace at any time. Building it for a project of 2,000 threats reads the
 //! incremental cache, so it costs O(threats), not a re-evaluation.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use aegis_canvas::{LayoutConfig, NodeKind, NodeStyle, Scene, Tone};
 use aegis_model::{
     AttackTree, FeasibilityLevel, GateKind, Methodology, NodeId, NodeIdx, ThreatId, TreeId,
 };
+
+use aegis_proto as pb;
 
 use crate::workspace::Workspace;
 
@@ -125,6 +128,68 @@ fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView>
         label,
         tone: Tone::from_level(index, m.risk_level_count()),
     })
+}
+
+/// The risk keys of every threat as this computer's engine computes them,
+/// by threat ID. Empty keys: not computable. Time O(threats).
+#[must_use]
+pub fn local_risk_keys(ws: &Workspace) -> HashMap<String, (String, String)> {
+    let project = ws.project();
+    let m = project.methodology();
+    let key = |r: Result<&aegis_model::ThreatRisk, _>| {
+        r.ok()
+            .and_then(aegis_model::ThreatRisk::max_risk)
+            .and_then(|l| m.risk_level_key(l))
+            .unwrap_or("")
+            .to_owned()
+    };
+    project
+        .threat_scenarios()
+        .map(|(_, id, _)| {
+            (
+                id.to_string(),
+                (
+                    key(ws.cache().evaluate_risk(project, id)),
+                    key(ws.cache().evaluate_residual_risk(project, id)),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Whether the server's numbers differ from this engine's for the same
+/// project state. Time O(threats).
+#[must_use]
+pub fn risks_differ(ws: &Workspace, server: &pb::RisksEvent) -> bool {
+    let local = local_risk_keys(ws);
+    local.len() != server.threats.len()
+        || server.threats.iter().any(|t| {
+            local
+                .get(&t.threat_id)
+                .is_none_or(|(i, r)| *i != t.inherent_risk || *r != t.residual_risk)
+        })
+}
+
+/// Replaces the risks in `rows` with the server's. For a client whose engine
+/// differs from the server's, or whose own numbers were found wrong.
+pub fn use_server_risks(ws: &Workspace, rows: &mut [ThreatRow], server: &pb::RisksEvent) {
+    let m = ws.project().methodology();
+    let view = |key: &str| {
+        m.risk_level(key)
+            .filter(|_| !key.is_empty())
+            .and_then(|l| risk_view(m, l))
+    };
+    let by_id: HashMap<&str, &pb::ThreatRiskEntry> = server
+        .threats
+        .iter()
+        .map(|t| (t.threat_id.as_str(), t))
+        .collect();
+    for row in rows {
+        if let Some(entry) = by_id.get(row.id.to_string().as_str()) {
+            row.inherent = view(&entry.inherent_risk);
+            row.residual = view(&entry.residual_risk);
+        }
+    }
 }
 
 /// The threat list with inherent and residual risk. Time O(threats), reading

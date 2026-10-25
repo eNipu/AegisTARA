@@ -14,7 +14,7 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use crate::actor::{Accepted, Event, OpenData, Subscription};
+use crate::actor::{Accepted, Event, OpenData, RiskReport, Subscription};
 use crate::auth::Principal;
 use crate::error::ServerError;
 use crate::ids::ProjectId;
@@ -99,7 +99,27 @@ fn watch_event(event: &Event) -> pb::WatchEvent {
             Event::Lock(holder) => E::Lock(pb::LockEvent {
                 holder: holder.to_string(),
             }),
+            Event::Risks(report) => E::Risks(risks_event(report)),
         }),
+    }
+}
+
+fn risk_entries(report: &RiskReport) -> Vec<pb::ThreatRiskEntry> {
+    report
+        .threats
+        .iter()
+        .map(|t| pb::ThreatRiskEntry {
+            threat_id: t.threat.to_string(),
+            inherent_risk: t.inherent.clone().unwrap_or_default(),
+            residual_risk: t.residual.clone().unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn risks_event(report: &RiskReport) -> pb::RisksEvent {
+    pb::RisksEvent {
+        as_of_seq: report.as_of_seq,
+        threats: risk_entries(report),
     }
 }
 
@@ -138,6 +158,7 @@ async fn forward(sub: Subscription, after: u64, out: mpsc::Sender<Result<pb::Wat
         backlog,
         mut live,
         lock_holder,
+        risks,
     } = sub;
     let first = Event::Lock(lock_holder.unwrap_or_else(|| Arc::from("")));
     if out.send(Ok(watch_event(&first))).await.is_err() {
@@ -150,14 +171,28 @@ async fn forward(sub: Subscription, after: u64, out: mpsc::Sender<Result<pb::Wat
             return;
         }
     }
+    // The risks as of now come after the backlog ops they include.
+    if let Some(report) = risks
+        && out
+            .send(Ok(watch_event(&Event::Risks(report))))
+            .await
+            .is_err()
+    {
+        return;
+    }
     loop {
         match live.recv().await {
             Ok(event) => {
-                if let Event::Op(op) = &event {
-                    if op.seq <= last {
-                        continue;
+                match &event {
+                    Event::Op(op) => {
+                        if op.seq <= last {
+                            continue;
+                        }
+                        last = op.seq;
                     }
-                    last = op.seq;
+                    // Numbers older than what the observer has seen are stale.
+                    Event::Risks(report) if report.as_of_seq < last => continue,
+                    Event::Risks(_) | Event::Lock(_) => {}
                 }
                 if out.send(Ok(watch_event(&event))).await.is_err() {
                     return;
@@ -396,15 +431,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             .await?;
         Ok(Response::new(pb::GetRisksResponse {
             as_of_seq: report.as_of_seq,
-            threats: report
-                .threats
-                .into_iter()
-                .map(|t| pb::ThreatRiskEntry {
-                    threat_id: t.threat.to_string(),
-                    inherent_risk: t.inherent.unwrap_or_default(),
-                    residual_risk: t.residual.unwrap_or_default(),
-                })
-                .collect(),
+            threats: risk_entries(&report),
         }))
     }
 }
@@ -447,10 +474,11 @@ mod tests {
         let sub = Subscription {
             backlog: vec![match op_event(3) {
                 Event::Op(a) => a,
-                Event::Lock(_) => unreachable!(),
+                Event::Lock(_) | Event::Risks(_) => unreachable!(),
             }],
             live,
             lock_holder: Some(Arc::from("alice")),
+            risks: None,
         };
         // A live event that the backlog already covers is skipped.
         tx.send(op_event(3)).expect("receiver exists");
@@ -474,6 +502,7 @@ mod tests {
             backlog: vec![],
             live,
             lock_holder: None,
+            risks: None,
         };
         // Ten events into a buffer of two before the observer reads any.
         for seq in 1..=10 {
@@ -494,6 +523,7 @@ mod tests {
             backlog: vec![],
             live,
             lock_holder: None,
+            risks: None,
         };
         let (out, rx) = mpsc::channel(1);
         drop(rx);

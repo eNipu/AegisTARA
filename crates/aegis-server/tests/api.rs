@@ -441,6 +441,11 @@ async fn observers_follow_the_editor_live() {
     // First event: who holds the lock now (nobody).
     let first = watch.message().await.expect("ok").expect("event");
     assert!(matches!(first.event, Some(Event::Lock(l)) if l.holder.is_empty()));
+    // Then the risks as of now: an empty project has none.
+    let event = watch.message().await.expect("ok").expect("event");
+    assert!(
+        matches!(event.event, Some(Event::Risks(r)) if r.as_of_seq == 0 && r.threats.is_empty())
+    );
 
     let lease = lock(&mut alice, &id).await;
     let event = watch.message().await.expect("ok").expect("event");
@@ -458,6 +463,25 @@ async fn observers_follow_the_editor_live() {
         assert_eq!(accepted.actor, "alice");
         assert_eq!(&codec.decode(&accepted.op).expect("decodes"), op);
     }
+    // One risks event per batch, after its ops, equal to what GetRisks says.
+    let event = watch.message().await.expect("ok").expect("event");
+    let Some(Event::Risks(risks)) = event.event else {
+        panic!("expected the risks after the batch");
+    };
+    assert_eq!(risks.as_of_seq, fx.ops.len() as u64);
+    let asked = alice
+        .get_risks(pb::GetRisksRequest {
+            project_id: id.clone(),
+        })
+        .await
+        .expect("risks")
+        .into_inner();
+    assert_eq!(risks.threats, asked.threats);
+    assert_eq!(risks.threats.len(), 1);
+    assert!(
+        !risks.threats[0].inherent_risk.is_empty(),
+        "the fixture is rated"
+    );
 
     alice
         .release_lock(pb::ReleaseLockRequest {
@@ -468,6 +492,94 @@ async fn observers_follow_the_editor_live() {
         .expect("release");
     let event = watch.message().await.expect("ok").expect("event");
     assert!(matches!(event.event, Some(Event::Lock(l)) if l.holder.is_empty()));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_new_observer_gets_the_current_risks_after_the_backlog() {
+    let server = TestServer::start(fast_config()).await;
+    let m = methodology();
+    let codec = OpCodec::new(m.clone());
+    let mut alice = server.client("alice").await;
+    let id = create_project(&mut alice, "p").await;
+    let fx = fixture(&m);
+    let lease = lock(&mut alice, &id).await;
+    submit(&mut alice, &id, &lease, 0, &fx.ops, &codec)
+        .await
+        .expect("accepted");
+
+    let mut watch = alice
+        .watch(pb::WatchRequest {
+            project_id: id.clone(),
+            after_seq: 3,
+        })
+        .await
+        .expect("watch")
+        .into_inner();
+    use pb::watch_event::Event;
+    let mut order = Vec::new();
+    for _ in 0..4 {
+        let event = watch.message().await.expect("ok").expect("event");
+        order.push(match event.event {
+            Some(Event::Lock(_)) => "lock".to_owned(),
+            Some(Event::Op(op)) => format!("op{}", op.seq),
+            Some(Event::Risks(r)) => format!("risks@{}", r.as_of_seq),
+            None => "none".to_owned(),
+        });
+    }
+    assert_eq!(order, ["lock", "op4", "op5", "risks@5"]);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_project_over_the_threat_limit_sends_ops_but_no_risks() {
+    let config = ServerConfig {
+        risks_event_max_threats: 0,
+        ..fast_config()
+    };
+    let server = TestServer::start(config).await;
+    let m = methodology();
+    let codec = OpCodec::new(m.clone());
+    let mut alice = server.client("alice").await;
+    let id = create_project(&mut alice, "p").await;
+    let fx = fixture(&m);
+    let lease = lock(&mut alice, &id).await;
+    // The project now has one threat scenario, which is over the limit of 0.
+    let seq = submit(&mut alice, &id, &lease, 0, &fx.ops, &codec)
+        .await
+        .expect("accepted");
+    let mut watch = alice
+        .watch(pb::WatchRequest {
+            project_id: id.clone(),
+            after_seq: seq,
+        })
+        .await
+        .expect("watch")
+        .into_inner();
+    use pb::watch_event::Event;
+    let first = watch.message().await.expect("ok").expect("event");
+    assert!(matches!(first.event, Some(Event::Lock(_))));
+
+    let rename = Op::RenameAsset {
+        id: fx.asset,
+        name: "Renamed".into(),
+        provenance: Provenance::default(),
+    };
+    submit(&mut alice, &id, &lease, seq, &[rename], &codec)
+        .await
+        .expect("accepted");
+    let next = watch.message().await.expect("ok").expect("event");
+    assert!(matches!(next.event, Some(Event::Op(op)) if op.seq == seq + 1));
+    // No risks event follows.
+    let more = tokio::time::timeout(Duration::from_millis(300), watch.message()).await;
+    assert!(more.is_err(), "no further event: {more:?}");
+    // The pull call still works for such a project.
+    assert!(
+        alice
+            .get_risks(pb::GetRisksRequest { project_id: id })
+            .await
+            .is_ok()
+    );
     server.stop().await;
 }
 
@@ -598,6 +710,7 @@ async fn watch_streams_outlive_the_call_timeout() {
         .expect("watch")
         .into_inner();
     let _ = watch.message().await.expect("ok").expect("lock state");
+    let _ = watch.message().await.expect("ok").expect("risks state");
     // Nothing happens for longer than a short timeout would allow.
     let waited = tokio::time::timeout(Duration::from_millis(300), watch.message()).await;
     assert!(waited.is_err(), "stream is still open and quiet");

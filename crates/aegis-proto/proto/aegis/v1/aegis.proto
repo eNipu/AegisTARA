@@ -193,7 +193,19 @@ message WatchEvent {
   oneof event {
     AcceptedOp op = 1;
     LockEvent lock = 2;
+    // The official recomputed risks. Sent once after the backlog, then once
+    // after every accepted batch, so an observer can check its own numbers
+    // against the server's, or show the server's when its engine differs.
+    RisksEvent risks = 3;
   }
+}
+
+message RisksEvent {
+  // Every op up to this sequence number is included in the numbers.
+  uint64 as_of_seq = 1;
+  // Every threat scenario, in arena order. The full list each time, so an
+  // observer never needs an earlier event to read this one.
+  repeated ThreatRiskEntry threats = 2;
 }
 
 message AcceptedOp {
