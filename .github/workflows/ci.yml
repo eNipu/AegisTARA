@@ -28,6 +28,12 @@ env:
   # Incremental artifacts only help local edit loops; off, the cached target/
   # is smaller and restores faster.
   CARGO_INCREMENTAL: 0
+  # Line tables only: backtraces keep file and line, and the test binaries
+  # that link Slint stay near 250 MB each. With full debug info the runner's
+  # disk filled and the linker died with SIGBUS while linking the
+  # aegis-shell tests (run 37).
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
   # Pinned stable toolchain for fmt, clippy, and test (ADR 0007). Bump it on
   # purpose, in its own commit, so new lints never turn CI red by surprise.
   RUST_TOOLCHAIN: "1.99.1"
