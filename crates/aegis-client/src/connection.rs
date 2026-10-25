@@ -453,6 +453,39 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self.client.clone().update_user(request).await?.into_inner())
     }
 
+    /// The login switch.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn server_settings(&self) -> Result<pb::ServerSettings, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .get_server_settings(pb::GetServerSettingsRequest {})
+            .await?
+            .into_inner())
+    }
+
+    /// Turns password login on or off (admin).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerCode::NoCompanyLogin`](crate::error::ServerCode::NoCompanyLogin)
+    /// when `enabled` is false and the server has no company login, or any
+    /// other [`ClientError`].
+    pub async fn set_password_login(
+        &self,
+        enabled: bool,
+    ) -> Result<pb::ServerSettings, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .set_password_login(pb::SetPasswordLoginRequest { enabled })
+            .await?
+            .into_inner())
+    }
+
     /// Deletes a user (admin).
     ///
     /// # Errors
@@ -654,6 +687,10 @@ pub struct LoginOptions {
     pub method: LoginMethod,
     /// Shown on the login screen.
     pub server_name: String,
+    /// A user name and password are accepted too. For a company login this
+    /// follows the admin setting (job 045); the app offers the password form
+    /// only when it is set.
+    pub password_enabled: bool,
 }
 
 /// A password session as the server opened it.
@@ -711,6 +748,7 @@ impl Public {
         Ok(LoginOptions {
             method,
             server_name: r.server_name,
+            password_enabled: r.password_enabled,
         })
     }
 

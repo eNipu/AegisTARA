@@ -193,6 +193,11 @@ pub enum AdminAction {
         /// The user.
         username: String,
     },
+    /// Turns password login on or off for the whole server (job 045).
+    SetPasswordLogin {
+        /// On or off.
+        enabled: bool,
+    },
 }
 
 /// The user's selection and display choices.

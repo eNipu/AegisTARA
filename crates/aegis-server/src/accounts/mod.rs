@@ -35,6 +35,7 @@ pub mod postgres;
 pub mod service;
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -133,6 +134,8 @@ pub enum AuditKind {
     ProjectDeleted,
     /// Someone created a baseline.
     BaselineCreated,
+    /// An admin turned password login on or off (job 045).
+    PasswordLoginChanged,
 }
 
 impl AuditKind {
@@ -150,6 +153,7 @@ impl AuditKind {
             AuditKind::Export => "export",
             AuditKind::ProjectDeleted => "project_deleted",
             AuditKind::BaselineCreated => "baseline_created",
+            AuditKind::PasswordLoginChanged => "password_login_changed",
         }
     }
 }
@@ -186,6 +190,8 @@ pub struct LoadedAccounts {
     pub users: Vec<UserRecord>,
     /// Every unexpired session.
     pub sessions: Vec<SessionRecord>,
+    /// The stored password login switch, `None` if an admin never set it.
+    pub password_login: Option<bool>,
 }
 
 macro_rules! dispatch {
@@ -243,6 +249,15 @@ impl AccountBackend {
         dispatch!(self, b => b.delete_sessions(keys).await)
     }
 
+    /// Stores the password login switch (job 045).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn put_password_login(&self, enabled: bool) -> Result<(), StoreFault> {
+        dispatch!(self, b => b.put_password_login(enabled).await)
+    }
+
     /// Appends an audit event.
     ///
     /// # Errors
@@ -293,6 +308,12 @@ pub enum AccountError {
     /// The change would leave no enabled admin.
     #[error("the last administrator cannot be removed, disabled or demoted")]
     LastAdmin,
+    /// Password login is switched off on this server.
+    #[error("password login is off on this server")]
+    PasswordLoginOff,
+    /// Password login cannot be turned off: no company login exists.
+    #[error("password login cannot be turned off because this server has no company login")]
+    NoCompanyLogin,
     /// The server holds the most users or sessions it allows.
     #[error("the account limit is reached")]
     Full,
@@ -366,6 +387,9 @@ pub struct AccountsConfig {
     pub hashing_wait: Duration,
     /// Wall clock in milliseconds since the Unix epoch.
     pub clock_ms: fn() -> u64,
+    /// The server also has a company login (OIDC), so an admin may turn
+    /// password login off (job 045).
+    pub company_login: bool,
 }
 
 impl Default for AccountsConfig {
@@ -379,6 +403,7 @@ impl Default for AccountsConfig {
             hashing_permits: 4,
             hashing_wait: Duration::from_secs(5),
             clock_ms: crate::config::system_clock_ms,
+            company_login: false,
         }
     }
 }
@@ -489,6 +514,8 @@ pub struct Accounts {
     hashing: Semaphore,
     decoy: String,
     random: SystemRandom,
+    /// The admin switch. Read on every login and request, so an atomic.
+    password_enabled: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -517,6 +544,7 @@ impl Accounts {
     ) -> Result<Self, AccountError> {
         let now = (config.clock_ms)();
         let loaded = backend.load(now).await?;
+        let password_login = loaded.password_login;
         let decoy = blocking(password::decoy)
             .await?
             .map_err(|_| AccountError::Internal)?;
@@ -537,6 +565,7 @@ impl Accounts {
             throttle: Mutex::new(Throttle::default()),
             decoy,
             random: SystemRandom::new(),
+            password_enabled: AtomicBool::new(password_login.unwrap_or(true)),
         })
     }
 
@@ -649,6 +678,11 @@ impl Accounts {
         let now = self.now();
         // A malformed name is answered like a wrong one, after the same work.
         let name = normalize_username(raw_username).unwrap_or_default();
+        if !self.password_login_enabled() {
+            self.audit(&name, AuditKind::LoginFailed, &name, "password_login_off")
+                .await;
+            return Err(AccountError::PasswordLoginOff);
+        }
         let throttled = lock(&self.throttle).check(&name, now);
         if let Err(retry_after_s) = throttled {
             self.audit(&name, AuditKind::LoginFailed, &name, "throttled")
@@ -720,7 +754,7 @@ impl Accounts {
     /// user is enabled. O(1); no I/O.
     #[must_use]
     pub fn authenticate(&self, token: &str) -> Option<Principal> {
-        if !token.starts_with(TOKEN_PREFIX) || token.len() > 128 {
+        if !self.password_login_enabled() || !token.starts_with(TOKEN_PREFIX) || token.len() > 128 {
             return None;
         }
         let key = SessionKey::of(token);
@@ -733,6 +767,52 @@ impl Accounts {
             admin: user.admin,
             method: AuthMethod::Password,
         })
+    }
+
+    /// Whether a user name and password are accepted now.
+    #[must_use]
+    pub fn password_login_enabled(&self) -> bool {
+        self.password_enabled.load(Ordering::Acquire)
+    }
+
+    /// Whether the server has a company login to fall back on.
+    #[must_use]
+    pub fn company_login_available(&self) -> bool {
+        self.config.company_login
+    }
+
+    /// Turns password login on or off (job 045). Turning it off first
+    /// stores the switch, then refuses new password requests and ends every
+    /// password session. Turning it on changes nothing else.
+    ///
+    /// # Errors
+    ///
+    /// [`AccountError::NoCompanyLogin`] when `enabled` is false and no
+    /// company login exists (the server would lock everyone out), or a
+    /// store fault.
+    pub async fn set_password_login(&self, actor: &str, enabled: bool) -> Result<(), AccountError> {
+        if !enabled && !self.config.company_login {
+            return Err(AccountError::NoCompanyLogin);
+        }
+        self.backend.put_password_login(enabled).await?;
+        self.password_enabled.store(enabled, Ordering::Release);
+        if !enabled {
+            let keys: Vec<SessionKey> = {
+                let mut state = lock(&self.state);
+                let keys = state.sessions.keys().copied().collect();
+                state.sessions.clear();
+                keys
+            };
+            self.backend.delete_sessions(&keys).await?;
+        }
+        self.audit(
+            actor,
+            AuditKind::PasswordLoginChanged,
+            "",
+            if enabled { "on" } else { "off" },
+        )
+        .await;
+        Ok(())
     }
 
     /// The display name of a user, if the user exists.
@@ -1112,6 +1192,78 @@ mod tests {
         Accounts::open(AccountBackend::Memory(MemoryAccounts::new()), config())
             .await
             .expect("open")
+    }
+
+    async fn accounts_with_company_login(company_login: bool) -> Accounts {
+        let config = AccountsConfig {
+            company_login,
+            ..config()
+        };
+        Accounts::open(AccountBackend::Memory(MemoryAccounts::new()), config)
+            .await
+            .expect("open")
+    }
+
+    #[tokio::test]
+    async fn password_login_cannot_be_turned_off_without_a_company_login() {
+        let a = accounts_with_company_login(false).await;
+        a.bootstrap_admin("root", "correct horse battery")
+            .await
+            .expect("admin");
+        assert!(a.password_login_enabled());
+        let err = a
+            .set_password_login("root", false)
+            .await
+            .expect_err("refused");
+        assert!(matches!(err, AccountError::NoCompanyLogin));
+        assert!(a.password_login_enabled());
+        // Turning it on is always fine.
+        a.set_password_login("root", true).await.expect("on");
+    }
+
+    #[tokio::test]
+    async fn turning_password_login_off_ends_sessions_and_refuses_logins() {
+        let a = accounts_with_company_login(true).await;
+        a.bootstrap_admin("root", "correct horse battery")
+            .await
+            .expect("admin");
+        let s = a
+            .log_in("root", "correct horse battery", "t")
+            .await
+            .expect("login");
+        assert!(a.authenticate(&s.token).is_some());
+
+        a.set_password_login("boss", false).await.expect("off");
+        assert!(!a.password_login_enabled());
+        assert!(a.authenticate(&s.token).is_none(), "old session must end");
+        let err = a
+            .log_in("root", "correct horse battery", "t")
+            .await
+            .expect_err("refused");
+        assert!(matches!(err, AccountError::PasswordLoginOff));
+
+        a.set_password_login("boss", true).await.expect("on");
+        let again = a
+            .log_in("root", "correct horse battery", "t")
+            .await
+            .expect("login");
+        assert!(a.authenticate(&again.token).is_some());
+        // The old token stays dead: sessions are not revived.
+        assert!(a.authenticate(&s.token).is_none());
+
+        let events = a.recent_events(20).await.expect("events");
+        let changes: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == AuditKind::PasswordLoginChanged)
+            .map(|e| (e.actor.as_str(), e.detail.as_str()))
+            .collect();
+        assert_eq!(changes, [("boss", "on"), ("boss", "off")]);
+        // A refused login is recorded as a failure with the reason.
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == AuditKind::LoginFailed && e.detail == "password_login_off")
+        );
     }
 
     #[test]

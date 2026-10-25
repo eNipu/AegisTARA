@@ -9,7 +9,11 @@ design is in `docs/adr/0034-release-scaffolding.md`.
 - The signed license file from the vendor (`aegis-license` makes it).
 - A login method: an OIDC identity provider and a client for AegisTARA
   (`AEGIS_AUTH=oidc`), or password login for tests and trials
-  (`AEGIS_AUTH=password` with `AEGIS_ADMIN_PASSWORD`, ADR 0035).
+  (`AEGIS_AUTH=password` with `AEGIS_ADMIN_PASSWORD`, ADR 0035). To start
+  with both and let an administrator turn the password form off later in
+  the app (Administration, "Login"), use `AEGIS_AUTH=both` with the OIDC
+  settings and `AEGIS_ADMIN_PASSWORD` (ADR 0039). If the company login
+  ever breaks, start once with `AEGIS_PASSWORD_LOGIN=on` to get back in.
 - A TLS terminating proxy in front of the server. The server speaks plain
   HTTP/2 and HTTP/1.1 (gRPC-Web) and is bound to the host's loopback by
   default. Proxies that forward only HTTP/1.1 work with gRPC-Web

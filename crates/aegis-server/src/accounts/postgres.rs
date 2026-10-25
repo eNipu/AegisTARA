@@ -72,6 +72,7 @@ fn kind_of(text: &str) -> Option<AuditKind> {
         K::Export,
         K::ProjectDeleted,
         K::BaselineCreated,
+        K::PasswordLoginChanged,
     ]
     .into_iter()
     .find(|k| k.as_str() == text)
@@ -115,7 +116,32 @@ impl PostgresAccounts {
             .iter()
             .map(session_of)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(LoadedAccounts { users, sessions })
+        let password_login = client
+            .query_opt(
+                "SELECT value FROM aegis_setting WHERE org_id = $1 AND key = 'password_login'",
+                &[&self.org],
+            )
+            .await
+            .map_err(backend)?
+            .map(|row| row.get::<_, String>(0) != "off");
+        Ok(LoadedAccounts {
+            users,
+            sessions,
+            password_login,
+        })
+    }
+
+    pub(super) async fn put_password_login(&self, enabled: bool) -> Result<(), StoreFault> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "INSERT INTO aegis_setting (org_id, key, value) VALUES ($1, 'password_login', $2)
+                 ON CONFLICT (org_id, key) DO UPDATE SET value = EXCLUDED.value",
+                &[&self.org, &if enabled { "on" } else { "off" }],
+            )
+            .await
+            .map_err(backend)?;
+        Ok(())
     }
 
     pub(super) async fn put_user(&self, user: &UserRecord) -> Result<(), StoreFault> {

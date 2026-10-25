@@ -70,6 +70,10 @@ pub struct Hooks {
     pub dev_log_in: Option<Box<dyn Fn(String)>>,
     /// Go back to choosing a server.
     pub change_server: Option<Box<dyn Fn()>>,
+    /// Switch from the company login to the password form.
+    pub use_password: Option<Box<dyn Fn()>>,
+    /// Switch from the password form back to the company login.
+    pub use_company: Option<Box<dyn Fn()>>,
     /// The export folder changed.
     pub export_dir_changed: Option<Box<dyn Fn(String)>>,
 }
@@ -314,6 +318,21 @@ impl Controller {
                 h()
             }
         );
+        on!(
+            on_use_password_login,
+            |c| if let Some(h) = &c.hooks.use_password {
+                h()
+            }
+        );
+        on!(
+            on_use_company_login,
+            |c| if let Some(h) = &c.hooks.use_company {
+                h()
+            }
+        );
+        on!(on_set_password_login, |c, enabled| c.send(Command::Admin(
+            AdminAction::SetPasswordLogin { enabled }
+        )));
         on!(on_log_out, |c| c.send(Command::LogOut));
         on!(on_change_password, |c, current, new| c.send(
             Command::ChangePassword {
@@ -1203,6 +1222,11 @@ impl Controller {
                 .collect(),
         ));
         w.set_admin_text(s(view.admin_text.as_deref().unwrap_or("")));
+        w.set_settings_known(view.settings.is_some());
+        if let Some(settings) = view.settings {
+            w.set_password_login_on(settings.password_login_enabled);
+            w.set_company_login_available(settings.company_login_available);
+        }
         self.apply_users();
 
         let Some(project) = view.project.as_ref() else {

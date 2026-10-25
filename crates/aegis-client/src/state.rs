@@ -249,6 +249,15 @@ pub struct Me {
     pub method: String,
 }
 
+/// The server's login switch (job 045), as the administration page shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServerSettingsView {
+    /// Password login is accepted now.
+    pub password_login_enabled: bool,
+    /// The server has a company login, so the switch may be turned off.
+    pub company_login_available: bool,
+}
+
 /// One user on the administration page.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserRow {
@@ -346,6 +355,8 @@ pub struct ViewModel {
     pub users: Vec<UserRow>,
     /// The last result of an administration action, in words.
     pub admin_text: Option<String>,
+    /// The login switch, once an administrator has loaded it.
+    pub settings: Option<ServerSettingsView>,
 }
 
 #[cfg(test)]

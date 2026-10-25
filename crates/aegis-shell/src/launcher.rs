@@ -96,7 +96,9 @@ fn login_error(e: &ClientError) -> String {
             "Too many failed logins. Try again in {} seconds.",
             retry_after_s.unwrap_or(60)
         ),
-        Some(ServerCode::PasswordLoginOff) => "This server does not use password login.".to_owned(),
+        Some(ServerCode::PasswordLoginOff) => {
+            "Password login is off on this server. Use the company login.".to_owned()
+        }
         _ => match e {
             ClientError::Transport(t) => format!("The server cannot be reached: {t}"),
             other => other.to_string(),
@@ -161,7 +163,19 @@ impl Launcher {
         let w3 = weak.clone();
         let w4 = weak.clone();
         let w5 = weak.clone();
+        let w6 = weak.clone();
+        let w7 = weak.clone();
         Hooks {
+            use_password: Some(Box::new(move || {
+                if let Some(l) = w6.upgrade() {
+                    l.use_password();
+                }
+            })),
+            use_company: Some(Box::new(move || {
+                if let Some(l) = w7.upgrade() {
+                    l.use_company();
+                }
+            })),
             log_in: Some(Box::new(move || {
                 if let Some(l) = weak.upgrade() {
                     l.oidc_log_in();
@@ -326,17 +340,8 @@ impl Launcher {
         });
         match options.method {
             LoginMethod::Password => {
-                w.set_login_method(1);
-                let provider = PasswordProvider::new(secrets());
-                if !user.is_empty() {
-                    provider.restore(&url, &user);
-                }
-                let shown = if user.is_empty() {
-                    "you".to_owned()
-                } else {
-                    user
-                };
-                self.start_session(Arc::new(AppProvider::Password(provider)), &shown);
+                w.set_password_also(false);
+                self.begin_password(&w, &url, &user);
             }
             LoginMethod::Oidc {
                 issuer,
@@ -344,6 +349,8 @@ impl Launcher {
                 resource,
             } => {
                 w.set_login_method(0);
+                // Offer the password form only while an admin keeps it on.
+                w.set_password_also(options.password_enabled);
                 let provider = Arc::new(AppProvider::Oidc(OidcProvider::new(OidcSettings {
                     issuer,
                     client_id,
@@ -363,11 +370,49 @@ impl Launcher {
                 });
             }
             LoginMethod::Development => {
+                w.set_password_also(false);
                 w.set_login_method(2);
                 w.set_connection(3);
                 w.set_connection_text("Enter a user name.".into());
             }
         }
+    }
+
+    /// Shows the password form and starts a session that waits for it.
+    fn begin_password(self: &Rc<Self>, w: &AppWindow, url: &str, user: &str) {
+        w.set_login_method(1);
+        let provider = PasswordProvider::new(secrets());
+        if !user.is_empty() {
+            provider.restore(url, user);
+        }
+        let shown = if user.is_empty() { "you" } else { user };
+        self.start_session(Arc::new(AppProvider::Password(provider)), shown);
+    }
+
+    /// "Use a user name and password" on the company login screen.
+    fn use_password(self: &Rc<Self>) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let Some(url) = self.current.borrow().as_ref().map(|c| c.url.clone()) else {
+            return;
+        };
+        w.set_login_error("".into());
+        let user = self.settings.borrow().username.clone();
+        self.begin_password(&w, &url, &user);
+    }
+
+    /// "Use company login" on the password form: ask the server again, so
+    /// a switch an admin turned off meanwhile is respected.
+    fn use_company(self: &Rc<Self>) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let Some(url) = self.current.borrow().as_ref().map(|c| c.url.clone()) else {
+            return;
+        };
+        let transport = w.get_transport_index();
+        self.connect(&url, transport);
     }
 
     fn start_session(self: &Rc<Self>, provider: Arc<AppProvider>, user: &str) {
@@ -463,7 +508,19 @@ impl Launcher {
                     let _ = session.send(Command::Reconnect);
                 }
             }
-            Err(e) => w.set_login_error(login_error(&e).into()),
+            Err(e) => {
+                if matches!(e.code(), Some(ServerCode::PasswordLoginOff)) {
+                    // An admin turned the password form off while this
+                    // screen was open: ask the server again, which shows
+                    // the company login only.
+                    self.use_company();
+                    w.set_login_error(
+                        "Password login was turned off. Log in with your company account.".into(),
+                    );
+                } else {
+                    w.set_login_error(login_error(&e).into());
+                }
+            }
         }
     }
 

@@ -1256,7 +1256,7 @@ without credentials.
 
 | RPC | Purpose |
 |---|---|
-| `GetLoginOptions` | Says how to log in (`password`, `oidc` with issuer and client ID, or `development`) and the server name. |
+| `GetLoginOptions` | Says how to log in (`password`, `oidc` with issuer and client ID, or `development`), the server name, and `password_enabled`: a user name and password are also accepted. For `password` it is true, for `development` false, for `oidc` it follows the admin switch (II.4.3). |
 | `LogIn` | User name + password + client name. Returns a session token, its lifetime and `UserInfo`. Answers `UNAUTHENTICATED` with one fixed message for every failure, and `RESOURCE_EXHAUSTED` with `retry-after` when throttled. |
 
 **`Aegis`** needs a principal on every call.
@@ -1273,6 +1273,7 @@ without credentials.
 | Exports | `RecordExport` (writes an audit event; the file is made on the client) |
 | Me | `WhoAmI`, `LogOut`, `ChangePassword` |
 | Users (admin) | `ListUsers`, `CreateUser`, `UpdateUser`, `DeleteUser` |
+| Login switch | `GetServerSettings` (any logged-in user), `SetPasswordLogin` (admin). `ServerSettings { password_login_enabled, company_login_available }` |
 
 `Watch` sends a `Heartbeat` every `heartbeat` (default 20 s) so proxies that
 close idle streams keep the connection open. The client restarts a stream
@@ -1322,7 +1323,7 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `server.rs` | `Layers<A>`, `builder()`, `router()` | See II.4.1. |
 | `health.rs` | `HealthLayer`, `Health<S>` | Answers `GET /healthz` before any other layer. |
 | `auth.rs` | `AuthMethod { Oidc, Password, Dev }`, `Principal { subject, admin, method }` | The principal is what every handler sees. |
-| `auth_layer.rs` | `RequestInfo { headers, method, url }`, trait `Authn`, `OidcAuthn<H>`, `PasswordAuthn(Arc<Accounts>)`, `DevAuthn`, `AuthLayer<A>`, `Authenticated<A, S>` | Static dispatch over the method (D11). |
+| `auth_layer.rs` | `RequestInfo { headers, method, url }`, trait `Authn`, `OidcAuthn<H>`, `PasswordAuthn(Arc<Accounts>)`, `HybridAuthn<H>`, `DevAuthn`, `AuthLayer<A>`, `Authenticated<A, S>` | Static dispatch over the method (D11). |
 | `accounts/mod.rs` | `Accounts`, `AccountBackend { Memory, Postgres }`, `UserRecord`, `SessionRecord`, `SessionKey`, `AuditKind`, `AuditEvent`, `AccountsConfig`, `NewSession`, `UserUpdate`, `LoadedAccounts`, `AccountError` | Users and sessions, see II.4.3. |
 | `accounts/password.rs` | `PasswordRule`, `hash()`, `verify()`, `decoy()` | Argon2id: 19 MiB, 2 passes, 1 lane. At least 10 characters, at most 256 bytes. |
 | `accounts/memory.rs`, `accounts/postgres.rs` | `MemoryAccounts`, `PostgresAccounts` | Storage backends. Postgres shares the project store's pool. |
@@ -1399,6 +1400,7 @@ classDiagram
         hashing_permits = 4
         hashing_wait = 5 s
         clock_ms: fn() -> u64
+        company_login = false
     }
     Accounts --> State
     Accounts --> AccountsConfig
@@ -1423,7 +1425,22 @@ Rules the code follows:
   Disabling a user or changing a password ends that user's sessions.
 - **Audit.** `AuditKind`: `login_ok`, `login_failed`, `logout`,
   `password_changed`, `user_created`, `user_updated`, `user_deleted`,
-  `export`, `project_deleted`, `baseline_created`. Never a password or token.
+  `export`, `project_deleted`, `baseline_created`,
+  `password_login_changed`. Never a password or token.
+- **Login switch (job 045, ADR 0039).** `AEGIS_AUTH=both` runs the company
+  login (OIDC) and password login side by side: `HybridAuthn` sends a bearer
+  token with the `ats_` prefix to `PasswordAuthn` and everything else to
+  `OidcAuthn`. `Accounts` holds an `AtomicBool` `password_enabled`
+  (default on, stored as the `password_login` row of `aegis_setting`, loaded
+  by `LoadedAccounts.password_login`). `set_password_login` first stores the
+  value; when turning off it also deletes every session. While off,
+  `authenticate` answers `None` and `log_in` answers
+  `AccountError::PasswordLoginOff` (`password_login_off`,
+  `FAILED_PRECONDITION`). Turning it off without
+  `AccountsConfig.company_login` is refused as `NoCompanyLogin`
+  (`no_company_login`), so nobody locks the server. `AEGIS_PASSWORD_LOGIN=on|off`
+  forces the value at start, the way back in if the company login breaks.
+  With `AEGIS_AUTH=oidc` there are no accounts and the form is always off.
 
 ### II.4.4 Limits (`ServerConfig`)
 
@@ -1502,6 +1519,11 @@ erDiagram
         bigint expires_ms
         text client_name
     }
+    aegis_setting {
+        uuid org_id PK
+        text key PK
+        text value
+    }
     aegis_event {
         bigint event_id PK
         uuid org_id
@@ -1514,7 +1536,9 @@ erDiagram
 ```
 
 Migrations: `001_init.sql` (projects and ops), `002_accounts_baselines.sql`
-(users, sessions, events, baselines, op time index). Deleting a project
+(users, sessions, events, baselines, op time index), `003_settings.sql`
+(`aegis_setting`: key and value per organization; today only
+`password_login` = `on` or `off`, no row means on). Deleting a project
 deletes its baselines and ops in one transaction.
 
 ### II.4.6 Seat restore
@@ -1533,15 +1557,15 @@ ops inside the window, from the `aegis_project_op_time` index) and calls
 | Module | Types | Notes |
 |---|---|---|
 | `transport.rs` | `TransportKind { Grpc, GrpcWeb }`, `Transport { Grpc(Channel), Web { client, origin } }`, `check_url()` | `auto`: gRPC-Web for `https://`, gRPC otherwise. HTTPS uses rustls with the OS trust store. `CONNECT_TIMEOUT = 10 s`, `CALL_TIMEOUT = 30 s`. |
-| `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` holds the token and sends it as `authorization: Bearer`. |
+| `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name, password_enabled }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` holds the token and sends it as `authorization: Bearer`. |
 | `error.rs` | `ClientError`, `ServerCode` | `ServerCode` maps status details to cases the UI can explain (`InvalidCredentials`, `Throttled { retry_after_s }`, `PasswordLoginOff`, `LockHeld`, ...). |
 | `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, watch_silence }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
 | `workspace.rs` | `Workspace`, `Submission`, `Origin`, `WorkspaceError`, `MAX_SUBMIT_OPS` | Optimistic local copy. Local ops apply at once and are kept with their inverses until the server confirms. Pending ops are sent in batches of at most `MAX_SUBMIT_OPS`, so a long offline queue is never rejected as too large. |
 | `commands.rs` | `Edit`, `EditError`, `Command` | `Edit` is a user intent (add asset, rate a step, link a control, ...). It expands to model `Op`s, including safe cascades (deleting an asset first unlinks what uses it). `Command` is everything the UI can ask of the session. |
 | `outline.rs` | `OutlineError`, `parse()`, `render()` | Text outline editor for attack trees (indent = child, `OR`/`AND`/`SEQ` gates, `- ` steps; lines with the same text are one shared node). |
 | `pages.rs` | `Vocabulary`, `Overview`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
-| `view.rs` | `Page` (13 pages), `Selection`, `AdminAction`, `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice` | What the window shows for the current page and selection. |
-| `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow` | The whole UI state, published on a `watch` channel. |
+| `view.rs` | `Page` (13 pages), `Selection`, `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice` | What the window shows for the current page and selection. |
+| `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView` | The whole UI state, published on a `watch` channel. |
 | `report.rs` | `ExportKind { Report, RiskRegister, TreeSvg }`, `ReportContext` | Builds export files on the client. Text is escaped for HTML and CSV (formula injection guarded). |
 | `settings.rs` | `Settings { server_url, transport, username, export_dir }`, `export_file_name()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic write. Never a password or token. |
 | `time.rs` | `date_ms()`, `date_time_ms()` | UTC dates without a time crate. |
@@ -1613,6 +1637,7 @@ sequenceDiagram
     L->>P: GetLoginOptions
     P-->>L: Password, server name
     L-->>U: password form
+    Note over L,U: With a company login and password_enabled the company<br/>login leads and "Use a user name and password" opens this form.<br/>"Use company login" asks the server again.
     U->>L: user, password, keep me logged in
     L->>P: LogIn
     P->>A: log_in (throttle, Argon2id, decoy)

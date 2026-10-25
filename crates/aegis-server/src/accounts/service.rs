@@ -14,6 +14,7 @@ use tonic::{Code, Request, Response, Status};
 use super::{AccountError, Accounts, UserRecord};
 use crate::error::ERROR_CODE_HEADER;
 use crate::pb;
+use crate::pb::get_login_options_response::Method;
 
 /// Path prefix of the public service, which the authentication layer lets
 /// through.
@@ -113,6 +114,8 @@ impl AccountError {
             AccountError::UnknownUser => "unknown_user",
             AccountError::UserExists => "user_exists",
             AccountError::LastAdmin => "last_admin",
+            AccountError::PasswordLoginOff => "password_login_off",
+            AccountError::NoCompanyLogin => "no_company_login",
             AccountError::Full => "account_limit",
             AccountError::Busy => "busy",
             AccountError::Store(_) => "storage",
@@ -129,7 +132,9 @@ impl AccountError {
             | AccountError::InvalidDisplayName => Code::InvalidArgument,
             AccountError::UnknownUser => Code::NotFound,
             AccountError::UserExists => Code::AlreadyExists,
-            AccountError::LastAdmin => Code::FailedPrecondition,
+            AccountError::LastAdmin
+            | AccountError::PasswordLoginOff
+            | AccountError::NoCompanyLogin => Code::FailedPrecondition,
             AccountError::Busy | AccountError::Store(_) => Code::Unavailable,
             AccountError::Internal => Code::Internal,
         }
@@ -177,6 +182,14 @@ impl pb::accounts_server::Accounts for AccountsService {
             oidc_client_id: o.oidc_client_id.clone(),
             oidc_resource: o.oidc_resource.clone(),
             server_name: o.server_name.clone(),
+            password_enabled: match o.method {
+                Method::Password => true,
+                Method::Development | Method::Unspecified => false,
+                Method::Oidc => self
+                    .accounts
+                    .as_ref()
+                    .is_some_and(|a| a.password_login_enabled()),
+            },
         }))
     }
 

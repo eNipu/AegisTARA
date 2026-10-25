@@ -14,6 +14,7 @@ struct Inner {
     users: BTreeMap<String, UserRecord>,
     sessions: HashMap<SessionKey, SessionRecord>,
     events: VecDeque<AuditEvent>,
+    password_login: Option<bool>,
 }
 
 /// Accounts in memory.
@@ -45,7 +46,13 @@ impl MemoryAccounts {
                 .filter(|s| s.expires_ms > now_ms)
                 .cloned()
                 .collect(),
+            password_login: inner.password_login,
         })
+    }
+
+    pub(super) async fn put_password_login(&self, enabled: bool) -> Result<(), StoreFault> {
+        self.inner().password_login = Some(enabled);
+        Ok(())
     }
 
     pub(super) async fn put_user(&self, user: &UserRecord) -> Result<(), StoreFault> {

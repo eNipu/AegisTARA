@@ -132,6 +132,10 @@ async fn login_options_and_wrong_passwords() {
         let options = public.login_options().await.expect("options");
         assert_eq!(options.method, LoginMethod::Password);
         assert_eq!(options.server_name, "Test");
+        assert!(
+            options.password_enabled,
+            "a password server accepts passwords"
+        );
         let wrong = public
             .log_in("admin", "not the password", "test")
             .await
@@ -338,5 +342,27 @@ async fn admins_manage_users_and_users_change_their_password() {
     let last = admin.delete_user("admin").await.expect_err("own account");
     assert!(matches!(last, ClientError::Server { .. }));
     admin.delete_user("bob").await.expect("delete bob");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn the_login_switch_is_read_and_refused_without_a_company_login() {
+    let server = TestServer::start().await;
+    let (conn, _login) = server
+        .log_in(TransportKind::Grpc, "admin", ADMIN_PASSWORD)
+        .await;
+    let settings = conn.server_settings().await.expect("settings");
+    assert!(settings.password_login_enabled);
+    assert!(!settings.company_login_available);
+    // This server has no company login, so the switch must stay on, and the
+    // client gets a code it can word for the administrator.
+    let err = conn.set_password_login(false).await.expect_err("refused");
+    assert_eq!(code(&err), Some(&ServerCode::NoCompanyLogin));
+    assert!(
+        conn.server_settings()
+            .await
+            .expect("again")
+            .password_login_enabled
+    );
     server.stop().await;
 }

@@ -31,7 +31,9 @@ Run this list for every release build. Tick each line in the release notes.
 - [ ] `AEGIS_DEV_AUTH` and `AEGIS_DEV_LICENSE` are unset in the customer's
       environment.
 - [ ] The customer's login method is agreed: company SSO (`AEGIS_AUTH=oidc`)
-      or, for a trial only, password login (decision D10).
+      or, for a trial only, password login (decision D10). A trial that moves
+      to SSO runs `AEGIS_AUTH=both` and an admin turns password login off in
+      the app (ADR 0039); check the app then shows only the company login.
 - [ ] `aegis-license inspect` reads a license made with the production key
       against the shipped `vendor.keys`.
 
