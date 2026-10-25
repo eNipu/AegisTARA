@@ -20,6 +20,7 @@
 
 pub mod actor;
 pub mod auth;
+pub mod auth_layer;
 pub mod config;
 pub mod error;
 pub mod ids;
@@ -38,8 +39,5 @@ pub use registry::Registry;
 pub use service::AegisService;
 pub use store::{MemoryStore, PostgresStore, ProjectStore};
 
-/// Generated protobuf messages and the gRPC service and client.
-#[allow(missing_docs, clippy::all, clippy::pedantic)]
-pub mod pb {
-    tonic::include_proto!("aegis.v1");
-}
+/// The generated protobuf messages and gRPC service (the `aegis-proto` crate).
+pub use aegis_proto as pb;
