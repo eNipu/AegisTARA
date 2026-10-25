@@ -1250,6 +1250,99 @@ impl<W: Write> OpLogWriter<W> {
 }
 
 // ---------------------------------------------------------------------------
+// Single-op codec.
+// ---------------------------------------------------------------------------
+
+/// Encodes and decodes one [`Op`] at a time, in the same JSON shape as the
+/// `op` member of an op log record: `{"op":"add_asset","id":...}`.
+///
+/// This is the wire form for ops outside a log file: a client submitting an
+/// op to the server, or a database row holding one. It shares the encoder
+/// and the strict, capped decoder of [`OpLogWriter`] and [`OpLogReader`], so
+/// there is one definition of what a valid op looks like (R3: caps before
+/// allocation, vocabulary keys resolved while decoding). The bytes carry no
+/// `seq` and no trailing newline.
+///
+/// Build one per methodology and reuse it: [`new`](Self::new) sorts the
+/// methodology's keys once.
+///
+/// ```
+/// use std::sync::Arc;
+/// use aegis_model::{AssetId, Methodology, Op, OpCodec};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let codec = OpCodec::new(Arc::new(Methodology::iso21434_r155()?));
+/// let op = Op::RemoveAsset { id: AssetId::new_v7() };
+/// let bytes = codec.encode(&op)?;
+/// assert_eq!(codec.decode(&bytes)?, op);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct OpCodec {
+    m: Arc<Methodology>,
+    order: KeyOrder,
+}
+
+impl OpCodec {
+    /// Builds a codec for `m`. Time O(m log m), m = methodology size.
+    #[must_use]
+    pub fn new(m: Arc<Methodology>) -> Self {
+        let order = KeyOrder::new(&m);
+        OpCodec { m, order }
+    }
+
+    /// The methodology this codec resolves keys against. Time O(1).
+    #[must_use]
+    pub fn methodology(&self) -> &Arc<Methodology> {
+        &self.m
+    }
+
+    /// Encodes `op` as canonical JSON: the same op always gives the same
+    /// bytes (P4). Time O(k log k), space O(k), k = size of the op.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::UnencodableOp`] if an index in the op is not in this
+    /// codec's methodology, an impact category is repeated, a name or list
+    /// is over its decode cap, or the encoding would exceed
+    /// [`MAX_OP_RECORD_BYTES`](crate::MAX_OP_RECORD_BYTES).
+    pub fn encode(&self, op: &Op) -> Result<Vec<u8>, StoreError> {
+        if !within_caps(op) {
+            return Err(StoreError::UnencodableOp);
+        }
+        let mut buf = Vec::new();
+        serde_json::to_writer(&mut buf, &op_view(&self.m, &self.order, op))
+            .map_err(wire::encode_error)?;
+        if buf.len() > MAX_OP_RECORD_BYTES {
+            return Err(StoreError::UnencodableOp);
+        }
+        Ok(buf)
+    }
+
+    /// Decodes one op. Decoding is strict (unknown, missing, and repeated
+    /// fields, and trailing data, are errors) and capped while it runs.
+    /// The op is not checked against a project; pass it to
+    /// [`Project::validate`](crate::Project::validate) or
+    /// [`Project::apply`](crate::Project::apply). Time O(bytes + k log k).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::LimitExceeded`] if `bytes` is longer than
+    /// [`MAX_OP_RECORD_BYTES`](crate::MAX_OP_RECORD_BYTES) or a field is
+    /// over its cap; [`StoreError::Decode`] (position only, never input
+    /// text) for malformed JSON or unknown fields; the vocabulary errors of
+    /// [`StoreError`] for unknown keys.
+    pub fn decode(&self, bytes: &[u8]) -> Result<Op, StoreError> {
+        if bytes.len() > MAX_OP_RECORD_BYTES {
+            return Err(StoreError::LimitExceeded(Limit::OP_RECORD));
+        }
+        let wire: OpWire = wire::from_slice(&self.m, bytes, Some(1))?;
+        op_from_wire(&self.m, wire)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Reader.
 // ---------------------------------------------------------------------------
 
@@ -1552,5 +1645,68 @@ mod tests {
             id: testkit::asset_id(1),
         };
         assert!(matches!(log.append(&op), Err(StoreError::UnencodableOp)));
+    }
+    #[test]
+    fn codec_round_trips_and_matches_the_record_op_member() {
+        let m = testkit::builtin();
+        let codec = OpCodec::new(Arc::clone(&m));
+        let op = Op::AddAsset {
+            id: testkit::asset_id(1),
+            name: "Brake ECU".into(),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        };
+        let bytes = codec.encode(&op).expect("encodes");
+        assert_eq!(codec.decode(&bytes).expect("decodes"), op);
+        assert_eq!(codec.encode(&op).expect("encodes"), bytes);
+
+        // The bare op is exactly the `op` member of the log record.
+        let mut record = Vec::new();
+        encode_record(&mut record, &m, &KeyOrder::new(&m), 7, &op).expect("encodes");
+        let expected = format!("{{\"seq\":7,\"op\":{}}}\n", String::from_utf8_lossy(&bytes));
+        assert_eq!(String::from_utf8(record).expect("utf8"), expected);
+    }
+
+    #[test]
+    fn codec_decode_is_strict_and_capped() {
+        let codec = OpCodec::new(testkit::builtin());
+        let id = testkit::asset_id(1);
+        let good = format!("{{\"op\":\"remove_asset\",\"id\":\"{id}\"}}");
+        assert!(codec.decode(good.as_bytes()).is_ok());
+        for bad in [
+            format!("{good} "),
+            format!("{good}x"),
+            format!("{{\"op\":\"remove_asset\",\"id\":\"{id}\",\"extra\":1}}"),
+            "{\"op\":\"no_such_op\"}".to_string(),
+            String::new(),
+        ] {
+            let result = codec.decode(bad.as_bytes());
+            // Trailing whitespace is JSON-legal; everything else is an error.
+            if bad.ends_with(' ') {
+                assert!(result.is_ok(), "{bad}");
+            } else {
+                assert!(matches!(result, Err(StoreError::Decode { .. })), "{bad}");
+            }
+        }
+        let long = vec![b' '; MAX_OP_RECORD_BYTES + 1];
+        assert!(matches!(
+            codec.decode(&long),
+            Err(StoreError::LimitExceeded(Limit::OpRecordBytes { .. }))
+        ));
+    }
+
+    #[test]
+    fn codec_refuses_foreign_indices() {
+        let codec = OpCodec::new(testkit::second());
+        let wide = testkit::wide();
+        let foreign = Op::SetAssetProperties {
+            id: testkit::asset_id(1),
+            properties: wide.all_properties(),
+            provenance: Provenance::default(),
+        };
+        assert!(matches!(
+            codec.encode(&foreign),
+            Err(StoreError::UnencodableOp)
+        ));
     }
 }
