@@ -48,8 +48,8 @@ use crate::pages;
 use crate::report::{ExportKind, ReportContext};
 use crate::sample::sample_ops;
 use crate::state::{
-    BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, Mode, Notice, PageData, ProjectEntry,
-    ProjectView, ServerSettingsView, Severity, SyncView, UserRow, ViewModel,
+    BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, Mode, Notice, NumbersCheck, PageData,
+    ProjectEntry, ProjectView, ServerSettingsView, Severity, SyncView, UserRow, ViewModel,
 };
 use crate::time::format_ms;
 use crate::view::{
@@ -1279,21 +1279,39 @@ impl<P: CredentialProvider> Actor<P> {
     /// server's is the official one, so the project is reloaded once and, if
     /// it persists, the server's numbers are shown.
     fn on_server_risks(&mut self, risks: pb::RisksEvent) {
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        self.server_risks = Some((open.id.clone(), risks));
+        self.compare_server_risks();
+    }
+
+    /// Compares the newest server numbers with this computer's, if they
+    /// describe exactly the state shown. Runs when the server's numbers
+    /// arrive and again when one of our own batches is confirmed: the
+    /// server's numbers for a change can arrive on the `Watch` stream a
+    /// moment before the answer to our `SubmitOps`, and a comparison that
+    /// ran only once would then never happen for an editor's own edits.
+    /// O(threats).
+    fn compare_server_risks(&mut self) {
         let engine_ok = self.engine_ok();
         let Some(open) = self.open.as_ref() else {
             return;
         };
-        let id = open.id.clone();
-        let comparable = !open.resyncing
+        let Some((project, risks)) = self.server_risks.as_ref() else {
+            return;
+        };
+        let comparable = *project == open.id
+            && !open.resyncing
             && open.ws.pending_batches() == 0
             && risks.as_of_seq == open.ws.confirmed_seq();
-        let differs = engine_ok && comparable && risks_differ(&open.ws, &risks);
+        if !engine_ok || !comparable {
+            return;
+        }
+        let id = open.id.clone();
         let verified_seq = risks.as_of_seq;
-        self.server_risks = Some((id.clone(), risks));
-        if !differs {
-            if engine_ok && comparable {
-                self.verified = Some((id, verified_seq));
-            }
+        if !risks_differ(&open.ws, risks) {
+            self.verified = Some((id, verified_seq));
             return;
         }
         if self.distrusted.as_deref() == Some(id.as_str()) {
@@ -1586,6 +1604,7 @@ impl<P: CredentialProvider> Actor<P> {
                     return;
                 }
                 self.pump();
+                self.compare_server_risks();
                 self.finish_ending();
             }
             Err(e) => self.on_submit_failed(epoch, &e),
@@ -1995,6 +2014,21 @@ impl<P: CredentialProvider> Actor<P> {
             {
                 use_server_risks(&open.ws, &mut threats, risks);
             }
+            let numbers = if !engine_ok {
+                NumbersCheck::NotComparable
+            } else if self.distrusted.as_deref() == Some(open.id.as_str()) {
+                NumbersCheck::ServerNumbersShown
+            } else if open.ws.pending_batches() == 0
+                && !open.resyncing
+                && self
+                    .verified
+                    .as_ref()
+                    .is_some_and(|(p, seq)| *p == open.id && *seq == open.ws.confirmed_seq())
+            {
+                NumbersCheck::Checked
+            } else {
+                NumbersCheck::Checking
+            };
             let selected_threat = open
                 .ui
                 .selected_threat
@@ -2036,6 +2070,7 @@ impl<P: CredentialProvider> Actor<P> {
                 can_redo: open.ws.can_redo(),
                 show_residual: open.ui.show_residual,
                 confirmed_seq: open.ws.confirmed_seq(),
+                numbers,
                 risks_verified_seq: self
                     .verified
                     .as_ref()

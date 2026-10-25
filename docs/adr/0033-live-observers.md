@@ -63,7 +63,7 @@ keeps editing off.
 
 - Every accepted batch costs the server O(threats) when observed. The cache
   makes the evaluation itself incremental; the list copy is the O(threats).
-- The shell does not yet show "checked with the server". The data is in the
-  view model (`risks_verified_seq`) for it.
+- The shell shows the check as a status in the project header (job 047,
+  `docs/adr/0041-numbers-check-mark.md`).
 - The tree view in a mismatched client is still local. Server tree results
   would need a new RPC and are not planned.

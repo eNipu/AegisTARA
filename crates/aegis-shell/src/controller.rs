@@ -22,7 +22,9 @@ use aegis_canvas::{Direction, Point, RenderOptions, Size, Viewport, render};
 use aegis_client::commands::{Command, Edit};
 use aegis_client::report::ExportKind;
 use aegis_client::session::Session;
-use aegis_client::state::{ConnectionView, Mode, ProjectView, Severity, SyncView, ViewModel};
+use aegis_client::state::{
+    ConnectionView, Mode, NumbersCheck, ProjectView, Severity, SyncView, ViewModel,
+};
 use aegis_client::view::{AdminAction, Page, RiskView, Selection};
 use aegis_model::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
 use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
@@ -1259,14 +1261,21 @@ impl Controller {
         w.set_band_kind(kind);
         w.set_band_text(s(&band));
         w.set_sync_text(s(&match project.sync {
-            SyncView::Synced => match project.risks_verified_seq {
-                Some(_) => "Saved \u{b7} numbers checked with the server".to_owned(),
-                None => "Saved".to_owned(),
-            },
+            SyncView::Synced => "Saved".to_owned(),
             SyncView::Syncing { pending: 1 } => "Saving 1 change…".to_owned(),
             SyncView::Syncing { pending } => format!("Saving {pending} changes…"),
             SyncView::Resyncing => "Reloading…".to_owned(),
         }));
+        let (numbers_kind, numbers_text) = match project.numbers {
+            NumbersCheck::Checked => (0, "Numbers checked with the server"),
+            NumbersCheck::Checking => (1, "Checking the numbers with the server\u{2026}"),
+            NumbersCheck::ServerNumbersShown => (2, "Showing the server's numbers"),
+            NumbersCheck::NotComparable => {
+                (3, "Numbers not checked: the server runs another engine")
+            }
+        };
+        w.set_numbers_kind(numbers_kind);
+        w.set_numbers_text(s(numbers_text));
         w.set_can_undo(project.can_undo);
         w.set_can_redo(project.can_redo);
         w.set_show_residual(project.show_residual);

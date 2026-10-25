@@ -45,6 +45,7 @@
 - [x] Every TARA page in the desktop app: menus with Lucide icons, overview, assets, damage, threats, attack trees (outline editor), risks and treatment, controls, goals and claims, problems, versions (baselines and comparison), history, reports and exports, user admin; server and login screens (041-tara-pages)
 - [x] Turn password login off per deployment from an admin setting, and show only company login in the app (today it is the `AEGIS_AUTH` variable) (045-password-login-switch)
 - [x] Build the server Docker image in CI and prove it starts: customer image refuses to start without a license, test image answers /healthz and GetLoginOptions (gap G12) (046-image-ci)
+- [x] Show "numbers checked with the server" in the app as a real status that follows the confirmed change, and fix the editor never comparing its own edits (gap G15) (047-numbers-check-mark)
 
 ## Waiting for a customer order
 
