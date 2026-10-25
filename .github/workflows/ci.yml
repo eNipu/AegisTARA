@@ -64,6 +64,14 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
+      # aegis-shell builds Slint's winit backend, whose font code needs the
+      # fontconfig headers and pkg-config. Windowing libraries are loaded at
+      # run time, so nothing else is needed to build and to run the headless
+      # UI tests.
+      - name: Install system libraries for aegis-shell
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
       # One cache entry holds the cargo registry and git sources plus the
       # workspace target/ (ADR 0025). The key hashes the root Cargo.lock, so a
       # new crate or dependency changes the key with no workflow edit.
@@ -137,6 +145,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ env.RUST_MSRV }}
+      # aegis-shell builds Slint's winit backend, whose font code needs the
+      # fontconfig headers and pkg-config. Windowing libraries are loaded at
+      # run time, so nothing else is needed to build and to run the headless
+      # UI tests.
+      - name: Install system libraries for aegis-shell
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
       # Library only: dev-dependencies (divan, proptest) may need a newer
       # compiler than the crate itself. Same discovery rule as scripts/ci.sh.
       - name: cargo check --locked (each crate)
