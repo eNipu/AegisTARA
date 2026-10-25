@@ -124,6 +124,8 @@ impl Edit {
 /// Everything a UI can tell the session to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    /// Connect again (after a login, or after the server was unreachable).
+    Reconnect,
     /// Reload the project list.
     Refresh,
     /// Create an empty project and open it.
