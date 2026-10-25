@@ -12,20 +12,28 @@
 # The toolchain version matches `rust-version` in the root Cargo.toml.
 
 FROM rust:1.99.1-slim-bookworm AS build
+# Extra cargo features. Empty for a customer image. A TEST server may set
+# `dev-license` (a server without a vendor license, see docs/railway.md);
+# docs/release-checklist.md forbids it in a shipped image. Railway passes
+# a service variable of the same name as this build argument.
+ARG CARGO_FEATURES=""
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # Only the server and what it depends on are compiled. The workspace still
 # lists the shell, which needs a UI toolkit this image does not carry; cargo
 # does not build members that were not asked for.
-RUN cargo build --release --locked -p aegis-server --bin aegis-server
+RUN cargo build --release --locked -p aegis-server --bin aegis-server --features "$CARGO_FEATURES"
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /src/target/release/aegis-server /usr/local/bin/aegis-server
-# Plain HTTP/2 inside the container. TLS ends at the load balancer or reverse
-# proxy in front of it (direction section 1).
-ENV AEGIS_LISTEN=0.0.0.0:50051
+# Plain HTTP/2 and HTTP/1.1 (gRPC-Web) inside the container. TLS ends at the
+# load balancer or reverse proxy in front of it (direction section 1). The
+# server listens on 0.0.0.0:$PORT; hosting platforms such as Railway set
+# PORT, and AEGIS_LISTEN overrides it.
+ENV PORT=50051
 EXPOSE 50051
 USER nonroot
-# There is no shell, so no in-image HEALTHCHECK. Probe the TCP port instead.
+# There is no shell, so no in-image HEALTHCHECK. Probe GET /healthz (200)
+# from the platform instead.
 ENTRYPOINT ["/usr/local/bin/aegis-server"]

@@ -47,7 +47,235 @@ service Aegis {
   // Admin only. Recomputes the audit hash chain over the project's stored
   // op history and reports whether it is intact.
   rpc VerifyAudit(VerifyAuditRequest) returns (VerifyAuditResponse);
+
+  // ---- the caller (job 037, docs/adr/0035-password-login.md) ----
+
+  // Who the server thinks the caller is.
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  // Ends the caller's password session. Other login methods: no effect.
+  rpc LogOut(LogOutRequest) returns (LogOutResponse);
+  // Changes the caller's own password (password login only). Ends every
+  // other session of the caller.
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+
+  // ---- users (admin only, password login only) ----
+
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc CreateUser(CreateUserRequest) returns (UserInfo);
+  // Changes the fields that are set. Disabling a user or setting a new
+  // password ends the user's sessions.
+  rpc UpdateUser(UpdateUserRequest) returns (UserInfo);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+
+  // ---- login switch (job 045, docs/adr/0039-password-login-switch.md) ----
+
+  // Any logged-in user may read the switch.
+  rpc GetServerSettings(GetServerSettingsRequest) returns (ServerSettings);
+  // Admin only. Turning password login off ends every password session at
+  // once. Refused with `no_company_login` when the server has no company
+  // login to fall back on.
+  rpc SetPasswordLogin(SetPasswordLoginRequest) returns (ServerSettings);
+
+  // ---- baselines (job 039, docs/adr/0037-baselines-and-reports.md) ----
+
+  // Freezes the project's current state under a name. Needs no lease.
+  rpc CreateBaseline(CreateBaselineRequest) returns (BaselineInfo);
+  rpc ListBaselines(ListBaselinesRequest) returns (ListBaselinesResponse);
+  // Streams a baseline's snapshot (format aegis-project v1) in chunks, the
+  // same way OpenProject does.
+  rpc GetBaseline(GetBaselineRequest) returns (stream OpenProjectChunk);
+
+  // ---- project administration ----
+
+  // Renames a project. Needs the edit lease, like any change.
+  rpc RenameProject(RenameProjectRequest) returns (ProjectSummary);
+  // Admin only. Deletes a project, its history and its baselines. Refused
+  // while someone holds the edit lease.
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse);
+  // The latest accepted changes of a project, newest first (who, when,
+  // what kind of change).
+  rpc ListHistory(ListHistoryRequest) returns (ListHistoryResponse);
+  // Records that the caller exported a report, so exports are audited
+  // (direction section 6).
+  rpc RecordExport(RecordExportRequest) returns (RecordExportResponse);
 }
+
+// Login. Callable without credentials: a client learns how to log in from
+// the server address alone, then logs in.
+service Accounts {
+  rpc GetLoginOptions(GetLoginOptionsRequest) returns (GetLoginOptionsResponse);
+  // Checks a user name and password and opens a session. Every failure
+  // gets the same answer, so a caller cannot tell a wrong name from a
+  // wrong password. Repeated failures slow the account down.
+  rpc LogIn(LogInRequest) returns (LogInResponse);
+}
+
+message GetLoginOptionsRequest {}
+
+message GetLoginOptionsResponse {
+  enum Method {
+    METHOD_UNSPECIFIED = 0;
+    // User name and password, checked by this server.
+    PASSWORD = 1;
+    // The company identity provider (OIDC with PKCE and DPoP).
+    OIDC = 2;
+    // Development only: the server trusts a user name header.
+    DEVELOPMENT = 3;
+  }
+  Method method = 1;
+  // Set for OIDC.
+  string oidc_issuer = 2;
+  string oidc_client_id = 3;
+  string oidc_resource = 4;
+  // Shown on the login screen, for example the company name.
+  string server_name = 5;
+  // True when a user name and password are also accepted. Always true for
+  // PASSWORD, false for DEVELOPMENT, and for OIDC it follows the admin
+  // setting (job 045). A client shows the company login first and offers
+  // the password form only when this is set.
+  bool password_enabled = 6;
+}
+
+message LogInRequest {
+  string username = 1;
+  string password = 2;
+  // Free text naming the device, kept with the session for the admin.
+  string client_name = 3;
+}
+
+message LogInResponse {
+  // Send as `authorization: Bearer <session_token>`.
+  string session_token = 1;
+  uint64 expires_in_ms = 2;
+  UserInfo user = 3;
+}
+
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  string subject = 1;
+  string display_name = 2;
+  bool admin = 3;
+  // How the caller logged in: "password", "oidc" or "development".
+  string method = 4;
+}
+
+message LogOutRequest {}
+message LogOutResponse {}
+
+message ChangePasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {}
+
+message UserInfo {
+  string username = 1;
+  string display_name = 2;
+  bool admin = 3;
+  bool disabled = 4;
+  uint64 created_ms = 5;
+  // 0 if the user never logged in.
+  uint64 last_login_ms = 6;
+  // Open sessions now.
+  uint32 sessions = 7;
+}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated UserInfo users = 1;
+}
+
+message CreateUserRequest {
+  string username = 1;
+  string display_name = 2;
+  string password = 3;
+  bool admin = 4;
+}
+
+message UpdateUserRequest {
+  string username = 1;
+  optional string display_name = 2;
+  optional bool admin = 3;
+  optional bool disabled = 4;
+  // A new password set by the admin.
+  optional string password = 5;
+}
+
+message DeleteUserRequest {
+  string username = 1;
+}
+
+message DeleteUserResponse {}
+
+message BaselineInfo {
+  string baseline_id = 1;
+  string project_id = 2;
+  string name = 3;
+  // The project state the baseline holds: ops 1..=seq.
+  uint64 seq = 4;
+  string created_by = 5;
+  uint64 created_ms = 6;
+  uint64 snapshot_bytes = 7;
+}
+
+message CreateBaselineRequest {
+  string project_id = 1;
+  string name = 2;
+}
+
+message ListBaselinesRequest {
+  string project_id = 1;
+}
+
+message ListBaselinesResponse {
+  repeated BaselineInfo baselines = 1;
+}
+
+message GetBaselineRequest {
+  string project_id = 1;
+  string baseline_id = 2;
+}
+
+message RenameProjectRequest {
+  string project_id = 1;
+  string lock_token = 2;
+  string name = 3;
+}
+
+message DeleteProjectRequest {
+  string project_id = 1;
+}
+
+message DeleteProjectResponse {}
+
+message ListHistoryRequest {
+  string project_id = 1;
+  // At most this many entries; the server caps it.
+  uint32 limit = 2;
+}
+
+message HistoryEntry {
+  uint64 seq = 1;
+  string actor = 2;
+  uint64 timestamp_ms = 3;
+  // The op kind, for example "AddAsset".
+  string kind = 4;
+}
+
+message ListHistoryResponse {
+  repeated HistoryEntry entries = 1;
+}
+
+message RecordExportRequest {
+  string project_id = 1;
+  // For example "html-report" or "csv-risk-register".
+  string kind = 2;
+}
+
+message RecordExportResponse {}
 
 message GetServerInfoRequest {}
 
@@ -197,8 +425,13 @@ message WatchEvent {
     // after every accepted batch, so an observer can check its own numbers
     // against the server's, or show the server's when its engine differs.
     RisksEvent risks = 3;
+    // Sent when nothing else happened for a while, so proxies that close
+    // idle connections keep the stream open. Carries no data.
+    Heartbeat heartbeat = 4;
   }
 }
+
+message Heartbeat {}
 
 message RisksEvent {
   // Every op up to this sequence number is included in the numbers.
@@ -250,4 +483,17 @@ message VerifyAuditResponse {
   // Hash of the last verified op. Export it to a system the database admin
   // cannot write, to detect a full rewrite of the history.
   bytes head_hash = 4;
+}
+
+message GetServerSettingsRequest {}
+
+message ServerSettings {
+  // Password login is accepted now.
+  bool password_login_enabled = 1;
+  // The server has a company login (OIDC), so the switch may be turned off.
+  bool company_login_available = 2;
+}
+
+message SetPasswordLoginRequest {
+  bool enabled = 1;
 }

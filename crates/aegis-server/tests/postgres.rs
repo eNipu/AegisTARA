@@ -13,8 +13,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use aegis_server::ProjectId;
+use aegis_server::accounts::{
+    AccountBackend, Accounts, AccountsConfig, AuditKind, PostgresAccounts, UserUpdate,
+};
 use aegis_server::store::{
-    PostgresOptions, PostgresStore, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
+    BaselineMeta, PostgresOptions, PostgresStore, ProjectMeta, ProjectStore, StoreFault, StoredOp,
+    StoredSnapshot,
 };
 use tokio_postgres::NoTls;
 use uuid::Uuid;
@@ -291,7 +295,7 @@ async fn migrations_are_idempotent_and_refuse_newer_databases() {
         .query("SELECT version FROM aegis_schema_migration", &[])
         .await
         .expect("rows");
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
 
     // A database migrated by a newer build is refused.
     f.raw
@@ -340,4 +344,240 @@ async fn the_server_restarts_over_postgres_with_identical_projects() {
 async fn audit_verification_works_through_the_api_on_postgres() {
     let Some(f) = fresh().await else { return };
     common::audit_is_verifiable_by_admins_only(Arc::new(f.store)).await;
+}
+
+#[tokio::test]
+async fn rename_history_baselines_and_delete() {
+    let Some(f) = fresh().await else { return };
+    let m = meta();
+    f.store.create(&m, b"s0").await.expect("create");
+    f.store
+        .append(m.id, &[op(1), op(2), op(3)])
+        .await
+        .expect("append");
+    f.store.rename(m.id, "Renamed").await.expect("rename");
+    assert_eq!(f.store.list(10).await.expect("list")[0].name, "Renamed");
+    let recent = f.store.recent_ops(m.id, 2).await.expect("recent");
+    assert_eq!(recent.iter().map(|o| o.seq).collect::<Vec<_>>(), [3, 2]);
+
+    let editors = f
+        .store
+        .active_editors(1_700_000_000_002)
+        .await
+        .expect("editors");
+    assert_eq!(editors, [("alice".to_owned(), 1_700_000_000_003)]);
+
+    let b = BaselineMeta {
+        id: Uuid::now_v7(),
+        project: m.id,
+        name: "B1".into(),
+        seq: 3,
+        created_by: "alice".into(),
+        created_ms: 5,
+        snapshot_bytes: 4,
+    };
+    f.store
+        .create_baseline(&b, b"snap")
+        .await
+        .expect("baseline");
+    assert!(matches!(
+        f.store.create_baseline(&b, b"snap").await,
+        Err(StoreFault::Exists)
+    ));
+    assert_eq!(
+        f.store.list_baselines(m.id).await.expect("list"),
+        std::slice::from_ref(&b)
+    );
+    let (got, bytes) = f
+        .store
+        .load_baseline(m.id, b.id)
+        .await
+        .expect("load")
+        .expect("found");
+    assert_eq!((got, bytes.as_slice()), (b.clone(), b"snap".as_slice()));
+    assert!(
+        f.store
+            .load_baseline(m.id, Uuid::now_v7())
+            .await
+            .expect("load")
+            .is_none()
+    );
+
+    f.store.delete(m.id).await.expect("delete");
+    assert!(f.store.load(m.id).await.expect("load").is_none());
+    assert!(matches!(
+        f.store.delete(m.id).await,
+        Err(StoreFault::Missing)
+    ));
+    assert!(matches!(
+        f.store.list_baselines(m.id).await,
+        Err(StoreFault::Missing)
+    ));
+    assert!(matches!(
+        f.store.recent_ops(m.id, 5).await,
+        Err(StoreFault::Missing)
+    ));
+}
+
+#[tokio::test]
+async fn accounts_survive_a_restart_in_postgres() {
+    let Some(f) = fresh().await else { return };
+    let backend = || AccountBackend::Postgres(PostgresAccounts::new(f.store.pool(), f.store.org()));
+    let accounts = Accounts::open(backend(), AccountsConfig::default())
+        .await
+        .expect("open");
+    accounts
+        .bootstrap_admin("root", "root long password")
+        .await
+        .expect("root");
+    accounts
+        .create_user("root", "bob", "Bob", "bobs long password", false)
+        .await
+        .expect("bob");
+    let session = accounts
+        .log_in("bob", "bobs long password", "laptop")
+        .await
+        .expect("login");
+    let gone = accounts
+        .log_in("root", "root long password", "")
+        .await
+        .expect("login");
+    accounts.log_out(&gone.token).await.expect("logout");
+
+    // A new process: same users, the open session still works, the closed one does not.
+    let again = Accounts::open(backend(), AccountsConfig::default())
+        .await
+        .expect("reopen");
+    assert_eq!(again.user_count(), 2);
+    let p = again
+        .authenticate(&session.token)
+        .expect("session survives");
+    assert_eq!(&*p.subject, "bob");
+    assert!(again.authenticate(&gone.token).is_none());
+    again
+        .update_user(
+            "root",
+            "bob",
+            UserUpdate {
+                disabled: Some(true),
+                ..UserUpdate::default()
+            },
+        )
+        .await
+        .expect("disable");
+    let third = Accounts::open(backend(), AccountsConfig::default())
+        .await
+        .expect("reopen");
+    assert!(
+        third.authenticate(&session.token).is_none(),
+        "disabling ended the session"
+    );
+    third.delete_user("root", "bob").await.expect("delete");
+    assert_eq!(third.user_count(), 1);
+
+    let kinds: Vec<AuditKind> = third
+        .recent_events(20)
+        .await
+        .expect("events")
+        .iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(kinds.first(), Some(&AuditKind::UserDeleted));
+    assert!(kinds.contains(&AuditKind::LoginOk) && kinds.contains(&AuditKind::Logout));
+    // Nothing secret is stored in the clear.
+    let rows = f
+        .raw
+        .query("SELECT encode(token_hash, 'hex') FROM aegis_session", &[])
+        .await
+        .expect("rows");
+    for row in rows {
+        let hash: String = row.get(0);
+        assert!(!session.token.contains(&hash));
+    }
+    let hashes = f
+        .raw
+        .query("SELECT password_hash FROM aegis_user", &[])
+        .await
+        .expect("rows");
+    for row in hashes {
+        let h: String = row.get(0);
+        assert!(h.starts_with("$argon2id$"));
+    }
+}
+
+#[tokio::test]
+async fn tls_encrypt_is_refused_by_a_server_without_tls() {
+    let Some(f) = fresh().await else { return };
+    let err = PostgresStore::connect_config(
+        f.config.clone(),
+        &PostgresOptions {
+            tls: aegis_server::store::DbTls::Encrypt,
+            ..PostgresOptions::default()
+        },
+    )
+    .await
+    .err()
+    .expect("a plain server cannot do TLS");
+    assert!(matches!(err, StoreFault::Backend(_)));
+}
+
+/// Needs a database with TLS on and a self-signed certificate, at
+/// `AEGIS_TEST_TLS_DATABASE_URL`; skipped without it.
+#[tokio::test]
+async fn tls_encrypt_works_and_verify_refuses_a_self_signed_certificate() {
+    let Ok(url) = std::env::var("AEGIS_TEST_TLS_DATABASE_URL") else {
+        eprintln!("AEGIS_TEST_TLS_DATABASE_URL is not set: skipping");
+        return;
+    };
+    let options = |tls| PostgresOptions {
+        tls,
+        ..PostgresOptions::default()
+    };
+    let store = PostgresStore::connect(&url, &options(aegis_server::store::DbTls::Encrypt))
+        .await
+        .expect("encrypted connection");
+    assert!(store.count().await.is_ok());
+    let refused = PostgresStore::connect(&url, &options(aegis_server::store::DbTls::Verify))
+        .await
+        .err()
+        .expect("the certificate is not trusted");
+    assert!(matches!(refused, StoreFault::Backend(_)));
+}
+
+#[tokio::test]
+async fn the_password_login_switch_survives_a_restart_in_postgres() {
+    let Some(f) = fresh().await else { return };
+    let backend = || AccountBackend::Postgres(PostgresAccounts::new(f.store.pool(), f.store.org()));
+    let config = || AccountsConfig {
+        company_login: true,
+        ..AccountsConfig::default()
+    };
+    let accounts = Accounts::open(backend(), config()).await.expect("open");
+    assert!(
+        accounts.password_login_enabled(),
+        "on until an admin says otherwise"
+    );
+    accounts
+        .set_password_login("carol", false)
+        .await
+        .expect("off");
+
+    let again = Accounts::open(backend(), config()).await.expect("reopen");
+    assert!(
+        !again.password_login_enabled(),
+        "off stays off after a restart"
+    );
+    again.set_password_login("carol", true).await.expect("on");
+    let third = Accounts::open(backend(), config()).await.expect("reopen");
+    assert!(third.password_login_enabled());
+
+    let events = third.recent_events(10).await.expect("events");
+    let kinds: Vec<_> = events.iter().map(|e| (e.kind, e.detail.as_str())).collect();
+    assert_eq!(
+        kinds,
+        [
+            (AuditKind::PasswordLoginChanged, "on"),
+            (AuditKind::PasswordLoginChanged, "off")
+        ]
+    );
 }

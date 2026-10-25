@@ -38,6 +38,19 @@
 - [x] Offline license tokens: the `aegis-license` crate signs and verifies Ed25519 license files (customer, seats, expiry, feature flags) with no network call, and the server refuses to start without a valid one (direction section 12) (034-license-tokens)
 - [x] Live read-only observers: the server streams accepted ops and recomputed results to every open client, and the client core renders an observer view that follows the editor (direction section 7) (035-live-observers)
 - [x] Release readiness scaffolding: release build profile (LTO, strip), container image for the server, Docker Compose file with PostgreSQL, and a signed update manifest check in the client (direction sections 2 and 10) (036-release-scaffolding)
-- [ ] TLS to PostgreSQL: add rustls-based `tokio-postgres` TLS to `PostgresStore` after a D5 review of the crypto crates (ring or aws-lc-rs) and their licenses, with a `sslmode` URL option and a test against a TLS-only database (037-postgres-tls)
-- [ ] HTTPS client for login and JWKS: add rustls (ring provider) and the OS trust store to `aegis-auth`'s `HttpClient`, after a D5 review of the crates and a `cargo-deny` run, with tests against a TLS mock provider; then the same TLS for the PostgreSQL job 037 (038-https-client)
-- [ ] Rebuild the seat ledger after a server restart from the audit log (actor and time of each accepted batch in the last 30 days), so a restart does not reset seat counts (039-seat-ledger-persistence)
+- [x] TLS to PostgreSQL: add rustls-based `tokio-postgres` TLS to `PostgresStore` after a D5 review of the crypto crates (ring or aws-lc-rs) and their licenses, with a `sslmode` URL option and a test against a TLS-only database (037-postgres-tls)
+- [x] HTTPS client for login and JWKS: add rustls (ring provider) and the OS trust store to `aegis-auth`'s `HttpClient`, after a D5 review of the crates and a `cargo-deny` run, with tests against a TLS mock provider; then the same TLS for the PostgreSQL job 037 (038-https-client)
+- [x] Rebuild the seat ledger after a server restart from the audit log (actor and time of each accepted batch in the last 30 days), so a restart does not reset seat counts (039-seat-ledger-persistence)
+- [x] Password login and reachable test server: user name and password accounts on the server (Argon2id, opaque session tokens, throttle, event log, user admin), gRPC-Web next to gRPC so the app works through HTTP/1.1 proxies, `GET /healthz`, `PORT` support, and a Railway test deployment (decisions D10 and D11) (040-password-login-and-grpc-web)
+- [x] Every TARA page in the desktop app: menus with Lucide icons, overview, assets, damage, threats, attack trees (outline editor), risks and treatment, controls, goals and claims, problems, versions (baselines and comparison), history, reports and exports, user admin; server and login screens (041-tara-pages)
+- [x] Turn password login off per deployment from an admin setting, and show only company login in the app (today it is the `AEGIS_AUTH` variable) (045-password-login-switch)
+- [x] Build the server Docker image in CI and prove it starts: customer image refuses to start without a license, test image answers /healthz and GetLoginOptions (gap G12) (046-image-ci)
+- [x] Show "numbers checked with the server" in the app as a real status that follows the confirmed change, and fix the editor never comparing its own edits (gap G15) (047-numbers-check-mark)
+
+## Waiting for a customer order
+
+Lines here are marked `[waiting]`, so `/factory next` never takes them. Move a line up into the list above when a customer order names the provider (decision D10).
+
+- [waiting] SSO with Microsoft Entra ID for a customer: app registration guide, `AEGIS_OIDC_*` settings, admin role mapping from Entra app roles, DPoP check, end-to-end test against a test tenant (add when a customer order names Entra ID, decision D10) (042-sso-entra-id)
+- [waiting] SSO with Google Workspace for a customer: OAuth client setup guide, hosted domain check, admin mapping by group, end-to-end test (add when a customer order names Google, decision D10) (043-sso-google)
+- [waiting] SSO with a customer's own OIDC provider (Okta, Keycloak, ADFS, ...): setup guide and a conformance checklist the customer runs before go-live (add per customer order, decision D10) (044-sso-generic-oidc)

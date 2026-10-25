@@ -26,6 +26,16 @@ Run this list for every release build. Tick each line in the release notes.
       the license key.
 - [ ] The server is built without the `dev-license` feature
       (`cargo tree -p aegis-server -e features | grep dev-license` prints nothing).
+- [ ] The image is built with an empty `CARGO_FEATURES` build argument. The
+      Railway test server sets it to `dev-license`; a customer image never does.
+      The CI job `server image` (`deploy/verify-image.sh`) builds it that way on
+      every push and proves it refuses to start without a license.
+- [ ] `AEGIS_DEV_AUTH` and `AEGIS_DEV_LICENSE` are unset in the customer's
+      environment.
+- [ ] The customer's login method is agreed: company SSO (`AEGIS_AUTH=oidc`)
+      or, for a trial only, password login (decision D10). A trial that moves
+      to SSO runs `AEGIS_AUTH=both` and an admin turns password login off in
+      the app (ADR 0039); check the app then shows only the company login.
 - [ ] `aegis-license inspect` reads a license made with the production key
       against the shipped `vendor.keys`.
 

@@ -40,6 +40,27 @@ pub enum ServerCode {
     LicenseSeatsFull,
     /// The server is temporarily unable (storage, unloading project).
     Unavailable,
+    /// Password login: wrong user name or password.
+    InvalidCredentials,
+    /// Password login: too many failures; wait this many seconds.
+    Throttled {
+        /// Seconds to wait, if the server said.
+        retry_after_s: Option<u64>,
+    },
+    /// A new password breaks a password rule (the message says which).
+    WeakPassword,
+    /// A user name with characters that are not allowed.
+    InvalidUsername,
+    /// No such user.
+    UnknownUser,
+    /// The user name is taken.
+    UserExists,
+    /// The last administrator cannot be removed.
+    LastAdmin,
+    /// The server does not use password login.
+    PasswordLoginOff,
+    /// Password login cannot be turned off: the server has no company login.
+    NoCompanyLogin,
     /// Anything else, with the raw code.
     Other(String),
 }
@@ -111,10 +132,14 @@ impl From<tonic::Status> for ClientError {
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_owned)
         };
-        if status.code() == tonic::Code::Unauthenticated {
+        let code_header = header(aegis_proto::ERROR_CODE_HEADER);
+        // A wrong password is an answer to a login, not a request to log in.
+        if status.code() == tonic::Code::Unauthenticated
+            && code_header.as_deref() != Some("invalid_credentials")
+        {
             return ClientError::LoginRequired;
         }
-        let Some(code) = header(aegis_proto::ERROR_CODE_HEADER) else {
+        let Some(code) = code_header else {
             return match status.code() {
                 tonic::Code::Unavailable
                 | tonic::Code::DeadlineExceeded
@@ -140,6 +165,17 @@ impl From<tonic::Status> for ClientError {
             "license_expired" => ServerCode::LicenseExpired,
             "license_seats" => ServerCode::LicenseSeatsFull,
             "storage" | "unloaded" => ServerCode::Unavailable,
+            "invalid_credentials" => ServerCode::InvalidCredentials,
+            "throttled" => ServerCode::Throttled {
+                retry_after_s: header("x-aegis-retry-after").and_then(|v| v.parse().ok()),
+            },
+            "weak_password" => ServerCode::WeakPassword,
+            "invalid_username" => ServerCode::InvalidUsername,
+            "unknown_user" => ServerCode::UnknownUser,
+            "user_exists" => ServerCode::UserExists,
+            "last_admin" => ServerCode::LastAdmin,
+            "password_login_off" => ServerCode::PasswordLoginOff,
+            "no_company_login" => ServerCode::NoCompanyLogin,
             other => ServerCode::Other(other.to_owned()),
         };
         ClientError::Server {
@@ -188,6 +224,21 @@ mod tests {
         assert!(e.is_transient());
         let e = ClientError::from(status(tonic::Code::Internal, "something-new"));
         assert_eq!(e.code(), Some(&ServerCode::Other("something-new".into())));
+    }
+
+    #[test]
+    fn a_wrong_password_is_not_a_login_request() {
+        let e = ClientError::from(status(tonic::Code::Unauthenticated, "invalid_credentials"));
+        assert_eq!(e.code(), Some(&ServerCode::InvalidCredentials));
+        let mut s = status(tonic::Code::ResourceExhausted, "throttled");
+        s.metadata_mut()
+            .insert("x-aegis-retry-after", MetadataValue::from_static("8"));
+        assert_eq!(
+            ClientError::from(s).code(),
+            Some(&ServerCode::Throttled {
+                retry_after_s: Some(8)
+            })
+        );
     }
 
     #[test]

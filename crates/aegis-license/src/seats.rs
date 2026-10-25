@@ -83,6 +83,23 @@ impl SeatLedger {
     pub fn seats(&self) -> usize {
         self.seats
     }
+
+    /// Puts back seats remembered from before a restart: `(subject, last
+    /// use in seconds)`. The most recent users win when there are more
+    /// than seats (for example a renewed license with fewer seats). A user
+    /// already in the ledger keeps the later of the two times. Time
+    /// O(m log m) for m entries.
+    pub fn restore(&mut self, seen: impl IntoIterator<Item = (String, u64)>) {
+        let mut seen: Vec<(String, u64)> = seen.into_iter().collect();
+        seen.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (subject, at) in seen {
+            if let Some(t) = self.last_seen.get_mut(&subject) {
+                *t = (*t).max(at);
+            } else if self.last_seen.len() < self.seats {
+                self.last_seen.insert(subject, at);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -108,6 +125,22 @@ mod tests {
         assert_eq!(ledger.used(100), 1);
         // "a" left; coming back now finds the seat taken.
         assert_eq!(ledger.admit("a", 101), Admission::Full);
+    }
+
+    #[test]
+    fn restore_keeps_the_most_recent_users() {
+        let mut ledger = SeatLedger::with_window(2, 100);
+        ledger.restore([
+            ("old".to_owned(), 10),
+            ("new".to_owned(), 50),
+            ("mid".to_owned(), 30),
+        ]);
+        assert_eq!(ledger.used(60), 2);
+        assert_eq!(ledger.admit("new", 60), Admission::Admitted);
+        assert_eq!(ledger.admit("mid", 60), Admission::Admitted);
+        assert_eq!(ledger.admit("old", 60), Admission::Full);
+        // Outside the window a restored seat frees like any other.
+        assert_eq!(ledger.admit("old", 161), Admission::Admitted);
     }
 
     #[test]

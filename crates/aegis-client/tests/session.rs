@@ -4,13 +4,14 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use aegis_client::commands::{Command, Edit};
 use aegis_client::connection::DevLogin;
 use aegis_client::session::{Session, SessionConfig};
-use aegis_client::state::{ConnectionView, Mode, Severity, SyncView, ViewModel};
+use aegis_client::state::{ConnectionView, Mode, NumbersCheck, Severity, SyncView, ViewModel};
 use aegis_server::auth_layer::{AuthLayer, DevAuthn};
 use aegis_server::config::ServerConfig;
 use aegis_server::methodologies::Methodologies;
@@ -27,9 +28,10 @@ const SAMPLE_OPS: u64 = 16;
 // Harness.
 // ---------------------------------------------------------------------------
 
-/// Delays every request whose path ends in `SubmitOps`, to model a slow link.
+/// Delays every request whose path ends in `SubmitOps`, to model a slow
+/// link, and counts `Watch` calls.
 #[derive(Clone)]
-struct SlowSubmit(Duration);
+struct SlowSubmit(Duration, Arc<AtomicUsize>);
 
 impl<S> Layer<S> for SlowSubmit {
     type Service = SlowSubmitService<S>;
@@ -37,6 +39,7 @@ impl<S> Layer<S> for SlowSubmit {
         SlowSubmitService {
             inner,
             delay: self.0,
+            watches: Arc::clone(&self.1),
         }
     }
 }
@@ -45,6 +48,7 @@ impl<S> Layer<S> for SlowSubmit {
 struct SlowSubmitService<S> {
     inner: S,
     delay: Duration,
+    watches: Arc<AtomicUsize>,
 }
 
 impl<S, B> Service<http::Request<B>> for SlowSubmitService<S>
@@ -65,6 +69,9 @@ where
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let slow = request.uri().path().ends_with("SubmitOps");
+        if request.uri().path().ends_with("/Watch") {
+            self.watches.fetch_add(1, Ordering::Relaxed);
+        }
         let delay = self.delay;
         Box::pin(async move {
             if slow {
@@ -94,6 +101,8 @@ impl Drop for Client {
 
 struct TestServer {
     url: String,
+    /// `Watch` calls the server received.
+    watches: Arc<AtomicUsize>,
     stop: Option<oneshot::Sender<()>>,
     done: Option<tokio::task::JoinHandle<()>>,
 }
@@ -107,13 +116,26 @@ impl TestServer {
         submit_delay: Duration,
         gate: Option<Arc<aegis_server::LicenseGate>>,
     ) -> Self {
+        Self::start_config(
+            submit_delay,
+            gate,
+            ServerConfig {
+                lease: Duration::from_secs(30),
+                ..ServerConfig::default()
+            },
+        )
+        .await
+    }
+
+    async fn start_config(
+        submit_delay: Duration,
+        gate: Option<Arc<aegis_server::LicenseGate>>,
+        config: ServerConfig,
+    ) -> Self {
         let registry = Registry::new(
             Arc::new(MemoryStore::new()),
             Arc::new(Methodologies::builtin().expect("builtin")),
-            Arc::new(ServerConfig {
-                lease: Duration::from_secs(30),
-                ..ServerConfig::default()
-            }),
+            Arc::new(config),
         );
         let registry = Arc::new(match gate {
             Some(gate) => registry.with_license(gate),
@@ -124,10 +146,12 @@ impl TestServer {
         let (stop, stopped) = oneshot::channel::<()>();
         let service = AegisService::new(Arc::clone(&registry)).into_server();
         let layer = AuthLayer::new(Arc::new(DevAuthn), &url);
+        let watches = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&watches);
         let done = tokio::spawn(async move {
             server::builder()
                 .layer(layer)
-                .layer(SlowSubmit(submit_delay))
+                .layer(SlowSubmit(submit_delay, counter))
                 .add_service(service)
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                     let _ = stopped.await;
@@ -138,14 +162,20 @@ impl TestServer {
         });
         TestServer {
             url,
+            watches,
             stop: Some(stop),
             done: Some(done),
         }
     }
 
     fn session(&self, user: &str, admin: bool) -> Client {
+        self.session_with(user, admin, |_| {})
+    }
+
+    fn session_with(&self, user: &str, admin: bool, tune: impl Fn(&mut SessionConfig)) -> Client {
         let mut config = SessionConfig::new(user);
         config.retry_delay = Duration::from_millis(100);
+        tune(&mut config);
         Client(Session::start(&self.url, Arc::new(DevLogin::new(user, admin)), config).0)
     }
 
@@ -488,6 +518,19 @@ async fn rating_a_step_updates_the_risks_immediately_and_undo_restores_them() {
 
     // Saved, then undone: the risk comes back and the undo is saved too.
     until(&alice, "saved", project_ready).await;
+    // The server recomputes after the edit, and the mark follows the
+    // confirmed change: it never says "checked" for a state the server has
+    // not agreed on (G15).
+    until(&alice, "numbers checked after the edit", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            assert!(
+                p.numbers != NumbersCheck::Checked || p.risks_verified_seq == Some(p.confirmed_seq),
+                "a stale check must not show as checked"
+            );
+            p.numbers == NumbersCheck::Checked && p.confirmed_seq == SAMPLE_OPS + 1
+        })
+    })
+    .await;
     alice.send(Command::Undo).expect("sent");
     let view = until(&alice, "restored", |vm| {
         vm.project
@@ -550,6 +593,10 @@ async fn a_second_user_follows_the_editor_live_and_cannot_edit() {
         },
     )
     .await;
+    assert_eq!(
+        view.project.as_ref().expect("project").numbers,
+        NumbersCheck::Checked
+    );
     assert!(
         !view.notices.iter().any(|n| n.text.contains("differ")),
         "{:?}",
@@ -579,6 +626,51 @@ async fn a_second_user_follows_the_editor_live_and_cannot_edit() {
         view.project.as_ref().expect("project").confirmed_seq,
         SAMPLE_OPS,
         "Bob's copy was current"
+    );
+    drop(alice);
+    drop(bob);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_silent_live_stream_is_restarted_and_updates_still_arrive() {
+    // No heartbeats, and a client that gives up on a stream after 300 ms of
+    // silence: like a proxy that dropped the connection without closing it.
+    let server = TestServer::start_config(
+        Duration::ZERO,
+        None,
+        ServerConfig {
+            heartbeat: Duration::from_secs(3600),
+            ..ServerConfig::default()
+        },
+    )
+    .await;
+    let alice = server.session("alice", false);
+    let bob = server.session_with("bob", false, |c| {
+        c.watch_silence = Duration::from_millis(300);
+    });
+    let id = create_and_open(&alice, "Quiet").await;
+    start_editing(&alice).await;
+    until(&bob, "online", online).await;
+    bob.send(Command::OpenProject { id }).expect("sent");
+    until(&bob, "bob sees the project", project_ready).await;
+    let before = server.watches.load(Ordering::Relaxed);
+
+    // Quiet for more than two silence windows: the stream is restarted.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let after = server.watches.load(Ordering::Relaxed);
+    assert!(after >= before + 2, "watch calls {before} -> {after}");
+
+    // And the restarted stream still delivers the editor's work.
+    alice.send(Command::CreateSample).expect("sent");
+    let view = until(&bob, "bob sees the threats", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.threats.len() == 2)
+    })
+    .await;
+    assert!(
+        !view.notices.iter().any(|n| n.severity == Severity::Error),
+        "{:?}",
+        view.notices
     );
     drop(alice);
     drop(bob);

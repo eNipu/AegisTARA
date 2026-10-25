@@ -1,8 +1,13 @@
-# AegisTARA Current Implementation Architecture (`crates/aegis-model`)
+# AegisTARA Implementation Architecture
 
-- **Date:** 2026-10-25
-- **Baseline Commit:** `b7ca167` (`026-choke-points-and-sensitivity`)
-- **Scope:** Complete architectural, UML class/struct, and activity interaction reference for `crates/aegis-model`.
+- **Date:** 2026-10-25 (Part II added and kept current with jobs 037 to 041)
+- **Baseline Commit:** `b7ca167` for Part I; Part II follows the branch head
+- **Scope:** Part I is the complete UML and activity reference for
+  `crates/aegis-model`. [Part II](#part-ii-the-system) covers the whole
+  system: every other crate, its structs and fields, the database schema,
+  the network paths, the main flows, and the engineering rules each part
+  follows. **Rule for maintainers: when a struct, enum, field, table, RPC or
+  flow is added or changed, update Part II in the same commit.**
 
 ---
 
@@ -1171,3 +1176,512 @@ flowchart TB
         S_SAVE -.->|"JSON / JSONL"| S_LOAD
     end
 ```
+
+---
+
+# Part II: the system
+
+Part II describes everything outside `aegis-model`. It is kept current with
+the branch head. Each section lists the main types with their fields, so a
+reviewer can check them against the engineering standards
+(`docs/engineering-standards.md`). Rule codes such as R3 or C1 refer to that
+document.
+
+## II.1 System context
+
+```mermaid
+flowchart LR
+    subgraph Desktop["Desktop app (aegis-shell)"]
+        UI["Slint window\n(app.slint, widgets.slint)"]
+        CTRL["Controller + Launcher\n(UI thread)"]
+        CORE["aegis-client\n(Session actor, Workspace, ViewModel)"]
+        UI <--> CTRL <--> CORE
+    end
+    subgraph Server["aegis-server (one container)"]
+        H["HealthLayer\nGET /healthz"]
+        W["GrpcWebLayer\n(tonic-web)"]
+        A["AuthLayer\n(password, OIDC or dev)"]
+        ACC["Accounts service\n(public)"]
+        SVC["Aegis service"]
+        REG["Registry\n(one actor per open project)"]
+        H --> W --> A
+        A --> ACC
+        A --> SVC --> REG
+    end
+    DB[("PostgreSQL\n(or memory)")]
+    IDP["Company IdP\n(OIDC, backlog)"]
+    CORE -- "gRPC (HTTP/2) or\ngRPC-Web (HTTP/1.1)\nover HTTPS" --> H
+    REG --> DB
+    ACC --> DB
+    CORE -. "OIDC + DPoP\n(when a customer orders SSO)" .-> IDP
+```
+
+- The desktop app talks to one server. The server owns all project state.
+- The app speaks gRPC over HTTP/2, or gRPC-Web over HTTP/1.1. gRPC-Web is
+  the default for `https://` addresses, because many proxies (and Railway's
+  edge) only forward HTTP/1.1.
+- TLS ends at the load balancer. The server speaks plain HTTP behind it. The
+  server can talk TLS to PostgreSQL (`AEGIS_DB_TLS`).
+- Login has three methods, chosen per deployment: `password` (test and
+  small deployments), `oidc` (company SSO, backlog for customer projects),
+  and `dev` (trusted header, development only).
+
+## II.2 Crate graph
+
+```mermaid
+flowchart TB
+    model["aegis-model\n(domain, evaluation, ops)"]
+    proto["aegis-proto\n(gRPC types from aegis.proto)"]
+    auth["aegis-auth\n(OIDC, DPoP, JWKS, keychain, TLS roots)"]
+    license["aegis-license\n(license tokens, seats, update manifest)"]
+    canvas["aegis-canvas\n(attack tree layout and drawing)"]
+    server["aegis-server\n(binary + library)"]
+    client["aegis-client\n(UI-free client core)"]
+    shell["aegis-shell\n(Slint desktop app)"]
+    server --> model & proto & auth & license
+    client --> model & proto & auth & license & canvas
+    shell --> client & canvas & model & auth
+```
+
+No crate depends on `aegis-shell`. `aegis-client` has no UI code, so every
+client behavior is testable without a window (standards T-rules). The shell
+tests start a real server in process (`aegis-server` is a dev-dependency).
+
+## II.3 Wire contract (`crates/aegis-proto/proto/aegis/v1/aegis.proto`)
+
+Two services.
+
+**`Accounts`** is public. The auth layer lets `/aegis.v1.Accounts/` pass
+without credentials.
+
+| RPC | Purpose |
+|---|---|
+| `GetLoginOptions` | Says how to log in (`password`, `oidc` with issuer and client ID, or `development`), the server name, and `password_enabled`: a user name and password are also accepted. For `password` it is true, for `development` false, for `oidc` it follows the admin switch (II.4.3). |
+| `LogIn` | User name + password + client name. Returns a session token, its lifetime and `UserInfo`. Answers `UNAUTHENTICATED` with one fixed message for every failure, and `RESOURCE_EXHAUSTED` with `retry-after` when throttled. |
+
+**`Aegis`** needs a principal on every call.
+
+| Group | RPCs |
+|---|---|
+| Server | `GetServerInfo`, `GetMethodology` |
+| Projects | `CreateProject`, `ListProjects`, `OpenProject` (stream of chunks), `RenameProject`, `DeleteProject` (admin) |
+| Edit lock | `AcquireLock`, `RenewLock`, `ReleaseLock`, `BreakLock` (admin) |
+| Editing | `SubmitOps` (batch, at most `max_batch_ops`), `Watch` (stream: ops, lease changes, risk updates, `Heartbeat`) |
+| Results | `GetRisks`, `VerifyAudit` (admin) |
+| Versions | `CreateBaseline`, `ListBaselines`, `GetBaseline` (stream of chunks) |
+| History | `ListHistory` (newest ops, capped by `max_history`) |
+| Exports | `RecordExport` (writes an audit event; the file is made on the client) |
+| Me | `WhoAmI`, `LogOut`, `ChangePassword` |
+| Users (admin) | `ListUsers`, `CreateUser`, `UpdateUser`, `DeleteUser` |
+| Login switch | `GetServerSettings` (any logged-in user), `SetPasswordLogin` (admin). `ServerSettings { password_login_enabled, company_login_available }` |
+
+`Watch` sends a `Heartbeat` every `heartbeat` (default 20 s) so proxies that
+close idle streams keep the connection open. The client restarts a stream
+that stays silent for `watch_silence` (60 s), which catches a connection a
+proxy dropped without closing (R6).
+
+## II.4 Server (`crates/aegis-server`)
+
+### II.4.1 Request path
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as HealthLayer
+    participant W as GrpcWebLayer
+    participant A as AuthLayer<A: Authn>
+    participant S as AegisService / AccountsService
+    C->>H: HTTP request
+    alt GET /healthz
+        H-->>C: 200 ok
+    else anything else
+        H->>W: pass
+        W->>A: gRPC (translated from gRPC-Web if needed)
+        alt path starts with /aegis.v1.Accounts/
+            A->>S: no principal needed
+        else
+            A->>A: Authn::authenticate(RequestInfo)
+            alt ok
+                A->>S: request + Principal in extensions
+            else fail
+                A-->>C: UNAUTHENTICATED (fixed text, reason logged)
+            end
+        end
+    end
+```
+
+`server::router(service, public, auth)` builds this stack. `server::builder()`
+sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
+`MAX_CONCURRENT_PER_CONNECTION = 64`, HTTP/2 keep-alive 30 s / 10 s,
+`TCP_NODELAY` (R6).
+
+### II.4.2 Modules and types
+
+| Module | Types | Notes |
+|---|---|---|
+| `main.rs` | | Reads environment variables (table in the module docs), opens the store and accounts, loads the license, restores seats, serves. `PORT` (Railway) means `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset. |
+| `server.rs` | `Layers<A>`, `builder()`, `router()` | See II.4.1. |
+| `health.rs` | `HealthLayer`, `Health<S>` | Answers `GET /healthz` before any other layer. |
+| `auth.rs` | `AuthMethod { Oidc, Password, Dev }`, `Principal { subject, admin, method }` | The principal is what every handler sees. |
+| `auth_layer.rs` | `RequestInfo { headers, method, url }`, trait `Authn`, `OidcAuthn<H>`, `PasswordAuthn(Arc<Accounts>)`, `HybridAuthn<H>`, `DevAuthn`, `AuthLayer<A>`, `Authenticated<A, S>` | Static dispatch over the method (D11). |
+| `accounts/mod.rs` | `Accounts`, `AccountBackend { Memory, Postgres }`, `UserRecord`, `SessionRecord`, `SessionKey`, `AuditKind`, `AuditEvent`, `AccountsConfig`, `NewSession`, `UserUpdate`, `LoadedAccounts`, `AccountError` | Users and sessions, see II.4.3. |
+| `accounts/password.rs` | `PasswordRule`, `hash()`, `verify()`, `decoy()` | Argon2id: 19 MiB, 2 passes, 1 lane. At least 10 characters, at most 256 bytes. |
+| `accounts/memory.rs`, `accounts/postgres.rs` | `MemoryAccounts`, `PostgresAccounts` | Storage backends. Postgres shares the project store's pool. |
+| `accounts/service.rs` | `AccountsService`, `LoginOptions`, `PUBLIC_PATH_PREFIX`, `RETRY_AFTER_HEADER` | The public `Accounts` gRPC service. |
+| `service.rs` | `AegisService<S>` | All `Aegis` handlers. Maps `ServerError` to a status. `with_accounts()` adds the account calls. |
+| `registry.rs` | `Registry<S>` | Owns the open project actors (map of `ProjectId` to `ProjectHandle`), caps (`max_open_projects`, `max_projects`), name checks, baselines, seat restore. |
+| `actor.rs` | `ProjectHandle`, `Accepted`, `Event`, `OpenData`, `Subscription`, `RiskReport`, `ThreatRiskRow`, `Loaded` | One task per open project (C1). Bounded mailbox (`mailbox`, R4). Commands include `Rename` and `Delete`. |
+| `lease.rs` | `LeaseToken`, `Grant`, `LeaseState` | Edit lock with expiry (`lease`, default 120 s). |
+| `license.rs` | `LicenseGate`, `LoadError`, `ClockSecs` | License check and seat ledger, `restore()` from recent editors. |
+| `methodologies.rs` | `Methodologies`, `HostedMethodology`, `PackLoadError` | Built-in packs plus `AEGIS_PACKS_DIR`. |
+| `config.rs` | `ServerConfig` | Every limit in one place, see II.4.4. |
+| `store/mod.rs` | trait `ProjectStore`, `ProjectMeta`, `StoredOp`, `StoredSnapshot`, `LoadedProject`, `BaselineMeta`, `StoreFault` | Storage interface. |
+| `store/memory.rs` | `MemoryStore` | Tests and development. |
+| `store/postgres.rs` | `PostgresStore`, `PostgresOptions`, `DbTls { Off, Encrypt, Verify }` | `Encrypt` accepts any certificate (libpq `require`); `Verify` checks it against the OS roots (libpq `verify-full`). |
+| `store/audit.rs` | `Hash`, `ChainVerifier`, `ChainReport` | SHA-256 hash chain over stored ops. |
+| `ids.rs` | `ProjectId`, `BadProjectId` | |
+| `error.rs` | `ServerError` | |
+
+`ProjectStore` methods: `create`, `list`, `count`, `load`, `append`,
+`verify_chain`, `save_snapshot`, `rename`, `delete`, `recent_ops`,
+`active_editors`, `create_baseline`, `list_baselines`, `load_baseline`.
+
+`BaselineMeta { id, project, name, seq, created_by, created_ms, snapshot_bytes }`.
+
+### II.4.3 Accounts
+
+```mermaid
+classDiagram
+    class Accounts {
+        -backend: AccountBackend
+        -config: AccountsConfig
+        -state: Mutex~State~
+        -throttle: Mutex~Throttle~
+        -hashing: Semaphore
+        -decoy: String
+        -random: SystemRandom
+        +open(backend, config) Accounts
+        +bootstrap_admin(name, password)
+        +log_in(name, password, client) NewSession
+        +authenticate(token) Principal
+        +log_out(token)
+        +change_password(user, old, new)
+        +list_users() / user(name)
+        +create_user / update_user / delete_user
+        +audit(event) / recent_events(n)
+        +purge_expired()
+    }
+    class State {
+        users: BTreeMap~String, UserRecord~
+        sessions: HashMap~SessionKey, SessionRecord~
+    }
+    class UserRecord {
+        username: String
+        display_name: String
+        password_hash: String
+        admin: bool
+        disabled: bool
+        created_ms: u64
+        last_login_ms: u64
+    }
+    class SessionRecord {
+        key: SessionKey
+        username: String
+        created_ms: u64
+        expires_ms: u64
+        client_name: String
+    }
+    class AccountsConfig {
+        session_ttl = 12 h
+        max_sessions_per_user = 10
+        max_users = 10000
+        free_failures = 5
+        max_backoff = 15 min
+        hashing_permits = 4
+        hashing_wait = 5 s
+        clock_ms: fn() -> u64
+        company_login = false
+    }
+    Accounts --> State
+    Accounts --> AccountsConfig
+    State --> UserRecord
+    State --> SessionRecord
+```
+
+Rules the code follows:
+
+- **Tokens.** A token is `ats_` plus 32 random bytes (base64url). Only its
+  SHA-256 (`SessionKey`) is stored. Sessions end at an absolute time (no
+  sliding). `spawn_purger` removes expired sessions.
+- **Passwords.** Argon2id hashing runs on `spawn_blocking` (R5), behind a
+  semaphore of `hashing_permits` with a `hashing_wait` timeout (R4, R6). An
+  unknown user name is checked against a decoy hash, so timing does not tell
+  whether a user exists.
+- **Throttle.** Per user name: after `free_failures` failures the wait
+  doubles from 1 s up to `max_backoff`. The map is capped (R3).
+- **Locks.** The state mutex is never held across an `.await` (C2). The
+  in-memory state is a cache of the backend and is rebuilt at start (D10).
+- **Safety.** The last enabled admin cannot be removed, disabled or demoted.
+  Disabling a user or changing a password ends that user's sessions.
+- **Audit.** `AuditKind`: `login_ok`, `login_failed`, `logout`,
+  `password_changed`, `user_created`, `user_updated`, `user_deleted`,
+  `export`, `project_deleted`, `baseline_created`,
+  `password_login_changed`. Never a password or token.
+- **Login switch (job 045, ADR 0039).** `AEGIS_AUTH=both` runs the company
+  login (OIDC) and password login side by side: `HybridAuthn` sends a bearer
+  token with the `ats_` prefix to `PasswordAuthn` and everything else to
+  `OidcAuthn`. `Accounts` holds an `AtomicBool` `password_enabled`
+  (default on, stored as the `password_login` row of `aegis_setting`, loaded
+  by `LoadedAccounts.password_login`). `set_password_login` first stores the
+  value; when turning off it also deletes every session. While off,
+  `authenticate` answers `None` and `log_in` answers
+  `AccountError::PasswordLoginOff` (`password_login_off`,
+  `FAILED_PRECONDITION`). Turning it off without
+  `AccountsConfig.company_login` is refused as `NoCompanyLogin`
+  (`no_company_login`), so nobody locks the server. `AEGIS_PASSWORD_LOGIN=on|off`
+  forces the value at start, the way back in if the company login breaks.
+  With `AEGIS_AUTH=oidc` there are no accounts and the form is always off.
+
+### II.4.4 Limits (`ServerConfig`)
+
+| Field | Default | Rule |
+|---|---|---|
+| `lease` | 120 s | Edit lock lifetime |
+| `idle_unload` | 15 min | Unload a project actor nobody uses |
+| `mailbox` / `mailbox_wait` | 64 / 5 s | R4 |
+| `observer_buffer` | 1024 | Per `Watch` stream, R4 |
+| `recent_ops` | 1024 | Ops kept for reconnect |
+| `snapshot_every` | 1000 ops | Snapshot cadence |
+| `max_batch_ops` | 1024 | Ops per `SubmitOps` |
+| `max_open_projects` / `max_projects` | 256 / 10 000 | R3 |
+| `chunk_bytes` | 256 KiB | Stream chunk size |
+| `risks_event_max_threats` | 2 000 | Risk events in `Watch` |
+| `max_project_name_chars` | 256 | |
+| `max_baselines` | 1 000 per project | R3 |
+| `max_history` | 500 | `ListHistory` rows |
+| `heartbeat` | 20 s | `Watch` heartbeat |
+
+(The defaults are in `config.rs`; that file is the source of truth if this
+table and the code ever differ.)
+
+### II.4.5 Database schema
+
+```mermaid
+erDiagram
+    aegis_project ||--o{ aegis_project_op : "ops 1..last_seq"
+    aegis_project ||--o{ aegis_baseline : "frozen versions"
+    aegis_user ||--o{ aegis_session : "ON DELETE CASCADE"
+    aegis_project {
+        uuid project_id PK
+        uuid org_id
+        text name
+        text methodology_key
+        text methodology_version
+        bigint created_ms
+        bigint last_seq
+        bytea last_hash
+        bigint snapshot_seq
+        bytea snapshot
+    }
+    aegis_project_op {
+        uuid project_id PK
+        bigint seq PK
+        text actor
+        bigint timestamp_ms
+        bytea op
+        bytea prev_hash
+        bytea hash
+    }
+    aegis_baseline {
+        uuid baseline_id PK
+        uuid project_id FK
+        text name
+        bigint seq
+        text created_by
+        bigint created_ms
+        bytea snapshot
+    }
+    aegis_user {
+        uuid org_id PK
+        text username PK
+        text display_name
+        text password_hash
+        boolean is_admin
+        boolean disabled
+        bigint created_ms
+        bigint last_login_ms
+    }
+    aegis_session {
+        bytea token_hash PK
+        uuid org_id
+        text username
+        bigint created_ms
+        bigint expires_ms
+        text client_name
+    }
+    aegis_setting {
+        uuid org_id PK
+        text key PK
+        text value
+    }
+    aegis_event {
+        bigint event_id PK
+        uuid org_id
+        bigint at_ms
+        text actor
+        text kind
+        text target
+        text detail
+    }
+```
+
+Migrations: `001_init.sql` (projects and ops), `002_accounts_baselines.sql`
+(users, sessions, events, baselines, op time index), `003_settings.sql`
+(`aegis_setting`: key and value per organization; today only
+`password_login` = `on` or `off`, no row means on). Deleting a project
+deletes its baselines and ops in one transaction.
+
+### II.4.6 Seat restore
+
+The license counts active editors in a rolling window (`SEAT_WINDOW_SECS`).
+After a restart the ledger would be empty, so a restart could let extra
+editors in. At start the server reads `active_editors` (distinct actors with
+ops inside the window, from the `aegis_project_op_time` index) and calls
+`LicenseGate::restore()`. The ledger is derived state rebuilt from the store
+(D10).
+
+## II.5 Client core (`crates/aegis-client`)
+
+### II.5.1 Modules and types
+
+| Module | Types | Notes |
+|---|---|---|
+| `transport.rs` | `TransportKind { Grpc, GrpcWeb }`, `Transport { Grpc(Channel), Web { client, origin } }`, `check_url()` | `auto`: gRPC-Web for `https://`, gRPC otherwise. HTTPS uses rustls with the OS trust store. `CONNECT_TIMEOUT = 10 s`, `CALL_TIMEOUT = 30 s`. |
+| `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name, password_enabled }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` holds the token and sends it as `authorization: Bearer`. |
+| `error.rs` | `ClientError`, `ServerCode` | `ServerCode` maps status details to cases the UI can explain (`InvalidCredentials`, `Throttled { retry_after_s }`, `PasswordLoginOff`, `LockHeld`, ...). |
+| `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, watch_silence }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
+| `workspace.rs` | `Workspace`, `Submission`, `Origin`, `WorkspaceError`, `MAX_SUBMIT_OPS` | Optimistic local copy. Local ops apply at once and are kept with their inverses until the server confirms. Pending ops are sent in batches of at most `MAX_SUBMIT_OPS`, so a long offline queue is never rejected as too large. |
+| `commands.rs` | `Edit`, `EditError`, `Command` | `Edit` is a user intent (add asset, rate a step, link a control, ...). It expands to model `Op`s, including safe cascades (deleting an asset first unlinks what uses it). `Command` is everything the UI can ask of the session. |
+| `outline.rs` | `OutlineError`, `parse()`, `render()` | Text outline editor for attack trees (indent = child, `OR`/`AND`/`SEQ` gates, `- ` steps; lines with the same text are one shared node). |
+| `pages.rs` | `Vocabulary`, `Overview`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
+| `view.rs` | `Page` (13 pages), `Selection`, `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice` | What the window shows for the current page and selection. |
+| `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` | The whole UI state, published on a `watch` channel. |
+| `report.rs` | `ExportKind { Report, RiskRegister, TreeSvg }`, `ReportContext` | Builds export files on the client. Text is escaped for HTML and CSV (formula injection guarded). |
+| `settings.rs` | `Settings { server_url, transport, username, export_dir }`, `export_file_name()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic write. Never a password or token. |
+| `time.rs` | `date_ms()`, `date_time_ms()` | UTC dates without a time crate. |
+| `updates.rs` | `UpdateChecker`, `UpdateOffer`, `UpdateStatus` | Signed update manifest check. |
+| `examples/smoke.rs` | | Smoke test of a running server: login options, password login, `WhoAmI`, `ListProjects`, logout (`docs/railway.md`). |
+
+### II.5.2 Edit flow
+
+```mermaid
+sequenceDiagram
+    participant UI as Window
+    participant S as Session actor
+    participant W as Workspace
+    participant Srv as Server
+    UI->>S: Command::Edit(Edit)
+    S->>W: expand Edit to Ops, apply locally (keep inverses)
+    S-->>UI: new ViewModel (optimistic)
+    S->>Srv: SubmitOps (batches <= MAX_SUBMIT_OPS, with lease token)
+    alt accepted
+        Srv-->>S: seq numbers
+        S->>W: confirm
+    else rejected
+        Srv-->>S: error
+        S->>W: roll back with inverses
+        S-->>UI: Notice (error)
+    end
+    Srv-->>S: Watch: ops from others, lease, risks, heartbeat
+    S->>W: rebase local ops on the new server ops
+    S-->>UI: new ViewModel
+```
+
+### II.5.3 Baselines and comparison
+
+`Command::CreateBaseline(name)` calls `CreateBaseline`; the server freezes
+the current snapshot. `Command::Compare(baseline)` downloads it with
+`GetBaseline` (a chunk stream, size capped), loads it as a `Project`, and
+calls `Project::diff` against the live project. `pages::comparison()` turns
+the `ProjectDiff` into `DiffLine`s for the Versions page.
+
+### II.5.4 Exports
+
+The client writes the file into the export folder with a safe name
+(`export_file_name`: no path separators, so it cannot leave the folder) and
+then calls `RecordExport`, so the server's event log shows who exported what.
+
+## II.6 Desktop app (`crates/aegis-shell`)
+
+| File | Types | Notes |
+|---|---|---|
+| `src/main.rs` | | Starts a 2-thread tokio runtime and the window (software renderer). Reads `AEGIS_URL`, `AEGIS_TRANSPORT`, `AEGIS_DEV_USER`, `AEGIS_DEV_ADMIN`. |
+| `src/launcher.rs` | `Launcher` | Owns the login steps: server screen, ask the server for `GetLoginOptions`, password or company login, start the `Session`, log out, change server. Saves `Settings`. Network results come back on a bounded channel and are handled on the UI thread in `pump()`. |
+| `src/controller.rs` | `Controller`, `Hooks`, `PasswordLogIn` | Copies the `ViewModel` into the window and turns window callbacks into `Command`s. |
+| `src/provider.rs` | `AppProvider { Oidc, Password, Dev }`, `OidcProvider`, `OidcSettings`, `PasswordProvider` | Credentials for each call. `PasswordProvider` can keep the session token in the OS keychain ("keep me logged in"); the password itself is never stored. |
+| `src/headless.rs` | `Headless`, `Frame` | Software-rendered window for tests and screenshots. |
+| `ui/app.slint` | `AppWindow` | Menu bar (File, Edit, View, Project, Admin, Help), TARA steps sidebar, one page per `Page`, inspector panel, status band. Connection screens: `connection` 4 = server, 3 = log in, 1 = online. |
+| `ui/widgets.slint` | shared widgets | Buttons, fields, cards, badges, icons. |
+| `ui/icons/*.svg` | | Lucide icons, ISC license (`ui/icons/LICENSE-lucide.txt`), allowed by the license policy (D5). |
+
+### II.6.1 Password login flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant L as Launcher
+    participant P as Public (Accounts)
+    participant A as Accounts (server)
+    U->>L: server address + transport
+    L->>L: check_url()
+    L->>P: GetLoginOptions
+    P-->>L: Password, server name
+    L-->>U: password form
+    Note over L,U: With a company login and password_enabled the company<br/>login leads and "Use a user name and password" opens this form.<br/>"Use company login" asks the server again.
+    U->>L: user, password, keep me logged in
+    L->>P: LogIn
+    P->>A: log_in (throttle, Argon2id, decoy)
+    A-->>P: token, expiry, user
+    P-->>L: PasswordSession
+    L->>L: PasswordProvider.set(token), keychain if kept
+    L->>L: start Session (user = server subject)
+    L-->>U: projects page
+```
+
+The session user is set to the subject the server returns. The edit lock
+holder is compared with it, so the band says "editing" and not "someone
+else".
+
+## II.7 Other crates
+
+| Crate | Main types | Role |
+|---|---|---|
+| `aegis-auth` | `OidcClient`, `Session<H, S>`, `Authenticator<H>`, `AccessTokenValidator<H>`, `DpopVerifier`, `DeviceKey`, `JwksCache<H>`, `Vault<S>`, `OsKeychain`, `HyperClient`, `tls::{system_roots, client_config, https_connector}` | OIDC with PKCE and DPoP for SSO, token validation on the server, keychain access, and the shared rustls setup (OS trust store, ring). |
+| `aegis-license` | `License`, `LicenseState`, `TrustedKeys`, `Issuer`, `SeatLedger`, `Admission`, `Manifest`, `Version`, `Artifact`, `Offer` | Signed license tokens, seat counting (`restore()` after restart), signed update manifests. |
+| `aegis-canvas` | `Scene`, `Layout`, `Forest`, `DisplayList`, `Item`, `Viewport`, `SpatialIndex`, `Tone`, `Paint`, `Stroke`, `SvgOptions`, `RenderOptions` | Attack tree layout, hit testing, pixel and SVG drawing. `Tone` is `Ord`, so it can be a sort key. |
+| `aegis-proto` | generated | `tonic` and `prost` code from `aegis.proto`. |
+
+## II.8 Deployment
+
+| File | Purpose |
+|---|---|
+| `deploy/Dockerfile` | Two-stage build. `ARG CARGO_FEATURES` (for example `dev-license` on the test server). Runs as a non-root user. `ENV PORT=50051`. |
+| `railway.json` | Railway: Dockerfile builder, health check `/healthz`, restart on failure (5 tries). |
+| `deploy/compose.test.yaml` | Local test stack: server with password login and dev license, PostgreSQL. |
+| `docs/railway.md` | How the Railway test server is set up and used. |
+
+## II.9 Guideline map
+
+| Rule | Where it shows |
+|---|---|
+| R3 caps | `ServerConfig`, `AccountsConfig.max_users`, throttle map cap, settings read cap, stream size caps, `MAX_SUBMIT_OPS` |
+| R4 bounded queues | actor mailbox, observer buffer, launcher event channel, hashing semaphore |
+| R5 blocking work off async | Argon2id on `spawn_blocking` |
+| R6 timeouts | `CALL_TIMEOUT` (server and client), `CONNECT_TIMEOUT`, `hashing_wait`, `mailbox_wait`, `Watch` heartbeat (server) and `watch_silence` (client, 60 s) |
+| C1 one owner | project actor, client session actor |
+| C2 no lock across await | `Accounts` state and throttle mutexes |
+| D7 ordered output | `BTreeMap` in `pages.rs` and `Accounts` users |
+| D10 derived state | accounts cache, seat ledger, project evaluation caches |
+| D11 enum dispatch | `AccountBackend`, `AppProvider`, `Transport`, `DbTls` |
+| P4 determinism | page rows sorted by stable keys, reports in fixed order |
+| Q3 no unwrap in library code | library code returns typed errors; `expect` only in tests and with a proven, commented invariant |
