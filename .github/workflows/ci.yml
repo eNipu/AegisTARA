@@ -140,6 +140,20 @@ jobs:
       - name: tools/deny-fixtures/run.sh
         run: tools/deny-fixtures/run.sh
 
+  # The server image was only ever built by hand (gap G12). This job builds the
+  # customer image and a test image from deploy/Dockerfile and starts the
+  # test one. Docker and curl are preinstalled on the runner.
+  image:
+    name: server image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: deploy/verify-image.sh
+        run: deploy/verify-image.sh
+
   msrv:
     name: MSRV cargo check
     runs-on: ubuntu-24.04
