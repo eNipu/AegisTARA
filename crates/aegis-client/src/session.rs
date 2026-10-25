@@ -939,6 +939,10 @@ impl<P: CredentialProvider> Actor<P> {
                     }
                 }
                 .ok_or_else(|| "there is nothing to export".to_owned())?;
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)
+                        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+                }
                 std::fs::write(&path, text)
                     .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 Ok::<_, String>(path.display().to_string())
@@ -1941,6 +1945,7 @@ impl<P: CredentialProvider> Actor<P> {
                 comparison,
                 history: open.history.clone(),
                 last_export: open.last_export.clone(),
+                nav_counts: nav_counts(open),
                 entry: open.entry.clone(),
                 mode: open.mode,
                 lock_holder: open.lock_holder.clone(),
@@ -2039,6 +2044,25 @@ fn page_data(open: &Open) -> PageData {
         Page::Versions | Page::History | Page::Reports | Page::Admin => {}
     }
     d
+}
+
+/// The sidebar counts. Time O(project) for the lint; the rest O(1).
+fn nav_counts(open: &Open) -> Vec<Option<usize>> {
+    let p = open.ws.project();
+    Page::ALL
+        .iter()
+        .map(|page| match page {
+            Page::Assets => Some(p.asset_count()),
+            Page::Damage => Some(p.damage_scenario_count()),
+            Page::Threats | Page::Risks => Some(p.threat_scenario_count()),
+            Page::Trees => Some(p.attack_tree_count()),
+            Page::Controls => Some(p.security_control_count()),
+            Page::Goals => Some(p.cybersecurity_goal_count() + p.cybersecurity_claim_count()),
+            Page::Problems => Some(p.lint().len()),
+            Page::Versions => Some(open.baselines.len()).filter(|n| *n > 0),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `AddAsset` as "Add asset".

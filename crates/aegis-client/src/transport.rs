@@ -104,13 +104,13 @@ pub enum Transport {
 ///
 /// [`ClientError::Transport`] otherwise.
 pub fn check_url(url: &str) -> Result<http::Uri, ClientError> {
-    let uri: http::Uri = url
-        .parse()
-        .map_err(|_| ClientError::Transport("the server address is not a URL".into()))?;
+    let uri: http::Uri = url.parse().map_err(|_| {
+        ClientError::Transport("the server address must look like https://aegis.example.com".into())
+    })?;
     match (uri.scheme_str(), uri.host()) {
         (Some("http" | "https"), Some(host)) if !host.is_empty() => Ok(uri),
         _ => Err(ClientError::Transport(
-            "the server address must start with http:// or https://".into(),
+            "the server address must look like https://aegis.example.com".into(),
         )),
     }
 }

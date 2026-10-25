@@ -459,7 +459,7 @@ fn explain_risk(
         .map_or("?", |d| d.name());
     let cat = entry.category();
     vec![format!(
-        "{what} {} = {} impact \"{}\" ({}) x feasibility {}. The worst of {} damage rating(s) decides.",
+        "{what}: {} = {} impact \"{}\" ({}) x feasibility {}. The worst of {} damage rating(s) decides.",
         m.risk_level_label(entry.risk()).unwrap_or("?"),
         m.impact_category_label(cat).unwrap_or("?"),
         damage,
@@ -480,12 +480,12 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
     let mut why = explain_risk(
         project,
         ws.cache().evaluate_risk(project, id),
-        "Risk before controls:",
+        "Risk before controls",
     );
     why.extend(explain_risk(
         project,
         ws.cache().evaluate_residual_risk(project, id),
-        "Risk after controls:",
+        "Risk after controls",
     ));
     if t.attack_tree().is_some() && t.direct_feasibility().is_some() {
         why.push(

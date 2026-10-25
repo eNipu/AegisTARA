@@ -8,6 +8,7 @@ pub mod pages;
 pub mod report;
 pub mod sample;
 pub mod session;
+pub mod settings;
 pub mod state;
 pub mod time;
 pub mod transport;
