@@ -10,13 +10,23 @@ A learning project: a Threat Analysis and Risk Assessment (TARA) tool, written f
 
 ## Status
 
-The deterministic core is built and verified; the server and desktop client
-are being built on top of it. Roadmap and open items:
-[docs/status-and-roadmap.md](docs/status-and-roadmap.md).
+The deterministic core, the server, login, the canvas engine, the client
+core, the desktop shell, offline licensing, live observers and release
+scaffolding are built and tested end to end. Reviews, TLS to PostgreSQL and
+`https://` login are still open. Roadmap and open items:
+[docs/status-and-roadmap.md](docs/status-and-roadmap.md). Running the server:
+[docs/deployment.md](docs/deployment.md).
 
 | Crate | Role |
 |---|---|
 | [`aegis-model`](crates/aegis-model) | Domain model, risk engine, analysis, persistence formats |
+| [`aegis-proto`](crates/aegis-proto) | gRPC messages and service shared by client and server |
+| [`aegis-server`](crates/aegis-server) | The server: actors, edit leases, PostgreSQL storage, audit, license gate |
+| [`aegis-auth`](crates/aegis-auth) | Login: OIDC with PKCE, DPoP, keychain |
+| [`aegis-canvas`](crates/aegis-canvas) | Attack tree layout, hit testing, display list, SVG |
+| [`aegis-client`](crates/aegis-client) | Client core with no UI toolkit: editing, sync, view model, update checks |
+| [`aegis-shell`](crates/aegis-shell) | The Slint desktop window (the only crate that uses Slint) |
+| [`aegis-license`](crates/aegis-license) | License files and signed update manifests |
 
 Every struct, field, and call flow of `aegis-model` is documented in
 [docs/architecture.md](docs/architecture.md). Build and test from the repo
@@ -37,6 +47,8 @@ cargo test --workspace
 6. [docs/architecture.md](docs/architecture.md): reference for `aegis-model`.
 7. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
 8. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
+9. [docs/deployment.md](docs/deployment.md) and [docs/release-checklist.md](docs/release-checklist.md): running and shipping the server.
+10. [docs/adr/](docs/adr): one decision record per job (0025 to 0034 cover the server, login, canvas, client, shell, licensing, observers and release).
 
 ## Continuous integration
 

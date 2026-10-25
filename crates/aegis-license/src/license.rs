@@ -42,7 +42,6 @@ const MAX_ID: usize = 64;
 const MAX_KID: usize = 32;
 const MAX_FEATURE: usize = 64;
 
-#[cfg(any(feature = "issuer", test))]
 /// What a license grants. Times are seconds since the Unix epoch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
