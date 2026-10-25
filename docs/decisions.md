@@ -11,6 +11,8 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Many users per company. One editor per project at a time in v1.
 - Proprietary product. Open source libraries are welcome, but only with permissive licenses.
 - AI features are in the backlog. The v1 architecture gets ready for them now.
+- Password login for testing. Company SSO (Entra ID, Google, other OIDC) when a customer orders it.
+- The test server runs on Railway.
 
 ---
 
@@ -87,8 +89,22 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Still needed from the owner:** a yes or no on both. If D7 is rejected, delete `crates/aegis-shell` and its exception.
 - **Housekeeping (G3):** the branches `claude/pipeline-tasks-3ca78e`, `factory/016-store-trees-and-provenance`, `factory/jobs-013-015` and `factory/jobs-017-019` are fully merged into `master` (0 commits ahead, checked 2026-10-25). The mockup content is in `docs/design/`. No local worktree exists. Deleting remote branches is left to the owner.
 
+## D10. Password login for testing; company SSO when a customer orders it
+
+- **Date:** 2026-10-25
+- **Decision:** the server has a simple user name and password login (`AEGIS_AUTH=password`). It is for the test server, demos and small trials. A customer project can turn it off: with `AEGIS_AUTH=oidc` the `LogIn` call answers that password login is off and the app shows only the company login.
+- **Backlog:** single sign-on with Microsoft Entra ID, Google, or the customer's own OIDC provider is added when a customer order names the provider (`factory/backlog.md`). The OIDC and DPoP code from job 031 is already in place; each provider needs its own setup, test and guide.
+- **Limits of password login:** Argon2id hashes, opaque session tokens stored as SHA-256, a per-name throttle, an event log. No password reset by e-mail, no MFA. These are reasons not to use it for customer production data.
+
+## D11. Test server on Railway
+
+- **Date:** 2026-10-25
+- **Decision:** the shared test server runs on the owner's Railway account (`docs/railway.md`), built from the branch with `deploy/Dockerfile` and the `dev-license` feature, with Railway PostgreSQL. Railway's edge forwards HTTP/1.1, so the app reaches it with gRPC-Web.
+- **Not for customers:** the `dev-license` build skips the license check. Release builds never enable that feature (`docs/release-checklist.md`).
+
 ## Open
 
 - Confirm D4 interpretation (working assumption in D9).
 - Accept or reject the Slint attribution condition (D7, working assumption in D9).
 - Delete the four merged remote branches listed in D9.
+- Pick the first SSO provider when a customer order arrives (D10).

@@ -10,26 +10,29 @@ A learning project: a Threat Analysis and Risk Assessment (TARA) tool, written f
 
 ## Status
 
-The deterministic core, the server, login, the canvas engine, the client
-core, the desktop shell, offline licensing, live observers and release
-scaffolding are built and tested end to end. Reviews, TLS to PostgreSQL and
-`https://` login are still open. Roadmap and open items:
-[docs/status-and-roadmap.md](docs/status-and-roadmap.md). Running the server:
-[docs/deployment.md](docs/deployment.md).
+The deterministic core, the server, password and OIDC login, the canvas
+engine, the client core, a desktop app with every TARA page, offline
+licensing, live observers, baselines, reports and release scaffolding are
+built and tested end to end. A test server runs on Railway
+([docs/railway.md](docs/railway.md)). The reviews are still open
+([docs/review-requirements.md](docs/review-requirements.md)). Roadmap and
+open items: [docs/status-and-roadmap.md](docs/status-and-roadmap.md).
+Running the server: [docs/deployment.md](docs/deployment.md).
 
 | Crate | Role |
 |---|---|
 | [`aegis-model`](crates/aegis-model) | Domain model, risk engine, analysis, persistence formats |
 | [`aegis-proto`](crates/aegis-proto) | gRPC messages and service shared by client and server |
 | [`aegis-server`](crates/aegis-server) | The server: actors, edit leases, PostgreSQL storage, audit, license gate |
-| [`aegis-auth`](crates/aegis-auth) | Login: OIDC with PKCE, DPoP, keychain |
+| [`aegis-auth`](crates/aegis-auth) | Login: OIDC with PKCE, DPoP, keychain, shared TLS setup |
 | [`aegis-canvas`](crates/aegis-canvas) | Attack tree layout, hit testing, display list, SVG |
 | [`aegis-client`](crates/aegis-client) | Client core with no UI toolkit: editing, sync, view model, update checks |
 | [`aegis-shell`](crates/aegis-shell) | The Slint desktop window (the only crate that uses Slint) |
 | [`aegis-license`](crates/aegis-license) | License files and signed update manifests |
 
-Every struct, field, and call flow of `aegis-model` is documented in
-[docs/architecture.md](docs/architecture.md). Build and test from the repo
+Every struct, field, and call flow is documented in
+[docs/architecture.md](docs/architecture.md) (Part I: `aegis-model`, Part II:
+the rest of the system). Build and test from the repo
 root:
 
 ```sh
@@ -44,11 +47,13 @@ cargo test --workspace
 3. [docs/ai-backlog.md](docs/ai-backlog.md): how AI features fit, and in which order.
 4. [docs/engineering-standards.md](docs/engineering-standards.md): coding requirements for performance, data structures, algorithms, and learning.
 5. [docs/status-and-roadmap.md](docs/status-and-roadmap.md): project status and the handoff roadmap.
-6. [docs/architecture.md](docs/architecture.md): reference for `aegis-model`.
+6. [docs/architecture.md](docs/architecture.md): architecture reference for the whole system.
 7. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
 8. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
 9. [docs/deployment.md](docs/deployment.md) and [docs/release-checklist.md](docs/release-checklist.md): running and shipping the server.
-10. [docs/adr/](docs/adr): one decision record per job (0025 to 0034 cover the server, login, canvas, client, shell, licensing, observers and release).
+10. [docs/adr/](docs/adr): one decision record per job (0025 to 0038 cover the server, login, canvas, client, shell, licensing, observers, release, password login, gRPC-Web, baselines and the TARA pages).
+11. [docs/review-requirements.md](docs/review-requirements.md): what to review before the work is accepted.
+12. [docs/railway.md](docs/railway.md): the test server on Railway.
 
 ## Continuous integration
 
