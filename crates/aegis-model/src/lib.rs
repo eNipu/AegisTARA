@@ -245,6 +245,14 @@ mod threat;
 mod topo;
 mod tree;
 
+/// Version of this crate, which is the engine version. A client and a server
+/// must run the same engine version for a project (direction section 3).
+///
+/// ```
+/// assert!(!aegis_model::ENGINE_VERSION.is_empty());
+/// ```
+pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub use asset::{Asset, PropertySet};
 pub use control::{
     CybersecurityClaim, CybersecurityGoal, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
@@ -280,7 +288,7 @@ pub use sensitivity::{
 pub use store::{
     Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
     MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,
-    MAX_PROJECT_FILE_BYTES, OpLogReader, OpLogWriter, VocabKind,
+    MAX_PROJECT_FILE_BYTES, OpCodec, OpLogReader, OpLogWriter, VocabKind,
 };
 pub use threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
 pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node};

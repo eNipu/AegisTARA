@@ -49,7 +49,7 @@ pub(crate) mod wire;
 
 use std::fmt;
 
-pub use op_log::{LoggedOp, OpLogReader, OpLogWriter};
+pub use op_log::{LoggedOp, OpCodec, OpLogReader, OpLogWriter};
 
 use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS};
 use crate::methodology::{

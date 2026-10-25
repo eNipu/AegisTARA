@@ -1,0 +1,7 @@
+# Public keys that may sign AegisTARA licenses, one per line: `key-id public-key`.
+# The public key is 32 bytes in base64url without padding (`aegis-license keygen`
+# prints it). A line starting with `#` is a comment. At most 8 keys, so a key can
+# be rotated and the old one retired later.
+#
+# This build carries no key yet, so it accepts no license. Before the first
+# release, the owner adds the production key here (docs/release-checklist.md).

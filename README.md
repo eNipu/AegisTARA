@@ -8,7 +8,34 @@ A learning project: a Threat Analysis and Risk Assessment (TARA) tool, written f
 - Visual attack trees with feasibility scoring, explain-why for every number, versions and baselines, and executive reports.
 - AI features are planned in the backlog.
 
-Status: direction set. No code yet.
+## Status
+
+The deterministic core, the server, login, the canvas engine, the client
+core, the desktop shell, offline licensing, live observers and release
+scaffolding are built and tested end to end. Reviews, TLS to PostgreSQL and
+`https://` login are still open. Roadmap and open items:
+[docs/status-and-roadmap.md](docs/status-and-roadmap.md). Running the server:
+[docs/deployment.md](docs/deployment.md).
+
+| Crate | Role |
+|---|---|
+| [`aegis-model`](crates/aegis-model) | Domain model, risk engine, analysis, persistence formats |
+| [`aegis-proto`](crates/aegis-proto) | gRPC messages and service shared by client and server |
+| [`aegis-server`](crates/aegis-server) | The server: actors, edit leases, PostgreSQL storage, audit, license gate |
+| [`aegis-auth`](crates/aegis-auth) | Login: OIDC with PKCE, DPoP, keychain |
+| [`aegis-canvas`](crates/aegis-canvas) | Attack tree layout, hit testing, display list, SVG |
+| [`aegis-client`](crates/aegis-client) | Client core with no UI toolkit: editing, sync, view model, update checks |
+| [`aegis-shell`](crates/aegis-shell) | The Slint desktop window (the only crate that uses Slint) |
+| [`aegis-license`](crates/aegis-license) | License files and signed update manifests |
+
+Every struct, field, and call flow of `aegis-model` is documented in
+[docs/architecture.md](docs/architecture.md). Build and test from the repo
+root:
+
+```sh
+cargo build --workspace
+cargo test --workspace
+```
 
 ## Documents
 
@@ -16,13 +43,17 @@ Status: direction set. No code yet.
 2. [docs/direction-v1.md](docs/direction-v1.md): desktop client, customer-hosted server, login, v1 scope.
 3. [docs/ai-backlog.md](docs/ai-backlog.md): how AI features fit, and in which order.
 4. [docs/engineering-standards.md](docs/engineering-standards.md): coding requirements for performance, data structures, algorithms, and learning.
-5. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
-6. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
+5. [docs/status-and-roadmap.md](docs/status-and-roadmap.md): project status and the handoff roadmap.
+6. [docs/architecture.md](docs/architecture.md): reference for `aegis-model`.
+7. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
+8. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
+9. [docs/deployment.md](docs/deployment.md) and [docs/release-checklist.md](docs/release-checklist.md): running and shipping the server.
+10. [docs/adr/](docs/adr): one decision record per job (0025 to 0034 cover the server, login, canvas, client, shell, licensing, observers and release).
 
 ## Continuous integration
 
 Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-on each production crate (`crates/*`): `cargo fmt --check`,
+on each production crate (`crates/*`, one Cargo workspace, ADR 0025): `cargo fmt --check`,
 `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`,
 the `cargo-deny` policy below, and `cargo check --locked` at the minimum
 supported Rust version (1.99.1). Rationale: [docs/adr/0007-workspace-ci.md](docs/adr/0007-workspace-ci.md).

@@ -51,4 +51,22 @@ impl Methodology {
     pub fn iso21434_r155() -> Result<Methodology, PackError> {
         Methodology::read_pack(BUILTIN.as_bytes())
     }
+
+    /// The pack file the built-in methodology is decoded from (format
+    /// `aegis-methodology-pack` v1, canonical JSON). A server hands these
+    /// bytes to clients that need the vocabulary.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let pack = Methodology::iso21434_r155_pack();
+    /// assert_eq!(Methodology::read_pack(pack.as_bytes())?, Methodology::iso21434_r155()?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn iso21434_r155_pack() -> &'static str {
+        BUILTIN
+    }
 }

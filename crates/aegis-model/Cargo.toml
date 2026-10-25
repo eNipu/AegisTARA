@@ -1,22 +1,22 @@
 [package]
 name = "aegis-model"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.99.1"
-publish = false
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 description = "AegisTARA domain model: arena-based attack trees with typed IDs."
-license = "LicenseRef-Proprietary"
+license.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-uuid = { version = "1", features = ["v7"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-dhat = "0.3.3"
-divan = "0.1.21"
-proptest = "1"
+dhat.workspace = true
+divan.workspace = true
+proptest.workspace = true
 
 [[bench]]
 name = "parents_time"

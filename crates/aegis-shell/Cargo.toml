@@ -1,0 +1,33 @@
+[package]
+name = "aegis-shell"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "AegisTARA desktop shell: the Slint window over the client core."
+# The shell links Slint, used under its Royalty-free License 2.0 (decisions
+# D7 and D9): the app shows an "About Slint" notice and the download page
+# carries the Slint badge. See docs/release-checklist.md.
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+aegis-auth = { workspace = true, features = ["os-keychain"] }
+aegis-canvas.workspace = true
+aegis-client.workspace = true
+aegis-model.workspace = true
+slint.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
+
+[dev-dependencies]
+aegis-auth = { workspace = true, features = ["test-support"] }
+aegis-server.workspace = true
+png.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-stream.workspace = true
+tower.workspace = true

@@ -1,0 +1,7 @@
+# Public keys that may sign AegisTARA update manifests: `key-id public-key`,
+# same format as vendor.keys. Kept separate from the license keys, so a leaked
+# license key cannot ship code to customers' computers.
+#
+# This build carries no key yet, so the client trusts no update. Before the
+# first release, the owner adds the production update key here
+# (docs/release-checklist.md).

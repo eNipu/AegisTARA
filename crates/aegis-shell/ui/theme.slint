@@ -1,0 +1,52 @@
+// Colors of the "drafting film" look (docs/design/aegis-design.html).
+// The canvas engine sends paint *tokens* (integers); this file turns them
+// into colors, so dark mode is a palette switch here and costs the Rust side
+// nothing. Tokens: aegis_canvas::Paint, see src/adapter.rs.
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+
+    out property <color> sheet: dark ? #151B21 : #E9EDF0;
+    out property <color> panel: dark ? #1E262E : #FFFFFF;
+    out property <color> ink: dark ? #E4EAF0 : #1D2733;
+    out property <color> graphite: dark ? #9AA8B5 : #5B6875;
+    out property <color> rule: dark ? #35424E : #C3CBD3;
+    out property <color> wash: dark ? #252F38 : #F3F5F7;
+    out property <color> accent: dark ? #A894F2 : #5A3FC0;
+    out property <color> accent-wash: dark ? #2B2547 : #ECE8FA;
+    out property <color> band: dark ? #E4EAF0 : #1D2733;
+    out property <color> band-text: dark ? #151B21 : #FFFFFF;
+    // Rating colors: Okabe-Ito based, the same in both themes.
+    out property <color> very-low: #009E73;
+    out property <color> low: #56B4E9;
+    out property <color> medium: #E69F00;
+    out property <color> high: #D55E00;
+
+    // Paint tokens from the canvas engine (src/adapter.rs keeps the numbers).
+    pure public function paint(token: int) -> color {
+        if (token == 0) { return sheet; }
+        if (token == 1) { return panel; }
+        if (token == 2) { return ink; }
+        if (token == 3) { return graphite; }
+        if (token == 4) { return rule; }
+        if (token == 5) { return wash; }
+        if (token == 6) { return accent; }
+        if (token == 7) { return accent-wash; }
+        if (token == 9) { return very-low; }
+        if (token == 10) { return low; }
+        if (token == 11) { return medium; }
+        if (token == 12) { return high; }
+        // 8: not rated, and anything unknown.
+        return rule;
+    }
+
+    // Rating buckets as used by the lists (0 = not rated, 1..4 = very low..high).
+    pure public function tone(bucket: int) -> color {
+        if (bucket == 1) { return very-low; }
+        if (bucket == 2) { return low; }
+        if (bucket == 3) { return medium; }
+        if (bucket == 4) { return high; }
+        return rule;
+    }
+}
