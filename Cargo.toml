@@ -24,6 +24,16 @@ uuid = { version = "1", features = ["v7"] }
 dhat = "0.3.3"
 divan = "0.1.21"
 proptest = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = { version = "0.14", default-features = false, features = ["codegen", "transport", "router"] }
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+prost = "0.14"
+bytes = "1"
+protox = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 aegis-model = { path = "crates/aegis-model" }
 
 # Shipped binaries (standards R10). Tests and benches use the dev profile.

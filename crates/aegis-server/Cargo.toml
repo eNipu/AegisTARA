@@ -1,0 +1,29 @@
+[package]
+name = "aegis-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "AegisTARA server: gRPC API over the aegis-model engine, edit leases, live observers."
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+aegis-model.workspace = true
+bytes.workspace = true
+prost.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

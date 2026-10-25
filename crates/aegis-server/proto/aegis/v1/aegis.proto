@@ -1,0 +1,194 @@
+// AegisTARA server API, version 1 (job 029, docs/adr/0026-server-skeleton.md).
+//
+// Rules the messages follow:
+// - IDs are hyphenated lowercase UUID text.
+// - An op travels as the bytes `OpCodec` produces: canonical JSON, the same
+//   shape as the `op` member of an op log record. The server decodes it
+//   with the capped, strict decoder of aegis-model (R3).
+// - Every repeated field and every stream has a server-side bound (R4).
+syntax = "proto3";
+
+package aegis.v1;
+
+service Aegis {
+  // Server identity, engine version, and the methodologies it can host.
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
+
+  // Returns the methodology pack file (format aegis-methodology-pack v1).
+  rpc GetMethodology(GetMethodologyRequest) returns (GetMethodologyResponse);
+
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+
+  // Streams the project snapshot (format aegis-project v1) in chunks. The
+  // first chunk carries the header fields. `last_seq` is the sequence number
+  // the snapshot is current as of; pass it to Watch to follow later ops.
+  rpc OpenProject(OpenProjectRequest) returns (stream OpenProjectChunk);
+
+  // Edit lease (decision D4): one editor per project at a time.
+  rpc AcquireLock(LockRequest) returns (Lease);
+  rpc RenewLock(RenewLockRequest) returns (Lease);
+  rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockResponse);
+  // Admin only. Drops the current lease, whoever holds it.
+  rpc BreakLock(LockRequest) returns (ReleaseLockResponse);
+
+  // Validates and applies a batch of ops atomically: either every op is
+  // accepted, or none is and the project is unchanged. Requires the lease.
+  rpc SubmitOps(SubmitOpsRequest) returns (SubmitOpsResponse);
+
+  // Streams accepted ops from `after_seq`, then live. Read-only; needs no
+  // lease. Ends with OUT_OF_RANGE if the client fell too far behind: reopen
+  // the project and watch again from its `last_seq`.
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+
+  // The official recomputed risks of every threat scenario.
+  rpc GetRisks(GetRisksRequest) returns (GetRisksResponse);
+}
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+  string server_version = 1;
+  // Version of the aegis-model engine compiled into the server. A client
+  // with a different engine version must show server results only.
+  string engine_version = 2;
+  repeated MethodologyInfo methodologies = 3;
+  uint64 lease_ms = 4;
+}
+
+message MethodologyInfo {
+  string key = 1;
+  string version = 2;
+  string label = 3;
+}
+
+message GetMethodologyRequest {
+  string key = 1;
+}
+
+message GetMethodologyResponse {
+  string key = 1;
+  string version = 2;
+  bytes pack = 3;
+}
+
+message CreateProjectRequest {
+  string name = 1;
+  string methodology_key = 2;
+}
+
+message CreateProjectResponse {
+  ProjectSummary project = 1;
+}
+
+message ListProjectsRequest {}
+
+message ListProjectsResponse {
+  repeated ProjectSummary projects = 1;
+}
+
+message ProjectSummary {
+  string project_id = 1;
+  string name = 2;
+  string methodology_key = 3;
+  string methodology_version = 4;
+  uint64 created_ms = 5;
+}
+
+message OpenProjectRequest {
+  string project_id = 1;
+}
+
+message OpenProjectChunk {
+  // Set on the first chunk only.
+  OpenProjectHeader header = 1;
+  bytes data = 2;
+}
+
+message OpenProjectHeader {
+  ProjectSummary project = 1;
+  uint64 last_seq = 2;
+  uint64 snapshot_bytes = 3;
+  // Current lease holder, empty if the project is unlocked.
+  string lock_holder = 4;
+}
+
+message LockRequest {
+  string project_id = 1;
+}
+
+message RenewLockRequest {
+  string project_id = 1;
+  string token = 2;
+}
+
+message ReleaseLockRequest {
+  string project_id = 1;
+  string token = 2;
+}
+
+message ReleaseLockResponse {}
+
+message Lease {
+  string project_id = 1;
+  string token = 2;
+  string holder = 3;
+  // Milliseconds until the lease expires. Renew well before this.
+  uint64 expires_in_ms = 4;
+}
+
+message SubmitOpsRequest {
+  string project_id = 1;
+  string lock_token = 2;
+  // The sequence number the client built its ops on. Rejected with
+  // FAILED_PRECONDITION if the project has moved on.
+  uint64 base_seq = 3;
+  repeated bytes ops = 4;
+}
+
+message SubmitOpsResponse {
+  // Sequence number of the last accepted op. The client already holds the
+  // inverse of every op it applied locally, so none is returned.
+  uint64 last_seq = 1;
+}
+
+message WatchRequest {
+  string project_id = 1;
+  uint64 after_seq = 2;
+}
+
+message WatchEvent {
+  oneof event {
+    AcceptedOp op = 1;
+    LockEvent lock = 2;
+  }
+}
+
+message AcceptedOp {
+  uint64 seq = 1;
+  string actor = 2;
+  uint64 timestamp_ms = 3;
+  bytes op = 4;
+}
+
+message LockEvent {
+  // Empty when the lock became free.
+  string holder = 1;
+}
+
+message GetRisksRequest {
+  string project_id = 1;
+}
+
+message GetRisksResponse {
+  uint64 as_of_seq = 1;
+  repeated ThreatRiskEntry threats = 2;
+}
+
+message ThreatRiskEntry {
+  string threat_id = 1;
+  // Risk level keys of the project's methodology; empty if not computable
+  // (for example a threat with no damage scenario).
+  string inherent_risk = 2;
+  string residual_risk = 3;
+}

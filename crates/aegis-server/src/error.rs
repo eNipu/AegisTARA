@@ -1,0 +1,183 @@
+//! Server errors and their mapping to gRPC status codes.
+//!
+//! Messages never echo user text (R6 of the model's rules carries over):
+//! they name IDs, positions, and counts only. Backend failures are logged
+//! with detail on the server and reach the client as a bare `UNAVAILABLE`.
+
+use aegis_model::{ModelError, StoreError};
+use tonic::metadata::MetadataValue;
+use tonic::{Code, Status};
+
+use crate::ids::ProjectId;
+use crate::store::StoreFault;
+
+/// Metadata key carrying a machine-readable error code on failed calls.
+pub const ERROR_CODE_HEADER: &str = "x-aegis-error";
+/// Metadata key carrying the project's current sequence number on
+/// `stale_base` errors.
+pub const CURRENT_SEQ_HEADER: &str = "x-aegis-current-seq";
+
+/// Everything the server can refuse or fail at.
+#[derive(Debug, thiserror::Error)]
+pub enum ServerError {
+    /// No such project.
+    #[error("unknown project {0}")]
+    UnknownProject(ProjectId),
+    /// A project ID that does not parse.
+    #[error("malformed project id")]
+    BadProjectId,
+    /// A request field is out of range or empty.
+    #[error("invalid request: {0}")]
+    InvalidRequest(&'static str),
+    /// A methodology key the server does not host.
+    #[error("unknown methodology")]
+    UnknownMethodology,
+    /// The caller is not an admin.
+    #[error("admin only")]
+    NotAdmin,
+    /// Another editor holds the lease.
+    #[error("project is locked by {holder}")]
+    LockHeld {
+        /// Subject of the current holder.
+        holder: String,
+    },
+    /// The project has no lease.
+    #[error("project is not locked")]
+    NotLocked,
+    /// The token does not match the current lease, or the lease expired.
+    #[error("lock token is not valid")]
+    LockInvalid,
+    /// The client built its ops on an older state.
+    #[error("project is at sequence {current}, not {base}")]
+    StaleBase {
+        /// Sequence number the client sent.
+        base: u64,
+        /// The project's current sequence number.
+        current: u64,
+    },
+    /// An op did not decode.
+    #[error("op {index} is malformed: {source}")]
+    MalformedOp {
+        /// Position in the batch.
+        index: usize,
+        /// Why.
+        source: StoreError,
+    },
+    /// An op decoded but the model refused it.
+    #[error("op {index} was rejected: {source}")]
+    RejectedOp {
+        /// Position in the batch.
+        index: usize,
+        /// Why.
+        source: ModelError,
+    },
+    /// An observer asked for ops the server no longer holds in memory, or
+    /// for a future sequence number.
+    #[error("sequence {after} is out of range; reopen the project")]
+    OutOfRange {
+        /// Sequence number asked for.
+        after: u64,
+    },
+    /// The project's queue or the server's project table is full.
+    #[error("server is busy")]
+    Busy,
+    /// Storage failed or returned data the server cannot trust.
+    #[error("storage failure")]
+    Store(#[from] StoreFault),
+    /// The project's actor stopped while the call was in flight. Retrying
+    /// loads it again.
+    #[error("project was unloaded; retry")]
+    Unloaded,
+    /// A bug or corrupted state; details are in the server log.
+    #[error("internal error")]
+    Internal,
+}
+
+impl ServerError {
+    /// The stable code clients branch on.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            ServerError::UnknownProject(_) => "unknown_project",
+            ServerError::BadProjectId => "bad_project_id",
+            ServerError::InvalidRequest(_) => "invalid_request",
+            ServerError::UnknownMethodology => "unknown_methodology",
+            ServerError::NotAdmin => "not_admin",
+            ServerError::LockHeld { .. } => "lock_held",
+            ServerError::NotLocked => "not_locked",
+            ServerError::LockInvalid => "lock_invalid",
+            ServerError::StaleBase { .. } => "stale_base",
+            ServerError::MalformedOp { .. } => "malformed_op",
+            ServerError::RejectedOp { .. } => "rejected_op",
+            ServerError::OutOfRange { .. } => "out_of_range",
+            ServerError::Busy => "busy",
+            ServerError::Store(_) => "storage",
+            ServerError::Unloaded => "unloaded",
+            ServerError::Internal => "internal",
+        }
+    }
+
+    fn grpc_code(&self) -> Code {
+        match self {
+            ServerError::UnknownProject(_) => Code::NotFound,
+            ServerError::BadProjectId
+            | ServerError::InvalidRequest(_)
+            | ServerError::UnknownMethodology
+            | ServerError::MalformedOp { .. }
+            | ServerError::RejectedOp { .. } => Code::InvalidArgument,
+            ServerError::NotAdmin => Code::PermissionDenied,
+            ServerError::LockHeld { .. }
+            | ServerError::NotLocked
+            | ServerError::LockInvalid
+            | ServerError::StaleBase { .. } => Code::FailedPrecondition,
+            ServerError::OutOfRange { .. } => Code::OutOfRange,
+            ServerError::Busy => Code::ResourceExhausted,
+            ServerError::Store(_) | ServerError::Unloaded => Code::Unavailable,
+            ServerError::Internal => Code::Internal,
+        }
+    }
+}
+
+impl From<ServerError> for Status {
+    fn from(e: ServerError) -> Status {
+        let mut status = Status::new(e.grpc_code(), e.to_string());
+        if let ServerError::Store(fault) = &e {
+            tracing::error!(%fault, "storage failure");
+        }
+        let md = status.metadata_mut();
+        md.insert(ERROR_CODE_HEADER, MetadataValue::from_static(e.code()));
+        if let ServerError::StaleBase { current, .. } = &e
+            && let Ok(v) = current.to_string().parse()
+        {
+            md.insert(CURRENT_SEQ_HEADER, v);
+        }
+        status
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_carries_code_and_header() {
+        let status: Status = ServerError::StaleBase {
+            base: 3,
+            current: 5,
+        }
+        .into();
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        let code = status.metadata().get(ERROR_CODE_HEADER).expect("code");
+        assert_eq!(code.as_bytes(), b"stale_base");
+        let seq = status.metadata().get(CURRENT_SEQ_HEADER).expect("seq");
+        assert_eq!(seq.as_bytes(), b"5");
+    }
+
+    #[test]
+    fn storage_detail_does_not_reach_the_client() {
+        let status: Status =
+            ServerError::Store(StoreFault::Backend("password=hunter2".into())).into();
+        assert_eq!(status.code(), Code::Unavailable);
+        assert!(!status.message().contains("hunter2"));
+    }
+}
