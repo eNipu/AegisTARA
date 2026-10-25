@@ -35,9 +35,23 @@ protox = "0.10"
 tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
 deadpool-postgres = "0.14"
 sha2 = "0.10"
+base64 = "0.22"
+ring = "0.17"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+percent-encoding = "2"
+keyring-core = "1"
+windows-native-keyring-store = "1"
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", "vendored"] }
+tower = { version = "0.5", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 aegis-model = { path = "crates/aegis-model" }
+aegis-auth = { path = "crates/aegis-auth" }
+aegis-proto = { path = "crates/aegis-proto" }
 
 # Shipped binaries (standards R10). Tests and benches use the dev profile.
 [profile.release]

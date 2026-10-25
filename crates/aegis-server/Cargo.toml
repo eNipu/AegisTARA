@@ -6,27 +6,25 @@ rust-version.workspace = true
 publish.workspace = true
 description = "AegisTARA server: gRPC API over the aegis-model engine, edit leases, live observers."
 license.workspace = true
-build = "build.rs"
 
 [dependencies]
+aegis-auth.workspace = true
 aegis-model.workspace = true
+aegis-proto.workspace = true
 bytes.workspace = true
 deadpool-postgres.workspace = true
-prost.workspace = true
+http.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
-tonic-prost.workspace = true
+tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
-[build-dependencies]
-protox.workspace = true
-tonic-prost-build.workspace = true
-
 [dev-dependencies]
+aegis-auth = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

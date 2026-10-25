@@ -1,0 +1,55 @@
+[package]
+name = "aegis-auth"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "AegisTARA login: OIDC code flow with PKCE, DPoP proofs, token validation, secret storage."
+license.workspace = true
+
+[features]
+# The OS keychain backend (Windows Credential Manager, macOS Keychain, Linux
+# Secret Service). Off by default so server builds do not carry it.
+os-keychain = [
+    "dep:keyring-core",
+    "dep:windows-native-keyring-store",
+    "dep:apple-native-keyring-store",
+    "dep:dbus-secret-service-keyring-store",
+]
+# A mock identity provider (`aegis_auth::testing`) for tests of this crate
+# and of the crates that log in. Never enable it in a shipped binary.
+test-support = []
+
+[dependencies]
+keyring-core = { workspace = true, optional = true }
+base64.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+percent-encoding.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync"] }
+tower.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+aegis-auth = { path = ".", features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util", "net", "io-util", "time", "sync", "rt-multi-thread", "macros"] }
+
+# One credential store per platform, from the keyring ecosystem. The Linux
+# store uses the C libdbus (built from source, `vendored`) instead of the
+# pure-Rust zbus stack, whose crates carry unmaintained advisories that
+# `cargo-deny` rejects (docs/adr/0028-login.md).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { workspace = true, optional = true }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+dbus-secret-service-keyring-store = { workspace = true, optional = true }
