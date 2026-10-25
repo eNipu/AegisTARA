@@ -6,6 +6,7 @@ pub mod error;
 pub mod sample;
 pub mod session;
 pub mod state;
+pub mod transport;
 pub mod updates;
 pub mod view;
 pub mod workspace;

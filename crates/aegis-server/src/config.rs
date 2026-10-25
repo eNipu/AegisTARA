@@ -37,6 +37,13 @@ pub struct ServerConfig {
     pub risks_event_max_threats: usize,
     /// Longest project name, in chars.
     pub max_project_name_chars: usize,
+    /// Most baselines per project.
+    pub max_baselines: usize,
+    /// Most entries one `ListHistory` call returns.
+    pub max_history: usize,
+    /// How often an idle `Watch` stream gets a heartbeat, so proxies that
+    /// close idle connections (Railway, corporate proxies) keep it open.
+    pub heartbeat: Duration,
     /// Wall clock in milliseconds since the Unix epoch, for audit
     /// timestamps. A function pointer so tests can fix it.
     pub wall_clock: fn() -> u64,
@@ -66,6 +73,9 @@ impl Default for ServerConfig {
             max_projects: 10_000,
             risks_event_max_threats: 2_000,
             max_project_name_chars: 256,
+            max_baselines: 1000,
+            max_history: 500,
+            heartbeat: Duration::from_secs(20),
             wall_clock: system_clock_ms,
         }
     }

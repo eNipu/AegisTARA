@@ -133,6 +133,13 @@ enum Cmd {
     },
     Subscribe(u64, Reply<Subscription>),
     Risks(Reply<RiskReport>),
+    Rename {
+        who: Principal,
+        token: String,
+        name: String,
+        reply: Reply<ProjectMeta>,
+    },
+    Delete(Reply<()>),
     Shutdown(Reply<()>),
 }
 
@@ -256,6 +263,36 @@ impl ProjectHandle {
         self.call(Cmd::Risks).await
     }
 
+    /// Renames the project. Needs the lease, like any change.
+    ///
+    /// # Errors
+    ///
+    /// Lease errors or a storage failure.
+    pub async fn rename(
+        &self,
+        who: Principal,
+        token: String,
+        name: String,
+    ) -> Result<ProjectMeta, ServerError> {
+        self.call(|reply| Cmd::Rename {
+            who,
+            token,
+            name,
+            reply,
+        })
+        .await
+    }
+
+    /// Deletes the project from storage and stops the actor. Refused while
+    /// anyone holds the lease. Observers' streams end.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::LockHeld`] or a storage failure.
+    pub async fn delete(&self) -> Result<(), ServerError> {
+        self.call(Cmd::Delete).await
+    }
+
     /// Writes a final snapshot and stops the actor.
     ///
     /// # Errors
@@ -355,6 +392,7 @@ pub fn spawn<S: ProjectStore>(
         max_batch: config.max_batch_ops,
         wall_clock: config.wall_clock,
         broken: false,
+        deleted: false,
     };
     tokio::spawn(actor.run(rx));
     ProjectHandle {
@@ -395,6 +433,8 @@ struct Actor<S> {
     /// Memory no longer matches storage; stop and let the next request
     /// reload.
     broken: bool,
+    /// The project was deleted; stop without writing a snapshot.
+    deleted: bool,
 }
 
 impl<S: ProjectStore> Actor<S> {
@@ -423,7 +463,7 @@ impl<S: ProjectStore> Actor<S> {
         }
         // Close the mailbox first so late callers fail fast and reload.
         rx.close();
-        if !self.broken {
+        if !self.broken && !self.deleted {
             self.snapshot_now().await;
         }
         tracing::debug!(project = %self.id, "project unloaded");
@@ -517,6 +557,43 @@ impl<S: ProjectStore> Actor<S> {
             }
             Cmd::Risks(reply) => {
                 let _ = reply.send(Ok(self.risks()));
+            }
+            Cmd::Rename {
+                who,
+                token,
+                name,
+                reply,
+            } => {
+                let r = match self.lease.require(Instant::now(), &who, &token) {
+                    Ok(()) => match self.store.rename(self.id, &name).await {
+                        Ok(()) => {
+                            self.meta.name = name;
+                            Ok(self.meta.clone())
+                        }
+                        Err(fault) => Err(ServerError::Store(fault)),
+                    },
+                    Err(e) => Err(e),
+                };
+                let _ = reply.send(r);
+            }
+            Cmd::Delete(reply) => {
+                if let Some(holder) = self.lease.holder(Instant::now()) {
+                    let _ = reply.send(Err(ServerError::LockHeld {
+                        holder: holder.to_string(),
+                    }));
+                    return Flow::Continue;
+                }
+                match self.store.delete(self.id).await {
+                    Ok(()) => {
+                        // Nothing is left to snapshot into.
+                        self.deleted = true;
+                        let _ = reply.send(Ok(()));
+                        return Flow::Stop;
+                    }
+                    Err(fault) => {
+                        let _ = reply.send(Err(ServerError::Store(fault)));
+                    }
+                }
             }
             Cmd::Shutdown(reply) => {
                 // Snapshot before answering, so a caller that waits for the

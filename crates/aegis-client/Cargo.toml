@@ -14,15 +14,20 @@ aegis-canvas.workspace = true
 aegis-model.workspace = true
 aegis-proto.workspace = true
 bytes.workspace = true
+http.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+hyper-rustls.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
-tower.workspace = true
+tonic-web.workspace = true
+tower = { workspace = true, features = ["timeout", "util"] }
 tracing.workspace = true
 
 [dev-dependencies]
-http = "1"
+http-body-util.workspace = true
 aegis-auth = { workspace = true, features = ["test-support"] }
 aegis-server.workspace = true
 aegis-license = { workspace = true, features = ["issuer"] }

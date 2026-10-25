@@ -3,11 +3,10 @@
 //! [`HttpClient`] is the seam: production code uses [`HyperClient`], tests
 //! use the same client against a mock identity provider on a loopback port.
 //!
-//! [`HyperClient`] speaks `http://` only in this build, and only to loopback
+//! [`HyperClient`] speaks `https://` (rustls with the OS trust store, see
+//! [`crate::tls`]) to any host, and cleartext `http://` only to loopback
 //! addresses unless told otherwise (`allow_insecure_http`). Tokens never go
-//! over cleartext to another host. `https://` support (rustls with the OS
-//! trust store) is a separate job, `038-https-client`, because it adds
-//! cryptography crates that need a D5 license review.
+//! over cleartext to another host.
 //!
 //! Limits (R6): 10 s per request, 1 MiB per response body, no redirects.
 
@@ -16,6 +15,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
+use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -145,20 +145,27 @@ pub fn is_loopback_url(url: &str) -> bool {
 
 /// The production [`HttpClient`], on `hyper`.
 pub struct HyperClient {
-    client: Client<HttpConnector, Full<Bytes>>,
+    /// An error when the machine has no usable trust store: `http://` to
+    /// loopback still works, `https://` answers with the TLS error.
+    https: Result<Client<HttpsConnector<HttpConnector>, Full<Bytes>>, crate::tls::TlsError>,
+    plain: Client<HttpConnector, Full<Bytes>>,
     timeout: Duration,
     allow_insecure_http: bool,
 }
 
 impl HyperClient {
-    /// A client that allows cleartext only to loopback addresses.
+    /// A client for `https://` to any host and cleartext only to loopback
+    /// addresses.
     #[must_use]
     pub fn new() -> Self {
         let mut connector = HttpConnector::new();
         connector.set_connect_timeout(Some(Duration::from_secs(5)));
+        let https = crate::tls::https_connector(connector.clone(), false, true)
+            .map(|c| Client::builder(TokioExecutor::new()).build(c));
         connector.enforce_http(true);
         HyperClient {
-            client: Client::builder(TokioExecutor::new()).build(connector),
+            https,
+            plain: Client::builder(TokioExecutor::new()).build(connector),
             timeout: Duration::from_secs(10),
             allow_insecure_http: false,
         }
@@ -181,12 +188,8 @@ impl Default for HyperClient {
 
 impl HttpClient for HyperClient {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, AuthError> {
-        if request.url.starts_with("https://") {
-            return Err(AuthError::Http(
-                "https is not available in this build".to_owned(),
-            ));
-        }
-        if !self.allow_insecure_http && !is_loopback_url(&request.url) {
+        let tls = request.url.starts_with("https://");
+        if !tls && !self.allow_insecure_http && !is_loopback_url(&request.url) {
             return Err(AuthError::Http(
                 "cleartext http is only allowed to a loopback address".to_owned(),
             ));
@@ -202,11 +205,15 @@ impl HttpClient for HyperClient {
             .map_err(|_| AuthError::Http("invalid request".to_owned()))?;
 
         let exchange = async {
-            let response = self
-                .client
-                .request(req)
-                .await
-                .map_err(|e| AuthError::Http(format!("request failed: {e}")))?;
+            let response = if tls {
+                match &self.https {
+                    Ok(client) => client.request(req).await,
+                    Err(e) => return Err(AuthError::Http(e.to_string())),
+                }
+            } else {
+                self.plain.request(req).await
+            }
+            .map_err(|e| AuthError::Http(format!("request failed: {e}")))?;
             let (parts, body) = response.into_parts();
             let body = Limited::new(body, MAX_RESPONSE_BYTES)
                 .collect()
@@ -266,15 +273,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleartext_to_a_remote_host_and_https_are_refused_before_any_connection() {
+    async fn cleartext_to_a_remote_host_is_refused_before_any_connection() {
         let client = HyperClient::new();
         let remote = client
             .send(HttpRequest::get("http://203.0.113.9/jwks"))
             .await;
         assert!(matches!(remote, Err(AuthError::Http(m)) if m.contains("loopback")));
-        let tls = client
-            .send(HttpRequest::get("https://idp.example.com/jwks"))
+    }
+
+    #[tokio::test]
+    async fn https_to_a_closed_port_fails_as_a_request_error() {
+        // TCP connect to a closed loopback port fails at once; the point is
+        // that https is attempted, no longer refused by policy.
+        let client = HyperClient::new();
+        let r = client
+            .send(HttpRequest::get("https://127.0.0.1:9/jwks"))
             .await;
-        assert!(matches!(tls, Err(AuthError::Http(m)) if m.contains("https")));
+        assert!(matches!(r, Err(AuthError::Http(m)) if !m.contains("not available")));
     }
 }

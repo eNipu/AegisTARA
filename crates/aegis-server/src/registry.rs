@@ -90,18 +90,7 @@ impl<S: ProjectStore> Registry<S> {
         name: &str,
         methodology_key: &str,
     ) -> Result<ProjectMeta, ServerError> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(ServerError::InvalidRequest("project name is empty"));
-        }
-        if name.chars().count() > self.config.max_project_name_chars {
-            return Err(ServerError::InvalidRequest("project name is too long"));
-        }
-        if name.chars().any(char::is_control) {
-            return Err(ServerError::InvalidRequest(
-                "project name has control characters",
-            ));
-        }
+        let name = self.check_name(name)?;
         let hosted = self
             .methodologies
             .get(methodology_key)
@@ -128,6 +117,90 @@ impl<S: ProjectStore> Registry<S> {
             created_ms: (self.config.wall_clock)(),
         };
         self.store.create(&meta, &snapshot).await?;
+        Ok(meta)
+    }
+
+    /// Trims and checks a project or baseline name.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidRequest`] for an empty or too long name, or one
+    /// with control characters.
+    pub fn check_name<'a>(&self, name: &'a str) -> Result<&'a str, ServerError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ServerError::InvalidRequest("name is empty"));
+        }
+        if name.chars().count() > self.config.max_project_name_chars {
+            return Err(ServerError::InvalidRequest("name is too long"));
+        }
+        if name.chars().any(char::is_control) {
+            return Err(ServerError::InvalidRequest("name has control characters"));
+        }
+        Ok(name)
+    }
+
+    /// The store, for calls that need no actor (history, baselines).
+    #[must_use]
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
+    /// Deletes a project: its actor stops (observers' streams end) and its
+    /// history and baselines are removed.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::UnknownProject`], [`ServerError::LockHeld`], or a
+    /// storage failure.
+    pub async fn delete(&self, id: ProjectId) -> Result<(), ServerError> {
+        self.with(id, |h| async move { h.delete().await }).await?;
+        let mut map = self.lock();
+        if map
+            .get(&id)
+            .is_some_and(|c| c.get().is_none_or(ProjectHandle::is_closed))
+        {
+            map.remove(&id);
+        }
+        Ok(())
+    }
+
+    /// Freezes the project's current state as a baseline. Reads the state
+    /// through the actor, so it is consistent with the accepted ops.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidRequest`] for a bad name or too many
+    /// baselines, [`ServerError::UnknownProject`], or a storage failure.
+    pub async fn create_baseline(
+        &self,
+        id: ProjectId,
+        name: &str,
+        who: &str,
+    ) -> Result<crate::store::BaselineMeta, ServerError> {
+        let name = self.check_name(name)?.to_owned();
+        let existing = self
+            .store
+            .list_baselines(id)
+            .await
+            .map_err(|e| missing(e, id))?;
+        if existing.len() >= self.config.max_baselines {
+            return Err(ServerError::InvalidRequest("too many baselines"));
+        }
+        let data = self.with(id, |h| async move { h.open().await }).await?;
+        let meta = crate::store::BaselineMeta {
+            id: uuid::Uuid::now_v7(),
+            project: id,
+            name,
+            seq: data.last_seq,
+            created_by: who.to_owned(),
+            created_ms: (self.config.wall_clock)(),
+            snapshot_bytes: data.snapshot.len() as u64,
+        };
+        self.store
+            .create_baseline(&meta, &data.snapshot)
+            .await
+            .map_err(|e| missing(e, id))?;
         Ok(meta)
     }
 
@@ -232,6 +305,25 @@ impl<S: ProjectStore> Registry<S> {
         Ok(actor::spawn(rebuilt, Arc::clone(&self.store), &self.config))
     }
 
+    /// Rebuilds the license seat ledger from the stored history: everyone
+    /// whose ops were accepted in the seat window holds a seat again, so a
+    /// restart does not hand out seats twice (backlog 039).
+    ///
+    /// # Errors
+    ///
+    /// A storage failure.
+    pub async fn restore_seats(&self) -> Result<usize, ServerError> {
+        let Some(gate) = self.license.as_ref() else {
+            return Ok(0);
+        };
+        let now_ms = (self.config.wall_clock)();
+        let since = now_ms.saturating_sub(aegis_license::SEAT_WINDOW_SECS * 1000);
+        let editors = self.store.active_editors(since).await?;
+        let n = editors.len();
+        gate.restore(editors.into_iter().map(|(who, ms)| (who, ms / 1000)));
+        Ok(n)
+    }
+
     /// Recomputes the audit hash chain of a project's stored history.
     ///
     /// # Errors
@@ -264,5 +356,13 @@ impl<S: ProjectStore> Registry<S> {
             .values()
             .filter(|c| c.get().is_some_and(|h| !h.is_closed()))
             .count()
+    }
+}
+
+/// Maps "no such project" from the store to the API error.
+pub(crate) fn missing(fault: StoreFault, id: ProjectId) -> ServerError {
+    match fault {
+        StoreFault::Missing => ServerError::UnknownProject(id),
+        other => ServerError::Store(other),
     }
 }

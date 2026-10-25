@@ -9,6 +9,10 @@
 //! The reply to a rejected request is always the same fixed message, so a
 //! caller learns nothing about *why* it failed; the reason is logged. Every
 //! rejection is a `warn!` with the error variant only (never a token).
+//!
+//! One path prefix passes without credentials: the public `Accounts`
+//! service (`/aegis.v1.Accounts/`), which only tells a client how to log
+//! in and checks passwords. Everything else needs a principal.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -20,7 +24,9 @@ use aegis_auth::validate::{Authenticator, RequestCredentials};
 use tonic::Status;
 use tower::{Layer, Service};
 
-use crate::auth::{DEV_ADMIN_HEADER, DEV_USER_HEADER, Principal};
+use crate::accounts::service::PUBLIC_PATH_PREFIX;
+use crate::accounts::{Accounts, bearer};
+use crate::auth::{AuthMethod, DEV_ADMIN_HEADER, DEV_USER_HEADER, Principal};
 
 /// What an authentication method may look at: the headers, the method, and
 /// the URL the client signed.
@@ -69,7 +75,21 @@ impl<H: HttpClient> Authn for OidcAuthn<H> {
         Ok(Principal {
             subject: claims.subject.into(),
             admin: claims.admin,
+            method: AuthMethod::Oidc,
         })
+    }
+}
+
+/// Password sessions of this server (`AEGIS_AUTH=password`): the bearer
+/// token is looked up in [`Accounts`]. O(1), no I/O.
+pub struct PasswordAuthn(pub Arc<Accounts>);
+
+impl Authn for PasswordAuthn {
+    async fn authenticate(&self, request: &RequestInfo) -> Result<Principal, String> {
+        let token = bearer(&request.headers).ok_or_else(|| "no bearer token".to_owned())?;
+        self.0
+            .authenticate(token)
+            .ok_or_else(|| "no open session for this token".to_owned())
     }
 }
 
@@ -86,6 +106,7 @@ impl Authn for DevAuthn {
         Ok(Principal {
             subject: user.into(),
             admin: request.header(DEV_ADMIN_HEADER) == Some("1"),
+            method: AuthMethod::Development,
         })
     }
 }
@@ -167,6 +188,9 @@ where
     fn call(&mut self, mut request: http::Request<B>) -> Self::Future {
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
+        if request.uri().path().starts_with(PUBLIC_PATH_PREFIX) {
+            return Box::pin(async move { inner.call(request).await });
+        }
         let authn = Arc::clone(&self.authn);
         // Copy what is needed out of the request: the body type is `Send`
         // but not `Sync`, so the request itself cannot be borrowed across
