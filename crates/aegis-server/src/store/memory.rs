@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 use super::{LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot};
 use crate::ids::ProjectId;
 
@@ -13,6 +14,9 @@ struct Entry {
     snapshot: StoredSnapshot,
     /// Every op ever accepted, `ops[i].seq == i + 1`.
     ops: Vec<StoredOp>,
+    /// `links[i]` is `(prev, hash)` of `ops[i]` in the audit chain.
+    links: Vec<(Hash, Hash)>,
+    head: Hash,
 }
 
 /// A store that keeps everything in process memory.
@@ -63,6 +67,8 @@ impl ProjectStore for MemoryStore {
                         bytes: snapshot.to_vec(),
                     },
                     ops: Vec::new(),
+                    links: Vec::new(),
+                    head: genesis(meta.id),
                 },
             );
             Ok(())
@@ -102,8 +108,24 @@ impl ProjectStore for MemoryStore {
                     });
                 }
             }
+            for op in ops {
+                let prev = entry.head;
+                entry.head = link(&prev, op);
+                entry.links.push((prev, entry.head));
+            }
             entry.ops.extend_from_slice(ops);
             Ok(())
+        })
+    }
+
+    async fn verify_chain(&self, id: ProjectId) -> Result<ChainReport, StoreFault> {
+        self.with(|m| {
+            let entry = m.get(&id).ok_or(StoreFault::Missing)?;
+            let mut verifier = ChainVerifier::new(id);
+            for (op, (prev, hash)) in entry.ops.iter().zip(&entry.links) {
+                verifier.push(op, prev, hash);
+            }
+            Ok(verifier.finish(&entry.head))
         })
     }
 
@@ -238,6 +260,35 @@ mod tests {
             bytes: vec![],
         };
         assert!(store.save_snapshot(m.id, &back).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_audit_chain_verifies_and_catches_edits() {
+        let store = MemoryStore::new();
+        let m = meta();
+        store.create(&m, b"s0").await.expect("create");
+        let empty = store.verify_chain(m.id).await.expect("verify");
+        assert!(empty.is_intact());
+        assert_eq!(empty.verified, 0);
+
+        store.append(m.id, &[op(1), op(2)]).await.expect("append");
+        store.append(m.id, &[op(3)]).await.expect("append");
+        let report = store.verify_chain(m.id).await.expect("verify");
+        assert!(report.is_intact());
+        assert_eq!(report.verified, 3);
+
+        // Someone edits an op behind the store's back.
+        store.with(|map| {
+            let entry = map.get_mut(&m.id).expect("exists");
+            entry.ops[1].actor = "mallory".into();
+        });
+        let report = store.verify_chain(m.id).await.expect("verify");
+        assert_eq!(report.first_bad, Some(2));
+        assert_eq!(report.verified, 1);
+        assert!(matches!(
+            store.verify_chain(ProjectId::new_v7()).await,
+            Err(StoreFault::Missing)
+        ));
     }
 
     #[tokio::test]

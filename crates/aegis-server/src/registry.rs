@@ -21,7 +21,7 @@ use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::ids::ProjectId;
 use crate::methodologies::Methodologies;
-use crate::store::{ProjectMeta, ProjectStore};
+use crate::store::{ChainReport, ProjectMeta, ProjectStore, StoreFault};
 
 type Cell = Arc<OnceCell<ProjectHandle>>;
 
@@ -213,6 +213,18 @@ impl<S: ProjectStore> Registry<S> {
             .await
             .map_err(|_| ServerError::Internal)??;
         Ok(actor::spawn(rebuilt, Arc::clone(&self.store), &self.config))
+    }
+
+    /// Recomputes the audit hash chain of a project's stored history.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::UnknownProject`] or a storage failure.
+    pub async fn verify_audit(&self, id: ProjectId) -> Result<ChainReport, ServerError> {
+        self.store.verify_chain(id).await.map_err(|e| match e {
+            StoreFault::Missing => ServerError::UnknownProject(id),
+            other => ServerError::Store(other),
+        })
     }
 
     /// Asks every loaded project to write a snapshot and stop. Call it
