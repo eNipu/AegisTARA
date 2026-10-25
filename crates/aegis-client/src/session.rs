@@ -44,12 +44,18 @@ use tokio::time::Instant;
 use crate::commands::Command;
 use crate::connection::{Connection, ServerInfo};
 use crate::error::{ClientError, ServerCode};
+use crate::pages;
+use crate::report::{ExportKind, ReportContext};
 use crate::sample::sample_ops;
 use crate::state::{
-    ConnectionView, LicenseView, Mode, Notice, ProjectEntry, ProjectView, Severity, SyncView,
-    ViewModel,
+    BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, Mode, Notice, PageData, ProjectEntry,
+    ProjectView, Severity, SyncView, UserRow, ViewModel,
 };
-use crate::view::{UiState, inspector, risks_differ, threat_rows, tree_view, use_server_risks};
+use crate::time::format_ms;
+use crate::view::{
+    AdminAction, Page, UiState, inspector, risks_differ, shown_tree, threat_rows, tree_view,
+    use_server_risks,
+};
 use crate::workspace::{Origin, Workspace, WorkspaceError};
 
 /// Most notices kept.
@@ -59,28 +65,57 @@ const COMMAND_QUEUE: usize = 256;
 /// Events queued from tasks before they must wait (R4).
 const EVENT_QUEUE: usize = 256;
 
+/// Called after a logout, so the UI can forget the credentials (the session
+/// does not know what kind they are).
+#[derive(Clone)]
+pub struct LogOutHook(pub Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for LogOutHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LogOutHook")
+    }
+}
+
 /// Tunables.
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
-    /// Who the user is, for provenance and display.
+    /// Who the user is, for provenance and display. Replaced by the
+    /// server's answer to `WhoAmI` once connected.
     pub user: String,
     /// Wall clock in milliseconds since the epoch.
     pub clock_ms: fn() -> u64,
     /// Wait before reconnecting or restarting a stream.
     pub retry_delay: Duration,
+    /// Which protocol to speak.
+    pub transport: crate::transport::TransportKind,
+    /// Called after [`Command::LogOut`].
+    pub on_log_out: Option<LogOutHook>,
 }
 
 impl SessionConfig {
-    /// Defaults for `user`: system clock, 2 s retry delay.
+    /// Defaults for `user`: system clock, 2 s retry delay, the default
+    /// transport for the server address (decided at start).
     #[must_use]
     pub fn new(user: &str) -> Self {
         SessionConfig {
             user: user.to_owned(),
             clock_ms: system_clock_ms,
             retry_delay: Duration::from_secs(2),
+            transport: crate::transport::TransportKind::Grpc,
+            on_log_out: None,
         }
     }
+
+    /// The same, with a chosen transport.
+    #[must_use]
+    pub fn with_transport(mut self, kind: crate::transport::TransportKind) -> Self {
+        self.transport = kind;
+        self
+    }
 }
+
+/// How many recent changes the history page shows.
+const HISTORY_ROWS: u32 = 200;
 
 fn unix_secs() -> u64 {
     system_clock_ms() / 1000
@@ -118,6 +153,9 @@ impl Session {
             project: None,
             notices: Vec::new(),
             user: config.user.clone(),
+            me: None,
+            users: Vec::new(),
+            admin_text: None,
         });
         let (view_tx, view) = watch::channel(initial);
         let actor = Actor {
@@ -141,6 +179,9 @@ impl Session {
             next_notice: 1,
             epoch: 0,
             renew: None,
+            me: None,
+            users: Vec::new(),
+            admin_text: None,
         };
         let task = tokio::spawn(actor.run());
         (Session { commands, view }, task)
@@ -200,6 +241,16 @@ struct Open {
     /// After a reload, continue into edit mode with this lease.
     resume_edit: Option<Lease>,
     watch: Option<JoinHandle<()>>,
+    /// The methodology's labels.
+    vocab: Arc<pages::Vocabulary>,
+    /// Baselines, oldest first.
+    baselines: Vec<BaselineRow>,
+    /// The baseline being compared with: its name and project.
+    compare: Option<(String, Project)>,
+    /// Recent changes.
+    history: Vec<HistoryRow>,
+    /// The last export written.
+    last_export: Option<String>,
 }
 
 impl Open {
@@ -259,6 +310,45 @@ enum Internal<P> {
         epoch: u64,
     },
     Reconnect,
+    Me(Result<pb::WhoAmIResponse, ClientError>),
+    Baselines {
+        epoch: u64,
+        result: Result<Vec<pb::BaselineInfo>, ClientError>,
+    },
+    BaselineCreated {
+        epoch: u64,
+        result: Result<pb::BaselineInfo, ClientError>,
+    },
+    Compared {
+        epoch: u64,
+        name: String,
+        result: Box<Result<Project, ClientError>>,
+    },
+    History {
+        epoch: u64,
+        result: Result<Vec<pb::HistoryEntry>, ClientError>,
+    },
+    Exported {
+        epoch: u64,
+        result: Result<String, String>,
+    },
+    Renamed {
+        epoch: u64,
+        result: Result<pb::ProjectSummary, ClientError>,
+    },
+    Deleted {
+        id: String,
+        result: Result<(), ClientError>,
+    },
+    Users(Result<Vec<pb::UserInfo>, ClientError>),
+    AdminDone {
+        what: String,
+        result: Result<(), ClientError>,
+        reload_users: bool,
+    },
+    Audit(Result<pb::VerifyAuditResponse, ClientError>),
+    PasswordChanged(Result<(), ClientError>),
+    LoggedOut,
 }
 
 struct Actor<P: CredentialProvider> {
@@ -287,6 +377,9 @@ struct Actor<P: CredentialProvider> {
     next_notice: u64,
     epoch: u64,
     renew: Option<tokio::time::Interval>,
+    me: Option<Me>,
+    users: Vec<UserRow>,
+    admin_text: Option<String>,
 }
 
 impl<P: CredentialProvider> Actor<P> {
@@ -372,14 +465,15 @@ impl<P: CredentialProvider> Actor<P> {
     where
         P: 'static,
     {
-        let (url, provider, events) = (
+        let (url, provider, events, kind) = (
             self.url.clone(),
             Arc::clone(&self.provider),
             self.events.clone(),
+            self.config.transport,
         );
         tokio::spawn(async move {
             let result = async {
-                let conn = Connection::connect(&url, provider).await?;
+                let conn = Connection::connect_with(&url, kind, provider).await?;
                 let info = conn.info().await?;
                 Ok((conn, info))
             }
@@ -417,6 +511,7 @@ impl<P: CredentialProvider> Actor<P> {
                 self.conn = Some(conn);
                 self.info = Some(info);
                 self.refresh_projects();
+                self.spawn(|conn| async move { Internal::Me(conn.who_am_i().await) });
             }
             Err(ClientError::LoginRequired) => self.connection = ConnectionView::LoginRequired,
             Err(e) => {
@@ -491,7 +586,376 @@ impl<P: CredentialProvider> Actor<P> {
                     self.resend();
                 }
             }
+            other => self.on_tool_event(other),
         }
+    }
+
+    /// Answers of the calls around the editing core: account, versions,
+    /// history, exports, administration.
+    #[allow(clippy::too_many_lines)]
+    fn on_tool_event(&mut self, event: Internal<P>) {
+        let current =
+            |open: &Option<Open>, epoch: u64| open.as_ref().is_some_and(|o| o.epoch == epoch);
+        match event {
+            Internal::Me(Ok(me)) => {
+                // The lease holder and the audit actor are the server's
+                // subject: use exactly that, or our own lease looks foreign.
+                if !me.subject.is_empty() {
+                    self.config.user.clone_from(&me.subject);
+                }
+                self.me = Some(Me {
+                    subject: me.subject,
+                    display_name: me.display_name,
+                    admin: me.admin,
+                    method: me.method,
+                });
+            }
+            // An older server without WhoAmI: keep the configured name.
+            Internal::Me(Err(_)) => {}
+            Internal::Baselines { epoch, result } => match result {
+                Ok(list) if current(&self.open, epoch) => {
+                    if let Some(open) = self.open.as_mut() {
+                        open.baselines = list
+                            .into_iter()
+                            .map(|b| BaselineRow {
+                                id: b.baseline_id,
+                                name: b.name,
+                                seq: b.seq,
+                                created_by: b.created_by,
+                                created: format_ms(b.created_ms),
+                            })
+                            .collect();
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => self.on_failure("Could not load the baselines", &e),
+            },
+            Internal::BaselineCreated { epoch, result } => match result {
+                Ok(b) => {
+                    self.notice(
+                        Severity::Info,
+                        format!("Baseline \"{}\" saved at change {}.", b.name, b.seq),
+                    );
+                    if current(&self.open, epoch) {
+                        self.load_baselines();
+                    }
+                }
+                Err(e) => self.on_failure("Could not create the baseline", &e),
+            },
+            Internal::Compared {
+                epoch,
+                name,
+                result,
+            } => match *result {
+                Ok(project) if current(&self.open, epoch) => {
+                    if let Some(open) = self.open.as_mut() {
+                        open.compare = Some((name, project));
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => self.on_failure("Could not load the baseline", &e),
+            },
+            Internal::History { epoch, result } => match result {
+                Ok(entries) if current(&self.open, epoch) => {
+                    if let Some(open) = self.open.as_mut() {
+                        open.history = entries
+                            .into_iter()
+                            .map(|h| HistoryRow {
+                                seq: h.seq,
+                                actor: h.actor,
+                                when: format_ms(h.timestamp_ms),
+                                kind: kind_words(&h.kind),
+                            })
+                            .collect();
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => self.on_failure("Could not load the history", &e),
+            },
+            Internal::Exported { epoch, result } => match result {
+                Ok(path) => {
+                    self.notice(Severity::Info, format!("Saved {path}"));
+                    if current(&self.open, epoch)
+                        && let Some(open) = self.open.as_mut()
+                    {
+                        open.last_export = Some(path);
+                    }
+                }
+                Err(why) => self.notice(Severity::Error, format!("The export failed: {why}")),
+            },
+            Internal::Renamed { epoch, result } => match result {
+                Ok(summary) => {
+                    for p in &mut self.projects {
+                        if p.id == summary.project_id {
+                            p.name.clone_from(&summary.name);
+                        }
+                    }
+                    if current(&self.open, epoch)
+                        && let Some(open) = self.open.as_mut()
+                    {
+                        open.entry.name = summary.name;
+                    }
+                }
+                Err(e) => self.on_failure("Could not rename the project", &e),
+            },
+            Internal::Deleted { id, result } => match result {
+                Ok(()) => {
+                    self.notice(Severity::Info, "The project was deleted.");
+                    if self.open.as_ref().is_some_and(|o| o.id == id) {
+                        self.close_project(false);
+                    }
+                    self.projects.retain(|p| p.id != id);
+                }
+                Err(e) => self.on_failure("Could not delete the project", &e),
+            },
+            Internal::Users(result) => match result {
+                Ok(users) => {
+                    self.users = users
+                        .into_iter()
+                        .map(|u| UserRow {
+                            username: u.username,
+                            display_name: u.display_name,
+                            admin: u.admin,
+                            disabled: u.disabled,
+                            last_login: if u.last_login_ms == 0 {
+                                "never".to_owned()
+                            } else {
+                                format_ms(u.last_login_ms)
+                            },
+                            sessions: u.sessions,
+                        })
+                        .collect();
+                }
+                Err(e) => self.on_failure("Could not load the users", &e),
+            },
+            Internal::AdminDone {
+                what,
+                result,
+                reload_users,
+            } => {
+                match result {
+                    Ok(()) => {
+                        self.admin_text = Some(format!("{what}: done."));
+                        self.notice(Severity::Info, format!("{what}: done."));
+                    }
+                    Err(e) => {
+                        self.admin_text = Some(format!("{what}: {e}"));
+                        self.on_failure(&what, &e);
+                    }
+                }
+                if reload_users {
+                    self.load_users();
+                }
+            }
+            Internal::Audit(result) => {
+                let text = match result {
+                    Ok(r) if r.intact => format!(
+                        "The audit chain is intact: {} change(s) checked.",
+                        r.verified_ops
+                    ),
+                    Ok(r) => format!(
+                        "The audit chain is broken at change {}. The stored history was changed outside AegisTARA.",
+                        r.first_bad_seq
+                    ),
+                    Err(e) => format!("The audit check failed: {e}"),
+                };
+                let severity = if text.contains("intact") {
+                    Severity::Info
+                } else {
+                    Severity::Error
+                };
+                self.notice(severity, text.clone());
+                self.admin_text = Some(text);
+            }
+            Internal::PasswordChanged(result) => match result {
+                Ok(()) => self.notice(
+                    Severity::Info,
+                    "Your password was changed. Your other sessions were logged out.",
+                ),
+                Err(e) => self.notice(
+                    Severity::Error,
+                    format!("The password was not changed: {e}"),
+                ),
+            },
+            Internal::LoggedOut => {
+                self.close_project(false);
+                self.conn = None;
+                self.me = None;
+                self.users.clear();
+                self.projects.clear();
+                if let Some(hook) = &self.config.on_log_out {
+                    (hook.0)();
+                }
+                self.connection = ConnectionView::LoginRequired;
+            }
+            _ => {}
+        }
+    }
+
+    fn load_baselines(&self) {
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let (epoch, id) = (open.epoch, open.id.clone());
+        self.spawn(move |conn| async move {
+            Internal::Baselines {
+                epoch,
+                result: conn.baselines(&id).await,
+            }
+        });
+    }
+
+    fn load_history(&self) {
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let (epoch, id) = (open.epoch, open.id.clone());
+        self.spawn(move |conn| async move {
+            Internal::History {
+                epoch,
+                result: conn.history(&id, HISTORY_ROWS).await,
+            }
+        });
+    }
+
+    fn load_users(&self) {
+        if self
+            .me
+            .as_ref()
+            .is_some_and(|m| m.admin && m.method == "password")
+        {
+            self.spawn(|conn| async move { Internal::Users(conn.users().await) });
+        }
+    }
+
+    fn admin(&self, action: AdminAction) {
+        let (what, reload) = match &action {
+            AdminAction::CreateUser { username, .. } => (format!("Create user {username}"), true),
+            AdminAction::SetAdmin { username, admin } => (
+                format!(
+                    "{} administrator rights for {username}",
+                    if *admin { "Grant" } else { "Remove" }
+                ),
+                true,
+            ),
+            AdminAction::SetDisabled { username, disabled } => (
+                format!(
+                    "{} {username}",
+                    if *disabled { "Disable" } else { "Enable" }
+                ),
+                true,
+            ),
+            AdminAction::ResetPassword { username, .. } => {
+                (format!("Set a new password for {username}"), true)
+            }
+            AdminAction::DeleteUser { username } => (format!("Delete user {username}"), true),
+        };
+        self.spawn(move |conn| async move {
+            let result = match action {
+                AdminAction::CreateUser {
+                    username,
+                    display_name,
+                    password,
+                    admin,
+                } => conn
+                    .create_user(pb::CreateUserRequest {
+                        username,
+                        display_name,
+                        password,
+                        admin,
+                    })
+                    .await
+                    .map(|_| ()),
+                AdminAction::SetAdmin { username, admin } => conn
+                    .update_user(pb::UpdateUserRequest {
+                        username,
+                        admin: Some(admin),
+                        ..pb::UpdateUserRequest::default()
+                    })
+                    .await
+                    .map(|_| ()),
+                AdminAction::SetDisabled { username, disabled } => conn
+                    .update_user(pb::UpdateUserRequest {
+                        username,
+                        disabled: Some(disabled),
+                        ..pb::UpdateUserRequest::default()
+                    })
+                    .await
+                    .map(|_| ()),
+                AdminAction::ResetPassword { username, password } => conn
+                    .update_user(pb::UpdateUserRequest {
+                        username,
+                        password: Some(password),
+                        ..pb::UpdateUserRequest::default()
+                    })
+                    .await
+                    .map(|_| ()),
+                AdminAction::DeleteUser { username } => conn.delete_user(&username).await,
+            };
+            Internal::AdminDone {
+                what,
+                result,
+                reload_users: reload,
+            }
+        });
+    }
+
+    /// Builds the export on the blocking pool from a copy of the project
+    /// (O(project size), R5), writes it, and records it on the server.
+    fn export(&mut self, kind: ExportKind, path: std::path::PathBuf) {
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let ctx = ReportContext {
+            project: open.entry.name.clone(),
+            user: self
+                .me
+                .as_ref()
+                .map_or_else(|| self.config.user.clone(), |m| m.display_name.clone()),
+            now_ms: (self.config.clock_ms)(),
+            seq: open.ws.confirmed_seq(),
+            unsaved: open.ws.pending_batches() > 0,
+        };
+        let tree = shown_tree(&open.ws, &open.ui);
+        let residual = open.ui.show_residual;
+        if kind == ExportKind::TreeSvg && tree.is_none() {
+            self.notice(Severity::Warning, "Open an attack tree first.");
+            return;
+        }
+        let project = open.ws.project().clone();
+        let seq = open.ws.confirmed_seq();
+        let (epoch, id) = (open.epoch, open.id.clone());
+        let conn = self.conn.clone();
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            // Building and writing are both blocking work (R5).
+            let written = tokio::task::spawn_blocking(move || {
+                let ws = Workspace::new(project, seq);
+                let text = match kind {
+                    ExportKind::Report => Some(crate::report::report_html(&ws, &ctx)),
+                    ExportKind::RiskRegister => Some(crate::report::risk_register_csv(&ws, &ctx)),
+                    ExportKind::TreeSvg => {
+                        tree.and_then(|t| crate::report::tree_svg(&ws, t, residual))
+                    }
+                }
+                .ok_or_else(|| "there is nothing to export".to_owned())?;
+                std::fs::write(&path, text)
+                    .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+                Ok::<_, String>(path.display().to_string())
+            })
+            .await
+            .unwrap_or_else(|_| Err("the export was interrupted".to_owned()));
+            if written.is_ok()
+                && let Some(conn) = conn
+                && let Err(e) = conn.record_export(&id, kind.audit_name()).await
+            {
+                // The file is written either way; a failed audit call is
+                // logged, not shown.
+                tracing::warn!(error = %e, "the export was not recorded on the server");
+            }
+            let result = written;
+            let _ = events.send(Internal::Exported { epoch, result }).await;
+        });
     }
 
     // ---- opening and closing --------------------------------------------
@@ -576,9 +1040,15 @@ impl<P: CredentialProvider> Actor<P> {
                     selected_threat: threat_rows(&ws).first().map(|t| t.id),
                     ..UiState::default()
                 };
+                let vocab = Arc::new(pages::vocabulary(&loaded.methodology));
                 self.open = Some(Open {
                     epoch,
                     id: entry.id.clone(),
+                    vocab,
+                    baselines: Vec::new(),
+                    compare: None,
+                    history: Vec::new(),
+                    last_export: None,
                     codec: OpCodec::new(loaded.methodology),
                     entry,
                     ws,
@@ -1127,16 +1597,134 @@ impl<P: CredentialProvider> Actor<P> {
             Command::EndEdit => self.end_edit(),
             Command::Edit(edit) => {
                 let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
-                self.apply_edit(
+                let created = edit.created();
+                let applied = self.apply_edit(
                     |project| edit.to_ops(project, &user, now).map_err(|e| e.to_string()),
                     Origin::Edit,
                 );
+                if applied
+                    && let Some(selection) = created
+                    && let Some(open) = self.open.as_mut()
+                {
+                    pages::select(&mut open.ui, selection);
+                }
+            }
+            Command::ShowPage(page) => self.show_page(page),
+            Command::Select {
+                selection,
+                navigate,
+            } => {
+                if let Some(open) = self.open.as_mut() {
+                    pages::select(&mut open.ui, selection);
+                    if navigate {
+                        let page = pages::page_of(selection);
+                        self.show_page(page);
+                    }
+                }
+            }
+            Command::RenameProject(name) => {
+                let Some(open) = self.open.as_ref() else {
+                    return;
+                };
+                let Some(lease) = open.lease.as_ref() else {
+                    self.notice(Severity::Info, "Press Edit to take the edit lock first.");
+                    return;
+                };
+                let (epoch, id, token) = (open.epoch, open.id.clone(), lease.token.clone());
+                self.spawn(move |conn| async move {
+                    Internal::Renamed {
+                        epoch,
+                        result: conn.rename_project(&id, &token, &name).await,
+                    }
+                });
+            }
+            Command::DeleteProject(id) => {
+                self.spawn(move |conn| async move {
+                    let result = conn.delete_project(&id).await;
+                    Internal::Deleted { id, result }
+                });
+            }
+            Command::LoadBaselines => self.load_baselines(),
+            Command::CreateBaseline(name) => {
+                let Some(open) = self.open.as_ref() else {
+                    return;
+                };
+                if open.ws.pending_batches() > 0 {
+                    self.notice(
+                        Severity::Info,
+                        "Some changes are not saved yet. Try again in a moment, so the baseline includes them.",
+                    );
+                    return;
+                }
+                let (epoch, id) = (open.epoch, open.id.clone());
+                self.spawn(move |conn| async move {
+                    Internal::BaselineCreated {
+                        epoch,
+                        result: conn.create_baseline(&id, &name).await,
+                    }
+                });
+            }
+            Command::CompareWith(None) => {
+                if let Some(open) = self.open.as_mut() {
+                    open.compare = None;
+                }
+            }
+            Command::CompareWith(Some(baseline)) => self.compare_with(baseline),
+            Command::LoadHistory => self.load_history(),
+            Command::Export { kind, path } => self.export(kind, path),
+            Command::LoadUsers => self.load_users(),
+            Command::Admin(action) => self.admin(action),
+            Command::BreakLock => {
+                let Some(open) = self.open.as_ref() else {
+                    return;
+                };
+                let id = open.id.clone();
+                self.spawn(move |conn| async move {
+                    Internal::AdminDone {
+                        what: "Break the edit lock".to_owned(),
+                        result: conn.break_lock(&id).await,
+                        reload_users: false,
+                    }
+                });
+            }
+            Command::VerifyAudit => {
+                let Some(open) = self.open.as_ref() else {
+                    return;
+                };
+                let id = open.id.clone();
+                self.spawn(
+                    move |conn| async move { Internal::Audit(conn.verify_audit(&id).await) },
+                );
+            }
+            Command::ChangePassword { current, new } => {
+                self.spawn(move |conn| async move {
+                    Internal::PasswordChanged(conn.change_password(&current, &new).await)
+                });
+            }
+            Command::LogOut => {
+                self.close_project(true);
+                let events = self.events.clone();
+                match self.conn.clone() {
+                    Some(conn) => {
+                        tokio::spawn(async move {
+                            // Best effort: the session ends on the server at
+                            // its expiry anyway.
+                            let _ = conn.log_out().await;
+                            let _ = events.send(Internal::LoggedOut).await;
+                        });
+                    }
+                    None => {
+                        tokio::spawn(async move {
+                            let _ = events.send(Internal::LoggedOut).await;
+                        });
+                    }
+                }
             }
             Command::Undo => self.history(true),
             Command::Redo => self.history(false),
             Command::CreateSample => {
                 let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
-                self.apply_edit(
+                let _ = self.apply_edit(
                     |project| {
                         if project.asset_count() > 0 {
                             return Err("the project already has content".to_owned());
@@ -1196,16 +1784,17 @@ impl<P: CredentialProvider> Actor<P> {
         }
     }
 
+    /// Applies an edit locally and queues it. Returns whether it was applied.
     fn apply_edit(
         &mut self,
         build: impl FnOnce(&Project) -> Result<Vec<aegis_model::Op>, String>,
         origin: Origin,
-    ) {
+    ) -> bool {
         if !self.can_edit() {
-            return;
+            return false;
         }
         let Some(open) = self.open.as_mut() else {
-            return;
+            return false;
         };
         let ops = match build(open.ws.project()) {
             Ok(ops) => ops,
@@ -1214,13 +1803,66 @@ impl<P: CredentialProvider> Actor<P> {
                     Severity::Warning,
                     format!("That change is not possible: {why}."),
                 );
-                return;
+                return false;
             }
         };
-        match open.ws.apply(ops, origin) {
-            Ok(()) => self.pump(),
-            Err(e) => self.notice(Severity::Warning, format!("That change was refused: {e}.")),
+        if ops.is_empty() {
+            return true;
         }
+        match open.ws.apply(ops, origin) {
+            Ok(()) => {
+                self.pump();
+                true
+            }
+            Err(e) => {
+                self.notice(Severity::Warning, format!("That change was refused: {e}."));
+                false
+            }
+        }
+    }
+
+    fn show_page(&mut self, page: Page) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        open.ui.page = page;
+        match page {
+            Page::Versions => self.load_baselines(),
+            Page::History => self.load_history(),
+            Page::Admin => self.load_users(),
+            _ => {}
+        }
+    }
+
+    /// Downloads a baseline and builds its project for the comparison.
+    fn compare_with(&self, baseline: String) {
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let name = open
+            .baselines
+            .iter()
+            .find(|b| b.id == baseline)
+            .map_or_else(|| "baseline".to_owned(), |b| b.name.clone());
+        let methodology = Arc::clone(open.ws.project().methodology());
+        let (epoch, id) = (open.epoch, open.id.clone());
+        self.spawn(move |conn| async move {
+            let result = async {
+                let (_, bytes) = conn.baseline(&id, &baseline).await?;
+                tokio::task::spawn_blocking(move || Project::load(bytes.as_slice(), methodology))
+                    .await
+                    .map_err(|_| ClientError::Protocol("loading was interrupted".into()))?
+                    .map_err(|e| {
+                        ClientError::Protocol(format!("the baseline could not be read: {e}"))
+                    })
+            }
+            .await;
+            Internal::Compared {
+                epoch,
+                name,
+                result: Box::new(result),
+            }
+        });
     }
 
     fn history(&mut self, undo: bool) {
@@ -1283,7 +1925,22 @@ impl<P: CredentialProvider> Actor<P> {
                 .and_then(|id| threats.iter().position(|t| t.id == id));
             let tree = tree_view(&open.ws, &open.ui);
             let selected_node = tree.as_ref().and_then(|t| t.selected);
+            let data = page_data(open);
+            let comparison = (open.ui.page == Page::Versions)
+                .then(|| {
+                    open.compare.as_ref().and_then(|(name, base)| {
+                        pages::comparison(base, name, open.ws.project()).ok()
+                    })
+                })
+                .flatten();
             ProjectView {
+                page: open.ui.page,
+                vocab: Arc::clone(&open.vocab),
+                data,
+                baselines: open.baselines.clone(),
+                comparison,
+                history: open.history.clone(),
+                last_export: open.last_export.clone(),
                 entry: open.entry.clone(),
                 mode: open.mode,
                 lock_holder: open.lock_holder.clone(),
@@ -1319,9 +1976,83 @@ impl<P: CredentialProvider> Actor<P> {
             projects: self.projects.clone(),
             project,
             notices: self.notices.iter().cloned().collect(),
-            user: self.config.user.clone(),
+            user: self
+                .me
+                .as_ref()
+                .map_or_else(|| self.config.user.clone(), |m| m.display_name.clone()),
+            me: self.me.clone(),
+            users: self.users.clone(),
+            admin_text: self.admin_text.clone(),
         }));
     }
+}
+
+/// The rows of the page on screen. Time O(entities of that page).
+fn page_data(open: &Open) -> PageData {
+    let ws = &open.ws;
+    let ui = &open.ui;
+    let mut d = PageData::default();
+    match ui.page {
+        Page::Overview => d.overview = Some(pages::overview(ws)),
+        Page::Assets => {
+            d.assets = pages::asset_rows(ws);
+            d.asset = ui.selected_asset.and_then(|id| pages::asset_detail(ws, id));
+        }
+        Page::Damage => {
+            d.damages = pages::damage_rows(ws);
+            d.damage = ui
+                .selected_damage
+                .and_then(|id| pages::damage_detail(ws, id));
+        }
+        Page::Threats | Page::Risks => {
+            if ui.page == Page::Threats {
+                d.assets = pages::asset_rows(ws);
+            } else {
+                d.risks = pages::risk_rows(ws);
+            }
+            d.threat = ui
+                .selected_threat
+                .and_then(|id| pages::threat_detail(ws, id));
+        }
+        Page::Trees => {
+            d.trees = pages::tree_rows(ws);
+            let project = ws.project();
+            d.outline = shown_tree(ws, ui)
+                .and_then(|t| project.attack_tree_idx(&t))
+                .and_then(|i| project.attack_tree(i))
+                .map(crate::outline::to_outline);
+            d.controls = pages::control_rows(ws);
+        }
+        Page::Controls => {
+            d.controls = pages::control_rows(ws);
+            d.control = ui
+                .selected_control
+                .and_then(|id| pages::control_detail(ws, id));
+        }
+        Page::Goals => {
+            d.goals = pages::goal_rows(ws);
+            d.goal = ui.selected_goal.and_then(|id| pages::goal_detail(ws, id));
+            d.claims = pages::claim_rows(ws);
+            d.claim = ui.selected_claim.and_then(|id| pages::claim_detail(ws, id));
+        }
+        Page::Problems => d.problems = pages::problems(ws),
+        Page::Versions | Page::History | Page::Reports | Page::Admin => {}
+    }
+    d
+}
+
+/// `AddAsset` as "Add asset".
+fn kind_words(kind: &str) -> String {
+    let mut out = String::with_capacity(kind.len() + 4);
+    for (i, c) in kind.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            out.push(' ');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn entry_of(summary: pb::ProjectSummary) -> ProjectEntry {

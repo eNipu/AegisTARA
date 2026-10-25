@@ -26,8 +26,9 @@ use crate::pb;
 use crate::registry::{Registry, missing};
 use crate::store::{BaselineMeta, ProjectMeta, ProjectStore};
 
-/// Largest gRPC message the server accepts: a full `SubmitOps` batch
-/// (256 ops of up to 64 KiB) plus framing.
+/// Largest gRPC message the server accepts. A `SubmitOps` batch has at most
+/// 1024 ops (`max_batch_ops`); typical ops are a few hundred bytes, and this
+/// cap bounds the whole request whatever the op sizes.
 pub const MAX_REQUEST_BYTES: usize = 17 * 1024 * 1024;
 
 /// Longest lease token the server reads, in bytes.
