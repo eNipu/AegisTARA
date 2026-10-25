@@ -1024,6 +1024,10 @@ impl<P: CredentialProvider> Actor<P> {
     fn on_command(&mut self, command: Command) {
         match command {
             Command::Shutdown => {}
+            Command::Reconnect => {
+                self.connection = ConnectionView::Connecting;
+                self.connect();
+            }
             Command::Refresh => self.refresh_projects(),
             Command::CreateProject {
                 name,
@@ -1166,7 +1170,26 @@ impl<P: CredentialProvider> Actor<P> {
 
     // ---- view ------------------------------------------------------------
 
+    /// Keeps the selection pointing at something that exists: the first threat
+    /// when nothing is selected (a project that just got its first threats)
+    /// or when the selected one is gone (an edit was rolled back).
+    fn ensure_selection(&mut self) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        let threats = threat_rows(&open.ws);
+        let still_there = open
+            .ui
+            .selected_threat
+            .is_some_and(|id| threats.iter().any(|t| t.id == id));
+        if !still_there {
+            open.ui.selected_threat = threats.first().map(|t| t.id);
+            open.ui.selected_node = None;
+        }
+    }
+
     fn publish(&mut self) {
+        self.ensure_selection();
         self.revision += 1;
         let project = self.open.as_ref().map(|open| {
             let threats = threat_rows(&open.ws);

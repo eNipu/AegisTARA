@@ -1,0 +1,674 @@
+// AegisTARA desktop window.
+//
+// This file only lays things out and reports what the user did. Every
+// decision (what is selected, what a rating change means, what the numbers
+// are) is made by the client core in Rust; the window shows the view model
+// and sends commands back.
+import { Button, ComboBox, ScrollView, LineEdit, Switch, AboutSlint } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Canvas, DrawItem } from "canvas.slint";
+
+export { DrawItem }
+
+export struct ProjectItem {
+    id: string,
+    name: string,
+    methodology: string,
+}
+
+export struct ThreatItem {
+    name: string,
+    asset: string,
+    inherent: string,
+    residual: string,
+    // 0 not rated, 1 very low ... 4 high (colors of the rating buckets)
+    inherent-tone: int,
+    residual-tone: int,
+    selected: bool,
+}
+
+export struct FactorItem {
+    label: string,
+    // "Not rated" first, then the levels
+    options: [string],
+    selected: int,
+}
+
+export struct NoticeItem {
+    id: int,
+    // 0 info, 1 warning, 2 error
+    severity: int,
+    text: string,
+}
+
+// A drop-down whose shown choice always follows the view model. A plain
+// ComboBox loses its binding once the user picks something, so a later change
+// from the engine (an undo, another editor) would not show.
+component Choice inherits VerticalLayout {
+    in property <[string]> options;
+    in property <int> index;
+    in property <bool> editable: true;
+    in property <string> label;
+    callback picked(int);
+
+    box := ComboBox {
+        model: root.options;
+        current-index: root.index;
+        enabled: root.editable;
+        accessible-label: root.label;
+        selected(v) => { root.picked(self.current-index); }
+    }
+    changed index => { box.current-index = root.index; }
+    changed options => { box.current-index = root.index; }
+}
+
+export component AppWindow inherits Window {
+    title: "AegisTARA";
+    preferred-width: 1360px;
+    preferred-height: 860px;
+    min-width: 900px;
+    min-height: 560px;
+    background: Theme.sheet;
+
+    // ---- connection ----
+    // 0 connecting, 1 online, 2 offline, 3 login required
+    in property <int> connection: 0;
+    in property <string> connection-text;
+    in property <string> user;
+    in property <string> engine-text;
+
+    // ---- projects ----
+    in property <[ProjectItem]> projects;
+    in property <bool> has-project;
+    in property <string> project-name;
+
+    // ---- open project ----
+    in property <bool> editing;
+    in property <string> band-text;
+    // 0 read-only (free), 1 read-only (someone else edits), 2 editing
+    in property <int> band-kind;
+    in property <string> sync-text;
+    in property <[ThreatItem]> threats;
+    in property <[DrawItem]> draw;
+    in property <bool> has-tree;
+    in property <string> tree-title;
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <bool> show-residual;
+    in property <bool> is-empty;
+    in property <string> zoom-text: "100%";
+    in property <string> canvas-summary;
+
+    // ---- inspector ----
+    in property <bool> has-inspector;
+    in property <string> inspector-title;
+    in property <string> inspector-kind;
+    in property <bool> inspector-is-step;
+    in property <[string]> level-options;
+    in property <int> rating-index;
+    in property <string> effective-text;
+    in property <string> potential-text;
+    in property <[FactorItem]> factors;
+    in property <string> evaluated-text;
+    in property <int> evaluated-tone;
+    in property <[string]> why-lines;
+
+    // ---- notices ----
+    in property <[NoticeItem]> notices;
+
+    // ---- window state ----
+    in-out property <bool> show-about: false;
+    in-out property <string> new-project-name: "";
+
+    callback retry();
+    callback log-in();
+    callback open-project(string);
+    callback create-project(string);
+    callback refresh-projects();
+    callback close-project();
+    callback select-threat(int);
+    callback begin-edit();
+    callback end-edit();
+    callback undo();
+    callback redo();
+    callback create-sample();
+    callback set-residual(bool);
+    callback set-rating(int);
+    callback set-factor(int, int);
+    callback dismiss-notice(int);
+    callback canvas-down(length, length);
+    callback canvas-move(length, length);
+    callback canvas-up(length, length);
+    callback canvas-scroll(length, length, float);
+    callback canvas-key(string, bool) -> bool;
+    callback canvas-resized(length, length);
+    callback fit();
+    callback zoom-reset();
+
+    // ===================================================================
+    // Not connected: one centered card.
+    // ===================================================================
+    if root.connection != 1: Rectangle {
+        background: Theme.sheet;
+        Rectangle {
+            width: min(parent.width - 48px, 460px);
+            height: card-column.preferred-height + 48px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            card-column := VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text {
+                    text: "AegisTARA";
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: Theme.ink;
+                }
+                Text {
+                    text: root.connection-text;
+                    wrap: word-wrap;
+                    color: Theme.graphite;
+                    font-size: 14px;
+                    accessible-role: text;
+                }
+                if root.connection == 2: Button {
+                    text: "Try again";
+                    clicked => { root.retry(); }
+                }
+                if root.connection == 3: Button {
+                    text: "Log in";
+                    primary: true;
+                    clicked => { root.log-in(); }
+                }
+            }
+        }
+    }
+
+    // ===================================================================
+    // Connected, no project open: the project list.
+    // ===================================================================
+    if root.connection == 1 && !root.has-project: Rectangle {
+        background: Theme.sheet;
+        Rectangle {
+            width: min(parent.width - 48px, 620px);
+            height: min(parent.height - 48px, 560px);
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: "Projects";
+                        font-size: 22px;
+                        font-weight: 700;
+                        color: Theme.ink;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: "Refresh"; clicked => { root.refresh-projects(); } }
+                    Button { text: "About"; clicked => { root.show-about = true; } }
+                }
+                if root.projects.length == 0: Text {
+                    text: "There are no projects yet. Create the first one below.";
+                    color: Theme.graphite;
+                    wrap: word-wrap;
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 4px;
+                        for p in root.projects: Rectangle {
+                            height: 44px;
+                            background: area.has-hover ? Theme.wash : transparent;
+                            border-width: 1px;
+                            border-color: Theme.rule;
+                            border-radius: 2px;
+                            accessible-role: button;
+                            accessible-label: "Open project " + p.name;
+                            accessible-action-default => { root.open-project(p.id); }
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 12px;
+                                Text {
+                                    text: p.name;
+                                    color: Theme.ink;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: p.methodology;
+                                    color: Theme.graphite;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            area := TouchArea { clicked => { root.open-project(p.id); } }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        placeholder-text: "New project name";
+                        text <=> root.new-project-name;
+                        accepted(t) => {
+                            if (t != "") { root.create-project(t); root.new-project-name = ""; }
+                        }
+                    }
+                    Button {
+                        text: "Create";
+                        primary: true;
+                        enabled: root.new-project-name != "";
+                        clicked => {
+                            root.create-project(root.new-project-name);
+                            root.new-project-name = "";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ===================================================================
+    // A project is open.
+    // ===================================================================
+    if root.connection == 1 && root.has-project: VerticalLayout {
+        // ---- mode band ----
+        Rectangle {
+            height: 32px;
+            background: root.band-kind == 2 ? Theme.band : Theme.wash;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+                Text {
+                    text: root.band-text;
+                    color: root.band-kind == 2 ? Theme.band-text : Theme.ink;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    accessible-role: text;
+                }
+                if root.band-kind == 0: Button {
+                    text: "Edit";
+                    primary: true;
+                    clicked => { root.begin-edit(); }
+                }
+                if root.band-kind == 2: Button {
+                    text: "Release edit lock";
+                    clicked => { root.end-edit(); }
+                }
+            }
+        }
+        // ---- header ----
+        Rectangle {
+            height: 52px;
+            background: Theme.panel;
+            border-width: 0px;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 12px;
+                Button { text: "Projects"; clicked => { root.close-project(); } }
+                Text {
+                    text: root.project-name;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.tree-title;
+                    color: Theme.graphite;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.sync-text;
+                    color: Theme.graphite;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                Button { text: "Undo"; enabled: root.can-undo && root.editing; clicked => { root.undo(); } }
+                Button { text: "Redo"; enabled: root.can-redo && root.editing; clicked => { root.redo(); } }
+                if root.is-empty && root.editing: Button {
+                    text: "Add sample TARA";
+                    primary: true;
+                    clicked => { root.create-sample(); }
+                }
+                Rectangle {
+                    Switch {
+                        text: "Residual risk";
+                        checked: root.show-residual;
+                        toggled => { root.set-residual(self.checked); }
+                    }
+                }
+                Button { text: "About"; clicked => { root.show-about = true; } }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.rule; }
+
+        // ---- three columns ----
+        HorizontalLayout {
+            // Threat list
+            Rectangle {
+                width: 260px;
+                background: Theme.panel;
+                VerticalLayout {
+                    Rectangle {
+                        height: 36px;
+                        Text {
+                            x: 16px;
+                            text: "Threat scenarios (" + root.threats.length + ")";
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: Theme.graphite;
+                            vertical-alignment: center;
+                        }
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            for t[i] in root.threats: Rectangle {
+                                height: 64px;
+                                background: t.selected ? Theme.wash : (ta.has-hover ? Theme.wash : transparent);
+                                accessible-role: button;
+                                accessible-label: t.name + ", risk " + t.inherent;
+                                accessible-action-default => { root.select-threat(i); }
+                                Rectangle {
+                                    x: 0px;
+                                    width: 4px;
+                                    background: t.selected ? Theme.ink : transparent;
+                                }
+                                VerticalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 12px;
+                                    padding-top: 6px;
+                                    padding-bottom: 6px;
+                                    spacing: 2px;
+                                    Text {
+                                        text: t.name;
+                                        color: Theme.ink;
+                                        font-weight: t.selected ? 700 : 400;
+                                        overflow: elide;
+                                        font-size: 13px;
+                                    }
+                                    Text {
+                                        text: t.asset;
+                                        color: Theme.graphite;
+                                        font-size: 12px;
+                                        overflow: elide;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Rectangle {
+                                            width: 10px;
+                                            height: 10px;
+                                            y: 3px;
+                                            background: Theme.tone(t.inherent-tone);
+                                        }
+                                        Text {
+                                            text: t.inherent == "" ? "not rated" : t.inherent;
+                                            color: Theme.ink;
+                                            font-size: 12px;
+                                        }
+                                        Text {
+                                            text: t.residual == "" ? "" : "after controls: " + t.residual;
+                                            color: Theme.graphite;
+                                            font-size: 12px;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                                ta := TouchArea { clicked => { root.select-threat(i); } }
+                            }
+                        }
+                    }
+                    Rectangle { height: 1px; background: Theme.rule; }
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 4px;
+                        Text { text: "Attack feasibility"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
+                        for entry[i] in ["High", "Medium", "Low", "Very low"]: HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle { width: 12px; height: 12px; y: 2px; background: Theme.tone(4 - i); }
+                            Text { text: entry; font-size: 12px; color: Theme.graphite; }
+                        }
+                    }
+                }
+            }
+            Rectangle { width: 1px; background: Theme.rule; }
+
+            // Canvas
+            Rectangle {
+                horizontal-stretch: 1;
+                Canvas {
+                    items: root.draw;
+                    accessible-summary: root.canvas-summary;
+                    pointer-down(x, y) => { root.canvas-down(x, y); }
+                    pointer-move(x, y) => { root.canvas-move(x, y); }
+                    pointer-up(x, y) => { root.canvas-up(x, y); }
+                    scrolled(x, y, d) => { root.canvas-scroll(x, y, d); }
+                    key(text, shift) => { return root.canvas-key(text, shift); }
+                    resized(w, h) => { root.canvas-resized(w, h); }
+                }
+                if !root.has-tree: Text {
+                    text: root.threats.length == 0
+                        ? "This project has no threat scenarios yet."
+                        : "The selected threat scenario has no attack tree yet.";
+                    color: Theme.graphite;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    x: 12px;
+                    y: parent.height - 44px;
+                    width: 150px;
+                    height: 32px;
+                    spacing: 6px;
+                    Button { text: "Fit"; clicked => { root.fit(); } }
+                    Button { text: root.zoom-text; clicked => { root.zoom-reset(); } }
+                }
+            }
+            Rectangle { width: 1px; background: Theme.rule; }
+
+            // Inspector
+            Rectangle {
+                width: 340px;
+                background: Theme.panel;
+                if !root.has-inspector: Text {
+                    text: "Select a node on the canvas to see why it has its rating.";
+                    color: Theme.graphite;
+                    wrap: word-wrap;
+                    font-size: 13px;
+                    x: 16px;
+                    y: 16px;
+                    width: parent.width - 32px;
+                }
+                if root.has-inspector: ScrollView {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+                        Text {
+                            text: root.inspector-title;
+                            font-size: 16px;
+                            font-weight: 700;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                        }
+                        Text { text: root.inspector-kind; color: Theme.graphite; font-size: 12px; }
+                        if root.evaluated-text != "": HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle { width: 16px; height: 16px; y: 6px; background: Theme.tone(root.evaluated-tone); }
+                            Text {
+                                text: root.evaluated-text + " attack feasibility";
+                                font-size: 15px;
+                                font-weight: 600;
+                                color: Theme.ink;
+                            }
+                        }
+                        if root.why-lines.length > 0: VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "Why?"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
+                            for line in root.why-lines: Text {
+                                text: line;
+                                wrap: word-wrap;
+                                color: Theme.ink;
+                                font-size: 13px;
+                            }
+                        }
+                        if root.inspector-is-step: VerticalLayout {
+                            spacing: 8px;
+                            Rectangle { height: 1px; background: Theme.rule; }
+                            Text { text: "Feasibility rating"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
+                            Choice {
+                                options: root.level-options;
+                                index: root.rating-index;
+                                editable: root.editing;
+                                label: "Feasibility rating";
+                                picked(i) => { root.set-rating(i); }
+                            }
+                            if root.effective-text != "": Text {
+                                text: "The engine uses: " + root.effective-text;
+                                color: Theme.graphite;
+                                font-size: 12px;
+                            }
+                            Text { text: "Attack potential"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
+                            if root.potential-text != "": Text {
+                                text: root.potential-text + " from the five factors";
+                                font-size: 13px;
+                                color: Theme.ink;
+                            }
+                            if root.potential-text == "": Text {
+                                text: "Rate all five factors to calculate it. Until then the rating above is used.";
+                                font-size: 12px;
+                                color: Theme.graphite;
+                                wrap: word-wrap;
+                            }
+                            for f[fi] in root.factors: VerticalLayout {
+                                spacing: 2px;
+                                Text { text: f.label; font-size: 12px; color: Theme.graphite; }
+                                Choice {
+                                    options: f.options;
+                                    index: f.selected;
+                                    editable: root.editing;
+                                    label: f.label;
+                                    picked(i) => { root.set-factor(fi, i); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- status bar ----
+        Rectangle { height: 1px; background: Theme.rule; }
+        Rectangle {
+            height: 26px;
+            background: Theme.panel;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 16px;
+                Text {
+                    text: root.engine-text;
+                    color: Theme.graphite;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text { text: root.user; color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
+                Text { text: "CPU renderer"; color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
+            }
+        }
+    }
+
+    // ===================================================================
+    // Notices: the newest at the bottom right.
+    // ===================================================================
+    VerticalLayout {
+        x: parent.width - 420px;
+        y: parent.height - self.preferred-height - 40px;
+        width: 400px;
+        spacing: 6px;
+        for n in root.notices: Rectangle {
+            background: n.severity == 2 ? #FDECEA : (n.severity == 1 ? #FFF4D6 : Theme.panel);
+            border-width: 1px;
+            border-color: n.severity == 2 ? Theme.high : (n.severity == 1 ? Theme.medium : Theme.rule);
+            border-radius: 2px;
+            height: notice-text.preferred-height + 20px;
+            accessible-role: text;
+            accessible-label: n.text;
+            HorizontalLayout {
+                padding: 10px;
+                spacing: 8px;
+                notice-text := Text {
+                    text: n.text;
+                    wrap: word-wrap;
+                    color: #1D2733;
+                    font-size: 13px;
+                    horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    accessible-role: button;
+                    accessible-label: "Dismiss";
+                    accessible-action-default => { root.dismiss-notice(n.id); }
+                    Text { text: "×"; color: #1D2733; font-size: 16px; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea { clicked => { root.dismiss-notice(n.id); } }
+                }
+            }
+        }
+    }
+
+    // ===================================================================
+    // About: the Slint notice the license requires (decisions D7, D9).
+    // ===================================================================
+    if root.show-about: Rectangle {
+        background: #000000A0;
+        TouchArea { clicked => { root.show-about = false; } }
+        Rectangle {
+            width: min(parent.width - 48px, 520px);
+            height: about-column.preferred-height + 48px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            about-column := VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "AegisTARA"; font-size: 22px; font-weight: 700; color: Theme.ink; }
+                Text {
+                    text: "Threat analysis and risk assessment for vehicle cybersecurity.";
+                    color: Theme.graphite;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 1px; background: Theme.rule; }
+                AboutSlint { }
+                Text {
+                    text: "This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Third-party licenses are listed in the release notices.";
+                    color: Theme.graphite;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                Button { text: "Close"; clicked => { root.show-about = false; } }
+            }
+        }
+    }
+}
