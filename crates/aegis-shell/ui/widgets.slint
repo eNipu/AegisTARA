@@ -1,0 +1,244 @@
+// Small building blocks shared by the pages (job 040).
+//
+// Every widget here only shows what it is given and reports what the user
+// did; the client core decides everything else.
+import { Button, ComboBox, CheckBox, StandardTableView, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export struct ProjectItem {
+    id: string,
+    name: string,
+    methodology: string,
+}
+
+export struct ThreatItem {
+    name: string,
+    asset: string,
+    inherent: string,
+    residual: string,
+    // 0 not rated, 1 very low ... 4 high (colors of the rating buckets)
+    inherent-tone: int,
+    residual-tone: int,
+    selected: bool,
+}
+
+// A labelled drop-down: label, choices, the chosen position.
+export struct FactorItem {
+    label: string,
+    // "Not rated" (or "None") first, then the choices
+    options: [string],
+    selected: int,
+}
+
+export struct NoticeItem {
+    id: int,
+    // 0 info, 1 warning, 2 error
+    severity: int,
+    text: string,
+}
+
+// A related entity: a click leads to it.
+export struct LinkItem {
+    label: string,
+    detail: string,
+    tone: int,
+}
+
+export struct CheckItem {
+    label: string,
+    checked: bool,
+}
+
+export struct MitigationItem {
+    name: string,
+    // position in the feasibility levels
+    level: int,
+}
+
+export struct CountItem {
+    label: string,
+    count: int,
+    tone: int,
+}
+
+export struct DiffItem {
+    kind: string,
+    text: string,
+}
+
+export struct ProblemItem {
+    error: bool,
+    text: string,
+}
+
+// A drop-down whose shown choice always follows the view model. A plain
+// ComboBox loses its binding once the user picks something, so a later change
+// from the engine (an undo, another editor) would not show.
+export component Choice inherits VerticalLayout {
+    in property <[string]> options;
+    in property <int> index;
+    in property <bool> editable: true;
+    in property <string> label;
+    callback picked(int);
+
+    box := ComboBox {
+        model: root.options;
+        current-index: root.index;
+        enabled: root.editable;
+        accessible-label: root.label;
+        selected(v) => { root.picked(self.current-index); }
+    }
+    changed index => { box.current-index = root.index; }
+    changed options => { box.current-index = root.index; }
+}
+
+// A table whose selected row follows the view model.
+export component Table inherits VerticalLayout {
+    in property <[TableColumn]> columns;
+    in property <[[StandardListViewItem]]> rows;
+    in property <int> selected: -1;
+    in property <string> label;
+    callback picked(int);
+
+    tv := StandardTableView {
+        vertical-stretch: 1;
+        columns: root.columns;
+        rows: root.rows;
+        accessible-label: root.label;
+        current-row-changed(r) => {
+            if (r != root.selected) { root.picked(r); }
+        }
+    }
+    changed selected => { tv.set-current-row(root.selected); }
+    init => { tv.set-current-row(root.selected); }
+}
+
+export component SectionTitle inherits Text {
+    font-size: 12px;
+    font-weight: 600;
+    color: Theme.graphite;
+}
+
+export component PageTitle inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <image> icon;
+    spacing: 10px;
+    padding-bottom: 4px;
+    Image {
+        source: root.icon;
+        width: 22px;
+        height: 22px;
+        y: 4px;
+        colorize: Theme.ink;
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        Text { text: root.title; font-size: 20px; font-weight: 700; color: Theme.ink; }
+        if root.subtitle != "": Text { text: root.subtitle; font-size: 12px; color: Theme.graphite; wrap: word-wrap; }
+    }
+    @children
+}
+
+// A framed area with padding.
+export component Panel inherits Rectangle {
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.rule;
+    border-radius: 2px;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        @children
+    }
+}
+
+export component Swatch inherits Rectangle {
+    in property <int> tone;
+    width: 12px;
+    height: 12px;
+    background: Theme.tone(root.tone);
+}
+
+// A vertical list of related entities; a click reports the position.
+export component LinkList inherits VerticalLayout {
+    in property <[LinkItem]> items;
+    in property <string> empty-text: "None.";
+    callback clicked(int);
+    spacing: 2px;
+    if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: 12px; }
+    for item[i] in root.items: Rectangle {
+        height: 30px;
+        background: area.has-hover ? Theme.wash : transparent;
+        border-radius: 2px;
+        accessible-role: button;
+        accessible-label: item.label;
+        accessible-action-default => { root.clicked(i); }
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 6px;
+            spacing: 8px;
+            if item.tone > 0: Swatch { tone: item.tone; y: 9px; }
+            Text { text: item.label; color: Theme.accent; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            Text { text: item.detail; color: Theme.graphite; font-size: 12px; vertical-alignment: center; overflow: elide; }
+        }
+        area := TouchArea { clicked => { root.clicked(i); } }
+    }
+}
+
+// Check boxes for a set of choices.
+export component CheckList inherits VerticalLayout {
+    in property <[CheckItem]> items;
+    in property <bool> editable: true;
+    in property <string> empty-text: "None.";
+    callback toggled(int, bool);
+    spacing: 2px;
+    if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: 12px; }
+    for item[i] in root.items: CheckBox {
+        text: item.label;
+        checked: item.checked;
+        enabled: root.editable;
+        toggled => { root.toggled(i, self.checked); }
+    }
+}
+
+// Count tiles for the overview.
+export component Tile inherits Rectangle {
+    in property <string> label;
+    in property <int> count;
+    min-width: 120px;
+    height: 70px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.rule;
+    border-radius: 2px;
+    VerticalLayout {
+        padding: 10px;
+        Text { text: root.count; font-size: 22px; font-weight: 700; color: Theme.ink; }
+        Text { text: root.label; font-size: 12px; color: Theme.graphite; overflow: elide; }
+    }
+}
+
+// Horizontal bars of a distribution.
+export component Bars inherits VerticalLayout {
+    in property <[CountItem]> items;
+    in property <string> title;
+    // The largest count, which gets the full width.
+    in property <int> most: 1;
+    spacing: 4px;
+    SectionTitle { text: root.title; }
+    for item in root.items: HorizontalLayout {
+        spacing: 8px;
+        Text { text: item.label; width: 90px; font-size: 12px; color: Theme.ink; overflow: elide; }
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 14px;
+            Rectangle {
+                x: 0;
+                width: item.count == 0 ? 2px : parent.width * min(1.0, item.count / max(1.0, root.most));
+                background: item.tone == 0 ? Theme.rule : Theme.tone(item.tone);
+            }
+        }
+        Text { text: item.count; width: 32px; font-size: 12px; color: Theme.ink; horizontal-alignment: right; }
+    }
+}

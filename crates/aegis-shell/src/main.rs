@@ -1,14 +1,18 @@
 //! The `aegis` desktop application.
 //!
-//! Configuration (environment variables, so a launcher or a shortcut can set
-//! them; a settings dialog comes later):
+//! The user types the server address once; the server says how to log in
+//! (password, company login, or development), and the app remembers the
+//! address in its settings file (`aegis_client::settings`).
+//!
+//! Environment variables for development and tests (a launcher or a
+//! shortcut can set them):
 //!
 //! | Variable | Meaning |
 //! |---|---|
-//! | `AEGIS_URL` | The server, for example `https://aegis.example.com`. Default `http://127.0.0.1:50051`. |
-//! | `AEGIS_OIDC_ISSUER`, `AEGIS_OIDC_CLIENT_ID` | Company login. |
-//! | `AEGIS_OIDC_RESOURCE` | The API the access token is for, if the provider needs it. |
-//! | `AEGIS_DEV_USER` | Development login against a server run with `AEGIS_DEV_AUTH=1`. |
+//! | `AEGIS_URL` | The server, for example `https://aegis.example.com`. Overrides the settings. |
+//! | `AEGIS_TRANSPORT` | `auto` (default), `grpc` or `grpc-web`. |
+//! | `AEGIS_DEV_USER` | Development login against a server run with `AEGIS_DEV_AUTH=1`, skipping the screens. |
+//! | `AEGIS_DEV_ADMIN` | With `AEGIS_DEV_USER`: also an admin. |
 //!
 //! The window always uses Slint's software renderer: it needs no GPU, so it
 //! behaves the same on a laptop, a virtual desktop, and a remote session.
@@ -19,16 +23,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use aegis_client::commands::Command;
-use aegis_client::connection::DevLogin;
-use aegis_client::session::{Session, SessionConfig};
+use aegis_client::transport::TransportKind;
 use aegis_shell::AppWindow;
-use aegis_shell::controller::Controller;
-use aegis_shell::provider::{AppProvider, OidcProvider, OidcSettings};
+use aegis_shell::launcher::Launcher;
 use slint::ComponentHandle;
 
 thread_local! {
-    /// The controller of this (UI) thread, reachable from `invoke_from_event_loop`.
-    static CONTROLLER: RefCell<Option<Rc<Controller>>> = const { RefCell::new(None) };
+    /// The launcher of this (UI) thread, reachable from `invoke_from_event_loop`.
+    static LAUNCHER: RefCell<Option<Rc<Launcher>>> = const { RefCell::new(None) };
 }
 
 fn env(name: &str) -> Option<String> {
@@ -51,36 +53,18 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<(), String> {
-    let url = env("AEGIS_URL").unwrap_or_else(|| "http://127.0.0.1:50051".to_owned());
-    let (provider, user) = if let Some(user) = env("AEGIS_DEV_USER") {
-        tracing::warn!("development login as {user}: only for a development server");
-        (
-            AppProvider::Dev(DevLogin::new(&user, env("AEGIS_DEV_ADMIN").is_some())),
-            user,
-        )
-    } else if let (Some(issuer), Some(client_id)) =
-        (env("AEGIS_OIDC_ISSUER"), env("AEGIS_OIDC_CLIENT_ID"))
-    {
-        let account = url.trim_end_matches('/').to_string();
-        let settings = OidcSettings {
-            issuer,
-            client_id,
-            resource: env("AEGIS_OIDC_RESOURCE"),
-            account,
-        };
-        (
-            AppProvider::Oidc(OidcProvider::new(settings)),
-            String::from("you"),
-        )
-    } else {
-        return Err(
-            "no login is configured; set AEGIS_OIDC_ISSUER and AEGIS_OIDC_CLIENT_ID \
-                    (or AEGIS_DEV_USER for a development server)"
-                .to_owned(),
-        );
-    };
+/// Asks the UI thread to handle what the network brought.
+fn wake() {
+    let _ = slint::invoke_from_event_loop(|| {
+        LAUNCHER.with(|l| {
+            if let Some(launcher) = l.borrow().as_ref() {
+                launcher.pump();
+            }
+        });
+    });
+}
 
+fn run() -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -96,64 +80,65 @@ fn run() -> Result<(), String> {
         .select()
         .map_err(|e| format!("cannot open a window: {e}"))?;
 
-    let provider = Arc::new(provider);
-    let (session, _task) = Session::start(&url, Arc::clone(&provider), SessionConfig::new(&user));
     let window = AppWindow::new().map_err(|e| format!("cannot create the window: {e}"))?;
+    let settings_path =
+        aegis_client::settings::config_dir().map(|d| aegis_client::settings::Settings::path_in(&d));
+    let launcher = Launcher::new(
+        &window,
+        runtime.handle().clone(),
+        settings_path,
+        Arc::new(wake),
+    );
+    LAUNCHER.with(|l| *l.borrow_mut() = Some(Rc::clone(&launcher)));
 
-    let log_in = {
-        let (provider, session, handle) = (
-            Arc::clone(&provider),
-            session.clone(),
-            runtime.handle().clone(),
-        );
-        move || {
-            let (provider, session) = (Arc::clone(&provider), session.clone());
-            handle.spawn(async move {
-                if let AppProvider::Oidc(oidc) = &*provider {
-                    match oidc.log_in().await {
-                        Ok(()) => {
-                            let _ = session.send(Command::Reconnect);
-                        }
-                        Err(e) => tracing::warn!(error = %e, "login failed"),
-                    }
+    // Every new view model of a session wakes the UI thread once; bursts
+    // collapse into one redraw because the watch channel only keeps the
+    // latest value.
+    let handle = runtime.handle().clone();
+    let watcher: Rc<RefCell<Option<tokio::task::JoinHandle<()>>>> = Rc::new(RefCell::new(None));
+    {
+        let watcher = Rc::clone(&watcher);
+        launcher.on_session(move |session| {
+            let mut changes = session.subscribe();
+            let task = handle.spawn(async move {
+                while changes.changed().await.is_ok() {
+                    wake();
                 }
             });
-        }
-    };
-    let controller = Controller::attach(&window, session.clone(), log_in);
-    CONTROLLER.with(|c| *c.borrow_mut() = Some(Rc::clone(&controller)));
-    controller.apply_latest();
-
-    // Saved login: try the refresh token before showing the login button.
-    if let AppProvider::Oidc(_) = &*provider {
-        let (provider, session) = (Arc::clone(&provider), session.clone());
-        runtime.spawn(async move {
-            if let AppProvider::Oidc(oidc) = &*provider
-                && matches!(oidc.restore().await, Ok(true))
-            {
-                let _ = session.send(Command::Reconnect);
+            if let Some(old) = watcher.borrow_mut().replace(task) {
+                old.abort();
             }
         });
     }
 
-    // Every new view model wakes the UI thread once; bursts collapse into one
-    // redraw because the watch channel only keeps the latest value.
-    let mut changes = session.subscribe();
-    runtime.spawn(async move {
-        while changes.changed().await.is_ok() {
-            let _ = slint::invoke_from_event_loop(|| {
-                CONTROLLER.with(|c| {
-                    if let Some(controller) = c.borrow().as_ref() {
-                        controller.apply_latest();
-                    }
-                });
-            });
+    if let Some(url) = env("AEGIS_URL") {
+        window.set_server_url(url.as_str().into());
+    }
+    let transport = env("AEGIS_TRANSPORT").unwrap_or_default();
+    match (env("AEGIS_DEV_USER"), env("AEGIS_URL")) {
+        (Some(user), url) => {
+            tracing::warn!("development login as {user}: only for a development server");
+            let url = url.unwrap_or_else(|| "http://127.0.0.1:50051".to_owned());
+            let kind = TransportKind::parse(&transport, &url)
+                .map_err(|e| format!("AEGIS_TRANSPORT: {e}"))?;
+            launcher.start_dev(&url, &user, env("AEGIS_DEV_ADMIN").is_some(), kind);
         }
-    });
+        (None, Some(url)) => {
+            let position = match transport.as_str() {
+                "grpc" => 1,
+                "grpc-web" => 2,
+                _ => 0,
+            };
+            launcher.connect(&url, position);
+        }
+        (None, None) => launcher.start(),
+    }
 
     window
         .run()
         .map_err(|e| format!("the window failed: {e}"))?;
-    let _ = session.send(Command::Shutdown);
+    if let Some(session) = launcher.controller().session() {
+        let _ = session.send(Command::Shutdown);
+    }
     Ok(())
 }

@@ -313,6 +313,9 @@ pub struct ProjectView {
     pub history: Vec<HistoryRow>,
     /// The last file written by an export.
     pub last_export: Option<String>,
+    /// Per page in `Page::ALL` order: a count for the sidebar, if the page
+    /// has one (entities, open problems).
+    pub nav_counts: Vec<Option<usize>>,
 }
 
 impl ProjectView {
