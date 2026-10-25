@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use aegis_canvas::{LayoutConfig, NodeKind, NodeStyle, Scene, Tone};
 use aegis_model::{
-    AttackTree, FeasibilityLevel, GateKind, Methodology, NodeId, NodeIdx, ThreatId, TreeId,
+    AssetId, AttackTree, ClaimId, ControlId, DamageId, FeasibilityLevel, GateKind, GoalId,
+    Methodology, NodeId, NodeIdx, ThreatId, TreeId,
 };
 
 use aegis_proto as pb;
@@ -49,21 +50,211 @@ pub struct ThreatRow {
     pub has_tree: bool,
 }
 
+/// A page of the open project: the steps of the TARA flow (ISO/SAE 21434
+/// clause 15, direction section 11) and the tools around them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Page {
+    /// Counts, risk distribution, top risks, problems.
+    #[default]
+    Overview,
+    /// Assets and their security properties.
+    Assets,
+    /// Damage scenarios and impact ratings.
+    Damage,
+    /// Threat scenarios.
+    Threats,
+    /// Attack trees on the canvas.
+    Trees,
+    /// The risk register and treatment decisions.
+    Risks,
+    /// Security controls.
+    Controls,
+    /// Cybersecurity goals and claims.
+    Goals,
+    /// Completeness and consistency findings.
+    Problems,
+    /// Baselines and the comparison with one.
+    Versions,
+    /// Recent accepted changes.
+    History,
+    /// Exports.
+    Reports,
+    /// Users, project tools, license (admins).
+    Admin,
+}
+
+impl Page {
+    /// Every page, in menu and sidebar order.
+    pub const ALL: [Page; 13] = [
+        Page::Overview,
+        Page::Assets,
+        Page::Damage,
+        Page::Threats,
+        Page::Trees,
+        Page::Risks,
+        Page::Controls,
+        Page::Goals,
+        Page::Problems,
+        Page::Versions,
+        Page::History,
+        Page::Reports,
+        Page::Admin,
+    ];
+
+    /// Position in [`Page::ALL`].
+    #[must_use]
+    pub fn index(self) -> usize {
+        Page::ALL.iter().position(|p| *p == self).unwrap_or(0)
+    }
+
+    /// The page at a position, if any.
+    #[must_use]
+    pub fn from_index(i: usize) -> Option<Page> {
+        Page::ALL.get(i).copied()
+    }
+
+    /// The title.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Page::Overview => "Overview",
+            Page::Assets => "Assets",
+            Page::Damage => "Damage scenarios",
+            Page::Threats => "Threat scenarios",
+            Page::Trees => "Attack trees",
+            Page::Risks => "Risks and treatment",
+            Page::Controls => "Security controls",
+            Page::Goals => "Goals and claims",
+            Page::Problems => "Problems",
+            Page::Versions => "Versions",
+            Page::History => "History",
+            Page::Reports => "Reports",
+            Page::Admin => "Administration",
+        }
+    }
+}
+
+/// One selected entity, by stable ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Selection {
+    /// An asset.
+    Asset(AssetId),
+    /// A damage scenario.
+    Damage(DamageId),
+    /// A threat scenario.
+    Threat(ThreatId),
+    /// An attack tree.
+    Tree(TreeId),
+    /// A security control.
+    Control(ControlId),
+    /// A cybersecurity goal.
+    Goal(GoalId),
+    /// A cybersecurity claim.
+    Claim(ClaimId),
+}
+
+/// A user administration request (admins, password login).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdminAction {
+    /// Creates a user.
+    CreateUser {
+        /// Login name.
+        username: String,
+        /// Shown name.
+        display_name: String,
+        /// First password.
+        password: String,
+        /// Administrator.
+        admin: bool,
+    },
+    /// Grants or revokes administrator rights.
+    SetAdmin {
+        /// The user.
+        username: String,
+        /// Admin or not.
+        admin: bool,
+    },
+    /// Disables or enables a user (disabling ends their sessions).
+    SetDisabled {
+        /// The user.
+        username: String,
+        /// Disabled or not.
+        disabled: bool,
+    },
+    /// Sets a new password (ends the user's sessions).
+    ResetPassword {
+        /// The user.
+        username: String,
+        /// The new password.
+        password: String,
+    },
+    /// Deletes a user.
+    DeleteUser {
+        /// The user.
+        username: String,
+    },
+    /// Turns password login on or off for the whole server (job 045).
+    SetPasswordLogin {
+        /// On or off.
+        enabled: bool,
+    },
+}
+
 /// The user's selection and display choices.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UiState {
-    /// The threat whose tree is shown.
+    /// The page on screen.
+    pub page: Page,
+    /// The selected threat (threat and risk pages; its tree when no tree is
+    /// selected).
     pub selected_threat: Option<ThreatId>,
-    /// The selected node of that tree.
+    /// The tree on the canvas, when chosen on the trees page.
+    pub selected_tree: Option<TreeId>,
+    /// The selected node of the tree on the canvas.
     pub selected_node: Option<NodeId>,
     /// Show the residual evaluation instead of the inherent one.
     pub show_residual: bool,
+    /// The selected asset.
+    pub selected_asset: Option<AssetId>,
+    /// The selected damage scenario.
+    pub selected_damage: Option<DamageId>,
+    /// The selected security control.
+    pub selected_control: Option<ControlId>,
+    /// The selected goal.
+    pub selected_goal: Option<GoalId>,
+    /// The selected claim.
+    pub selected_claim: Option<ClaimId>,
+}
+
+/// The tree the canvas shows: the chosen tree, else the selected threat's.
+#[must_use]
+pub fn shown_tree(ws: &Workspace, ui: &UiState) -> Option<TreeId> {
+    let project = ws.project();
+    if let Some(t) = ui
+        .selected_tree
+        .filter(|t| project.attack_tree_idx(t).is_some())
+    {
+        return Some(t);
+    }
+    let threat = project.threat_scenario(project.threat_scenario_idx(&ui.selected_threat?)?)?;
+    project.attack_tree_id(threat.attack_tree()?)
+}
+
+/// A control attached to the selected step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MitigationView {
+    /// The control.
+    pub control: ControlId,
+    /// Its name.
+    pub name: String,
+    /// The cap, as a position in the feasibility levels.
+    pub level: usize,
 }
 
 /// The tree on the canvas.
 pub struct TreeView {
-    /// The threat it belongs to.
-    pub threat: ThreatId,
+    /// A threat it belongs to, if any.
+    pub threat: Option<ThreatId>,
     /// The tree.
     pub tree: TreeId,
     /// The laid-out scene, ready for `aegis_canvas::render`.
@@ -119,6 +310,12 @@ pub struct Inspector {
     pub evaluated: Option<String>,
     /// Explain-why lines for gates: the rule and the deciding child.
     pub why: Vec<String>,
+    /// Controls attached to this step (steps only).
+    pub mitigations: Vec<MitigationView>,
+    /// Controls that can still be attached (steps only).
+    pub attachable: Vec<(ControlId, String)>,
+    /// The step's feasibility after controls, if they change it.
+    pub residual: Option<String>,
 }
 
 fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
@@ -232,28 +429,24 @@ fn level_label(m: &Methodology, level: FeasibilityLevel) -> String {
     m.feasibility_level_label(level).unwrap_or("?").to_owned()
 }
 
-/// The tree of the selected threat, laid out and annotated with the
-/// evaluation (inherent or residual).
-///
-/// Time O(n log n) in the tree size (at most 32 nodes in a project).
+/// A tree laid out and annotated with its evaluation (inherent or
+/// residual). A tree that cannot be evaluated yet (an empty gate, a step
+/// with no rating on the deciding path) is still drawn, unrated, so the user
+/// can see and fix it. Time O(n log n) in the tree size.
 #[must_use]
-pub fn tree_view(ws: &Workspace, ui: &UiState) -> Option<TreeView> {
+pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Scene> {
     let project = ws.project();
     let m = project.methodology();
-    let threat_id = ui.selected_threat?;
-    let threat = project.threat_scenario(project.threat_scenario_idx(&threat_id)?)?;
-    let tree_idx = threat.attack_tree()?;
-    let tree_id = project.attack_tree_id(tree_idx)?;
+    let tree_idx = project.attack_tree_idx(&tree_id)?;
     let tree = project.attack_tree(tree_idx)?;
-    let evaluation = if ui.show_residual {
+    let evaluation = if residual {
         ws.cache().evaluate_residual_tree(project, tree_id)
     } else {
         ws.cache().evaluate_tree(project, tree_id)
     }
-    .ok()?;
-
+    .ok();
     let style = |idx: NodeIdx| -> NodeStyle {
-        let value = evaluation.get(idx).copied();
+        let value = evaluation.and_then(|e| e.get(idx).copied());
         let is_step = tree.get(idx).is_some_and(|n| n.gate_kind().is_none());
         let score = if is_step {
             let potential = project.step_attack_potential(tree_idx, idx);
@@ -272,9 +465,40 @@ pub fn tree_view(ws: &Workspace, ui: &UiState) -> Option<TreeView> {
         }
     };
     let mut scene = Scene::from_tree(tree, LayoutConfig::default(), style);
-    let path: Vec<NodeIdx> = evaluation.why_path(tree.root()).collect();
-    scene.set_critical_path(&path);
+    if let Some(e) = evaluation {
+        let path: Vec<NodeIdx> = e.why_path(tree.root()).collect();
+        scene.set_critical_path(&path);
+    }
+    Some(scene)
+}
 
+/// The tree of the selected threat, laid out and annotated with the
+/// evaluation (inherent or residual).
+///
+/// Time O(n log n) in the tree size (at most 32 nodes in a project).
+#[must_use]
+pub fn tree_view(ws: &Workspace, ui: &UiState) -> Option<TreeView> {
+    let project = ws.project();
+    let tree_id = shown_tree(ws, ui)?;
+    let tree_idx = project.attack_tree_idx(&tree_id)?;
+    let tree = project.attack_tree(tree_idx)?;
+    // The threat this tree belongs to, for the title: the selected one if it
+    // uses the tree, else the first that does.
+    let threat_id = ui
+        .selected_threat
+        .filter(|t| {
+            project
+                .threat_scenario_idx(t)
+                .and_then(|i| project.threat_scenario(i))
+                .is_some_and(|t| t.attack_tree() == Some(tree_idx))
+        })
+        .or_else(|| {
+            project
+                .threat_scenarios()
+                .find(|(_, _, t)| t.attack_tree() == Some(tree_idx))
+                .map(|(_, id, _)| id)
+        });
+    let scene = tree_scene(ws, tree_id, ui.show_residual)?;
     let selected = ui.selected_node.and_then(|n| tree.idx_of(&n));
     Some(TreeView {
         threat: threat_id,
@@ -301,10 +525,8 @@ fn kind_text(kind: NodeKind) -> &'static str {
 pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
     let project = ws.project();
     let m = project.methodology();
-    let threat_id = ui.selected_threat?;
-    let threat = project.threat_scenario(project.threat_scenario_idx(&threat_id)?)?;
-    let tree_idx = threat.attack_tree()?;
-    let tree_id = project.attack_tree_id(tree_idx)?;
+    let tree_id = shown_tree(ws, ui)?;
+    let tree_idx = project.attack_tree_idx(&tree_id)?;
     let tree: &AttackTree = project.attack_tree(tree_idx)?;
     let node_id = ui.selected_node?;
     let idx = tree.idx_of(&node_id)?;
@@ -379,6 +601,40 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         }
     }
 
+    let (mitigations, attachable, residual) = if is_step {
+        let attached = project.step_mitigations(tree_idx, idx);
+        let mitigations: Vec<MitigationView> = attached
+            .iter()
+            .filter_map(|s| {
+                let control = project.security_control_id(s.control())?;
+                Some(MitigationView {
+                    control,
+                    name: project
+                        .security_control(s.control())
+                        .map(|c| c.name().to_owned())
+                        .unwrap_or_default(),
+                    level: m
+                        .feasibility_levels()
+                        .position(|(l, _, _)| l == s.feasibility())
+                        .unwrap_or(0),
+                })
+            })
+            .collect();
+        let attachable = project
+            .security_controls()
+            .filter(|(c_idx, _, _)| !attached.iter().any(|s| s.control() == *c_idx))
+            .map(|(_, id, c)| (id, c.name().to_owned()))
+            .collect();
+        let inherent = project.effective_step_feasibility(tree_idx, idx);
+        let after = project.residual_step_feasibility(tree_idx, idx);
+        let residual = after
+            .filter(|a| Some(*a) != inherent)
+            .map(|l| level_label(m, l));
+        (mitigations, attachable, residual)
+    } else {
+        (Vec::new(), Vec::new(), None)
+    };
+
     Some(Inspector {
         tree: tree_id,
         node: node_id,
@@ -396,5 +652,8 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         factors,
         evaluated: value.map(|v| level_label(m, v)),
         why,
+        mitigations,
+        attachable,
+        residual,
     })
 }

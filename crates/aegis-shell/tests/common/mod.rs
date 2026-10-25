@@ -62,6 +62,13 @@ impl TestServer {
         Session::start(&self.url, Arc::new(DevLogin::new(user, false)), config).0
     }
 
+    /// A session of a development administrator.
+    pub fn admin_session(&self, user: &str) -> Session {
+        let mut config = SessionConfig::new(user);
+        config.retry_delay = Duration::from_millis(100);
+        Session::start(&self.url, Arc::new(DevLogin::new(user, true)), config).0
+    }
+
     pub async fn stop(mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());

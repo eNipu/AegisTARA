@@ -1,86 +1,103 @@
-// AegisTARA desktop window.
+// AegisTARA desktop window (jobs 033 and 040).
 //
 // This file only lays things out and reports what the user did. Every
-// decision (what is selected, what a rating change means, what the numbers
-// are) is made by the client core in Rust; the window shows the view model
-// and sends commands back.
-import { Button, ComboBox, ScrollView, LineEdit, Switch, AboutSlint } from "std-widgets.slint";
+// decision (what is selected, what a change means, what the numbers are) is
+// made by the client core in Rust; the window shows the view model and sends
+// commands back. Menu and sidebar glyphs are Lucide icons (ISC license,
+// ui/icons/LICENSE-lucide.txt).
+import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, AboutSlint, StandardListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Canvas, DrawItem } from "canvas.slint";
+import {
+    ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
+    CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, Panel, Swatch,
+    LinkList, CheckList, Tile, Bars
+} from "widgets.slint";
 
-export { DrawItem }
+export { DrawItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem }
 
-export struct ProjectItem {
-    id: string,
-    name: string,
-    methodology: string,
+// Page numbers, in the order of aegis_client::view::Page::ALL.
+global Pages {
+    out property <int> overview: 0;
+    out property <int> assets: 1;
+    out property <int> damage: 2;
+    out property <int> threats: 3;
+    out property <int> trees: 4;
+    out property <int> risks: 5;
+    out property <int> controls: 6;
+    out property <int> goals: 7;
+    out property <int> problems: 8;
+    out property <int> versions: 9;
+    out property <int> history: 10;
+    out property <int> reports: 11;
+    out property <int> admin: 12;
 }
 
-export struct ThreatItem {
-    name: string,
-    asset: string,
-    inherent: string,
-    residual: string,
-    // 0 not rated, 1 very low ... 4 high (colors of the rating buckets)
-    inherent-tone: int,
-    residual-tone: int,
-    selected: bool,
-}
-
-export struct FactorItem {
-    label: string,
-    // "Not rated" first, then the levels
-    options: [string],
-    selected: int,
-}
-
-export struct NoticeItem {
-    id: int,
-    // 0 info, 1 warning, 2 error
-    severity: int,
-    text: string,
-}
-
-// A drop-down whose shown choice always follows the view model. A plain
-// ComboBox loses its binding once the user picks something, so a later change
-// from the engine (an undo, another editor) would not show.
-component Choice inherits VerticalLayout {
-    in property <[string]> options;
-    in property <int> index;
-    in property <bool> editable: true;
+// A row with a label above a field.
+component Field inherits VerticalLayout {
     in property <string> label;
-    callback picked(int);
+    spacing: 2px;
+    SectionTitle { text: root.label; }
+    @children
+}
 
-    box := ComboBox {
-        model: root.options;
-        current-index: root.index;
+// The rename row of a details panel.
+component NameEditor inherits HorizontalLayout {
+    in property <string> name;
+    in property <bool> editable;
+    callback renamed(string);
+    spacing: 6px;
+    edit := LineEdit {
+        horizontal-stretch: 1;
+        text: root.name;
         enabled: root.editable;
-        accessible-label: root.label;
-        selected(v) => { root.picked(self.current-index); }
+        accessible-label: "Name";
+        accepted(t) => { if (t != root.name && t != "") { root.renamed(t); } }
     }
-    changed index => { box.current-index = root.index; }
-    changed options => { box.current-index = root.index; }
+    Button {
+        text: "Rename";
+        enabled: root.editable && edit.text != root.name && edit.text != "";
+        clicked => { root.renamed(edit.text); }
+    }
+    changed name => { edit.text = root.name; }
 }
 
 export component AppWindow inherits Window {
     title: "AegisTARA";
     preferred-width: 1360px;
     preferred-height: 860px;
-    min-width: 900px;
-    min-height: 560px;
+    min-width: 980px;
+    min-height: 600px;
     background: Theme.sheet;
+    icon: @image-url("icons/shield.svg");
 
-    // ---- connection ----
-    // 0 connecting, 1 online, 2 offline, 3 login required
+    // ---- connection and login ----
+    // 0 connecting, 1 online, 2 offline, 3 login required, 4 choose a server
     in property <int> connection: 0;
     in property <string> connection-text;
+    // 0 company login (OIDC), 1 user name and password, 2 development
+    in property <int> login-method: 0;
+    // The company login is shown, and a user name and password are accepted too.
+    in property <bool> password-also: false;
+    in property <string> server-name;
+    in property <string> login-error;
+    in property <bool> login-busy;
+    in-out property <string> server-url;
+    // 0 automatic, 1 gRPC over HTTP/2, 2 gRPC-Web over HTTP/1.1
+    in-out property <int> transport-index: 0;
+    in-out property <string> login-user;
+    in-out property <string> login-password;
+    in-out property <bool> remember: true;
     in property <string> user;
     in property <string> engine-text;
+    in property <bool> is-admin;
+    in property <bool> is-password;
 
     // ---- projects ----
     in property <[ProjectItem]> projects;
     in property <bool> has-project;
     in property <string> project-name;
+    in-out property <string> new-project-name: "";
 
     // ---- open project ----
     in property <bool> editing;
@@ -88,18 +105,99 @@ export component AppWindow inherits Window {
     // 0 read-only (free), 1 read-only (someone else edits), 2 editing
     in property <int> band-kind;
     in property <string> sync-text;
-    in property <[ThreatItem]> threats;
-    in property <[DrawItem]> draw;
-    in property <bool> has-tree;
-    in property <string> tree-title;
+    // Whether the risk numbers are checked against the server's (G15):
+    // 0 checked, 1 checking, 2 the server's numbers are shown, 3 not comparable.
+    in property <int> numbers-kind;
+    in property <string> numbers-text;
     in property <bool> can-undo;
     in property <bool> can-redo;
     in property <bool> show-residual;
     in property <bool> is-empty;
+    in property <int> page: 0;
+    // One entry per page: a count shown in the sidebar, or empty.
+    in property <[string]> nav-counts;
+
+    // ---- vocabulary ----
+    in property <[string]> property-labels;
+    in property <[string]> threat-categories;
+    // "Not rated" first.
+    in property <[string]> feasibility-options;
+    // The levels only.
+    in property <[string]> feasibility-levels;
+    // "Not decided" first.
+    in property <[string]> treatment-options;
+    in property <[string]> catalog-schemes;
+
+    // ---- overview ----
+    in property <[CountItem]> ov-counts;
+    in property <[CountItem]> ov-inherent;
+    in property <[CountItem]> ov-residual;
+    in property <int> ov-most: 1;
+    in property <int> ov-errors;
+    in property <int> ov-warnings;
+    in property <[LinkItem]> ov-top;
+
+    // ---- assets ----
+    in property <[[StandardListViewItem]]> asset-rows;
+    in property <int> asset-selected: -1;
+    in property <bool> has-asset;
+    in property <string> asset-name;
+    in property <[CheckItem]> asset-properties;
+    in property <[LinkItem]> asset-threats;
+    in property <string> asset-changed;
+
+    // ---- damage ----
+    in property <[[StandardListViewItem]]> damage-rows;
+    in property <int> damage-selected: -1;
+    in property <bool> has-damage;
+    in property <string> damage-name;
+    in property <[FactorItem]> damage-impacts;
+    in property <[LinkItem]> damage-threats;
+    in property <string> damage-changed;
+
+    // ---- threats and risks ----
+    in property <[ThreatItem]> threats;
+    in property <[[StandardListViewItem]]> threat-rows;
+    in property <int> threat-selected: -1;
+    in property <[string]> asset-names;
+    in-out property <string> new-threat-name;
+    in-out property <int> new-threat-asset: 0;
+    in-out property <int> new-threat-category: 0;
+    in property <bool> has-threat-detail;
+    in property <string> td-name;
+    in property <string> td-asset;
+    in property <int> td-category;
+    in property <[CheckItem]> td-damages;
+    in property <[string]> td-refs;
+    in-out property <int> new-ref-scheme: 0;
+    in-out property <string> new-ref-text;
+    in property <int> td-feasibility;
+    in property <[string]> tree-names;
+    in property <int> td-tree;
+    in property <string> td-feasibility-text;
+    in property <string> td-inherent;
+    in property <string> td-residual;
+    in property <int> td-inherent-tone;
+    in property <int> td-residual-tone;
+    in property <[string]> td-why;
+    in property <string> td-changed;
+    in property <int> td-treatment;
+    in property <[string]> goal-names;
+    in property <int> td-goal;
+    in property <[string]> claim-names;
+    in property <int> td-claim;
+    in property <[[StandardListViewItem]]> risk-rows;
+    in property <int> risk-selected: -1;
+
+    // ---- attack trees ----
+    in property <[[StandardListViewItem]]> tree-rows;
+    in property <int> tree-selected: -1;
+    in property <[DrawItem]> draw;
+    in property <bool> has-tree;
+    in property <string> tree-title;
     in property <string> zoom-text: "100%";
     in property <string> canvas-summary;
-
-    // ---- inspector ----
+    in property <string> outline-text;
     in property <bool> has-inspector;
     in property <string> inspector-title;
     in property <string> inspector-kind;
@@ -112,30 +210,153 @@ export component AppWindow inherits Window {
     in property <string> evaluated-text;
     in property <int> evaluated-tone;
     in property <[string]> why-lines;
+    in property <[MitigationItem]> mitigations;
+    in property <[string]> attach-names;
+    in property <string> step-residual-text;
+    in-out property <int> attach-control-index: 0;
+    in-out property <int> attach-level-index: 0;
+    // Where the canvas is in the window, for tests that click on nodes.
+    in-out property <length> canvas-x;
+    in-out property <length> canvas-y;
+
+    // ---- controls ----
+    in property <[[StandardListViewItem]]> control-rows;
+    in property <int> control-selected: -1;
+    in property <bool> has-control;
+    in property <string> control-name;
+    in property <[LinkItem]> control-steps;
+    in property <[LinkItem]> control-goals;
+    in property <string> control-changed;
+
+    // ---- goals and claims ----
+    in property <[[StandardListViewItem]]> goal-rows;
+    in property <int> goal-selected: -1;
+    in property <bool> has-goal;
+    in property <string> goal-name;
+    in property <[CheckItem]> goal-controls;
+    in property <[LinkItem]> goal-threats;
+    in property <[[StandardListViewItem]]> claim-rows;
+    in property <int> claim-selected: -1;
+    in property <bool> has-claim;
+    in property <string> claim-name;
+    in property <[LinkItem]> claim-threats;
+
+    // ---- problems, versions, history, reports ----
+    in property <[ProblemItem]> problems;
+    in property <[[StandardListViewItem]]> baseline-rows;
+    in property <int> baseline-selected: -1;
+    in property <bool> comparing;
+    in property <string> compare-summary;
+    in property <[DiffItem]> diff-lines;
+    in property <[[StandardListViewItem]]> history-rows;
+    in-out property <string> export-dir;
+    in property <string> last-export;
+
+    // ---- administration ----
+    in property <[[StandardListViewItem]]> user-rows;
+    in property <int> user-selected: -1;
+    in property <bool> selected-user-admin;
+    in property <bool> selected-user-disabled;
+    in property <string> admin-text;
+    // The login switch (job 045): shown once an administrator has loaded it.
+    in property <bool> settings-known;
+    in property <bool> password-login-on;
+    in property <bool> company-login-available;
+    in-out property <string> new-user-name;
+    in-out property <string> new-user-display;
+    in-out property <string> new-user-password;
+    in-out property <bool> new-user-admin;
 
     // ---- notices ----
     in property <[NoticeItem]> notices;
 
-    // ---- window state ----
+    // ---- dialogs ----
     in-out property <bool> show-about: false;
-    in-out property <string> new-project-name: "";
+    in-out property <bool> show-shortcuts: false;
+    in-out property <bool> prompt-open: false;
+    in-out property <string> prompt-kind;
+    in-out property <string> prompt-title;
+    in-out property <string> prompt-label;
+    in-out property <string> prompt-text;
+    in-out property <bool> prompt-secret: false;
+    in-out property <bool> confirm-open: false;
+    in-out property <string> confirm-kind;
+    in-out property <string> confirm-text;
+    in-out property <bool> outline-open: false;
+    in-out property <string> outline-draft;
+    in-out property <bool> password-open: false;
+    in-out property <string> pw-current;
+    in-out property <string> pw-new;
+    in-out property <string> pw-repeat;
 
+    // ---- callbacks: connection and account ----
     callback retry();
     callback log-in();
+    callback connect-server(string, int);
+    callback password-log-in(string, string, bool);
+    callback dev-log-in(string);
+    callback change-server();
+    callback use-password-login();
+    callback use-company-login();
+    callback log-out();
+    callback change-password(string, string);
+
+    // ---- callbacks: projects and editing ----
     callback open-project(string);
     callback create-project(string);
     callback refresh-projects();
     callback close-project();
-    callback select-threat(int);
+    callback rename-project(string);
+    callback delete-project();
+    callback show-page(int);
     callback begin-edit();
     callback end-edit();
     callback undo();
     callback redo();
     callback create-sample();
     callback set-residual(bool);
+    callback dismiss-notice(int);
+    callback ov-top-clicked(int);
+
+    // ---- callbacks: pages ----
+    callback pick-asset(int);
+    callback add-asset(string);
+    callback rename-asset(string);
+    callback toggle-asset-property(int, bool);
+    callback remove-asset();
+    callback asset-threat-clicked(int);
+    callback pick-damage(int);
+    callback add-damage(string);
+    callback rename-damage(string);
+    callback set-impact(int, int);
+    callback remove-damage();
+    callback damage-threat-clicked(int);
+    callback select-threat(int);
+    callback add-threat(string, int, int);
+    callback rename-threat(string);
+    callback set-threat-category(int);
+    callback toggle-threat-damage(int, bool);
+    callback add-catalog-ref(int, string);
+    callback remove-catalog-ref(int);
+    callback set-threat-feasibility(int);
+    callback set-threat-tree(int);
+    callback new-tree-for-threat();
+    callback open-threat-tree();
+    callback remove-threat();
+    callback set-treatment(int);
+    callback set-threat-goal(int);
+    callback set-threat-claim(int);
+    callback pick-risk(int);
+    callback pick-tree(int);
+    callback new-tree(string);
+    callback apply-outline(string);
+    callback remove-tree();
+    callback attach-control(int, int);
+    callback set-mitigation(int, int);
+    callback detach-control(int);
+    callback select-threat-of-tree();
     callback set-rating(int);
     callback set-factor(int, int);
-    callback dismiss-notice(int);
     callback canvas-down(length, length);
     callback canvas-move(length, length);
     callback canvas-up(length, length);
@@ -144,6 +365,158 @@ export component AppWindow inherits Window {
     callback canvas-resized(length, length);
     callback fit();
     callback zoom-reset();
+    callback pick-control(int);
+    callback add-control(string);
+    callback rename-control(string);
+    callback remove-control();
+    callback control-step-clicked(int);
+    callback control-goal-clicked(int);
+    callback pick-goal(int);
+    callback add-goal(string);
+    callback rename-goal(string);
+    callback toggle-goal-control(int, bool);
+    callback remove-goal();
+    callback goal-threat-clicked(int);
+    callback pick-claim(int);
+    callback add-claim(string);
+    callback rename-claim(string);
+    callback remove-claim();
+    callback claim-threat-clicked(int);
+    callback problem-clicked(int);
+    callback pick-baseline(int);
+    callback create-baseline(string);
+    callback compare-baseline();
+    callback stop-compare();
+    callback refresh-history();
+    callback export-report();
+    callback export-csv();
+    callback export-svg();
+    callback pick-user(int);
+    callback create-user(string, string, string, bool);
+    callback toggle-user-admin();
+    callback toggle-user-disabled();
+    callback reset-user-password(string);
+    callback delete-user();
+    callback break-lock();
+    callback set-password-login(bool);
+    callback verify-audit();
+
+    // Opens the one-line input dialog. The answer comes back through
+    // `prompt-accepted` with the same kind.
+    public function ask(kind: string, title: string, label: string, text: string) {
+        root.prompt-kind = kind;
+        root.prompt-title = title;
+        root.prompt-label = label;
+        root.prompt-text = text;
+        root.prompt-secret = false;
+        root.prompt-open = true;
+    }
+
+    public function confirm(kind: string, text: string) {
+        root.confirm-kind = kind;
+        root.confirm-text = text;
+        root.confirm-open = true;
+    }
+
+    function prompt-done(kind: string, text: string) {
+        root.prompt-open = false;
+        if (text == "") { return; }
+        if (kind == "new-project") { root.create-project(text); }
+        if (kind == "rename-project") { root.rename-project(text); }
+        if (kind == "add-asset") { root.add-asset(text); }
+        if (kind == "add-damage") { root.add-damage(text); }
+        if (kind == "new-tree") { root.new-tree(text); }
+        if (kind == "add-control") { root.add-control(text); }
+        if (kind == "add-goal") { root.add-goal(text); }
+        if (kind == "add-claim") { root.add-claim(text); }
+        if (kind == "create-baseline") { root.create-baseline(text); }
+        if (kind == "reset-password") { root.reset-user-password(text); }
+    }
+
+    function confirm-done(kind: string) {
+        root.confirm-open = false;
+        if (kind == "remove-asset") { root.remove-asset(); }
+        if (kind == "remove-damage") { root.remove-damage(); }
+        if (kind == "remove-threat") { root.remove-threat(); }
+        if (kind == "remove-tree") { root.remove-tree(); }
+        if (kind == "remove-control") { root.remove-control(); }
+        if (kind == "remove-goal") { root.remove-goal(); }
+        if (kind == "remove-claim") { root.remove-claim(); }
+        if (kind == "delete-user") { root.delete-user(); }
+        if (kind == "delete-project") { root.delete-project(); }
+        if (kind == "break-lock") { root.break-lock(); }
+        if (kind == "password-login-off") { root.set-password-login(false); }
+        if (kind == "log-out") { root.log-out(); }
+    }
+
+    property <bool> in-project: root.connection == 1 && root.has-project;
+    property <bool> online: root.connection == 1;
+
+    // ===================================================================
+    // Menus, with Lucide glyphs.
+    // ===================================================================
+    MenuBar {
+        Menu {
+            title: "File";
+            MenuItem { title: "New project…"; icon: @image-url("icons/file-plus.svg"); enabled: root.online; activated => { root.ask("new-project", "New project", "Project name", ""); } }
+            MenuItem { title: "Projects"; icon: @image-url("icons/folder-open.svg"); enabled: root.online; activated => { root.close-project(); } }
+            MenuItem { title: "Close project"; icon: @image-url("icons/folder-x.svg"); enabled: root.in-project; activated => { root.close-project(); } }
+            MenuSeparator {}
+            MenuItem { title: "Export TARA report (HTML)"; icon: @image-url("icons/file-text.svg"); enabled: root.in-project; activated => { root.export-report(); } }
+            MenuItem { title: "Export risk register (CSV)"; icon: @image-url("icons/sheet.svg"); enabled: root.in-project; activated => { root.export-csv(); } }
+            MenuItem { title: "Export attack tree (SVG)"; icon: @image-url("icons/image.svg"); enabled: root.in-project && root.has-tree; activated => { root.export-svg(); } }
+            MenuSeparator {}
+            MenuItem { title: "Change password…"; icon: @image-url("icons/key-round.svg"); enabled: root.online && root.is-password; activated => { root.pw-current = ""; root.pw-new = ""; root.pw-repeat = ""; root.password-open = true; } }
+            MenuItem { title: "Change server…"; icon: @image-url("icons/server.svg"); activated => { root.change-server(); } }
+            MenuItem { title: "Log out"; icon: @image-url("icons/log-out.svg"); enabled: root.online; activated => { root.confirm("log-out", "Log out of this server?"); } }
+        }
+        Menu {
+            title: "Edit";
+            MenuItem { title: "Undo"; icon: @image-url("icons/undo-2.svg"); shortcut: @keys(Control + Z); enabled: root.in-project && root.editing && root.can-undo; activated => { root.undo(); } }
+            MenuItem { title: "Redo"; icon: @image-url("icons/redo-2.svg"); shortcut: @keys(Control + Y); enabled: root.in-project && root.editing && root.can-redo; activated => { root.redo(); } }
+            MenuSeparator {}
+            MenuItem { title: "Take the edit lock"; icon: @image-url("icons/pencil.svg"); shortcut: @keys(Control + E); enabled: root.in-project && root.band-kind == 0; activated => { root.begin-edit(); } }
+            MenuItem { title: "Release the edit lock"; icon: @image-url("icons/lock.svg"); enabled: root.in-project && root.editing; activated => { root.end-edit(); } }
+        }
+        Menu {
+            title: "View";
+            MenuItem { title: "Overview"; icon: @image-url("icons/layout-dashboard.svg"); shortcut: @keys(Control + "1"); enabled: root.in-project; activated => { root.show-page(Pages.overview); } }
+            MenuItem { title: "Assets"; icon: @image-url("icons/box.svg"); shortcut: @keys(Control + "2"); enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
+            MenuItem { title: "Damage scenarios"; icon: @image-url("icons/triangle-alert.svg"); shortcut: @keys(Control + "3"); enabled: root.in-project; activated => { root.show-page(Pages.damage); } }
+            MenuItem { title: "Threat scenarios"; icon: @image-url("icons/swords.svg"); shortcut: @keys(Control + "4"); enabled: root.in-project; activated => { root.show-page(Pages.threats); } }
+            MenuItem { title: "Attack trees"; icon: @image-url("icons/network.svg"); shortcut: @keys(Control + "5"); enabled: root.in-project; activated => { root.show-page(Pages.trees); } }
+            MenuItem { title: "Risks and treatment"; icon: @image-url("icons/gauge.svg"); shortcut: @keys(Control + "6"); enabled: root.in-project; activated => { root.show-page(Pages.risks); } }
+            MenuItem { title: "Security controls"; icon: @image-url("icons/shield-check.svg"); shortcut: @keys(Control + "7"); enabled: root.in-project; activated => { root.show-page(Pages.controls); } }
+            MenuItem { title: "Goals and claims"; icon: @image-url("icons/target.svg"); shortcut: @keys(Control + "8"); enabled: root.in-project; activated => { root.show-page(Pages.goals); } }
+            MenuItem { title: "Problems"; icon: @image-url("icons/circle-alert.svg"); shortcut: @keys(Control + "9"); enabled: root.in-project; activated => { root.show-page(Pages.problems); } }
+            MenuSeparator {}
+            MenuItem { title: "Risk after controls"; icon: @image-url("icons/eye.svg"); checkable: true; checked: root.show-residual; enabled: root.in-project; activated => { root.set-residual(!root.show-residual); } }
+            MenuItem { title: "Fit the tree"; icon: @image-url("icons/maximize.svg"); enabled: root.in-project && root.has-tree; activated => { root.fit(); } }
+            MenuItem { title: "Zoom to 100%"; icon: @image-url("icons/zoom-in.svg"); enabled: root.in-project && root.has-tree; activated => { root.zoom-reset(); } }
+        }
+        Menu {
+            title: "Project";
+            MenuItem { title: "Rename project…"; icon: @image-url("icons/pencil.svg"); enabled: root.in-project && root.editing; activated => { root.ask("rename-project", "Rename project", "Project name", root.project-name); } }
+            MenuItem { title: "Add the sample TARA"; icon: @image-url("icons/plus.svg"); enabled: root.in-project && root.editing && root.is-empty; activated => { root.create-sample(); } }
+            MenuSeparator {}
+            MenuItem { title: "Create baseline…"; icon: @image-url("icons/flag.svg"); enabled: root.in-project; activated => { root.ask("create-baseline", "Create baseline", "Baseline name, for example B1 Design freeze", ""); } }
+            MenuItem { title: "Versions and comparison"; icon: @image-url("icons/git-compare.svg"); enabled: root.in-project; activated => { root.show-page(Pages.versions); } }
+            MenuItem { title: "History"; icon: @image-url("icons/history.svg"); enabled: root.in-project; activated => { root.show-page(Pages.history); } }
+            MenuItem { title: "Reports"; icon: @image-url("icons/file-chart-column.svg"); enabled: root.in-project; activated => { root.show-page(Pages.reports); } }
+        }
+        Menu {
+            title: "Admin";
+            MenuItem { title: "Users and project tools"; icon: @image-url("icons/user-cog.svg"); enabled: root.in-project && root.is-admin; activated => { root.show-page(Pages.admin); } }
+            MenuItem { title: "Check the audit chain"; icon: @image-url("icons/list-checks.svg"); enabled: root.in-project && root.is-admin; activated => { root.verify-audit(); } }
+            MenuItem { title: "Break the edit lock"; icon: @image-url("icons/unlink.svg"); enabled: root.in-project && root.is-admin && root.band-kind == 1; activated => { root.confirm("break-lock", "Break the edit lock? The other editor's unsaved changes are lost."); } }
+            MenuItem { title: "Delete project…"; icon: @image-url("icons/trash-2.svg"); enabled: root.in-project && root.is-admin; activated => { root.confirm("delete-project", "Delete this project, its history and its baselines? This cannot be undone."); } }
+        }
+        Menu {
+            title: "Help";
+            MenuItem { title: "Keyboard shortcuts"; icon: @image-url("icons/keyboard.svg"); activated => { root.show-shortcuts = true; } }
+            MenuItem { title: "About AegisTARA"; icon: @image-url("icons/info.svg"); activated => { root.show-about = true; } }
+        }
+    }
 
     // ===================================================================
     // Not connected: one centered card.
@@ -160,12 +533,12 @@ export component AppWindow inherits Window {
             card-column := VerticalLayout {
                 padding: 24px;
                 spacing: 12px;
-                Text {
-                    text: "AegisTARA";
-                    font-size: 22px;
-                    font-weight: 700;
-                    color: Theme.ink;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Image { source: @image-url("icons/shield.svg"); width: 28px; height: 28px; colorize: Theme.accent; }
+                    Text { text: "AegisTARA"; font-size: 22px; font-weight: 700; color: Theme.ink; vertical-alignment: center; }
                 }
+                if root.server-name != "" && root.connection == 3: Text { text: root.server-name; color: Theme.ink; font-size: 14px; }
                 Text {
                     text: root.connection-text;
                     wrap: word-wrap;
@@ -173,14 +546,94 @@ export component AppWindow inherits Window {
                     font-size: 14px;
                     accessible-role: text;
                 }
-                if root.connection == 2: Button {
-                    text: "Try again";
-                    clicked => { root.retry(); }
+                // Choose a server.
+                if root.connection == 4: VerticalLayout {
+                    spacing: 10px;
+                    Field {
+                        label: "Server address";
+                        url-edit := LineEdit {
+                            text <=> root.server-url;
+                            placeholder-text: "https://aegis.example.com";
+                            accessible-label: "Server address";
+                            accepted(t) => { root.connect-server(t, root.transport-index); }
+                        }
+                    }
+                    Field {
+                        label: "Connection";
+                        Choice {
+                            options: ["Automatic", "gRPC (HTTP/2)", "gRPC-Web (HTTP/1.1, through any proxy)"];
+                            index: root.transport-index;
+                            label: "Connection";
+                            picked(i) => { root.transport-index = i; }
+                        }
+                    }
+                    Button {
+                        text: "Connect";
+                        icon: @image-url("icons/server.svg");
+                        primary: true;
+                        enabled: root.server-url != "" && !root.login-busy;
+                        clicked => { root.connect-server(root.server-url, root.transport-index); }
+                    }
                 }
-                if root.connection == 3: Button {
-                    text: "Log in";
-                    primary: true;
-                    clicked => { root.log-in(); }
+                if root.connection == 2: HorizontalLayout {
+                    spacing: 8px;
+                    Button { text: "Try again"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.retry(); } }
+                    Button { text: "Change server"; icon: @image-url("icons/server.svg"); clicked => { root.change-server(); } }
+                }
+                // Password login.
+                if root.connection == 3 && root.login-method == 1: VerticalLayout {
+                    spacing: 10px;
+                    Field {
+                        label: "User name";
+                        LineEdit {
+                            text <=> root.login-user;
+                            accessible-label: "User name";
+                        }
+                    }
+                    Field {
+                        label: "Password";
+                        LineEdit {
+                            text <=> root.login-password;
+                            input-type: password;
+                            accessible-label: "Password";
+                            accepted(t) => { root.password-log-in(root.login-user, root.login-password, root.remember); }
+                        }
+                    }
+                    CheckBox { text: "Keep me logged in on this computer"; checked <=> root.remember; }
+                    if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: root.login-busy ? "Logging in…" : "Log in";
+                            icon: @image-url("icons/log-in.svg");
+                            primary: true;
+                            enabled: root.login-user != "" && root.login-password != "" && !root.login-busy;
+                            clicked => { root.password-log-in(root.login-user, root.login-password, root.remember); }
+                        }
+                        Button { text: "Change server"; clicked => { root.change-server(); } }
+                        if root.password-also: Button { text: "Use company login"; icon: @image-url("icons/key-round.svg"); clicked => { root.use-company-login(); } }
+                    }
+                }
+                // Development login.
+                if root.connection == 3 && root.login-method == 2: VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Development server: no password is checked."; color: Theme.medium; font-size: 12px; }
+                    Field {
+                        label: "User name";
+                        LineEdit { text <=> root.login-user; accessible-label: "User name"; accepted(t) => { root.dev-log-in(t); } }
+                    }
+                    Button { text: "Continue"; primary: true; enabled: root.login-user != ""; clicked => { root.dev-log-in(root.login-user); } }
+                }
+                // Company login.
+                if root.connection == 3 && root.login-method == 0: VerticalLayout {
+                    spacing: 8px;
+                    if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: "Log in"; primary: true; clicked => { root.log-in(); } }
+                        Button { text: "Change server"; clicked => { root.change-server(); } }
+                        if root.password-also: Button { text: "Use a user name and password"; clicked => { root.use-password-login(); } }
+                    }
                 }
             }
         }
@@ -203,6 +656,7 @@ export component AppWindow inherits Window {
                 spacing: 12px;
                 HorizontalLayout {
                     spacing: 12px;
+                    Image { source: @image-url("icons/folder-open.svg"); width: 22px; height: 22px; y: 4px; colorize: Theme.ink; }
                     Text {
                         text: "Projects";
                         font-size: 22px;
@@ -211,8 +665,8 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                     }
                     Rectangle { horizontal-stretch: 1; }
-                    Button { text: "Refresh"; clicked => { root.refresh-projects(); } }
-                    Button { text: "About"; clicked => { root.show-about = true; } }
+                    Button { text: "Refresh"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-projects(); } }
+                    Button { text: "About"; icon: @image-url("icons/info.svg"); clicked => { root.show-about = true; } }
                 }
                 if root.projects.length == 0: Text {
                     text: "There are no projects yet. Create the first one below.";
@@ -267,6 +721,7 @@ export component AppWindow inherits Window {
                     }
                     Button {
                         text: "Create";
+                        icon: @image-url("icons/file-plus.svg");
                         primary: true;
                         enabled: root.new-project-name != "";
                         clicked => {
@@ -275,6 +730,7 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+                Text { text: "Logged in as " + root.user + ". " + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
             }
         }
     }
@@ -282,7 +738,7 @@ export component AppWindow inherits Window {
     // ===================================================================
     // A project is open.
     // ===================================================================
-    if root.connection == 1 && root.has-project: VerticalLayout {
+    if root.in-project: VerticalLayout {
         // ---- mode band ----
         Rectangle {
             height: 32px;
@@ -291,6 +747,13 @@ export component AppWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 12px;
+                Image {
+                    source: root.band-kind == 2 ? @image-url("icons/pencil.svg") : @image-url("icons/lock.svg");
+                    width: 16px;
+                    height: 16px;
+                    y: 8px;
+                    colorize: root.band-kind == 2 ? Theme.band-text : Theme.ink;
+                }
                 Text {
                     text: root.band-text;
                     color: root.band-kind == 2 ? Theme.band-text : Theme.ink;
@@ -314,12 +777,11 @@ export component AppWindow inherits Window {
         Rectangle {
             height: 52px;
             background: Theme.panel;
-            border-width: 0px;
             HorizontalLayout {
                 padding-left: 16px;
                 padding-right: 16px;
-                spacing: 12px;
-                Button { text: "Projects"; clicked => { root.close-project(); } }
+                spacing: 10px;
+                Button { text: "Projects"; icon: @image-url("icons/folder-open.svg"); clicked => { root.close-project(); } }
                 Text {
                     text: root.project-name;
                     font-size: 16px;
@@ -327,14 +789,7 @@ export component AppWindow inherits Window {
                     color: Theme.ink;
                     vertical-alignment: center;
                     overflow: elide;
-                }
-                Text {
-                    text: root.tree-title;
-                    color: Theme.graphite;
-                    font-size: 13px;
-                    vertical-alignment: center;
                     horizontal-stretch: 1;
-                    overflow: elide;
                 }
                 Text {
                     text: root.sync-text;
@@ -342,235 +797,850 @@ export component AppWindow inherits Window {
                     font-size: 13px;
                     vertical-alignment: center;
                 }
-                Button { text: "Undo"; enabled: root.can-undo && root.editing; clicked => { root.undo(); } }
-                Button { text: "Redo"; enabled: root.can-redo && root.editing; clicked => { root.redo(); } }
+                HorizontalLayout {
+                    spacing: 4px;
+                    accessible-role: text;
+                    accessible-label: root.numbers-text;
+                    Image {
+                        source: root.numbers-kind == 0 ? @image-url("icons/badge-check.svg") : root.numbers-kind == 1 ? @image-url("icons/refresh-cw.svg") : @image-url("icons/triangle-alert.svg");
+                        colorize: root.numbers-kind == 0 ? Theme.very-low : root.numbers-kind == 1 ? Theme.graphite : Theme.high;
+                        width: 16px;
+                        height: 16px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        text: root.numbers-text;
+                        color: root.numbers-kind == 0 ? Theme.ink : root.numbers-kind == 1 ? Theme.graphite : Theme.high;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                }
+                Button { text: "Undo"; icon: @image-url("icons/undo-2.svg"); enabled: root.can-undo && root.editing; clicked => { root.undo(); } }
+                Button { text: "Redo"; icon: @image-url("icons/redo-2.svg"); enabled: root.can-redo && root.editing; clicked => { root.redo(); } }
                 if root.is-empty && root.editing: Button {
                     text: "Add sample TARA";
                     primary: true;
                     clicked => { root.create-sample(); }
                 }
                 Rectangle {
-                    Switch {
-                        text: "Residual risk";
+                    width: residual-switch.preferred-width;
+                    residual-switch := Switch {
+                        text: "Risk after controls";
                         checked: root.show-residual;
                         toggled => { root.set-residual(self.checked); }
                     }
                 }
-                Button { text: "About"; clicked => { root.show-about = true; } }
             }
         }
         Rectangle { height: 1px; background: Theme.rule; }
 
-        // ---- three columns ----
         HorizontalLayout {
-            // Threat list
+            vertical-stretch: 1;
+            // ---- TARA steps ----
             Rectangle {
-                width: 260px;
+                width: 210px;
                 background: Theme.panel;
-                VerticalLayout {
-                    Rectangle {
-                        height: 36px;
-                        Text {
-                            x: 16px;
-                            text: "Threat scenarios (" + root.threats.length + ")";
-                            font-size: 12px;
-                            font-weight: 600;
-                            color: Theme.graphite;
-                            vertical-alignment: center;
+                ScrollView {
+                    VerticalLayout {
+                        padding-top: 8px;
+                        padding-bottom: 8px;
+                        for item[i] in [
+                            { label: "Overview", icon: @image-url("icons/layout-dashboard.svg") },
+                            { label: "Assets", icon: @image-url("icons/box.svg") },
+                            { label: "Damage scenarios", icon: @image-url("icons/triangle-alert.svg") },
+                            { label: "Threat scenarios", icon: @image-url("icons/swords.svg") },
+                            { label: "Attack trees", icon: @image-url("icons/network.svg") },
+                            { label: "Risks and treatment", icon: @image-url("icons/gauge.svg") },
+                            { label: "Security controls", icon: @image-url("icons/shield-check.svg") },
+                            { label: "Goals and claims", icon: @image-url("icons/target.svg") },
+                            { label: "Problems", icon: @image-url("icons/circle-alert.svg") },
+                            { label: "Versions", icon: @image-url("icons/git-compare.svg") },
+                            { label: "History", icon: @image-url("icons/history.svg") },
+                            { label: "Reports", icon: @image-url("icons/file-chart-column.svg") },
+                            { label: "Administration", icon: @image-url("icons/user-cog.svg") },
+                        ]: Rectangle {
+                            visible: i != Pages.admin || root.is-admin;
+                            height: self.visible ? 36px : 0px;
+                            background: root.page == i ? Theme.accent-wash : (nav-area.has-hover ? Theme.wash : transparent);
+                            accessible-role: button;
+                            accessible-label: item.label;
+                            accessible-action-default => { root.show-page(i); }
+                            Rectangle { x: 0; width: 3px; background: root.page == i ? Theme.accent : transparent; }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 10px;
+                                spacing: 10px;
+                                Image { source: item.icon; width: 18px; height: 18px; y: 9px; colorize: root.page == i ? Theme.accent : Theme.graphite; }
+                                Text {
+                                    text: item.label;
+                                    color: Theme.ink;
+                                    font-size: 13px;
+                                    font-weight: root.page == i ? 700 : 400;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: root.nav-counts[i];
+                                    color: i == Pages.problems && root.nav-counts[i] != "" && root.nav-counts[i] != "0" ? Theme.high : Theme.graphite;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            nav-area := TouchArea { clicked => { root.show-page(i); } }
                         }
                     }
+                }
+            }
+            Rectangle { width: 1px; background: Theme.rule; }
+
+            // ---- the page ----
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.sheet;
+
+                // Overview
+                if root.page == Pages.overview: ScrollView {
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 16px;
+                        PageTitle { title: "Overview"; subtitle: "The project at a glance: what is analysed, how risky it is, and what is still open."; icon: @image-url("icons/layout-dashboard.svg"); }
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            spacing: 10px;
+                            for c in root.ov-counts: Tile { label: c.label; count: c.count; }
+                        }
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            spacing: 16px;
+                            Panel {
+                                horizontal-stretch: 1;
+                                Bars { title: "Threat scenarios by risk before controls"; items: root.ov-inherent; most: root.ov-most; }
+                            }
+                            Panel {
+                                horizontal-stretch: 1;
+                                Bars { title: "Threat scenarios by risk after controls"; items: root.ov-residual; most: root.ov-most; }
+                            }
+                        }
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            spacing: 16px;
+                            Panel {
+                                horizontal-stretch: 2;
+                                SectionTitle { text: "Highest risks"; }
+                                LinkList { items: root.ov-top; empty-text: "No threat scenario yet."; clicked(i) => { root.ov-top-clicked(i); } }
+                            }
+                            Panel {
+                                horizontal-stretch: 1;
+                                SectionTitle { text: "Problems"; }
+                                Text { text: root.ov-errors + " blocking, " + root.ov-warnings + " warnings"; color: root.ov-errors > 0 ? Theme.high : Theme.ink; font-size: 14px; }
+                                Button { text: "Show problems"; icon: @image-url("icons/circle-alert.svg"); clicked => { root.show-page(Pages.problems); } }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                // Assets
+                if root.page == Pages.assets: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle {
+                            title: "Assets";
+                            subtitle: "What must be protected, and which security properties matter.";
+                            icon: @image-url("icons/box.svg");
+                            Button { text: "Add asset"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-asset", "Add asset", "Asset name", ""); } }
+                        }
+                        Table {
+                            label: "Assets";
+                            columns: [{ title: "Asset", horizontal-stretch: 2 }, { title: "Properties", horizontal-stretch: 2 }, { title: "Threats", horizontal-stretch: 1 }, { title: "Worst risk", horizontal-stretch: 1 }];
+                            rows: root.asset-rows;
+                            selected: root.asset-selected;
+                            picked(i) => { root.pick-asset(i); }
+                        }
+                    }
+                    if root.has-asset: Panel {
+                        width: 400px;
+                        SectionTitle { text: "Asset"; }
+                        NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
+                        SectionTitle { text: "Security properties"; }
+                        CheckList { items: root.asset-properties; editable: root.editing; toggled(i, on) => { root.toggle-asset-property(i, on); } }
+                        SectionTitle { text: "Threat scenarios on this asset"; }
+                        LinkList { items: root.asset-threats; clicked(i) => { root.asset-threat-clicked(i); } }
+                        Text { text: root.asset-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: "Remove asset"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-asset", "Remove asset \"" + root.asset-name + "\"?"); } }
+                    }
+                }
+
+                // Damage scenarios
+                if root.page == Pages.damage: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle {
+                            title: "Damage scenarios";
+                            subtitle: "What could go wrong for road users, the company and the owner, rated per impact category.";
+                            icon: @image-url("icons/triangle-alert.svg");
+                            Button { text: "Add damage scenario"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-damage", "Add damage scenario", "What happens", ""); } }
+                        }
+                        Table {
+                            label: "Damage scenarios";
+                            columns: [{ title: "Damage scenario", horizontal-stretch: 2 }, { title: "Impact", horizontal-stretch: 2 }, { title: "Threats", horizontal-stretch: 1 }];
+                            rows: root.damage-rows;
+                            selected: root.damage-selected;
+                            picked(i) => { root.pick-damage(i); }
+                        }
+                    }
+                    if root.has-damage: Panel {
+                        width: 400px;
+                        SectionTitle { text: "Damage scenario"; }
+                        NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
+                        SectionTitle { text: "Impact rating"; }
+                        for f[fi] in root.damage-impacts: Field {
+                            label: f.label;
+                            Choice { options: f.options; index: f.selected; editable: root.editing; label: f.label; picked(i) => { root.set-impact(fi, i); } }
+                        }
+                        SectionTitle { text: "Threat scenarios leading here"; }
+                        LinkList { items: root.damage-threats; clicked(i) => { root.damage-threat-clicked(i); } }
+                        Text { text: root.damage-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: "Remove damage scenario"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-damage", "Remove damage scenario \"" + root.damage-name + "\"? It is unlinked from its threat scenarios."); } }
+                    }
+                }
+
+                // Threat scenarios
+                if root.page == Pages.threats: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle { title: "Threat scenarios"; subtitle: "How an attacker could harm an asset, with STRIDE and UN R155 Annex 5."; icon: @image-url("icons/swords.svg"); }
+                        if root.editing: Panel {
+                            SectionTitle { text: "Add a threat scenario"; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit { horizontal-stretch: 2; placeholder-text: "Threat scenario"; text <=> root.new-threat-name; accessible-label: "New threat scenario"; }
+                                Choice { horizontal-stretch: 1; options: root.asset-names; index: root.new-threat-asset; label: "Asset"; picked(i) => { root.new-threat-asset = i; } }
+                                Choice { horizontal-stretch: 1; options: root.threat-categories; index: root.new-threat-category; label: "Category"; picked(i) => { root.new-threat-category = i; } }
+                                Button {
+                                    text: "Add";
+                                    icon: @image-url("icons/plus.svg");
+                                    enabled: root.new-threat-name != "" && root.asset-names.length > 0;
+                                    clicked => { root.add-threat(root.new-threat-name, root.new-threat-asset, root.new-threat-category); root.new-threat-name = ""; }
+                                }
+                            }
+                            if root.asset-names.length == 0: Text { text: "Add an asset first."; color: Theme.graphite; font-size: 12px; }
+                        }
+                        Table {
+                            label: "Threat scenarios";
+                            columns: [{ title: "Threat scenario", horizontal-stretch: 3 }, { title: "Asset", horizontal-stretch: 2 }, { title: "Risk before", horizontal-stretch: 1 }, { title: "Risk after", horizontal-stretch: 1 }];
+                            rows: root.threat-rows;
+                            selected: root.threat-selected;
+                            picked(i) => { root.select-threat(i); }
+                        }
+                    }
+                    if root.has-threat-detail: ScrollView {
+                        width: 430px;
+                        Panel {
+                            width: 412px;
+                            SectionTitle { text: "Threat scenario"; }
+                            NameEditor { name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
+                            Text { text: "On asset " + root.td-asset; color: Theme.graphite; font-size: 12px; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Swatch { tone: root.td-inherent-tone; y: 4px; }
+                                Text { text: "Before controls: " + (root.td-inherent == "" ? "not rated" : root.td-inherent); color: Theme.ink; font-size: 13px; }
+                                Swatch { tone: root.td-residual-tone; y: 4px; }
+                                Text { text: "After: " + (root.td-residual == "" ? "not rated" : root.td-residual); color: Theme.ink; font-size: 13px; }
+                            }
+                            for line in root.td-why: Text { text: line; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                            Field {
+                                label: "Category";
+                                Choice { options: root.threat-categories; index: root.td-category; editable: root.editing; label: "Category"; picked(i) => { root.set-threat-category(i); } }
+                            }
+                            SectionTitle { text: "Damage scenarios it leads to"; }
+                            CheckList { items: root.td-damages; editable: root.editing; empty-text: "Add a damage scenario first."; toggled(i, on) => { root.toggle-threat-damage(i, on); } }
+                            SectionTitle { text: "Catalog references"; }
+                            for r[ri] in root.td-refs: HorizontalLayout {
+                                spacing: 6px;
+                                Text { text: r; color: Theme.ink; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                Button { text: "Remove"; enabled: root.editing; clicked => { root.remove-catalog-ref(ri); } }
+                            }
+                            if root.editing: HorizontalLayout {
+                                spacing: 6px;
+                                Choice { options: root.catalog-schemes; index: root.new-ref-scheme; label: "Catalog"; picked(i) => { root.new-ref-scheme = i; } }
+                                LineEdit { horizontal-stretch: 1; placeholder-text: "4.1"; text <=> root.new-ref-text; accessible-label: "Reference"; }
+                                Button { text: "Add"; enabled: root.new-ref-text != ""; clicked => { root.add-catalog-ref(root.new-ref-scheme, root.new-ref-text); root.new-ref-text = ""; } }
+                            }
+                            Field {
+                                label: "Attack tree";
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Choice { horizontal-stretch: 1; options: root.tree-names; index: root.td-tree; editable: root.editing; label: "Attack tree"; picked(i) => { root.set-threat-tree(i); } }
+                                    if root.td-tree > 0: Button { text: "Open"; icon: @image-url("icons/network.svg"); clicked => { root.open-threat-tree(); } }
+                                    if root.td-tree == 0: Button { text: "New tree"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.new-tree-for-threat(); } }
+                                }
+                            }
+                            Field {
+                                label: "Direct feasibility rating (concept phase; an attack tree overrides it)";
+                                Choice { options: root.feasibility-options; index: root.td-feasibility; editable: root.editing; label: "Direct feasibility"; picked(i) => { root.set-threat-feasibility(i); } }
+                            }
+                            if root.td-feasibility-text != "": Text { text: "Feasibility the engine uses: " + root.td-feasibility-text; color: Theme.graphite; font-size: 12px; }
+                            Text { text: root.td-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                            Button { text: "Remove threat scenario"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-threat", "Remove threat scenario \"" + root.td-name + "\"?"); } }
+                        }
+                    }
+                }
+
+                // Attack trees
+                if root.page == Pages.trees: HorizontalLayout {
+                    VerticalLayout {
+                        width: 290px;
+                        padding: 12px;
+                        spacing: 8px;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            SectionTitle { text: "Attack trees"; vertical-alignment: center; horizontal-stretch: 1; }
+                            Button { text: "New"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("new-tree", "New attack tree", "The attacker's goal (the root)", ""); } }
+                        }
+                        Table {
+                            label: "Attack trees";
+                            columns: [{ title: "Tree", horizontal-stretch: 3 }, { title: "Nodes", horizontal-stretch: 1 }, { title: "Feasibility", horizontal-stretch: 1 }];
+                            rows: root.tree-rows;
+                            selected: root.tree-selected;
+                            picked(i) => { root.pick-tree(i); }
+                        }
+                        if root.has-tree: HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: "Edit outline"; icon: @image-url("icons/pencil.svg"); enabled: root.editing; clicked => { root.outline-draft = root.outline-text; root.outline-open = true; } }
+                            Button { text: "Delete"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-tree", "Delete this attack tree? Its threat scenarios lose their tree."); } }
+                        }
+                        if root.has-tree: Button { text: "Export SVG"; icon: @image-url("icons/image.svg"); clicked => { root.export-svg(); } }
+                        // Legend.
+                        VerticalLayout {
+                            spacing: 4px;
+                            SectionTitle { text: "Attack feasibility"; }
+                            for entry[i] in ["High", "Medium", "Low", "Very low"]: HorizontalLayout {
+                                spacing: 8px;
+                                Swatch { tone: 4 - i; y: 2px; }
+                                Text { text: entry; font-size: 12px; color: Theme.graphite; }
+                            }
+                        }
+                    }
+                    Rectangle { width: 1px; background: Theme.rule; }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        VerticalLayout {
+                            Rectangle {
+                                height: 30px;
+                                background: Theme.panel;
+                                Text { x: 12px; text: root.tree-title; color: Theme.graphite; font-size: 13px; vertical-alignment: center; overflow: elide; width: parent.width - 24px; }
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                Canvas {
+                                    items: root.draw;
+                                    accessible-summary: root.canvas-summary;
+                                    pointer-down(x, y) => { root.canvas-down(x, y); }
+                                    pointer-move(x, y) => { root.canvas-move(x, y); }
+                                    pointer-up(x, y) => { root.canvas-up(x, y); }
+                                    scrolled(x, y, d) => { root.canvas-scroll(x, y, d); }
+                                    key(text, shift) => { return root.canvas-key(text, shift); }
+                                    resized(w, h) => {
+                                        root.canvas-x = self.absolute-position.x;
+                                        root.canvas-y = self.absolute-position.y;
+                                        root.canvas-resized(w, h);
+                                    }
+                                }
+                                if !root.has-tree: Text {
+                                    text: root.tree-rows.length == 0
+                                        ? "This project has no attack trees yet. Create one with New, or from a threat scenario."
+                                        : "Choose an attack tree on the left.";
+                                    color: Theme.graphite;
+                                    font-size: 14px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                                HorizontalLayout {
+                                    x: 12px;
+                                    y: parent.height - 44px;
+                                    width: 170px;
+                                    height: 32px;
+                                    spacing: 6px;
+                                    Button { text: "Fit"; icon: @image-url("icons/maximize.svg"); clicked => { root.fit(); } }
+                                    Button { text: root.zoom-text; clicked => { root.zoom-reset(); } }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { width: 1px; background: Theme.rule; }
+                    // Inspector
+                    Rectangle {
+                        width: 340px;
+                        background: Theme.panel;
+                        if !root.has-inspector: Text {
+                            text: "Select a node on the canvas to see why it has its rating.";
+                            color: Theme.graphite;
+                            wrap: word-wrap;
+                            font-size: 13px;
+                            x: 16px;
+                            y: 16px;
+                            width: parent.width - 32px;
+                        }
+                        if root.has-inspector: ScrollView {
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 10px;
+                                Text {
+                                    text: root.inspector-title;
+                                    font-size: 16px;
+                                    font-weight: 700;
+                                    color: Theme.ink;
+                                    wrap: word-wrap;
+                                }
+                                Text { text: root.inspector-kind; color: Theme.graphite; font-size: 12px; }
+                                if root.evaluated-text != "": HorizontalLayout {
+                                    spacing: 8px;
+                                    Rectangle { width: 16px; height: 16px; y: 6px; background: Theme.tone(root.evaluated-tone); }
+                                    Text {
+                                        text: root.evaluated-text + " attack feasibility";
+                                        font-size: 15px;
+                                        font-weight: 600;
+                                        color: Theme.ink;
+                                    }
+                                }
+                                if root.why-lines.length > 0: VerticalLayout {
+                                    spacing: 4px;
+                                    SectionTitle { text: "Why?"; }
+                                    for line in root.why-lines: Text {
+                                        text: line;
+                                        wrap: word-wrap;
+                                        color: Theme.ink;
+                                        font-size: 13px;
+                                    }
+                                }
+                                if root.inspector-is-step: VerticalLayout {
+                                    spacing: 8px;
+                                    Rectangle { height: 1px; background: Theme.rule; }
+                                    SectionTitle { text: "Feasibility rating"; }
+                                    Choice {
+                                        options: root.level-options;
+                                        index: root.rating-index;
+                                        editable: root.editing;
+                                        label: "Feasibility rating";
+                                        picked(i) => { root.set-rating(i); }
+                                    }
+                                    if root.effective-text != "": Text {
+                                        text: "The engine uses: " + root.effective-text;
+                                        color: Theme.graphite;
+                                        font-size: 12px;
+                                    }
+                                    SectionTitle { text: "Attack potential"; }
+                                    if root.potential-text != "": Text {
+                                        text: root.potential-text + " from the five factors";
+                                        font-size: 13px;
+                                        color: Theme.ink;
+                                    }
+                                    if root.potential-text == "": Text {
+                                        text: "Rate all five factors to calculate it. Until then the rating above is used.";
+                                        font-size: 12px;
+                                        color: Theme.graphite;
+                                        wrap: word-wrap;
+                                    }
+                                    for f[fi] in root.factors: VerticalLayout {
+                                        spacing: 2px;
+                                        Text { text: f.label; font-size: 12px; color: Theme.graphite; }
+                                        Choice {
+                                            options: f.options;
+                                            index: f.selected;
+                                            editable: root.editing;
+                                            label: f.label;
+                                            picked(i) => { root.set-factor(fi, i); }
+                                        }
+                                    }
+                                    Rectangle { height: 1px; background: Theme.rule; }
+                                    SectionTitle { text: "Security controls on this step"; }
+                                    if root.step-residual-text != "": Text { text: "After controls: " + root.step-residual-text; color: Theme.ink; font-size: 13px; }
+                                    if root.mitigations.length == 0: Text { text: "None."; color: Theme.graphite; font-size: 12px; }
+                                    for mi[mx] in root.mitigations: VerticalLayout {
+                                        spacing: 2px;
+                                        Text { text: mi.name; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            Text { text: "caps at"; color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
+                                            Choice { horizontal-stretch: 1; options: root.feasibility-levels; index: mi.level; editable: root.editing; label: "Cap"; picked(i) => { root.set-mitigation(mx, i); } }
+                                            Button { text: "Detach"; enabled: root.editing; clicked => { root.detach-control(mx); } }
+                                        }
+                                    }
+                                    if root.editing && root.attach-names.length > 0: VerticalLayout {
+                                        spacing: 4px;
+                                        SectionTitle { text: "Attach a control"; }
+                                        Choice { options: root.attach-names; index: root.attach-control-index; label: "Control"; picked(i) => { root.attach-control-index = i; } }
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            Text { text: "caps at"; color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
+                                            Choice { horizontal-stretch: 1; options: root.feasibility-levels; index: root.attach-level-index; label: "Cap"; picked(i) => { root.attach-level-index = i; } }
+                                            Button { text: "Attach"; icon: @image-url("icons/link.svg"); clicked => { root.attach-control(root.attach-control-index, root.attach-level-index); } }
+                                        }
+                                    }
+                                    if root.editing && root.attach-names.length == 0 && root.mitigations.length == 0: Text { text: "Add controls on the Security controls page to attach them here."; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Risks and treatment
+                if root.page == Pages.risks: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle { title: "Risks and treatment"; subtitle: "Every threat scenario, worst risk first, with the decision on what to do about it."; icon: @image-url("icons/gauge.svg"); }
+                        Table {
+                            label: "Risk register";
+                            // The short columns get a minimum width so their titles and values
+                            // ("not rated") are never cut; the names take the rest.
+                            columns: [{ title: "Threat scenario", horizontal-stretch: 3, min-width: 110px }, { title: "Deciding damage", horizontal-stretch: 2, min-width: 136px }, { title: "Impact", horizontal-stretch: 0, min-width: 84px }, { title: "Feasibility", horizontal-stretch: 0, min-width: 104px }, { title: "Before", horizontal-stretch: 0, min-width: 80px }, { title: "After", horizontal-stretch: 0, min-width: 76px }, { title: "Treatment", horizontal-stretch: 0, min-width: 104px }];
+                            rows: root.risk-rows;
+                            selected: root.risk-selected;
+                            picked(i) => { root.pick-risk(i); }
+                        }
+                    }
+                    if root.has-threat-detail: Panel {
+                        width: 360px;
+                        Text { text: root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Swatch { tone: root.td-inherent-tone; y: 4px; }
+                            Text { text: "Before controls: " + (root.td-inherent == "" ? "not rated" : root.td-inherent); color: Theme.ink; font-size: 13px; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Swatch { tone: root.td-residual-tone; y: 4px; }
+                            Text { text: "After controls: " + (root.td-residual == "" ? "not rated" : root.td-residual); color: Theme.ink; font-size: 13px; }
+                        }
+                        SectionTitle { text: "Why?"; }
+                        for line in root.td-why: Text { text: line; color: Theme.ink; font-size: 12px; wrap: word-wrap; }
+                        Field {
+                            label: "Treatment decision";
+                            Choice { options: root.treatment-options; index: root.td-treatment; editable: root.editing; label: "Treatment"; picked(i) => { root.set-treatment(i); } }
+                        }
+                        Field {
+                            label: "Cybersecurity goal (for Reduce)";
+                            Choice { options: root.goal-names; index: root.td-goal; editable: root.editing; label: "Goal"; picked(i) => { root.set-threat-goal(i); } }
+                        }
+                        Field {
+                            label: "Cybersecurity claim (for Retain and Share)";
+                            Choice { options: root.claim-names; index: root.td-claim; editable: root.editing; label: "Claim"; picked(i) => { root.set-threat-claim(i); } }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: "Open threat scenario"; icon: @image-url("icons/swords.svg"); clicked => { root.show-page(Pages.threats); } }
+                    }
+                }
+
+                // Security controls
+                if root.page == Pages.controls: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle {
+                            title: "Security controls";
+                            subtitle: "Measures that make attack steps harder. Attach them to steps on the Attack trees page.";
+                            icon: @image-url("icons/shield-check.svg");
+                            Button { text: "Add control"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-control", "Add security control", "Control name", ""); } }
+                        }
+                        Table {
+                            label: "Security controls";
+                            columns: [{ title: "Control", horizontal-stretch: 3 }, { title: "Attack steps", horizontal-stretch: 1 }, { title: "Goals", horizontal-stretch: 1 }];
+                            rows: root.control-rows;
+                            selected: root.control-selected;
+                            picked(i) => { root.pick-control(i); }
+                        }
+                    }
+                    if root.has-control: Panel {
+                        width: 400px;
+                        SectionTitle { text: "Security control"; }
+                        NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
+                        SectionTitle { text: "Attached to"; }
+                        LinkList { items: root.control-steps; empty-text: "No attack step yet."; clicked(i) => { root.control-step-clicked(i); } }
+                        SectionTitle { text: "Part of goals"; }
+                        LinkList { items: root.control-goals; clicked(i) => { root.control-goal-clicked(i); } }
+                        Text { text: root.control-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: "Remove control"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-control", "Remove control \"" + root.control-name + "\"? It is detached from its steps and goals."); } }
+                    }
+                }
+
+                // Goals and claims
+                if root.page == Pages.goals: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle {
+                            title: "Goals and claims";
+                            subtitle: "Goals back a Reduce decision with controls; claims back Retain and Share.";
+                            icon: @image-url("icons/target.svg");
+                            Button { text: "Add goal"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-goal", "Add cybersecurity goal", "Goal", ""); } }
+                            Button { text: "Add claim"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-claim", "Add cybersecurity claim", "Claim", ""); } }
+                        }
+                        SectionTitle { text: "Cybersecurity goals"; }
+                        Table {
+                            label: "Cybersecurity goals";
+                            columns: [{ title: "Goal", horizontal-stretch: 3 }, { title: "Controls", horizontal-stretch: 1 }, { title: "Threats", horizontal-stretch: 1 }];
+                            rows: root.goal-rows;
+                            selected: root.goal-selected;
+                            picked(i) => { root.pick-goal(i); }
+                        }
+                        SectionTitle { text: "Cybersecurity claims"; }
+                        Table {
+                            label: "Cybersecurity claims";
+                            columns: [{ title: "Claim", horizontal-stretch: 3 }, { title: "Threats", horizontal-stretch: 1 }];
+                            rows: root.claim-rows;
+                            selected: root.claim-selected;
+                            picked(i) => { root.pick-claim(i); }
+                        }
+                    }
+                    VerticalLayout {
+                        width: 400px;
+                        spacing: 12px;
+                        if root.has-goal: Panel {
+                            SectionTitle { text: "Cybersecurity goal"; }
+                            NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
+                            SectionTitle { text: "Controls that realize it"; }
+                            CheckList { items: root.goal-controls; editable: root.editing; empty-text: "Add security controls first."; toggled(i, on) => { root.toggle-goal-control(i, on); } }
+                            SectionTitle { text: "Threat scenarios"; }
+                            LinkList { items: root.goal-threats; clicked(i) => { root.goal-threat-clicked(i); } }
+                            Button { text: "Remove goal"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-goal", "Remove goal \"" + root.goal-name + "\"?"); } }
+                        }
+                        if root.has-claim: Panel {
+                            SectionTitle { text: "Cybersecurity claim"; }
+                            NameEditor { name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
+                            SectionTitle { text: "Threat scenarios"; }
+                            LinkList { items: root.claim-threats; clicked(i) => { root.claim-threat-clicked(i); } }
+                            Button { text: "Remove claim"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-claim", "Remove claim \"" + root.claim-name + "\"?"); } }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                // Problems
+                if root.page == Pages.problems: VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    PageTitle { title: "Problems"; subtitle: "Completeness and consistency checks. Blocking problems stop a risk from being computed or a treatment from being complete."; icon: @image-url("icons/circle-alert.svg"); }
+                    if root.problems.length == 0: Text { text: "No problems. The analysis is complete and consistent."; color: Theme.ink; font-size: 14px; }
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
-                            for t[i] in root.threats: Rectangle {
-                                height: 64px;
-                                background: t.selected ? Theme.wash : (ta.has-hover ? Theme.wash : transparent);
-                                accessible-role: button;
-                                accessible-label: t.name + ", risk " + t.inherent;
-                                accessible-action-default => { root.select-threat(i); }
-                                Rectangle {
-                                    x: 0px;
-                                    width: 4px;
-                                    background: t.selected ? Theme.ink : transparent;
-                                }
-                                VerticalLayout {
-                                    padding-left: 16px;
-                                    padding-right: 12px;
-                                    padding-top: 6px;
-                                    padding-bottom: 6px;
-                                    spacing: 2px;
-                                    Text {
-                                        text: t.name;
-                                        color: Theme.ink;
-                                        font-weight: t.selected ? 700 : 400;
-                                        overflow: elide;
-                                        font-size: 13px;
-                                    }
-                                    Text {
-                                        text: t.asset;
-                                        color: Theme.graphite;
-                                        font-size: 12px;
-                                        overflow: elide;
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 6px;
-                                        Rectangle {
-                                            width: 10px;
-                                            height: 10px;
-                                            y: 3px;
-                                            background: Theme.tone(t.inherent-tone);
-                                        }
-                                        Text {
-                                            text: t.inherent == "" ? "not rated" : t.inherent;
-                                            color: Theme.ink;
-                                            font-size: 12px;
-                                        }
-                                        Text {
-                                            text: t.residual == "" ? "" : "after controls: " + t.residual;
-                                            color: Theme.graphite;
-                                            font-size: 12px;
-                                            overflow: elide;
-                                        }
-                                    }
-                                }
-                                ta := TouchArea { clicked => { root.select-threat(i); } }
-                            }
-                        }
-                    }
-                    Rectangle { height: 1px; background: Theme.rule; }
-                    VerticalLayout {
-                        padding: 12px;
-                        spacing: 4px;
-                        Text { text: "Attack feasibility"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
-                        for entry[i] in ["High", "Medium", "Low", "Very low"]: HorizontalLayout {
-                            spacing: 8px;
-                            Rectangle { width: 12px; height: 12px; y: 2px; background: Theme.tone(4 - i); }
-                            Text { text: entry; font-size: 12px; color: Theme.graphite; }
-                        }
-                    }
-                }
-            }
-            Rectangle { width: 1px; background: Theme.rule; }
-
-            // Canvas
-            Rectangle {
-                horizontal-stretch: 1;
-                Canvas {
-                    items: root.draw;
-                    accessible-summary: root.canvas-summary;
-                    pointer-down(x, y) => { root.canvas-down(x, y); }
-                    pointer-move(x, y) => { root.canvas-move(x, y); }
-                    pointer-up(x, y) => { root.canvas-up(x, y); }
-                    scrolled(x, y, d) => { root.canvas-scroll(x, y, d); }
-                    key(text, shift) => { return root.canvas-key(text, shift); }
-                    resized(w, h) => { root.canvas-resized(w, h); }
-                }
-                if !root.has-tree: Text {
-                    text: root.threats.length == 0
-                        ? "This project has no threat scenarios yet."
-                        : "The selected threat scenario has no attack tree yet.";
-                    color: Theme.graphite;
-                    font-size: 14px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                HorizontalLayout {
-                    x: 12px;
-                    y: parent.height - 44px;
-                    width: 150px;
-                    height: 32px;
-                    spacing: 6px;
-                    Button { text: "Fit"; clicked => { root.fit(); } }
-                    Button { text: root.zoom-text; clicked => { root.zoom-reset(); } }
-                }
-            }
-            Rectangle { width: 1px; background: Theme.rule; }
-
-            // Inspector
-            Rectangle {
-                width: 340px;
-                background: Theme.panel;
-                if !root.has-inspector: Text {
-                    text: "Select a node on the canvas to see why it has its rating.";
-                    color: Theme.graphite;
-                    wrap: word-wrap;
-                    font-size: 13px;
-                    x: 16px;
-                    y: 16px;
-                    width: parent.width - 32px;
-                }
-                if root.has-inspector: ScrollView {
-                    VerticalLayout {
-                        padding: 16px;
-                        spacing: 10px;
-                        Text {
-                            text: root.inspector-title;
-                            font-size: 16px;
-                            font-weight: 700;
-                            color: Theme.ink;
-                            wrap: word-wrap;
-                        }
-                        Text { text: root.inspector-kind; color: Theme.graphite; font-size: 12px; }
-                        if root.evaluated-text != "": HorizontalLayout {
-                            spacing: 8px;
-                            Rectangle { width: 16px; height: 16px; y: 6px; background: Theme.tone(root.evaluated-tone); }
-                            Text {
-                                text: root.evaluated-text + " attack feasibility";
-                                font-size: 15px;
-                                font-weight: 600;
-                                color: Theme.ink;
-                            }
-                        }
-                        if root.why-lines.length > 0: VerticalLayout {
                             spacing: 4px;
-                            Text { text: "Why?"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
-                            for line in root.why-lines: Text {
-                                text: line;
-                                wrap: word-wrap;
-                                color: Theme.ink;
-                                font-size: 13px;
+                            for p[pi] in root.problems: Rectangle {
+                                min-height: 36px;
+                                background: problem-area.has-hover ? Theme.wash : Theme.panel;
+                                border-width: 1px;
+                                border-color: Theme.rule;
+                                accessible-role: button;
+                                accessible-label: p.text;
+                                accessible-action-default => { root.problem-clicked(pi); }
+                                HorizontalLayout {
+                                    padding: 8px;
+                                    spacing: 10px;
+                                    Image { source: @image-url("icons/circle-alert.svg"); width: 16px; height: 16px; colorize: p.error ? Theme.high : Theme.medium; }
+                                    Text { text: p.error ? "Blocking" : "Warning"; width: 70px; color: p.error ? Theme.high : Theme.medium; font-size: 12px; font-weight: 600; }
+                                    Text { text: p.text; color: Theme.ink; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                                    Text { text: "Go to"; color: Theme.accent; font-size: 12px; }
+                                }
+                                problem-area := TouchArea { clicked => { root.problem-clicked(pi); } }
                             }
                         }
-                        if root.inspector-is-step: VerticalLayout {
-                            spacing: 8px;
-                            Rectangle { height: 1px; background: Theme.rule; }
-                            Text { text: "Feasibility rating"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
-                            Choice {
-                                options: root.level-options;
-                                index: root.rating-index;
-                                editable: root.editing;
-                                label: "Feasibility rating";
-                                picked(i) => { root.set-rating(i); }
-                            }
-                            if root.effective-text != "": Text {
-                                text: "The engine uses: " + root.effective-text;
-                                color: Theme.graphite;
-                                font-size: 12px;
-                            }
-                            Text { text: "Attack potential"; font-size: 12px; font-weight: 600; color: Theme.graphite; }
-                            if root.potential-text != "": Text {
-                                text: root.potential-text + " from the five factors";
-                                font-size: 13px;
-                                color: Theme.ink;
-                            }
-                            if root.potential-text == "": Text {
-                                text: "Rate all five factors to calculate it. Until then the rating above is used.";
-                                font-size: 12px;
-                                color: Theme.graphite;
-                                wrap: word-wrap;
-                            }
-                            for f[fi] in root.factors: VerticalLayout {
-                                spacing: 2px;
-                                Text { text: f.label; font-size: 12px; color: Theme.graphite; }
-                                Choice {
-                                    options: f.options;
-                                    index: f.selected;
-                                    editable: root.editing;
-                                    label: f.label;
-                                    picked(i) => { root.set-factor(fi, i); }
+                    }
+                }
+
+                // Versions
+                if root.page == Pages.versions: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 2;
+                        spacing: 10px;
+                        PageTitle {
+                            title: "Versions";
+                            subtitle: "Baselines freeze the saved state under a name. Compare the current state with one to see what changed and which risks moved.";
+                            icon: @image-url("icons/git-compare.svg");
+                            Button { text: "Create baseline"; icon: @image-url("icons/flag.svg"); clicked => { root.ask("create-baseline", "Create baseline", "Baseline name, for example B1 Design freeze", ""); } }
+                        }
+                        Table {
+                            label: "Baselines";
+                            columns: [{ title: "Baseline", horizontal-stretch: 2 }, { title: "Change", horizontal-stretch: 1 }, { title: "By", horizontal-stretch: 1 }, { title: "Created", horizontal-stretch: 2 }];
+                            rows: root.baseline-rows;
+                            selected: root.baseline-selected;
+                            picked(i) => { root.pick-baseline(i); }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: "Compare with the current state"; icon: @image-url("icons/git-compare.svg"); enabled: root.baseline-selected >= 0; clicked => { root.compare-baseline(); } }
+                            if root.comparing: Button { text: "Stop comparing"; icon: @image-url("icons/x.svg"); clicked => { root.stop-compare(); } }
+                        }
+                    }
+                    if root.comparing: Panel {
+                        horizontal-stretch: 3;
+                        SectionTitle { text: "Comparison"; }
+                        Text { text: root.compare-summary; color: Theme.ink; font-size: 14px; wrap: word-wrap; }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: 4px;
+                                for d in root.diff-lines: HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { text: d.kind; width: 70px; font-size: 12px; font-weight: 600; color: d.kind == "Removed" ? Theme.high : (d.kind == "Risk" ? Theme.accent : Theme.ink); }
+                                    Text { text: d.text; font-size: 13px; color: Theme.ink; wrap: word-wrap; horizontal-stretch: 1; }
                                 }
                             }
                         }
+                    }
+                }
+
+                // History
+                if root.page == Pages.history: VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    PageTitle {
+                        title: "History";
+                        subtitle: "The latest accepted changes on the server, newest first. Every change is in the hash-chained audit log.";
+                        icon: @image-url("icons/history.svg");
+                        Button { text: "Refresh"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-history(); } }
+                    }
+                    Table {
+                        label: "History";
+                        columns: [{ title: "Change", horizontal-stretch: 1 }, { title: "Who", horizontal-stretch: 2 }, { title: "When", horizontal-stretch: 2 }, { title: "What", horizontal-stretch: 3 }];
+                        rows: root.history-rows;
+                    }
+                }
+
+                // Reports
+                if root.page == Pages.reports: VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    PageTitle { title: "Reports"; subtitle: "Exports carry your name and the time, and the server records each one."; icon: @image-url("icons/file-chart-column.svg"); }
+                    Panel {
+                        Field {
+                            label: "Save files in this folder";
+                            LineEdit { text <=> root.export-dir; accessible-label: "Export folder"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Button { text: "TARA report (HTML, print to PDF)"; icon: @image-url("icons/file-text.svg"); primary: true; clicked => { root.export-report(); } }
+                            Button { text: "Risk register (CSV)"; icon: @image-url("icons/sheet.svg"); clicked => { root.export-csv(); } }
+                            Button { text: "Attack tree on the canvas (SVG)"; icon: @image-url("icons/image.svg"); enabled: root.has-tree; clicked => { root.export-svg(); } }
+                        }
+                        if root.last-export != "": Text { text: "Last saved: " + root.last-export; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                    }
+                    Text {
+                        text: "The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. Open it in a browser and print to PDF.";
+                        color: Theme.graphite;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+
+                // Administration
+                if root.page == Pages.admin: HorizontalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle { title: "Administration"; subtitle: "Users of this server (password login), and tools for the open project."; icon: @image-url("icons/user-cog.svg"); }
+                        if root.is-password: Table {
+                            label: "Users";
+                            columns: [{ title: "User", horizontal-stretch: 1 }, { title: "Name", horizontal-stretch: 2 }, { title: "Admin", horizontal-stretch: 1 }, { title: "Status", horizontal-stretch: 1 }, { title: "Last login", horizontal-stretch: 2 }, { title: "Sessions", horizontal-stretch: 1 }];
+                            rows: root.user-rows;
+                            selected: root.user-selected;
+                            picked(i) => { root.pick-user(i); }
+                        }
+                        if !root.is-password: Text { text: "Users come from the company identity provider. Manage them there."; color: Theme.graphite; wrap: word-wrap; }
+                        if root.settings-known: Panel {
+                            SectionTitle { text: "Login"; }
+                            Text {
+                                text: root.password-login-on ? "Password login is on. People can log in with a user name and password as well as with the company account." : "Password login is off. Everyone logs in with the company account.";
+                                color: Theme.ink;
+                                wrap: word-wrap;
+                                font-size: 13px;
+                            }
+                            if !root.company-login-available: Text {
+                                text: "This server has no company login, so password login cannot be turned off.";
+                                color: Theme.graphite;
+                                wrap: word-wrap;
+                                font-size: 12px;
+                            }
+                            Button {
+                                text: root.password-login-on ? "Turn password login off" : "Turn password login on";
+                                icon: @image-url("icons/lock.svg");
+                                enabled: !root.password-login-on || root.company-login-available;
+                                clicked => {
+                                    if (root.password-login-on) {
+                                        root.confirm("password-login-off", "Turn password login off? Everyone with a password session is logged out now. Use the company account to log in.");
+                                    } else {
+                                        root.set-password-login(true);
+                                    }
+                                }
+                            }
+                        }
+                        if root.is-password && root.user-selected >= 0: HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: root.selected-user-admin ? "Remove admin rights" : "Make admin"; icon: @image-url("icons/user-cog.svg"); clicked => { root.toggle-user-admin(); } }
+                            Button { text: root.selected-user-disabled ? "Enable" : "Disable"; icon: @image-url("icons/lock.svg"); clicked => { root.toggle-user-disabled(); } }
+                            Button { text: "Set password"; icon: @image-url("icons/key-round.svg"); clicked => { root.ask("reset-password", "Set a new password", "New password (at least 10 characters)", ""); root.prompt-secret = true; } }
+                            Button { text: "Delete"; icon: @image-url("icons/trash-2.svg"); clicked => { root.confirm("delete-user", "Delete this user? Their sessions end."); } }
+                        }
+                        if root.is-password: Panel {
+                            SectionTitle { text: "Add a user"; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit { horizontal-stretch: 1; placeholder-text: "user name"; text <=> root.new-user-name; accessible-label: "New user name"; }
+                                LineEdit { horizontal-stretch: 2; placeholder-text: "Full name"; text <=> root.new-user-display; accessible-label: "Full name"; }
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit { horizontal-stretch: 1; placeholder-text: "First password (10+ characters)"; input-type: password; text <=> root.new-user-password; accessible-label: "First password"; }
+                                CheckBox { text: "Administrator"; checked <=> root.new-user-admin; }
+                                Button {
+                                    text: "Add user";
+                                    icon: @image-url("icons/plus.svg");
+                                    enabled: root.new-user-name != "" && root.new-user-password != "";
+                                    clicked => {
+                                        root.create-user(root.new-user-name, root.new-user-display, root.new-user-password, root.new-user-admin);
+                                        root.new-user-password = "";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Panel {
+                        width: 400px;
+                        SectionTitle { text: "This project"; }
+                        Button { text: "Check the audit chain"; icon: @image-url("icons/list-checks.svg"); clicked => { root.verify-audit(); } }
+                        Button { text: "Break the edit lock"; icon: @image-url("icons/unlink.svg"); enabled: root.band-kind == 1; clicked => { root.confirm("break-lock", "Break the edit lock? The other editor's unsaved changes are lost."); } }
+                        Button { text: "Delete project"; icon: @image-url("icons/trash-2.svg"); clicked => { root.confirm("delete-project", "Delete this project, its history and its baselines? This cannot be undone."); } }
+                        if root.admin-text != "": Text { text: root.admin-text; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                        SectionTitle { text: "Server and license"; }
+                        Text { text: root.engine-text; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
                     }
                 }
             }
@@ -591,7 +1661,9 @@ export component AppWindow inherits Window {
                     font-size: 12px;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
+                    overflow: elide;
                 }
+                Image { source: @image-url("icons/circle-user-round.svg"); width: 14px; height: 14px; y: 6px; colorize: Theme.graphite; }
                 Text { text: root.user; color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
                 Text { text: "CPU renderer"; color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
             }
@@ -630,7 +1702,7 @@ export component AppWindow inherits Window {
                     accessible-role: button;
                     accessible-label: "Dismiss";
                     accessible-action-default => { root.dismiss-notice(n.id); }
-                    Text { text: "×"; color: #1D2733; font-size: 16px; horizontal-alignment: center; vertical-alignment: center; }
+                    Image { source: @image-url("icons/x.svg"); width: 14px; height: 14px; colorize: #1D2733; }
                     TouchArea { clicked => { root.dismiss-notice(n.id); } }
                 }
             }
@@ -638,8 +1710,166 @@ export component AppWindow inherits Window {
     }
 
     // ===================================================================
-    // About: the Slint notice the license requires (decisions D7, D9).
+    // Dialogs.
     // ===================================================================
+    if root.prompt-open: Rectangle {
+        background: #000000A0;
+        TouchArea { clicked => { root.prompt-open = false; } }
+        Rectangle {
+            width: min(parent.width - 48px, 480px);
+            height: prompt-column.preferred-height + 40px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            TouchArea {}
+            prompt-column := VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                Text { text: root.prompt-title; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                SectionTitle { text: root.prompt-label; }
+                prompt-edit := LineEdit {
+                    text <=> root.prompt-text;
+                    input-type: root.prompt-secret ? password : text;
+                    accessible-label: root.prompt-label;
+                    accepted(t) => { root.prompt-done(root.prompt-kind, t); }
+                    init => { self.focus(); }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button { text: "Cancel"; clicked => { root.prompt-open = false; } }
+                    Button { text: "OK"; primary: true; enabled: root.prompt-text != ""; clicked => { root.prompt-done(root.prompt-kind, root.prompt-text); } }
+                }
+            }
+        }
+    }
+
+    if root.confirm-open: Rectangle {
+        background: #000000A0;
+        TouchArea { clicked => { root.confirm-open = false; } }
+        Rectangle {
+            width: min(parent.width - 48px, 460px);
+            height: confirm-column.preferred-height + 40px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            TouchArea {}
+            confirm-column := VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+                Text { text: root.confirm-text; font-size: 15px; color: Theme.ink; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button { text: "Cancel"; clicked => { root.confirm-open = false; } }
+                    Button { text: "Yes"; primary: true; clicked => { root.confirm-done(root.confirm-kind); } }
+                }
+            }
+        }
+    }
+
+    if root.outline-open: Rectangle {
+        background: #000000A0;
+        Rectangle {
+            width: min(parent.width - 48px, 760px);
+            height: min(parent.height - 48px, 620px);
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                Text { text: "Edit the attack tree"; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                Text {
+                    text: "One node per line; indent a child under its parent. Start a gate with OR, AND or SEQ (sequential AND); a step with - or nothing. Lines with the same text are the same node, which is how a step is shared. Nodes that keep their text keep their ratings and controls.";
+                    color: Theme.graphite;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                TextEdit {
+                    vertical-stretch: 1;
+                    text <=> root.outline-draft;
+                    font-family: "monospace";
+                    font-size: 13px;
+                    wrap: no-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button { text: "Cancel"; clicked => { root.outline-open = false; } }
+                    Button { text: "Apply"; primary: true; clicked => { root.apply-outline(root.outline-draft); root.outline-open = false; } }
+                }
+            }
+        }
+    }
+
+    if root.password-open: Rectangle {
+        background: #000000A0;
+        Rectangle {
+            width: min(parent.width - 48px, 420px);
+            height: pw-column.preferred-height + 40px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            pw-column := VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                Text { text: "Change your password"; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                Field { label: "Current password"; LineEdit { input-type: password; text <=> root.pw-current; accessible-label: "Current password"; } }
+                Field { label: "New password (at least 10 characters)"; LineEdit { input-type: password; text <=> root.pw-new; accessible-label: "New password"; } }
+                Field { label: "New password again"; LineEdit { input-type: password; text <=> root.pw-repeat; accessible-label: "New password again"; } }
+                if root.pw-repeat != "" && root.pw-new != root.pw-repeat: Text { text: "The two new passwords differ."; color: Theme.high; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button { text: "Cancel"; clicked => { root.password-open = false; } }
+                    Button {
+                        text: "Change password";
+                        primary: true;
+                        enabled: root.pw-current != "" && root.pw-new != "" && root.pw-new == root.pw-repeat;
+                        clicked => { root.change-password(root.pw-current, root.pw-new); root.password-open = false; root.pw-current = ""; root.pw-new = ""; root.pw-repeat = ""; }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.show-shortcuts: Rectangle {
+        background: #000000A0;
+        TouchArea { clicked => { root.show-shortcuts = false; } }
+        Rectangle {
+            width: min(parent.width - 48px, 480px);
+            height: keys-column.preferred-height + 40px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            keys-column := VerticalLayout {
+                padding: 20px;
+                spacing: 6px;
+                Text { text: "Keyboard shortcuts"; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                for k in [
+                    { keys: "Ctrl+Z / Ctrl+Y", what: "Undo / redo" },
+                    { keys: "Ctrl+E", what: "Take the edit lock" },
+                    { keys: "Ctrl+1 to Ctrl+9", what: "Go to a TARA step" },
+                    { keys: "Arrow keys", what: "Move between nodes on the canvas" },
+                    { keys: "+ / - / 0 / F", what: "Zoom in / out / 100% / fit" },
+                    { keys: "Esc", what: "Clear the selection on the canvas" },
+                ]: HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: k.keys; width: 150px; font-size: 13px; font-weight: 600; color: Theme.ink; }
+                    Text { text: k.what; font-size: 13px; color: Theme.ink; }
+                }
+                HorizontalLayout { alignment: end; Button { text: "Close"; clicked => { root.show-shortcuts = false; } } }
+            }
+        }
+    }
+
+    // About: the Slint notice the license requires (decisions D7, D9).
     if root.show-about: Rectangle {
         background: #000000A0;
         TouchArea { clicked => { root.show-about = false; } }
@@ -662,7 +1892,7 @@ export component AppWindow inherits Window {
                 Rectangle { height: 1px; background: Theme.rule; }
                 AboutSlint { }
                 Text {
-                    text: "This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Third-party licenses are listed in the release notices.";
+                    text: "This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Icons by Lucide (ISC license). Third-party licenses are listed in the release notices.";
                     color: Theme.graphite;
                     font-size: 12px;
                     wrap: word-wrap;

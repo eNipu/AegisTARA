@@ -10,7 +10,7 @@
 //! [`SvgTheme`]: crate::svg::SvgTheme
 
 /// How a node's rating looks. Four colored buckets plus "not rated".
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tone {
     /// No rating yet.
     #[default]

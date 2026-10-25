@@ -4,6 +4,7 @@
 mod common;
 
 use aegis_client::state::{Mode, SyncView};
+use aegis_client::view::Page;
 use common::{App, TestServer, save};
 use slint::Model;
 
@@ -70,7 +71,20 @@ async fn app_with_sample(server: &TestServer, user: &str) -> App {
             .is_some_and(|p| p.tree.is_some() && p.sync == SyncView::Synced)
     })
     .await;
+    show_trees(&app).await;
     app
+}
+
+/// Opens the attack trees page and lets the canvas take its place.
+async fn show_trees(app: &App) {
+    app.window.invoke_show_page(4);
+    app.until("trees page", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.page == Page::Trees)
+    })
+    .await;
+    // Two frames: one lays the canvas out, one draws the fitted tree.
+    app.frame();
+    app.frame();
 }
 
 /// The window position (logical pixels) of the node whose label starts with
@@ -83,14 +97,16 @@ fn node_position(app: &App, label: &str) -> (f32, f32) {
         .map(|i| (i, scene.label(i as u32)))
         .find(|(_, l)| l.starts_with(label))
         .expect("node");
-    // The canvas sits at x = 261 (rail 260 + separator 1) and below the band,
-    // header, and separator (32 + 52 + 1).
+    // The window reports where the canvas is.
     let idx = scene.node_idx(position as u32).expect("idx");
     let rect = scene.node_rect(idx).expect("rect");
     let centre = rect.center();
     let st = app.controller.viewport_for_tests();
     let screen = st.to_screen(aegis_canvas::Point::new(centre.x, centre.y));
-    (261.0 + screen.x, 85.0 + screen.y)
+    (
+        app.window.get_canvas_x() + screen.x,
+        app.window.get_canvas_y() + screen.y,
+    )
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -189,7 +205,7 @@ async fn the_canvas_pans_zooms_and_navigates_by_keyboard() {
 
     // Dragging empty canvas pans.
     let origin = app.controller.viewport_for_tests().origin;
-    app.headless.drag((500.0, 700.0), (420.0, 650.0));
+    app.headless.drag((700.0, 700.0), (620.0, 650.0));
     let panned = app.controller.viewport_for_tests().origin;
     assert!(
         panned.x > origin.x && panned.y > origin.y,

@@ -9,6 +9,10 @@
 //! The reply to a rejected request is always the same fixed message, so a
 //! caller learns nothing about *why* it failed; the reason is logged. Every
 //! rejection is a `warn!` with the error variant only (never a token).
+//!
+//! One path prefix passes without credentials: the public `Accounts`
+//! service (`/aegis.v1.Accounts/`), which only tells a client how to log
+//! in and checks passwords. Everything else needs a principal.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -20,7 +24,9 @@ use aegis_auth::validate::{Authenticator, RequestCredentials};
 use tonic::Status;
 use tower::{Layer, Service};
 
-use crate::auth::{DEV_ADMIN_HEADER, DEV_USER_HEADER, Principal};
+use crate::accounts::service::PUBLIC_PATH_PREFIX;
+use crate::accounts::{Accounts, bearer};
+use crate::auth::{AuthMethod, DEV_ADMIN_HEADER, DEV_USER_HEADER, Principal};
 
 /// What an authentication method may look at: the headers, the method, and
 /// the URL the client signed.
@@ -69,7 +75,45 @@ impl<H: HttpClient> Authn for OidcAuthn<H> {
         Ok(Principal {
             subject: claims.subject.into(),
             admin: claims.admin,
+            method: AuthMethod::Oidc,
         })
+    }
+}
+
+/// Password sessions of this server (`AEGIS_AUTH=password`): the bearer
+/// token is looked up in [`Accounts`]. O(1), no I/O.
+pub struct PasswordAuthn(pub Arc<Accounts>);
+
+impl Authn for PasswordAuthn {
+    async fn authenticate(&self, request: &RequestInfo) -> Result<Principal, String> {
+        let token = bearer(&request.headers).ok_or_else(|| "no bearer token".to_owned())?;
+        self.0
+            .authenticate(token)
+            .ok_or_else(|| "no open session for this token".to_owned())
+    }
+}
+
+/// Company login and password login side by side (`AEGIS_AUTH=both`, job
+/// 045). A bearer token with the `ats_` prefix is a password session; anything
+/// else goes to OIDC. The prefix cannot appear in a JWT, so one kind of
+/// credential is never tried as the other. When an admin turns password login
+/// off, [`Accounts::authenticate`] answers `None` and password tokens fail.
+pub struct HybridAuthn<H> {
+    /// Password sessions.
+    pub password: PasswordAuthn,
+    /// Company login.
+    pub oidc: OidcAuthn<H>,
+}
+
+impl<H: HttpClient> Authn for HybridAuthn<H> {
+    async fn authenticate(&self, request: &RequestInfo) -> Result<Principal, String> {
+        let is_password =
+            bearer(&request.headers).is_some_and(|t| t.starts_with(crate::accounts::TOKEN_PREFIX));
+        if is_password {
+            self.password.authenticate(request).await
+        } else {
+            self.oidc.authenticate(request).await
+        }
     }
 }
 
@@ -86,6 +130,7 @@ impl Authn for DevAuthn {
         Ok(Principal {
             subject: user.into(),
             admin: request.header(DEV_ADMIN_HEADER) == Some("1"),
+            method: AuthMethod::Development,
         })
     }
 }
@@ -167,6 +212,9 @@ where
     fn call(&mut self, mut request: http::Request<B>) -> Self::Future {
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
+        if request.uri().path().starts_with(PUBLIC_PATH_PREFIX) {
+            return Box::pin(async move { inner.call(request).await });
+        }
         let authn = Arc::clone(&self.authn);
         // Copy what is needed out of the request: the body type is `Send`
         // but not `Sync`, so the request itself cannot be borrowed across

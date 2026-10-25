@@ -1,13 +1,17 @@
 //! How the shell logs in.
 //!
-//! Two ways, one trait (`CredentialProvider`):
+//! Three ways, one trait (`CredentialProvider`). The server says which one
+//! it wants (`GetLoginOptions`), so the user only types the server address:
 //!
 //! - **OIDC** against the company identity provider (the real thing): the
 //!   login button starts the browser flow; the device key and refresh token
 //!   live in the OS keychain, or in memory if there is none.
+//! - **Password** (test servers, `AEGIS_AUTH=password`): user name and
+//!   password, checked by the server, which answers with a session token.
+//!   With "keep me logged in", the token is kept in the OS keychain under
+//!   the server and user name, never in a file.
 //! - **Development**: a user name sent as a header to a server started with
-//!   `AEGIS_DEV_AUTH=1`. Selected only by `AEGIS_DEV_USER`; never in a
-//!   release configuration.
+//!   `AEGIS_DEV_AUTH=1`. Never in a release configuration.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +22,7 @@ use aegis_auth::oidc::{OidcClient, OidcConfig};
 use aegis_auth::session::{Session as AuthSession, SystemBrowser};
 use aegis_auth::store::{MemorySecretStore, OsKeychain, SecretStore, Vault};
 use aegis_auth::{AuthError, Credentials, system_clock};
-use aegis_client::connection::DevLogin;
+use aegis_client::connection::{DevLogin, PasswordLogin};
 use tokio::sync::OnceCell;
 
 type Secrets = Arc<dyn SecretStore>;
@@ -100,10 +104,97 @@ impl OidcProvider {
     }
 }
 
+/// Opens the OS keychain, or a memory store on a machine without one.
+#[must_use]
+pub fn secrets() -> Secrets {
+    match OsKeychain::open("AegisTARA") {
+        Ok(keychain) => Arc::new(keychain),
+        Err(e) => {
+            tracing::warn!(error = %e, "no OS keychain; logins will not be remembered");
+            Arc::new(MemorySecretStore::new())
+        }
+    }
+}
+
+/// Password login, with the session token optionally kept in the keychain.
+pub struct PasswordProvider {
+    /// The token sent with every call.
+    pub login: PasswordLogin,
+    secrets: Secrets,
+    /// Keychain entry name: server and user.
+    account: std::sync::Mutex<Option<String>>,
+}
+
+impl PasswordProvider {
+    /// No session yet.
+    #[must_use]
+    pub fn new(secrets: Secrets) -> Self {
+        PasswordProvider {
+            login: PasswordLogin::new(),
+            secrets,
+            account: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn entry(server: &str, user: &str) -> String {
+        format!(
+            "password-session|{}|{}",
+            server.trim_end_matches('/'),
+            user.trim().to_lowercase()
+        )
+    }
+
+    /// Restores a kept token for `server` and `user`. `true` if one was found.
+    pub fn restore(&self, server: &str, user: &str) -> bool {
+        let name = Self::entry(server, user);
+        let token = self
+            .secrets
+            .get(&name)
+            .ok()
+            .flatten()
+            .and_then(|b| String::from_utf8(b).ok())
+            .filter(|t| t.starts_with("ats_") && t.len() <= 128);
+        let found = token.is_some();
+        self.login.set(token);
+        *self.lock() = Some(name);
+        found
+    }
+
+    /// Uses a new session token; keeps it in the keychain when `remember`.
+    pub fn set(&self, server: &str, user: &str, token: String, remember: bool) {
+        let name = Self::entry(server, user);
+        if remember {
+            if let Err(e) = self.secrets.set(&name, token.as_bytes()) {
+                tracing::warn!(error = %e, "the login could not be kept in the keychain");
+            }
+        } else {
+            let _ = self.secrets.delete(&name);
+        }
+        self.login.set(Some(token));
+        *self.lock() = Some(name);
+    }
+
+    /// Forgets the token, here and in the keychain.
+    pub fn forget(&self) {
+        self.login.set(None);
+        if let Some(name) = self.lock().take() {
+            let _ = self.secrets.delete(&name);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.account
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The credentials the app uses.
 pub enum AppProvider {
     /// OIDC with DPoP.
     Oidc(OidcProvider),
+    /// User name and password.
+    Password(PasswordProvider),
     /// The development login.
     Dev(DevLogin),
 }
@@ -112,6 +203,7 @@ impl CredentialProvider for AppProvider {
     async fn credentials(&self, method: &str, url: &str) -> Result<Credentials, AuthError> {
         match self {
             AppProvider::Dev(dev) => dev.credentials(method, url).await,
+            AppProvider::Password(p) => p.login.credentials(method, url).await,
             AppProvider::Oidc(oidc) => match oidc.session.get() {
                 Some(session) => session.credentials(method, url).await,
                 None => Err(AuthError::LoginRequired),

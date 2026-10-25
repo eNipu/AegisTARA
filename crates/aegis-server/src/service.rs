@@ -14,33 +14,93 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+use crate::accounts::service::{password_login_off, user_info};
+use crate::accounts::{Accounts, AuditKind, UserUpdate, bearer};
 use crate::actor::{Accepted, Event, OpenData, RiskReport, Subscription};
-use crate::auth::Principal;
+use crate::auth::{AuthMethod, Principal};
 use crate::error::ServerError;
 use crate::ids::ProjectId;
 use crate::lease::Grant;
 use crate::license::LicenseGate;
 use crate::pb;
-use crate::registry::Registry;
-use crate::store::{ProjectMeta, ProjectStore};
+use crate::registry::{Registry, missing};
+use crate::store::{BaselineMeta, ProjectMeta, ProjectStore};
 
-/// Largest gRPC message the server accepts: a full `SubmitOps` batch
-/// (256 ops of up to 64 KiB) plus framing.
+/// Largest gRPC message the server accepts. A `SubmitOps` batch has at most
+/// 1024 ops (`max_batch_ops`); typical ops are a few hundred bytes, and this
+/// cap bounds the whole request whatever the op sizes.
 pub const MAX_REQUEST_BYTES: usize = 17 * 1024 * 1024;
 
 /// Longest lease token the server reads, in bytes.
 const MAX_TOKEN_BYTES: usize = 64;
 
+/// Longest export kind recorded, in bytes.
+const MAX_EXPORT_KIND_BYTES: usize = 64;
+
 /// The tonic service over a [`Registry`].
 pub struct AegisService<S> {
     registry: Arc<Registry<S>>,
+    /// Password accounts, when the server runs with `AEGIS_AUTH=password`.
+    accounts: Option<Arc<Accounts>>,
 }
 
 impl<S: ProjectStore> AegisService<S> {
     /// Wraps a registry.
     #[must_use]
     pub fn new(registry: Arc<Registry<S>>) -> Self {
-        AegisService { registry }
+        AegisService {
+            registry,
+            accounts: None,
+        }
+    }
+
+    /// Adds password accounts: enables the user administration calls and
+    /// `ChangePassword`, and puts logins and exports in their event log.
+    #[must_use]
+    pub fn with_accounts(mut self, accounts: Arc<Accounts>) -> Self {
+        self.accounts = Some(accounts);
+        self
+    }
+
+    fn accounts(&self) -> Result<&Accounts, Status> {
+        self.accounts.as_deref().ok_or_else(password_login_off)
+    }
+
+    fn admin_accounts<T>(&self, request: &Request<T>) -> Result<(&Accounts, Principal), Status> {
+        let who = Principal::of(request)?.clone();
+        if !who.admin {
+            return Err(ServerError::NotAdmin.into());
+        }
+        Ok((self.accounts()?, who))
+    }
+
+    /// The switch as clients see it. Without password accounts (company
+    /// login only) password login is simply off.
+    fn server_settings(&self) -> pb::ServerSettings {
+        match &self.accounts {
+            Some(a) => pb::ServerSettings {
+                password_login_enabled: a.password_login_enabled(),
+                company_login_available: a.company_login_available(),
+            },
+            None => pb::ServerSettings {
+                password_login_enabled: false,
+                company_login_available: true,
+            },
+        }
+    }
+
+    async fn audit(&self, who: &Principal, kind: AuditKind, target: &str, detail: &str) {
+        match &self.accounts {
+            Some(a) => a.audit(&who.subject, kind, target, detail).await,
+            // Without an account store the event goes to the server log.
+            None => tracing::info!(
+                actor = %who.subject,
+                kind = kind.as_str(),
+                target,
+                detail,
+                "audit event"
+            ),
+        }
     }
 
     /// The service ready to mount on a tonic server, with the request size
@@ -123,27 +183,69 @@ fn risks_event(report: &RiskReport) -> pb::RisksEvent {
     }
 }
 
+fn baseline_info(b: &BaselineMeta) -> pb::BaselineInfo {
+    pb::BaselineInfo {
+        baseline_id: b.id.to_string(),
+        project_id: b.project.to_string(),
+        name: b.name.clone(),
+        seq: b.seq,
+        created_by: b.created_by.clone(),
+        created_ms: b.created_ms,
+        snapshot_bytes: b.snapshot_bytes,
+    }
+}
+
+/// The op kind of canonical op bytes (`{"op":"add_asset",...}`), in
+/// `PascalCase` as the API reports it. Bounded by the op size (64 KiB).
+fn op_kind(bytes: &[u8]) -> String {
+    #[derive(serde::Deserialize)]
+    struct Kind {
+        op: String,
+    }
+    serde_json::from_slice::<Kind>(bytes).map_or_else(
+        |_| "Unknown".to_owned(),
+        |k| {
+            k.op.split('_')
+                .map(|w| {
+                    let mut c = w.chars();
+                    c.next()
+                        .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+                        .unwrap_or_default()
+                })
+                .collect()
+        },
+    )
+}
+
 /// Splits a snapshot into chunks; the first carries the header. Slices share
 /// the snapshot's buffer, so this copies nothing.
 fn chunks(data: OpenData, chunk_bytes: usize) -> Vec<Result<pb::OpenProjectChunk, Status>> {
-    let chunk_bytes = chunk_bytes.max(1);
     let header = pb::OpenProjectHeader {
         project: Some(summary(&data.meta)),
         last_seq: data.last_seq,
         snapshot_bytes: data.snapshot.len() as u64,
         lock_holder: data.lock_holder.map(|h| h.to_string()).unwrap_or_default(),
     };
-    let mut out = Vec::with_capacity(data.snapshot.len() / chunk_bytes + 1);
+    chunk_snapshot(header, &data.snapshot, chunk_bytes)
+}
+
+fn chunk_snapshot(
+    header: pb::OpenProjectHeader,
+    snapshot: &Bytes,
+    chunk_bytes: usize,
+) -> Vec<Result<pb::OpenProjectChunk, Status>> {
+    let chunk_bytes = chunk_bytes.max(1);
+    let mut out = Vec::with_capacity(snapshot.len() / chunk_bytes + 1);
     let mut header = Some(header);
     let mut offset = 0;
     loop {
-        let end = (offset + chunk_bytes).min(data.snapshot.len());
+        let end = (offset + chunk_bytes).min(snapshot.len());
         out.push(Ok(pb::OpenProjectChunk {
             header: header.take(),
-            data: data.snapshot.slice(offset..end),
+            data: snapshot.slice(offset..end),
         }));
         offset = end;
-        if offset >= data.snapshot.len() {
+        if offset >= snapshot.len() {
             return out;
         }
     }
@@ -153,7 +255,12 @@ type BoxStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 
 /// Forwards a subscription to a client: the lock state, the backlog, then
 /// live events, until the client leaves or falls behind (R4).
-async fn forward(sub: Subscription, after: u64, out: mpsc::Sender<Result<pb::WatchEvent, Status>>) {
+async fn forward(
+    sub: Subscription,
+    after: u64,
+    heartbeat: std::time::Duration,
+    out: mpsc::Sender<Result<pb::WatchEvent, Status>>,
+) {
     let Subscription {
         backlog,
         mut live,
@@ -181,7 +288,16 @@ async fn forward(sub: Subscription, after: u64, out: mpsc::Sender<Result<pb::Wat
         return;
     }
     loop {
-        match live.recv().await {
+        let Ok(received) = tokio::time::timeout(heartbeat, live.recv()).await else {
+            let beat = pb::WatchEvent {
+                event: Some(pb::watch_event::Event::Heartbeat(pb::Heartbeat {})),
+            };
+            if out.send(Ok(beat)).await.is_err() {
+                return;
+            }
+            continue;
+        };
+        match received {
             Ok(event) => {
                 match &event {
                     Event::Op(op) => {
@@ -213,6 +329,7 @@ async fn forward(sub: Subscription, after: u64, out: mpsc::Sender<Result<pb::Wat
 impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
     type OpenProjectStream = BoxStream<pb::OpenProjectChunk>;
     type WatchStream = BoxStream<pb::WatchEvent>;
+    type GetBaselineStream = BoxStream<pb::OpenProjectChunk>;
 
     async fn get_server_info(
         &self,
@@ -398,7 +515,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             .with(id, |h| async move { h.subscribe(after).await })
             .await?;
         let (tx, rx) = mpsc::channel(self.registry.config().observer_buffer.max(1));
-        tokio::spawn(forward(sub, after, tx));
+        tokio::spawn(forward(sub, after, self.registry.config().heartbeat, tx));
         Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
@@ -433,6 +550,304 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             as_of_seq: report.as_of_seq,
             threats: risk_entries(&report),
         }))
+    }
+
+    async fn who_am_i(
+        &self,
+        request: Request<pb::WhoAmIRequest>,
+    ) -> Result<Response<pb::WhoAmIResponse>, Status> {
+        let who = Principal::of(&request)?;
+        let display_name = match (who.method, &self.accounts) {
+            (AuthMethod::Password, Some(a)) => a.display_name(&who.subject),
+            _ => None,
+        }
+        .unwrap_or_else(|| who.subject.to_string());
+        Ok(Response::new(pb::WhoAmIResponse {
+            subject: who.subject.to_string(),
+            display_name,
+            admin: who.admin,
+            method: who.method.as_str().to_owned(),
+        }))
+    }
+
+    async fn log_out(
+        &self,
+        request: Request<pb::LogOutRequest>,
+    ) -> Result<Response<pb::LogOutResponse>, Status> {
+        let who = Principal::of(&request)?;
+        let headers = request.metadata().clone().into_headers();
+        if who.method == AuthMethod::Password
+            && let Some(accounts) = &self.accounts
+            && let Some(token) = bearer(&headers)
+        {
+            accounts.log_out(token).await?;
+        }
+        Ok(Response::new(pb::LogOutResponse {}))
+    }
+
+    async fn change_password(
+        &self,
+        request: Request<pb::ChangePasswordRequest>,
+    ) -> Result<Response<pb::ChangePasswordResponse>, Status> {
+        let who = Principal::of(&request)?.clone();
+        if who.method != AuthMethod::Password {
+            return Err(password_login_off());
+        }
+        let accounts = self.accounts()?;
+        let headers = request.metadata().clone().into_headers();
+        let keep = bearer(&headers).map(str::to_owned);
+        let req = request.into_inner();
+        accounts
+            .change_password(
+                &who.subject,
+                &req.current_password,
+                &req.new_password,
+                keep.as_deref(),
+            )
+            .await?;
+        Ok(Response::new(pb::ChangePasswordResponse {}))
+    }
+
+    async fn get_server_settings(
+        &self,
+        request: Request<pb::GetServerSettingsRequest>,
+    ) -> Result<Response<pb::ServerSettings>, Status> {
+        Principal::of(&request)?;
+        Ok(Response::new(self.server_settings()))
+    }
+
+    async fn set_password_login(
+        &self,
+        request: Request<pb::SetPasswordLoginRequest>,
+    ) -> Result<Response<pb::ServerSettings>, Status> {
+        let (accounts, who) = self.admin_accounts(&request)?;
+        accounts
+            .set_password_login(&who.subject, request.get_ref().enabled)
+            .await?;
+        Ok(Response::new(self.server_settings()))
+    }
+
+    async fn list_users(
+        &self,
+        request: Request<pb::ListUsersRequest>,
+    ) -> Result<Response<pb::ListUsersResponse>, Status> {
+        let (accounts, _) = self.admin_accounts(&request)?;
+        Ok(Response::new(pb::ListUsersResponse {
+            users: accounts
+                .list_users()
+                .iter()
+                .map(|(u, n)| user_info(u, *n))
+                .collect(),
+        }))
+    }
+
+    async fn create_user(
+        &self,
+        request: Request<pb::CreateUserRequest>,
+    ) -> Result<Response<pb::UserInfo>, Status> {
+        let (accounts, who) = self.admin_accounts(&request)?;
+        let req = request.get_ref();
+        let user = accounts
+            .create_user(
+                &who.subject,
+                &req.username,
+                &req.display_name,
+                &req.password,
+                req.admin,
+            )
+            .await?;
+        Ok(Response::new(user_info(&user, 0)))
+    }
+
+    async fn update_user(
+        &self,
+        request: Request<pb::UpdateUserRequest>,
+    ) -> Result<Response<pb::UserInfo>, Status> {
+        let (accounts, who) = self.admin_accounts(&request)?;
+        let req = request.into_inner();
+        let change = UserUpdate {
+            display_name: req.display_name,
+            admin: req.admin,
+            disabled: req.disabled,
+            password: req.password,
+        };
+        let user = accounts
+            .update_user(&who.subject, &req.username, change)
+            .await?;
+        let sessions = accounts.user(&user.username).map_or(0, |(_, n)| n);
+        Ok(Response::new(user_info(&user, sessions)))
+    }
+
+    async fn delete_user(
+        &self,
+        request: Request<pb::DeleteUserRequest>,
+    ) -> Result<Response<pb::DeleteUserResponse>, Status> {
+        let (accounts, who) = self.admin_accounts(&request)?;
+        if crate::accounts::normalize_username(&request.get_ref().username)
+            .is_ok_and(|u| *u == *who.subject)
+        {
+            return Err(Status::failed_precondition(
+                "you cannot delete your own account",
+            ));
+        }
+        accounts
+            .delete_user(&who.subject, &request.get_ref().username)
+            .await?;
+        Ok(Response::new(pb::DeleteUserResponse {}))
+    }
+
+    async fn create_baseline(
+        &self,
+        request: Request<pb::CreateBaselineRequest>,
+    ) -> Result<Response<pb::BaselineInfo>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let meta = self
+            .registry
+            .create_baseline(id, &req.name, &who.subject)
+            .await?;
+        self.audit(
+            &who,
+            AuditKind::BaselineCreated,
+            &id.to_string(),
+            &meta.id.to_string(),
+        )
+        .await;
+        Ok(Response::new(baseline_info(&meta)))
+    }
+
+    async fn list_baselines(
+        &self,
+        request: Request<pb::ListBaselinesRequest>,
+    ) -> Result<Response<pb::ListBaselinesResponse>, Status> {
+        Principal::of(&request)?;
+        let id = project_id(&request.get_ref().project_id)?;
+        let list = self
+            .registry
+            .store()
+            .list_baselines(id)
+            .await
+            .map_err(|e| missing(e, id))?;
+        Ok(Response::new(pb::ListBaselinesResponse {
+            baselines: list.iter().map(baseline_info).collect(),
+        }))
+    }
+
+    async fn get_baseline(
+        &self,
+        request: Request<pb::GetBaselineRequest>,
+    ) -> Result<Response<Self::GetBaselineStream>, Status> {
+        Principal::of(&request)?;
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let baseline: uuid::Uuid = req
+            .baseline_id
+            .parse()
+            .map_err(|_| ServerError::InvalidRequest("baseline id"))?;
+        let (meta, snapshot) = self
+            .registry
+            .store()
+            .load_baseline(id, baseline)
+            .await
+            .map_err(|e| missing(e, id))?
+            .ok_or(ServerError::InvalidRequest("unknown baseline"))?;
+        let header = pb::OpenProjectHeader {
+            project: None,
+            last_seq: meta.seq,
+            snapshot_bytes: snapshot.len() as u64,
+            lock_holder: String::new(),
+        };
+        let items = chunk_snapshot(
+            header,
+            &Bytes::from(snapshot),
+            self.registry.config().chunk_bytes,
+        );
+        Ok(Response::new(Box::pin(tokio_stream::iter(items))))
+    }
+
+    async fn rename_project(
+        &self,
+        request: Request<pb::RenameProjectRequest>,
+    ) -> Result<Response<pb::ProjectSummary>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let tok = token(&req.lock_token)?;
+        let name = self.registry.check_name(&req.name)?.to_owned();
+        let meta = self
+            .registry
+            .with(id, |h| {
+                let (who, tok, name) = (who.clone(), tok.clone(), name.clone());
+                async move { h.rename(who, tok, name).await }
+            })
+            .await?;
+        Ok(Response::new(summary(&meta)))
+    }
+
+    async fn delete_project(
+        &self,
+        request: Request<pb::DeleteProjectRequest>,
+    ) -> Result<Response<pb::DeleteProjectResponse>, Status> {
+        let who = Principal::of(&request)?.clone();
+        if !who.admin {
+            return Err(ServerError::NotAdmin.into());
+        }
+        let id = project_id(&request.get_ref().project_id)?;
+        self.registry.delete(id).await?;
+        self.audit(&who, AuditKind::ProjectDeleted, &id.to_string(), "")
+            .await;
+        Ok(Response::new(pb::DeleteProjectResponse {}))
+    }
+
+    async fn list_history(
+        &self,
+        request: Request<pb::ListHistoryRequest>,
+    ) -> Result<Response<pb::ListHistoryResponse>, Status> {
+        Principal::of(&request)?;
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let max = self.registry.config().max_history;
+        let limit = match req.limit {
+            0 => max,
+            n => (n as usize).min(max),
+        };
+        let ops = self
+            .registry
+            .store()
+            .recent_ops(id, limit)
+            .await
+            .map_err(|e| missing(e, id))?;
+        Ok(Response::new(pb::ListHistoryResponse {
+            entries: ops
+                .iter()
+                .map(|o| pb::HistoryEntry {
+                    seq: o.seq,
+                    actor: o.actor.clone(),
+                    timestamp_ms: o.timestamp_ms,
+                    kind: op_kind(&o.op),
+                })
+                .collect(),
+        }))
+    }
+
+    async fn record_export(
+        &self,
+        request: Request<pb::RecordExportRequest>,
+    ) -> Result<Response<pb::RecordExportResponse>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let kind = req.kind.as_str();
+        if kind.is_empty()
+            || kind.len() > MAX_EXPORT_KIND_BYTES
+            || !kind.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Err(ServerError::InvalidRequest("export kind").into());
+        }
+        self.audit(&who, AuditKind::Export, &id.to_string(), kind)
+            .await;
+        Ok(Response::new(pb::RecordExportResponse {}))
     }
 }
 
@@ -485,7 +900,7 @@ mod tests {
         tx.send(op_event(4)).expect("receiver exists");
         drop(tx);
         let (out, rx) = mpsc::channel(16);
-        forward(sub, 2, out).await;
+        forward(sub, 2, std::time::Duration::from_secs(60), out).await;
         let items = drain(rx).await;
         assert!(matches!(
             &items[0],
@@ -509,7 +924,7 @@ mod tests {
             tx.send(op_event(seq)).expect("receiver exists");
         }
         let (out, rx) = mpsc::channel(16);
-        forward(sub, 0, out).await;
+        forward(sub, 0, std::time::Duration::from_secs(60), out).await;
         let items = drain(rx).await;
         let last = items.last().expect("something was sent");
         let status = last.as_ref().expect_err("ends with an error");
@@ -529,9 +944,12 @@ mod tests {
         drop(rx);
         tx.send(op_event(1)).expect("receiver exists");
         // Returns instead of waiting for more events.
-        tokio::time::timeout(std::time::Duration::from_secs(5), forward(sub, 0, out))
-            .await
-            .expect("forward ends");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            forward(sub, 0, std::time::Duration::from_secs(60), out),
+        )
+        .await
+        .expect("forward ends");
     }
 
     #[test]

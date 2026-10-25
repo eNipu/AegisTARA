@@ -27,7 +27,7 @@ use std::future::Future;
 
 pub use audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 pub use memory::MemoryStore;
-pub use postgres::{PostgresOptions, PostgresStore};
+pub use postgres::{DbTls, PostgresOptions, PostgresStore};
 
 use crate::ids::ProjectId;
 
@@ -77,6 +77,27 @@ pub struct LoadedProject {
     pub snapshot: StoredSnapshot,
     /// Ops after the snapshot, in order.
     pub ops: Vec<StoredOp>,
+}
+
+/// A named, frozen project state (job 039): the snapshot after ops
+/// `1..=seq`. Baselines are never changed, only created and listed, and
+/// deleted with their project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaselineMeta {
+    /// Identity (UUIDv7, so ordering by ID is creation order).
+    pub id: uuid::Uuid,
+    /// The project.
+    pub project: ProjectId,
+    /// Display name, for example `B3 SOP gate`.
+    pub name: String,
+    /// The baseline holds the effect of ops `1..=seq`.
+    pub seq: u64,
+    /// Subject that created it.
+    pub created_by: String,
+    /// Milliseconds since the Unix epoch.
+    pub created_ms: u64,
+    /// Size of the snapshot.
+    pub snapshot_bytes: u64,
 }
 
 /// A storage failure. Details stay in the server log.
@@ -161,4 +182,62 @@ pub trait ProjectStore: Send + Sync + 'static {
         id: ProjectId,
         snapshot: &StoredSnapshot,
     ) -> impl Future<Output = Result<(), StoreFault>> + Send;
+
+    /// Changes a project's display name.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault::Missing`] if the project does not exist.
+    fn rename(
+        &self,
+        id: ProjectId,
+        name: &str,
+    ) -> impl Future<Output = Result<(), StoreFault>> + Send;
+
+    /// Deletes a project with its history and baselines, atomically.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault::Missing`] if the project does not exist.
+    fn delete(&self, id: ProjectId) -> impl Future<Output = Result<(), StoreFault>> + Send;
+
+    /// The newest `limit` accepted ops of a project, newest first.
+    fn recent_ops(
+        &self,
+        id: ProjectId,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<StoredOp>, StoreFault>> + Send;
+
+    /// Every subject that had an op accepted at or after `since_ms`, with
+    /// the time of their latest one, in any project. Rebuilds the seat
+    /// ledger after a restart (backlog 039).
+    fn active_editors(
+        &self,
+        since_ms: u64,
+    ) -> impl Future<Output = Result<Vec<(String, u64)>, StoreFault>> + Send;
+
+    /// Stores a baseline.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault::Missing`] if the project does not exist,
+    /// [`StoreFault::Exists`] if the baseline ID is taken.
+    fn create_baseline(
+        &self,
+        meta: &BaselineMeta,
+        snapshot: &[u8],
+    ) -> impl Future<Output = Result<(), StoreFault>> + Send;
+
+    /// A project's baselines, oldest first.
+    fn list_baselines(
+        &self,
+        project: ProjectId,
+    ) -> impl Future<Output = Result<Vec<BaselineMeta>, StoreFault>> + Send;
+
+    /// One baseline with its snapshot, or `None`.
+    fn load_baseline(
+        &self,
+        project: ProjectId,
+        id: uuid::Uuid,
+    ) -> impl Future<Output = Result<Option<(BaselineMeta, Vec<u8>)>, StoreFault>> + Send;
 }

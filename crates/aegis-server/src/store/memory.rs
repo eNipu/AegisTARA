@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
-use super::{LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot};
+use super::{
+    BaselineMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
+};
 use crate::ids::ProjectId;
 
 #[derive(Debug)]
@@ -17,6 +19,8 @@ struct Entry {
     /// `links[i]` is `(prev, hash)` of `ops[i]` in the audit chain.
     links: Vec<(Hash, Hash)>,
     head: Hash,
+    /// Oldest first.
+    baselines: Vec<(BaselineMeta, Vec<u8>)>,
 }
 
 /// A store that keeps everything in process memory.
@@ -69,6 +73,7 @@ impl ProjectStore for MemoryStore {
                     ops: Vec::new(),
                     links: Vec::new(),
                     head: genesis(meta.id),
+                    baselines: Vec::new(),
                 },
             );
             Ok(())
@@ -146,6 +151,72 @@ impl ProjectStore for MemoryStore {
             entry.snapshot = snapshot.clone();
             Ok(())
         })
+    }
+
+    async fn rename(&self, id: ProjectId, name: &str) -> Result<(), StoreFault> {
+        self.with(|m| {
+            m.get_mut(&id).ok_or(StoreFault::Missing)?.meta.name = name.to_owned();
+            Ok(())
+        })
+    }
+
+    async fn delete(&self, id: ProjectId) -> Result<(), StoreFault> {
+        self.with(|m| m.remove(&id).map(|_| ()).ok_or(StoreFault::Missing))
+    }
+
+    async fn recent_ops(&self, id: ProjectId, limit: usize) -> Result<Vec<StoredOp>, StoreFault> {
+        self.with(|m| {
+            let entry = m.get(&id).ok_or(StoreFault::Missing)?;
+            Ok(entry.ops.iter().rev().take(limit).cloned().collect())
+        })
+    }
+
+    async fn active_editors(&self, since_ms: u64) -> Result<Vec<(String, u64)>, StoreFault> {
+        Ok(self.with(|m| {
+            let mut latest: BTreeMap<String, u64> = BTreeMap::new();
+            for op in m.values().flat_map(|e| &e.ops) {
+                if op.timestamp_ms >= since_ms {
+                    let t = latest.entry(op.actor.clone()).or_default();
+                    *t = (*t).max(op.timestamp_ms);
+                }
+            }
+            latest.into_iter().collect()
+        }))
+    }
+
+    async fn create_baseline(
+        &self,
+        meta: &BaselineMeta,
+        snapshot: &[u8],
+    ) -> Result<(), StoreFault> {
+        self.with(|m| {
+            if m.values()
+                .any(|e| e.baselines.iter().any(|(b, _)| b.id == meta.id))
+            {
+                return Err(StoreFault::Exists);
+            }
+            let entry = m.get_mut(&meta.project).ok_or(StoreFault::Missing)?;
+            entry.baselines.push((meta.clone(), snapshot.to_vec()));
+            Ok(())
+        })
+    }
+
+    async fn list_baselines(&self, project: ProjectId) -> Result<Vec<BaselineMeta>, StoreFault> {
+        self.with(|m| {
+            let entry = m.get(&project).ok_or(StoreFault::Missing)?;
+            Ok(entry.baselines.iter().map(|(b, _)| b.clone()).collect())
+        })
+    }
+
+    async fn load_baseline(
+        &self,
+        project: ProjectId,
+        id: uuid::Uuid,
+    ) -> Result<Option<(BaselineMeta, Vec<u8>)>, StoreFault> {
+        Ok(self.with(|m| {
+            m.get(&project)
+                .and_then(|e| e.baselines.iter().find(|(b, _)| b.id == id).cloned())
+        }))
     }
 }
 

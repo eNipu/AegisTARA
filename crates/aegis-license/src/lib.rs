@@ -39,5 +39,9 @@ pub use manifest::{
 };
 pub use seats::{Admission, SeatLedger};
 
+/// How long a seat stays taken after its user's last edit session, in
+/// seconds (30 days).
+pub const SEAT_WINDOW_SECS: u64 = SeatLedger::WINDOW_DAYS * DAY;
+
 #[cfg(feature = "issuer")]
 pub use issuer::Issuer;

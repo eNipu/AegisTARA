@@ -28,6 +28,12 @@ env:
   # Incremental artifacts only help local edit loops; off, the cached target/
   # is smaller and restores faster.
   CARGO_INCREMENTAL: 0
+  # Line tables only: backtraces keep file and line, and the test binaries
+  # that link Slint stay near 250 MB each. With full debug info the runner's
+  # disk filled and the linker died with SIGBUS while linking the
+  # aegis-shell tests (run 37).
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
   # Pinned stable toolchain for fmt, clippy, and test (ADR 0007). Bump it on
   # purpose, in its own commit, so new lints never turn CI red by surprise.
   RUST_TOOLCHAIN: "1.99.1"
@@ -133,6 +139,20 @@ jobs:
         run: scripts/deny.sh
       - name: tools/deny-fixtures/run.sh
         run: tools/deny-fixtures/run.sh
+
+  # The server image was only ever built by hand (gap G12). This job builds the
+  # customer image and a test image from deploy/Dockerfile and starts the
+  # test one. Docker and curl are preinstalled on the runner.
+  image:
+    name: server image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: deploy/verify-image.sh
+        run: deploy/verify-image.sh
 
   msrv:
     name: MSRV cargo check
