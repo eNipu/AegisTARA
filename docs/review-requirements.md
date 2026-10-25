@@ -4,6 +4,29 @@ This page lists what must be reviewed before the work on this branch is
 accepted. The owner asked for the build first and the review after. Nothing
 here has been reviewed yet.
 
+## Pending reviews
+
+One row per job. A cell says `pending` until that review has run and passed.
+Add a row for every new job.
+
+| Job | Code | Security | UX | UI |
+|---|---|---|---|---|
+| 027 workspace and README | pending | pending | pending | pending |
+| 028 decision cleanup | pending | pending | pending | pending |
+| 029 server skeleton | pending | pending | pending | pending |
+| 030 server persistence | pending | pending | pending | pending |
+| 031 login | pending | pending | pending | pending |
+| 032 canvas engine | pending | pending | pending | pending |
+| 033 client core and shell | pending | pending | pending | pending |
+| 034 license tokens | pending | pending | pending | pending |
+| 035 live observers | pending | pending | pending | pending |
+| 036 release scaffolding | pending | pending | pending | pending |
+| 037 Postgres TLS | pending | pending | pending | pending |
+| 038 HTTPS client | pending | pending | pending | pending |
+| 039 seat ledger persistence | pending | pending | pending | pending |
+| 040 password login and gRPC-Web | pending | pending | pending | pending |
+| 041 TARA pages | pending | pending | pending | pending |
+
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)
 - **Jobs in scope:** 027 to 041 (`factory/backlog.md`)
