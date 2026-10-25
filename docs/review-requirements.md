@@ -27,6 +27,7 @@ Add a row for every new job.
 | 040 password login and gRPC-Web | pending | pending | pending | pending |
 | 041 TARA pages | pending | pending | pending | pending |
 | 045 password login switch | pending | pending | pending | pending |
+| 046 server image in CI | pending | pending | pending | pending |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)

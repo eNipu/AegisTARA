@@ -28,6 +28,8 @@ Run this list for every release build. Tick each line in the release notes.
       (`cargo tree -p aegis-server -e features | grep dev-license` prints nothing).
 - [ ] The image is built with an empty `CARGO_FEATURES` build argument. The
       Railway test server sets it to `dev-license`; a customer image never does.
+      The CI job `server image` (`deploy/verify-image.sh`) builds it that way on
+      every push and proves it refuses to start without a license.
 - [ ] `AEGIS_DEV_AUTH` and `AEGIS_DEV_LICENSE` are unset in the customer's
       environment.
 - [ ] The customer's login method is agreed: company SSO (`AEGIS_AUTH=oidc`)

@@ -44,6 +44,7 @@
 - [x] Password login and reachable test server: user name and password accounts on the server (Argon2id, opaque session tokens, throttle, event log, user admin), gRPC-Web next to gRPC so the app works through HTTP/1.1 proxies, `GET /healthz`, `PORT` support, and a Railway test deployment (decisions D10 and D11) (040-password-login-and-grpc-web)
 - [x] Every TARA page in the desktop app: menus with Lucide icons, overview, assets, damage, threats, attack trees (outline editor), risks and treatment, controls, goals and claims, problems, versions (baselines and comparison), history, reports and exports, user admin; server and login screens (041-tara-pages)
 - [x] Turn password login off per deployment from an admin setting, and show only company login in the app (today it is the `AEGIS_AUTH` variable) (045-password-login-switch)
+- [x] Build the server Docker image in CI and prove it starts: customer image refuses to start without a license, test image answers /healthz and GetLoginOptions (gap G12) (046-image-ci)
 
 ## Waiting for a customer order
 
