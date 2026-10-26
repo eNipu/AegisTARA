@@ -302,3 +302,28 @@ What each added job needs from each review, besides the lists above.
 - [ ] 049: the event table columns and the tab buttons.
 - [ ] 050: open `target/report-samples/tara-report.pdf` (made by
       `cargo test -p aegis-client --test pages`) and check page 1 to the end.
+
+---
+
+## 8. Self-review notes (2026-10-26)
+
+Not one of the four formal reviews. A first pass by the builder over the
+back-fixes from the other session, with what was run.
+
+| Check | Result |
+|---|---|
+| `scripts/ci.sh` on all eight crates (fmt, clippy `-D warnings`, tests), rustc 1.99.1, PostgreSQL 16 | passed |
+| Plain builds (no dev-dependencies) with clippy for license, model, proto, auth, canvas, client, server | passed (the `aegis-license` fix from `9886fd4` is sound) |
+| `scripts/deny.sh`, `tools/deny-fixtures/run.sh` (9 cases) | passed |
+| 048 `fetch_manifest`: https only, 1 MiB body cap and no redirects in `aegis-auth` `HyperClient`, no trust from transport | as documented |
+| 045 switch: only an admin; sessions end; `authenticate` checks the switch on every request | as documented, **one finding** below |
+
+Finding fixed (job 052 commit): a login that was already hashing when an admin
+turned password login off could still store a session. It was unusable while
+the switch was off but became valid again when it was turned on. `log_in`
+now checks the switch under the same lock the switch uses to clear sessions;
+test `a_login_racing_the_switch_leaves_no_session` fails without the fix.
+
+Not run here: the formal code, security, UX and UI reviews (G8), the docker
+lines of `deploy/verify-image.sh` (Docker Hub refused the pull with 429; they
+run in CI), and any screen reader pass (G14).
