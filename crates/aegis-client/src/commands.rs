@@ -1098,6 +1098,9 @@ pub enum Command {
     LogOut,
     /// Remove a notice from the list.
     DismissNotice(u64),
+    /// Fetch the signed update manifest and say whether a newer release
+    /// exists (the answer is a notice).
+    CheckForUpdates,
     /// Stop the session.
     Shutdown,
 }

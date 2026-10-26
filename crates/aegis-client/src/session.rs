@@ -52,6 +52,7 @@ use crate::state::{
     ProjectEntry, ProjectView, ServerSettingsView, Severity, SyncView, UserRow, ViewModel,
 };
 use crate::time::format_ms;
+use crate::updates::{UpdateChecker, UpdateError, UpdateStatus};
 use crate::view::{
     AdminAction, Page, UiState, inspector, risks_differ, shown_tree, threat_rows, tree_view,
     use_server_risks,
@@ -95,6 +96,10 @@ pub struct SessionConfig {
     /// so only a dead connection that no one closed (a proxy dropping it
     /// without a reset) reaches this.
     pub watch_silence: Duration,
+    /// Where the signed update manifest is. Empty: no address is set.
+    pub update_url: String,
+    /// Checks the manifest against the update keys of this build.
+    pub update_checker: Arc<UpdateChecker>,
 }
 
 impl SessionConfig {
@@ -110,6 +115,8 @@ impl SessionConfig {
             transport: crate::transport::TransportKind::Grpc,
             on_log_out: None,
             watch_silence: Duration::from_secs(60),
+            update_url: String::new(),
+            update_checker: Arc::new(UpdateChecker::for_this_build()),
         }
     }
 
@@ -350,6 +357,7 @@ enum Internal<P> {
         result: Result<(), ClientError>,
     },
     Users(Result<Vec<pb::UserInfo>, ClientError>),
+    Updates(Result<UpdateStatus, UpdateError>),
     Settings(Result<pb::ServerSettings, ClientError>),
     SettingsSet(Result<pb::ServerSettings, ClientError>),
     AdminDone {
@@ -740,6 +748,28 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 Err(e) => self.on_failure("Could not load the users", &e),
             },
+            Internal::Updates(result) => match result {
+                Ok(UpdateStatus::UpToDate) => {
+                    self.notice(Severity::Info, "AegisTARA is up to date.");
+                }
+                Ok(UpdateStatus::NoBuildForThisPlatform { release }) => self.notice(
+                    Severity::Warning,
+                    format!("Release {release} exists, but not for this computer."),
+                ),
+                Ok(UpdateStatus::Available(offer)) => {
+                    let notes: String = offer.notes.chars().take(300).collect();
+                    self.notice(
+                        Severity::Info,
+                        format!(
+                            "AegisTARA {} is available ({} MB). Download it from {}. {notes}",
+                            offer.release,
+                            offer.bytes().div_ceil(1_000_000),
+                            offer.url()
+                        ),
+                    );
+                }
+                Err(e) => self.notice(Severity::Error, format!("Could not check for updates: {e}")),
+            },
             Internal::Settings(result) => match result {
                 Ok(s) => self.settings = Some(settings_view(&s)),
                 Err(e) => self.on_failure("Could not load the server settings", &e),
@@ -873,6 +903,28 @@ impl<P: CredentialProvider> Actor<P> {
         {
             self.spawn(|conn| async move { Internal::Users(conn.users().await) });
         }
+    }
+
+    /// Fetches the signed manifest in the background. Needs no server
+    /// connection: an air gapped site simply sets no address.
+    fn check_for_updates(&mut self) {
+        if self.config.update_url.is_empty() {
+            self.notice(
+                Severity::Info,
+                "No update address is set. Your administrator can set update_url in the settings file.",
+            );
+            return;
+        }
+        let (url, checker) = (
+            self.config.update_url.clone(),
+            Arc::clone(&self.config.update_checker),
+        );
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            let http = aegis_auth::http::HyperClient::new();
+            let result = checker.check_url(&http, &url).await;
+            let _ = events.send(Internal::Updates(result)).await;
+        });
     }
 
     fn load_settings(&self) {
@@ -1761,6 +1813,7 @@ impl<P: CredentialProvider> Actor<P> {
             Command::CompareWith(Some(baseline)) => self.compare_with(baseline),
             Command::LoadHistory => self.load_history(),
             Command::Export { kind, path } => self.export(kind, path),
+            Command::CheckForUpdates => self.check_for_updates(),
             Command::LoadUsers => {
                 self.load_users();
                 self.load_settings();

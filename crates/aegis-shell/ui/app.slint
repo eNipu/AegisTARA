@@ -299,6 +299,7 @@ export component AppWindow inherits Window {
     callback use-password-login();
     callback use-company-login();
     callback log-out();
+    callback check-for-updates();
     callback change-password(string, string);
 
     // ---- callbacks: projects and editing ----
@@ -514,6 +515,7 @@ export component AppWindow inherits Window {
         Menu {
             title: "Help";
             MenuItem { title: "Keyboard shortcuts"; icon: @image-url("icons/keyboard.svg"); activated => { root.show-shortcuts = true; } }
+            MenuItem { title: "Check for updates"; icon: @image-url("icons/refresh-cw.svg"); activated => { root.check-for-updates(); } }
             MenuItem { title: "About AegisTARA"; icon: @image-url("icons/info.svg"); activated => { root.show-about = true; } }
         }
     }

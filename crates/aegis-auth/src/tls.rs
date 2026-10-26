@@ -64,6 +64,26 @@ fn build() -> Result<Arc<rustls::ClientConfig>, TlsError> {
     Ok(Arc::new(config))
 }
 
+/// A client configuration that trusts exactly `roots`: ring, no client
+/// certificate. For a private certificate authority (a company that signs its
+/// own server certificates) and for tests; production code that trusts the
+/// operating system uses [`client_config`].
+///
+/// # Errors
+///
+/// [`TlsError::Setup`] if rustls refuses the configuration.
+pub fn config_with_roots(
+    roots: rustls::RootCertStore,
+) -> Result<Arc<rustls::ClientConfig>, TlsError> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| TlsError::Setup(e.to_string()))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(Arc::new(config))
+}
+
 /// The shared client configuration: ring, the OS roots, no client
 /// certificate. Built on first use; later calls are a clone of an `Arc`.
 ///
@@ -83,23 +103,40 @@ pub fn client_config() -> Result<Arc<rustls::ClientConfig>, TlsError> {
 ///
 /// As [`client_config`].
 pub fn https_connector(
-    mut http: HttpConnector,
+    http: HttpConnector,
     allow_http: bool,
     http2: bool,
 ) -> Result<HttpsConnector<HttpConnector>, TlsError> {
+    Ok(https_connector_with(
+        &client_config()?,
+        http,
+        allow_http,
+        http2,
+    ))
+}
+
+/// As [`https_connector`], with the given configuration instead of the
+/// shared one.
+#[must_use]
+pub fn https_connector_with(
+    config: &Arc<rustls::ClientConfig>,
+    mut http: HttpConnector,
+    allow_http: bool,
+    http2: bool,
+) -> HttpsConnector<HttpConnector> {
     http.enforce_http(false);
-    let config = (*client_config()?).clone();
+    let config = (**config).clone();
     let builder = HttpsConnectorBuilder::new().with_tls_config(config);
     let builder = if allow_http {
         builder.https_or_http()
     } else {
         builder.https_only()
     };
-    Ok(if http2 {
+    if http2 {
         builder.enable_http1().enable_http2().wrap_connector(http)
     } else {
         builder.enable_http1().wrap_connector(http)
-    })
+    }
 }
 
 #[cfg(test)]
