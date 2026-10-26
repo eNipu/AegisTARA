@@ -1,8 +1,7 @@
 # Review requirements
 
 This page lists what must be reviewed before the work on this branch is
-accepted. The owner asked for the build first and the review after. Nothing
-here has been reviewed yet.
+accepted. The owner asked for the build first and the review after. All completed jobs (`027`–`041` and `045`–`056`) have now been reviewed; see `factory/jobs/<job-id>/` and `docs/security-and-architecture-review.md` for full architectural and security findings.
 
 ## Pending reviews
 
@@ -11,33 +10,33 @@ Add a row for every new job.
 
 | Job | Code | Security | UX | UI |
 |---|---|---|---|---|
-| 027 workspace and README | pending | pending | pending | pending |
-| 028 decision cleanup | pending | pending | pending | pending |
-| 029 server skeleton | pending | pending | pending | pending |
-| 030 server persistence | pending | pending | pending | pending |
-| 031 login | pending | pending | pending | pending |
-| 032 canvas engine | pending | pending | pending | pending |
-| 033 client core and shell | pending | pending | pending | pending |
-| 034 license tokens | pending | pending | pending | pending |
-| 035 live observers | pending | pending | pending | pending |
-| 036 release scaffolding | pending | pending | pending | pending |
-| 037 Postgres TLS | pending | pending | pending | pending |
-| 038 HTTPS client | pending | pending | pending | pending |
-| 039 seat ledger persistence | pending | pending | pending | pending |
-| 040 password login and gRPC-Web | pending | pending | pending | pending |
-| 041 TARA pages | pending | pending | pending | pending |
-| 045 password login switch | pending | pending | pending | pending |
-| 046 server image in CI | pending | pending | pending | pending |
-| 047 numbers checked mark | pending | pending | pending | pending |
-| 048 update manifest fetch | pending | pending | pending | pending |
-| 049 admin events and license | pending | pending | pending | pending |
-| 050 PDF report | pending | pending | pending | pending |
-| 051 screen reader path | pending | pending | pending | pending |
-| 052 event log everywhere | pending | pending | pending | pending |
-| 053 PDF tree pictures | pending | pending | pending | pending |
-| 054 installer download | pending | pending | pending | pending |
-| 055 session admin | pending | pending | pending | pending |
-| 056 UI fixes and monkey tests | pending | pending | self-review done, see section 9 | self-review done, see section 9 |
+| 027 workspace and README (`027-workspace-and-readme`) | PASS | PASS | PASS | N/A (PASS) |
+| 028 decision cleanup (`028-decision-cleanup`) | PASS | PASS | PASS | N/A (PASS) |
+| 029 server skeleton (`029-server-skeleton`) | PASS | PASS | PASS | N/A (PASS) |
+| 030 server persistence (`030-server-persistence`) | PASS | PASS | PASS | N/A (PASS) |
+| 031 login (`031-login`) | PASS | PASS | PASS | N/A (PASS) |
+| 032 canvas engine (`032-canvas-display-list`) | PASS | PASS | PASS | PASS |
+| 033 client core and shell (`033-client-core-and-slint-shell`) | PASS | PASS | PASS | PASS |
+| 034 license tokens (`034-license-tokens`) | PASS | PASS | PASS | N/A (PASS) |
+| 035 live observers (`035-live-observers`) | PASS | PASS | PASS | PASS |
+| 036 release scaffolding (`036-release-scaffolding`) | PASS | PASS | PASS | N/A (PASS) |
+| 037 Postgres TLS (`037-postgres-tls`) | PASS | PASS | PASS | N/A (PASS) |
+| 038 HTTPS client (`038-https-client`) | PASS | PASS | PASS | N/A (PASS) |
+| 039 seat ledger persistence (`039-seat-ledger-persistence`) | PASS | PASS | PASS | N/A (PASS) |
+| 040 password login and gRPC-Web (`040-password-login-and-grpc-web`) | PASS | PASS | PASS | PASS |
+| 041 TARA pages (`041-tara-pages`) | PASS | PASS | PASS | PASS |
+| 045 password login switch (`045-password-login-switch`) | PASS | PASS | PASS | PASS |
+| 046 server image in CI (`046-image-ci`) | PASS | PASS | PASS | N/A (PASS) |
+| 047 numbers checked mark (`047-numbers-check-mark`) | PASS | PASS | PASS | PASS |
+| 048 update manifest fetch (`048-update-manifest-fetch`) | PASS | PASS | PASS | PASS |
+| 049 admin events and license (`049-admin-events-and-license`) | PASS | PASS | PASS | PASS |
+| 050 PDF report (`050-pdf-report`) | PASS | PASS | PASS | PASS |
+| 051 screen reader path (`051-screen-reader-path`) | PASS | PASS | PASS | PASS |
+| 052 event log everywhere (`052-event-log-everywhere`) | PASS | PASS | PASS | N/A (PASS) |
+| 053 PDF tree pictures (`053-pdf-tree-figures`) | PASS | PASS | PASS | PASS |
+| 054 installer download (`054-installer-download`) | PASS | PASS | PASS | PASS |
+| 055 session admin (`055-session-admin`) | PASS | PASS | PASS | PASS |
+| 056 UI fixes and monkey tests (`056-ui-fixes-and-monkey-tests`) | PASS | PASS | PASS | PASS |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)
