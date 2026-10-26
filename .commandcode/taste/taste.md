@@ -1,0 +1,1 @@
+- When work has open questions or ambiguous trade-offs, prefers the agent to make the call itself using best practice and a full pass over edge cases, rather than handing the decision back for the user to resolve. Confidence: 0.6
