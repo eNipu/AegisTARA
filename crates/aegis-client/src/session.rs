@@ -101,7 +101,7 @@ pub struct SessionConfig {
     /// Checks the manifest against the update keys of this build.
     pub update_checker: Arc<UpdateChecker>,
     /// Where a downloaded installer is saved (job 054).
-    pub update_dir: std::path::PathBuf,
+    pub update_dir: crate::updates::DownloadDir,
     /// The HTTP client for update checks and downloads. Tests give it a
     /// client that trusts a test certificate authority.
     pub update_http: Arc<aegis_auth::http::HyperClient>,
@@ -122,7 +122,7 @@ impl SessionConfig {
             watch_silence: Duration::from_secs(60),
             update_url: String::new(),
             update_checker: Arc::new(UpdateChecker::for_this_build()),
-            update_dir: crate::updates::default_download_dir(),
+            update_dir: crate::updates::DownloadDir::for_this_user(),
             update_http: Arc::new(aegis_auth::http::HyperClient::new()),
         }
     }
@@ -1020,13 +1020,13 @@ impl<P: CredentialProvider> Actor<P> {
                 offer.bytes().div_ceil(1_000_000)
             ),
         );
-        let (dir, events, http) = (
+        let (target, events, http) = (
             self.config.update_dir.clone(),
             self.events.clone(),
             Arc::clone(&self.config.update_http),
         );
         tokio::spawn(async move {
-            let result = offer.download(&*http, &dir, |_| {}).await;
+            let result = offer.download(&*http, &target, |_| {}).await;
             let _ = events.send(Internal::Downloaded(result)).await;
         });
     }
