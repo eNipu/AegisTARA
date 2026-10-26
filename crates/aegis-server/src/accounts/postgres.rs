@@ -63,22 +63,7 @@ fn session_of(row: &Row) -> Result<SessionRecord, StoreFault> {
 }
 
 fn kind_of(text: &str) -> Option<AuditKind> {
-    use AuditKind as K;
-    [
-        K::LoginOk,
-        K::LoginFailed,
-        K::Logout,
-        K::PasswordChanged,
-        K::UserCreated,
-        K::UserUpdated,
-        K::UserDeleted,
-        K::Export,
-        K::ProjectDeleted,
-        K::BaselineCreated,
-        K::PasswordLoginChanged,
-    ]
-    .into_iter()
-    .find(|k| k.as_str() == text)
+    AuditKind::from_name(text)
 }
 
 impl PostgresAccounts {

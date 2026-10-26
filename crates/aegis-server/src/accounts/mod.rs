@@ -160,6 +160,51 @@ pub enum AuditKind {
 }
 
 impl AuditKind {
+    /// Every kind, so a backend can read a stored name back. Adding a kind
+    /// means adding it here; the test `every_kind_is_listed_and_round_trips`
+    /// fails if it is missing.
+    pub const ALL: [AuditKind; 12] = [
+        AuditKind::LoginOk,
+        AuditKind::LoginFailed,
+        AuditKind::Logout,
+        AuditKind::PasswordChanged,
+        AuditKind::UserCreated,
+        AuditKind::UserUpdated,
+        AuditKind::UserDeleted,
+        AuditKind::Export,
+        AuditKind::ProjectDeleted,
+        AuditKind::BaselineCreated,
+        AuditKind::PasswordLoginChanged,
+        AuditKind::SessionRevoked,
+    ];
+
+    /// The kind with this stored name, if there is one.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<AuditKind> {
+        AuditKind::ALL.into_iter().find(|k| k.as_str() == name)
+    }
+
+    /// A number for each kind, `0..ALL.len()`. The match has no wildcard, so
+    /// a new kind will not compile until it is numbered here, which the test
+    /// then checks against [`AuditKind::ALL`].
+    #[cfg(test)]
+    fn ordinal(self) -> usize {
+        match self {
+            AuditKind::LoginOk => 0,
+            AuditKind::LoginFailed => 1,
+            AuditKind::Logout => 2,
+            AuditKind::PasswordChanged => 3,
+            AuditKind::UserCreated => 4,
+            AuditKind::UserUpdated => 5,
+            AuditKind::UserDeleted => 6,
+            AuditKind::Export => 7,
+            AuditKind::ProjectDeleted => 8,
+            AuditKind::BaselineCreated => 9,
+            AuditKind::PasswordLoginChanged => 10,
+            AuditKind::SessionRevoked => 11,
+        }
+    }
+
     /// The stored name.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -1331,6 +1376,19 @@ mod tests {
         Accounts::open(AccountBackend::Memory(MemoryAccounts::new()), config)
             .await
             .expect("open")
+    }
+
+    #[test]
+    fn every_kind_is_listed_and_round_trips() {
+        for (i, kind) in AuditKind::ALL.into_iter().enumerate() {
+            assert_eq!(kind.ordinal(), i, "{kind:?} is out of place in ALL");
+            assert_eq!(AuditKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(AuditKind::from_name("no_such_kind"), None);
+        let mut names: Vec<_> = AuditKind::ALL.iter().map(|k| k.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), AuditKind::ALL.len(), "names are unique");
     }
 
     #[tokio::test]
