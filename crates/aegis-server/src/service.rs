@@ -18,7 +18,7 @@ use crate::accounts::service::{no_event_log, password_login_off, user_info};
 
 /// Events returned when the request names no limit.
 const DEFAULT_EVENTS: usize = 200;
-use crate::accounts::{Accounts, AuditKind, UserUpdate, bearer};
+use crate::accounts::{Accounts, AuditKind, EventLog, UserUpdate, bearer};
 use crate::actor::{Accepted, Event, OpenData, RiskReport, Subscription};
 use crate::auth::{AuthMethod, Principal};
 use crate::error::ServerError;
@@ -45,6 +45,9 @@ pub struct AegisService<S> {
     registry: Arc<Registry<S>>,
     /// Password accounts, when the server runs with `AEGIS_AUTH=password`.
     accounts: Option<Arc<Accounts>>,
+    /// The event log. Present with password accounts and, for company login
+    /// or development servers, through [`with_event_log`](Self::with_event_log).
+    events: Option<EventLog>,
 }
 
 impl<S: ProjectStore> AegisService<S> {
@@ -54,6 +57,7 @@ impl<S: ProjectStore> AegisService<S> {
         AegisService {
             registry,
             accounts: None,
+            events: None,
         }
     }
 
@@ -61,8 +65,24 @@ impl<S: ProjectStore> AegisService<S> {
     /// `ChangePassword`, and puts logins and exports in their event log.
     #[must_use]
     pub fn with_accounts(mut self, accounts: Arc<Accounts>) -> Self {
+        self.events = Some(accounts.event_log());
         self.accounts = Some(accounts);
         self
+    }
+
+    /// Gives a server without password accounts (company login only, or
+    /// development login) an event log: exports, baselines and project
+    /// deletions are recorded, and an administrator can read them.
+    #[must_use]
+    pub fn with_event_log(mut self, events: EventLog) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    /// The event log, if the server keeps one.
+    #[must_use]
+    pub fn event_log(&self) -> Option<&EventLog> {
+        self.events.as_ref()
     }
 
     fn accounts(&self) -> Result<&Accounts, Status> {
@@ -93,9 +113,9 @@ impl<S: ProjectStore> AegisService<S> {
     }
 
     async fn audit(&self, who: &Principal, kind: AuditKind, target: &str, detail: &str) {
-        match &self.accounts {
-            Some(a) => a.audit(&who.subject, kind, target, detail).await,
-            // Without an account store the event goes to the server log.
+        match &self.events {
+            Some(log) => log.record(&who.subject, kind, target, detail).await,
+            // Without an event log the event goes to the server log.
             None => tracing::info!(
                 actor = %who.subject,
                 kind = kind.as_str(),
@@ -638,12 +658,15 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         if !who.admin {
             return Err(ServerError::NotAdmin.into());
         }
-        let accounts = self.accounts.as_deref().ok_or_else(no_event_log)?;
+        let log = self.events.as_ref().ok_or_else(no_event_log)?;
         let limit = match request.get_ref().limit {
             0 => DEFAULT_EVENTS,
             n => usize::try_from(n).unwrap_or(usize::MAX),
         };
-        let events = accounts.recent_events(limit).await?;
+        let events = log
+            .recent(limit)
+            .await
+            .map_err(crate::accounts::AccountError::from)?;
         Ok(Response::new(pb::ListEventsResponse {
             events: events
                 .into_iter()

@@ -13,6 +13,9 @@ use uuid::Uuid;
 use super::{AuditEvent, AuditKind, LoadedAccounts, SessionKey, SessionRecord, UserRecord};
 use crate::store::StoreFault;
 
+/// Rows one trim statement deletes at most.
+const TRIM_BATCH: i64 = 5000;
+
 /// Accounts in PostgreSQL.
 #[derive(Clone)]
 pub struct PostgresAccounts {
@@ -271,5 +274,45 @@ impl PostgresAccounts {
                 }))
             })
             .collect()
+    }
+
+    /// Removes events older than `cutoff_ms`, then the oldest beyond `keep`.
+    ///
+    /// Works in batches from the oldest rows in primary key order. Events
+    /// are written in time order, so a batch with a young row ends the age
+    /// pass: a log with nothing old costs one indexed read of
+    /// [`TRIM_BATCH`] rows, and no call holds a long lock.
+    pub(super) async fn trim_events(&self, cutoff_ms: u64, keep: usize) -> Result<u64, StoreFault> {
+        let client = self.client().await?;
+        let cutoff = to_i64(cutoff_ms)?;
+        let mut removed = 0u64;
+        loop {
+            let n = client
+                .execute(
+                    "DELETE FROM aegis_event WHERE at_ms < $2 AND event_id IN (
+                         SELECT event_id FROM aegis_event
+                         WHERE org_id = $1
+                         ORDER BY event_id LIMIT $3)",
+                    &[&self.org, &cutoff, &TRIM_BATCH],
+                )
+                .await
+                .map_err(backend)?;
+            removed += n;
+            if n < TRIM_BATCH as u64 {
+                break;
+            }
+        }
+        // The row cap: delete everything older than the keep-th newest id.
+        let keep = to_i64(keep as u64)?;
+        let n = client
+            .execute(
+                "DELETE FROM aegis_event WHERE org_id = $1 AND event_id < (
+                     SELECT event_id FROM aegis_event WHERE org_id = $1
+                     ORDER BY event_id DESC OFFSET $2 LIMIT 1)",
+                &[&self.org, &(keep - 1).max(0)],
+            )
+            .await
+            .map_err(backend)?;
+        Ok(removed + n)
     }
 }

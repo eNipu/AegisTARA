@@ -29,6 +29,7 @@
 //! Lock order (C3): `state` and `throttle` are never held together and never
 //! across an `.await` (C2).
 
+pub mod events;
 pub mod memory;
 pub mod password;
 pub mod postgres;
@@ -44,6 +45,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
+pub use events::{EventLog, Retention};
 pub use memory::MemoryAccounts;
 pub use password::PasswordRule;
 pub use postgres::PostgresAccounts;
@@ -274,6 +276,16 @@ impl AccountBackend {
     /// [`StoreFault`] from the backend.
     pub async fn recent_events(&self, limit: usize) -> Result<Vec<AuditEvent>, StoreFault> {
         dispatch!(self, b => b.recent_events(limit).await)
+    }
+
+    /// Removes events older than `cutoff_ms`, then the oldest ones beyond
+    /// `keep`. Returns how many went.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn trim_events(&self, cutoff_ms: u64, keep: usize) -> Result<u64, StoreFault> {
+        dispatch!(self, b => b.trim_events(cutoff_ms, keep).await)
     }
 }
 
@@ -507,7 +519,7 @@ pub struct UserUpdate {
 
 /// Password accounts: see the module docs.
 pub struct Accounts {
-    backend: AccountBackend,
+    backend: Arc<AccountBackend>,
     config: AccountsConfig,
     state: Mutex<State>,
     throttle: Mutex<Throttle>,
@@ -558,7 +570,7 @@ impl Accounts {
             }
         }
         Ok(Accounts {
-            backend,
+            backend: Arc::new(backend),
             hashing: Semaphore::new(config.hashing_permits.max(1)),
             config,
             state: Mutex::new(state),
@@ -582,16 +594,14 @@ impl Accounts {
     /// Writes an audit event. A failure is logged and does not fail the
     /// caller's action, which has already been stored.
     pub async fn audit(&self, actor: &str, kind: AuditKind, target: &str, detail: &str) {
-        let event = AuditEvent {
-            at_ms: self.now(),
-            actor: bounded(actor, 256),
-            kind,
-            target: bounded(target, 256),
-            detail: bounded(detail, 256),
-        };
-        if let Err(fault) = self.backend.record(&event).await {
-            tracing::error!(%fault, kind = kind.as_str(), "could not write an audit event");
-        }
+        self.event_log().record(actor, kind, target, detail).await;
+    }
+
+    /// The event log these accounts write to. It shares the backend, so the
+    /// server can read, trim and extend it without the user table.
+    #[must_use]
+    pub fn event_log(&self) -> EventLog {
+        EventLog::new(Arc::clone(&self.backend), self.config.clock_ms)
     }
 
     /// The newest audit events, newest first.
@@ -600,7 +610,7 @@ impl Accounts {
     ///
     /// [`AccountError::Store`].
     pub async fn recent_events(&self, limit: usize) -> Result<Vec<AuditEvent>, AccountError> {
-        Ok(self.backend.recent_events(limit.min(1000)).await?)
+        Ok(self.event_log().recent(limit).await?)
     }
 
     /// Number of users.

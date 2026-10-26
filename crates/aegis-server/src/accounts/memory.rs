@@ -101,4 +101,17 @@ impl MemoryAccounts {
             .cloned()
             .collect())
     }
+
+    pub(super) async fn trim_events(&self, cutoff_ms: u64, keep: usize) -> Result<u64, StoreFault> {
+        let mut inner = self.inner();
+        let before = inner.events.len();
+        // Events are appended in time order, so the old ones are at the front.
+        while inner.events.front().is_some_and(|e| e.at_ms < cutoff_ms) {
+            inner.events.pop_front();
+        }
+        while inner.events.len() > keep {
+            inner.events.pop_front();
+        }
+        Ok((before - inner.events.len()) as u64)
+    }
 }
