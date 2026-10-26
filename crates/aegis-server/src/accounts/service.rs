@@ -112,6 +112,7 @@ impl AccountError {
             AccountError::InvalidUsername => "invalid_username",
             AccountError::InvalidDisplayName => "invalid_display_name",
             AccountError::UnknownUser => "unknown_user",
+            AccountError::UnknownSession => "unknown_session",
             AccountError::UserExists => "user_exists",
             AccountError::LastAdmin => "last_admin",
             AccountError::PasswordLoginOff => "password_login_off",
@@ -130,7 +131,7 @@ impl AccountError {
             AccountError::Rule(_)
             | AccountError::InvalidUsername
             | AccountError::InvalidDisplayName => Code::InvalidArgument,
-            AccountError::UnknownUser => Code::NotFound,
+            AccountError::UnknownUser | AccountError::UnknownSession => Code::NotFound,
             AccountError::UserExists => Code::AlreadyExists,
             AccountError::LastAdmin
             | AccountError::PasswordLoginOff
@@ -156,6 +157,17 @@ impl From<AccountError> for Status {
         }
         status
     }
+}
+
+/// The refusal when the server keeps no event log.
+#[must_use]
+pub fn no_event_log() -> Status {
+    let mut status = Status::failed_precondition("this server keeps no event log");
+    status.metadata_mut().insert(
+        ERROR_CODE_HEADER,
+        MetadataValue::from_static("no_event_log"),
+    );
+    status
 }
 
 /// The refusal when password login is off.

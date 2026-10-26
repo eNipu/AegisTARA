@@ -34,8 +34,8 @@ pub use license::{
     MAX_SEATS, SKEW,
 };
 pub use manifest::{
-    Artifact, MANIFEST_PREFIX, MAX_ARTIFACT_BYTES, MAX_ARTIFACTS, MAX_MANIFEST_BYTES, Manifest,
-    ManifestError, Offer, Version,
+    Artifact, DownloadCheck, MANIFEST_PREFIX, MAX_ARTIFACT_BYTES, MAX_ARTIFACTS,
+    MAX_MANIFEST_BYTES, Manifest, ManifestError, Offer, Version,
 };
 pub use seats::{Admission, SeatLedger};
 

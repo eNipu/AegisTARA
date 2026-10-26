@@ -14,8 +14,11 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use crate::accounts::service::{password_login_off, user_info};
-use crate::accounts::{Accounts, AuditKind, UserUpdate, bearer};
+use crate::accounts::service::{no_event_log, password_login_off, user_info};
+
+/// Events returned when the request names no limit.
+const DEFAULT_EVENTS: usize = 200;
+use crate::accounts::{Accounts, AuditKind, EventLog, UserUpdate, bearer};
 use crate::actor::{Accepted, Event, OpenData, RiskReport, Subscription};
 use crate::auth::{AuthMethod, Principal};
 use crate::error::ServerError;
@@ -42,6 +45,9 @@ pub struct AegisService<S> {
     registry: Arc<Registry<S>>,
     /// Password accounts, when the server runs with `AEGIS_AUTH=password`.
     accounts: Option<Arc<Accounts>>,
+    /// The event log. Present with password accounts and, for company login
+    /// or development servers, through [`with_event_log`](Self::with_event_log).
+    events: Option<EventLog>,
 }
 
 impl<S: ProjectStore> AegisService<S> {
@@ -51,6 +57,7 @@ impl<S: ProjectStore> AegisService<S> {
         AegisService {
             registry,
             accounts: None,
+            events: None,
         }
     }
 
@@ -58,8 +65,24 @@ impl<S: ProjectStore> AegisService<S> {
     /// `ChangePassword`, and puts logins and exports in their event log.
     #[must_use]
     pub fn with_accounts(mut self, accounts: Arc<Accounts>) -> Self {
+        self.events = Some(accounts.event_log());
         self.accounts = Some(accounts);
         self
+    }
+
+    /// Gives a server without password accounts (company login only, or
+    /// development login) an event log: exports, baselines and project
+    /// deletions are recorded, and an administrator can read them.
+    #[must_use]
+    pub fn with_event_log(mut self, events: EventLog) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    /// The event log, if the server keeps one.
+    #[must_use]
+    pub fn event_log(&self) -> Option<&EventLog> {
+        self.events.as_ref()
     }
 
     fn accounts(&self) -> Result<&Accounts, Status> {
@@ -90,9 +113,9 @@ impl<S: ProjectStore> AegisService<S> {
     }
 
     async fn audit(&self, who: &Principal, kind: AuditKind, target: &str, detail: &str) {
-        match &self.accounts {
-            Some(a) => a.audit(&who.subject, kind, target, detail).await,
-            // Without an account store the event goes to the server log.
+        match &self.events {
+            Some(log) => log.record(&who.subject, kind, target, detail).await,
+            // Without an event log the event goes to the server log.
             None => tracing::info!(
                 actor = %who.subject,
                 kind = kind.as_str(),
@@ -625,6 +648,68 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             .set_password_login(&who.subject, request.get_ref().enabled)
             .await?;
         Ok(Response::new(self.server_settings()))
+    }
+
+    async fn list_events(
+        &self,
+        request: Request<pb::ListEventsRequest>,
+    ) -> Result<Response<pb::ListEventsResponse>, Status> {
+        let who = Principal::of(&request)?.clone();
+        if !who.admin {
+            return Err(ServerError::NotAdmin.into());
+        }
+        let log = self.events.as_ref().ok_or_else(no_event_log)?;
+        let limit = match request.get_ref().limit {
+            0 => DEFAULT_EVENTS,
+            n => usize::try_from(n).unwrap_or(usize::MAX),
+        };
+        let events = log
+            .recent(limit)
+            .await
+            .map_err(crate::accounts::AccountError::from)?;
+        Ok(Response::new(pb::ListEventsResponse {
+            events: events
+                .into_iter()
+                .map(|e| pb::EventInfo {
+                    at_ms: e.at_ms,
+                    actor: e.actor,
+                    kind: e.kind.as_str().to_owned(),
+                    target: e.target,
+                    detail: e.detail,
+                })
+                .collect(),
+        }))
+    }
+
+    async fn list_sessions(
+        &self,
+        request: Request<pb::ListSessionsRequest>,
+    ) -> Result<Response<pb::ListSessionsResponse>, Status> {
+        let (accounts, _) = self.admin_accounts(&request)?;
+        Ok(Response::new(pb::ListSessionsResponse {
+            sessions: accounts
+                .list_sessions()
+                .iter()
+                .map(|s| pb::SessionInfo {
+                    id: s.key.id(),
+                    username: s.username.clone(),
+                    client_name: s.client_name.clone(),
+                    created_ms: s.created_ms,
+                    expires_ms: s.expires_ms,
+                })
+                .collect(),
+        }))
+    }
+
+    async fn revoke_session(
+        &self,
+        request: Request<pb::RevokeSessionRequest>,
+    ) -> Result<Response<pb::RevokeSessionResponse>, Status> {
+        let (accounts, who) = self.admin_accounts(&request)?;
+        accounts
+            .revoke_session(&who.subject, &request.get_ref().id)
+            .await?;
+        Ok(Response::new(pb::RevokeSessionResponse {}))
     }
 
     async fn list_users(

@@ -1273,6 +1273,7 @@ without credentials.
 | Exports | `RecordExport` (writes an audit event; the file is made on the client) |
 | Me | `WhoAmI`, `LogOut`, `ChangePassword` |
 | Users (admin) | `ListUsers`, `CreateUser`, `UpdateUser`, `DeleteUser` |
+| Event log (admin) | `ListEvents` (limit 0 = 200, capped at 1000; newest first; `no_event_log` when the server has no accounts) |
 | Login switch | `GetServerSettings` (any logged-in user), `SetPasswordLogin` (admin). `ServerSettings { password_login_enabled, company_login_available }` |
 
 `Watch` sends a `Heartbeat` every `heartbeat` (default 20 s) so proxies that
@@ -1559,17 +1560,19 @@ ops inside the window, from the `aegis_project_op_time` index) and calls
 | `transport.rs` | `TransportKind { Grpc, GrpcWeb }`, `Transport { Grpc(Channel), Web { client, origin } }`, `check_url()` | `auto`: gRPC-Web for `https://`, gRPC otherwise. HTTPS uses rustls with the OS trust store. `CONNECT_TIMEOUT = 10 s`, `CALL_TIMEOUT = 30 s`. |
 | `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name, password_enabled }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` holds the token and sends it as `authorization: Bearer`. |
 | `error.rs` | `ClientError`, `ServerCode` | `ServerCode` maps status details to cases the UI can explain (`InvalidCredentials`, `Throttled { retry_after_s }`, `PasswordLoginOff`, `LockHeld`, ...). |
-| `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, watch_silence }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
+| `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, watch_silence, update_url, update_checker }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s (`LoadEvents` among them) and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
 | `workspace.rs` | `Workspace`, `Submission`, `Origin`, `WorkspaceError`, `MAX_SUBMIT_OPS` | Optimistic local copy. Local ops apply at once and are kept with their inverses until the server confirms. Pending ops are sent in batches of at most `MAX_SUBMIT_OPS`, so a long offline queue is never rejected as too large. |
 | `commands.rs` | `Edit`, `EditError`, `Command` | `Edit` is a user intent (add asset, rate a step, link a control, ...). It expands to model `Op`s, including safe cascades (deleting an asset first unlinks what uses it). `Command` is everything the UI can ask of the session. |
 | `outline.rs` | `OutlineError`, `parse()`, `render()` | Text outline editor for attack trees (indent = child, `OR`/`AND`/`SEQ` gates, `- ` steps; lines with the same text are one shared node). |
 | `pages.rs` | `Vocabulary`, `Overview`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
 | `view.rs` | `Page` (13 pages), `Selection`, `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice` | What the window shows for the current page and selection. |
-| `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` | The whole UI state, published on a `watch` channel. |
+| `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` (`ViewModel` also has `events`, `events_error`; `LicenseView` has dates, features and `lines()`) | The whole UI state, published on a `watch` channel. |
 | `report.rs` | `ExportKind { Report, RiskRegister, TreeSvg }`, `ReportContext` | Builds export files on the client. Text is escaped for HTML and CSV (formula injection guarded). |
-| `settings.rs` | `Settings { server_url, transport, username, export_dir }`, `export_file_name()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic write. Never a password or token. |
+| `settings.rs` | `Settings { server_url, transport, username, export_dir, update_url }`, `export_file_name()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic write. Never a password or token. |
 | `time.rs` | `date_ms()`, `date_time_ms()` | UTC dates without a time crate. |
-| `updates.rs` | `UpdateChecker`, `UpdateOffer`, `UpdateStatus` | Signed update manifest check. |
+| `pdf.rs` | `ReportDoc`, `Block`, `Style`, `report_doc`, `report_pdf`, `PdfError`, `MAX_PAGES` | The report as a PDF (job 050): blocks, A4 layout with real glyph widths, tables that continue with their header row, footer with watermark and page numbers. `krilla` writes the file, Inter (OFL) is embedded. |
+| `audit.rs` | `EventRow`, `EventGroup { Logins, Exports, AdminActions, Other }`, `event_row`, `filter` | Event log entries in plain words, for the administration page (job 049). |
+| `updates.rs` | `UpdateChecker`, `UpdateOffer`, `UpdateStatus`, `UpdateError`, `fetch_manifest` | Signed update manifest check. `fetch_manifest` GETs it over HTTPS with the `aegis-auth` client (no redirects, 10 s, 1 MiB; manifest at most 32 KiB; `https://` or loopback `http://` only). `Command::CheckForUpdates` runs it in the background and answers with a notice. The address is `Settings.update_url`, or `AEGIS_UPDATE_URL`; empty means none (air gapped). |
 | `examples/smoke.rs` | | Smoke test of a running server: login options, password login, `WhoAmI`, `ListProjects`, logout (`docs/railway.md`). |
 
 ### II.5.2 Edit flow
@@ -1621,6 +1624,7 @@ then calls `RecordExport`, so the server's event log shows who exported what.
 | `src/provider.rs` | `AppProvider { Oidc, Password, Dev }`, `OidcProvider`, `OidcSettings`, `PasswordProvider` | Credentials for each call. `PasswordProvider` can keep the session token in the OS keychain ("keep me logged in"); the password itself is never stored. |
 | `src/headless.rs` | `Headless`, `Frame` | Software-rendered window for tests and screenshots. |
 | `ui/app.slint` | `AppWindow` | Menu bar (File, Edit, View, Project, Admin, Help), TARA steps sidebar, one page per `Page`, inspector panel, status band. Connection screens: `connection` 4 = server, 3 = log in, 1 = online. |
+| `ui/canvas.slint` | `Canvas`, `DrawItem`, `AccessNode` | Draws the display list. For screen readers the focusable area is a `list` with one `list-item` per node on screen (`AccessNode`: box, sentence, selected, position, count), made by `aegis_canvas::access::visible` in `Controller::redraw`; the default action selects the node. The canvas label is the selected node's sentence. |
 | `ui/widgets.slint` | shared widgets | Buttons, fields, cards, badges, icons. |
 | `ui/icons/*.svg` | | Lucide icons, ISC license (`ui/icons/LICENSE-lucide.txt`), allowed by the license policy (D5). |
 
@@ -1656,9 +1660,9 @@ else".
 
 | Crate | Main types | Role |
 |---|---|---|
-| `aegis-auth` | `OidcClient`, `Session<H, S>`, `Authenticator<H>`, `AccessTokenValidator<H>`, `DpopVerifier`, `DeviceKey`, `JwksCache<H>`, `Vault<S>`, `OsKeychain`, `HyperClient`, `tls::{system_roots, client_config, https_connector}` | OIDC with PKCE and DPoP for SSO, token validation on the server, keychain access, and the shared rustls setup (OS trust store, ring). |
+| `aegis-auth` | `OidcClient`, `Session<H, S>`, `Authenticator<H>`, `AccessTokenValidator<H>`, `DpopVerifier`, `DeviceKey`, `JwksCache<H>`, `Vault<S>`, `OsKeychain`, `HyperClient`, `tls::{system_roots, client_config, config_with_roots, https_connector, https_connector_with}`, `HyperClient::with_tls_config` | OIDC with PKCE and DPoP for SSO, token validation on the server, keychain access, and the shared rustls setup (OS trust store, ring). |
 | `aegis-license` | `License`, `LicenseState`, `TrustedKeys`, `Issuer`, `SeatLedger`, `Admission`, `Manifest`, `Version`, `Artifact`, `Offer` | Signed license tokens, seat counting (`restore()` after restart), signed update manifests. |
-| `aegis-canvas` | `Scene`, `Layout`, `Forest`, `DisplayList`, `Item`, `Viewport`, `SpatialIndex`, `Tone`, `Paint`, `Stroke`, `SvgOptions`, `RenderOptions` | Attack tree layout, hit testing, pixel and SVG drawing. `Tone` is `Ord`, so it can be a sort key. |
+| `aegis-canvas` | `access::{NodeAccess, VisibleNode, describe, sentence, visible}`, `Scene`, `Layout`, `Forest`, `DisplayList`, `Item`, `Viewport`, `SpatialIndex`, `Tone`, `Paint`, `Stroke`, `SvgOptions`, `RenderOptions` | Attack tree layout, hit testing, pixel and SVG drawing. `Tone` is `Ord`, so it can be a sort key. |
 | `aegis-proto` | generated | `tonic` and `prost` code from `aegis.proto`. |
 
 ## II.8 Deployment

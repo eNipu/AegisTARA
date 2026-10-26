@@ -111,6 +111,8 @@ pub struct Scene {
     /// `edge_start[v]..edge_start[v + 1]` are the edges leaving `v`.
     edge_start: Vec<u32>,
     edge_critical: Vec<bool>,
+    /// How many shared (dashed) edges end at each node.
+    shared_in: Vec<u32>,
     root: u32,
     bounds: Rect,
     node_index: SpatialIndex,
@@ -163,6 +165,10 @@ impl Scene {
             }
         }
         edge_start.push(edges.len() as u32);
+        let mut shared_in = vec![0u32; n];
+        for e in edges.iter().filter(|e| e.link) {
+            shared_in[e.to as usize] += 1;
+        }
 
         let root = tree.root().index() as u32;
         let forest = Forest::from_children(&owned);
@@ -194,6 +200,7 @@ impl Scene {
             edges,
             edge_start,
             edge_critical: vec![false; 0],
+            shared_in,
             root,
             bounds: Rect::default(),
             node_index: SpatialIndex::default(),
@@ -307,6 +314,43 @@ impl Scene {
     #[must_use]
     pub fn edges(&self) -> &[Edge] {
         &self.edges
+    }
+
+    /// The edges leaving a node (to its children, owned and shared), in
+    /// display order. Time O(1).
+    #[must_use]
+    pub fn edges_from(&self, v: u32) -> &[Edge] {
+        let (Some(a), Some(b)) = (
+            self.edge_start.get(v as usize),
+            self.edge_start.get(v as usize + 1),
+        ) else {
+            return &[];
+        };
+        &self.edges[*a as usize..*b as usize]
+    }
+
+    /// The children a node owns, in display order. Time O(1).
+    #[must_use]
+    pub fn owned_children(&self, v: u32) -> &[u32] {
+        if (v as usize) < self.len() {
+            self.forest.children(v)
+        } else {
+            &[]
+        }
+    }
+
+    /// How many other nodes reach this one through a shared (dashed) edge.
+    /// Time O(1).
+    #[must_use]
+    pub fn shared_in(&self, v: u32) -> u32 {
+        self.shared_in.get(v as usize).copied().unwrap_or(0)
+    }
+
+    /// The node that owns `v` as a position, if it is not the root.
+    /// Time O(1).
+    #[must_use]
+    pub fn owner_pos(&self, v: u32) -> Option<u32> {
+        self.owner.get(v as usize).copied().flatten()
     }
 
     /// Whether the edge is on the highlighted path.

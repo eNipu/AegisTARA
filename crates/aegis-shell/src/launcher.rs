@@ -425,6 +425,13 @@ impl Launcher {
         };
         let forget = Arc::clone(&provider);
         let mut config = SessionConfig::new(user).with_transport(kind);
+        config.update_url = std::env::var("AEGIS_UPDATE_URL")
+            .ok()
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| self.settings.borrow().update_url.clone());
+        if let Some(dir) = std::env::var_os("AEGIS_UPDATE_DIR").filter(|d| !d.is_empty()) {
+            config.update_dir = aegis_client::updates::DownloadDir::Folder(dir.into());
+        }
         config.on_log_out = Some(LogOutHook(Arc::new(move || {
             if let AppProvider::Password(p) = &*forget {
                 p.forget();
