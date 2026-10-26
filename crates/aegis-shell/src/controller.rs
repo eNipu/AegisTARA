@@ -56,6 +56,8 @@ struct State {
     user: Option<usize>,
     /// The event log filter chosen on the administration page.
     event_group: Option<EventGroup>,
+    /// The session row chosen on the administration page (job 055).
+    session: Option<usize>,
 }
 
 /// A password login request: user, password, keep the login.
@@ -192,6 +194,7 @@ impl Controller {
                 baseline: None,
                 user: None,
                 event_group: None,
+                session: None,
             }),
             hooks,
         });
@@ -874,6 +877,21 @@ impl Controller {
             c.state.borrow_mut().user = pos(i);
             c.apply_users();
         });
+        on!(on_refresh_sessions, |c| c.send(Command::LoadSessions));
+        on!(on_pick_session, |c, i| {
+            c.state.borrow_mut().session = pos(i);
+            c.apply_sessions();
+        });
+        on!(
+            on_revoke_session,
+            |c| if let Some(row) = c.selected_session() {
+                c.state.borrow_mut().session = None;
+                c.send(Command::Admin(AdminAction::RevokeSession {
+                    id: row.id,
+                    username: row.user,
+                }));
+            }
+        );
         on!(on_create_user, |c,
                              username,
                              display_name,
@@ -968,6 +986,11 @@ impl Controller {
 
     fn shown_tree(&self) -> Option<TreeId> {
         self.with_project(|p| p.tree.as_ref().map(|t| t.tree))
+    }
+
+    fn selected_session(&self) -> Option<aegis_client::audit::SessionRow> {
+        let i = self.state.borrow().session?;
+        self.view()?.sessions.get(i).cloned()
     }
 
     fn selected_user(&self) -> Option<aegis_client::state::UserRow> {
@@ -1265,6 +1288,7 @@ impl Controller {
             w.set_company_login_available(settings.company_login_available);
         }
         self.apply_users();
+        self.apply_sessions();
         self.apply_events();
 
         let Some(project) = view.project.as_ref() else {
@@ -1718,6 +1742,35 @@ impl Controller {
                 .collect(),
         ));
         w.set_last_export(s(p.last_export.as_deref().unwrap_or("")));
+    }
+
+    fn apply_sessions(&self) {
+        let (Some(w), Some(view)) = (self.window.upgrade(), self.view()) else {
+            return;
+        };
+        w.set_session_rows(rows(
+            view.sessions
+                .iter()
+                .map(|r| {
+                    vec![
+                        r.user.clone(),
+                        r.device.clone(),
+                        r.started.clone(),
+                        r.expires.clone(),
+                    ]
+                })
+                .collect(),
+        ));
+        let mut st = self.state.borrow_mut();
+        if st.session.is_some_and(|i| i >= view.sessions.len()) {
+            st.session = None;
+        }
+        w.set_session_selected(st.session.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1));
+        w.set_sessions_text(s(if view.sessions.is_empty() {
+            "No open sessions."
+        } else {
+            ""
+        }));
     }
 
     fn apply_users(&self) {

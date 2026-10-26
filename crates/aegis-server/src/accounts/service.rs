@@ -112,6 +112,7 @@ impl AccountError {
             AccountError::InvalidUsername => "invalid_username",
             AccountError::InvalidDisplayName => "invalid_display_name",
             AccountError::UnknownUser => "unknown_user",
+            AccountError::UnknownSession => "unknown_session",
             AccountError::UserExists => "user_exists",
             AccountError::LastAdmin => "last_admin",
             AccountError::PasswordLoginOff => "password_login_off",
@@ -130,7 +131,7 @@ impl AccountError {
             AccountError::Rule(_)
             | AccountError::InvalidUsername
             | AccountError::InvalidDisplayName => Code::InvalidArgument,
-            AccountError::UnknownUser => Code::NotFound,
+            AccountError::UnknownUser | AccountError::UnknownSession => Code::NotFound,
             AccountError::UserExists => Code::AlreadyExists,
             AccountError::LastAdmin
             | AccountError::PasswordLoginOff

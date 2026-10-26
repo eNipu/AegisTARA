@@ -201,6 +201,30 @@ async fn a_user_logs_in_with_a_password_and_out_again() {
     );
     window.set_admin_tab(1);
     common_save(&headless.render(), "l03b-admin-events");
+
+    // The sessions tab (job 055): the admin's own session is listed; ending
+    // it is a log out, so only look and select here.
+    window.set_admin_tab(2);
+    window.invoke_refresh_sessions();
+    until(&headless, &launcher, "sessions", || {
+        window.get_session_rows().row_count() >= 1
+    })
+    .await;
+    let first = window
+        .get_session_rows()
+        .row_data(0)
+        .expect("row")
+        .row_data(0)
+        .expect("cell")
+        .text
+        .to_string();
+    assert_eq!(first, "admin");
+    window.invoke_pick_session(0);
+    until(&headless, &launcher, "selected", || {
+        window.get_session_selected() == 0
+    })
+    .await;
+    common_save(&headless.render(), "l03c-admin-sessions");
     window.set_admin_tab(0);
 
     // Log out: back to the password form, and the old token is gone.

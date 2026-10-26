@@ -758,3 +758,52 @@ async fn stress_many_writers_and_a_trimmer_keep_the_event_log_bounded() {
     let newest = log.recent(1).await.expect("recent");
     assert_eq!(newest.len(), 1);
 }
+
+/// An ended session stays ended after a restart (job 055).
+#[tokio::test]
+async fn an_ended_session_stays_ended_after_a_restart_in_postgres() {
+    let Some(f) = fresh().await else { return };
+    let backend = || AccountBackend::Postgres(PostgresAccounts::new(f.store.pool(), f.store.org()));
+    let accounts = Accounts::open(backend(), AccountsConfig::default())
+        .await
+        .expect("open");
+    accounts
+        .bootstrap_admin("root", "root long password")
+        .await
+        .expect("root");
+    accounts
+        .create_user("root", "bob", "", "bobs long password", false)
+        .await
+        .expect("bob");
+    let keep = accounts
+        .log_in("bob", "bobs long password", "keeps")
+        .await
+        .expect("keep");
+    let end = accounts
+        .log_in("bob", "bobs long password", "ends")
+        .await
+        .expect("end");
+    let id = accounts
+        .list_sessions()
+        .iter()
+        .find(|s| s.client_name == "ends")
+        .map(|s| s.key.id())
+        .expect("listed");
+    accounts.revoke_session("root", &id).await.expect("revoke");
+    assert!(accounts.authenticate(&end.token).is_none());
+
+    let again = Accounts::open(backend(), AccountsConfig::default())
+        .await
+        .expect("reopen");
+    assert!(again.authenticate(&end.token).is_none(), "still ended");
+    assert!(again.authenticate(&keep.token).is_some(), "the other stays");
+    assert_eq!(again.list_sessions().len(), 1);
+    let kinds: Vec<AuditKind> = again
+        .recent_events(10)
+        .await
+        .expect("events")
+        .iter()
+        .map(|e| e.kind)
+        .collect();
+    assert!(kinds.contains(&AuditKind::SessionRevoked));
+}

@@ -681,6 +681,37 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         }))
     }
 
+    async fn list_sessions(
+        &self,
+        request: Request<pb::ListSessionsRequest>,
+    ) -> Result<Response<pb::ListSessionsResponse>, Status> {
+        let (accounts, _) = self.admin_accounts(&request)?;
+        Ok(Response::new(pb::ListSessionsResponse {
+            sessions: accounts
+                .list_sessions()
+                .iter()
+                .map(|s| pb::SessionInfo {
+                    id: s.key.id(),
+                    username: s.username.clone(),
+                    client_name: s.client_name.clone(),
+                    created_ms: s.created_ms,
+                    expires_ms: s.expires_ms,
+                })
+                .collect(),
+        }))
+    }
+
+    async fn revoke_session(
+        &self,
+        request: Request<pb::RevokeSessionRequest>,
+    ) -> Result<Response<pb::RevokeSessionResponse>, Status> {
+        let (accounts, who) = self.admin_accounts(&request)?;
+        accounts
+            .revoke_session(&who.subject, &request.get_ref().id)
+            .await?;
+        Ok(Response::new(pb::RevokeSessionResponse {}))
+    }
+
     async fn list_users(
         &self,
         request: Request<pb::ListUsersRequest>,

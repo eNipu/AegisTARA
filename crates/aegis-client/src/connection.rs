@@ -470,6 +470,34 @@ impl<P: CredentialProvider> Connection<P> {
             .events)
     }
 
+    /// The open sessions (admin, password login).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn sessions(&self) -> Result<Vec<pb::SessionInfo>, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .list_sessions(pb::ListSessionsRequest {})
+            .await?
+            .into_inner()
+            .sessions)
+    }
+
+    /// Ends one session by its ID (admin).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`]; `unknown_session` if it ended already.
+    pub async fn revoke_session(&self, id: &str) -> Result<(), ClientError> {
+        self.client
+            .clone()
+            .revoke_session(pb::RevokeSessionRequest { id: id.to_owned() })
+            .await?;
+        Ok(())
+    }
+
     /// The login switch.
     ///
     /// # Errors

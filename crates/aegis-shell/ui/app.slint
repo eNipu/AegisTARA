@@ -259,8 +259,11 @@ export component AppWindow inherits Window {
     in property <bool> selected-user-admin;
     in property <bool> selected-user-disabled;
     in property <string> admin-text;
-    // The event log tab (job 049): 0 users and login, 1 event log.
+    // The event log tab (job 049): 0 users and login, 1 event log, 2 sessions.
     in-out property <int> admin-tab: 0;
+    in property <[[StandardListViewItem]]> session-rows;
+    in property <int> session-selected: -1;
+    in property <string> sessions-text;
     in property <[[StandardListViewItem]]> event-rows;
     in property <int> event-filter: 0;
     in property <string> events-text;
@@ -408,6 +411,9 @@ export component AppWindow inherits Window {
     callback toggle-user-disabled();
     callback reset-user-password(string);
     callback delete-user();
+    callback refresh-sessions();
+    callback pick-session(int);
+    callback revoke-session();
     callback break-lock();
     callback set-password-login(bool);
     callback set-event-filter(int);
@@ -456,6 +462,7 @@ export component AppWindow inherits Window {
         if (kind == "remove-goal") { root.remove-goal(); }
         if (kind == "remove-claim") { root.remove-claim(); }
         if (kind == "delete-user") { root.delete-user(); }
+        if (kind == "revoke-session") { root.revoke-session(); }
         if (kind == "delete-project") { root.delete-project(); }
         if (kind == "break-lock") { root.break-lock(); }
         if (kind == "password-login-off") { root.set-password-login(false); }
@@ -1589,6 +1596,7 @@ export component AppWindow inherits Window {
                             spacing: 6px;
                             Button { text: "Users and login"; icon: @image-url("icons/users.svg"); primary: root.admin-tab == 0; clicked => { root.admin-tab = 0; } }
                             Button { text: "Event log"; icon: @image-url("icons/scroll-text.svg"); primary: root.admin-tab == 1; clicked => { root.admin-tab = 1; root.refresh-events(); } }
+                            Button { text: "Sessions"; icon: @image-url("icons/shield.svg"); primary: root.admin-tab == 2; clicked => { root.admin-tab = 2; root.refresh-sessions(); } }
                         }
                         if root.admin-tab == 0: VerticalLayout {
                             spacing: 10px;
@@ -1675,6 +1683,24 @@ export component AppWindow inherits Window {
                                 selected: -1;
                             }
                             if root.events-text != "": Text { text: root.events-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
+                        }
+                        if root.admin-tab == 2: VerticalLayout {
+                            spacing: 8px;
+                            if !root.is-password: Text { text: "Sessions are managed by the company identity provider."; color: Theme.graphite; wrap: word-wrap; }
+                            if root.is-password: HorizontalLayout {
+                                spacing: 6px;
+                                Text { text: "Open password sessions, newest first. Ending one logs that device out at its next request."; color: Theme.graphite; wrap: word-wrap; font-size: 13px; horizontal-stretch: 1; }
+                                Button { text: "Refresh"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-sessions(); } }
+                            }
+                            if root.is-password: Table {
+                                label: "Sessions";
+                                columns: [{ title: "User", horizontal-stretch: 2 }, { title: "Device", horizontal-stretch: 3 }, { title: "Started (UTC)", horizontal-stretch: 4 }, { title: "Ends (UTC)", horizontal-stretch: 4 }];
+                                rows: root.session-rows;
+                                selected: root.session-selected;
+                                picked(i) => { root.pick-session(i); }
+                            }
+                            if root.is-password && root.session-selected >= 0: Button { text: "End this session"; icon: @image-url("icons/log-out.svg"); clicked => { root.confirm("revoke-session", "End this session? That device is logged out at its next request."); } }
+                            if root.is-password && root.sessions-text != "": Text { text: root.sessions-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
                         }
                     }
                     Panel {
