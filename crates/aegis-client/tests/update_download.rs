@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use aegis_auth::http::HyperClient;
 use aegis_auth::tls::config_with_roots;
-use aegis_client::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
+use aegis_client::updates::{DownloadDir, UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use aegis_license::{Artifact, Issuer, Manifest, TrustedKeys, Version};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -164,7 +164,7 @@ async fn a_good_installer_is_saved_checked_and_named_from_the_signed_fields() {
     let mut last = 0u64;
     let mut calls = 0u32;
     let path = offer
-        .download(&trusting_client(), &dir, |n| {
+        .download(&trusting_client(), &DownloadDir::Folder(dir.clone()), |n| {
             assert!(n > last, "progress only grows");
             last = n;
             calls += 1;
@@ -196,7 +196,11 @@ async fn a_file_with_the_right_size_and_wrong_bytes_is_deleted() {
     let offer = offer_for(&base, &data);
     let dir = temp_dir();
     let err = offer
-        .download(&trusting_client(), &dir, |_| {})
+        .download(
+            &trusting_client(),
+            &DownloadDir::Folder(dir.clone()),
+            |_| {},
+        )
         .await
         .expect_err("refused");
     assert!(matches!(err, UpdateError::DownloadMismatch), "{err:?}");
@@ -216,7 +220,11 @@ async fn too_many_bytes_and_too_few_are_both_refused_and_removed() {
         let offer = offer_for(&base, &data);
         let dir = temp_dir();
         let err = offer
-            .download(&trusting_client(), &dir, |_| {})
+            .download(
+                &trusting_client(),
+                &DownloadDir::Folder(dir.clone()),
+                |_| {},
+            )
             .await
             .expect_err("refused");
         assert!(matches!(err, UpdateError::DownloadMismatch), "{err:?}");
@@ -235,7 +243,11 @@ async fn a_failed_download_leaves_an_earlier_good_file_alone() {
     .await;
     let dir = temp_dir();
     let first = offer_for(&good, &data)
-        .download(&trusting_client(), &dir, |_| {})
+        .download(
+            &trusting_client(),
+            &DownloadDir::Folder(dir.clone()),
+            |_| {},
+        )
         .await
         .expect("first");
     let bad = serve(Reply {
@@ -244,7 +256,11 @@ async fn a_failed_download_leaves_an_earlier_good_file_alone() {
     })
     .await;
     let err = offer_for(&bad, &data)
-        .download(&trusting_client(), &dir, |_| {})
+        .download(
+            &trusting_client(),
+            &DownloadDir::Folder(dir.clone()),
+            |_| {},
+        )
         .await
         .expect_err("refused");
     assert!(matches!(err, UpdateError::DownloadMismatch));
@@ -263,7 +279,11 @@ async fn a_server_error_is_a_download_error_and_leaves_nothing() {
     let offer = offer_for(&base, &installer(100));
     let dir = temp_dir();
     let err = offer
-        .download(&trusting_client(), &dir, |_| {})
+        .download(
+            &trusting_client(),
+            &DownloadDir::Folder(dir.clone()),
+            |_| {},
+        )
         .await
         .expect_err("fails");
     assert!(
@@ -286,7 +306,11 @@ async fn a_server_the_computer_does_not_trust_is_not_downloaded_from() {
     let dir = temp_dir();
     // The default client trusts the operating system's roots, not the test CA.
     let err = offer
-        .download(&HyperClient::new(), &dir, |_| {})
+        .download(
+            &HyperClient::new(),
+            &DownloadDir::Folder(dir.clone()),
+            |_| {},
+        )
         .await
         .expect_err("untrusted certificate");
     assert!(matches!(err, UpdateError::Download(_)), "{err:?}");
@@ -307,7 +331,11 @@ async fn an_unwritable_folder_is_a_disk_error() {
     let blocker = temp_dir();
     std::fs::write(&blocker, b"x").expect("file");
     let err = offer
-        .download(&trusting_client(), &blocker.join("sub"), |_| {})
+        .download(
+            &trusting_client(),
+            &DownloadDir::Folder(blocker.join("sub")),
+            |_| {},
+        )
         .await
         .expect_err("cannot create");
     assert!(matches!(err, UpdateError::Disk(_)), "{err:?}");
@@ -373,7 +401,7 @@ async fn the_help_menu_checks_then_downloads_and_verifies() {
     let dir = temp_dir();
     let mut config = SessionConfig::new("alice");
     config.update_url = format!("{manifest_url}/m");
-    config.update_dir = dir.clone();
+    config.update_dir = DownloadDir::Folder(dir.clone());
     config.update_http = Arc::new(trusting_client());
     config.update_checker = Arc::new(UpdateChecker::new(
         TrustedKeys::single("upd", public).expect("keys"),
@@ -433,7 +461,11 @@ async fn stress_a_big_installer_and_parallel_downloads_all_verify() {
         let dir = temp_dir();
         tasks.push(tokio::spawn(async move {
             let path = offer
-                .download(&trusting_client(), &dir, |_| {})
+                .download(
+                    &trusting_client(),
+                    &DownloadDir::Folder(dir.clone()),
+                    |_| {},
+                )
                 .await
                 .expect("downloads");
             (path, dir)
@@ -454,4 +486,129 @@ async fn stress_a_big_installer_and_parallel_downloads_all_verify() {
         total / (1024 * 1024),
         total as f64 / (1024.0 * 1024.0) / secs
     );
+}
+
+// ---- a folder other users can write to (ADR 0048, section 7) ----
+
+#[cfg(unix)]
+#[tokio::test]
+async fn links_planted_in_the_download_folder_are_not_followed() {
+    let data = installer(5_000);
+    let base = serve(Reply {
+        status: "200 OK",
+        body: data.clone(),
+    })
+    .await;
+    let offer = offer_for(&base, &data);
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).expect("dir");
+    let victim = dir.join("victim.txt");
+    std::fs::write(&victim, b"precious").expect("victim");
+    // Where an older version, or a guess, would have put the files.
+    let name = "AegisTARA-0.5.0-linux-x86_64.appimage";
+    std::os::unix::fs::symlink(&victim, dir.join(format!("{name}.part"))).expect("part link");
+    std::os::unix::fs::symlink(&victim, dir.join(name)).expect("final link");
+
+    let path = offer
+        .download(
+            &trusting_client(),
+            &DownloadDir::Folder(dir.clone()),
+            |_| {},
+        )
+        .await
+        .expect("downloads");
+    assert_eq!(std::fs::read(&victim).expect("victim"), b"precious");
+    assert_eq!(std::fs::read(&path).expect("installer"), data);
+    assert!(
+        !std::fs::symlink_metadata(&path)
+            .expect("meta")
+            .file_type()
+            .is_symlink(),
+        "the final name is the checked file, not the link"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_private_folder_is_made_for_each_download_in_a_shared_base() {
+    let data = installer(5_000);
+    let base_url = serve(Reply {
+        status: "200 OK",
+        body: data.clone(),
+    })
+    .await;
+    let offer = offer_for(&base_url, &data);
+    // The shared folder, with things other users could have planted.
+    let shared = temp_dir();
+    std::fs::create_dir_all(&shared).expect("shared");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/", shared.join("aegistara-update")).expect("link");
+        std::fs::create_dir(shared.join("aegistara-update-planted")).expect("planted");
+    }
+    let target = DownloadDir::PrivateIn(shared.clone());
+
+    let first = offer
+        .download(&trusting_client(), &target, |_| {})
+        .await
+        .expect("first");
+    let second = offer
+        .download(&trusting_client(), &target, |_| {})
+        .await
+        .expect("second");
+    for path in [&first, &second] {
+        assert_eq!(std::fs::read(path).expect("installer"), data);
+        let folder = path.parent().expect("folder");
+        assert_ne!(folder, shared, "not the shared folder itself");
+        assert_eq!(folder.parent().expect("base"), shared);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(folder)
+                .expect("meta")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "only the owner may enter: {mode:o}");
+        }
+    }
+    assert_ne!(first.parent(), second.parent(), "a new folder each time");
+    let _ = std::fs::remove_dir_all(&shared);
+}
+
+#[tokio::test]
+async fn a_failed_download_into_a_private_folder_leaves_no_folder_behind() {
+    let data = installer(5_000);
+    let mut evil = data.clone();
+    evil[10] ^= 1;
+    let base_url = serve(Reply {
+        status: "200 OK",
+        body: evil,
+    })
+    .await;
+    let offer = offer_for(&base_url, &data);
+    let shared = temp_dir();
+    std::fs::create_dir_all(&shared).expect("shared");
+    let err = offer
+        .download(
+            &trusting_client(),
+            &DownloadDir::PrivateIn(shared.clone()),
+            |_| {},
+        )
+        .await
+        .expect_err("refused");
+    assert!(matches!(err, UpdateError::DownloadMismatch), "{err:?}");
+    assert!(
+        files(&shared).is_empty(),
+        "left behind: {:?}",
+        files(&shared)
+    );
+    let _ = std::fs::remove_dir_all(&shared);
+}
+
+#[test]
+fn the_default_target_is_the_downloads_folder_or_a_private_folder_in_temp() {
+    match DownloadDir::for_this_user() {
+        DownloadDir::Folder(dir) => assert!(dir.ends_with("Downloads"), "{dir:?}"),
+        DownloadDir::PrivateIn(base) => assert_eq!(base, std::env::temp_dir()),
+    }
 }
