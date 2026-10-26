@@ -37,6 +37,7 @@ Add a row for every new job.
 | 053 PDF tree pictures | pending | pending | pending | pending |
 | 054 installer download | pending | pending | pending | pending |
 | 055 session admin | pending | pending | pending | pending |
+| 056 UI fixes and monkey tests | pending | pending | self-review done, see section 9 | self-review done, see section 9 |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)
@@ -332,3 +333,60 @@ test `a_login_racing_the_switch_leaves_no_session` fails without the fix.
 Not run here: the formal code, security, UX and UI reviews (G8), the docker
 lines of `deploy/verify-image.sh` (Docker Hub refused the pull with 429; they
 run in CI), and any screen reader pass (G14).
+
+---
+
+## 9. UX and UI self-review (2026-10-26, job 056)
+
+A first pass by the builder, not the formal factory reviews (those stay
+`pending` in the table at the top). Method: every page and login screen from
+`target/shell-screenshots/` at 1360 x 860, then the main pages at the
+smallest window the app allows (980 x 600) and at 1100 x 760, then a random
+"monkey" run (`crates/aegis-shell/tests/monkey.rs`) that fires every window
+callback with hostile values while the window changes size.
+
+### Fixed in this job
+
+| # | Where | Problem | Fix |
+|---|---|---|---|
+| F1 | Administration, company login servers | The three tab buttons grew into huge blocks and the Login panel sank to the bottom | Tab row has a fixed height; a filler takes the spare room |
+| F2 | Every table in a narrow panel | The style gives a table a 400 px minimum width, so the attack tree list lost its Rating column behind the canvas | `min-width: 0` in the shared `Table`; columns share the width they get |
+| F3 | Reports | Text still said "open it in a browser and print to PDF" next to a PDF button | Reworded |
+| F4 | Administration, users table | Six columns in about 430 px: headers and cells showed "..." | Fixed widths for the short columns, side panel 300 px |
+| F5 | Threat scenarios at 1100 and 980 | The detail panel ran off the right edge (the add form needed 620 px) | Add form in two rows; side panels follow the window width |
+| F6 | Attack trees at 1100 and 980 | The canvas shrank to 90 to 200 px between two 340 px panels | Panels follow the window width (list 240 to 340, inspector 260 to 340); the list shows Tree and Rating |
+| F7 | Threat panel | Catalog reference "Add" button clipped; a long field label cut; "Risk before" and "Risk after" headers shown as "Ris..." | Row split in two, labels wrap, headers "Before" and "After" |
+
+### Open, for a design pass (none blocks use)
+
+| # | Where | Observation |
+|---|---|---|
+| O1 | Every table | The style paints every second row's text in its "secondary" grey (about 5.6 to 1 on the sheet, so it passes AA) which makes those rows look disabled. A custom table widget would fix it, with keyboard and screen reader behaviour to keep |
+| O2 | Undo and Redo | A disabled button has a heavy outline while an enabled one has none, so a disabled Redo looks focused |
+| O3 | Sidebar at 600 px high | "Administration" and "Reports" are below the fold; a thin scroll bar is the only hint |
+| O4 | Goals and claims | The goals and claims tables share the height 50 / 50 and leave a gap between them |
+| O5 | Risks at 980 | Seven columns need 694 px, so the table scrolls sideways |
+| O6 | Notices | Info notices stack at the bottom right and cover content (the last History row) until dismissed; consider timing them out |
+| O7 | Whole app | No hands-on pass with a screen reader and no keyboard-only walk through every page yet (G14) |
+
+### Does it crash?
+
+`tests/monkey.rs` fires the window's callbacks (all but log out, change
+server and the four exports, which the page tests cover; retry, the login
+buttons, ending the edit session and refilling the sample are fired rarely or
+in a controlled way, see the test) with random values:
+empty and 10 000 character text, control and right to left characters,
+outline text with errors, indexes that do not exist (negative, huge), floats
+that are NaN or infinite, pages and window sizes changed at random (240 x 160
+to 3000 x 1400), over a real server. A "persistent user" step re-opens a
+project, retakes the edit lock and refills an empty project, so the run keeps
+reaching the model: **123 to 377 of the storm's own edits per 4 000 steps got
+through and were saved**, and the test fails if none do. The editor test also
+checks that the app still answers and draws after the storm. In the first
+version of the test the monkey deleted its own project within 40 steps and
+tested an empty app; the trace and the "edits reached the server" check found
+that. The default run is 300 steps and 2 seeds; use `AEGIS_MONKEY_STEPS` and
+`AEGIS_MONKEY_SEEDS` for a soak.
+
+`tests/small_windows.rs` draws eight pages at 980 x 600, 1100 x 760 and
+(below the supported minimum) 800 x 600 and 640 x 480 and keeps the pictures.

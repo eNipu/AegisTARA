@@ -101,6 +101,12 @@ impl Headless {
         }
     }
 
+    /// Changes the size of the window and of the pictures `render` makes.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.window.set_size(PhysicalSize::new(width, height));
+        self.size = (width, height);
+    }
+
     /// Lets timers and animations advance.
     pub fn tick(&self) {
         slint::platform::update_timers_and_animations();

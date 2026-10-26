@@ -1601,7 +1601,7 @@ impl Controller {
         w.set_tree_rows(rows(
             d.trees
                 .iter()
-                .map(|t| vec![t.title.clone(), t.nodes.to_string(), t.feasibility.clone()])
+                .map(|t| vec![t.title.clone(), t.feasibility.clone()])
                 .collect(),
         ));
         w.set_tree_selected(index_of(
