@@ -55,13 +55,75 @@
 - [x] Download the installer after the update check: streaming HTTPS download capped by the signed size, SHA-256 checked as it arrives, file named only when right, Help menu entry (054-installer-download)
 - [x] Administrators list and end password sessions: two admin calls, a Sessions tab in Administration, an audit event, and a stress test with 100,000 sessions (055-session-admin)
 
+### Phase 4: consultancy-ready (`docs/requirements.md`, decisions D12 to D24)
+
+The id at the end of each line is the planned job id; `docs/requirements.md` names jobs by it. Codes such as FND-01 are requirement IDs from that file.
+
+- [ ] Standalone mode (D22): the app starts the server library in its own process on the loopback address only, with a project-folder store (the existing snapshot and op log formats) instead of PostgreSQL, no login, the license file checked by the app; File > New/Open project folder; import a standalone folder into a server with history and provenance kept; an end-to-end test that runs every page in standalone mode (SHP-01 to SHP-03) (107-standalone-mode)
+- [ ] Remove the live observer view (D23, rule P7): read-only users open the last saved version or a baseline with a "newer version available, reload" notice; the editor keeps its lease and the "numbers checked" mark through ordinary calls; delete the observer op and risk streaming (ADR 0033) and the `Watch` heartbeat and silence watchdog if nothing else needs them; update ADR 0033 and architecture Part II; record removed lines and tests (SHP-04, SHP-05) (108-remove-live-view)
+- [ ] License check for development-only tools (D5 as widened): `deny.toml` keeps the allow list for the shipped dependency graph and stops failing on dev-dependency and fuzz-only licenses; a fixture proves a copyleft dev-dependency passes and a copyleft normal dependency still fails (NFR-11) (110-deny-dev-policy)
+- [ ] Description text on every element and project notes: plain long text with caps (R3), ops, store and wire format with v1 fixtures still loading, diff, reports, and an editor field on every page (FND-01) (064-element-descriptions)
+- [ ] Node-level attack tree operations (add, link, unlink, remove, rename, set gate) with an atomic multi-op batch and one undo step, the outline editor moved onto them, then raise the per-tree node cap toward 4,096 with benchmarks proving the 5 ms edit budget (A1) and the op-log line cap; update ADR 0014 (FND-02, FND-03) (065-tree-node-ops)
+- [ ] Attack tree library phase 0 (decision D14): a library pack format (versioned JSON, license field, hash, decode caps), a built-in demo pack written from public sources, a Library panel next to the canvas with n-gram fuzzy search (works for Japanese), facet chips and a preview, insert as a new tree, under a gate or in place of a leaf as a copy with an origin note in one undo step, ratings by user choice flagged for review by the linter, no silent merging of identical names (LIB-01 to LIB-04) (057-attack-tree-library)
+- [ ] Pack-defined element names and a plain likelihood method (D24): packs name the element types (for example "harm" for "damage scenario") and pages, reports and exports use them; a pack-defined likelihood scale rated directly, next to attack potential; old packs keep today's names (DOM-01, DOM-02) (109-pack-names-and-likelihood)
+- [ ] EU CRA product-security pack: a methodology pack for products with digital elements written from public sources (CRA Annex I), impact categories, a likelihood scale and a risk matrix as editable examples, a sample project, no copyrighted standard text (DOM-03) (111-cra-pack)
+- [ ] i18n foundation (D13): `@tr()` on every text in the `.slint` files with bundled catalogs, a Fluent catalog in `aegis-client` for pages, errors and reports, a UI language setting defaulting to the OS, a test that fails on a missing key, and a pseudo-locale screenshot test for clipped text (L10N-01 to L10N-03) (066-i18n-foundation)
+- [ ] Japanese text rendering: system CJK font fallback in the UI, an embedded subset of Noto Sans JP (OFL-1.1) in the PDF, Japanese IME checked in every text field on Windows, locale dates and numbers with a date style setting (L10N-04, L10N-05) (067-cjk-fonts-and-formats)
+- [ ] Japanese translation: ja catalogs for the UI and reports, labels per language in methodology packs (format change with old packs still loading) and Japanese labels for the built-in pack, a glossary file for translators, Japanese screenshots of every page (L10N-06, L10N-07) (068-japanese-translation)
+- [ ] One report document model: move the HTML report onto `ReportDoc` so HTML and PDF cannot drift, with table of contents and anchors in HTML (RPT-01; `brainstorm-logs-and-reports.md` section 3) (070-report-doc-model)
+- [ ] Report builder: pick sections and filters (risk level, asset, component, baseline), language, logo, document ID, revision history, approvers and a classification mark on every page; save the choice as a profile per project or company; record the profile in the export audit event (RPT-02 to RPT-04) (071-report-builder)
+- [ ] XLSX export with a permissive writer after a D5 check: a risk register sheet and a full workbook with one sheet per element type, formula injection guarded as for CSV (RPT-05) (072-xlsx-export)
+- [ ] Figures: attach PNG, JPEG and sanitized static SVG images with captions to the project or an element, stored by the server (in the project folder in standalone mode) with per-file and per-project caps, streamed in chunks, shown in the app and placed in reports (ARC-01, RPT-06) (073-figures)
+- [ ] Item definition model (D15): components, interfaces, data flows and trust boundaries with pack-defined kinds, assets bound to components, ops, store, diff, lint rules (unbound asset, boundary-crossing flow with no threat), an Item definition page and a report section (ARC-02) (074-item-definition)
+- [ ] Excel TARA import: read an XLSX workbook, map columns to elements in a step with a dry-run preview and a list of rows that did not map, apply as one batch with provenance `Import` (INT-02) (080-excel-import)
+
+### Phase 5: client deployments
+
+- [ ] Login hardening from the security review: keep lockouts when the throttle map is full (evict oldest, never clear all, SEC-01), monotonic expiry eviction in the DPoP replay cache (SEC-03), a per-address limit in front of the Argon2id semaphore for `LogIn` (SEC-04), each with a test that fails before the fix (060-login-hardening)
+- [ ] Database hardening: verify the PostgreSQL certificate and host name in `DbTls::Encrypt` with the OS roots or a configured CA (SEC-05), and run every multi-step account and session change in one transaction (SEC-07) (061-database-hardening)
+- [ ] Event log integrity: hash-chain `aegis_event` like the op audit, never drop an event on a database error without a visible error, and record each retention trim as an event, with `VerifyAudit` covering it (SEC-06) (062-event-log-integrity)
+- [ ] Small hardening: zeroize key material, passwords and bearer tokens (SEC-08), create settings and export files with `create_new` and owner-only permissions (SEC-09), explicit HTTP/2 stream, frame and keepalive limits and request timeouts on the server (SEC-10) (063-small-hardening)
+- [ ] Project access with a built-in role table (D19): roles Admin, Methodology Owner, Project Owner, Analyst, Reviewer, Viewer, per-project membership, checked on the server before every RPC (fixes SEC-02), role mapping from SSO groups, an Access tab in Administration, audit events (ACC-01 to ACC-03) (058-project-access)
+- [ ] Content language: a language tag and optional translations on description text (capped count), an editor for the translation, and bilingual output in reports (FND-04, L10N-08) (069-content-language)
+- [ ] Catalog packs and a STRIDE plus MITRE pack: catalog packs with names and descriptions for CAPEC, ATT&CK and EMB3D after a license review of each (attribution kept), searchable in the library panel; a STRIDE pack for services and cloud that cites them (DOM-04, DOM-05) (112-catalog-packs)
+- [ ] Command palette (Ctrl+K / Cmd+K) over pages, elements and commands with shortcuts shown, and a keyboard cheat sheet (UI-01) (081-command-palette)
+- [ ] Panel slots: resizable left, right and bottom panels that remember their size per user; the inspector shows every property of the selection with explain-why; the library panel uses a slot (UI-02) (082-panel-slots)
+- [ ] History panel: the op history as a list with author and time, preview on select, undo back to a chosen point as one batch (UI-03) (083-history-panel)
+- [ ] Multi-select and bulk edit in the asset, damage, threat, control and risk tables (UI-04) (084-bulk-edit)
+- [ ] Design system pass: spacing grid and type scale tokens in `theme.slint`, a compact density mode, empty states with one action, Japanese and pseudo-locale layout checks, screenshots of every page in both languages for the UI review (UI-05) (085-design-system-pass)
+- [ ] CRA readiness for our own product: an SBOM per release in CI, `SECURITY.md` with the vulnerability disclosure policy, a support period and security update statement in the release checklist (NFR-05) (101-cra-readiness)
+- [ ] Offline bundle for air-gapped sites: installer, server image tarball, update manifest and checksums in one signed archive, with install steps in `docs/deployment.md` (NFR-06) (100-offline-bundle)
+- [ ] Product security pack in English and Japanese: architecture and data flow summary, cryptography, authentication, logging and retention, personal data handling for GDPR and APPI, answers to a typical vendor security questionnaire (NFR-07, NFR-09) (102-product-security-pack)
+- [ ] User manual and sample projects in English and Japanese (an ECU, a gateway, a telematics unit), built from the app's own screenshots (NFR-07) (103-manual-and-samples)
+
+### Phase 6: traceability and integrations
+
+- [ ] External references and trace links (D16): `ExternalRef` (Jira, Polarion, JAMA, ReqIF, URL) on every element, a generic trace link for relations the engine does not use, suspect state derived when a link's source changed after confirmation, lint findings for suspect links (TRC-01, TRC-02) (076-external-refs-and-trace-links)
+- [ ] Requirement and verification elements linked to goals and controls, with pack-defined verification methods and results (TRC-03) (077-requirements-and-verification)
+- [ ] Traceability matrix page with coverage numbers and click-through, and a matching report section (TRC-04, RPT-06) (078-traceability-matrix)
+- [ ] ReqIF export and import of goals, requirements, controls and claims with stable identifiers, decode caps on import, a round-trip test, checked against files from at least two ALM tools (INT-01) (079-reqif)
+- [ ] Architecture diagram: a data-flow diagram of the item definition drawn by `aegis-canvas` into the same display list, user-placed positions stored in the project, an auto-layout command, click-through to threats, in the PDF and HTML reports (ARC-03) (075-architecture-diagram)
+- [ ] Company library on the server: save a selection as a library item, draft, approved and deprecated states, publishing by the Methodology Owner role, usage counts, context suggestions ranked by facets with a "why suggested" line, the "save as library item" offer, templates with slots, and tags for attack trees, technical attack trees and attack lists by interface, asset and attack type (LIB-05 to LIB-08) (087-company-library)
+- [ ] Connector framework and Jira (D18): encrypted credentials set by an admin on the server, per-project field mapping, push and link of requirements and controls, status pull, a bounded queue with timeouts and retry-after, audit events, tested against a mock Jira (Cloud and Data Center APIs) (INT-03, INT-04) (094-jira-connector)
+- [ ] Public API for external plugins (D20): service accounts with scoped API tokens managed in Administration, the published `aegis.proto` with an API guide, and an example bridge program that mirrors requirements into GitHub Issues through the API (INT-07) (106-plugin-api)
+- [ ] Command line report tool: `aegis report --profile <name>` produces PDF, HTML or XLSX from a server project or a baseline for CI pipelines (RPT-07) (104-cli-report)
+- [ ] Tool qualification evidence document: determinism, property tests, explain-why, benchmarks and the review process, as evidence for customers working under ISO 26262 and ISO/SAE 21434 (NFR-08) (105-tool-qualification-kit)
+
+### Phase 7: AI (decision D12)
+
+- [ ] AI gateway in the server: provider settings for admins with encrypted keys, two adapter families (OpenAI-compatible HTTP and Anthropic Messages) as one enum, a policy table per feature and project classification, a "data leaves the company" flag and the model license on each provider, the context builder limited to what the user may read, schema and citation checks, an AI audit log with retention, off by default, tested against a mock provider (AI-01 to AI-05) (088-ai-gateway)
+- [ ] Suggestion branches: proposed ops kept apart from the project, ghost nodes on the canvas and ghost rows in tables, accept or reject one by one or in a batch as normal ops with provenance `Ai` and the accepting user (FND-05) (089-suggestion-branches)
+- [ ] Golden set and evaluation harness: public example TARAs made by experts, recall, precision, rating agreement and citation checks per feature, a gate that keeps a feature off until it passes, a run on every prompt or model change (AI-06) (090-ai-golden-set)
+- [ ] AI wave 1: damage scenario writer, threat suggestions with STRIDE and catalog citations, rating rationale text, report summary wording with a check that every number matches the engine (AI-07) (091-ai-wave-1)
+- [ ] Multilingual semantic search over the library and catalogs: a permissive multilingual embedding model run in the server after a D5 review, vectors in memory with a measured size limit, mixed with the n-gram score (AI-08, LIB-09) (092-semantic-search)
+- [ ] Translation of element text through the gateway into the content language fields, reviewed by the user before it is kept (AI-09) (093-ai-translation)
+
 ## Waiting for a design session
 
 Lines here are marked `[design]`, so `/factory next` never takes them. A person decides the open questions in the linked note first, then the line moves up.
 
-- [design] Attack tree library: search a library of ready-made trees, fragments and leaves (templates and complete items), insert one into a tree under construction and customize it; copy with a remembered origin, one undo step, built-in pack first, company library on the server next (notes and questions: `docs/brainstorm-attack-tree-library.md`; decide the 32 node cap, whether ratings travel, merge rules, who may publish) (057-attack-tree-library)
-- [design] Project access: roles, groups and project membership instead of "every logged-in user opens every project" (direction section 6; decide Cedar policies against a built-in role table) (058-project-access)
-- [design] AI wave 1 behind a gateway: smart search, threat suggestions, damage writer, summary wording (`docs/ai-backlog.md`; decide the gateway, the provider adapters and the policy check first) (059-ai-wave-1)
+- [design] MCP server: expose read and propose tools to the company's own AI assistants with the user's permissions (`rmcp`; decide transport and token handling) (AI-10) (097-mcp-server)
+- [design] Our own small model (D12): tune an Apache-2.0 or MIT open-weight model on public and expert-reviewed synthetic TARA data, ship it as an optional image served through the OpenAI-compatible adapter; starts only after 090 and 091 have measured results (AI-11) (098-assist-model)
 
 ## Waiting for a customer order
 
@@ -69,4 +131,22 @@ Lines here are marked `[waiting]`, so `/factory next` never takes them. Move a l
 
 - [waiting] SSO with Microsoft Entra ID for a customer: app registration guide, `AEGIS_OIDC_*` settings, admin role mapping from Entra app roles, DPoP check, end-to-end test against a test tenant (add when a customer order names Entra ID, decision D10) (042-sso-entra-id)
 - [waiting] SSO with Google Workspace for a customer: OAuth client setup guide, hosted domain check, admin mapping by group, end-to-end test (add when a customer order names Google, decision D10) (043-sso-google)
+- [waiting] Polarion connector on the 094 framework: REST API of current Polarion versions, work item mapping, end-to-end test against a test instance (add when a customer order names Polarion, D18) (INT-05) (095-polarion-connector)
+- [waiting] JAMA connector on the 094 framework: REST API, item type mapping, end-to-end test (add when a customer order names JAMA, D18) (INT-06) (096-jama-connector)
+- [waiting] Signed Windows MSI and macOS notarized package (add when the code signing certificates are bought; production keys G13 at the same time) (NFR-06) (099-signed-installers)
 - [waiting] SSO with a customer's own OIDC provider (Okta, Keycloak, ADFS, ...): setup guide and a conformance checklist the customer runs before go-live (add per customer order, decision D10) (044-sso-generic-oidc)
+
+## Owner tasks (not factory jobs)
+
+Lines here are marked `[owner]`. They need a person, money or a contract, not code. Sources: `docs/brainstorm-product-v2.md` sections 9 and 11, `docs/decisions.md` Open.
+
+- [owner] Japan: set up the business entity and the consultancy (stage 1 of `brainstorm-product-v2.md` section 9.5); JPY price list and Japanese contract terms with a clause that generic know-how may go into the library
+- [owner] Editions and pricing (Team, Professional, Enterprise) mapped to license token features
+- [owner] Professional translator for the UI, manuals and website in Japanese, with the glossary from job 068
+- [owner] Website and sample videos in English and Japanese; a free library pack and a public sample TARA
+- [owner] First partners for stage 1 (`brainstorm-product-v2.md` section 9.6): automotive engineering service companies, penetration testing firms, testing and certification bodies
+- [owner] Events: escar Asia, Automotive World, EdgeTech+, the JSAE automotive engineering exposition, escar Europe
+- [owner] Professional liability insurance for consulting deliverables
+- [owner] Export control classification (the product contains cryptography) with a trade lawyer before the first export sale
+- [owner] Buy code signing certificates (Windows EV, Apple developer) for job 099
+- [owner] Ask the first customer which ALM tool they use (decides 095 or 096)

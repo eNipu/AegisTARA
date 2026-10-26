@@ -1,6 +1,6 @@
 # Brainstorm: an attack tree library (for a separate session)
 
-- Status: **not built, not in the plan until now.** Notes for a design session.
+- Status: **design questions answered** in decision D14 ([brainstorm-product-v2.md](brainstorm-product-v2.md) section 3); phase 0 is backlog job 057, the company library job 087.
 - Date: 2026-10-26
 - Asked for: a library of ready-made attack trees and leaves. While building a
   tree, a project searches the library, picks a relevant item, adds it, and

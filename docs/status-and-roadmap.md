@@ -3,7 +3,7 @@
 - **Date:** 2026-10-26
 - **Baseline Commit:** branch `claude/inspiring-clarke-phmv4u` (jobs 037 to 051). Earlier baselines: `202f296` (job 036), `b7ca167` (job 026).
 - **Audience:** the next maintainer or agent picking up this repository.
-- **Companion documents:** [architecture.md](architecture.md) (Part I: `aegis-model`; Part II: the whole system), [direction-v1.md](direction-v1.md) (product vision), [engineering-standards.md](engineering-standards.md) (binding rules), [decisions.md](decisions.md) (D1–D11), [review-requirements.md](review-requirements.md) (what to review next), [railway.md](railway.md) (test server), [ai-backlog.md](ai-backlog.md) (post-v1 AI features), [PROJECT_REVIEW.md](../PROJECT_REVIEW.md) (independent review, 2026-10-20).
+- **Companion documents:** [architecture.md](architecture.md) (Part I: `aegis-model`; Part II: the whole system), [direction-v1.md](direction-v1.md) (product vision), [engineering-standards.md](engineering-standards.md) (binding rules), [decisions.md](decisions.md) (D1–D11), [review-requirements.md](review-requirements.md) (what to review next), [railway.md](railway.md) (test server), [ai-backlog.md](ai-backlog.md) (post-v1 AI features), [brainstorm-product-v2.md](brainstorm-product-v2.md) (AI, languages, library, UI, traceability, market), [requirements.md](requirements.md) (v2 requirements and gaps), [PROJECT_REVIEW.md](../PROJECT_REVIEW.md) (independent review, 2026-10-20).
 
 ---
 
@@ -23,12 +23,12 @@
 | Client core (`aegis-client`) | **Complete (033)** | Optimistic editing, undo as edits, lease handling, view model, 10 end-to-end tests against the real server |
 | Desktop app (`aegis-shell`) | **Complete (033, 041)** | Menus with Lucide icons, every TARA page, outline tree editor, baselines and comparison, history, exports, admin, server and login screens; headless UI tests with screenshots |
 | Offline licensing (`aegis-license`) | **Complete (034)** | Ed25519 license files, grace period, seat ledger, issuer tool, server gate |
-| Live observers | **Complete (035)** | Ops plus recomputed risks streamed to observers; the client cross-checks its own numbers |
+| Live observers | **Complete (035), to be removed (D23, job 108)** | Ops plus recomputed risks streamed to observers. The owner decided read-only users see a saved version instead |
 | Release scaffolding | **Built and deployed (036, 040, 046, 048)** | Release profile, Dockerfile, Compose files, signed update manifest, now fetched over HTTPS (Help > Check for updates, 048). CI builds the image and starts it (046; its docker lines first run in CI) |
 | TLS to PostgreSQL, `https://` clients, seat restore | **Complete (037, 038, 039)** | `AEGIS_DB_TLS`, rustls with ring and OS roots, seats rebuilt from the op log |
 | Transport through proxies | **Complete (040)** | gRPC-Web next to gRPC, `/healthz`, `PORT`, `Watch` heartbeats and a client silence watchdog |
 | Reports and admin views | **Complete (047, 049, 050, 051, 052, 053)** | PDF report (krilla, Inter font) with attack tree pictures (overview plus readable detail panels for big trees), "numbers checked" mark that follows the confirmed change, admin event log on every server with retention, license page, a screen reader path for the attack tree canvas |
-| AI features | **Backlog only** | `docs/ai-backlog.md`; the v1 hooks are in place |
+| AI features | **Planned (Phase 7)** | `docs/ai-backlog.md`, decision D12; suggestion branches and language tags still missing |
 
 ### Factory jobs
 
@@ -124,15 +124,22 @@ flowchart TD
     P1["Phase 1 — Server skeleton<br/>(tonic gRPC, lease lock D4, audit log,<br/>PostgreSQL snapshots + oplog)"]
     P2["Phase 2 — Client core<br/>(canvas display list, Slint shell,<br/>OIDC PKCE + DPoP + keychain)"]
     P3["Phase 3 — Release readiness<br/>(installers/updates, offline Ed25519<br/>license tokens, live read-only view)"]
-    P4["Phase 4 — AI waves 1–4<br/>(per docs/ai-backlog.md; hooks already built)"]
+    P4["Phase 4 — Consultancy-ready<br/>(standalone app, no live view,<br/>descriptions, tree ops, library 0,<br/>CRA pack, en+ja, report builder,<br/>XLSX, figures, item definition)"]
+    P5["Phase 5 — Client deployments<br/>(SEC findings, roles, catalog packs,<br/>UI pass, CRA readiness, bundle,<br/>manuals and security pack)"]
+    P6["Phase 6 — Traceability and integrations<br/>(trace links, requirements, matrix,<br/>ReqIF, diagram canvas, Jira)"]
+    P7["Phase 7 — AI<br/>(gateway, suggestion branches,<br/>golden set, wave 1, semantic search)"]
     P0 --> P1
     P0 --> P2
     P1 --> P2
     P2 --> P3
     P3 --> P4
+    P4 --> P5
+    P5 --> P6
+    P4 --> P7
+    P5 --> P7
 ```
 
-> **Phases 0 to 3 are built** on the branch named above, with the open items in section 3. The review stages and a customer deployment are left before Phase 4.
+> **Phases 0 to 3 are built** on the branch named above, with the open items in section 3. Phases 4 to 7 come from [requirements.md](requirements.md) (decisions D12 to D24, jobs 057, 058 and 060 to 112). The order follows the business model: consultancy first (D21). Phase 7 can start once Phase 4 is done and the library (057) exists; it does not wait for Phase 6.
 
 ### Phase 0 — Housekeeping (unblocks everything) — done
 - Root workspace, README refresh, worktree cleanup, D4/D7 decisions, §4 drift fix.
@@ -153,9 +160,22 @@ flowchart TD
 - Installers + auto-update (§10), offline Ed25519 license tokens (§12), live read-only observers (§7).
 - **Exit:** a sovereign (air-gapped) demo deployment. The Railway test server is the first step.
 
-### Phase 4 — AI features (post-v1, per `docs/ai-backlog.md`)
-- Wave 1: smart catalog search, threat suggestions, damage writer, summary wording, wording cleanup.
-- The v1 hooks AI needs are already in place: provenance (`ProvenanceSource::Ai`), typed invertible ops, catalog IDs, engine-as-tool, derivation traces, oplog audit.
+### Phase 4 — Consultancy-ready (jobs 107, 108, 110, 064, 065, 057, 109, 111, 066 to 068, 070 to 074, 080)
+- What the owner's consultancy needs first (D21): the standalone app (D22), the live view removed (D23), description text, node-level tree ops and the library, pack-defined names and the EU CRA pack (D24), English and Japanese, the report builder, XLSX, figures, the item definition, Excel import.
+- **Exit:** on a laptop with no server, the owner imports an Excel TARA, completes it in Japanese with library trees, and hands over a Japanese PDF, an XLSX and the project folder; the same for a CRA product.
+
+### Phase 5 — Client deployments (jobs 060 to 063, 058, 069, 112, 081 to 085, 100 to 103)
+- What a client running AegisTARA on its own server needs: the security findings closed, roles (D19, fixes SEC-02), bilingual content, catalog packs, the UI pass, CRA readiness of our product, the offline bundle, manuals and the security pack.
+- **Exit:** a client team installs the server from the offline bundle, imports the consultancy's project folder, and works with roles; the security review's High and Medium findings are closed.
+
+### Phase 6 — Traceability and integrations (jobs 075 to 079, 087, 094 to 096, 104)
+- Requirements and verification, trace links with suspect marking, traceability matrix, ReqIF, architecture diagram canvas, company library, Jira connector (Polarion and JAMA on order).
+- **Exit:** a goal goes out as a ReqIF requirement, comes back with its Polarion key, and the matrix shows full coverage.
+
+### Phase 7 — AI (jobs 088 to 093; 097, 098 later)
+- AI gateway with the customer's own provider (D12), suggestion branches, golden set and evaluation, wave 1 features, multilingual semantic search, translation.
+- The hooks already built: provenance (`ProvenanceSource::Ai`), typed invertible ops, catalog IDs, engine-as-tool, derivation traces, oplog audit. Missing hooks (suggestion branches, language tags) are jobs 089 and 069.
+- **Exit:** wave 1 features pass their golden-set thresholds with a self-hosted model and with a cloud model.
 
 ---
 
@@ -174,9 +194,10 @@ Everything else in the backlog is ticked. Open items, in order:
 3. ~~Event store for company-login-only servers~~ done (052, ADR 0046).
 4. ~~Attack tree picture inside the PDF~~ done (053, ADR 0047). Still open: make the HTML report use the same document model (see `brainstorm-logs-and-reports.md`).
 5. ~~Installer download and hash check~~ done (054, ADR 0048). Still open: running the installer from the app (a per platform decision).
-6. Admin: groups, roles and project access (direction §6; needs a decision between Cedar policies and a built-in role table). Sessions list and end: done (055, ADR 0049).
-7. Phase 4, AI wave 1.
-8. **Attack tree library** (search, insert and customize ready-made trees, fragments and leaves): not built, not planned before; notes and open questions in [brainstorm-attack-tree-library.md](brainstorm-attack-tree-library.md), backlog item 057, waiting for a design session.
+6. ~~Admin: groups, roles and project access~~ decided: a built-in role table (D19), job 058 is ready. Sessions list and end: done (055, ADR 0049).
+7. Phases 4 to 7 above, in the order of `factory/backlog.md` (jobs 060 onward). Gaps G20 to G41 and the requirements are in [requirements.md](requirements.md).
+8. **Attack tree library**: the design questions are answered (D14); job 057 (phase 0) is ready after the node-level tree ops (065).
+9. Owner questions: D4, D7, and [brainstorm-product-v2.md](brainstorm-product-v2.md) section 11.
 
 ---
 

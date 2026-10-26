@@ -193,6 +193,8 @@ sequenceDiagram
 
 ## 7. Editing model in v1: locks and live view
 
+> **Changed 2026-10-26 (D4 confirmed, D23):** one editor per project, as below, but read-only users open a saved version with a reload notice instead of a live view. The live view is removed by job 108. A standalone app with no server exists for single users (D22).
+
 - **Edit lock per project.** The user takes the lock to edit. It is a lease (about 2 minutes) that the client renews in the background.
 - If the client disconnects, the lease expires and the lock is released. Admins and project owners can break a lock.
 - **Everyone else opens read-only** and sees changes live through the event stream.
