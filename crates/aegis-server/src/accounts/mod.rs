@@ -732,6 +732,15 @@ impl Accounts {
         // Close the oldest sessions past the per-user limit.
         let evicted = {
             let mut state = lock(&self.state);
+            // `set_password_login(false)` stores the switch before it clears
+            // the sessions under this lock. A login that got past the first
+            // check while the switch went off must not leave a session
+            // behind: it would come alive again when the switch goes on.
+            if !self.password_login_enabled() {
+                drop(state);
+                self.backend.delete_sessions(&[session.key]).await?;
+                return Err(AccountError::PasswordLoginOff);
+            }
             state.users.insert(name.clone(), user.clone());
             state.sessions.insert(session.key, session.clone());
             let mut mine: Vec<(u64, SessionKey)> = state
@@ -1212,6 +1221,49 @@ mod tests {
         Accounts::open(AccountBackend::Memory(MemoryAccounts::new()), config)
             .await
             .expect("open")
+    }
+
+    /// A login that is hashing while an admin turns the switch off must not
+    /// leave a session behind, or it would come alive when the switch goes on.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_login_racing_the_switch_leaves_no_session() {
+        let a = Arc::new(accounts_with_company_login(true).await);
+        a.bootstrap_admin("root", "correct horse battery")
+            .await
+            .expect("admin");
+        let names: Vec<String> = (0..8).map(|i| format!("user{i}")).collect();
+        for n in &names {
+            a.create_user("root", n, "", "a long enough password", false)
+                .await
+                .expect("user");
+        }
+        for round in 0..12 {
+            let logins: Vec<_> = names
+                .iter()
+                .map(|n| {
+                    let (a, n) = (Arc::clone(&a), n.clone());
+                    tokio::spawn(async move {
+                        a.log_in(&n, "a long enough password", "test")
+                            .await
+                            .map(|_| ())
+                    })
+                })
+                .collect();
+            // Land in the middle of the hashing.
+            tokio::time::sleep(Duration::from_millis(5 + round)).await;
+            a.set_password_login("root", false).await.expect("off");
+            for l in logins {
+                match l.await.expect("task") {
+                    Ok(()) | Err(AccountError::PasswordLoginOff) => {}
+                    Err(e) => panic!("unexpected: {e}"),
+                }
+            }
+            for n in &names {
+                let open = a.user(n).map_or(0, |(_, sessions)| sessions);
+                assert_eq!(open, 0, "round {round}: {n} kept a session");
+            }
+            a.set_password_login("root", true).await.expect("on");
+        }
     }
 
     #[tokio::test]
