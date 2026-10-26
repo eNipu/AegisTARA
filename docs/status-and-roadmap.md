@@ -1,7 +1,7 @@
 # AegisTARA — Project Status & Handoff Roadmap
 
-- **Date:** 2026-10-25
-- **Baseline Commit:** branch `claude/inspiring-clarke-phmv4u` (jobs 037 to 041). Earlier baselines: `202f296` (job 036), `b7ca167` (job 026).
+- **Date:** 2026-10-26
+- **Baseline Commit:** branch `claude/inspiring-clarke-phmv4u` (jobs 037 to 051). Earlier baselines: `202f296` (job 036), `b7ca167` (job 026).
 - **Audience:** the next maintainer or agent picking up this repository.
 - **Companion documents:** [architecture.md](architecture.md) (Part I: `aegis-model`; Part II: the whole system), [direction-v1.md](direction-v1.md) (product vision), [engineering-standards.md](engineering-standards.md) (binding rules), [decisions.md](decisions.md) (D1–D11), [review-requirements.md](review-requirements.md) (what to review next), [railway.md](railway.md) (test server), [ai-backlog.md](ai-backlog.md) (post-v1 AI features), [PROJECT_REVIEW.md](../PROJECT_REVIEW.md) (independent review, 2026-10-20).
 
@@ -11,22 +11,23 @@
 
 **Product vision (v1):** a native desktop TARA client (Slint) talking to a customer-hosted single-tenant server (Rust + PostgreSQL), automotive first (ISO/SAE 21434, UN R155/R156), with deterministic risk computation, explain-why for every number, and sovereign (air-gapped-capable) deployment.
 
-**Reality today:** the deterministic core, the server, password and OIDC login, the canvas engine, the client core, a desktop app with every TARA page, offline licensing, live observers, baselines, history, exports and release scaffolding are built and tested end to end. One Cargo workspace holds eight crates. A test server runs on Railway (`docs/railway.md`). **The reviews (code, security, UX, UI) for jobs 027 to 041 have not been run yet**; the owner asked for the build first. What to review is in `docs/review-requirements.md`.
+**Reality today:** the deterministic core, the server, password and OIDC login, the canvas engine, the client core, a desktop app with every TARA page, offline licensing, live observers, baselines, history, exports and release scaffolding are built and tested end to end. One Cargo workspace holds eight crates. A test server runs on Railway (`docs/railway.md`). **The reviews (code, security, UX, UI) for jobs 027 to 051 have not been run yet**; the owner asked for the build first. The table at the top of `docs/review-requirements.md` lists every job with its four reviews, all `pending`, and section 7 lists what the jobs added after 041 need.
 
 | Area | State | Evidence |
 |---|---|---|
 | Domain model, risk engine, analysis, persistence (`aegis-model`) | **Complete (jobs 001–026)** | See the table below |
 | Cargo workspace, CI, supply chain | **Complete (027, 028)** | Root workspace, `scripts/ci.sh`, `scripts/deny.sh`, 9 policy fixtures, Postgres service in CI |
 | Server (`aegis-server`, `aegis-proto`) | **Complete (029, 030)** | gRPC API, one actor per project, atomic batches, edit lease (D4), observers, MemoryStore and PostgresStore, hash-chained audit, `VerifyAudit` |
-| Login (`aegis-auth`, server accounts) | **Complete (031, 038, 040)** | Password login for testing (Argon2id, opaque tokens, throttle, user admin). OIDC code flow + PKCE, DPoP, JWKS cache, keychain, HTTPS with the OS trust store. Company SSO per customer is in the backlog (D10) |
+| Login (`aegis-auth`, server accounts) | **Complete (031, 038, 040, 045)** | Password login for testing (Argon2id, opaque tokens, throttle, user admin). OIDC code flow + PKCE, DPoP, JWKS cache, keychain, HTTPS with the OS trust store. `AEGIS_AUTH=both` runs company and password login together, and an admin turns the password form off in the app (045). Company SSO per customer is in the backlog (D10) |
 | Canvas (`aegis-canvas`) | **Complete (032)** | Linear-time layout (1M nodes in 51 ms), R-tree hit test, display list, SVG snapshots, keyboard navigation |
 | Client core (`aegis-client`) | **Complete (033)** | Optimistic editing, undo as edits, lease handling, view model, 10 end-to-end tests against the real server |
 | Desktop app (`aegis-shell`) | **Complete (033, 041)** | Menus with Lucide icons, every TARA page, outline tree editor, baselines and comparison, history, exports, admin, server and login screens; headless UI tests with screenshots |
 | Offline licensing (`aegis-license`) | **Complete (034)** | Ed25519 license files, grace period, seat ledger, issuer tool, server gate |
 | Live observers | **Complete (035)** | Ops plus recomputed risks streamed to observers; the client cross-checks its own numbers |
-| Release scaffolding | **Built and deployed (036, 040)** | Release profile, Dockerfile, Compose files, signed update manifest. The image builds and runs on Railway |
+| Release scaffolding | **Built and deployed (036, 040, 046, 048)** | Release profile, Dockerfile, Compose files, signed update manifest, now fetched over HTTPS (Help > Check for updates, 048). CI builds the image and starts it (046; its docker lines first run in CI) |
 | TLS to PostgreSQL, `https://` clients, seat restore | **Complete (037, 038, 039)** | `AEGIS_DB_TLS`, rustls with ring and OS roots, seats rebuilt from the op log |
 | Transport through proxies | **Complete (040)** | gRPC-Web next to gRPC, `/healthz`, `PORT`, `Watch` heartbeats and a client silence watchdog |
+| Reports and admin views | **Complete (047, 049, 050, 051)** | PDF report (krilla, Inter font), "numbers checked" mark that follows the confirmed change, admin event log and license page, a screen reader path for the attack tree canvas |
 | AI features | **Backlog only** | `docs/ai-backlog.md`; the v1 hooks are in place |
 
 ### Factory jobs
@@ -48,8 +49,15 @@
 | 037–039 | Database TLS, HTTPS clients, seat restore | 0036, 0037 |
 | 040 | Password login, gRPC-Web, Railway test server | 0035, 0036 |
 | 041 | Every TARA page, baselines, history, reports | 0037, 0038 |
+| 045 | Password login switch | 0039 |
+| 046 | Server image in CI | 0040 |
+| 047 | Numbers checked mark | 0041 |
+| 048 | Update manifest over HTTPS | 0042 |
+| 049 | Admin event log and license page | 0043 |
+| 050 | PDF report | 0044 |
+| 051 | Screen reader path for the canvas | 0045 |
 
-Jobs 027 to 041 have **not** been through the factory review stages (code, security, UX, UI). The list is in `docs/review-requirements.md`.
+Jobs 027 to 051 have **not** been through the factory review stages (code, security, UX, UI). The list is in `docs/review-requirements.md`.
 
 ---
 
@@ -77,7 +85,7 @@ The implementation keeps evaluation and persistence in `aegis-model` and compile
 5. Server and login skeleton: **done** (029 to 031).
 6. Methodology pack format: **done** (job 012).
 
-Not yet built from the direction: reports (PDF, Typst), versions and baselines in the UI, the admin screens (users, groups, policies, audit view), SVG export from the UI, the AI waves.
+Not yet built from the direction: groups and policies in the admin screens, the attack tree picture inside the PDF (it has the outline), installer download and install after an update check, the AI waves.
 
 ---
 
@@ -92,14 +100,14 @@ Not yet built from the direction: reports (PDF, Typst), versions and baselines i
 | G5 | D7 (Slint attribution condition) | **Working assumption** in D9: About window plus website badge. `deny.toml` carries an exception and a ban that confines Slint to `aegis-shell` | Owner confirms, or deletes `crates/aegis-shell` |
 | G6 | `direction-v1.md` §4 drift | **Done** (028) | |
 | G7 | Node deletion semantics for `AttackTree` | Not needed yet | Decide when the first delete op is specified |
-| G8 | **Reviews of jobs 027 to 041** (code, security, UX, UI) | **Not run** (deferred by the owner) | Follow `docs/review-requirements.md` |
+| G8 | **Reviews of jobs 027 to 051** (code, security, UX, UI) | **Not run** (deferred by the owner) | Follow `docs/review-requirements.md` |
 | G9 | `https://` for login, key sets and update fetching | **Done** (038) | |
 | G10 | TLS to PostgreSQL | **Done** (037) | |
 | G11 | Seat counts reset when the server restarts | **Done** (039) | |
-| G12 | The server image and Compose file were never run | **Partly done**: the image builds and runs on Railway | Add a CI job that builds the image; run the release checklist |
+| G12 | The server image and Compose file were never run | **Mostly done** (046): CI builds the customer and test images and starts the test one. The docker lines have not run outside CI yet | Check the first CI run of job `server image`; run the release checklist once |
 | G13 | `vendor.keys` and `update.keys` hold no key | **Open by design** | Owner generates the two production keys (`aegis-license keygen`) before the first release |
-| G14 | Accessibility: no screen reader path for canvas items | **Open** | Part of the UX review |
-| G15 | The shell shows no "numbers checked with the server" mark, no admin screens, no reports | **Mostly done** (041): admin, reports, versions, history are in. The "checked" mark is still open | Product backlog |
+| G14 | Accessibility: no screen reader path for canvas items | **Built** (051): a sentence per node on screen, spoken selection, Tab and arrow keys, Enter selects. Not tried with a real screen reader | Hands-on pass with Orca, NVDA or VoiceOver in the UX review |
+| G15 | The shell shows no "numbers checked with the server" mark, no admin screens, no reports | **Done** (041, 047, 049, 050) | |
 | G16 | Company SSO (Entra ID, Google, other OIDC) | **Waiting for a customer order** (D10) | `factory/backlog.md`, section "Waiting for a customer order" |
 
 ---
@@ -152,17 +160,18 @@ flowchart TD
 Jobs 027 to 041 are ticked in `factory/backlog.md`. What remains there:
 
 ```text
-- [ ] Turn password login off per deployment from an admin setting (045-password-login-switch)
 - [waiting] SSO with Microsoft Entra ID (042), Google (043), other OIDC (044): when a customer orders it
 ```
 
-Suggested additions, in order:
+Everything else in the backlog is ticked. Open items, in order:
 
-1. Run the four reviews on jobs 027 to 041 (G8, `docs/review-requirements.md`).
-2. Build the server image in CI and run the release checklist once (G12).
-3. Reports: Typst PDF through the display list.
-4. Admin: groups, policies, audit view, license view (direction §6).
-5. Phase 4, AI wave 1.
+1. Run the four reviews on jobs 027 to 051 (G8, `docs/review-requirements.md`).
+2. Watch the first CI run of the `server image` job and run the release checklist once (G12).
+3. Give servers with company login only (`AEGIS_AUTH=oidc`) an event store, so the admin event log works there too (ADR 0043).
+4. Draw the attack tree picture inside the PDF from the canvas display list (ADR 0044), and make the HTML report use the same document model.
+5. Installer download, hash check and install after the update check (ADR 0042).
+6. Admin: groups and policies (direction §6).
+7. Phase 4, AI wave 1.
 
 ---
 

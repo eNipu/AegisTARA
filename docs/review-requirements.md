@@ -29,10 +29,14 @@ Add a row for every new job.
 | 045 password login switch | pending | pending | pending | pending |
 | 046 server image in CI | pending | pending | pending | pending |
 | 047 numbers checked mark | pending | pending | pending | pending |
+| 048 update manifest fetch | pending | pending | pending | pending |
+| 049 admin events and license | pending | pending | pending | pending |
+| 050 PDF report | pending | pending | pending | pending |
+| 051 screen reader path | pending | pending | pending | pending |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)
-- **Jobs in scope:** 027 to 041 (`factory/backlog.md`)
+- **Jobs in scope:** 027 to 041, and 045 to 051 (`factory/backlog.md`; the added jobs are listed in section 7)
 - **Reviews:** code, security, UX, UI. The factory agents `review-code`,
   `review-security`, `review-ux` and `review-ui` can run them; a human
   reviewer can use the same lists.
@@ -246,3 +250,55 @@ Use the screenshots in `target/shell-screenshots/` and the running app.
 - No screen reader path for canvas items (G14).
 - `vendor.keys` and `update.keys` hold no production key yet (G13).
 - One server instance per database (ADR 0035).
+
+---
+
+## 7. Jobs 045 to 051 (built after the first list)
+
+What each added job needs from each review, besides the lists above.
+
+### Code
+
+- [ ] 045: `Accounts::set_password_login` stores before it flips the flag; a
+      refused login costs no hashing; `HybridAuthn` routes on the `ats_`
+      prefix only. `AEGIS_PASSWORD_LOGIN` is read once at start.
+- [ ] 047: `compare_server_risks` runs on both triggers (server numbers and
+      confirmed batch); `NumbersCheck::Checked` needs the confirmed change.
+- [ ] 048: `fetch_manifest` limits (https only, 32 KiB, no redirects).
+- [ ] 049: `ListEvents` cap and admin check; `audit.rs` covers every
+      `AuditKind`.
+- [ ] 050: `pdf.rs` layout loops end (a cell taller than a page, a word wider
+      than a column, `MAX_PAGES`); output is deterministic.
+- [ ] 051: `access::visible` stays O(visible); `describe` handles an invalid
+      node.
+
+### Security
+
+- [ ] 045: only an admin can change the switch; turning it off ends every
+      password session; no lock-out without a company login.
+- [ ] 048: transport is not trust (a wrong signature is refused over valid
+      TLS); `with_tls_config` is not used with weaker settings anywhere.
+- [ ] 049: the event log holds no password or token; a non-admin is refused.
+- [ ] 050: the PDF contains only what the project holds (names, text), and
+      the font file license is in the repository.
+- [ ] 046: the customer image refuses to start without a license
+      (`deploy/verify-image.sh`; its docker lines were first run by CI).
+
+### UX
+
+- [ ] 045: the login screen with and without the password form; the message
+      after an admin turns it off while someone is on the form.
+- [ ] 047: the wording of the four states of the numbers mark; very large
+      projects stay on "Checking".
+- [ ] 049: the Administration page is taller than 760 px on the users tab.
+- [ ] 051: **hands-on with a screen reader** (Orca on Linux, NVDA on Windows,
+      VoiceOver on macOS): reach the canvas with Tab, walk the tree with the
+      arrow keys, hear the sentence, press Enter on an entry. The tests do
+      not run an accessibility backend (ADR 0045).
+
+### UI
+
+- [ ] 047: the numbers mark in the project header at 1100 px width.
+- [ ] 049: the event table columns and the tab buttons.
+- [ ] 050: open `target/report-samples/tara-report.pdf` (made by
+      `cargo test -p aegis-client --test pages`) and check page 1 to the end.

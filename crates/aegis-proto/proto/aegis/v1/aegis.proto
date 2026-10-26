@@ -76,6 +76,13 @@ service Aegis {
   // login to fall back on.
   rpc SetPasswordLogin(SetPasswordLoginRequest) returns (ServerSettings);
 
+  // ---- event log (job 049, docs/adr/0043-audit-and-license-views.md) ----
+
+  // Admin only. The newest events of the server's event log (logins,
+  // exports, admin actions), newest first. Answers `no_event_log` when the
+  // server keeps none (development login, company login only).
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+
   // ---- baselines (job 039, docs/adr/0037-baselines-and-reports.md) ----
 
   // Freezes the project's current state under a name. Needs no lease.
@@ -496,4 +503,25 @@ message ServerSettings {
 
 message SetPasswordLoginRequest {
   bool enabled = 1;
+}
+
+message ListEventsRequest {
+  // 0 means the default (200). The server caps it at 1000.
+  uint32 limit = 1;
+}
+
+message EventInfo {
+  uint64 at_ms = 1;
+  // Who did it, or the user name tried at a failed login.
+  string actor = 2;
+  // login_ok, login_failed, logout, password_changed, user_created,
+  // user_updated, user_deleted, export, project_deleted, baseline_created,
+  // password_login_changed.
+  string kind = 3;
+  string target = 4;
+  string detail = 5;
+}
+
+message ListEventsResponse {
+  repeated EventInfo events = 1;
 }

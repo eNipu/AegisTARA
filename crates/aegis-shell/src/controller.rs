@@ -19,6 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use aegis_canvas::{Direction, Point, RenderOptions, Size, Viewport, render};
+use aegis_client::audit::EventGroup;
 use aegis_client::commands::{Command, Edit};
 use aegis_client::report::ExportKind;
 use aegis_client::session::Session;
@@ -31,8 +32,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecMod
 
 use crate::adapter::{bucket, draw_items};
 use crate::{
-    AppWindow, CheckItem, CountItem, DiffItem, FactorItem, LinkItem, MitigationItem, NoticeItem,
-    ProblemItem, ProjectItem, ThreatItem,
+    AccessNode, AppWindow, CheckItem, CountItem, DiffItem, FactorItem, LinkItem, MitigationItem,
+    NoticeItem, ProblemItem, ProjectItem, ThreatItem,
 };
 
 /// Pixels the pointer must move before a press becomes a drag.
@@ -53,6 +54,8 @@ struct State {
     baseline: Option<usize>,
     /// The user row chosen on the administration page.
     user: Option<usize>,
+    /// The event log filter chosen on the administration page.
+    event_group: Option<EventGroup>,
 }
 
 /// A password login request: user, password, keep the login.
@@ -188,6 +191,7 @@ impl Controller {
                 press: None,
                 baseline: None,
                 user: None,
+                event_group: None,
             }),
             hooks,
         });
@@ -271,6 +275,7 @@ impl Controller {
         };
         let what = match kind {
             ExportKind::Report => "tara-report",
+            ExportKind::ReportPdf => "tara-report",
             ExportKind::RiskRegister => "risk-register",
             ExportKind::TreeSvg => "attack-tree",
         };
@@ -335,6 +340,34 @@ impl Controller {
         on!(on_set_password_login, |c, enabled| c.send(Command::Admin(
             AdminAction::SetPasswordLogin { enabled }
         )));
+        on!(on_set_event_filter, |c, which| {
+            c.state.borrow_mut().event_group = match which {
+                1 => Some(EventGroup::Logins),
+                2 => Some(EventGroup::Exports),
+                3 => Some(EventGroup::AdminActions),
+                _ => None,
+            };
+            if let Some(w) = c.window.upgrade() {
+                w.set_event_filter(which);
+            }
+            c.apply_events();
+        });
+        on!(on_canvas_node_activated, |c, node| {
+            let view = c.view();
+            if let Ok(n) = usize::try_from(node)
+                && let Some(project) = view.as_ref().and_then(|v| v.project.as_ref())
+                && let Some(scene) = project.scene()
+                && let Some(idx) = scene.node_idx(u32::try_from(n).unwrap_or(u32::MAX))
+            {
+                if let Some(rect) = scene.node_rect(idx) {
+                    c.state.borrow_mut().viewport.reveal(rect, 40.0);
+                }
+                c.send(Command::SelectNode(Some(idx.index())));
+                c.redraw();
+            }
+        });
+        on!(on_refresh_events, |c| c.send(Command::LoadEvents));
+        on!(on_check_for_updates, |c| c.send(Command::CheckForUpdates));
         on!(on_log_out, |c| c.send(Command::LogOut));
         on!(on_change_password, |c, current, new| c.send(
             Command::ChangePassword {
@@ -831,6 +864,7 @@ impl Controller {
         on!(on_stop_compare, |c| c.send(Command::CompareWith(None)));
         on!(on_refresh_history, |c| c.send(Command::LoadHistory));
         on!(on_export_report, |c| c.export(ExportKind::Report));
+        on!(on_export_pdf, |c| c.export(ExportKind::ReportPdf));
         on!(on_export_csv, |c| c.export(ExportKind::RiskRegister));
         on!(on_export_svg, |c| c.export(ExportKind::TreeSvg));
 
@@ -1230,6 +1264,7 @@ impl Controller {
             w.set_company_login_available(settings.company_login_available);
         }
         self.apply_users();
+        self.apply_events();
 
         let Some(project) = view.project.as_ref() else {
             w.set_has_project(false);
@@ -1713,6 +1748,40 @@ impl Controller {
         w.set_selected_user_disabled(chosen.is_some_and(|u| u.disabled));
     }
 
+    /// The event log, filtered, and the license facts.
+    fn apply_events(&self) {
+        let (Some(w), Some(view)) = (self.window.upgrade(), self.view()) else {
+            return;
+        };
+        let group = self.state.borrow().event_group;
+        let shown = aegis_client::audit::filter(&view.events, group);
+        w.set_event_rows(rows(
+            shown
+                .iter()
+                .map(|e| {
+                    vec![
+                        e.when.clone(),
+                        e.who.clone(),
+                        e.what.clone(),
+                        e.about.clone(),
+                    ]
+                })
+                .collect(),
+        ));
+        w.set_events_text(s(match (&view.events_error, shown.is_empty()) {
+            (Some(why), _) => why,
+            (None, true) => "No events to show.",
+            (None, false) => "",
+        }));
+        let license = match &view.connection {
+            ConnectionView::Online {
+                license: Some(l), ..
+            } => l.lines().join("\n"),
+            _ => "No license is checked on this server (development build).".to_owned(),
+        };
+        w.set_license_text(s(&license));
+    }
+
     /// The tree, its title, and the inspector.
     fn apply_canvas(&self, view: &Arc<ViewModel>) {
         let Some(w) = self.window.upgrade() else {
@@ -1743,13 +1812,20 @@ impl Controller {
         });
         w.set_tree_title(s(title.as_deref().unwrap_or("")));
         w.set_has_tree(project.tree.is_some());
-        w.set_canvas_summary(s(&match (&project.tree, &project.inspector) {
-            (Some(t), Some(i)) => format!(
-                "Attack tree with {} nodes. Selected: {}.",
-                t.scene.len(),
-                i.title
+        // What a screen reader says on the canvas: the tree's size, and the
+        // selected node in a full sentence (where it sits, its rating).
+        w.set_canvas_summary(s(&match (&project.tree, project.selected_node) {
+            (Some(t), Some(sel)) => {
+                let node = u32::try_from(sel.index()).unwrap_or(u32::MAX);
+                let said = aegis_canvas::access::describe(&t.scene, node)
+                    .map(|a| aegis_canvas::access::sentence(&a, true))
+                    .unwrap_or_default();
+                format!("Attack tree with {} nodes. {said}", t.scene.len())
+            }
+            (Some(t), None) => format!(
+                "Attack tree with {} nodes. Nothing is selected. Press an arrow key to select the root.",
+                t.scene.len()
             ),
-            (Some(t), None) => format!("Attack tree with {} nodes.", t.scene.len()),
             _ => "No attack tree".to_owned(),
         }));
 
@@ -1833,6 +1909,35 @@ impl Controller {
             None => Vec::new(),
         };
         w.set_draw(model(items));
+        // The nodes on screen, in words, for screen readers.
+        let access = match &project.tree {
+            Some(tree) => {
+                let nodes = aegis_canvas::access::visible(&tree.scene, &st.viewport);
+                let count = i32::try_from(nodes.len()).unwrap_or(i32::MAX);
+                nodes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, n)| {
+                        let selected = project
+                            .selected_node
+                            .is_some_and(|sel| u32::try_from(sel.index()) == Ok(n.access.node));
+                        AccessNode {
+                            x: n.x,
+                            y: n.y,
+                            w: n.w,
+                            h: n.h,
+                            label: s(&aegis_canvas::access::sentence(&n.access, selected)),
+                            selected,
+                            position: i32::try_from(i + 1).unwrap_or(i32::MAX),
+                            count,
+                            node: i32::try_from(n.access.node).unwrap_or(i32::MAX),
+                        }
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        w.set_access_nodes(model(access));
         w.set_zoom_text(s(&format!("{:.0}%", st.viewport.zoom * 100.0)));
     }
 }

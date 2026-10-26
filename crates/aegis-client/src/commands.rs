@@ -1081,6 +1081,8 @@ pub enum Command {
     },
     /// Admin: load the users.
     LoadUsers,
+    /// Admin: load the server's event log (logins, exports, admin actions).
+    LoadEvents,
     /// Admin: create, change or delete a user.
     Admin(crate::view::AdminAction),
     /// Admin: break the open project's edit lock.
@@ -1098,6 +1100,9 @@ pub enum Command {
     LogOut,
     /// Remove a notice from the list.
     DismissNotice(u64),
+    /// Fetch the signed update manifest and say whether a newer release
+    /// exists (the answer is a notice).
+    CheckForUpdates,
     /// Stop the session.
     Shutdown,
 }

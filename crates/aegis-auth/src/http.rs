@@ -171,6 +171,26 @@ impl HyperClient {
         }
     }
 
+    /// A client that trusts exactly the roots of `config` for `https://`
+    /// instead of the operating system's (see
+    /// [`config_with_roots`](crate::tls::config_with_roots)): a company's own
+    /// certificate authority, or a test server.
+    #[must_use]
+    pub fn with_tls_config(config: &std::sync::Arc<rustls::ClientConfig>) -> Self {
+        let mut connector = HttpConnector::new();
+        connector.set_connect_timeout(Some(Duration::from_secs(5)));
+        let https = Ok(Client::builder(TokioExecutor::new()).build(
+            crate::tls::https_connector_with(config, connector.clone(), false, true),
+        ));
+        connector.enforce_http(true);
+        HyperClient {
+            https,
+            plain: Client::builder(TokioExecutor::new()).build(connector),
+            timeout: Duration::from_secs(10),
+            allow_insecure_http: false,
+        }
+    }
+
     /// Also allows cleartext `http://` to non-loopback hosts. For a lab
     /// network only; tokens cross it unprotected.
     #[must_use]
