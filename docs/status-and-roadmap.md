@@ -27,7 +27,7 @@
 | Release scaffolding | **Built and deployed (036, 040, 046, 048)** | Release profile, Dockerfile, Compose files, signed update manifest, now fetched over HTTPS (Help > Check for updates, 048). CI builds the image and starts it (046; its docker lines first run in CI) |
 | TLS to PostgreSQL, `https://` clients, seat restore | **Complete (037, 038, 039)** | `AEGIS_DB_TLS`, rustls with ring and OS roots, seats rebuilt from the op log |
 | Transport through proxies | **Complete (040)** | gRPC-Web next to gRPC, `/healthz`, `PORT`, `Watch` heartbeats and a client silence watchdog |
-| Reports and admin views | **Complete (047, 049, 050, 051)** | PDF report (krilla, Inter font), "numbers checked" mark that follows the confirmed change, admin event log and license page, a screen reader path for the attack tree canvas |
+| Reports and admin views | **Complete (047, 049, 050, 051, 052, 053)** | PDF report (krilla, Inter font) with attack tree pictures (overview plus readable detail panels for big trees), "numbers checked" mark that follows the confirmed change, admin event log on every server with retention, license page, a screen reader path for the attack tree canvas |
 | AI features | **Backlog only** | `docs/ai-backlog.md`; the v1 hooks are in place |
 
 ### Factory jobs
@@ -56,6 +56,8 @@
 | 049 | Admin event log and license page | 0043 |
 | 050 | PDF report | 0044 |
 | 051 | Screen reader path for the canvas | 0045 |
+| 052 | Event log on every server, retention, stress test | 0046 |
+| 053 | Attack tree pictures in the PDF | 0047 |
 
 Jobs 027 to 051 have **not** been through the factory review stages (code, security, UX, UI). The list is in `docs/review-requirements.md`.
 
@@ -167,8 +169,8 @@ Everything else in the backlog is ticked. Open items, in order:
 
 1. Run the four reviews on jobs 027 to 051 (G8, `docs/review-requirements.md`).
 2. Watch the first CI run of the `server image` job and run the release checklist once (G12).
-3. Give servers with company login only (`AEGIS_AUTH=oidc`) an event store, so the admin event log works there too (ADR 0043).
-4. Draw the attack tree picture inside the PDF from the canvas display list (ADR 0044), and make the HTML report use the same document model.
+3. ~~Event store for company-login-only servers~~ done (052, ADR 0046).
+4. ~~Attack tree picture inside the PDF~~ done (053, ADR 0047). Still open: make the HTML report use the same document model (see `brainstorm-logs-and-reports.md`).
 5. Installer download, hash check and install after the update check (ADR 0042).
 6. Admin: groups and policies (direction §6).
 7. Phase 4, AI wave 1.

@@ -67,7 +67,7 @@ about 1.2 MB, in `crates/aegis-client/assets/fonts/` with its license text.
 Only the used glyphs are embedded in each PDF. The binary grows by the two
 files.
 
-### 6. Attack trees are text for now
+### 6. Attack trees are text for now (superseded by ADR 0047)
 
 Each tree appears as its indented outline, the same text the HTML report
 shows under the picture. The picture itself (the canvas display list drawn as
