@@ -47,6 +47,7 @@
 - [x] Build the server Docker image in CI and prove it starts: customer image refuses to start without a license, test image answers /healthz and GetLoginOptions (gap G12) (046-image-ci)
 - [x] Show "numbers checked with the server" in the app as a real status that follows the confirmed change, and fix the editor never comparing its own edits (gap G15) (047-numbers-check-mark)
 - [x] Fetch the signed update manifest over HTTPS in the client with the rustls client of aegis-auth, check it, and offer a Help menu entry (048-update-manifest-fetch)
+- [x] Admin: the event log (logins, exports, admin actions) with a filter, and a license page with dates, seats and features (049-admin-events-and-license)
 
 ## Waiting for a customer order
 

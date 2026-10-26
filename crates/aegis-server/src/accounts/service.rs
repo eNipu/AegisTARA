@@ -158,6 +158,17 @@ impl From<AccountError> for Status {
     }
 }
 
+/// The refusal when the server keeps no event log.
+#[must_use]
+pub fn no_event_log() -> Status {
+    let mut status = Status::failed_precondition("this server keeps no event log");
+    status.metadata_mut().insert(
+        ERROR_CODE_HEADER,
+        MetadataValue::from_static("no_event_log"),
+    );
+    status
+}
+
 /// The refusal when password login is off.
 #[must_use]
 pub fn password_login_off() -> Status {

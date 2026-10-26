@@ -128,6 +128,9 @@ impl SessionConfig {
     }
 }
 
+/// How many events the administration page loads.
+const EVENT_ROWS: u32 = 200;
+
 /// How many recent changes the history page shows.
 const HISTORY_ROWS: u32 = 200;
 
@@ -171,6 +174,8 @@ impl Session {
             users: Vec::new(),
             admin_text: None,
             settings: None,
+            events: Vec::new(),
+            events_error: None,
         });
         let (view_tx, view) = watch::channel(initial);
         let actor = Actor {
@@ -198,6 +203,8 @@ impl Session {
             users: Vec::new(),
             admin_text: None,
             settings: None,
+            audit_rows: Vec::new(),
+            events_error: None,
         };
         let task = tokio::spawn(actor.run());
         (Session { commands, view }, task)
@@ -358,6 +365,7 @@ enum Internal<P> {
     },
     Users(Result<Vec<pb::UserInfo>, ClientError>),
     Updates(Result<UpdateStatus, UpdateError>),
+    Events(Result<Vec<pb::EventInfo>, ClientError>),
     Settings(Result<pb::ServerSettings, ClientError>),
     SettingsSet(Result<pb::ServerSettings, ClientError>),
     AdminDone {
@@ -400,6 +408,8 @@ struct Actor<P: CredentialProvider> {
     users: Vec<UserRow>,
     admin_text: Option<String>,
     settings: Option<ServerSettingsView>,
+    audit_rows: Vec<crate::audit::EventRow>,
+    events_error: Option<String>,
 }
 
 impl<P: CredentialProvider> Actor<P> {
@@ -748,6 +758,21 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 Err(e) => self.on_failure("Could not load the users", &e),
             },
+            Internal::Events(result) => match result {
+                Ok(events) => {
+                    self.audit_rows = events.iter().map(crate::audit::event_row).collect();
+                    self.events_error = None;
+                }
+                Err(e) => {
+                    self.audit_rows.clear();
+                    self.events_error = Some(match e.code() {
+                        Some(ServerCode::Other(c)) if c == "no_event_log" => {
+                            "This server keeps no event log.".to_owned()
+                        }
+                        _ => format!("The event log could not be read: {e}"),
+                    });
+                }
+            },
             Internal::Updates(result) => match result {
                 Ok(UpdateStatus::UpToDate) => {
                     self.notice(Severity::Info, "AegisTARA is up to date.");
@@ -859,6 +884,8 @@ impl<P: CredentialProvider> Actor<P> {
                 self.me = None;
                 self.users.clear();
                 self.settings = None;
+                self.audit_rows.clear();
+                self.events_error = None;
                 self.projects.clear();
                 if let Some(hook) = &self.config.on_log_out {
                     (hook.0)();
@@ -925,6 +952,12 @@ impl<P: CredentialProvider> Actor<P> {
             let result = checker.check_url(&http, &url).await;
             let _ = events.send(Internal::Updates(result)).await;
         });
+    }
+
+    fn load_events(&self) {
+        if self.me.as_ref().is_some_and(|m| m.admin) {
+            self.spawn(|conn| async move { Internal::Events(conn.events(EVENT_ROWS).await) });
+        }
     }
 
     fn load_settings(&self) {
@@ -1814,6 +1847,7 @@ impl<P: CredentialProvider> Actor<P> {
             Command::LoadHistory => self.load_history(),
             Command::Export { kind, path } => self.export(kind, path),
             Command::CheckForUpdates => self.check_for_updates(),
+            Command::LoadEvents => self.load_events(),
             Command::LoadUsers => {
                 self.load_users();
                 self.load_settings();
@@ -1975,6 +2009,7 @@ impl<P: CredentialProvider> Actor<P> {
             Page::Versions => self.load_baselines(),
             Page::History => self.load_history(),
             Page::Admin => {
+                self.load_events();
                 self.load_users();
                 self.load_settings();
             }
@@ -2149,6 +2184,8 @@ impl<P: CredentialProvider> Actor<P> {
             users: self.users.clone(),
             admin_text: self.admin_text.clone(),
             settings: self.settings,
+            events: self.audit_rows.clone(),
+            events_error: self.events_error.clone(),
         }));
     }
 }

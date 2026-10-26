@@ -14,7 +14,10 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use crate::accounts::service::{password_login_off, user_info};
+use crate::accounts::service::{no_event_log, password_login_off, user_info};
+
+/// Events returned when the request names no limit.
+const DEFAULT_EVENTS: usize = 200;
 use crate::accounts::{Accounts, AuditKind, UserUpdate, bearer};
 use crate::actor::{Accepted, Event, OpenData, RiskReport, Subscription};
 use crate::auth::{AuthMethod, Principal};
@@ -625,6 +628,34 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             .set_password_login(&who.subject, request.get_ref().enabled)
             .await?;
         Ok(Response::new(self.server_settings()))
+    }
+
+    async fn list_events(
+        &self,
+        request: Request<pb::ListEventsRequest>,
+    ) -> Result<Response<pb::ListEventsResponse>, Status> {
+        let who = Principal::of(&request)?.clone();
+        if !who.admin {
+            return Err(ServerError::NotAdmin.into());
+        }
+        let accounts = self.accounts.as_deref().ok_or_else(no_event_log)?;
+        let limit = match request.get_ref().limit {
+            0 => DEFAULT_EVENTS,
+            n => usize::try_from(n).unwrap_or(usize::MAX),
+        };
+        let events = accounts.recent_events(limit).await?;
+        Ok(Response::new(pb::ListEventsResponse {
+            events: events
+                .into_iter()
+                .map(|e| pb::EventInfo {
+                    at_ms: e.at_ms,
+                    actor: e.actor,
+                    kind: e.kind.as_str().to_owned(),
+                    target: e.target,
+                    detail: e.detail,
+                })
+                .collect(),
+        }))
     }
 
     async fn list_users(

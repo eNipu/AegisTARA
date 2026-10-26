@@ -1081,6 +1081,8 @@ pub enum Command {
     },
     /// Admin: load the users.
     LoadUsers,
+    /// Admin: load the server's event log (logins, exports, admin actions).
+    LoadEvents,
     /// Admin: create, change or delete a user.
     Admin(crate::view::AdminAction),
     /// Admin: break the open project's edit lock.
