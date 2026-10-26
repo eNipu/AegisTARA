@@ -1624,6 +1624,7 @@ then calls `RecordExport`, so the server's event log shows who exported what.
 | `src/provider.rs` | `AppProvider { Oidc, Password, Dev }`, `OidcProvider`, `OidcSettings`, `PasswordProvider` | Credentials for each call. `PasswordProvider` can keep the session token in the OS keychain ("keep me logged in"); the password itself is never stored. |
 | `src/headless.rs` | `Headless`, `Frame` | Software-rendered window for tests and screenshots. |
 | `ui/app.slint` | `AppWindow` | Menu bar (File, Edit, View, Project, Admin, Help), TARA steps sidebar, one page per `Page`, inspector panel, status band. Connection screens: `connection` 4 = server, 3 = log in, 1 = online. |
+| `ui/canvas.slint` | `Canvas`, `DrawItem`, `AccessNode` | Draws the display list. For screen readers the focusable area is a `list` with one `list-item` per node on screen (`AccessNode`: box, sentence, selected, position, count), made by `aegis_canvas::access::visible` in `Controller::redraw`; the default action selects the node. The canvas label is the selected node's sentence. |
 | `ui/widgets.slint` | shared widgets | Buttons, fields, cards, badges, icons. |
 | `ui/icons/*.svg` | | Lucide icons, ISC license (`ui/icons/LICENSE-lucide.txt`), allowed by the license policy (D5). |
 
@@ -1661,7 +1662,7 @@ else".
 |---|---|---|
 | `aegis-auth` | `OidcClient`, `Session<H, S>`, `Authenticator<H>`, `AccessTokenValidator<H>`, `DpopVerifier`, `DeviceKey`, `JwksCache<H>`, `Vault<S>`, `OsKeychain`, `HyperClient`, `tls::{system_roots, client_config, config_with_roots, https_connector, https_connector_with}`, `HyperClient::with_tls_config` | OIDC with PKCE and DPoP for SSO, token validation on the server, keychain access, and the shared rustls setup (OS trust store, ring). |
 | `aegis-license` | `License`, `LicenseState`, `TrustedKeys`, `Issuer`, `SeatLedger`, `Admission`, `Manifest`, `Version`, `Artifact`, `Offer` | Signed license tokens, seat counting (`restore()` after restart), signed update manifests. |
-| `aegis-canvas` | `Scene`, `Layout`, `Forest`, `DisplayList`, `Item`, `Viewport`, `SpatialIndex`, `Tone`, `Paint`, `Stroke`, `SvgOptions`, `RenderOptions` | Attack tree layout, hit testing, pixel and SVG drawing. `Tone` is `Ord`, so it can be a sort key. |
+| `aegis-canvas` | `access::{NodeAccess, VisibleNode, describe, sentence, visible}`, `Scene`, `Layout`, `Forest`, `DisplayList`, `Item`, `Viewport`, `SpatialIndex`, `Tone`, `Paint`, `Stroke`, `SvgOptions`, `RenderOptions` | Attack tree layout, hit testing, pixel and SVG drawing. `Tone` is `Ord`, so it can be a sort key. |
 | `aegis-proto` | generated | `tonic` and `prost` code from `aegis.proto`. |
 
 ## II.8 Deployment

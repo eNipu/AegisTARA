@@ -49,6 +49,7 @@
 - [x] Fetch the signed update manifest over HTTPS in the client with the rustls client of aegis-auth, check it, and offer a Help menu entry (048-update-manifest-fetch)
 - [x] Admin: the event log (logins, exports, admin actions) with a filter, and a license page with dates, seats and features (049-admin-events-and-license)
 - [x] PDF report export with a permissive library (krilla, Inter font), watermark and page numbers on every page, tables that continue across pages, checked with D5 and cargo-deny (050-pdf-report)
+- [x] A screen reader path for attack tree nodes on the canvas: a sentence per node on screen, the selection spoken through the canvas label, keyboard reach and activation (gap G14) (051-screen-reader-path)
 
 ## Waiting for a customer order
 

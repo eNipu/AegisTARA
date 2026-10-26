@@ -7,7 +7,7 @@
 // ui/icons/LICENSE-lucide.txt).
 import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, AboutSlint, StandardListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Canvas, DrawItem } from "canvas.slint";
+import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, Panel, Swatch,
@@ -193,6 +193,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> tree-rows;
     in property <int> tree-selected: -1;
     in property <[DrawItem]> draw;
+    in property <[AccessNode]> access-nodes;
     in property <bool> has-tree;
     in property <string> tree-title;
     in property <string> zoom-text: "100%";
@@ -370,6 +371,7 @@ export component AppWindow inherits Window {
     callback canvas-scroll(length, length, float);
     callback canvas-key(string, bool) -> bool;
     callback canvas-resized(length, length);
+    callback canvas-node-activated(int);
     callback fit();
     callback zoom-reset();
     callback pick-control(int);
@@ -1159,6 +1161,8 @@ export component AppWindow inherits Window {
                                 vertical-stretch: 1;
                                 Canvas {
                                     items: root.draw;
+                                    access-nodes: root.access-nodes;
+                                    node-activated(n) => { root.canvas-node-activated(n); }
                                     accessible-summary: root.canvas-summary;
                                     pointer-down(x, y) => { root.canvas-down(x, y); }
                                     pointer-move(x, y) => { root.canvas-move(x, y); }
