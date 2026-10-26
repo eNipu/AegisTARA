@@ -1083,6 +1083,8 @@ pub enum Command {
     LoadUsers,
     /// Admin: load the server's event log (logins, exports, admin actions).
     LoadEvents,
+    /// Admin: load the open sessions (password login).
+    LoadSessions,
     /// Admin: create, change or delete a user.
     Admin(crate::view::AdminAction),
     /// Admin: break the open project's edit lock.

@@ -419,6 +419,8 @@ pub struct ViewModel {
     pub events: Vec<crate::audit::EventRow>,
     /// Why the event log is empty when it could not be read.
     pub events_error: Option<String>,
+    /// The open sessions, newest first (administrators, password login).
+    pub sessions: Vec<crate::audit::SessionRow>,
 }
 
 #[cfg(test)]

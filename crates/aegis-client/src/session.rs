@@ -183,6 +183,7 @@ impl Session {
             settings: None,
             events: Vec::new(),
             events_error: None,
+            sessions: Vec::new(),
         });
         let (view_tx, view) = watch::channel(initial);
         let actor = Actor {
@@ -212,6 +213,7 @@ impl Session {
             settings: None,
             audit_rows: Vec::new(),
             events_error: None,
+            session_rows: Vec::new(),
             offered: None,
             downloading: false,
         };
@@ -376,6 +378,7 @@ enum Internal<P> {
     Updates(Result<UpdateStatus, UpdateError>),
     Downloaded(Result<std::path::PathBuf, UpdateError>),
     Events(Result<Vec<pb::EventInfo>, ClientError>),
+    Sessions(Result<Vec<pb::SessionInfo>, ClientError>),
     Settings(Result<pb::ServerSettings, ClientError>),
     SettingsSet(Result<pb::ServerSettings, ClientError>),
     AdminDone {
@@ -420,6 +423,7 @@ struct Actor<P: CredentialProvider> {
     settings: Option<ServerSettingsView>,
     audit_rows: Vec<crate::audit::EventRow>,
     events_error: Option<String>,
+    session_rows: Vec<crate::audit::SessionRow>,
     /// The release the last update check offered, for "Download update".
     offered: Option<UpdateOffer>,
     /// An installer download is running.
@@ -787,6 +791,15 @@ impl<P: CredentialProvider> Actor<P> {
                     });
                 }
             },
+            Internal::Sessions(result) => match result {
+                Ok(list) => {
+                    self.session_rows = list.iter().map(crate::audit::session_row).collect()
+                }
+                Err(e) => {
+                    self.session_rows.clear();
+                    self.on_failure("Could not load the sessions", &e);
+                }
+            },
             Internal::Updates(result) => match result {
                 Ok(UpdateStatus::UpToDate) => {
                     self.notice(Severity::Info, "AegisTARA is up to date.");
@@ -874,6 +887,7 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 if reload_users {
                     self.load_users();
+                    self.load_sessions();
                 }
             }
             Internal::Audit(result) => {
@@ -914,6 +928,7 @@ impl<P: CredentialProvider> Actor<P> {
                 self.settings = None;
                 self.audit_rows.clear();
                 self.events_error = None;
+                self.session_rows.clear();
                 self.projects.clear();
                 if let Some(hook) = &self.config.on_log_out {
                     (hook.0)();
@@ -1016,6 +1031,16 @@ impl<P: CredentialProvider> Actor<P> {
         });
     }
 
+    fn load_sessions(&self) {
+        if self
+            .me
+            .as_ref()
+            .is_some_and(|m| m.admin && m.method == "password")
+        {
+            self.spawn(|conn| async move { Internal::Sessions(conn.sessions().await) });
+        }
+    }
+
     fn load_events(&self) {
         if self.me.as_ref().is_some_and(|m| m.admin) {
             self.spawn(|conn| async move { Internal::Events(conn.events(EVENT_ROWS).await) });
@@ -1055,6 +1080,9 @@ impl<P: CredentialProvider> Actor<P> {
                 (format!("Set a new password for {username}"), true)
             }
             AdminAction::DeleteUser { username } => (format!("Delete user {username}"), true),
+            AdminAction::RevokeSession { username, .. } => {
+                (format!("End the session of {username}"), true)
+            }
             AdminAction::SetPasswordLogin { .. } => return,
         };
         self.spawn(move |conn| async move {
@@ -1098,6 +1126,7 @@ impl<P: CredentialProvider> Actor<P> {
                     .await
                     .map(|_| ()),
                 AdminAction::DeleteUser { username } => conn.delete_user(&username).await,
+                AdminAction::RevokeSession { id, .. } => conn.revoke_session(&id).await,
                 // Sent as `Internal::SettingsSet` above; never reaches here.
                 AdminAction::SetPasswordLogin { .. } => Ok(()),
             };
@@ -1916,6 +1945,7 @@ impl<P: CredentialProvider> Actor<P> {
             Command::CheckForUpdates => self.check_for_updates(),
             Command::DownloadUpdate => self.download_update(),
             Command::LoadEvents => self.load_events(),
+            Command::LoadSessions => self.load_sessions(),
             Command::LoadUsers => {
                 self.load_users();
                 self.load_settings();
@@ -2254,6 +2284,7 @@ impl<P: CredentialProvider> Actor<P> {
             settings: self.settings,
             events: self.audit_rows.clone(),
             events_error: self.events_error.clone(),
+            sessions: self.session_rows.clone(),
         }));
     }
 }

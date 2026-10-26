@@ -438,3 +438,97 @@ async fn the_session_shows_events_and_the_license_to_an_admin() {
     assert!(view.borrow().connection != aegis_client::state::ConnectionView::LoginRequired);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn an_admin_sees_sessions_ends_one_and_the_user_is_logged_out() {
+    use aegis_client::commands::Command;
+    use aegis_client::session::{Session, SessionConfig};
+    use aegis_client::view::AdminAction;
+
+    let server = TestServer::start().await;
+    let (admin_conn, _) = server
+        .log_in(TransportKind::Grpc, "admin", ADMIN_PASSWORD)
+        .await;
+    admin_conn
+        .create_user(pb::CreateUserRequest {
+            username: "bob".into(),
+            display_name: String::new(),
+            password: "bobs long password".into(),
+            admin: false,
+        })
+        .await
+        .expect("create");
+    let (bob, _) = server
+        .log_in(TransportKind::Grpc, "bob", "bobs long password")
+        .await;
+    bob.who_am_i().await.expect("bob works");
+
+    // A normal user may not list or end sessions.
+    let refused = bob.sessions().await.expect_err("refused");
+    assert_eq!(code(&refused), Some(&ServerCode::NotAdmin));
+
+    // The admin's window: the session loads the list on request.
+    let public = Public::connect(&server.url, TransportKind::Grpc)
+        .await
+        .expect("public");
+    let s = public
+        .log_in("admin", ADMIN_PASSWORD, "the admin's laptop")
+        .await
+        .expect("login");
+    let login = Arc::new(PasswordLogin::new());
+    login.set(Some(s.token));
+    let (session, _task) = Session::start(&server.url, login, SessionConfig::new("admin"));
+    let view = session.subscribe();
+    let wait = |ok: fn(&aegis_client::state::ViewModel) -> bool| {
+        let mut view = view.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if ok(&view.borrow_and_update()) {
+                        return;
+                    }
+                    view.changed().await.expect("session alive");
+                }
+            })
+            .await
+            .expect("timed out");
+        }
+    };
+    wait(|vm| vm.me.as_ref().is_some_and(|m| m.admin)).await;
+    session.send(Command::LoadSessions).expect("sent");
+    wait(|vm| vm.sessions.iter().any(|r| r.user == "bob")).await;
+    let bobs = view
+        .borrow()
+        .sessions
+        .iter()
+        .find(|r| r.user == "bob")
+        .cloned()
+        .expect("bob's row");
+    assert_eq!(bobs.device, "test");
+    assert!(
+        view.borrow()
+            .sessions
+            .iter()
+            .any(|r| r.device == "the admin's laptop")
+    );
+
+    // Ending it: the row goes, the notice says so, and bob is logged out.
+    session
+        .send(Command::Admin(AdminAction::RevokeSession {
+            id: bobs.id.clone(),
+            username: "bob".into(),
+        }))
+        .expect("sent");
+    wait(|vm| !vm.sessions.iter().any(|r| r.user == "bob")).await;
+    assert!(
+        view.borrow()
+            .notices
+            .iter()
+            .any(|n| n.text.contains("End the session of bob: done")),
+        "{:?}",
+        view.borrow().notices
+    );
+    let out = bob.who_am_i().await.expect_err("logged out");
+    assert!(matches!(out, ClientError::LoginRequired), "{out:?}");
+    server.stop().await;
+}

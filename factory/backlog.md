@@ -53,6 +53,7 @@
 - [x] The event log on every server: company-login-only and development servers keep and show an event log too, with retention by age and by row count so a login flood cannot fill the disk, plus a stress test (052-event-log-everywhere)
 - [x] Attack tree pictures in the PDF report: the canvas display list as vector paths, with an overview and readable detail panels for very tall or deep trees, and a stress test with a million boxes (053-pdf-tree-figures)
 - [x] Download the installer after the update check: streaming HTTPS download capped by the signed size, SHA-256 checked as it arrives, file named only when right, Help menu entry (054-installer-download)
+- [x] Administrators list and end password sessions: two admin calls, a Sessions tab in Administration, an audit event, and a stress test with 100,000 sessions (055-session-admin)
 
 ## Waiting for a customer order
 

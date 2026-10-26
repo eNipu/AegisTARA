@@ -255,3 +255,80 @@ async fn a_server_without_password_accounts_can_keep_an_event_log() {
     assert_eq!(err.code(), Code::PermissionDenied);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn an_admin_lists_and_ends_sessions() {
+    let env = start().await;
+    let mut admin = env.log_in("admin", ADMIN_PASSWORD).await.expect("admin");
+    admin
+        .create_user(pb::CreateUserRequest {
+            username: "bob".into(),
+            display_name: String::new(),
+            password: "bobs long password".into(),
+            admin: false,
+        })
+        .await
+        .expect("create");
+    let mut bob = env.log_in("bob", "bobs long password").await.expect("bob");
+    bob.who_am_i(pb::WhoAmIRequest {}).await.expect("bob works");
+
+    let list = admin
+        .list_sessions(pb::ListSessionsRequest {})
+        .await
+        .expect("list")
+        .into_inner()
+        .sessions;
+    assert_eq!(list.len(), 2, "admin and bob");
+    let bobs = list.iter().find(|s| s.username == "bob").expect("bob");
+    assert_eq!(bobs.client_name, "test");
+    assert_eq!(bobs.id.len(), 16);
+    assert!(bobs.expires_ms > bobs.created_ms);
+    // Nothing in the list can be used as a token.
+    assert!(!format!("{list:?}").contains("ats_"));
+
+    // A user who is not an admin sees and ends nothing.
+    let err = bob
+        .list_sessions(pb::ListSessionsRequest {})
+        .await
+        .expect_err("refused");
+    assert_eq!(err.code(), Code::PermissionDenied);
+    let err = bob
+        .revoke_session(pb::RevokeSessionRequest {
+            id: bobs.id.clone(),
+        })
+        .await
+        .expect_err("refused");
+    assert_eq!(err.code(), Code::PermissionDenied);
+    bob.who_am_i(pb::WhoAmIRequest {}).await.expect("still in");
+
+    // The admin ends bob's session: bob's next call fails, the log says so.
+    admin
+        .revoke_session(pb::RevokeSessionRequest {
+            id: bobs.id.clone(),
+        })
+        .await
+        .expect("revoked");
+    let err = bob.who_am_i(pb::WhoAmIRequest {}).await.expect_err("ended");
+    assert_eq!(err.code(), Code::Unauthenticated);
+    let err = admin
+        .revoke_session(pb::RevokeSessionRequest {
+            id: bobs.id.clone(),
+        })
+        .await
+        .expect_err("already ended");
+    assert_eq!(err.code(), Code::NotFound);
+    let events = admin
+        .list_events(pb::ListEventsRequest { limit: 1 })
+        .await
+        .expect("events")
+        .into_inner()
+        .events;
+    assert_eq!(events[0].kind, "session_revoked");
+    assert_eq!(events[0].actor, "admin");
+    assert_eq!(events[0].target, "bob");
+    // Bob can log in again: ending a session is not a ban.
+    env.log_in("bob", "bobs long password")
+        .await
+        .expect("again");
+    env.stop().await;
+}

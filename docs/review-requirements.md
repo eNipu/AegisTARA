@@ -36,6 +36,7 @@ Add a row for every new job.
 | 052 event log everywhere | pending | pending | pending | pending |
 | 053 PDF tree pictures | pending | pending | pending | pending |
 | 054 installer download | pending | pending | pending | pending |
+| 055 session admin | pending | pending | pending | pending |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)

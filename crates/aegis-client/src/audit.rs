@@ -33,6 +33,38 @@ pub struct EventRow {
     pub group: EventGroup,
 }
 
+/// One open session, for the administrator's session list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionRow {
+    /// What to pass back to end it.
+    pub id: String,
+    /// Whose session.
+    pub user: String,
+    /// The device name the app gave at login.
+    pub device: String,
+    /// When it began, in UTC, without the "UTC".
+    pub started: String,
+    /// When it ends by itself, in UTC, without the "UTC".
+    pub expires: String,
+}
+
+/// One session in words. O(1).
+#[must_use]
+pub fn session_row(s: &pb::SessionInfo) -> SessionRow {
+    SessionRow {
+        id: s.id.clone(),
+        user: s.username.clone(),
+        device: if s.client_name.is_empty() {
+            "unknown device".to_owned()
+        } else {
+            s.client_name.clone()
+        },
+        // The table titles say UTC, which saves room in narrow columns.
+        started: format_ms(s.created_ms).trim_end_matches(" UTC").to_owned(),
+        expires: format_ms(s.expires_ms).trim_end_matches(" UTC").to_owned(),
+    }
+}
+
 /// Puts one event in words. O(1).
 #[must_use]
 pub fn event_row(e: &pb::EventInfo) -> EventRow {
@@ -73,6 +105,14 @@ pub fn event_row(e: &pb::EventInfo) -> EventRow {
             EventGroup::AdminActions,
             format!("Turned password login {d}"),
         ),
+        "session_revoked" => (
+            EventGroup::AdminActions,
+            if d.is_empty() {
+                "Ended a session".to_owned()
+            } else {
+                format!("Ended a session ({d})")
+            },
+        ),
         other => (EventGroup::Other, other.to_owned()),
     };
     EventRow {
@@ -108,6 +148,22 @@ mod tests {
     }
 
     #[test]
+    fn a_session_is_shown_with_a_device_or_a_placeholder() {
+        let row = session_row(&pb::SessionInfo {
+            id: "00ff00ff00ff00ff".into(),
+            username: "bob".into(),
+            client_name: String::new(),
+            created_ms: 1_800_000_000_000,
+            expires_ms: 1_800_043_200_000,
+        });
+        assert_eq!(row.device, "unknown device");
+        assert_eq!(row.id, "00ff00ff00ff00ff");
+        assert!(row.started.contains("2027"), "{}", row.started);
+        assert_ne!(row.started, row.expires);
+        assert!(!row.started.contains("UTC"), "{}", row.started);
+    }
+
+    #[test]
     fn every_kind_the_server_writes_has_words_and_a_group() {
         let cases = [
             ("login_ok", EventGroup::Logins),
@@ -121,6 +177,7 @@ mod tests {
             ("project_deleted", EventGroup::AdminActions),
             ("baseline_created", EventGroup::AdminActions),
             ("password_login_changed", EventGroup::AdminActions),
+            ("session_revoked", EventGroup::AdminActions),
         ];
         for (kind, group) in cases {
             let row = event_row(&event(kind, "alice", "x", ""));
