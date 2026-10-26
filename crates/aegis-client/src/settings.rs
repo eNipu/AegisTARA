@@ -33,6 +33,9 @@ pub struct Settings {
     pub username: String,
     /// Where exports are written; empty for the documents folder.
     pub export_dir: String,
+    /// Where the signed update manifest is (`https://...`); empty for none.
+    /// `AEGIS_UPDATE_URL` overrides it. An air gapped site leaves it empty.
+    pub update_url: String,
 }
 
 /// The configuration folder of this app, if the OS tells us one.
@@ -158,6 +161,7 @@ mod tests {
             server_url: "https://aegis.example.com".into(),
             transport: "grpc-web".into(),
             username: "mira".into(),
+            update_url: "https://updates.example.com/m".into(),
             export_dir: String::new(),
         };
         s.save(&path).expect("save");

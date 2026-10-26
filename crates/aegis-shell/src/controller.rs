@@ -335,6 +335,7 @@ impl Controller {
         on!(on_set_password_login, |c, enabled| c.send(Command::Admin(
             AdminAction::SetPasswordLogin { enabled }
         )));
+        on!(on_check_for_updates, |c| c.send(Command::CheckForUpdates));
         on!(on_log_out, |c| c.send(Command::LogOut));
         on!(on_change_password, |c, current, new| c.send(
             Command::ChangePassword {

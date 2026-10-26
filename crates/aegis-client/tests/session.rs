@@ -824,3 +824,116 @@ async fn closing_the_project_releases_the_lock() {
     drop(bob);
     server.stop().await;
 }
+
+/// Serves `body` to every request over plain HTTP on loopback (the client
+/// allows that for tests and lab setups only). Returns the URL.
+async fn serve_manifest(body: String) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("http://{}/m", listener.local_addr().expect("addr"));
+    tokio::spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let _ = tcp.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = tcp.write_all(head.as_bytes()).await;
+                let _ = tcp.write_all(body.as_bytes()).await;
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn checking_for_updates_says_what_it_found() {
+    use aegis_license::{Artifact, Issuer, Manifest, TrustedKeys, Version};
+    let (pkcs8, public) = Issuer::generate().expect("key");
+    let issuer = Issuer::from_pkcs8(&pkcs8).expect("issuer");
+    let platform = aegis_client::updates::platform_name();
+    let manifest = Manifest {
+        version: 1,
+        kid: "upd".into(),
+        release: "9.0.0".into(),
+        published_at: 1_800_000_000,
+        artifacts: vec![Artifact {
+            platform,
+            url: "https://downloads.example.com/aegis".into(),
+            sha256: "0".repeat(64),
+            bytes: 5_000_000,
+        }],
+        notes: "Much better.".into(),
+    };
+    let file = issuer.sign_manifest(&manifest).expect("signs");
+    let keys = TrustedKeys::single("upd", public).expect("keys");
+    let url = serve_manifest(file).await;
+
+    let server = TestServer::start(Duration::ZERO).await;
+    // No address set: the user is told how to set one.
+    let none = server.session("alice", false);
+    until(&none, "online", online).await;
+    none.send(Command::CheckForUpdates).expect("sent");
+    until(&none, "told", |vm| {
+        vm.notices
+            .iter()
+            .any(|n| n.text.contains("No update address"))
+    })
+    .await;
+
+    // An address: the signed release is announced with its download address.
+    let found = server.session_with("alice", false, |c| {
+        c.update_url = url.clone();
+        c.update_checker = Arc::new(aegis_client::updates::UpdateChecker::new(
+            keys.clone(),
+            Version::parse("0.1.0").expect("v"),
+            aegis_client::updates::platform_name(),
+        ));
+    });
+    until(&found, "online", online).await;
+    found.send(Command::CheckForUpdates).expect("sent");
+    let view = until(&found, "offer", |vm| {
+        vm.notices.iter().any(|n| n.text.contains("9.0.0"))
+    })
+    .await;
+    let text = &view
+        .notices
+        .iter()
+        .find(|n| n.text.contains("9.0.0"))
+        .expect("notice")
+        .text;
+    assert!(
+        text.contains("https://downloads.example.com/aegis"),
+        "{text}"
+    );
+    assert!(text.contains("5 MB"), "{text}");
+
+    // A manifest this build does not trust is an error, not an offer.
+    let (_, other) = Issuer::generate().expect("key");
+    let distrust = server.session_with("alice", false, |c| {
+        c.update_url = url.clone();
+        c.update_checker = Arc::new(aegis_client::updates::UpdateChecker::new(
+            TrustedKeys::single("upd", other).expect("keys"),
+            Version::parse("0.1.0").expect("v"),
+            aegis_client::updates::platform_name(),
+        ));
+    });
+    until(&distrust, "online", online).await;
+    distrust.send(Command::CheckForUpdates).expect("sent");
+    let view = until(&distrust, "refused", |vm| {
+        vm.notices.iter().any(|n| n.severity == Severity::Error)
+    })
+    .await;
+    assert!(
+        view.notices
+            .iter()
+            .any(|n| n.text.contains("Could not check for updates")),
+        "{:?}",
+        view.notices
+    );
+    drop((none, found, distrust));
+    server.stop().await;
+}

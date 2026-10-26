@@ -2,9 +2,11 @@
 //!
 //! This module decides, from the text of a manifest, whether an update exists
 //! for this computer and whether a downloaded installer is the one the vendor
-//! signed. It does no network I/O. Fetching the manifest and the installer
-//! needs the HTTPS client (backlog 038); until then the manifest can be
-//! loaded from a file or a share, which suits air gapped sites too.
+//! signed. [`UpdateChecker::check`] does no network I/O, so a manifest can
+//! also come from a file or a share, which suits air gapped sites.
+//! [`fetch_manifest`] and [`UpdateChecker::check_url`] fetch it over HTTPS
+//! with the `aegis-auth` client (rustls, the OS trust store, no redirects,
+//! 10 s, 1 MiB; job 048, ADR 0042). The installer download is not here yet.
 //!
 //! Safety rules, all enforced by `aegis-license`:
 //!
@@ -14,7 +16,62 @@
 //!   downgrade the app;
 //! - an installer is accepted only if its size and SHA-256 match.
 
+use aegis_auth::http::{HttpClient, HttpRequest, is_loopback_url};
+use aegis_license::MAX_MANIFEST_BYTES;
 use aegis_license::{Artifact, Manifest, ManifestError, Offer, TrustedKeys, Version};
+
+/// Why an update check failed.
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateError {
+    /// The address is not `https://` (a loopback `http://` address is allowed
+    /// for tests and lab setups).
+    #[error("the update address must start with https://")]
+    NotHttps,
+    /// The request failed: no network, bad certificate, time out.
+    #[error("the update server could not be reached: {0}")]
+    Fetch(String),
+    /// The server answered with a status other than 200.
+    #[error("the update server answered {0}")]
+    Status(u16),
+    /// The answer is not a manifest: too large or not text.
+    #[error("the update server did not send a manifest")]
+    NotAManifest,
+    /// The manifest is not valid or not signed by a trusted update key.
+    #[error("the update manifest was refused: {0}")]
+    Manifest(#[from] ManifestError),
+}
+
+/// Fetches the manifest text from `url`. The text is not trusted yet: pass it
+/// to [`UpdateChecker::check`]. One request, no redirects.
+///
+/// # Errors
+///
+/// [`UpdateError`] for a non-HTTPS address, a failed request, a status other
+/// than 200, or a body that is too large or not text.
+pub async fn fetch_manifest<H: HttpClient>(http: &H, url: &str) -> Result<String, UpdateError> {
+    if !url.starts_with("https://") && !(url.starts_with("http://") && is_loopback_url(url)) {
+        return Err(UpdateError::NotHttps);
+    }
+    let request = HttpRequest {
+        method: "GET",
+        url: url.to_owned(),
+        headers: vec![("accept", "text/plain".to_owned())],
+        body: Vec::new(),
+    };
+    let response = http
+        .send(request)
+        .await
+        .map_err(|e| UpdateError::Fetch(e.to_string()))?;
+    if response.status != 200 {
+        return Err(UpdateError::Status(response.status));
+    }
+    if response.body.len() > MAX_MANIFEST_BYTES {
+        return Err(UpdateError::NotAManifest);
+    }
+    String::from_utf8(response.body)
+        .map(|t| t.trim().to_owned())
+        .map_err(|_| UpdateError::NotAManifest)
+}
 
 /// A newer release for this computer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +122,7 @@ pub enum UpdateStatus {
 }
 
 /// Checks manifests for one running release on one platform.
+#[derive(Debug)]
 pub struct UpdateChecker {
     keys: TrustedKeys,
     current: Version,
@@ -98,6 +156,20 @@ impl UpdateChecker {
                 .expect("the crate version is major.minor.patch"),
             platform_name(),
         )
+    }
+
+    /// Fetches the manifest from `url` and checks it.
+    ///
+    /// # Errors
+    ///
+    /// [`UpdateError`], see [`fetch_manifest`] and [`UpdateChecker::check`].
+    pub async fn check_url<H: HttpClient>(
+        &self,
+        http: &H,
+        url: &str,
+    ) -> Result<UpdateStatus, UpdateError> {
+        let text = fetch_manifest(http, url).await?;
+        Ok(self.check(&text)?)
     }
 
     /// Verifies the manifest and says what to do. Time O(n) in the manifest
