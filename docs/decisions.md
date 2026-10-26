@@ -13,6 +13,9 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - AI features are in the backlog. The v1 architecture gets ready for them now.
 - Password login for testing. Company SSO (Entra ID, Google, other OIDC) when a customer orders it.
 - The test server runs on Railway.
+- AI: the customer's own model through one server gateway first; our own small model later (D12).
+- Japan is the first export market; English and Japanese ship first (D13).
+- Library, item definition, traceability, report builder, ReqIF-first integrations and a built-in role table are decided (D14 to D19).
 
 ---
 
@@ -102,9 +105,60 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Decision:** the shared test server runs on the owner's Railway account (`docs/railway.md`), built from the branch with `deploy/Dockerfile` and the `dev-license` feature, with Railway PostgreSQL. Railway's edge forwards HTTP/1.1, so the app reaches it with gRPC-Web.
 - **Not for customers:** the `dev-license` build skips the license check. Release builds never enable that feature (`docs/release-checklist.md`).
 
+## D12. AI: customer's own model first, our own small model later
+
+- **Date:** 2026-10-26
+- **Decision:** one AI gateway in the server. It speaks to the model the customer chooses through two adapter families: OpenAI-compatible HTTP (OpenAI, Azure OpenAI, vLLM, llama.cpp, Ollama) and the Anthropic Messages API (Anthropic, Claude on Bedrock and Vertex). Keys are set by an admin, stored encrypted on the server, never on laptops. A tuned small open-weight model of our own is an optional add-on later, served through the same OpenAI-compatible adapter.
+- **Why:** customer TARAs never reach us (D3), so we have little training data; retrieval, strict output schemas and the engine as a tool give most of the value with any model. Building the gateway first makes the model replaceable.
+- **Unchanged:** D6. AI proposes, the engine computes, a human decides. Off by default.
+- **Details:** [brainstorm-product-v2.md](brainstorm-product-v2.md) section 1, [ai-backlog.md](ai-backlog.md).
+
+## D13. Japan is the first export market; UI, methodology and content languages are separate
+
+- **Date:** 2026-10-26
+- **Decision:** English and Japanese ship first. UI text uses Slint `@tr()` with catalogs bundled in the binary, and a Fluent catalog in `aegis-client` for text made in Rust (pages, errors, reports). Methodology packs carry labels per language. Project text carries a language tag and optional translations. PDFs embed a subset of Noto Sans JP (OFL-1.1). Translation of user content goes through the AI gateway or a customer's licensed service, never a hidden network call.
+- **Why:** Japanese OEMs and suppliers apply UN R155 through MLIT type approval and prefer on-premise tools, which matches D3. A Japanese PDF is broken today (Inter has no Japanese glyphs).
+- **Details:** [brainstorm-product-v2.md](brainstorm-product-v2.md) section 2.
+
+## D14. Attack tree library answers
+
+- **Date:** 2026-10-26
+- **Decision:** the eight questions in [brainstorm-attack-tree-library.md](brainstorm-attack-tree-library.md) section 7 are answered in [brainstorm-product-v2.md](brainstorm-product-v2.md) section 3: copy with an origin note; node-level tree ops, then raise the per-tree cap (target 4,096, measured); ratings travel by user choice and are flagged for review; never merge identical names silently; the Methodology Owner role publishes; a built-in demo pack from public sources; a Library panel next to the canvas; phase 0 is the first demo. Search is n-gram fuzzy plus facets without AI; multilingual embeddings come later. Saving to the library is offered, not automatic.
+- **Moves:** backlog item 057 out of "waiting for a design session".
+
+## D15. Item definition and architecture figures
+
+- **Date:** 2026-10-26
+- **Decision:** three steps. (1) Figures: image attachments with captions, stored on the server, in reports. (2) Item definition elements in `aegis-model` (component, interface, data flow, trust boundary; assets bound to components), with neutral names packs can rename. (3) A data-flow diagram drawn by `aegis-canvas`.
+- **Why:** direction section 11 put the item definition in v1 scope and it was not built; customers already have architecture pictures, so figures come first.
+
+## D16. Traceability model
+
+- **Date:** 2026-10-26
+- **Decision:** typed links the engine uses stay typed. New: requirement and verification elements, a generic trace link for relations the engine does not use, external references (Jira, Polarion, JAMA, ReqIF, URL) on every element, and suspect marking when a link's source changes. A traceability matrix page and report section show coverage.
+
+## D17. Report builder
+
+- **Date:** 2026-10-26
+- **Decision:** HTML and PDF move to one document model. Users pick sections, filters, language and branding, and save the choice as a profile. XLSX joins PDF and HTML; DOCX only on a customer order.
+
+## D18. Integrations: ReqIF first, server-side connectors second
+
+- **Date:** 2026-10-26
+- **Decision:** ReqIF export and import first (air gapped, works with Polarion, JAMA, DOORS, codebeamer). Then live connectors in the server, never in the desktop app: Jira first, Polarion and JAMA when a customer order names them. Push and link with status pull, not full two-way sync.
+- **Why:** connector tokens are company secrets and the server already sits inside the company network.
+
+## D19. Project access: a built-in role table, not Cedar
+
+- **Date:** 2026-10-26
+- **Decision:** the six roles from direction section 6 (Admin, Methodology Owner, Project Owner, Analyst, Reviewer, Viewer) and per-project membership, enforced on the server for every RPC. Roles map from SSO groups. Cedar policies only if a customer needs rules the table cannot express.
+- **Why:** fixes SEC-02 with the least new machinery; the library, AI and connectors need these permissions.
+- **Moves:** backlog item 058 out of "waiting for a design session".
+
 ## Open
 
 - Confirm D4 interpretation (working assumption in D9).
-- Accept or reject the Slint attribution condition (D7, working assumption in D9).
+- Accept or reject the Slint attribution condition (D7, working assumption in D9). This now also decides the download page for the Japanese partner.
 - Delete the four merged remote branches listed in D9.
 - Pick the first SSO provider when a customer order arrives (D10).
+- The questions in [brainstorm-product-v2.md](brainstorm-product-v2.md) section 11: the meaning of "attack loop", the Japan partner model, a vendor-hosted SaaS option (would change D3), the first customer's ALM tool, and who translates.

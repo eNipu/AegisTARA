@@ -1,6 +1,6 @@
 # AI Features: Brainstorm and Backlog
 
-- Status: backlog. Nothing here is in v1.
+- Status: backlog. Nothing here is in v1. Provider approach decided in D12 ([brainstorm-product-v2.md](brainstorm-product-v2.md) section 1); jobs 088 to 093 in `factory/backlog.md`.
 - Date: 2026-10-10
 
 ## TLDR
