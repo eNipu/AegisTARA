@@ -6,7 +6,8 @@
   `crates/aegis-model`. [Part II](#part-ii-the-system) covers the whole
   system: every other crate, its structs and fields, the database schema,
   the network paths, the main flows, and the engineering rules each part
-  follows. **Rule for maintainers: when a struct, enum, field, table, RPC or
+  follows. [Part III](#part-iii-the-target-system-planned-not-built) is the
+  planned system for the v2 requirements. **Rule for maintainers: when a struct, enum, field, table, RPC or
   flow is added or changed, update Part II in the same commit.**
 
 ---
@@ -1689,3 +1690,293 @@ else".
 | D11 enum dispatch | `AccountBackend`, `AppProvider`, `Transport`, `DbTls` |
 | P4 determinism | page rows sorted by stable keys, reports in fixed order |
 | Q3 no unwrap in library code | library code returns typed errors; `expect` only in tests and with a proven, commented invariant |
+
+---
+
+# Part III: the target system (planned, not built)
+
+Part III is the architecture for the work in
+[requirements.md](requirements.md) (decisions D12 to D24, jobs 057, 058 and
+060 onward). **Rule for maintainers: when a job builds a part described
+here, move that part into Part I or Part II in the same commit and delete it
+here.** Nothing in Part III is a promise about field names; the job's spec
+and ADR decide those.
+
+## III.0 Planned removals (D23, rule P7)
+
+Read-only users no longer follow the editor live. Job 108 removes, where
+nothing else needs them:
+
+| Part (described in Part II today) | Replaced by |
+|---|---|
+| Observer op stream and `RisksEvent` in `Watch` (ADR 0033), the observer view in the client | Open the last saved version or a baseline; a "newer version available, reload" notice (a cheap version check on a timer or on focus) |
+| `Heartbeat` every 20 s and the client `watch_silence` watchdog | Nothing, if `Watch` goes; otherwise kept only for the editor |
+| Lease changes pushed through `Watch` | The editor learns of a broken lease from `RenewLock` or `SubmitOps` answers |
+| Server numbers pushed to the editor | `GetRisks` after a confirmed batch keeps the "numbers checked" mark (job 047) |
+
+Part II keeps describing the built code until job 108 lands.
+
+## III.1 Target system context
+
+```mermaid
+flowchart LR
+    subgraph Desktop["Desktop app (aegis-shell + aegis-client)"]
+        UI["Slint window\n@tr catalogs (en, ja)\ncommand palette, inspector,\nlibrary panel, AI panel"]
+        CORE["aegis-client\nsession, workspace,\nFluent catalogs,\nreport model -> HTML/PDF/XLSX,\nReqIF and Excel import"]
+        UI <--> CORE
+    end
+    subgraph Server["aegis-server (customer hosted, one container)"]
+        ACCESS["Access check\n(roles + membership, D19)"]
+        SVC["Aegis service\n(projects, ops, baselines)"]
+        BLOB["Attachment store\n(figures, capped)"]
+        LIB["Library service\n(packs, company items,\nn-gram index, facets)"]
+        GW["AI gateway (D12)\npolicy, context builder,\noutput check, AI audit"]
+        CON["Connector worker (D18)\nJira, Polarion, JAMA\nbounded queue, timeouts"]
+        SEC["Secret store\n(provider keys, connector\ntokens, encrypted)"]
+        ACCESS --> SVC & BLOB & LIB & GW & CON
+        GW --> SEC
+        CON --> SEC
+        GW --> LIB
+    end
+    DB[("PostgreSQL")]
+    MODELS["Models chosen by the customer\nOpenAI-compatible (vLLM, llama.cpp,\nOllama, Azure OpenAI) or\nAnthropic (direct, Bedrock, Vertex)"]
+    ALM["ALM tools\nJira, Polarion, JAMA"]
+    FILES["Files\nReqIF, XLSX, PDF, HTML,\nlibrary packs"]
+    CORE -- "gRPC / gRPC-Web" --> ACCESS
+    SVC & BLOB & LIB & GW & CON --> DB
+    GW -. "opt-in, per provider policy" .-> MODELS
+    CON -. "opt-in, per project" .-> ALM
+    CORE <--> FILES
+```
+
+### III.1a Standalone mode (D22)
+
+```mermaid
+flowchart LR
+    subgraph App["One desktop process"]
+        UI2["Slint window"] <--> CORE2["aegis-client\n(same code path)"]
+        CORE2 -- "gRPC on 127.0.0.1 only,\nrandom port, no login" --> SRV2["aegis-server library\n(same service and actor)"]
+        SRV2 --> FS["Folder store\nsnapshot + op log +\nattachments"]
+        LIC["License file check\n(aegis-license)"] --> SRV2
+    end
+    FS <--> DIR[("Project folder\non disk")]
+    DIR -. "hand over, then import" .-> CUST["Customer server\n(D3)"]
+```
+
+The standalone app is the same client talking to the same server code; only
+the store and the login differ. Nothing listens on a public address. A
+project folder is the consultancy deliverable next to the report, and a
+customer imports it into their own server with history and provenance kept.
+
+What stays true from Part II: one server per customer, the server owns all
+project state, every change is a validated `Op`, numbers come only from the
+engine, and everything works air gapped except the two dotted arrows.
+
+## III.2 Where new code goes
+
+No new crate is planned. Each part starts as a module in the crate that
+owns its data; a module moves into its own crate only when a second consumer
+appears (the trigger is named in the table).
+
+| Crate | New modules | Holds | Split trigger |
+|---|---|---|---|
+| `aegis-model` | `text.rs` | `Text { value, lang, translations }` for descriptions and notes (FND-01, FND-04) | |
+| | `tree.rs` (extended), `op.rs` | Node-level tree ops and the raised per-tree cap (FND-02, FND-03) | |
+| | `item.rs` | `Component`, `Interface`, `DataFlow`, `TrustBoundary`, asset binding (ARC-02) | |
+| | `trace.rs` | `Requirement`, `Verification`, `TraceLink`, `ExternalRef`, suspect state (TRC-01 to TRC-03) | |
+| | `suggest.rs` | `SuggestionBranch`: proposed ops kept apart until accepted (FND-05) | |
+| | `library/` | Library pack format (like methodology packs: versioned JSON, caps, hash), n-gram index, facet filter, insert batch builder with origin note (LIB-01 to LIB-04) | |
+| `aegis-canvas` | `diagram.rs` | Data-flow diagram layout and drawing into the same display list (ARC-03) | |
+| `aegis-proto` | new RPC groups | Access, attachments (chunked streams), library, report profiles, AI (suggest stream, accept, reject), connectors | |
+| `aegis-server` | `store/folder.rs` | `ProjectStore` over a project folder (snapshot, op log, attachments), used by standalone mode (SHP-01, SHP-02) | |
+| | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
+| | `store/blob.rs` | Attachments in PostgreSQL with size caps (ARC-01) | |
+| | `library.rs` | Company library: states, publish permission, usage counts (LIB-05, LIB-06) | |
+| | `secrets.rs` | Encrypted credentials, key from the environment or the cloud key service | |
+| | `ai/` | Gateway: `Provider` enum over two adapters (rule D11 enum dispatch), policy table, context builder, schema and citation check, AI audit (AI-01 to AI-05) | `aegis-ai` crate when the MCP server (AI-10) needs it outside the server |
+| | `connect/` | Connector worker: one adapter per ALM tool, field mapping, push and status pull (INT-03 to INT-06) | |
+| `aegis-client` | `i18n.rs` + `locales/{en,ja}/*.ftl` | Fluent catalogs, locale choice, date and number formats (L10N-01, L10N-05) | |
+| | `report/` | `report.rs` and `pdf.rs` move here; one `ReportDoc` feeds `html.rs`, `pdf.rs`, `xlsx.rs`; `profile.rs` holds section and filter choices (RPT-01 to RPT-05) | `aegis-report` crate when the command line tool (RPT-07) must run without the client |
+| | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
+| `aegis-shell` | `ui/` with `@tr()`, `translations/ja/aegis-shell.po` | Bundled UI catalogs (L10N-01); panel slots, command palette, history panel (UI-01 to UI-04) | |
+| | `standalone.rs` | Starts the in-process server on loopback with the folder store; File > New/Open project folder (SHP-01) | |
+| `aegis-model` | `methodology/` (extended) | Element type names per pack, a plain likelihood method, catalog packs with text (DOM-01, DOM-02, DOM-04) | |
+
+Repository additions: `packs/library/` (the built-in demo library pack),
+`packs/cra/` (the EU CRA pack), `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
+where licenses allow),
+`crates/aegis-client/locales/`, `crates/aegis-shell/translations/`,
+`crates/aegis-client/assets/fonts/NotoSansJP-*` (subset at export time by
+krilla).
+
+## III.3 Target domain model (additions only)
+
+```mermaid
+classDiagram
+    direction LR
+    class Text {
+        value: String
+        lang: LangTag
+        translations: BTreeMap~LangTag_String~
+    }
+    class Component {
+        id: ComponentId
+        name: String
+        description: Text
+        parent: Option~ComponentId~
+    }
+    class Interface {
+        id: InterfaceId
+        name: String
+        kind: InterfaceKind
+    }
+    class DataFlow {
+        id: DataFlowId
+        from: ComponentId
+        to: ComponentId
+        via: Option~InterfaceId~
+    }
+    class TrustBoundary {
+        id: TrustBoundaryId
+        members: Vec~ComponentId~
+    }
+    class Requirement {
+        id: RequirementId
+        name: String
+        description: Text
+    }
+    class Verification {
+        id: VerificationId
+        method: VerificationMethod
+        result: Option~VerificationResult~
+    }
+    class TraceLink {
+        from: ElementRef
+        to: ElementRef
+        kind: TraceKind
+        confirmed_seq: u64
+    }
+    class ExternalRef {
+        system: ExternalSystem
+        key: String
+        url: Option~String~
+        synced_ms: Option~u64~
+    }
+    class Origin {
+        library_item: LibraryItemId
+        version: u32
+        nodes: Vec~NodeMapping~
+    }
+    class SuggestionBranch {
+        id: SuggestionId
+        source: Provenance
+        ops: Vec~Op~
+        citations: Vec~Citation~
+    }
+    Component "1" o-- "*" Asset : binds
+    DataFlow --> Component
+    DataFlow --> Interface
+    TrustBoundary o-- Component
+    CybersecurityGoal "1" <-- "*" Requirement : refines
+    Requirement "1" <-- "*" Verification : verifies
+    SecurityControl ..> Requirement : implements
+    AttackTree ..> Origin : copied from library
+```
+
+A link is suspect when its `from` element changed after `confirmed_seq`
+(the op sequence number at confirmation). Suspect state is derived (D10),
+never stored.
+
+`InterfaceKind`, `VerificationMethod`, `VerificationResult` and `TraceKind`
+are string keys from the methodology pack (D1: vocabulary is data).
+`ExternalSystem` is Jira, Polarion, JAMA, ReqIF or a plain URL.
+
+## III.4 AI suggestion flow
+
+```mermaid
+sequenceDiagram
+    participant U as User (desktop)
+    participant S as Server (access check)
+    participant G as AI gateway
+    participant P as Provider (customer's model)
+    participant E as Engine + linter
+    U->>S: Suggest(feature, selection)
+    S->>S: role allows feature? project classification allows provider?
+    S->>G: request with user's read scope
+    G->>G: build context (only readable elements, catalogs, library), redact
+    G->>P: prompt + JSON schema
+    P-->>G: structured output
+    G->>G: parse against schema, check every citation exists
+    G->>E: turn into Ops, validate, lint
+    E-->>G: valid ops + findings
+    G->>G: AI audit row (model, refs, response, cost)
+    G-->>U: SuggestionBranch (ghost nodes)
+    U->>S: Accept(some) / Reject(rest)
+    S->>S: accepted ops applied as normal ops, provenance = Ai + accepting user
+```
+
+The model never writes to the project, never sees elements the user cannot
+read, and never computes a number.
+
+## III.5 Connector push flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant S as Server
+    participant Q as Connector queue (bounded)
+    participant A as ALM tool
+    U->>S: Push(requirement ids, target = Jira project)
+    S->>S: role allows connector? mapping exists?
+    S->>Q: enqueue (reject with retry-after when full)
+    Q->>A: create or update item (timeout, rate limit)
+    A-->>Q: external key
+    Q->>S: Op SetExternalRef (provenance = Import)
+    S-->>U: ExternalRef shown, audit event written
+```
+
+A failed push leaves the project unchanged and shows the error on the
+element; the user retries.
+
+## III.6 Language layers
+
+```mermaid
+flowchart TB
+    OS["OS locale"] --> PICK["User setting:\nUI language, date style"]
+    PICK --> SLINT["Slint @tr catalogs\n(bundled .po)"]
+    PICK --> FLUENT["aegis-client Fluent catalogs\n(pages, errors, reports)"]
+    PACK["Methodology pack\nlabels per language"] --> PAGES["Pages and reports"]
+    FLUENT --> PAGES
+    TEXT["Project text\n(lang tag + translations)"] --> PAGES
+    GWT["AI gateway or customer MT\n(opt-in)"] -. "fills translations" .-> TEXT
+    PAGES --> REP["Report language:\nen, ja, bilingual"]
+```
+
+## III.7 Report pipeline
+
+```mermaid
+flowchart LR
+    PRJ["Project or baseline"] --> DOC
+    PROF["Report profile\n(sections, filters,\nlanguage, branding, marks)"] --> DOC
+    FIG["Figures + diagram\n(display list)"] --> DOC
+    DOC["ReportDoc\n(one model)"] --> HTML["HTML"]
+    DOC --> PDF["PDF (krilla,\nInter + Noto Sans JP)"]
+    DOC --> XLSX["XLSX"]
+    DOC --> AUD["Export audit event\n(profile, baseline, app version)"]
+```
+
+## III.8 Planned database additions
+
+| Table | Holds | Caps |
+|---|---|---|
+| `aegis_role_member` | user or SSO group, project (or all), role | rows per project capped |
+| `aegis_attachment` | project, id, media type, bytes, sha256, caption | per file and per project size caps |
+| `aegis_library_item` | id, version, state (draft, approved, deprecated), pack JSON, hash, author, usage count | item size cap as for packs |
+| `aegis_secret` | name, encrypted value, key id | admin only, never returned in clear |
+| `aegis_ai_audit` | user, project, feature, provider, model, refs, response, accepted, cost | retention by age and count, as for the event log |
+| `aegis_connector` | project, system, base URL, mapping, secret name | |
+| `aegis_report_profile` | project or company, name, profile JSON | |
+
+Project content (item definition, trace links, external references,
+descriptions) stays in the op log and snapshot like every other element, so
+baselines, diff and audit cover it with no new table.

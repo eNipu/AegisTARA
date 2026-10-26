@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(cargo:*)",
+      "Shell(for:*)",
+      "Shell(do:*)",
+      "Shell(grep:*)",
+      "Shell(done:*)",
+      "Shell(cd /Users/lamda/Documents/GitHub/AegisTARA && for i in $(seq 1 12); do out=$(cargo test -p aegis-client --test session 2>&1); if echo \"$out\" | grep -q FAILED; then echo \"$out\" > /tmp/fail.txt; echo \"captured failing run $i\"; break; fi; done; echo \"--- panics ---\"; grep -n \"panicked\" /tmp/fail.txt)",
+      "Shell(cd /Users/lamda/Documents/GitHub/AegisTARA && for i in $(seq 1 15); do out=$(cargo test -p aegis-client --test session 2>&1); if echo \"$out\" | grep -q FAILED; then echo \"=== failing run $i ===\"; echo \"$out\" | sed -n '/failures:/,$p' | head -60; break; fi; done)",
+      "Shell(cd /Users/lamda/Documents/GitHub/AegisTARA && for i in $(seq 1 25); do out=$(cargo test -p aegis-client --test session 2>&1); if echo \"$out\" | grep -q FAILED; then echo \"=== run $i ===\"; echo \"$out\" | sed -n '/failures:/,$p' | grep -A7 'panicked at'; fi; done)",
+      "Shell(cd /Users/lamda/Documents/GitHub/AegisTARA && cargo test -p aegis-client --test session an_edit_shows 2>&1 | tail -20 && for i in 1 2 3 4 5 6 7 8; do out=$(cargo test -p aegis-client --test session an_edit_shows 2>&1); if echo \"$out\" | grep -q FAILED; then echo \"FAILED on isolated run $i\"; break; else echo \"run $i ok\"; fi; done)",
+      "Shell(cd:*)",
+      "Shell(cd /Users/lamda/Documents/GitHub/AegisTARA && cargo build -p aegis-client --tests 2>&1 | tail -3 && BIN=$(ls -t target/debug/deps/session-* | grep -v '\\.d$' | head -1) && echo \"bin=$BIN\" && for round in 1 2 3 4 5 6; do for p in 1 2 3 4 5 6; do \"$BIN\" an_edit_shows --nocapture > /tmp/dbg_$p.log 2>&1 & done; wait; if grep -l FAILED /tmp/dbg_*.log >/dev/null; then echo \"=== failure in round $round ===\"; grep -l FAILED /tmp/dbg_*.log; break; fi; echo \"round $round all ok\"; done)",
+      "Shell(cd /Users/lamda/Documents/GitHub/AegisTARA && BIN=$(ls -t target/debug/deps/session-* | grep -v '\\.d$' | head -1) && for round in $(seq 1 12); do \"$BIN\" --nocapture a_second_user_follows rating_a_step an_edit_shows losing_the_lock a_silent > /tmp/run.log 2>&1; if grep -q FAILED /tmp/run.log; then echo \"=== failed on round $round ===\"; grep -E 'panicked at|assertion|left:|right:|timed out' /tmp/run.log | head -20; break; fi; echo \"round $round ok\"; done)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
