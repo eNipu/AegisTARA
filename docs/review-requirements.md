@@ -321,6 +321,7 @@ back-fixes from the other session, with what was run.
 | `scripts/deny.sh`, `tools/deny-fixtures/run.sh` (9 cases) | passed |
 | 048 `fetch_manifest`: https only, 1 MiB body cap and no redirects in `aegis-auth` `HyperClient`, no trust from transport | as documented |
 | 045 switch: only an admin; sessions end; `authenticate` checks the switch on every request | as documented, **one finding** below |
+| 054 download in a shared temp folder: a planted symlink or file could be written through | fixed (`create_new` part file, a private 0700 folder per download); the tests fail on the old code, ADR 0048 section 7 |
 
 Finding fixed (job 052 commit): a login that was already hashing when an admin
 turned password login off could still store a session. It was unusable while
