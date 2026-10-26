@@ -19,6 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use aegis_canvas::{Direction, Point, RenderOptions, Size, Viewport, render};
+use aegis_client::audit::EventGroup;
 use aegis_client::commands::{Command, Edit};
 use aegis_client::report::ExportKind;
 use aegis_client::session::Session;
@@ -53,6 +54,8 @@ struct State {
     baseline: Option<usize>,
     /// The user row chosen on the administration page.
     user: Option<usize>,
+    /// The event log filter chosen on the administration page.
+    event_group: Option<EventGroup>,
 }
 
 /// A password login request: user, password, keep the login.
@@ -188,6 +191,7 @@ impl Controller {
                 press: None,
                 baseline: None,
                 user: None,
+                event_group: None,
             }),
             hooks,
         });
@@ -335,6 +339,19 @@ impl Controller {
         on!(on_set_password_login, |c, enabled| c.send(Command::Admin(
             AdminAction::SetPasswordLogin { enabled }
         )));
+        on!(on_set_event_filter, |c, which| {
+            c.state.borrow_mut().event_group = match which {
+                1 => Some(EventGroup::Logins),
+                2 => Some(EventGroup::Exports),
+                3 => Some(EventGroup::AdminActions),
+                _ => None,
+            };
+            if let Some(w) = c.window.upgrade() {
+                w.set_event_filter(which);
+            }
+            c.apply_events();
+        });
+        on!(on_refresh_events, |c| c.send(Command::LoadEvents));
         on!(on_check_for_updates, |c| c.send(Command::CheckForUpdates));
         on!(on_log_out, |c| c.send(Command::LogOut));
         on!(on_change_password, |c, current, new| c.send(
@@ -1231,6 +1248,7 @@ impl Controller {
             w.set_company_login_available(settings.company_login_available);
         }
         self.apply_users();
+        self.apply_events();
 
         let Some(project) = view.project.as_ref() else {
             w.set_has_project(false);
@@ -1712,6 +1730,40 @@ impl Controller {
         w.set_user_selected(st.user.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1));
         w.set_selected_user_admin(chosen.is_some_and(|u| u.admin));
         w.set_selected_user_disabled(chosen.is_some_and(|u| u.disabled));
+    }
+
+    /// The event log, filtered, and the license facts.
+    fn apply_events(&self) {
+        let (Some(w), Some(view)) = (self.window.upgrade(), self.view()) else {
+            return;
+        };
+        let group = self.state.borrow().event_group;
+        let shown = aegis_client::audit::filter(&view.events, group);
+        w.set_event_rows(rows(
+            shown
+                .iter()
+                .map(|e| {
+                    vec![
+                        e.when.clone(),
+                        e.who.clone(),
+                        e.what.clone(),
+                        e.about.clone(),
+                    ]
+                })
+                .collect(),
+        ));
+        w.set_events_text(s(match (&view.events_error, shown.is_empty()) {
+            (Some(why), _) => why,
+            (None, true) => "No events to show.",
+            (None, false) => "",
+        }));
+        let license = match &view.connection {
+            ConnectionView::Online {
+                license: Some(l), ..
+            } => l.lines().join("\n"),
+            _ => "No license is checked on this server (development build).".to_owned(),
+        };
+        w.set_license_text(s(&license));
     }
 
     /// The tree, its title, and the inspector.

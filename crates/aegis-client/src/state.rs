@@ -10,6 +10,7 @@ use crate::pages::{
     DamageRow, GoalDetail, GoalRowOf, Overview, ProblemRow, RiskRow, ThreatDetail, TreeRow,
     Vocabulary,
 };
+use crate::time::format_ms;
 use crate::view::{Inspector, Page, ThreatRow, TreeView};
 
 /// How the client stands with the server.
@@ -62,6 +63,12 @@ pub struct LicenseView {
     /// Whole days until the paid period ends (active) or the grace period
     /// ends (grace). `None` once expired.
     pub days_left: Option<u64>,
+    /// When the paid period ends, in UTC.
+    pub valid_until: String,
+    /// When the grace period ends, in UTC.
+    pub grace_until: String,
+    /// Licensed features, sorted.
+    pub features: Vec<String>,
 }
 
 impl LicenseView {
@@ -87,7 +94,38 @@ impl LicenseView {
             seats_used: info.seats_used,
             days_left: (kind != LicenseKind::Expired)
                 .then(|| end.saturating_sub(now_secs) / 86_400),
+            valid_until: format_ms(info.expires_at.saturating_mul(1000)),
+            grace_until: format_ms(info.grace_ends_at.saturating_mul(1000)),
+            features: {
+                let mut f = info.features.clone();
+                f.sort();
+                f
+            },
         })
+    }
+
+    /// The license page, one fact per line.
+    #[must_use]
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("Licensed to {}", self.customer),
+            format!("{} of {} seats in use", self.seats_used, self.seats),
+        ];
+        lines.push(match self.kind {
+            LicenseKind::Active => format!("Valid until {}", self.valid_until),
+            LicenseKind::Grace => format!(
+                "The paid period ended on {}. Everything works until {}.",
+                self.valid_until, self.grace_until
+            ),
+            LicenseKind::Expired => format!(
+                "The license expired on {} (grace ended {}). Projects can be read, not changed.",
+                self.valid_until, self.grace_until
+            ),
+        });
+        if !self.features.is_empty() {
+            lines.push(format!("Features: {}", self.features.join(", ")));
+        }
+        lines
     }
 
     /// A sentence to show when the license needs attention, with how bad it is.
@@ -377,6 +415,10 @@ pub struct ViewModel {
     pub admin_text: Option<String>,
     /// The login switch, once an administrator has loaded it.
     pub settings: Option<ServerSettingsView>,
+    /// The server's event log in words, newest first (administrators).
+    pub events: Vec<crate::audit::EventRow>,
+    /// Why the event log is empty when it could not be read.
+    pub events_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -396,6 +438,39 @@ mod tests {
             grace_ends_at,
             features: vec![],
         }
+    }
+
+    #[test]
+    fn the_license_page_has_dates_and_features() {
+        let day = 86_400;
+        let mut i = info(State::Active, 20_000 * day, 20_030 * day);
+        i.features = vec!["pdf".into(), "baselines".into()];
+        let v = LicenseView::from_info(&i, 19_000 * day).expect("view");
+        assert_eq!(v.valid_until, "4 Oct 2024 00:00 UTC");
+        assert_eq!(v.grace_until, "3 Nov 2024 00:00 UTC");
+        assert_eq!(v.features, ["baselines", "pdf"]);
+        let lines = v.lines();
+        assert!(lines.iter().any(|l| l.contains("Example")), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.contains("1 of 4 seats")),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.contains("4 Oct 2024")), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.contains("baselines, pdf")),
+            "features are sorted: {lines:?}"
+        );
+        // Expired: the page says so and still shows when it ended.
+        let over = LicenseView::from_info(
+            &info(State::Expired, 20_000 * day, 20_030 * day),
+            99_999 * day,
+        )
+        .expect("view");
+        assert!(
+            over.lines().iter().any(|l| l.contains("expired")),
+            "{:?}",
+            over.lines()
+        );
     }
 
     #[test]

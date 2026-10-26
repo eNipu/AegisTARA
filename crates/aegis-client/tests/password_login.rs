@@ -366,3 +366,75 @@ async fn the_login_switch_is_read_and_refused_without_a_company_login() {
     );
     server.stop().await;
 }
+
+#[tokio::test]
+async fn an_admin_reads_the_event_log_and_a_user_is_refused() {
+    let server = TestServer::start().await;
+    let (admin, _l) = server
+        .log_in(TransportKind::Grpc, "admin", ADMIN_PASSWORD)
+        .await;
+    admin
+        .create_user(pb::CreateUserRequest {
+            username: "bob".into(),
+            display_name: String::new(),
+            password: "bobs long password".into(),
+            admin: false,
+        })
+        .await
+        .expect("create");
+    let (bob, _l2) = server
+        .log_in(TransportKind::Grpc, "bob", "bobs long password")
+        .await;
+    let events = admin.events(50).await.expect("events");
+    assert_eq!(events[0].kind, "login_ok");
+    assert_eq!(events[0].actor, "bob");
+    let refused = bob.events(50).await.expect_err("not an admin");
+    assert_eq!(code(&refused), Some(&ServerCode::NotAdmin));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn the_session_shows_events_and_the_license_to_an_admin() {
+    use aegis_client::audit::EventGroup;
+    use aegis_client::commands::Command;
+    use aegis_client::session::{Session, SessionConfig};
+    let server = TestServer::start().await;
+    let public = Public::connect(&server.url, TransportKind::Grpc)
+        .await
+        .expect("public");
+    let s = public
+        .log_in("admin", ADMIN_PASSWORD, "test")
+        .await
+        .expect("login");
+    let login = Arc::new(PasswordLogin::new());
+    login.set(Some(s.token));
+    let (session, _task) = Session::start(&server.url, login, SessionConfig::new("admin"));
+    let mut view = session.subscribe();
+    let wait = |ok: fn(&aegis_client::state::ViewModel) -> bool| {
+        let mut view = view.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if ok(&view.borrow_and_update()) {
+                        return;
+                    }
+                    view.changed().await.expect("session alive");
+                }
+            })
+            .await
+            .expect("timed out");
+        }
+    };
+    wait(|vm| vm.me.as_ref().is_some_and(|m| m.admin)).await;
+    session.send(Command::LoadEvents).expect("sent");
+    wait(|vm| !vm.events.is_empty()).await;
+    {
+        let vm = view.borrow_and_update();
+        assert_eq!(vm.events[0].what, "Logged in");
+        assert_eq!(vm.events[0].group, EventGroup::Logins);
+        assert_eq!(vm.events_error, None);
+    }
+    // The test server has no license (development), so there is no license page.
+    assert!(view.borrow().connection != aegis_client::state::ConnectionView::LoginRequired);
+    server.stop().await;
+}
