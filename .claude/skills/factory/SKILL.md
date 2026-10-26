@@ -63,8 +63,9 @@ paths to read, and the one path to write. Never paste conversation context into 
 ## Commands
 
 ### `/factory <feature>`
-1. Job id: next 3-digit number after the highest id in board.json, plus a short kebab slug
-   (`004-export-csv`). Create `factory/jobs/<job-id>/`. Add the job to board.json with `stage: spec`.
+1. Job id: if the feature text ends with a planned id `(NNN-slug)` that is not yet in board.json,
+   use it (docs/requirements.md refers to jobs by these ids). Otherwise the next 3-digit number
+   after the highest id in board.json, plus a short kebab slug (`004-export-csv`). Create `factory/jobs/<job-id>/`. Add the job to board.json with `stage: spec`.
 2. Run **Steps 1–5** below.
 
 ### `/factory next`
