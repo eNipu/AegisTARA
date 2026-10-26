@@ -77,7 +77,7 @@ jobs:
       - name: Install system libraries for aegis-shell
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
+          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev poppler-utils
       # One cache entry holds the cargo registry and git sources plus the
       # workspace target/ (ADR 0025). The key hashes the root Cargo.lock, so a
       # new crate or dependency changes the key with no workflow edit.
@@ -172,7 +172,7 @@ jobs:
       - name: Install system libraries for aegis-shell
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
+          sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev poppler-utils
       # Library only: dev-dependencies (divan, proptest) may need a newer
       # compiler than the crate itself. Same discovery rule as scripts/ci.sh.
       - name: cargo check --locked (each crate)

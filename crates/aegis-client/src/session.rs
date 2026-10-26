@@ -1078,19 +1078,24 @@ impl<P: CredentialProvider> Actor<P> {
             // Building and writing are both blocking work (R5).
             let written = tokio::task::spawn_blocking(move || {
                 let ws = Workspace::new(project, seq);
-                let text = match kind {
-                    ExportKind::Report => Some(crate::report::report_html(&ws, &ctx)),
-                    ExportKind::RiskRegister => Some(crate::report::risk_register_csv(&ws, &ctx)),
-                    ExportKind::TreeSvg => {
-                        tree.and_then(|t| crate::report::tree_svg(&ws, t, residual))
+                let bytes: Vec<u8> = match kind {
+                    ExportKind::Report => Some(crate::report::report_html(&ws, &ctx).into_bytes()),
+                    ExportKind::ReportPdf => {
+                        Some(crate::pdf::report_pdf(&ws, &ctx).map_err(|e| e.to_string())?)
                     }
+                    ExportKind::RiskRegister => {
+                        Some(crate::report::risk_register_csv(&ws, &ctx).into_bytes())
+                    }
+                    ExportKind::TreeSvg => tree
+                        .and_then(|t| crate::report::tree_svg(&ws, t, residual))
+                        .map(String::into_bytes),
                 }
                 .ok_or_else(|| "there is nothing to export".to_owned())?;
                 if let Some(dir) = path.parent() {
                     std::fs::create_dir_all(dir)
                         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
                 }
-                std::fs::write(&path, text)
+                std::fs::write(&path, bytes)
                     .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 Ok::<_, String>(path.display().to_string())
             })
