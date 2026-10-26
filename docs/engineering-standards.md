@@ -30,6 +30,7 @@ The rules use MUST (required), SHOULD (default, deviations need a written reason
 | P4 | Deterministic by default | The same input gives the same output, byte for byte. Needed for signed reports, hashes, diffs, and tests. |
 | P5 | Costs are visible | Allocation, cloning, locking, and I/O should be easy to spot when reading code. |
 | P6 | Every rule is teachable | If we cannot explain why a rule exists, we remove it. |
+| P7 | Features earn their complexity | A feature that adds technical complexity without business value is reduced or removed (owner rule, decision D23). A spec names the business value of each moving part. |
 
 ---
 

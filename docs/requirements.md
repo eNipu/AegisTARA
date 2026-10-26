@@ -3,7 +3,7 @@
 - Status: accepted as the plan of record; the owner can change any line.
 - Date: 2026-10-26
 - Sources: [brainstorm-product-v2.md](brainstorm-product-v2.md) (why),
-  decisions D12 to D19 in [decisions.md](decisions.md),
+  decisions D12 to D24 in [decisions.md](decisions.md),
   [direction-v1.md](direction-v1.md) section 11 (v1 scope),
   [security-and-architecture-review.md](security-and-architecture-review.md)
   (SEC-01 to SEC-12), [ai-backlog.md](ai-backlog.md).
@@ -11,8 +11,10 @@
   A requirement with no job is not planned yet.
 
 Priority: **M** must (blocks the phase), **S** should, **C** could.
-Phase: **4** harden and fill model gaps, **5** Japan-ready product, **6**
-traceability and integrations, **7** AI. Phases 1 to 3 are done
+Phase: **4** consultancy-ready (standalone app, model gaps, Japanese,
+reports, library), **5** client deployments (security, roles, UI polish,
+release), **6** traceability and integrations, **7** AI. The order follows
+the business model: the owner's consultancy uses the tool first (D21, D22). Phases 1 to 3 are done
 ([status-and-roadmap.md](status-and-roadmap.md)).
 
 ---
@@ -42,11 +44,26 @@ traceability and integrations, **7** AI. Phases 1 to 3 are done
 | G38 | No signed installers, no production keys, no offline bundle | G13 in the roadmap; ADR 0034 | Cannot ship to a customer | 099, 100 |
 | G39 | No Japanese or English user manual, no product security pack for vendor questionnaires | `docs/` holds engineering docs only | Japanese buyers ask for both before a PoC | 102, 103 |
 | G40 | Reviews of jobs 027 to 056 still pending | `review-requirements.md` | Known unknowns before customers | Roadmap item 1 |
-| G41 | D4 and D7 unconfirmed | `decisions.md` Open | D7 decides the download page and the Slint license cost | Owner |
+| G41 | ~~D4 and D7 unconfirmed~~ | Both confirmed 2026-10-26 | | Done |
+| G42 | No way to work without a server | The app needs `aegis-server` and PostgreSQL or memory | The consultancy and small projects need a single-user app | 107 |
+| G43 | The live observer view costs a streaming path, heartbeats and a watchdog with no business value | ADR 0033, `Watch` in `aegis.proto` | Complexity without value (owner rule P7) | 108 |
+| G44 | Element type names ("damage scenario") are fixed in pages and reports | `pages.rs`, `report.rs` | CRA, cloud and medical work use other words | 109 |
+| G45 | Packs hold catalog ID syntax only, no catalog text; only attack-potential and direct feasibility | `methodology/catalog.rs` | STRIDE plus MITRE work and CRA packs need catalog text and a plain likelihood scale | 109, 112 |
+| G46 | `deny.toml` treats dev-dependencies like shipped code | `deny.toml`, D5 | D5 now allows any license for development-only tools | 110 |
 
 ---
 
 ## 2. Functional requirements
+
+### 2.0 Product shape (SHP)
+
+| ID | Requirement | Pri | Phase | Job |
+|---|---|---|---|---|
+| SHP-01 | Standalone mode: the app runs without a separate server, with the server library inside the app on loopback only, projects in a folder (snapshot and op log), no login (D22) | M | 4 | 107 |
+| SHP-02 | A standalone project folder can be handed to a client and imported into a server, history and provenance kept | M | 4 | 107 |
+| SHP-03 | The app checks the license file itself in standalone mode | M | 4 | 107 |
+| SHP-04 | Read-only users open the last saved version or a baseline and see a "newer version available" notice; no live stream (D4, D23) | M | 4 | 108 |
+| SHP-05 | The editor keeps the lease and the "numbers checked" mark without the observer stream | M | 4 | 108 |
 
 ### 2.1 Model foundations (FND)
 
@@ -58,25 +75,36 @@ traceability and integrations, **7** AI. Phases 1 to 3 are done
 | FND-04 | Text fields carry a language tag and optional translations (capped count) | S | 5 | 069 |
 | FND-05 | A suggestion branch holds proposed ops (from AI or the library) apart from the project until accepted; accept and reject are ops with provenance | M | 7 | 089 |
 
+### 2.1a Domains beyond automotive (DOM)
+
+| ID | Requirement | Pri | Phase | Job |
+|---|---|---|---|---|
+| DOM-01 | Packs name the element types (for example "harm" instead of "damage scenario"); pages, reports and exports use those names | M | 4 | 109 |
+| DOM-02 | A plain likelihood method (pack-defined scale, rated directly) next to attack potential | M | 4 | 109 |
+| DOM-03 | A product-security pack for the EU CRA (products with digital elements), written from public sources | M | 4 | 111 |
+| DOM-04 | Catalog packs with names and descriptions (CAPEC, ATT&CK, EMB3D) where the catalog license allows redistribution, with attribution | S | 5 | 112 |
+| DOM-05 | A STRIDE plus MITRE pack for services and cloud | S | 5 | 112 |
+| DOM-06 | Medical and industrial packs | C | on order | none |
+
 ### 2.2 Access (ACC)
 
 | ID | Requirement | Pri | Phase | Job |
 |---|---|---|---|---|
-| ACC-01 | Built-in roles (Admin, Methodology Owner, Project Owner, Analyst, Reviewer, Viewer) and project membership enforced on the server for every RPC (fixes SEC-02) | M | 4 | 058 |
-| ACC-02 | Roles map from SSO groups when company login is used | S | 4 | 058 |
-| ACC-03 | Library publishing, AI use and connector use are permissions in the same table | M | 4 | 058 |
+| ACC-01 | Built-in roles (Admin, Methodology Owner, Project Owner, Analyst, Reviewer, Viewer) and project membership enforced on the server for every RPC (fixes SEC-02) | M | 5 | 058 |
+| ACC-02 | Roles map from SSO groups when company login is used | S | 5 | 058 |
+| ACC-03 | Library publishing, AI use and connector use are permissions in the same table | M | 5 | 058 |
 
 ### 2.3 Languages (L10N)
 
 | ID | Requirement | Pri | Phase | Job |
 |---|---|---|---|---|
-| L10N-01 | All UI text goes through translation (`@tr` in Slint, a Fluent catalog in `aegis-client`); catalogs are bundled in the binary | M | 5 | 066 |
-| L10N-02 | The user picks the UI language (default from the OS); it switches without losing work | M | 5 | 066 |
-| L10N-03 | A test fails when a shipped locale lacks a key; a pseudo-locale screenshot test catches clipped text | M | 5 | 066 |
-| L10N-04 | Japanese text renders in the UI (system CJK fallback) and in the PDF (embedded, subset Noto Sans JP); Japanese IME works in every field | M | 5 | 067 |
-| L10N-05 | Dates and numbers follow the locale; the date style is a user setting | S | 5 | 067 |
-| L10N-06 | Full Japanese translation of the UI, reports and the built-in methodology pack labels | M | 5 | 068 |
-| L10N-07 | Methodology packs carry labels per language | M | 5 | 068 |
+| L10N-01 | All UI text goes through translation (`@tr` in Slint, a Fluent catalog in `aegis-client`); catalogs are bundled in the binary | M | 4 | 066 |
+| L10N-02 | The user picks the UI language (default from the OS); it switches without losing work | M | 4 | 066 |
+| L10N-03 | A test fails when a shipped locale lacks a key; a pseudo-locale screenshot test catches clipped text | M | 4 | 066 |
+| L10N-04 | Japanese text renders in the UI (system CJK fallback) and in the PDF (embedded, subset Noto Sans JP); Japanese IME works in every field | M | 4 | 067 |
+| L10N-05 | Dates and numbers follow the locale; the date style is a user setting | S | 4 | 067 |
+| L10N-06 | Full Japanese translation of the UI, reports and the built-in methodology pack labels | M | 4 | 068 |
+| L10N-07 | Methodology packs carry labels per language | M | 4 | 068 |
 | L10N-08 | Reports in English, Japanese or bilingual | S | 5 | 069, 071 |
 | L10N-09 | German and simplified Chinese catalogs | C | later | none |
 
@@ -84,12 +112,12 @@ traceability and integrations, **7** AI. Phases 1 to 3 are done
 
 | ID | Requirement | Pri | Phase | Job |
 |---|---|---|---|---|
-| RPT-01 | HTML and PDF come from one document model (no drift) | M | 5 | 070 |
-| RPT-02 | The user selects sections and filters (risk level, asset, component, baseline) before export | M | 5 | 071 |
-| RPT-03 | Report profiles are saved per project and per company | S | 5 | 071 |
-| RPT-04 | Cover, revision history, logo, document ID, approver names, classification mark on every page | M | 5 | 071 |
-| RPT-05 | XLSX export: risk register and a full workbook (one sheet per element type) | M | 5 | 072 |
-| RPT-06 | Figures (architecture images, architecture canvas) and the traceability matrix are report sections | M | 5, 6 | 073, 075, 078 |
+| RPT-01 | HTML and PDF come from one document model (no drift) | M | 4 | 070 |
+| RPT-02 | The user selects sections and filters (risk level, asset, component, baseline) before export | M | 4 | 071 |
+| RPT-03 | Report profiles are saved per project and per company | S | 4 | 071 |
+| RPT-04 | Cover, revision history, logo, document ID, approver names, classification mark on every page | M | 4 | 071 |
+| RPT-05 | XLSX export: risk register and a full workbook (one sheet per element type) | M | 4 | 072 |
+| RPT-06 | Figures (architecture images, architecture canvas) and the traceability matrix are report sections | M | 4, 6 | 073, 075, 078 |
 | RPT-07 | Headless report generation from a command line tool for CI pipelines | C | 6 | 104 |
 | RPT-08 | DOCX export | C | later | none |
 
@@ -97,8 +125,8 @@ traceability and integrations, **7** AI. Phases 1 to 3 are done
 
 | ID | Requirement | Pri | Phase | Job |
 |---|---|---|---|---|
-| ARC-01 | Attach PNG, JPEG and sanitized SVG figures with captions to the project or an element; size capped; stored on the server | M | 5 | 073 |
-| ARC-02 | Item definition elements: component, interface, data flow, trust boundary; assets bound to components; ops, store, diff, lint | M | 5 | 074 |
+| ARC-01 | Attach PNG, JPEG and sanitized SVG figures with captions to the project or an element; size capped; stored on the server | M | 4 | 073 |
+| ARC-02 | Item definition elements: component, interface, data flow, trust boundary; assets bound to components; ops, store, diff, lint | M | 4 | 074 |
 | ARC-03 | Architecture diagram on the canvas (data-flow style), user-placed positions plus auto-layout, click-through to threats | S | 6 | 075 |
 | ARC-04 | Import from draw.io, SysML v2, ARXML | C | later | none |
 
@@ -111,24 +139,25 @@ traceability and integrations, **7** AI. Phases 1 to 3 are done
 | TRC-03 | Requirement and verification elements linked to goals and controls | M | 6 | 077 |
 | TRC-04 | Traceability matrix page with coverage numbers, also a report section | M | 6 | 078 |
 | INT-01 | ReqIF export and import of goals, requirements, controls and claims with stable identifiers | M | 6 | 079 |
-| INT-02 | Excel TARA import with a column mapping step and a dry-run preview | M | 5 | 080 |
+| INT-02 | Excel TARA import with a column mapping step and a dry-run preview | M | 4 | 080 |
 | INT-03 | Server-side connector framework: admin-set encrypted credentials, per-project field mapping, push and link, status pull, audit events, bounded queues and timeouts | S | 6 | 094 |
 | INT-04 | Jira (Cloud and Data Center) connector | S | 6 | 094 |
 | INT-05 | Polarion connector | S | on order | 095 |
 | INT-06 | JAMA connector | S | on order | 096 |
+| INT-07 | Public API for external plugins: service accounts with scoped API tokens, the published `aegis.proto`, an API guide with an example bridge (D20) | S | 6 | 106 |
 
 ### 2.7 Attack tree library (LIB)
 
 | ID | Requirement | Pri | Phase | Job |
 |---|---|---|---|---|
-| LIB-01 | Library packs (versioned JSON, license field, hash, decode caps) for leaves, fragments, complete trees and templates | M | 5 | 057 |
-| LIB-02 | Library panel next to the canvas: fuzzy n-gram search (works for Japanese), facet chips, preview | M | 5 | 057 |
-| LIB-03 | Insert as a new tree, under a gate, or in place of a leaf; copy with an origin note; one undo step; ratings travel by user choice and are flagged for review | M | 5 | 057 |
-| LIB-04 | Never merge identical step names silently | M | 5 | 057 |
+| LIB-01 | Library packs (versioned JSON, license field, hash, decode caps) for leaves, fragments, complete trees and templates | M | 4 | 057 |
+| LIB-02 | Library panel next to the canvas: fuzzy n-gram search (works for Japanese), facet chips, preview | M | 4 | 057 |
+| LIB-03 | Insert as a new tree, under a gate, or in place of a leaf; copy with an origin note; one undo step; ratings travel by user choice and are flagged for review | M | 4 | 057 |
+| LIB-04 | Never merge identical step names silently | M | 4 | 057 |
 | LIB-05 | Company library on the server with draft, approved, deprecated states; publishing needs the Methodology Owner role | S | 6 | 087 |
 | LIB-06 | Context suggestions ranked by the selected element's facets, with a "why suggested" line | S | 6 | 087 |
 | LIB-07 | "Save as library item" offered after an insert or large edit | S | 6 | 087 |
-| LIB-08 | Templates with slots and attack loop fragments (repeat count, unrolled at insert) | C | 6 | 087 |
+| LIB-08 | Templates with slots; the library holds attack trees, technical attack trees (fragments) and attack lists (leaves) with interface, asset and attack type tags | S | 6 | 087 |
 | LIB-09 | Meaning based multilingual search | S | 7 | 092 |
 
 ### 2.8 UI (UI)
@@ -165,6 +194,8 @@ traceability and integrations, **7** AI. Phases 1 to 3 are done
 | ID | Requirement | Pri | Job |
 |---|---|---|---|
 | NFR-01 | Sovereignty: every feature works air gapped except live connectors and cloud AI providers, which are opt-in | M | all |
+| NFR-10 | Every feature names its business value; complexity without value is removed (P7, D23) | M | all |
+| NFR-11 | Development-only tools may use any license; nothing from them ships; `deny.toml` checks the shipped graph (D5) | M | 110 |
 | NFR-02 | Engineering standards (D8) apply to every new part: caps (R3), bounded queues (R4), timeouts (R6), determinism (P4), no entity names in errors (R6) | M | all |
 | NFR-03 | All open SEC findings closed before the first customer deployment | M | 058, 060 to 063 |
 | NFR-04 | New dependencies pass D5 and `cargo-deny`; model weights and fonts get a license review | M | all |
