@@ -429,6 +429,9 @@ impl Launcher {
             .ok()
             .filter(|u| !u.is_empty())
             .unwrap_or_else(|| self.settings.borrow().update_url.clone());
+        if let Some(dir) = std::env::var_os("AEGIS_UPDATE_DIR").filter(|d| !d.is_empty()) {
+            config.update_dir = dir.into();
+        }
         config.on_log_out = Some(LogOutHook(Arc::new(move || {
             if let AppProvider::Password(p) = &*forget {
                 p.forget();

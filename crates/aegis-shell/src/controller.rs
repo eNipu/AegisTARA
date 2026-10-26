@@ -368,6 +368,7 @@ impl Controller {
         });
         on!(on_refresh_events, |c| c.send(Command::LoadEvents));
         on!(on_check_for_updates, |c| c.send(Command::CheckForUpdates));
+        on!(on_download_update, |c| c.send(Command::DownloadUpdate));
         on!(on_log_out, |c| c.send(Command::LogOut));
         on!(on_change_password, |c, current, new| c.send(
             Command::ChangePassword {

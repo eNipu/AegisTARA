@@ -1103,6 +1103,10 @@ pub enum Command {
     /// Fetch the signed update manifest and say whether a newer release
     /// exists (the answer is a notice).
     CheckForUpdates,
+    /// Download the installer of the release the last check offered, check
+    /// its size and SHA-256 against the signed manifest, and say where it is
+    /// (the answer is a notice). Nothing is run.
+    DownloadUpdate,
     /// Stop the session.
     Shutdown,
 }

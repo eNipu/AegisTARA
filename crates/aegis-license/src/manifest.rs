@@ -17,7 +17,7 @@
 
 use std::fmt;
 
-use ring::digest::{SHA256, digest};
+use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 
 use crate::envelope;
@@ -153,11 +153,68 @@ impl Artifact {
     ///
     /// [`ManifestError::DownloadMismatch`].
     pub fn verify_download(&self, data: &[u8]) -> Result<(), ManifestError> {
-        if data.len() as u64 != self.bytes {
+        let mut check = self.start_check();
+        check.update(data)?;
+        check.finish()
+    }
+
+    /// Starts checking a download that arrives in pieces, so a large
+    /// installer never has to sit in memory. Feed every piece to
+    /// [`DownloadCheck::update`], then call [`DownloadCheck::finish`].
+    #[must_use]
+    pub fn start_check(&self) -> DownloadCheck<'_> {
+        DownloadCheck {
+            artifact: self,
+            hash: Context::new(&SHA256),
+            seen: 0,
+        }
+    }
+}
+
+/// A download being checked piece by piece against an [`Artifact`].
+///
+/// It refuses more bytes than the signed size as soon as they arrive, so a
+/// server that keeps sending cannot make the client store more than the
+/// manifest announced. Time O(n) in the bytes, memory O(1).
+pub struct DownloadCheck<'a> {
+    artifact: &'a Artifact,
+    hash: Context,
+    seen: u64,
+}
+
+impl DownloadCheck<'_> {
+    /// Adds the next piece.
+    ///
+    /// # Errors
+    ///
+    /// [`ManifestError::DownloadMismatch`] if the pieces so far are longer
+    /// than the signed size.
+    pub fn update(&mut self, piece: &[u8]) -> Result<(), ManifestError> {
+        self.seen = self.seen.saturating_add(piece.len() as u64);
+        if self.seen > self.artifact.bytes {
+            return Err(ManifestError::DownloadMismatch);
+        }
+        self.hash.update(piece);
+        Ok(())
+    }
+
+    /// Bytes accepted so far.
+    #[must_use]
+    pub fn seen(&self) -> u64 {
+        self.seen
+    }
+
+    /// Ends the check: the size and the SHA-256 must both match.
+    ///
+    /// # Errors
+    ///
+    /// [`ManifestError::DownloadMismatch`].
+    pub fn finish(self) -> Result<(), ManifestError> {
+        if self.seen != self.artifact.bytes {
             return Err(ManifestError::DownloadMismatch);
         }
         // The hash is public, so an ordinary comparison leaks nothing.
-        if hex(digest(&SHA256, data).as_ref()) == self.sha256 {
+        if hex(self.hash.finish().as_ref()) == self.artifact.sha256 {
             Ok(())
         } else {
             Err(ManifestError::DownloadMismatch)
@@ -333,6 +390,8 @@ fn download_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use ring::digest::digest;
+
     use super::*;
 
     fn artifact(platform: &str) -> Artifact {
@@ -413,6 +472,30 @@ mod tests {
             Err(ManifestError::DownloadMismatch)
         );
         assert_eq!(a.verify_download(b""), Err(ManifestError::DownloadMismatch));
+    }
+
+    #[test]
+    fn a_download_in_pieces_is_checked_as_it_arrives() {
+        let a = artifact("linux-x86_64");
+        let mut ok = a.start_check();
+        for piece in [&b"inst"[..], b"", b"al", b"ler"] {
+            ok.update(piece).expect("piece");
+        }
+        assert_eq!(ok.seen(), 9);
+        assert!(ok.finish().is_ok());
+
+        // Too many bytes are refused at the piece that crosses the size.
+        let mut long = a.start_check();
+        long.update(b"installer").expect("all of it");
+        assert_eq!(long.update(b"!"), Err(ManifestError::DownloadMismatch));
+
+        // Too few, or the wrong ones, fail at the end.
+        let mut short = a.start_check();
+        short.update(b"install").expect("part");
+        assert_eq!(short.finish(), Err(ManifestError::DownloadMismatch));
+        let mut wrong = a.start_check();
+        wrong.update(b"installeR").expect("same length");
+        assert_eq!(wrong.finish(), Err(ManifestError::DownloadMismatch));
     }
 
     #[test]

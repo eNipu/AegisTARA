@@ -6,7 +6,9 @@
 //! also come from a file or a share, which suits air gapped sites.
 //! [`fetch_manifest`] and [`UpdateChecker::check_url`] fetch it over HTTPS
 //! with the `aegis-auth` client (rustls, the OS trust store, no redirects,
-//! 10 s, 1 MiB; job 048, ADR 0042). The installer download is not here yet.
+//! 10 s, 1 MiB; job 048, ADR 0042). [`UpdateOffer::download`] streams the
+//! installer to a file and checks its signed size and SHA-256 before the file
+//! gets its final name (job 054, ADR 0048).
 //!
 //! Safety rules, all enforced by `aegis-license`:
 //!
@@ -16,7 +18,11 @@
 //!   downgrade the app;
 //! - an installer is accepted only if its size and SHA-256 match.
 
-use aegis_auth::http::{HttpClient, HttpRequest, is_loopback_url};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
+use aegis_auth::error::AuthError;
+use aegis_auth::http::{HttpClient, HttpDownload, HttpRequest, is_loopback_url};
 use aegis_license::MAX_MANIFEST_BYTES;
 use aegis_license::{Artifact, Manifest, ManifestError, Offer, TrustedKeys, Version};
 
@@ -39,6 +45,16 @@ pub enum UpdateError {
     /// The manifest is not valid or not signed by a trusted update key.
     #[error("the update manifest was refused: {0}")]
     Manifest(#[from] ManifestError),
+    /// The installer's size or checksum differs from the signed manifest.
+    /// The file was deleted.
+    #[error("the downloaded file does not match the signed size and checksum, and was deleted")]
+    DownloadMismatch,
+    /// The installer could not be fetched.
+    #[error("the installer could not be downloaded: {0}")]
+    Download(String),
+    /// The installer could not be written to disk.
+    #[error("the installer could not be saved: {0}")]
+    Disk(String),
 }
 
 /// Fetches the manifest text from `url`. The text is not trusted yet: pass it
@@ -96,6 +112,87 @@ impl UpdateOffer {
         self.artifact.bytes
     }
 
+    /// Downloads the installer into `dir` and checks it.
+    ///
+    /// The bytes go to `<name>.part` while they arrive, are counted and
+    /// hashed on the way (never held in memory), and are refused as soon as
+    /// they pass the signed size. Only when the size and the SHA-256 both
+    /// match is the file renamed to its final name, so a file with that name
+    /// is always a checked one. On any failure the `.part` file is removed.
+    ///
+    /// The name is built from the signed release and platform, never from
+    /// the address, so a server cannot choose where the file goes. Nothing
+    /// is run or opened: the user starts the installer.
+    ///
+    /// `progress` gets the bytes saved so far, after each piece.
+    ///
+    /// # Errors
+    ///
+    /// [`UpdateError`]: a non-HTTPS address, a failed or stalled transfer,
+    /// a disk error, or [`UpdateError::DownloadMismatch`].
+    pub async fn download<H: HttpDownload>(
+        &self,
+        http: &H,
+        dir: &Path,
+        mut progress: impl FnMut(u64) + Send,
+    ) -> Result<PathBuf, UpdateError> {
+        let url = self.url();
+        if !url.starts_with("https://") && !(url.starts_with("http://") && is_loopback_url(url)) {
+            return Err(UpdateError::NotHttps);
+        }
+        std::fs::create_dir_all(dir).map_err(|e| UpdateError::Disk(e.to_string()))?;
+        let name = installer_file_name(&self.release, &self.artifact.platform, url);
+        let final_path = dir.join(&name);
+        let part_path = dir.join(format!("{name}.part"));
+        let mut file =
+            std::fs::File::create(&part_path).map_err(|e| UpdateError::Disk(e.to_string()))?;
+
+        let mut check = self.artifact.start_check();
+        let mut mismatch = false;
+        let result = http
+            .download(url, self.artifact.bytes, |piece| {
+                if check.update(piece).is_err() {
+                    mismatch = true;
+                    return Err(AuthError::TooLarge);
+                }
+                file.write_all(piece)
+                    .map_err(|e| AuthError::Http(format!("disk: {e}")))?;
+                progress(check.seen());
+                Ok(())
+            })
+            .await;
+        let outcome = match result {
+            Ok(_) if mismatch => Err(UpdateError::DownloadMismatch),
+            Ok(_) => check
+                .finish()
+                .map_err(|_| UpdateError::DownloadMismatch)
+                .and_then(|()| {
+                    file.sync_all()
+                        .map_err(|e| UpdateError::Disk(e.to_string()))
+                }),
+            Err(_) if mismatch => Err(UpdateError::DownloadMismatch),
+            // The signed size is the cap, so an oversized answer is a mismatch too.
+            Err(AuthError::TooLarge) => Err(UpdateError::DownloadMismatch),
+            Err(AuthError::Http(m)) if m.starts_with("disk: ") => {
+                Err(UpdateError::Disk(m.trim_start_matches("disk: ").to_owned()))
+            }
+            Err(e) => Err(UpdateError::Download(e.to_string())),
+        };
+        drop(file);
+        match outcome {
+            Ok(()) => std::fs::rename(&part_path, &final_path)
+                .map(|()| final_path)
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&part_path);
+                    UpdateError::Disk(e.to_string())
+                }),
+            Err(e) => {
+                let _ = std::fs::remove_file(&part_path);
+                Err(e)
+            }
+        }
+    }
+
     /// Checks a downloaded installer against the signed size and hash. Run it
     /// before the file is opened or run.
     ///
@@ -105,6 +202,61 @@ impl UpdateOffer {
     pub fn verify_download(&self, data: &[u8]) -> Result<(), ManifestError> {
         self.artifact.verify_download(data)
     }
+}
+
+/// The file name of a downloaded installer: `AegisTARA-<release>-<platform>`
+/// plus a known installer extension from the address (`.bin` if there is
+/// none). Only letters, digits, `.`, `-` and `_` survive, so the name cannot
+/// leave the folder whatever the manifest holds.
+fn installer_file_name(release: &str, platform: &str, url: &str) -> String {
+    const EXTENSIONS: [&str; 10] = [
+        ".exe",
+        ".msi",
+        ".dmg",
+        ".pkg",
+        ".deb",
+        ".rpm",
+        ".appimage",
+        ".zip",
+        ".tar.gz",
+        ".msix",
+    ];
+    let clean = |text: &str| -> String {
+        text.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(40)
+            .collect()
+    };
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let last = path
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let ext = EXTENSIONS
+        .iter()
+        .find(|e| last.ends_with(**e))
+        .copied()
+        .unwrap_or(".bin");
+    format!("AegisTARA-{}-{}{ext}", clean(release), clean(platform))
+}
+
+/// A folder for downloads: the user's `Downloads` folder if there is one,
+/// else the system temporary folder.
+#[must_use]
+pub fn default_download_dir() -> PathBuf {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(|home| PathBuf::from(home).join("Downloads"))
+        .find(|p| p.is_dir())
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 /// What a manifest means for this computer.
@@ -205,6 +357,26 @@ pub fn platform_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_file_name_comes_from_signed_fields_and_a_known_extension() {
+        assert_eq!(
+            installer_file_name(
+                "0.4.0",
+                "linux-x86_64",
+                "https://x.example/a/Aegis.AppImage?sig=1"
+            ),
+            "AegisTARA-0.4.0-linux-x86_64.appimage"
+        );
+        assert_eq!(
+            installer_file_name("1.0.0", "windows-x86_64", "https://x/setup.EXE"),
+            "AegisTARA-1.0.0-windows-x86_64.exe"
+        );
+        // An unknown extension, or a traversal attempt, becomes `.bin`.
+        let n = installer_file_name("1.0.0", "../../etc/x", "https://x/../../passwd");
+        assert_eq!(n, "AegisTARA-1.0.0-.._.._etc_x.bin");
+        assert!(!n.contains('/') && !n.contains('\\'));
+    }
 
     #[test]
     fn this_crates_version_is_a_release_number() {

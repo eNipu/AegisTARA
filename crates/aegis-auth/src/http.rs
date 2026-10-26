@@ -200,14 +200,28 @@ impl HyperClient {
     }
 }
 
+impl std::fmt::Debug for HyperClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HyperClient")
+            .field("timeout", &self.timeout)
+            .field("allow_insecure_http", &self.allow_insecure_http)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for HyperClient {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HttpClient for HyperClient {
-    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, AuthError> {
+impl HyperClient {
+    /// Applies the scheme policy, builds the request and sends it. Returns
+    /// as soon as the response head has arrived; the body is not read.
+    async fn start(
+        &self,
+        request: HttpRequest,
+    ) -> Result<http::Response<hyper::body::Incoming>, AuthError> {
         let tls = request.url.starts_with("https://");
         if !tls && !self.allow_insecure_http && !is_loopback_url(&request.url) {
             return Err(AuthError::Http(
@@ -223,17 +237,22 @@ impl HttpClient for HyperClient {
         let req = builder
             .body(Full::new(Bytes::from(request.body)))
             .map_err(|_| AuthError::Http("invalid request".to_owned()))?;
-
-        let exchange = async {
-            let response = if tls {
-                match &self.https {
-                    Ok(client) => client.request(req).await,
-                    Err(e) => return Err(AuthError::Http(e.to_string())),
-                }
-            } else {
-                self.plain.request(req).await
+        if tls {
+            match &self.https {
+                Ok(client) => client.request(req).await,
+                Err(e) => return Err(AuthError::Http(e.to_string())),
             }
-            .map_err(|e| AuthError::Http(format!("request failed: {e}")))?;
+        } else {
+            self.plain.request(req).await
+        }
+        .map_err(|e| AuthError::Http(format!("request failed: {e}")))
+    }
+}
+
+impl HttpClient for HyperClient {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, AuthError> {
+        let exchange = async {
+            let response = self.start(request).await?;
             let (parts, body) = response.into_parts();
             let body = Limited::new(body, MAX_RESPONSE_BYTES)
                 .collect()
@@ -253,6 +272,87 @@ impl HttpClient for HyperClient {
         tokio::time::timeout(self.timeout, exchange)
             .await
             .map_err(|_| AuthError::Http("request timed out".to_owned()))?
+    }
+}
+
+/// How long a download may stay silent between two pieces.
+pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(30);
+
+/// Longest a whole download may take.
+pub const DOWNLOAD_TOTAL: Duration = Duration::from_secs(60 * 60);
+
+/// A `GET` whose body is handed on piece by piece instead of being kept, for
+/// files too large for [`HttpClient::send`] (an installer). Memory is O(1).
+pub trait HttpDownload: Send + Sync + 'static {
+    /// Downloads `url` and passes each piece of the body to `sink`, in order.
+    ///
+    /// Stops with an error when the server answers anything but `200`, when
+    /// the body would exceed `max_bytes` (checked against `content-length`
+    /// first, then against the bytes that actually arrive), when the server
+    /// is silent for [`DOWNLOAD_IDLE`], when the whole download takes longer
+    /// than [`DOWNLOAD_TOTAL`], or when `sink` fails. No redirects.
+    ///
+    /// Returns the number of bytes passed to `sink`.
+    fn download(
+        &self,
+        url: &str,
+        max_bytes: u64,
+        sink: impl FnMut(&[u8]) -> Result<(), AuthError> + Send,
+    ) -> impl Future<Output = Result<u64, AuthError>> + Send;
+}
+
+impl HttpDownload for HyperClient {
+    async fn download(
+        &self,
+        url: &str,
+        max_bytes: u64,
+        mut sink: impl FnMut(&[u8]) -> Result<(), AuthError> + Send,
+    ) -> Result<u64, AuthError> {
+        let request = HttpRequest {
+            method: "GET",
+            url: url.to_owned(),
+            headers: vec![("accept", "application/octet-stream".to_owned())],
+            body: Vec::new(),
+        };
+        let transfer = async {
+            let response = tokio::time::timeout(self.timeout, self.start(request))
+                .await
+                .map_err(|_| AuthError::Http("request timed out".to_owned()))??;
+            let (parts, mut body) = response.into_parts();
+            if parts.status.as_u16() != 200 {
+                return Err(AuthError::Http(format!(
+                    "the server answered {}",
+                    parts.status.as_u16()
+                )));
+            }
+            let announced = parts
+                .headers
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
+            if announced.is_some_and(|n| n > max_bytes) {
+                return Err(AuthError::TooLarge);
+            }
+            let mut total = 0u64;
+            loop {
+                let frame = tokio::time::timeout(DOWNLOAD_IDLE, body.frame())
+                    .await
+                    .map_err(|_| AuthError::Http("the download stalled".to_owned()))?;
+                let Some(frame) = frame else { break };
+                let frame = frame.map_err(|e| AuthError::Http(format!("download failed: {e}")))?;
+                if let Some(data) = frame.data_ref() {
+                    total = total.saturating_add(data.len() as u64);
+                    if total > max_bytes {
+                        return Err(AuthError::TooLarge);
+                    }
+                    sink(data)?;
+                }
+            }
+            Ok(total)
+        };
+        tokio::time::timeout(DOWNLOAD_TOTAL, transfer)
+            .await
+            .map_err(|_| AuthError::Http("the download took too long".to_owned()))?
     }
 }
 
@@ -310,5 +410,137 @@ mod tests {
             .send(HttpRequest::get("https://127.0.0.1:9/jwks"))
             .await;
         assert!(matches!(r, Err(AuthError::Http(m)) if !m.contains("not available")));
+    }
+
+    // ---- downloads ----
+
+    /// A loopback server that answers one request with `reply`, then keeps
+    /// the connection open for `linger` (to test a stall).
+    async fn one_shot(reply: Vec<u8>, linger: Duration) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}/installer", listener.local_addr().expect("addr"));
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut head = [0u8; 2048];
+            let _ = socket.read(&mut head).await;
+            let _ = socket.write_all(&reply).await;
+            tokio::time::sleep(linger).await;
+        });
+        url
+    }
+
+    fn response(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut out =
+            format!("HTTP/1.1 {status}\r\n{headers}connection: close\r\n\r\n").into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
+
+    #[tokio::test]
+    async fn a_download_larger_than_the_response_limit_arrives_in_order() {
+        // 3 MiB: three times what `send` would accept.
+        let body: Vec<u8> = (0..3 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+        let reply = response(
+            "200 OK",
+            &format!("content-length: {}\r\n", body.len()),
+            &body,
+        );
+        let url = one_shot(reply, Duration::ZERO).await;
+        let mut got = Vec::new();
+        let n = HyperClient::new()
+            .download(&url, body.len() as u64, |piece| {
+                got.extend_from_slice(piece);
+                Ok(())
+            })
+            .await
+            .expect("download");
+        assert_eq!(n, body.len() as u64);
+        assert!(got == body, "the bytes differ");
+    }
+
+    #[tokio::test]
+    async fn an_announced_size_over_the_limit_is_refused_before_any_byte_is_kept() {
+        let reply = response("200 OK", "content-length: 5000\r\n", &[7u8; 5000]);
+        let url = one_shot(reply, Duration::ZERO).await;
+        let mut pieces = 0;
+        let r = HyperClient::new()
+            .download(&url, 1000, |_| {
+                pieces += 1;
+                Ok(())
+            })
+            .await;
+        assert!(matches!(r, Err(AuthError::TooLarge)), "{r:?}");
+        assert_eq!(pieces, 0);
+    }
+
+    #[tokio::test]
+    async fn a_body_that_outgrows_its_announced_size_is_cut_off() {
+        // Chunked, so there is no content-length to check first.
+        let mut body = Vec::new();
+        for _ in 0..10 {
+            body.extend_from_slice(b"200\r\n");
+            body.extend_from_slice(&[1u8; 512]);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(b"0\r\n\r\n");
+        let reply = response("200 OK", "transfer-encoding: chunked\r\n", &body);
+        let url = one_shot(reply, Duration::ZERO).await;
+        let mut kept = 0usize;
+        let r = HyperClient::new()
+            .download(&url, 2000, |p| {
+                kept += p.len();
+                Ok(())
+            })
+            .await;
+        assert!(matches!(r, Err(AuthError::TooLarge)), "{r:?}");
+        assert!(kept <= 2000, "kept {kept} bytes");
+    }
+
+    #[tokio::test]
+    async fn a_status_other_than_200_is_an_error() {
+        let url = one_shot(
+            response("404 Not Found", "content-length: 0\r\n", b""),
+            Duration::ZERO,
+        )
+        .await;
+        let r = HyperClient::new().download(&url, 100, |_| Ok(())).await;
+        assert!(matches!(r, Err(AuthError::Http(m)) if m.contains("404")));
+    }
+
+    #[tokio::test]
+    async fn a_failing_sink_stops_the_download() {
+        let reply = response("200 OK", "content-length: 10\r\n", &[0u8; 10]);
+        let url = one_shot(reply, Duration::ZERO).await;
+        let r = HyperClient::new()
+            .download(&url, 100, |_| Err(AuthError::Http("disk full".into())))
+            .await;
+        assert!(matches!(r, Err(AuthError::Http(m)) if m == "disk full"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_server_that_goes_silent_is_given_up_on() {
+        // Promises 100 bytes, sends 10, then says nothing.
+        let reply = response("200 OK", "content-length: 100\r\n", &[0u8; 10]);
+        let url = one_shot(reply, Duration::from_secs(3600)).await;
+        let started = tokio::time::Instant::now();
+        let r = HyperClient::new().download(&url, 100, |_| Ok(())).await;
+        assert!(
+            matches!(&r, Err(AuthError::Http(m)) if m.contains("stalled")),
+            "{r:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(120));
+    }
+
+    #[tokio::test]
+    async fn cleartext_downloads_from_a_remote_host_are_refused() {
+        let r = HyperClient::new()
+            .download("http://203.0.113.9/installer", 100, |_| Ok(()))
+            .await;
+        assert!(matches!(r, Err(AuthError::Http(m)) if m.contains("loopback")));
     }
 }
