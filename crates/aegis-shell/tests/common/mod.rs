@@ -132,6 +132,13 @@ impl App {
         self.session.send(command).expect("sent");
     }
 
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.headless.resize(width, height);
+        self.window
+            .window()
+            .set_size(slint::PhysicalSize::new(width, height));
+    }
+
     pub fn frame(&self) -> Frame {
         self.controller.apply_latest();
         self.headless.render()

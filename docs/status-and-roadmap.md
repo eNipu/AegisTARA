@@ -176,6 +176,7 @@ Everything else in the backlog is ticked. Open items, in order:
 5. ~~Installer download and hash check~~ done (054, ADR 0048). Still open: running the installer from the app (a per platform decision).
 6. Admin: groups, roles and project access (direction §6; needs a decision between Cedar policies and a built-in role table). Sessions list and end: done (055, ADR 0049).
 7. Phase 4, AI wave 1.
+8. **Attack tree library** (search, insert and customize ready-made trees, fragments and leaves): not built, not planned before; notes and open questions in [brainstorm-attack-tree-library.md](brainstorm-attack-tree-library.md), backlog item 057, waiting for a design session.
 
 ---
 

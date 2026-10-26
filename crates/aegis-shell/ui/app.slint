@@ -37,7 +37,7 @@ global Pages {
 component Field inherits VerticalLayout {
     in property <string> label;
     spacing: 2px;
-    SectionTitle { text: root.label; }
+    SectionTitle { text: root.label; wrap: word-wrap; }
     @children
 }
 
@@ -70,6 +70,13 @@ export component AppWindow inherits Window {
     min-height: 600px;
     background: Theme.sheet;
     icon: @image-url("icons/shield.svg");
+
+    // Side panels follow the window: full size on a big window, narrower on a
+    // small one, so a page never pushes its detail panel off the screen
+    // (checked at the smallest window, 980 x 600, by tests/small_windows.rs).
+    property <length> side-width: min(400px, max(300px, root.width * 0.3));
+    property <length> tree-list-width: min(340px, max(240px, root.width * 0.24));
+    property <length> inspector-width: min(340px, max(260px, root.width * 0.25));
 
     // ---- connection and login ----
     // 0 connecting, 1 online, 2 offline, 3 login required, 4 choose a server
@@ -986,7 +993,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     if root.has-asset: Panel {
-                        width: 400px;
+                        width: root.side-width;
                         SectionTitle { text: "Asset"; }
                         NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
                         SectionTitle { text: "Security properties"; }
@@ -1021,7 +1028,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     if root.has-damage: Panel {
-                        width: 400px;
+                        width: root.side-width;
                         SectionTitle { text: "Damage scenario"; }
                         NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
                         SectionTitle { text: "Impact rating"; }
@@ -1049,9 +1056,7 @@ export component AppWindow inherits Window {
                             SectionTitle { text: "Add a threat scenario"; }
                             HorizontalLayout {
                                 spacing: 6px;
-                                LineEdit { horizontal-stretch: 2; placeholder-text: "Threat scenario"; text <=> root.new-threat-name; accessible-label: "New threat scenario"; }
-                                Choice { horizontal-stretch: 1; options: root.asset-names; index: root.new-threat-asset; label: "Asset"; picked(i) => { root.new-threat-asset = i; } }
-                                Choice { horizontal-stretch: 1; options: root.threat-categories; index: root.new-threat-category; label: "Category"; picked(i) => { root.new-threat-category = i; } }
+                                LineEdit { horizontal-stretch: 1; placeholder-text: "Threat scenario"; text <=> root.new-threat-name; accessible-label: "New threat scenario"; }
                                 Button {
                                     text: "Add";
                                     icon: @image-url("icons/plus.svg");
@@ -1059,20 +1064,25 @@ export component AppWindow inherits Window {
                                     clicked => { root.add-threat(root.new-threat-name, root.new-threat-asset, root.new-threat-category); root.new-threat-name = ""; }
                                 }
                             }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Choice { horizontal-stretch: 1; options: root.asset-names; index: root.new-threat-asset; label: "Asset"; picked(i) => { root.new-threat-asset = i; } }
+                                Choice { horizontal-stretch: 1; options: root.threat-categories; index: root.new-threat-category; label: "Category"; picked(i) => { root.new-threat-category = i; } }
+                            }
                             if root.asset-names.length == 0: Text { text: "Add an asset first."; color: Theme.graphite; font-size: 12px; }
                         }
                         Table {
                             label: "Threat scenarios";
-                            columns: [{ title: "Threat scenario", horizontal-stretch: 3 }, { title: "Asset", horizontal-stretch: 2 }, { title: "Risk before", horizontal-stretch: 1 }, { title: "Risk after", horizontal-stretch: 1 }];
+                            columns: [{ title: "Threat scenario", horizontal-stretch: 3 }, { title: "Asset", horizontal-stretch: 2 }, { title: "Before", horizontal-stretch: 1 }, { title: "After", horizontal-stretch: 1 }];
                             rows: root.threat-rows;
                             selected: root.threat-selected;
                             picked(i) => { root.select-threat(i); }
                         }
                     }
                     if root.has-threat-detail: ScrollView {
-                        width: 430px;
+                        width: root.side-width + 30px;
                         Panel {
-                            width: 412px;
+                            width: root.side-width + 12px;
                             SectionTitle { text: "Threat scenario"; }
                             NameEditor { name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
                             Text { text: "On asset " + root.td-asset; color: Theme.graphite; font-size: 12px; }
@@ -1096,9 +1106,9 @@ export component AppWindow inherits Window {
                                 Text { text: r; color: Theme.ink; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
                                 Button { text: "Remove"; enabled: root.editing; clicked => { root.remove-catalog-ref(ri); } }
                             }
+                            if root.editing: Choice { options: root.catalog-schemes; index: root.new-ref-scheme; label: "Catalog"; picked(i) => { root.new-ref-scheme = i; } }
                             if root.editing: HorizontalLayout {
                                 spacing: 6px;
-                                Choice { options: root.catalog-schemes; index: root.new-ref-scheme; label: "Catalog"; picked(i) => { root.new-ref-scheme = i; } }
                                 LineEdit { horizontal-stretch: 1; placeholder-text: "4.1"; text <=> root.new-ref-text; accessible-label: "Reference"; }
                                 Button { text: "Add"; enabled: root.new-ref-text != ""; clicked => { root.add-catalog-ref(root.new-ref-scheme, root.new-ref-text); root.new-ref-text = ""; } }
                             }
@@ -1125,7 +1135,7 @@ export component AppWindow inherits Window {
                 // Attack trees
                 if root.page == Pages.trees: HorizontalLayout {
                     VerticalLayout {
-                        width: 290px;
+                        width: root.tree-list-width;
                         padding: 12px;
                         spacing: 8px;
                         HorizontalLayout {
@@ -1135,7 +1145,7 @@ export component AppWindow inherits Window {
                         }
                         Table {
                             label: "Attack trees";
-                            columns: [{ title: "Tree", horizontal-stretch: 3 }, { title: "Nodes", horizontal-stretch: 1 }, { title: "Feasibility", horizontal-stretch: 1 }];
+                            columns: [{ title: "Tree", horizontal-stretch: 1 }, { title: "Rating", width: 92px, min-width: 92px }];
                             rows: root.tree-rows;
                             selected: root.tree-selected;
                             picked(i) => { root.pick-tree(i); }
@@ -1209,7 +1219,7 @@ export component AppWindow inherits Window {
                     Rectangle { width: 1px; background: Theme.rule; }
                     // Inspector
                     Rectangle {
-                        width: 340px;
+                        width: root.inspector-width;
                         background: Theme.panel;
                         if !root.has-inspector: Text {
                             text: "Select a node on the canvas to see why it has its rating.";
@@ -1342,7 +1352,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     if root.has-threat-detail: Panel {
-                        width: 360px;
+                        width: min(360px, root.side-width);
                         Text { text: root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 8px;
@@ -1395,7 +1405,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     if root.has-control: Panel {
-                        width: 400px;
+                        width: root.side-width;
                         SectionTitle { text: "Security control"; }
                         NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
                         SectionTitle { text: "Attached to"; }
@@ -1440,7 +1450,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     VerticalLayout {
-                        width: 400px;
+                        width: root.side-width;
                         spacing: 12px;
                         if root.has-goal: Panel {
                             SectionTitle { text: "Cybersecurity goal"; }
@@ -1576,7 +1586,7 @@ export component AppWindow inherits Window {
                         if root.last-export != "": Text { text: "Last saved: " + root.last-export; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
                     }
                     Text {
-                        text: "The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. Open it in a browser and print to PDF.";
+                        text: "The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. The PDF has the watermark and page numbers on every page. The HTML version opens in a browser, where you can also print it.";
                         color: Theme.graphite;
                         font-size: 13px;
                         wrap: word-wrap;
@@ -1594,6 +1604,8 @@ export component AppWindow inherits Window {
                         PageTitle { title: "Administration"; subtitle: "Users of this server (password login), and tools for the open project."; icon: @image-url("icons/user-cog.svg"); }
                         HorizontalLayout {
                             spacing: 6px;
+                            vertical-stretch: 0;
+                            max-height: 40px;
                             Button { text: "Users and login"; icon: @image-url("icons/users.svg"); primary: root.admin-tab == 0; clicked => { root.admin-tab = 0; } }
                             Button { text: "Event log"; icon: @image-url("icons/scroll-text.svg"); primary: root.admin-tab == 1; clicked => { root.admin-tab = 1; root.refresh-events(); } }
                             Button { text: "Sessions"; icon: @image-url("icons/shield.svg"); primary: root.admin-tab == 2; clicked => { root.admin-tab = 2; root.refresh-sessions(); } }
@@ -1602,7 +1614,7 @@ export component AppWindow inherits Window {
                             spacing: 10px;
                             if root.is-password: Table {
                                 label: "Users";
-                                columns: [{ title: "User", horizontal-stretch: 1 }, { title: "Name", horizontal-stretch: 2 }, { title: "Admin", horizontal-stretch: 1 }, { title: "Status", horizontal-stretch: 1 }, { title: "Last login", horizontal-stretch: 2 }, { title: "Sessions", horizontal-stretch: 1 }];
+                                columns: [{ title: "User", horizontal-stretch: 2 }, { title: "Name", horizontal-stretch: 2 }, { title: "Admin", width: 78px, min-width: 78px }, { title: "Status", width: 80px, min-width: 80px }, { title: "Last login", horizontal-stretch: 3 }, { title: "Sessions", width: 98px, min-width: 98px }];
                                 rows: root.user-rows;
                                 selected: root.user-selected;
                                 picked(i) => { root.pick-user(i); }
@@ -1664,6 +1676,7 @@ export component AppWindow inherits Window {
                                     }
                                 }
                             }
+                            Rectangle { vertical-stretch: 1; }
                         }
                         if root.admin-tab == 1: VerticalLayout {
                             spacing: 8px;
@@ -1704,7 +1717,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     Panel {
-                        width: 400px;
+                        width: 300px;
                         SectionTitle { text: "This project"; }
                         Button { text: "Check the audit chain"; icon: @image-url("icons/list-checks.svg"); clicked => { root.verify-audit(); } }
                         Button { text: "Break the edit lock"; icon: @image-url("icons/unlink.svg"); enabled: root.band-kind == 1; clicked => { root.confirm("break-lock", "Break the edit lock? The other editor's unsaved changes are lost."); } }
