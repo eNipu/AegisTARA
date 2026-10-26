@@ -29,6 +29,7 @@
 //! Lock order (C3): `state` and `throttle` are never held together and never
 //! across an `.await` (C2).
 
+pub mod events;
 pub mod memory;
 pub mod password;
 pub mod postgres;
@@ -44,6 +45,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
+pub use events::{EventLog, Retention};
 pub use memory::MemoryAccounts;
 pub use password::PasswordRule;
 pub use postgres::PostgresAccounts;
@@ -60,6 +62,8 @@ pub const MAX_USERNAME_BYTES: usize = 64;
 pub const MAX_DISPLAY_NAME_CHARS: usize = 128;
 /// Longest client name kept with a session, in characters.
 pub const MAX_CLIENT_NAME_CHARS: usize = 128;
+/// Most sessions one `list_sessions` call returns (R3).
+pub const MAX_SESSION_LIST: usize = 1000;
 
 pub(crate) fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -74,6 +78,21 @@ impl SessionKey {
     #[must_use]
     pub fn of(token: &str) -> Self {
         SessionKey(Sha256::digest(token.as_bytes()).into())
+    }
+
+    /// A short name for the session in lists: the first 8 bytes of the key
+    /// as 16 lowercase hex digits. It says nothing about the token (the key
+    /// is already a hash of it), and an admin passes it back to revoke the
+    /// session.
+    #[must_use]
+    pub fn id(&self) -> String {
+        use std::fmt::Write as _;
+        self.0[..8]
+            .iter()
+            .fold(String::with_capacity(16), |mut out, b| {
+                let _ = write!(out, "{b:02x}");
+                out
+            })
     }
 }
 
@@ -136,9 +155,56 @@ pub enum AuditKind {
     BaselineCreated,
     /// An admin turned password login on or off (job 045).
     PasswordLoginChanged,
+    /// An admin ended someone's session (job 055).
+    SessionRevoked,
 }
 
 impl AuditKind {
+    /// Every kind, so a backend can read a stored name back. Adding a kind
+    /// means adding it here; the test `every_kind_is_listed_and_round_trips`
+    /// fails if it is missing.
+    pub const ALL: [AuditKind; 12] = [
+        AuditKind::LoginOk,
+        AuditKind::LoginFailed,
+        AuditKind::Logout,
+        AuditKind::PasswordChanged,
+        AuditKind::UserCreated,
+        AuditKind::UserUpdated,
+        AuditKind::UserDeleted,
+        AuditKind::Export,
+        AuditKind::ProjectDeleted,
+        AuditKind::BaselineCreated,
+        AuditKind::PasswordLoginChanged,
+        AuditKind::SessionRevoked,
+    ];
+
+    /// The kind with this stored name, if there is one.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<AuditKind> {
+        AuditKind::ALL.into_iter().find(|k| k.as_str() == name)
+    }
+
+    /// A number for each kind, `0..ALL.len()`. The match has no wildcard, so
+    /// a new kind will not compile until it is numbered here, which the test
+    /// then checks against [`AuditKind::ALL`].
+    #[cfg(test)]
+    fn ordinal(self) -> usize {
+        match self {
+            AuditKind::LoginOk => 0,
+            AuditKind::LoginFailed => 1,
+            AuditKind::Logout => 2,
+            AuditKind::PasswordChanged => 3,
+            AuditKind::UserCreated => 4,
+            AuditKind::UserUpdated => 5,
+            AuditKind::UserDeleted => 6,
+            AuditKind::Export => 7,
+            AuditKind::ProjectDeleted => 8,
+            AuditKind::BaselineCreated => 9,
+            AuditKind::PasswordLoginChanged => 10,
+            AuditKind::SessionRevoked => 11,
+        }
+    }
+
     /// The stored name.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -154,6 +220,7 @@ impl AuditKind {
             AuditKind::ProjectDeleted => "project_deleted",
             AuditKind::BaselineCreated => "baseline_created",
             AuditKind::PasswordLoginChanged => "password_login_changed",
+            AuditKind::SessionRevoked => "session_revoked",
         }
     }
 }
@@ -275,6 +342,16 @@ impl AccountBackend {
     pub async fn recent_events(&self, limit: usize) -> Result<Vec<AuditEvent>, StoreFault> {
         dispatch!(self, b => b.recent_events(limit).await)
     }
+
+    /// Removes events older than `cutoff_ms`, then the oldest ones beyond
+    /// `keep`. Returns how many went.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn trim_events(&self, cutoff_ms: u64, keep: usize) -> Result<u64, StoreFault> {
+        dispatch!(self, b => b.trim_events(cutoff_ms, keep).await)
+    }
 }
 
 /// Why an account operation was refused.
@@ -302,6 +379,9 @@ pub enum AccountError {
     /// No such user.
     #[error("no such user")]
     UnknownUser,
+    /// No open session has this ID (it may have ended already).
+    #[error("no such session")]
+    UnknownSession,
     /// The user name is taken.
     #[error("that user name is taken")]
     UserExists,
@@ -507,7 +587,7 @@ pub struct UserUpdate {
 
 /// Password accounts: see the module docs.
 pub struct Accounts {
-    backend: AccountBackend,
+    backend: Arc<AccountBackend>,
     config: AccountsConfig,
     state: Mutex<State>,
     throttle: Mutex<Throttle>,
@@ -558,7 +638,7 @@ impl Accounts {
             }
         }
         Ok(Accounts {
-            backend,
+            backend: Arc::new(backend),
             hashing: Semaphore::new(config.hashing_permits.max(1)),
             config,
             state: Mutex::new(state),
@@ -582,16 +662,14 @@ impl Accounts {
     /// Writes an audit event. A failure is logged and does not fail the
     /// caller's action, which has already been stored.
     pub async fn audit(&self, actor: &str, kind: AuditKind, target: &str, detail: &str) {
-        let event = AuditEvent {
-            at_ms: self.now(),
-            actor: bounded(actor, 256),
-            kind,
-            target: bounded(target, 256),
-            detail: bounded(detail, 256),
-        };
-        if let Err(fault) = self.backend.record(&event).await {
-            tracing::error!(%fault, kind = kind.as_str(), "could not write an audit event");
-        }
+        self.event_log().record(actor, kind, target, detail).await;
+    }
+
+    /// The event log these accounts write to. It shares the backend, so the
+    /// server can read, trim and extend it without the user table.
+    #[must_use]
+    pub fn event_log(&self) -> EventLog {
+        EventLog::new(Arc::clone(&self.backend), self.config.clock_ms)
     }
 
     /// The newest audit events, newest first.
@@ -600,7 +678,7 @@ impl Accounts {
     ///
     /// [`AccountError::Store`].
     pub async fn recent_events(&self, limit: usize) -> Result<Vec<AuditEvent>, AccountError> {
-        Ok(self.backend.recent_events(limit.min(1000)).await?)
+        Ok(self.event_log().recent(limit).await?)
     }
 
     /// Number of users.
@@ -722,6 +800,15 @@ impl Accounts {
         // Close the oldest sessions past the per-user limit.
         let evicted = {
             let mut state = lock(&self.state);
+            // `set_password_login(false)` stores the switch before it clears
+            // the sessions under this lock. A login that got past the first
+            // check while the switch went off must not leave a session
+            // behind: it would come alive again when the switch goes on.
+            if !self.password_login_enabled() {
+                drop(state);
+                self.backend.delete_sessions(&[session.key]).await?;
+                return Err(AccountError::PasswordLoginOff);
+            }
             state.users.insert(name.clone(), user.clone());
             state.sessions.insert(session.key, session.clone());
             let mut mine: Vec<(u64, SessionKey)> = state
@@ -1124,11 +1211,98 @@ impl Accounts {
         Ok(())
     }
 
+    /// The open sessions, newest first, at most [`MAX_SESSION_LIST`]. Time
+    /// O(sessions log sessions); no I/O.
+    #[must_use]
+    pub fn list_sessions(&self) -> Vec<SessionRecord> {
+        let now = self.now();
+        let mut open: Vec<SessionRecord> = lock(&self.state)
+            .sessions
+            .values()
+            .filter(|s| s.expires_ms > now)
+            .cloned()
+            .collect();
+        open.sort_unstable_by(|a, b| {
+            b.created_ms
+                .cmp(&a.created_ms)
+                .then_with(|| a.key.cmp(&b.key))
+        });
+        open.truncate(MAX_SESSION_LIST);
+        open
+    }
+
+    /// Ends one session by its [`SessionKey::id`]. The owner's next request
+    /// is refused as unauthenticated. An admin may end their own session
+    /// too (it is a log out).
+    ///
+    /// # Errors
+    ///
+    /// [`AccountError::UnknownSession`] for an ID that is not 16 hex digits
+    /// or names no open session, or a store fault (the session then stays
+    /// open).
+    pub async fn revoke_session(
+        &self,
+        actor: &str,
+        id: &str,
+    ) -> Result<SessionRecord, AccountError> {
+        let Some(prefix) = parse_session_id(id) else {
+            return Err(AccountError::UnknownSession);
+        };
+        let removed = {
+            let mut state = lock(&self.state);
+            // One pass over raw bytes, no allocation: O(open sessions).
+            let mut found = state.sessions.keys().filter(|k| k.0[..8] == prefix);
+            let key = match (found.next().copied(), found.next()) {
+                (Some(key), None) => key,
+                // None, or two sessions share the 64-bit prefix (about one
+                // chance in 10^10 at 100 000 sessions): end neither.
+                _ => return Err(AccountError::UnknownSession),
+            };
+            state.sessions.remove(&key)
+        };
+        let Some(session) = removed else {
+            return Err(AccountError::UnknownSession);
+        };
+        if let Err(e) = self.backend.delete_sessions(&[session.key]).await {
+            lock(&self.state)
+                .sessions
+                .insert(session.key, session.clone());
+            return Err(e.into());
+        }
+        self.audit(
+            actor,
+            AuditKind::SessionRevoked,
+            &session.username,
+            &session.client_name,
+        )
+        .await;
+        Ok(session)
+    }
+
     /// The backend, for tests.
     #[must_use]
     pub fn backend(&self) -> &AccountBackend {
         &self.backend
     }
+}
+
+/// The 8 bytes a [`SessionKey::id`] stands for, or `None` if `id` is not
+/// exactly 16 lowercase hex digits.
+fn parse_session_id(id: &str) -> Option<[u8; 8]> {
+    if id.len() != 16 {
+        return None;
+    }
+    let mut out = [0u8; 8];
+    let (pairs, _) = id.as_bytes().as_chunks::<2>();
+    for (byte, pair) in out.iter_mut().zip(pairs) {
+        let digit = |c: u8| match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            _ => None,
+        };
+        *byte = digit(pair[0])? << 4 | digit(pair[1])?;
+    }
+    Some(out)
 }
 
 /// Reads `authorization: Bearer <token>` from request headers.
@@ -1202,6 +1376,202 @@ mod tests {
         Accounts::open(AccountBackend::Memory(MemoryAccounts::new()), config)
             .await
             .expect("open")
+    }
+
+    #[test]
+    fn every_kind_is_listed_and_round_trips() {
+        for (i, kind) in AuditKind::ALL.into_iter().enumerate() {
+            assert_eq!(kind.ordinal(), i, "{kind:?} is out of place in ALL");
+            assert_eq!(AuditKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(AuditKind::from_name("no_such_kind"), None);
+        let mut names: Vec<_> = AuditKind::ALL.iter().map(|k| k.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), AuditKind::ALL.len(), "names are unique");
+    }
+
+    #[tokio::test]
+    async fn sessions_are_listed_newest_first_without_the_expired_and_can_be_ended() {
+        let a = accounts().await;
+        a.bootstrap_admin("root", "correct horse battery")
+            .await
+            .expect("admin");
+        a.create_user("root", "bob", "", "a long enough password", false)
+            .await
+            .expect("bob");
+        let old = a
+            .log_in("bob", "a long enough password", "old laptop")
+            .await
+            .expect("old");
+        advance(1000);
+        let new = a
+            .log_in("bob", "a long enough password", "new laptop")
+            .await
+            .expect("new");
+        let list = a.list_sessions();
+        assert_eq!(
+            list.iter()
+                .map(|s| s.client_name.as_str())
+                .collect::<Vec<_>>(),
+            ["new laptop", "old laptop"]
+        );
+        // The ID is 16 hex digits and is not the token.
+        let id = list[0].key.id();
+        assert_eq!(id.len(), 16);
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(!new.token.contains(&id));
+
+        // Ending a session refuses its token at once and leaves the other.
+        let ended = a.revoke_session("root", &id).await.expect("revoke");
+        assert_eq!(ended.username, "bob");
+        assert!(a.authenticate(&new.token).is_none());
+        assert!(a.authenticate(&old.token).is_some());
+        assert_eq!(a.list_sessions().len(), 1);
+        let events = a.recent_events(5).await.expect("events");
+        assert_eq!(events[0].kind, AuditKind::SessionRevoked);
+        assert_eq!(events[0].actor, "root");
+        assert_eq!(events[0].target, "bob");
+        assert_eq!(events[0].detail, "new laptop");
+
+        // Ending it again, a malformed ID and an unknown one are all refused.
+        for bad in [
+            id.as_str(),
+            "",
+            "xyz",
+            "0123456789abcdeg",
+            "0123456789ABCDEF",
+            "00000000000000000",
+        ] {
+            assert!(
+                matches!(
+                    a.revoke_session("root", bad).await,
+                    Err(AccountError::UnknownSession)
+                ),
+                "{bad:?}"
+            );
+        }
+        // An expired session is no longer listed.
+        advance(a.config.session_ttl.as_millis() as u64 + 1);
+        assert!(a.list_sessions().is_empty());
+    }
+
+    /// Stress: `AEGIS_STRESS_SESSIONS` sessions (default 5000) loaded from a
+    /// backend. The list stays capped and ordered, and many concurrent ends
+    /// of distinct sessions all succeed exactly once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn stress_many_sessions_are_capped_in_the_list_and_ended_concurrently() {
+        let total: u64 = std::env::var("AEGIS_STRESS_SESSIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5000);
+        let backend = AccountBackend::Memory(MemoryAccounts::new());
+        for u in 0..50 {
+            backend
+                .put_user(&UserRecord {
+                    username: format!("user{u}"),
+                    display_name: String::new(),
+                    password_hash: "unused".into(),
+                    admin: u == 0,
+                    disabled: false,
+                    created_ms: 1,
+                    last_login_ms: 0,
+                })
+                .await
+                .expect("user");
+        }
+        for i in 0..total {
+            backend
+                .put_session(&SessionRecord {
+                    key: SessionKey::of(&format!("{TOKEN_PREFIX}token-{i}")),
+                    username: format!("user{}", i % 50),
+                    created_ms: 1000 + i,
+                    expires_ms: u64::MAX / 2,
+                    client_name: "stress".into(),
+                })
+                .await
+                .expect("session");
+        }
+        let a = Arc::new(Accounts::open(backend, config()).await.expect("open"));
+        let list = a.list_sessions();
+        assert_eq!(list.len(), (total as usize).min(MAX_SESSION_LIST));
+        assert!(list.windows(2).all(|w| w[0].created_ms >= w[1].created_ms));
+        assert_eq!(list[0].created_ms, 1000 + total - 1, "the newest first");
+
+        let started = std::time::Instant::now();
+        let ids: Vec<String> = list.iter().map(|s| s.key.id()).collect();
+        let tasks: Vec<_> = ids
+            .iter()
+            .cloned()
+            .map(|id| {
+                let a = Arc::clone(&a);
+                tokio::spawn(async move { a.revoke_session("user0", &id).await.is_ok() })
+            })
+            .collect();
+        let mut ended = 0;
+        for t in tasks {
+            ended += usize::from(t.await.expect("task"));
+        }
+        assert_eq!(ended, ids.len(), "every distinct session ended once");
+        // The same IDs again: all gone.
+        for id in &ids {
+            assert!(a.revoke_session("user0", id).await.is_err());
+        }
+        eprintln!(
+            "session stress: {} sessions loaded, {} ended in {:?}",
+            total,
+            ids.len(),
+            started.elapsed()
+        );
+        assert_eq!(
+            a.list_sessions().len(),
+            (total as usize)
+                .saturating_sub(ids.len())
+                .min(MAX_SESSION_LIST)
+        );
+    }
+
+    /// A login that is hashing while an admin turns the switch off must not
+    /// leave a session behind, or it would come alive when the switch goes on.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_login_racing_the_switch_leaves_no_session() {
+        let a = Arc::new(accounts_with_company_login(true).await);
+        a.bootstrap_admin("root", "correct horse battery")
+            .await
+            .expect("admin");
+        let names: Vec<String> = (0..8).map(|i| format!("user{i}")).collect();
+        for n in &names {
+            a.create_user("root", n, "", "a long enough password", false)
+                .await
+                .expect("user");
+        }
+        for round in 0..12 {
+            let logins: Vec<_> = names
+                .iter()
+                .map(|n| {
+                    let (a, n) = (Arc::clone(&a), n.clone());
+                    tokio::spawn(async move {
+                        a.log_in(&n, "a long enough password", "test")
+                            .await
+                            .map(|_| ())
+                    })
+                })
+                .collect();
+            // Land in the middle of the hashing.
+            tokio::time::sleep(Duration::from_millis(5 + round)).await;
+            a.set_password_login("root", false).await.expect("off");
+            for l in logins {
+                match l.await.expect("task") {
+                    Ok(()) | Err(AccountError::PasswordLoginOff) => {}
+                    Err(e) => panic!("unexpected: {e}"),
+                }
+            }
+            for n in &names {
+                let open = a.user(n).map_or(0, |(_, sessions)| sessions);
+                assert_eq!(open, 0, "round {round}: {n} kept a session");
+            }
+            a.set_password_login("root", true).await.expect("on");
+        }
     }
 
     #[tokio::test]

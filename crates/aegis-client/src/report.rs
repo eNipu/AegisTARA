@@ -35,6 +35,8 @@ use crate::workspace::Workspace;
 pub enum ExportKind {
     /// The HTML TARA report.
     Report,
+    /// The TARA report as a PDF file.
+    ReportPdf,
     /// The CSV risk register.
     RiskRegister,
     /// The SVG of the tree on the canvas.
@@ -47,6 +49,7 @@ impl ExportKind {
     pub fn audit_name(self) -> &'static str {
         match self {
             ExportKind::Report => "html-report",
+            ExportKind::ReportPdf => "pdf-report",
             ExportKind::RiskRegister => "csv-risk-register",
             ExportKind::TreeSvg => "svg-attack-tree",
         }
@@ -57,6 +60,7 @@ impl ExportKind {
     pub fn extension(self) -> &'static str {
         match self {
             ExportKind::Report => "html",
+            ExportKind::ReportPdf => "pdf",
             ExportKind::RiskRegister => "csv",
             ExportKind::TreeSvg => "svg",
         }
@@ -79,7 +83,7 @@ pub struct ReportContext {
 }
 
 impl ReportContext {
-    fn watermark(&self) -> String {
+    pub(crate) fn watermark(&self) -> String {
         format!(
             "Confidential. Exported by {} on {}.",
             self.user,
@@ -122,7 +126,7 @@ pub fn csv_field(text: &str) -> String {
     }
 }
 
-fn risk_text(r: Option<&crate::view::RiskView>) -> String {
+pub(crate) fn risk_text(r: Option<&crate::view::RiskView>) -> String {
     r.map_or_else(|| "not rated".to_owned(), |v| v.label.clone())
 }
 
@@ -258,7 +262,7 @@ fn risk_table(out: &mut String, rows: &[RiskRow]) {
     );
 }
 
-fn methodology_line(project: &Project) -> String {
+pub(crate) fn methodology_line(project: &Project) -> String {
     let m = project.methodology();
     format!("{} (pack {} {})", m.label(), m.key(), m.version())
 }

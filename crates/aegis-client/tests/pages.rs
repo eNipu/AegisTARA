@@ -7,6 +7,7 @@ use std::sync::Arc;
 use aegis_client::commands::{Edit, EditError};
 use aegis_client::outline::to_outline;
 use aegis_client::pages::{self, comparison};
+use aegis_client::pdf::{Block, Figure, report_doc, report_pdf};
 use aegis_client::report::{ReportContext, report_html, risk_register_csv, tree_svg};
 use aegis_client::view::{Selection, UiState, inspector, shown_tree};
 use aegis_client::workspace::{Origin, Workspace};
@@ -574,4 +575,358 @@ fn exports_are_complete_escaped_and_deterministic() {
         "{}",
         &svg[..40]
     );
+}
+
+// ---- the PDF report (job 050) --------------------------------------------
+
+fn context(unsaved: bool) -> ReportContext {
+    ReportContext {
+        project: "Brake ECU".into(),
+        user: "Mira Chen".into(),
+        now_ms: 1_792_956_600_000,
+        seq: 42,
+        unsaved,
+    }
+}
+
+/// The text of a PDF as `pdftotext` reads it, one string per page. The
+/// tests fail instead of skipping on CI, where poppler is installed.
+fn pdf_pages(pdf: &[u8]) -> Option<Vec<String>> {
+    use std::io::Write as _;
+    let child = std::process::Command::new("pdftotext")
+        .args(["-enc", "UTF-8", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "pdftotext is missing on CI (poppler-utils)"
+        );
+        eprintln!("pdftotext is not installed: skipping the text checks");
+        return None;
+    };
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(pdf)
+        .expect("write");
+    let out = child.wait_with_output().expect("pdftotext");
+    assert!(out.status.success(), "pdftotext refused the file");
+    let text = String::from_utf8(out.stdout).expect("utf-8");
+    let mut pages: Vec<String> = text.split('\x0c').map(str::to_owned).collect();
+    if pages.last().is_some_and(|p| p.trim().is_empty()) {
+        pages.pop();
+    }
+    Some(pages)
+}
+
+fn words(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn the_pdf_report_has_every_section_and_is_deterministic() {
+    let mut t = tara();
+    apply(
+        &mut t.ws,
+        &Edit::RenameThreat {
+            threat: t.threat,
+            name: "Spoofed <script>alert(1)</script>, \"quoted\" and Bremsensteuergerät Größe"
+                .into(),
+        },
+    );
+    let ctx = context(false);
+    let pdf = report_pdf(&t.ws, &ctx).expect("pdf");
+    assert!(pdf.starts_with(b"%PDF-1."), "{:?}", &pdf[..8]);
+    assert!(
+        pdf.ends_with(b"%%EOF\n") || pdf.ends_with(b"%%EOF"),
+        "complete file"
+    );
+    assert_eq!(
+        pdf,
+        report_pdf(&t.ws, &ctx).expect("pdf"),
+        "same input, same bytes"
+    );
+
+    // Kept for a human to open (like the window screenshots).
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/report-samples");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("tara-report.pdf"), &pdf).expect("write");
+
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    let all = words(&pages.join(" "));
+    for section in [
+        "Brake ECU",
+        "1. Executive summary",
+        "2. Assets",
+        "3. Damage scenarios",
+        "4. Threat scenarios",
+        "5. Attack trees",
+        "6. Risk register and treatment",
+        "7. Security controls",
+        "8. Cybersecurity goals and claims",
+        "9. Open problems",
+        "Brake request on CAN-2",
+        "Confidential. Exported by Mira Chen on 25 Oct 2026 19:30 UTC.",
+    ] {
+        assert!(all.contains(section), "missing {section:?} in:\n{all}");
+    }
+    // Unicode survives (the font is embedded), and text is printed as it is.
+    assert!(all.contains("Bremsensteuergerät Größe"), "{all}");
+    assert!(
+        all.contains("<script>alert(1)</script>"),
+        "plain text, not markup"
+    );
+    assert!(!all.contains("Draft:"), "saved state has no draft note");
+    // The attack tree is in the report as its outline.
+    assert!(
+        all.contains("OR") || all.contains("AND"),
+        "tree outline: {all}"
+    );
+}
+
+#[test]
+fn every_page_has_the_watermark_and_a_page_number_and_tables_continue() {
+    let mut t = tara();
+    for i in 0..120 {
+        apply(
+            &mut t.ws,
+            &Edit::AddAsset {
+                id: AssetId::new_v7(),
+                name: format!("Gateway interface number {i}"),
+                properties: vec![0],
+            },
+        );
+    }
+    let pdf = report_pdf(&t.ws, &context(true)).expect("pdf");
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    assert!(pages.len() >= 3, "{} pages", pages.len());
+    let total = pages.len();
+    for (i, page) in pages.iter().enumerate() {
+        let text = words(page);
+        assert!(
+            text.contains("Confidential. Exported by Mira Chen"),
+            "page {}",
+            i + 1
+        );
+        assert!(
+            text.contains(&format!("Page {} of {total}", i + 1)),
+            "page {}: {text}",
+            i + 1
+        );
+    }
+    // The first page says it is a draft; a long table repeats its header row.
+    assert!(words(&pages[0]).contains("Draft:"));
+    // Header words are never cut in the middle, even in narrow columns.
+    let with_header = pages
+        .iter()
+        .filter(|p| words(p).contains("Non-repudiation"))
+        .count();
+    assert!(
+        with_header >= 2,
+        "the header row repeats on a new page ({with_header})"
+    );
+    // Nothing is lost between pages.
+    let all = words(&pages.join(" "));
+    for i in [0, 59, 119] {
+        assert!(
+            all.contains(&format!("Gateway interface number {i}")),
+            "row {i}"
+        );
+    }
+}
+
+#[test]
+fn very_long_words_and_lines_are_wrapped_not_lost() {
+    let mut t = tara();
+    // One word far wider than the page, then many short ones (256 characters
+    // is the longest name the model takes).
+    let long = format!("{} {}", "Ab".repeat(100), "word ".repeat(10).trim_end());
+    apply(
+        &mut t.ws,
+        &Edit::RenameThreat {
+            threat: t.threat,
+            name: long.clone(),
+        },
+    );
+    let pdf = report_pdf(&t.ws, &context(false)).expect("pdf");
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    let all = words(&pages.join(" ")).replace(' ', "");
+    assert!(
+        all.contains(&long.replace(' ', "")),
+        "the whole name is on the pages"
+    );
+}
+
+#[test]
+fn the_pdf_and_the_html_report_have_the_same_sections() {
+    let t = tara();
+    let ctx = context(false);
+    let html = report_html(&t.ws, &ctx);
+    let doc = report_doc(&t.ws, &ctx);
+    let from_html: Vec<String> = html
+        .split("<h2>")
+        .skip(1)
+        .map(|s| s.split("</h2>").next().unwrap_or_default().to_owned())
+        .collect();
+    let from_doc: Vec<String> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading(2, text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(from_doc, from_html);
+}
+
+fn figures(doc: &aegis_client::pdf::ReportDoc) -> Vec<&Figure> {
+    doc.blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Figure(f) => Some(f),
+            _ => None,
+        })
+        .collect()
+}
+
+fn set_outline(t: &mut Tara, outline: String) {
+    let tree = t.tree;
+    apply(&mut t.ws, &Edit::ReplaceTree { tree, outline });
+}
+
+/// Writes a sample for a human to open.
+fn keep_sample(name: &str, pdf: &[u8]) {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/report-samples");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join(name), pdf).expect("write");
+}
+
+#[test]
+fn a_small_tree_is_drawn_as_one_picture_before_its_outline() {
+    let t = tara();
+    let ctx = context(false);
+    let doc = report_doc(&t.ws, &ctx);
+    let figs = figures(&doc);
+    assert_eq!(figs.len(), 1, "one tree, one figure");
+    assert_eq!(figs[0].panels.len(), 1);
+    assert_eq!(figs[0].omitted, 0);
+    assert_eq!(figs[0].panels[0].caption, "Attack tree");
+    let drawn: Vec<&str> = figs[0].panels[0]
+        .list
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            aegis_canvas::Item::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        drawn.iter().any(|t| t.contains("Unintended")),
+        "the root title is drawn: {drawn:?}"
+    );
+    // The figure comes before the outline of the same tree.
+    let fig_at = doc
+        .blocks
+        .iter()
+        .position(|b| matches!(b, Block::Figure(_)))
+        .expect("figure");
+    assert!(matches!(doc.blocks[fig_at + 1], Block::Preformatted(_)));
+
+    let pdf = report_pdf(&t.ws, &ctx).expect("pdf");
+    keep_sample("tara-report.pdf", &pdf);
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    let all = words(&pages.join(" "));
+    assert!(all.contains("Attack tree"), "caption: {all}");
+    assert!(all.contains("Gain access to OBD port") || all.contains("Gain access"));
+}
+
+#[test]
+fn a_tall_tree_gets_an_overview_and_detail_panels_in_the_pdf() {
+    let mut t = tara();
+    // 30 siblings: the most the model allows is 32 nodes, and this is about
+    // 2300 world pixels tall, far too much for one readable page.
+    let mut outline = String::from("OR Unintended braking\n");
+    for i in 0..30 {
+        outline.push_str(&format!("  - Attack step number {i}\n"));
+    }
+    set_outline(&mut t, outline);
+    let ctx = context(false);
+    let doc = report_doc(&t.ws, &ctx);
+    let figs = figures(&doc);
+    assert_eq!(figs.len(), 1);
+    let f = figs[0];
+    assert!(
+        f.panels.len() > 2,
+        "overview plus detail: {}",
+        f.panels.len()
+    );
+    assert!(f.panels[0].caption.starts_with("Overview"));
+    assert!(f.panels[1].caption.starts_with("Detail: row 1 of"));
+    // The overview draws no text (too small to read); a detail panel does.
+    let has_text = |p: &aegis_client::pdf::Panel| {
+        p.list
+            .items
+            .iter()
+            .any(|i| matches!(i, aegis_canvas::Item::Text { .. }))
+    };
+    assert!(!has_text(&f.panels[0]));
+    assert!(has_text(&f.panels[1]));
+    // No panel is taller than a page can hold.
+    assert!(
+        f.panels
+            .iter()
+            .all(|p| p.size.1 <= 560.0 && p.size.0 <= 500.0)
+    );
+
+    let pdf = report_pdf(&t.ws, &ctx).expect("pdf");
+    keep_sample("tara-report-tall-tree.pdf", &pdf);
+    assert_eq!(pdf, report_pdf(&t.ws, &ctx).expect("pdf"), "deterministic");
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    let all = words(&pages.join(" "));
+    assert!(all.contains("Overview of the whole tree"));
+    assert!(all.contains("Detail: row 2 of"), "{all}");
+    // Every step is readable somewhere in the detail panels.
+    for i in [0, 14, 29] {
+        assert!(all.contains(&format!("number {i}")), "step {i} missing");
+    }
+}
+
+#[test]
+fn a_deep_tree_is_cut_along_its_width() {
+    let mut t = tara();
+    // A chain of 14 nested gates: wider than a page at any readable zoom.
+    let mut outline = String::new();
+    for depth in 0..14 {
+        outline.push_str(&"  ".repeat(depth));
+        outline.push_str(&format!("AND Nested gate {depth}\n"));
+    }
+    outline.push_str(&"  ".repeat(14));
+    outline.push_str("- The last step\n");
+    set_outline(&mut t, outline);
+    let ctx = context(false);
+    let doc = report_doc(&t.ws, &ctx);
+    let f = figures(&doc)[0].clone();
+    assert!(f.panels[0].caption.starts_with("Overview"));
+    let captions: Vec<&str> = f.panels.iter().map(|p| p.caption.as_str()).collect();
+    assert!(
+        captions.iter().any(|c| c.contains("column 2 of")),
+        "{captions:?}"
+    );
+    let pdf = report_pdf(&t.ws, &ctx).expect("pdf");
+    keep_sample("tara-report-deep-tree.pdf", &pdf);
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    assert!(words(&pages.join(" ")).contains("The last step"));
+}
+
+#[test]
+fn a_tree_that_has_no_nodes_left_has_no_figure_and_does_not_break_the_report() {
+    let mut t = tara();
+    let tree = t.tree;
+    apply(&mut t.ws, &Edit::RemoveTree { tree });
+    let doc = report_doc(&t.ws, &context(false));
+    assert!(figures(&doc).is_empty());
+    report_pdf(&t.ws, &context(false)).expect("pdf");
 }

@@ -46,6 +46,14 @@
 - [x] Turn password login off per deployment from an admin setting, and show only company login in the app (today it is the `AEGIS_AUTH` variable) (045-password-login-switch)
 - [x] Build the server Docker image in CI and prove it starts: customer image refuses to start without a license, test image answers /healthz and GetLoginOptions (gap G12) (046-image-ci)
 - [x] Show "numbers checked with the server" in the app as a real status that follows the confirmed change, and fix the editor never comparing its own edits (gap G15) (047-numbers-check-mark)
+- [x] Fetch the signed update manifest over HTTPS in the client with the rustls client of aegis-auth, check it, and offer a Help menu entry (048-update-manifest-fetch)
+- [x] Admin: the event log (logins, exports, admin actions) with a filter, and a license page with dates, seats and features (049-admin-events-and-license)
+- [x] PDF report export with a permissive library (krilla, Inter font), watermark and page numbers on every page, tables that continue across pages, checked with D5 and cargo-deny (050-pdf-report)
+- [x] A screen reader path for attack tree nodes on the canvas: a sentence per node on screen, the selection spoken through the canvas label, keyboard reach and activation (gap G14) (051-screen-reader-path)
+- [x] The event log on every server: company-login-only and development servers keep and show an event log too, with retention by age and by row count so a login flood cannot fill the disk, plus a stress test (052-event-log-everywhere)
+- [x] Attack tree pictures in the PDF report: the canvas display list as vector paths, with an overview and readable detail panels for very tall or deep trees, and a stress test with a million boxes (053-pdf-tree-figures)
+- [x] Download the installer after the update check: streaming HTTPS download capped by the signed size, SHA-256 checked as it arrives, file named only when right, Help menu entry (054-installer-download)
+- [x] Administrators list and end password sessions: two admin calls, a Sessions tab in Administration, an audit event, and a stress test with 100,000 sessions (055-session-admin)
 
 ## Waiting for a customer order
 

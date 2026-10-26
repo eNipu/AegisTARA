@@ -453,6 +453,51 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self.client.clone().update_user(request).await?.into_inner())
     }
 
+    /// The newest events of the server's event log, newest first (admin).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerCode::NotAdmin`](crate::error::ServerCode::NotAdmin), or any
+    /// other [`ClientError`]; a server with no event log answers
+    /// `ServerCode::Other("no_event_log")`.
+    pub async fn events(&self, limit: u32) -> Result<Vec<pb::EventInfo>, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .list_events(pb::ListEventsRequest { limit })
+            .await?
+            .into_inner()
+            .events)
+    }
+
+    /// The open sessions (admin, password login).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn sessions(&self) -> Result<Vec<pb::SessionInfo>, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .list_sessions(pb::ListSessionsRequest {})
+            .await?
+            .into_inner()
+            .sessions)
+    }
+
+    /// Ends one session by its ID (admin).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`]; `unknown_session` if it ended already.
+    pub async fn revoke_session(&self, id: &str) -> Result<(), ClientError> {
+        self.client
+            .clone()
+            .revoke_session(pb::RevokeSessionRequest { id: id.to_owned() })
+            .await?;
+        Ok(())
+    }
+
     /// The login switch.
     ///
     /// # Errors

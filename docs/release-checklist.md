@@ -22,6 +22,9 @@ Run this list for every release build. Tick each line in the release notes.
       builds pull requests.
 - [ ] `crates/aegis-license/keys/update.keys` holds the production **update**
       public key. It is a different key from the license key.
+- [ ] The address of the signed manifest is decided and given to customers
+      (`update_url` in the app settings, or `AEGIS_UPDATE_URL`); air gapped
+      customers leave it empty.
 - [ ] The update private key is offline too, and held by fewer people than
       the license key.
 - [ ] The server is built without the `dev-license` feature

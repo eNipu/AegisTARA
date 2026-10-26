@@ -26,6 +26,8 @@
 //! | `AEGIS_LICENSE_FILE` | (required) | Path of the signed license file. The server does not start without a valid one. |
 //! | `AEGIS_DEV_LICENSE` | unset | `1` skips the check. Only in builds with the `dev-license` feature. |
 //! | `AEGIS_DB_POOL` | `16` | Database connections held open |
+//! | `AEGIS_EVENT_RETENTION_DAYS` | `365` | Events older than this are removed from the event log (hourly) |
+//! | `AEGIS_EVENT_MAX_ROWS` | `1000000` | Most events kept; the oldest go first, so a flood of failed logins cannot fill the disk |
 //! | `AEGIS_PACKS_DIR` | unset | Directory of extra methodology pack files |
 //! | `RUST_LOG` | `info` | Log filter |
 //!
@@ -45,9 +47,11 @@ use aegis_auth::jwks::JwksCache;
 use aegis_auth::validate::{AdminRule, Authenticator, DpopPolicy, ValidatorConfig};
 use aegis_auth::{oidc, system_clock};
 use aegis_license::{DAY, LicenseState, TrustedKeys};
+use aegis_server::accounts::events::spawn_trimmer;
 use aegis_server::accounts::service::{AccountsService, LoginOptions};
 use aegis_server::accounts::{
-    AccountBackend, Accounts, AccountsConfig, MemoryAccounts, PostgresAccounts, spawn_purger,
+    AccountBackend, Accounts, AccountsConfig, EventLog, MemoryAccounts, PostgresAccounts,
+    Retention, spawn_purger,
 };
 use aegis_server::auth::Principal;
 use aegis_server::auth_layer::{
@@ -238,6 +242,27 @@ async fn password_accounts(
     Ok(Arc::new(accounts))
 }
 
+/// How long events stay in the event log and how many are kept.
+fn retention() -> Result<Retention, String> {
+    let mut retention = Retention::default();
+    if let Some(v) = var("AEGIS_EVENT_RETENTION_DAYS") {
+        let days: u64 = v
+            .parse()
+            .ok()
+            .filter(|d| (1..=3650).contains(d))
+            .ok_or_else(|| "AEGIS_EVENT_RETENTION_DAYS must be 1 to 3650".to_owned())?;
+        retention.max_age = Duration::from_secs(days * 86_400);
+    }
+    if let Some(v) = var("AEGIS_EVENT_MAX_ROWS") {
+        retention.max_events = v
+            .parse()
+            .ok()
+            .filter(|n| (1000..=100_000_000).contains(n))
+            .ok_or_else(|| "AEGIS_EVENT_MAX_ROWS must be 1000 to 100000000".to_owned())?;
+    }
+    Ok(retention)
+}
+
 /// Loads and checks the license. The server does not start without one.
 fn license() -> Result<Option<Arc<LicenseGate>>, String> {
     #[cfg(feature = "dev-license")]
@@ -369,6 +394,8 @@ async fn start<S: ProjectStore>(
     let (mode, public_url, options, accounts) = match setup.kind {
         AuthKind::Oidc => {
             let (mode, url, options) = oidc_mode().await?;
+            // No password accounts, but the event log still works (job 052).
+            service = service.with_event_log(EventLog::standalone(account_backend));
             (mode, url, options, None)
         }
         AuthKind::Both => {
@@ -400,6 +427,7 @@ async fn start<S: ProjectStore>(
         }
         AuthKind::Dev => {
             tracing::warn!("development login: every caller is trusted. Development only.");
+            service = service.with_event_log(EventLog::standalone(account_backend));
             (
                 Mode::Dev(DevAuthn),
                 String::new(),
@@ -411,11 +439,19 @@ async fn start<S: ProjectStore>(
     let purger = accounts
         .as_ref()
         .map(|a| spawn_purger(Arc::clone(a), Duration::from_secs(600)));
+    let trimmer = match service.event_log() {
+        Some(log) => Some(spawn_trimmer(
+            log.clone(),
+            retention()?,
+            Duration::from_secs(3600),
+        )),
+        None => None,
+    };
     let public = AccountsService::new(accounts, options);
     let layer = AuthLayer::new(Arc::new(mode), &public_url);
     let result = serve(registry, service, public, setup.listen, layer).await;
-    if let Some(p) = purger {
-        p.abort();
+    for task in [purger, trimmer].into_iter().flatten() {
+        task.abort();
     }
     result
 }

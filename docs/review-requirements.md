@@ -29,10 +29,18 @@ Add a row for every new job.
 | 045 password login switch | pending | pending | pending | pending |
 | 046 server image in CI | pending | pending | pending | pending |
 | 047 numbers checked mark | pending | pending | pending | pending |
+| 048 update manifest fetch | pending | pending | pending | pending |
+| 049 admin events and license | pending | pending | pending | pending |
+| 050 PDF report | pending | pending | pending | pending |
+| 051 screen reader path | pending | pending | pending | pending |
+| 052 event log everywhere | pending | pending | pending | pending |
+| 053 PDF tree pictures | pending | pending | pending | pending |
+| 054 installer download | pending | pending | pending | pending |
+| 055 session admin | pending | pending | pending | pending |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)
-- **Jobs in scope:** 027 to 041 (`factory/backlog.md`)
+- **Jobs in scope:** 027 to 041, and 045 to 051 (`factory/backlog.md`; the added jobs are listed in section 7)
 - **Reviews:** code, security, UX, UI. The factory agents `review-code`,
   `review-security`, `review-ux` and `review-ui` can run them; a human
   reviewer can use the same lists.
@@ -246,3 +254,81 @@ Use the screenshots in `target/shell-screenshots/` and the running app.
 - No screen reader path for canvas items (G14).
 - `vendor.keys` and `update.keys` hold no production key yet (G13).
 - One server instance per database (ADR 0035).
+
+---
+
+## 7. Jobs 045 to 051 (built after the first list)
+
+What each added job needs from each review, besides the lists above.
+
+### Code
+
+- [ ] 045: `Accounts::set_password_login` stores before it flips the flag; a
+      refused login costs no hashing; `HybridAuthn` routes on the `ats_`
+      prefix only. `AEGIS_PASSWORD_LOGIN` is read once at start.
+- [ ] 047: `compare_server_risks` runs on both triggers (server numbers and
+      confirmed batch); `NumbersCheck::Checked` needs the confirmed change.
+- [ ] 048: `fetch_manifest` limits (https only, 32 KiB, no redirects).
+- [ ] 049: `ListEvents` cap and admin check; `audit.rs` covers every
+      `AuditKind`.
+- [ ] 050: `pdf.rs` layout loops end (a cell taller than a page, a word wider
+      than a column, `MAX_PAGES`); output is deterministic.
+- [ ] 051: `access::visible` stays O(visible); `describe` handles an invalid
+      node.
+
+### Security
+
+- [ ] 045: only an admin can change the switch; turning it off ends every
+      password session; no lock-out without a company login.
+- [ ] 048: transport is not trust (a wrong signature is refused over valid
+      TLS); `with_tls_config` is not used with weaker settings anywhere.
+- [ ] 049: the event log holds no password or token; a non-admin is refused.
+- [ ] 050: the PDF contains only what the project holds (names, text), and
+      the font file license is in the repository.
+- [ ] 046: the customer image refuses to start without a license
+      (`deploy/verify-image.sh`; its docker lines were first run by CI).
+
+### UX
+
+- [ ] 045: the login screen with and without the password form; the message
+      after an admin turns it off while someone is on the form.
+- [ ] 047: the wording of the four states of the numbers mark; very large
+      projects stay on "Checking".
+- [ ] 049: the Administration page is taller than 760 px on the users tab.
+- [ ] 051: **hands-on with a screen reader** (Orca on Linux, NVDA on Windows,
+      VoiceOver on macOS): reach the canvas with Tab, walk the tree with the
+      arrow keys, hear the sentence, press Enter on an entry. The tests do
+      not run an accessibility backend (ADR 0045).
+
+### UI
+
+- [ ] 047: the numbers mark in the project header at 1100 px width.
+- [ ] 049: the event table columns and the tab buttons.
+- [ ] 050: open `target/report-samples/tara-report.pdf` (made by
+      `cargo test -p aegis-client --test pages`) and check page 1 to the end.
+
+---
+
+## 8. Self-review notes (2026-10-26)
+
+Not one of the four formal reviews. A first pass by the builder over the
+back-fixes from the other session, with what was run.
+
+| Check | Result |
+|---|---|
+| `scripts/ci.sh` on all eight crates (fmt, clippy `-D warnings`, tests), rustc 1.99.1, PostgreSQL 16 | passed |
+| Plain builds (no dev-dependencies) with clippy for license, model, proto, auth, canvas, client, server | passed (the `aegis-license` fix from `9886fd4` is sound) |
+| `scripts/deny.sh`, `tools/deny-fixtures/run.sh` (9 cases) | passed |
+| 048 `fetch_manifest`: https only, 1 MiB body cap and no redirects in `aegis-auth` `HyperClient`, no trust from transport | as documented |
+| 045 switch: only an admin; sessions end; `authenticate` checks the switch on every request | as documented, **one finding** below |
+| 054 download in a shared temp folder: a planted symlink or file could be written through | fixed (`create_new` part file, a private 0700 folder per download); the tests fail on the old code, ADR 0048 section 7 |
+
+Finding fixed (job 052 commit): a login that was already hashing when an admin
+turned password login off could still store a session. It was unusable while
+the switch was off but became valid again when it was turned on. `log_in`
+now checks the switch under the same lock the switch uses to clear sessions;
+test `a_login_racing_the_switch_leaves_no_session` fails without the fix.
+
+Not run here: the formal code, security, UX and UI reviews (G8), the docker
+lines of `deploy/verify-image.sh` (Docker Hub refused the pull with 429; they
+run in CI), and any screen reader pass (G14).

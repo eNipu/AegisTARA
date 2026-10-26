@@ -193,6 +193,13 @@ pub enum AdminAction {
         /// The user.
         username: String,
     },
+    /// Ends one open session (job 055).
+    RevokeSession {
+        /// The session's ID from the session list.
+        id: String,
+        /// Whose it is, for the message.
+        username: String,
+    },
     /// Turns password login on or off for the whole server (job 045).
     SetPasswordLogin {
         /// On or off.

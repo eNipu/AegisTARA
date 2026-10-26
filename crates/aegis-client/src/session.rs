@@ -52,6 +52,7 @@ use crate::state::{
     ProjectEntry, ProjectView, ServerSettingsView, Severity, SyncView, UserRow, ViewModel,
 };
 use crate::time::format_ms;
+use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use crate::view::{
     AdminAction, Page, UiState, inspector, risks_differ, shown_tree, threat_rows, tree_view,
     use_server_risks,
@@ -95,6 +96,15 @@ pub struct SessionConfig {
     /// so only a dead connection that no one closed (a proxy dropping it
     /// without a reset) reaches this.
     pub watch_silence: Duration,
+    /// Where the signed update manifest is. Empty: no address is set.
+    pub update_url: String,
+    /// Checks the manifest against the update keys of this build.
+    pub update_checker: Arc<UpdateChecker>,
+    /// Where a downloaded installer is saved (job 054).
+    pub update_dir: crate::updates::DownloadDir,
+    /// The HTTP client for update checks and downloads. Tests give it a
+    /// client that trusts a test certificate authority.
+    pub update_http: Arc<aegis_auth::http::HyperClient>,
 }
 
 impl SessionConfig {
@@ -110,6 +120,10 @@ impl SessionConfig {
             transport: crate::transport::TransportKind::Grpc,
             on_log_out: None,
             watch_silence: Duration::from_secs(60),
+            update_url: String::new(),
+            update_checker: Arc::new(UpdateChecker::for_this_build()),
+            update_dir: crate::updates::DownloadDir::for_this_user(),
+            update_http: Arc::new(aegis_auth::http::HyperClient::new()),
         }
     }
 
@@ -120,6 +134,9 @@ impl SessionConfig {
         self
     }
 }
+
+/// How many events the administration page loads.
+const EVENT_ROWS: u32 = 200;
 
 /// How many recent changes the history page shows.
 const HISTORY_ROWS: u32 = 200;
@@ -164,6 +181,9 @@ impl Session {
             users: Vec::new(),
             admin_text: None,
             settings: None,
+            events: Vec::new(),
+            events_error: None,
+            sessions: Vec::new(),
         });
         let (view_tx, view) = watch::channel(initial);
         let actor = Actor {
@@ -191,6 +211,11 @@ impl Session {
             users: Vec::new(),
             admin_text: None,
             settings: None,
+            audit_rows: Vec::new(),
+            events_error: None,
+            session_rows: Vec::new(),
+            offered: None,
+            downloading: false,
         };
         let task = tokio::spawn(actor.run());
         (Session { commands, view }, task)
@@ -350,6 +375,10 @@ enum Internal<P> {
         result: Result<(), ClientError>,
     },
     Users(Result<Vec<pb::UserInfo>, ClientError>),
+    Updates(Result<UpdateStatus, UpdateError>),
+    Downloaded(Result<std::path::PathBuf, UpdateError>),
+    Events(Result<Vec<pb::EventInfo>, ClientError>),
+    Sessions(Result<Vec<pb::SessionInfo>, ClientError>),
     Settings(Result<pb::ServerSettings, ClientError>),
     SettingsSet(Result<pb::ServerSettings, ClientError>),
     AdminDone {
@@ -392,6 +421,13 @@ struct Actor<P: CredentialProvider> {
     users: Vec<UserRow>,
     admin_text: Option<String>,
     settings: Option<ServerSettingsView>,
+    audit_rows: Vec<crate::audit::EventRow>,
+    events_error: Option<String>,
+    session_rows: Vec<crate::audit::SessionRow>,
+    /// The release the last update check offered, for "Download update".
+    offered: Option<UpdateOffer>,
+    /// An installer download is running.
+    downloading: bool,
 }
 
 impl<P: CredentialProvider> Actor<P> {
@@ -740,6 +776,66 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 Err(e) => self.on_failure("Could not load the users", &e),
             },
+            Internal::Events(result) => match result {
+                Ok(events) => {
+                    self.audit_rows = events.iter().map(crate::audit::event_row).collect();
+                    self.events_error = None;
+                }
+                Err(e) => {
+                    self.audit_rows.clear();
+                    self.events_error = Some(match e.code() {
+                        Some(ServerCode::Other(c)) if c == "no_event_log" => {
+                            "This server keeps no event log.".to_owned()
+                        }
+                        _ => format!("The event log could not be read: {e}"),
+                    });
+                }
+            },
+            Internal::Sessions(result) => match result {
+                Ok(list) => {
+                    self.session_rows = list.iter().map(crate::audit::session_row).collect()
+                }
+                Err(e) => {
+                    self.session_rows.clear();
+                    self.on_failure("Could not load the sessions", &e);
+                }
+            },
+            Internal::Updates(result) => match result {
+                Ok(UpdateStatus::UpToDate) => {
+                    self.notice(Severity::Info, "AegisTARA is up to date.");
+                }
+                Ok(UpdateStatus::NoBuildForThisPlatform { release }) => self.notice(
+                    Severity::Warning,
+                    format!("Release {release} exists, but not for this computer."),
+                ),
+                Ok(UpdateStatus::Available(offer)) => {
+                    let notes: String = offer.notes.chars().take(300).collect();
+                    self.notice(
+                        Severity::Info,
+                        format!(
+                            "AegisTARA {} is available ({} MB). Choose Help, Download update, or fetch it from {}. {notes}",
+                            offer.release,
+                            offer.bytes().div_ceil(1_000_000),
+                            offer.url(),
+                        ),
+                    );
+                    self.offered = Some(offer);
+                }
+                Err(e) => self.notice(Severity::Error, format!("Could not check for updates: {e}")),
+            },
+            Internal::Downloaded(result) => {
+                self.downloading = false;
+                match result {
+                    Ok(path) => self.notice(
+                        Severity::Info,
+                        format!(
+                            "The update was downloaded and checked against the signed manifest: {}. Close AegisTARA, then open that file to install it.",
+                            path.display()
+                        ),
+                    ),
+                    Err(e) => self.notice(Severity::Error, format!("Could not download the update: {e}")),
+                }
+            }
             Internal::Settings(result) => match result {
                 Ok(s) => self.settings = Some(settings_view(&s)),
                 Err(e) => self.on_failure("Could not load the server settings", &e),
@@ -791,6 +887,7 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 if reload_users {
                     self.load_users();
+                    self.load_sessions();
                 }
             }
             Internal::Audit(result) => {
@@ -829,6 +926,9 @@ impl<P: CredentialProvider> Actor<P> {
                 self.me = None;
                 self.users.clear();
                 self.settings = None;
+                self.audit_rows.clear();
+                self.events_error = None;
+                self.session_rows.clear();
                 self.projects.clear();
                 if let Some(hook) = &self.config.on_log_out {
                     (hook.0)();
@@ -875,6 +975,78 @@ impl<P: CredentialProvider> Actor<P> {
         }
     }
 
+    /// Fetches the signed manifest in the background. Needs no server
+    /// connection: an air gapped site simply sets no address.
+    fn check_for_updates(&mut self) {
+        if self.config.update_url.is_empty() {
+            self.notice(
+                Severity::Info,
+                "No update address is set. Your administrator can set update_url in the settings file.",
+            );
+            return;
+        }
+        let (url, checker, http) = (
+            self.config.update_url.clone(),
+            Arc::clone(&self.config.update_checker),
+            Arc::clone(&self.config.update_http),
+        );
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            let result = checker.check_url(&*http, &url).await;
+            let _ = events.send(Internal::Updates(result)).await;
+        });
+    }
+
+    /// Downloads the installer of the release the last check offered, in the
+    /// background. Nothing is run or opened.
+    fn download_update(&mut self) {
+        let Some(offer) = self.offered.clone() else {
+            self.notice(
+                Severity::Info,
+                "There is no update to download. Choose Help, Check for updates first.",
+            );
+            return;
+        };
+        if self.downloading {
+            self.notice(Severity::Info, "The update is already being downloaded.");
+            return;
+        }
+        self.downloading = true;
+        self.notice(
+            Severity::Info,
+            format!(
+                "Downloading AegisTARA {} ({} MB)...",
+                offer.release,
+                offer.bytes().div_ceil(1_000_000)
+            ),
+        );
+        let (target, events, http) = (
+            self.config.update_dir.clone(),
+            self.events.clone(),
+            Arc::clone(&self.config.update_http),
+        );
+        tokio::spawn(async move {
+            let result = offer.download(&*http, &target, |_| {}).await;
+            let _ = events.send(Internal::Downloaded(result)).await;
+        });
+    }
+
+    fn load_sessions(&self) {
+        if self
+            .me
+            .as_ref()
+            .is_some_and(|m| m.admin && m.method == "password")
+        {
+            self.spawn(|conn| async move { Internal::Sessions(conn.sessions().await) });
+        }
+    }
+
+    fn load_events(&self) {
+        if self.me.as_ref().is_some_and(|m| m.admin) {
+            self.spawn(|conn| async move { Internal::Events(conn.events(EVENT_ROWS).await) });
+        }
+    }
+
     fn load_settings(&self) {
         if self.me.as_ref().is_some_and(|m| m.admin) {
             self.spawn(|conn| async move { Internal::Settings(conn.server_settings().await) });
@@ -908,6 +1080,9 @@ impl<P: CredentialProvider> Actor<P> {
                 (format!("Set a new password for {username}"), true)
             }
             AdminAction::DeleteUser { username } => (format!("Delete user {username}"), true),
+            AdminAction::RevokeSession { username, .. } => {
+                (format!("End the session of {username}"), true)
+            }
             AdminAction::SetPasswordLogin { .. } => return,
         };
         self.spawn(move |conn| async move {
@@ -951,6 +1126,7 @@ impl<P: CredentialProvider> Actor<P> {
                     .await
                     .map(|_| ()),
                 AdminAction::DeleteUser { username } => conn.delete_user(&username).await,
+                AdminAction::RevokeSession { id, .. } => conn.revoke_session(&id).await,
                 // Sent as `Internal::SettingsSet` above; never reaches here.
                 AdminAction::SetPasswordLogin { .. } => Ok(()),
             };
@@ -993,19 +1169,24 @@ impl<P: CredentialProvider> Actor<P> {
             // Building and writing are both blocking work (R5).
             let written = tokio::task::spawn_blocking(move || {
                 let ws = Workspace::new(project, seq);
-                let text = match kind {
-                    ExportKind::Report => Some(crate::report::report_html(&ws, &ctx)),
-                    ExportKind::RiskRegister => Some(crate::report::risk_register_csv(&ws, &ctx)),
-                    ExportKind::TreeSvg => {
-                        tree.and_then(|t| crate::report::tree_svg(&ws, t, residual))
+                let bytes: Vec<u8> = match kind {
+                    ExportKind::Report => Some(crate::report::report_html(&ws, &ctx).into_bytes()),
+                    ExportKind::ReportPdf => {
+                        Some(crate::pdf::report_pdf(&ws, &ctx).map_err(|e| e.to_string())?)
                     }
+                    ExportKind::RiskRegister => {
+                        Some(crate::report::risk_register_csv(&ws, &ctx).into_bytes())
+                    }
+                    ExportKind::TreeSvg => tree
+                        .and_then(|t| crate::report::tree_svg(&ws, t, residual))
+                        .map(String::into_bytes),
                 }
                 .ok_or_else(|| "there is nothing to export".to_owned())?;
                 if let Some(dir) = path.parent() {
                     std::fs::create_dir_all(dir)
                         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
                 }
-                std::fs::write(&path, text)
+                std::fs::write(&path, bytes)
                     .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 Ok::<_, String>(path.display().to_string())
             })
@@ -1761,6 +1942,10 @@ impl<P: CredentialProvider> Actor<P> {
             Command::CompareWith(Some(baseline)) => self.compare_with(baseline),
             Command::LoadHistory => self.load_history(),
             Command::Export { kind, path } => self.export(kind, path),
+            Command::CheckForUpdates => self.check_for_updates(),
+            Command::DownloadUpdate => self.download_update(),
+            Command::LoadEvents => self.load_events(),
+            Command::LoadSessions => self.load_sessions(),
             Command::LoadUsers => {
                 self.load_users();
                 self.load_settings();
@@ -1922,6 +2107,7 @@ impl<P: CredentialProvider> Actor<P> {
             Page::Versions => self.load_baselines(),
             Page::History => self.load_history(),
             Page::Admin => {
+                self.load_events();
                 self.load_users();
                 self.load_settings();
             }
@@ -2096,6 +2282,9 @@ impl<P: CredentialProvider> Actor<P> {
             users: self.users.clone(),
             admin_text: self.admin_text.clone(),
             settings: self.settings,
+            events: self.audit_rows.clone(),
+            events_error: self.events_error.clone(),
+            sessions: self.session_rows.clone(),
         }));
     }
 }

@@ -7,7 +7,7 @@
 // ui/icons/LICENSE-lucide.txt).
 import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, AboutSlint, StandardListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Canvas, DrawItem } from "canvas.slint";
+import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, Panel, Swatch,
@@ -193,6 +193,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> tree-rows;
     in property <int> tree-selected: -1;
     in property <[DrawItem]> draw;
+    in property <[AccessNode]> access-nodes;
     in property <bool> has-tree;
     in property <string> tree-title;
     in property <string> zoom-text: "100%";
@@ -258,6 +259,15 @@ export component AppWindow inherits Window {
     in property <bool> selected-user-admin;
     in property <bool> selected-user-disabled;
     in property <string> admin-text;
+    // The event log tab (job 049): 0 users and login, 1 event log, 2 sessions.
+    in-out property <int> admin-tab: 0;
+    in property <[[StandardListViewItem]]> session-rows;
+    in property <int> session-selected: -1;
+    in property <string> sessions-text;
+    in property <[[StandardListViewItem]]> event-rows;
+    in property <int> event-filter: 0;
+    in property <string> events-text;
+    in property <string> license-text;
     // The login switch (job 045): shown once an administrator has loaded it.
     in property <bool> settings-known;
     in property <bool> password-login-on;
@@ -299,6 +309,8 @@ export component AppWindow inherits Window {
     callback use-password-login();
     callback use-company-login();
     callback log-out();
+    callback check-for-updates();
+    callback download-update();
     callback change-password(string, string);
 
     // ---- callbacks: projects and editing ----
@@ -363,6 +375,7 @@ export component AppWindow inherits Window {
     callback canvas-scroll(length, length, float);
     callback canvas-key(string, bool) -> bool;
     callback canvas-resized(length, length);
+    callback canvas-node-activated(int);
     callback fit();
     callback zoom-reset();
     callback pick-control(int);
@@ -389,6 +402,7 @@ export component AppWindow inherits Window {
     callback stop-compare();
     callback refresh-history();
     callback export-report();
+    callback export-pdf();
     callback export-csv();
     callback export-svg();
     callback pick-user(int);
@@ -397,8 +411,13 @@ export component AppWindow inherits Window {
     callback toggle-user-disabled();
     callback reset-user-password(string);
     callback delete-user();
+    callback refresh-sessions();
+    callback pick-session(int);
+    callback revoke-session();
     callback break-lock();
     callback set-password-login(bool);
+    callback set-event-filter(int);
+    callback refresh-events();
     callback verify-audit();
 
     // Opens the one-line input dialog. The answer comes back through
@@ -443,6 +462,7 @@ export component AppWindow inherits Window {
         if (kind == "remove-goal") { root.remove-goal(); }
         if (kind == "remove-claim") { root.remove-claim(); }
         if (kind == "delete-user") { root.delete-user(); }
+        if (kind == "revoke-session") { root.revoke-session(); }
         if (kind == "delete-project") { root.delete-project(); }
         if (kind == "break-lock") { root.break-lock(); }
         if (kind == "password-login-off") { root.set-password-login(false); }
@@ -462,6 +482,7 @@ export component AppWindow inherits Window {
             MenuItem { title: "Projects"; icon: @image-url("icons/folder-open.svg"); enabled: root.online; activated => { root.close-project(); } }
             MenuItem { title: "Close project"; icon: @image-url("icons/folder-x.svg"); enabled: root.in-project; activated => { root.close-project(); } }
             MenuSeparator {}
+            MenuItem { title: "Export TARA report (PDF)"; icon: @image-url("icons/file-down.svg"); enabled: root.in-project; activated => { root.export-pdf(); } }
             MenuItem { title: "Export TARA report (HTML)"; icon: @image-url("icons/file-text.svg"); enabled: root.in-project; activated => { root.export-report(); } }
             MenuItem { title: "Export risk register (CSV)"; icon: @image-url("icons/sheet.svg"); enabled: root.in-project; activated => { root.export-csv(); } }
             MenuItem { title: "Export attack tree (SVG)"; icon: @image-url("icons/image.svg"); enabled: root.in-project && root.has-tree; activated => { root.export-svg(); } }
@@ -514,6 +535,8 @@ export component AppWindow inherits Window {
         Menu {
             title: "Help";
             MenuItem { title: "Keyboard shortcuts"; icon: @image-url("icons/keyboard.svg"); activated => { root.show-shortcuts = true; } }
+            MenuItem { title: "Check for updates"; icon: @image-url("icons/refresh-cw.svg"); activated => { root.check-for-updates(); } }
+            MenuItem { title: "Download update"; icon: @image-url("icons/file-down.svg"); activated => { root.download-update(); } }
             MenuItem { title: "About AegisTARA"; icon: @image-url("icons/info.svg"); activated => { root.show-about = true; } }
         }
     }
@@ -1147,6 +1170,8 @@ export component AppWindow inherits Window {
                                 vertical-stretch: 1;
                                 Canvas {
                                     items: root.draw;
+                                    access-nodes: root.access-nodes;
+                                    node-activated(n) => { root.canvas-node-activated(n); }
                                     accessible-summary: root.canvas-summary;
                                     pointer-down(x, y) => { root.canvas-down(x, y); }
                                     pointer-move(x, y) => { root.canvas-move(x, y); }
@@ -1543,7 +1568,8 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px;
                             alignment: start;
-                            Button { text: "TARA report (HTML, print to PDF)"; icon: @image-url("icons/file-text.svg"); primary: true; clicked => { root.export-report(); } }
+                            Button { text: "TARA report (PDF)"; icon: @image-url("icons/file-down.svg"); primary: true; clicked => { root.export-pdf(); } }
+                            Button { text: "TARA report (HTML)"; icon: @image-url("icons/file-text.svg"); clicked => { root.export-report(); } }
                             Button { text: "Risk register (CSV)"; icon: @image-url("icons/sheet.svg"); clicked => { root.export-csv(); } }
                             Button { text: "Attack tree on the canvas (SVG)"; icon: @image-url("icons/image.svg"); enabled: root.has-tree; clicked => { root.export-svg(); } }
                         }
@@ -1566,69 +1592,115 @@ export component AppWindow inherits Window {
                         horizontal-stretch: 3;
                         spacing: 10px;
                         PageTitle { title: "Administration"; subtitle: "Users of this server (password login), and tools for the open project."; icon: @image-url("icons/user-cog.svg"); }
-                        if root.is-password: Table {
-                            label: "Users";
-                            columns: [{ title: "User", horizontal-stretch: 1 }, { title: "Name", horizontal-stretch: 2 }, { title: "Admin", horizontal-stretch: 1 }, { title: "Status", horizontal-stretch: 1 }, { title: "Last login", horizontal-stretch: 2 }, { title: "Sessions", horizontal-stretch: 1 }];
-                            rows: root.user-rows;
-                            selected: root.user-selected;
-                            picked(i) => { root.pick-user(i); }
-                        }
-                        if !root.is-password: Text { text: "Users come from the company identity provider. Manage them there."; color: Theme.graphite; wrap: word-wrap; }
-                        if root.settings-known: Panel {
-                            SectionTitle { text: "Login"; }
-                            Text {
-                                text: root.password-login-on ? "Password login is on. People can log in with a user name and password as well as with the company account." : "Password login is off. Everyone logs in with the company account.";
-                                color: Theme.ink;
-                                wrap: word-wrap;
-                                font-size: 13px;
-                            }
-                            if !root.company-login-available: Text {
-                                text: "This server has no company login, so password login cannot be turned off.";
-                                color: Theme.graphite;
-                                wrap: word-wrap;
-                                font-size: 12px;
-                            }
-                            Button {
-                                text: root.password-login-on ? "Turn password login off" : "Turn password login on";
-                                icon: @image-url("icons/lock.svg");
-                                enabled: !root.password-login-on || root.company-login-available;
-                                clicked => {
-                                    if (root.password-login-on) {
-                                        root.confirm("password-login-off", "Turn password login off? Everyone with a password session is logged out now. Use the company account to log in.");
-                                    } else {
-                                        root.set-password-login(true);
-                                    }
-                                }
-                            }
-                        }
-                        if root.is-password && root.user-selected >= 0: HorizontalLayout {
+                        HorizontalLayout {
                             spacing: 6px;
-                            Button { text: root.selected-user-admin ? "Remove admin rights" : "Make admin"; icon: @image-url("icons/user-cog.svg"); clicked => { root.toggle-user-admin(); } }
-                            Button { text: root.selected-user-disabled ? "Enable" : "Disable"; icon: @image-url("icons/lock.svg"); clicked => { root.toggle-user-disabled(); } }
-                            Button { text: "Set password"; icon: @image-url("icons/key-round.svg"); clicked => { root.ask("reset-password", "Set a new password", "New password (at least 10 characters)", ""); root.prompt-secret = true; } }
-                            Button { text: "Delete"; icon: @image-url("icons/trash-2.svg"); clicked => { root.confirm("delete-user", "Delete this user? Their sessions end."); } }
+                            Button { text: "Users and login"; icon: @image-url("icons/users.svg"); primary: root.admin-tab == 0; clicked => { root.admin-tab = 0; } }
+                            Button { text: "Event log"; icon: @image-url("icons/scroll-text.svg"); primary: root.admin-tab == 1; clicked => { root.admin-tab = 1; root.refresh-events(); } }
+                            Button { text: "Sessions"; icon: @image-url("icons/shield.svg"); primary: root.admin-tab == 2; clicked => { root.admin-tab = 2; root.refresh-sessions(); } }
                         }
-                        if root.is-password: Panel {
-                            SectionTitle { text: "Add a user"; }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                LineEdit { horizontal-stretch: 1; placeholder-text: "user name"; text <=> root.new-user-name; accessible-label: "New user name"; }
-                                LineEdit { horizontal-stretch: 2; placeholder-text: "Full name"; text <=> root.new-user-display; accessible-label: "Full name"; }
+                        if root.admin-tab == 0: VerticalLayout {
+                            spacing: 10px;
+                            if root.is-password: Table {
+                                label: "Users";
+                                columns: [{ title: "User", horizontal-stretch: 1 }, { title: "Name", horizontal-stretch: 2 }, { title: "Admin", horizontal-stretch: 1 }, { title: "Status", horizontal-stretch: 1 }, { title: "Last login", horizontal-stretch: 2 }, { title: "Sessions", horizontal-stretch: 1 }];
+                                rows: root.user-rows;
+                                selected: root.user-selected;
+                                picked(i) => { root.pick-user(i); }
                             }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                LineEdit { horizontal-stretch: 1; placeholder-text: "First password (10+ characters)"; input-type: password; text <=> root.new-user-password; accessible-label: "First password"; }
-                                CheckBox { text: "Administrator"; checked <=> root.new-user-admin; }
+                            if !root.is-password: Text { text: "Users come from the company identity provider. Manage them there."; color: Theme.graphite; wrap: word-wrap; }
+                            if root.settings-known: Panel {
+                                SectionTitle { text: "Login"; }
+                                Text {
+                                    text: root.password-login-on ? "Password login is on. People can log in with a user name and password as well as with the company account." : "Password login is off. Everyone logs in with the company account.";
+                                    color: Theme.ink;
+                                    wrap: word-wrap;
+                                    font-size: 13px;
+                                }
+                                if !root.company-login-available: Text {
+                                    text: "This server has no company login, so password login cannot be turned off.";
+                                    color: Theme.graphite;
+                                    wrap: word-wrap;
+                                    font-size: 12px;
+                                }
                                 Button {
-                                    text: "Add user";
-                                    icon: @image-url("icons/plus.svg");
-                                    enabled: root.new-user-name != "" && root.new-user-password != "";
+                                    text: root.password-login-on ? "Turn password login off" : "Turn password login on";
+                                    icon: @image-url("icons/lock.svg");
+                                    enabled: !root.password-login-on || root.company-login-available;
                                     clicked => {
-                                        root.create-user(root.new-user-name, root.new-user-display, root.new-user-password, root.new-user-admin);
-                                        root.new-user-password = "";
+                                        if (root.password-login-on) {
+                                            root.confirm("password-login-off", "Turn password login off? Everyone with a password session is logged out now. Use the company account to log in.");
+                                        } else {
+                                            root.set-password-login(true);
+                                        }
                                     }
                                 }
                             }
+                            if root.is-password && root.user-selected >= 0: HorizontalLayout {
+                                spacing: 6px;
+                                Button { text: root.selected-user-admin ? "Remove admin rights" : "Make admin"; icon: @image-url("icons/user-cog.svg"); clicked => { root.toggle-user-admin(); } }
+                                Button { text: root.selected-user-disabled ? "Enable" : "Disable"; icon: @image-url("icons/lock.svg"); clicked => { root.toggle-user-disabled(); } }
+                                Button { text: "Set password"; icon: @image-url("icons/key-round.svg"); clicked => { root.ask("reset-password", "Set a new password", "New password (at least 10 characters)", ""); root.prompt-secret = true; } }
+                                Button { text: "Delete"; icon: @image-url("icons/trash-2.svg"); clicked => { root.confirm("delete-user", "Delete this user? Their sessions end."); } }
+                            }
+                            if root.is-password: Panel {
+                                SectionTitle { text: "Add a user"; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { horizontal-stretch: 1; placeholder-text: "user name"; text <=> root.new-user-name; accessible-label: "New user name"; }
+                                    LineEdit { horizontal-stretch: 2; placeholder-text: "Full name"; text <=> root.new-user-display; accessible-label: "Full name"; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    LineEdit { horizontal-stretch: 1; placeholder-text: "First password (10+ characters)"; input-type: password; text <=> root.new-user-password; accessible-label: "First password"; }
+                                    CheckBox { text: "Administrator"; checked <=> root.new-user-admin; }
+                                    Button {
+                                        text: "Add user";
+                                        icon: @image-url("icons/plus.svg");
+                                        enabled: root.new-user-name != "" && root.new-user-password != "";
+                                        clicked => {
+                                            root.create-user(root.new-user-name, root.new-user-display, root.new-user-password, root.new-user-admin);
+                                            root.new-user-password = "";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if root.admin-tab == 1: VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Button { text: "All"; primary: root.event-filter == 0; clicked => { root.set-event-filter(0); } }
+                                Button { text: "Logins"; primary: root.event-filter == 1; clicked => { root.set-event-filter(1); } }
+                                Button { text: "Exports"; primary: root.event-filter == 2; clicked => { root.set-event-filter(2); } }
+                                Button { text: "Admin actions"; primary: root.event-filter == 3; clicked => { root.set-event-filter(3); } }
+                                Rectangle { horizontal-stretch: 1; }
+                                Button { text: "Refresh"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-events(); } }
+                            }
+                            Table {
+                                label: "Event log";
+                                columns: [{ title: "When", horizontal-stretch: 4 }, { title: "Who", horizontal-stretch: 2 }, { title: "What", horizontal-stretch: 5 }, { title: "About", horizontal-stretch: 2 }];
+                                rows: root.event-rows;
+                                selected: -1;
+                            }
+                            if root.events-text != "": Text { text: root.events-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
+                        }
+                        if root.admin-tab == 2: VerticalLayout {
+                            spacing: 8px;
+                            if !root.is-password: Text { text: "Sessions are managed by the company identity provider."; color: Theme.graphite; wrap: word-wrap; }
+                            if root.is-password: HorizontalLayout {
+                                spacing: 6px;
+                                Text { text: "Open password sessions, newest first. Ending one logs that device out at its next request."; color: Theme.graphite; wrap: word-wrap; font-size: 13px; horizontal-stretch: 1; }
+                                Button { text: "Refresh"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-sessions(); } }
+                            }
+                            if root.is-password: Table {
+                                label: "Sessions";
+                                columns: [{ title: "User", horizontal-stretch: 2 }, { title: "Device", horizontal-stretch: 3 }, { title: "Started (UTC)", horizontal-stretch: 4 }, { title: "Ends (UTC)", horizontal-stretch: 4 }];
+                                rows: root.session-rows;
+                                selected: root.session-selected;
+                                picked(i) => { root.pick-session(i); }
+                            }
+                            if root.is-password && root.session-selected >= 0: Button { text: "End this session"; icon: @image-url("icons/log-out.svg"); clicked => { root.confirm("revoke-session", "End this session? That device is logged out at its next request."); } }
+                            if root.is-password && root.sessions-text != "": Text { text: root.sessions-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
                         }
                     }
                     Panel {
@@ -1638,7 +1710,9 @@ export component AppWindow inherits Window {
                         Button { text: "Break the edit lock"; icon: @image-url("icons/unlink.svg"); enabled: root.band-kind == 1; clicked => { root.confirm("break-lock", "Break the edit lock? The other editor's unsaved changes are lost."); } }
                         Button { text: "Delete project"; icon: @image-url("icons/trash-2.svg"); clicked => { root.confirm("delete-project", "Delete this project, its history and its baselines? This cannot be undone."); } }
                         if root.admin-text != "": Text { text: root.admin-text; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
-                        SectionTitle { text: "Server and license"; }
+                        SectionTitle { text: "License"; }
+                        Text { text: root.license-text; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                        SectionTitle { text: "Server"; }
                         Text { text: root.engine-text; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                     }
