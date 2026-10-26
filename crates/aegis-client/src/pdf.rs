@@ -34,10 +34,15 @@ use krilla::geom::{PathBuilder, Point, Rect, Size};
 use krilla::metadata::{DateTime, Metadata};
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
-use krilla::paint::{Fill, FillRule};
+use krilla::paint::{Fill, FillRule, Stroke as PdfStroke, StrokeDash};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use skrifa::instance::{LocationRef, Size as FontSize};
 use skrifa::{FontRef, MetadataProvider};
+
+use aegis_canvas::{
+    Align, DisplayList, Item as CanvasItem, Paint, RenderOptions, Size as CanvasSize, SvgTheme,
+    TileLimits, plan_tiles, render as render_view,
+};
 
 use crate::commands::TREATMENTS;
 use crate::outline::to_outline;
@@ -66,7 +71,7 @@ pub enum Style {
 }
 
 /// One block of the report.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Block {
     /// A heading of level 1 (title), 2 (section) or 3.
     Heading(u8, String),
@@ -81,10 +86,39 @@ pub enum Block {
     },
     /// Lines whose indentation matters (an attack tree outline).
     Preformatted(String),
+    /// A drawing: an attack tree as one or more panels.
+    Figure(Figure),
 }
 
+/// A drawing made of panels, each a canvas display list on its own frame.
+///
+/// A tree that fits a page readably is one panel. A big tree is an overview
+/// panel (the whole tree, boxes only) followed by detail panels in reading
+/// order; see `aegis_canvas::tiles` for the rules.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Figure {
+    /// The panels, in reading order.
+    pub panels: Vec<Panel>,
+    /// Detail panels left out because the figure has a limit.
+    pub omitted: usize,
+}
+
+/// One framed drawing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Panel {
+    /// Printed above the frame.
+    pub caption: String,
+    /// Frame width and height in points.
+    pub size: (f32, f32),
+    /// What to draw, in frame coordinates (origin at the top-left corner).
+    pub list: Arc<DisplayList>,
+}
+
+/// Panel area on a page: the full text width and this height in points.
+const FIGURE_H: f32 = 540.0;
+
 /// The report before it is laid out.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReportDoc {
     /// Document title for the PDF properties.
     pub title: String,
@@ -92,6 +126,49 @@ pub struct ReportDoc {
     pub watermark: String,
     /// The content.
     pub blocks: Vec<Block>,
+}
+
+/// The panels for one attack tree (the inherent view, as the HTML report
+/// shows it). `None` if the tree is gone or has no nodes.
+///
+/// Cost: the layout is linear in the nodes; the plan is O(n log n) and draws
+/// at most [`TileLimits::max_panels`] + 1 panels, whatever the tree's size.
+fn tree_figure(ws: &Workspace, tree: aegis_model::TreeId) -> Option<Figure> {
+    let scene = crate::view::tree_scene(ws, tree, false)?;
+    if scene.is_empty() {
+        return None;
+    }
+    let area = CanvasSize::new(CONTENT_W, FIGURE_H);
+    let plan = plan_tiles(&scene, area, &TileLimits::default());
+    let options = RenderOptions::default();
+    let panel = |caption: String, view: &aegis_canvas::Viewport| Panel {
+        caption,
+        size: (view.size.w, view.size.h),
+        list: Arc::new(render_view(&scene, view, &options)),
+    };
+    let mut panels = Vec::new();
+    let caption = if plan.needs_detail {
+        "Overview of the whole tree. Detail panels follow."
+    } else {
+        "Attack tree"
+    };
+    panels.push(panel(caption.to_owned(), &plan.overview));
+    for tile in &plan.detail {
+        panels.push(panel(
+            format!(
+                "Detail: row {} of {}, column {} of {}",
+                tile.row + 1,
+                plan.rows,
+                tile.col + 1,
+                plan.cols
+            ),
+            &tile.view,
+        ));
+    }
+    Some(Figure {
+        panels,
+        omitted: plan.omitted,
+    })
 }
 
 fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Block {
@@ -308,6 +385,9 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
             ),
             Style::Muted,
         ));
+        if let Some(figure) = tree_figure(ws, row.id) {
+            b.push(Block::Figure(figure));
+        }
         if let Some(tree) = project
             .attack_tree_idx(&row.id)
             .and_then(|i| project.attack_tree(i))
@@ -490,6 +570,14 @@ enum Item {
     Shade { x: f32, y: f32, w: f32, h: f32 },
     /// A thin rule.
     Rule { x1: f32, x2: f32, y: f32 },
+    /// A framed drawing (a figure panel).
+    Diagram {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        list: Arc<DisplayList>,
+    },
 }
 
 struct Pages {
@@ -788,6 +876,42 @@ fn preformatted(p: &mut Pages, fonts: &mut Fonts, text: &str) {
     p.y += 6.0;
 }
 
+/// Places the panels of a figure: a caption, then the frame. A panel never
+/// splits across pages; it moves to the next page when it does not fit.
+fn figure_block(p: &mut Pages, fonts: &mut Fonts, figure: &Figure) {
+    let caption = Look {
+        size: TABLE + 1.0,
+        bold: false,
+        ink: Ink::Grey,
+    };
+    for panel in &figure.panels {
+        let (w, h) = (
+            panel.size.0.min(CONTENT_W),
+            panel.size.1.min(BOTTOM - MARGIN - 20.0),
+        );
+        if p.room() < h + leading(caption.size) + 6.0 && p.y > MARGIN {
+            p.new_page();
+        }
+        text_block(p, fonts, &panel.caption, caption, MARGIN, CONTENT_W);
+        p.push(Item::Diagram {
+            x: MARGIN,
+            y: p.y,
+            w,
+            h,
+            list: Arc::clone(&panel.list),
+        });
+        p.y += h + 8.0;
+    }
+    if figure.omitted > 0 {
+        let note = format!(
+            "{} more detail panels are not drawn. The outline below lists every node.",
+            figure.omitted
+        );
+        text_block(p, fonts, &note, caption, MARGIN, CONTENT_W);
+        p.y += 4.0;
+    }
+}
+
 fn layout(doc: &ReportDoc, fonts: &mut Fonts) -> Pages {
     let mut p = Pages::new();
     for block in &doc.blocks {
@@ -812,6 +936,7 @@ fn layout(doc: &ReportDoc, fonts: &mut Fonts) -> Pages {
             }
             Block::Table { headers, rows } => table_block(&mut p, fonts, headers, rows),
             Block::Preformatted(text) => preformatted(&mut p, fonts, text),
+            Block::Figure(figure) => figure_block(&mut p, fonts, figure),
         }
     }
     if p.truncated {
@@ -914,6 +1039,162 @@ fn rectangle(
     }
 }
 
+/// A canvas color token as a PDF color (the light, print palette).
+fn paint_color(paint: Paint) -> rgb::Color {
+    let hex = SvgTheme::Light.hex(paint).trim_start_matches('#');
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0);
+    rgb::Color::new(byte(0), byte(2), byte(4))
+}
+
+fn pdf_stroke(s: aegis_canvas::Stroke) -> PdfStroke {
+    PdfStroke {
+        paint: paint_color(s.paint).into(),
+        width: s.width.max(0.3),
+        dash: s.dashed.then(|| StrokeDash {
+            array: vec![4.0, 3.0],
+            offset: 0.0,
+        }),
+        ..PdfStroke::default()
+    }
+}
+
+/// A rectangle with rounded corners as a path.
+fn rounded_rect(x: f32, y: f32, w: f32, h: f32, radius: f32) -> Option<krilla::geom::Path> {
+    const KAPPA: f32 = 0.552_284_7;
+    let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+    let mut b = PathBuilder::new();
+    if r < 0.25 {
+        b.push_rect(Rect::from_xywh(x, y, w, h)?);
+        return b.finish();
+    }
+    let k = r * KAPPA;
+    let (right, bottom) = (x + w, y + h);
+    b.move_to(x + r, y);
+    b.line_to(right - r, y);
+    b.cubic_to(right - r + k, y, right, y + r - k, right, y + r);
+    b.line_to(right, bottom - r);
+    b.cubic_to(
+        right,
+        bottom - r + k,
+        right - r + k,
+        bottom,
+        right - r,
+        bottom,
+    );
+    b.line_to(x + r, bottom);
+    b.cubic_to(x + r - k, bottom, x, bottom - r + k, x, bottom - r);
+    b.line_to(x, y + r);
+    b.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
+    b.close();
+    b.finish()
+}
+
+/// Draws one panel: a frame, then the display list clipped to it.
+#[allow(clippy::many_single_char_names)]
+fn draw_diagram(
+    surface: &mut krilla::surface::Surface<'_>,
+    fonts: &mut Fonts,
+    (x, y, w, h): (f32, f32, f32, f32),
+    list: &DisplayList,
+) {
+    let Some(frame) = Rect::from_xywh(x, y, w, h) else {
+        return;
+    };
+    let mut b = PathBuilder::new();
+    b.push_rect(frame);
+    let Some(frame_path) = b.finish() else { return };
+    surface.set_fill(Some(fill(paint_color(Paint::Panel))));
+    surface.set_stroke(Some(pdf_stroke(aegis_canvas::Stroke::solid(
+        Paint::Rule,
+        0.5,
+    ))));
+    surface.draw_path(&frame_path);
+    surface.set_stroke(None);
+
+    surface.push_clip_path(&frame_path, &FillRule::default());
+    for item in &list.items {
+        match item {
+            CanvasItem::Rect {
+                rect,
+                fill: f,
+                stroke,
+                radius,
+                ..
+            } => {
+                let Some(path) = rounded_rect(
+                    x + rect.origin.x,
+                    y + rect.origin.y,
+                    rect.size.w,
+                    rect.size.h,
+                    *radius,
+                ) else {
+                    continue;
+                };
+                surface.set_fill(f.map(|p| fill(paint_color(p))));
+                surface.set_stroke(stroke.map(pdf_stroke));
+                surface.draw_path(&path);
+            }
+            CanvasItem::Curve {
+                from,
+                c1,
+                c2,
+                to,
+                stroke,
+            } => {
+                let mut b = PathBuilder::new();
+                b.move_to(x + from.x, y + from.y);
+                b.cubic_to(x + c1.x, y + c1.y, x + c2.x, y + c2.y, x + to.x, y + to.y);
+                if let Some(path) = b.finish() {
+                    surface.set_fill(None);
+                    surface.set_stroke(Some(pdf_stroke(*stroke)));
+                    surface.draw_path(&path);
+                }
+            }
+            CanvasItem::Polyline { points, stroke } => {
+                let mut b = PathBuilder::new();
+                for (i, pt) in points.iter().enumerate() {
+                    if i == 0 {
+                        b.move_to(x + pt.x, y + pt.y);
+                    } else {
+                        b.line_to(x + pt.x, y + pt.y);
+                    }
+                }
+                if let Some(path) = b.finish() {
+                    surface.set_fill(None);
+                    surface.set_stroke(Some(pdf_stroke(*stroke)));
+                    surface.draw_path(&path);
+                }
+            }
+            CanvasItem::Text {
+                at,
+                text,
+                size,
+                bold,
+                paint,
+                align,
+            } => {
+                surface.set_stroke(None);
+                let face = fonts.face(*bold);
+                let left = match align {
+                    Align::Start => at.x,
+                    Align::End => at.x - face.width(text, *size),
+                };
+                draw_text(
+                    surface,
+                    face,
+                    x + left,
+                    y + at.y,
+                    *size,
+                    paint_color(*paint),
+                    text,
+                );
+            }
+        }
+    }
+    surface.pop();
+    surface.set_stroke(None);
+}
+
 fn metadata(doc: &ReportDoc, ctx: &ReportContext) -> Metadata {
     let secs = ctx.now_ms / 1000;
     let days = i64::try_from(secs / 86_400).unwrap_or(0);
@@ -961,6 +1242,9 @@ fn render(
                         0.4,
                         rgb::Color::new(195, 203, 211),
                     );
+                }
+                Item::Diagram { x, y, w, h, list } => {
+                    draw_diagram(&mut surface, fonts, (*x, *y, *w, *h), list);
                 }
                 Item::Text {
                     x,

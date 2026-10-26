@@ -50,6 +50,7 @@ pub mod scene;
 pub mod style;
 pub mod svg;
 pub mod text;
+pub mod tiles;
 pub mod viewport;
 
 pub use display::{Align, DisplayList, Item};
@@ -58,4 +59,5 @@ pub use render::{RenderOptions, render};
 pub use scene::{Direction, Edge, LayoutConfig, NodeKind, NodeStyle, Scene};
 pub use style::{Paint, Stroke, Tone};
 pub use svg::{SvgOptions, SvgTheme, scene_to_svg, to_svg};
+pub use tiles::{Tile, TileLimits, TilePlan, plan as plan_tiles};
 pub use viewport::Viewport;
