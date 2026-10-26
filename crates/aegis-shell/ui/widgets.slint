@@ -102,6 +102,10 @@ export component Table inherits VerticalLayout {
 
     tv := StandardTableView {
         vertical-stretch: 1;
+        // The style gives a table a minimum width of 400px, which clips it in
+        // a narrow panel (the attack tree list is 290px). The columns share
+        // the width they get; a table that is too narrow scrolls sideways.
+        min-width: 0px;
         columns: root.columns;
         rows: root.rows;
         accessible-label: root.label;

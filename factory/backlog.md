@@ -55,6 +55,14 @@
 - [x] Download the installer after the update check: streaming HTTPS download capped by the signed size, SHA-256 checked as it arrives, file named only when right, Help menu entry (054-installer-download)
 - [x] Administrators list and end password sessions: two admin calls, a Sessions tab in Administration, an audit event, and a stress test with 100,000 sessions (055-session-admin)
 
+## Waiting for a design session
+
+Lines here are marked `[design]`, so `/factory next` never takes them. A person decides the open questions in the linked note first, then the line moves up.
+
+- [design] Attack tree library: search a library of ready-made trees, fragments and leaves (templates and complete items), insert one into a tree under construction and customize it; copy with a remembered origin, one undo step, built-in pack first, company library on the server next (notes and questions: `docs/brainstorm-attack-tree-library.md`; decide the 32 node cap, whether ratings travel, merge rules, who may publish) (057-attack-tree-library)
+- [design] Project access: roles, groups and project membership instead of "every logged-in user opens every project" (direction section 6; decide Cedar policies against a built-in role table) (058-project-access)
+- [design] AI wave 1 behind a gateway: smart search, threat suggestions, damage writer, summary wording (`docs/ai-backlog.md`; decide the gateway, the provider adapters and the policy check first) (059-ai-wave-1)
+
 ## Waiting for a customer order
 
 Lines here are marked `[waiting]`, so `/factory next` never takes them. Move a line up into the list above when a customer order names the provider (decision D10).
