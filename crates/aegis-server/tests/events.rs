@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 
 use aegis_server::accounts::service::{AccountsService, LoginOptions};
-use aegis_server::accounts::{AccountBackend, Accounts, AccountsConfig, MemoryAccounts};
+use aegis_server::accounts::{AccountBackend, Accounts, AccountsConfig, EventLog, MemoryAccounts};
 use aegis_server::auth_layer::{AuthLayer, PasswordAuthn};
 use aegis_server::methodologies::Methodologies;
 use aegis_server::pb::accounts_client::AccountsClient;
@@ -218,5 +218,40 @@ async fn a_server_without_an_event_store_says_so() {
             .and_then(|v| v.to_str().ok()),
         Some("no_event_log")
     );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_server_without_password_accounts_can_keep_an_event_log() {
+    // Company login only has no user table; the log stands on its own.
+    let log = EventLog::standalone(AccountBackend::Memory(MemoryAccounts::new()));
+    let server = common::TestServer::start_with_event_log(fast_config(), log).await;
+    let mut admin = server.admin("root@example.com").await;
+    let project = uuid::Uuid::new_v4().to_string();
+    admin
+        .record_export(pb::RecordExportRequest {
+            project_id: project.clone(),
+            kind: "report-pdf".into(),
+        })
+        .await
+        .expect("export");
+    let events = admin
+        .list_events(pb::ListEventsRequest { limit: 0 })
+        .await
+        .expect("events")
+        .into_inner()
+        .events;
+    assert_eq!(kinds(&events), ["export"]);
+    assert_eq!(events[0].actor, "root@example.com");
+    assert_eq!(events[0].target, project);
+    assert_eq!(events[0].detail, "report-pdf");
+
+    // Still admin only.
+    let mut bob = server.client("bob@example.com").await;
+    let err = bob
+        .list_events(pb::ListEventsRequest { limit: 10 })
+        .await
+        .expect_err("refused");
+    assert_eq!(err.code(), Code::PermissionDenied);
     server.stop().await;
 }

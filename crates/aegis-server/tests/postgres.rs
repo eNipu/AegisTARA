@@ -581,3 +581,180 @@ async fn the_password_login_switch_survives_a_restart_in_postgres() {
         ]
     );
 }
+
+/// The event log keeps a bounded number of rows (job 052): old events go in
+/// batches, then anything beyond the row cap.
+#[tokio::test]
+async fn the_event_log_is_trimmed_by_age_and_by_row_cap_in_postgres() {
+    use aegis_server::accounts::{EventLog, Retention};
+    use std::time::Duration;
+
+    let Some(f) = fresh().await else { return };
+    let log = EventLog::standalone(AccountBackend::Postgres(PostgresAccounts::new(
+        f.store.pool(),
+        f.store.org(),
+    )));
+    let org = f.store.org();
+    let now = log.now_ms();
+    let day = 86_400_000u64;
+    // 12 000 events 400 days old (more than two delete batches), then 50 young
+    // ones, written the fast way.
+    f.raw
+        .execute(
+            "INSERT INTO aegis_event (org_id, at_ms, actor, kind, target, detail)
+             SELECT $1, $2::bigint + g, 'old', 'export', 'p', 'pdf' FROM generate_series(1, 12000) g",
+            &[&org, &i64::try_from(now - 400 * day).expect("fits")],
+        )
+        .await
+        .expect("old");
+    for i in 0..50 {
+        log.record("young", AuditKind::Export, &format!("p{i}"), "pdf")
+            .await;
+    }
+
+    let removed = log
+        .trim(Retention {
+            max_age: Duration::from_secs(365 * 86_400),
+            max_events: 1_000_000,
+        })
+        .await
+        .expect("trim by age");
+    assert_eq!(removed, 12_000);
+    assert_eq!(log.recent(1000).await.expect("recent").len(), 50);
+
+    // Nothing old: a second pass removes nothing.
+    let again = log
+        .trim(Retention {
+            max_age: Duration::from_secs(365 * 86_400),
+            max_events: 1_000_000,
+        })
+        .await
+        .expect("again");
+    assert_eq!(again, 0);
+
+    // The row cap keeps the newest ten.
+    let removed = log
+        .trim(Retention {
+            max_age: Duration::from_secs(365 * 86_400),
+            max_events: 10,
+        })
+        .await
+        .expect("trim by cap");
+    assert_eq!(removed, 40);
+    let left = log.recent(1000).await.expect("recent");
+    assert_eq!(left.len(), 10);
+    assert_eq!(left[0].target, "p49");
+    assert_eq!(left[9].target, "p40");
+
+    // A cap above the row count removes nothing.
+    let none = log
+        .trim(Retention {
+            max_age: Duration::from_secs(365 * 86_400),
+            max_events: 1000,
+        })
+        .await
+        .expect("no-op");
+    assert_eq!(none, 0);
+}
+
+/// Stress (job 052): many writers and a trimmer at once. The size is
+/// `AEGIS_STRESS_EVENTS` events in total (default 4000); CI keeps the
+/// default, a local run can use 200000 or more. Nothing may fail, no event
+/// may be lost while the cap is not reached, and the cap must hold at the end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stress_many_writers_and_a_trimmer_keep_the_event_log_bounded() {
+    use aegis_server::accounts::{EventLog, Retention};
+    use std::time::{Duration, Instant};
+
+    let Some(f) = fresh().await else { return };
+    let total: usize = std::env::var("AEGIS_STRESS_EVENTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4000);
+    let writers = 16;
+    let per_writer = total / writers;
+    let log = EventLog::standalone(AccountBackend::Postgres(PostgresAccounts::new(
+        f.store.pool(),
+        f.store.org(),
+    )));
+
+    // Phase 1: writers only. Every event must arrive.
+    let started = Instant::now();
+    let mut tasks = Vec::new();
+    for w in 0..writers {
+        let log = log.clone();
+        tasks.push(tokio::spawn(async move {
+            for i in 0..per_writer {
+                log.record(
+                    &format!("user{w}"),
+                    AuditKind::Export,
+                    &format!("p{i}"),
+                    "pdf",
+                )
+                .await;
+            }
+        }));
+    }
+    for t in tasks {
+        t.await.expect("writer");
+    }
+    let written = writers * per_writer;
+    let secs = started.elapsed().as_secs_f64();
+    eprintln!(
+        "event log stress: {written} events in {secs:.2} s ({:.0} per second)",
+        written as f64 / secs
+    );
+    let count: i64 = f
+        .raw
+        .query_one("SELECT count(*) FROM aegis_event", &[])
+        .await
+        .expect("count")
+        .get(0);
+    assert_eq!(count as usize, written, "no event may be lost");
+
+    // Phase 2: writers and a trimmer together; the cap holds at the end.
+    let cap = (written / 4).max(1000);
+    let retention = Retention {
+        max_age: Duration::from_secs(3600),
+        max_events: cap,
+    };
+    let trimmer = {
+        let log = log.clone();
+        tokio::spawn(async move {
+            for _ in 0..20 {
+                log.trim(retention).await.expect("trim under load");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+    };
+    let mut tasks = Vec::new();
+    for w in 0..writers {
+        let log = log.clone();
+        tasks.push(tokio::spawn(async move {
+            for i in 0..per_writer / 4 {
+                log.record(
+                    &format!("user{w}"),
+                    AuditKind::Export,
+                    &format!("q{i}"),
+                    "pdf",
+                )
+                .await;
+            }
+        }));
+    }
+    for t in tasks {
+        t.await.expect("writer");
+    }
+    trimmer.await.expect("trimmer");
+    log.trim(retention).await.expect("final trim");
+    let count: i64 = f
+        .raw
+        .query_one("SELECT count(*) FROM aegis_event", &[])
+        .await
+        .expect("count")
+        .get(0);
+    assert_eq!(count as usize, cap, "the row cap holds");
+    // The newest events survive.
+    let newest = log.recent(1).await.expect("recent");
+    assert_eq!(newest.len(), 1);
+}

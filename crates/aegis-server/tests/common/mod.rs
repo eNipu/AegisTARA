@@ -62,20 +62,30 @@ impl TestServer<MemoryStore> {
         config: ServerConfig,
         gate: Arc<aegis_server::LicenseGate>,
     ) -> Self {
-        Self::start_with(Arc::new(MemoryStore::new()), config, Some(gate)).await
+        Self::start_with(Arc::new(MemoryStore::new()), config, Some(gate), None).await
+    }
+
+    /// A development-login server that keeps an event log, like a server
+    /// with company login only (job 052).
+    pub async fn start_with_event_log(
+        config: ServerConfig,
+        events: aegis_server::accounts::EventLog,
+    ) -> Self {
+        Self::start_with(Arc::new(MemoryStore::new()), config, None, Some(events)).await
     }
 }
 
 impl<S: ProjectStore> TestServer<S> {
     /// Starts a server over an existing store (to test restarts).
     pub async fn start_on(store: Arc<S>, config: ServerConfig) -> Self {
-        Self::start_with(store, config, None).await
+        Self::start_with(store, config, None, None).await
     }
 
     async fn start_with(
         store: Arc<S>,
         config: ServerConfig,
         gate: Option<Arc<aegis_server::LicenseGate>>,
+        events: Option<aegis_server::accounts::EventLog>,
     ) -> Self {
         let registry = Registry::new(
             Arc::clone(&store),
@@ -89,7 +99,11 @@ impl<S: ProjectStore> TestServer<S> {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let (stop, stopped) = oneshot::channel::<()>();
-        let service = AegisService::new(Arc::clone(&registry)).into_server();
+        let mut service = AegisService::new(Arc::clone(&registry));
+        if let Some(events) = events {
+            service = service.with_event_log(events);
+        }
+        let service = service.into_server();
         let reg = Arc::clone(&registry);
         let done = tokio::spawn(async move {
             // Unload the projects first: that ends every `Watch` stream, so

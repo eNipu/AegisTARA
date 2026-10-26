@@ -40,6 +40,16 @@ or over its grace period.
 - **`AEGIS_DB_TLS=encrypt` does not check the database certificate.** Use
   `verify` when the database has a real certificate.
 
+## Event log size
+
+Every server keeps an event log (logins, exports, baselines, deleted
+projects, admin actions), also with company login only (ADR 0046). An hourly
+job removes events older than `AEGIS_EVENT_RETENTION_DAYS` (default 365) and
+anything beyond `AEGIS_EVENT_MAX_ROWS` (default 1,000,000, oldest first). The
+row cap stops a flood of failed logins from filling the disk. If an audit
+rule needs longer keeping, raise the retention or copy the table out before
+the job runs. A row is about 150 bytes, so the default cap is near 150 MB.
+
 ## Test server
 
 A shared test server runs on Railway: `docs/railway.md`. A local copy of it:
