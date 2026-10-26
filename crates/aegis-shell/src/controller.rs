@@ -32,8 +32,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecMod
 
 use crate::adapter::{bucket, draw_items};
 use crate::{
-    AppWindow, CheckItem, CountItem, DiffItem, FactorItem, LinkItem, MitigationItem, NoticeItem,
-    ProblemItem, ProjectItem, ThreatItem,
+    AccessNode, AppWindow, CheckItem, CountItem, DiffItem, FactorItem, LinkItem, MitigationItem,
+    NoticeItem, ProblemItem, ProjectItem, ThreatItem,
 };
 
 /// Pixels the pointer must move before a press becomes a drag.
@@ -351,6 +351,20 @@ impl Controller {
                 w.set_event_filter(which);
             }
             c.apply_events();
+        });
+        on!(on_canvas_node_activated, |c, node| {
+            let view = c.view();
+            if let Ok(n) = usize::try_from(node)
+                && let Some(project) = view.as_ref().and_then(|v| v.project.as_ref())
+                && let Some(scene) = project.scene()
+                && let Some(idx) = scene.node_idx(u32::try_from(n).unwrap_or(u32::MAX))
+            {
+                if let Some(rect) = scene.node_rect(idx) {
+                    c.state.borrow_mut().viewport.reveal(rect, 40.0);
+                }
+                c.send(Command::SelectNode(Some(idx.index())));
+                c.redraw();
+            }
         });
         on!(on_refresh_events, |c| c.send(Command::LoadEvents));
         on!(on_check_for_updates, |c| c.send(Command::CheckForUpdates));
@@ -1798,13 +1812,20 @@ impl Controller {
         });
         w.set_tree_title(s(title.as_deref().unwrap_or("")));
         w.set_has_tree(project.tree.is_some());
-        w.set_canvas_summary(s(&match (&project.tree, &project.inspector) {
-            (Some(t), Some(i)) => format!(
-                "Attack tree with {} nodes. Selected: {}.",
-                t.scene.len(),
-                i.title
+        // What a screen reader says on the canvas: the tree's size, and the
+        // selected node in a full sentence (where it sits, its rating).
+        w.set_canvas_summary(s(&match (&project.tree, project.selected_node) {
+            (Some(t), Some(sel)) => {
+                let node = u32::try_from(sel.index()).unwrap_or(u32::MAX);
+                let said = aegis_canvas::access::describe(&t.scene, node)
+                    .map(|a| aegis_canvas::access::sentence(&a, true))
+                    .unwrap_or_default();
+                format!("Attack tree with {} nodes. {said}", t.scene.len())
+            }
+            (Some(t), None) => format!(
+                "Attack tree with {} nodes. Nothing is selected. Press an arrow key to select the root.",
+                t.scene.len()
             ),
-            (Some(t), None) => format!("Attack tree with {} nodes.", t.scene.len()),
             _ => "No attack tree".to_owned(),
         }));
 
@@ -1888,6 +1909,35 @@ impl Controller {
             None => Vec::new(),
         };
         w.set_draw(model(items));
+        // The nodes on screen, in words, for screen readers.
+        let access = match &project.tree {
+            Some(tree) => {
+                let nodes = aegis_canvas::access::visible(&tree.scene, &st.viewport);
+                let count = i32::try_from(nodes.len()).unwrap_or(i32::MAX);
+                nodes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, n)| {
+                        let selected = project
+                            .selected_node
+                            .is_some_and(|sel| u32::try_from(sel.index()) == Ok(n.access.node));
+                        AccessNode {
+                            x: n.x,
+                            y: n.y,
+                            w: n.w,
+                            h: n.h,
+                            label: s(&aegis_canvas::access::sentence(&n.access, selected)),
+                            selected,
+                            position: i32::try_from(i + 1).unwrap_or(i32::MAX),
+                            count,
+                            node: i32::try_from(n.access.node).unwrap_or(i32::MAX),
+                        }
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        w.set_access_nodes(model(access));
         w.set_zoom_text(s(&format!("{:.0}%", st.viewport.zoom * 100.0)));
     }
 }
