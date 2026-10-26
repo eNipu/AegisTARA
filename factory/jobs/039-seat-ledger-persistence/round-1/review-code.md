@@ -1,0 +1,15 @@
+# Code Review — 039-seat-ledger-persistence (Round 1)
+
+## Verdict
+PASS
+
+## Blocking findings
+None.
+
+## Advisory findings
+See `docs/security-and-architecture-review.md` for workspace-level architectural recommendations.
+
+## Standards Check
+- **Architecture & ADR compliance**: Matches `docs/adr/0033-license-and-seats.md` across `crates/aegis-server/src/license.rs`, `crates/aegis-server/src/store/postgres.rs`, `crates/aegis-server/src/main.rs`.
+- **P1 / Q3 (No panics in library code)**: Verified zero `unwrap()`, `expect()`, `panic!()`, `todo!()`, or `unimplemented!()` in non-test code.
+- **C1 / R4 / R5 / R6 (Concurrency & bounds)**: Actor ownership, bounded queues, `spawn_blocking` for CPU-intensive work, and explicit timeouts verified.
