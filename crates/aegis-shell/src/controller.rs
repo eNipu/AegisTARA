@@ -275,6 +275,7 @@ impl Controller {
         };
         let what = match kind {
             ExportKind::Report => "tara-report",
+            ExportKind::ReportPdf => "tara-report",
             ExportKind::RiskRegister => "risk-register",
             ExportKind::TreeSvg => "attack-tree",
         };
@@ -849,6 +850,7 @@ impl Controller {
         on!(on_stop_compare, |c| c.send(Command::CompareWith(None)));
         on!(on_refresh_history, |c| c.send(Command::LoadHistory));
         on!(on_export_report, |c| c.export(ExportKind::Report));
+        on!(on_export_pdf, |c| c.export(ExportKind::ReportPdf));
         on!(on_export_csv, |c| c.export(ExportKind::RiskRegister));
         on!(on_export_svg, |c| c.export(ExportKind::TreeSvg));
 

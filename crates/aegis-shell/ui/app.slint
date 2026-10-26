@@ -396,6 +396,7 @@ export component AppWindow inherits Window {
     callback stop-compare();
     callback refresh-history();
     callback export-report();
+    callback export-pdf();
     callback export-csv();
     callback export-svg();
     callback pick-user(int);
@@ -471,6 +472,7 @@ export component AppWindow inherits Window {
             MenuItem { title: "Projects"; icon: @image-url("icons/folder-open.svg"); enabled: root.online; activated => { root.close-project(); } }
             MenuItem { title: "Close project"; icon: @image-url("icons/folder-x.svg"); enabled: root.in-project; activated => { root.close-project(); } }
             MenuSeparator {}
+            MenuItem { title: "Export TARA report (PDF)"; icon: @image-url("icons/file-down.svg"); enabled: root.in-project; activated => { root.export-pdf(); } }
             MenuItem { title: "Export TARA report (HTML)"; icon: @image-url("icons/file-text.svg"); enabled: root.in-project; activated => { root.export-report(); } }
             MenuItem { title: "Export risk register (CSV)"; icon: @image-url("icons/sheet.svg"); enabled: root.in-project; activated => { root.export-csv(); } }
             MenuItem { title: "Export attack tree (SVG)"; icon: @image-url("icons/image.svg"); enabled: root.in-project && root.has-tree; activated => { root.export-svg(); } }
@@ -1553,7 +1555,8 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px;
                             alignment: start;
-                            Button { text: "TARA report (HTML, print to PDF)"; icon: @image-url("icons/file-text.svg"); primary: true; clicked => { root.export-report(); } }
+                            Button { text: "TARA report (PDF)"; icon: @image-url("icons/file-down.svg"); primary: true; clicked => { root.export-pdf(); } }
+                            Button { text: "TARA report (HTML)"; icon: @image-url("icons/file-text.svg"); clicked => { root.export-report(); } }
                             Button { text: "Risk register (CSV)"; icon: @image-url("icons/sheet.svg"); clicked => { root.export-csv(); } }
                             Button { text: "Attack tree on the canvas (SVG)"; icon: @image-url("icons/image.svg"); enabled: root.has-tree; clicked => { root.export-svg(); } }
                         }

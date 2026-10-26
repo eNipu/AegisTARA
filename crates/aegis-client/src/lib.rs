@@ -6,6 +6,7 @@ pub mod connection;
 pub mod error;
 pub mod outline;
 pub mod pages;
+pub mod pdf;
 pub mod report;
 pub mod sample;
 pub mod session;
