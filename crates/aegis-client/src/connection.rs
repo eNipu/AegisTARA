@@ -453,6 +453,23 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self.client.clone().update_user(request).await?.into_inner())
     }
 
+    /// The newest events of the server's event log, newest first (admin).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerCode::NotAdmin`](crate::error::ServerCode::NotAdmin), or any
+    /// other [`ClientError`]; a server with no event log answers
+    /// `ServerCode::Other("no_event_log")`.
+    pub async fn events(&self, limit: u32) -> Result<Vec<pb::EventInfo>, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .list_events(pb::ListEventsRequest { limit })
+            .await?
+            .into_inner()
+            .events)
+    }
+
     /// The login switch.
     ///
     /// # Errors

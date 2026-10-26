@@ -16,7 +16,7 @@ use aegis_server::{AegisService, MemoryStore, Registry, server};
 use aegis_shell::AppWindow;
 use aegis_shell::headless::Headless;
 use aegis_shell::launcher::Launcher;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 
@@ -157,6 +157,51 @@ async fn a_user_logs_in_with_a_password_and_out_again() {
     window.invoke_begin_edit();
     until(&headless, &launcher, "editing", || window.get_editing()).await;
     assert_eq!(window.get_band_kind(), 2);
+
+    // The administration page shows the event log in words, a filter, and
+    // the license facts (this test server runs without a license).
+    window.invoke_show_page(12);
+    until(&headless, &launcher, "events", || {
+        window.get_event_rows().row_count() >= 2
+    })
+    .await;
+    let cell = |row: usize, col: usize| {
+        window
+            .get_event_rows()
+            .row_data(row)
+            .expect("row")
+            .row_data(col)
+            .expect("cell")
+            .text
+            .to_string()
+    };
+    assert_eq!(cell(0, 1), "admin");
+    assert_eq!(cell(0, 2), "Logged in");
+    window.invoke_set_event_filter(2); // exports: none yet
+    until(&headless, &launcher, "filtered", || {
+        window.get_event_rows().row_count() == 0
+    })
+    .await;
+    assert!(
+        window.get_events_text().contains("No events"),
+        "{}",
+        window.get_events_text()
+    );
+    window.invoke_set_event_filter(3); // admin actions: the first admin's creation
+    until(&headless, &launcher, "admin actions", || {
+        window.get_event_rows().row_count() >= 1
+    })
+    .await;
+    assert_eq!(cell(0, 2), "Created a user");
+    window.invoke_set_event_filter(0);
+    assert!(
+        window.get_license_text().contains("No license"),
+        "{}",
+        window.get_license_text()
+    );
+    window.set_admin_tab(1);
+    common_save(&headless.render(), "l03b-admin-events");
+    window.set_admin_tab(0);
 
     // Log out: back to the password form, and the old token is gone.
     window.invoke_log_out();

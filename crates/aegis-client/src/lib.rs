@@ -1,10 +1,12 @@
 //! Client core. No UI toolkit.
 #![forbid(unsafe_code)]
+pub mod audit;
 pub mod commands;
 pub mod connection;
 pub mod error;
 pub mod outline;
 pub mod pages;
+pub mod pdf;
 pub mod report;
 pub mod sample;
 pub mod session;

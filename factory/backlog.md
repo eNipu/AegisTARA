@@ -46,6 +46,10 @@
 - [x] Turn password login off per deployment from an admin setting, and show only company login in the app (today it is the `AEGIS_AUTH` variable) (045-password-login-switch)
 - [x] Build the server Docker image in CI and prove it starts: customer image refuses to start without a license, test image answers /healthz and GetLoginOptions (gap G12) (046-image-ci)
 - [x] Show "numbers checked with the server" in the app as a real status that follows the confirmed change, and fix the editor never comparing its own edits (gap G15) (047-numbers-check-mark)
+- [x] Fetch the signed update manifest over HTTPS in the client with the rustls client of aegis-auth, check it, and offer a Help menu entry (048-update-manifest-fetch)
+- [x] Admin: the event log (logins, exports, admin actions) with a filter, and a license page with dates, seats and features (049-admin-events-and-license)
+- [x] PDF report export with a permissive library (krilla, Inter font), watermark and page numbers on every page, tables that continue across pages, checked with D5 and cargo-deny (050-pdf-report)
+- [x] A screen reader path for attack tree nodes on the canvas: a sentence per node on screen, the selection spoken through the canvas label, keyboard reach and activation (gap G14) (051-screen-reader-path)
 
 ## Waiting for a customer order
 

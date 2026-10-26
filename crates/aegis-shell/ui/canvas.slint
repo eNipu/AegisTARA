@@ -25,7 +25,26 @@ export struct DrawItem {
     align-end: bool,
 }
 
+// One node on screen, for screen readers: a box and a sentence (job 051).
+export struct AccessNode {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    label: string,
+    selected: bool,
+    // 1 to count, in node order.
+    position: int,
+    count: int,
+    // The node's position in the scene.
+    node: int,
+}
+
 export component Canvas inherits Rectangle {
+    // The nodes on screen, in words. Drawn as nothing; only a screen reader
+    // sees them.
+    in property <[AccessNode]> access-nodes;
+    callback node-activated(int);
     in property <[DrawItem]> items;
     in property <string> accessible-summary;
 
@@ -94,6 +113,22 @@ export component Canvas inherits Rectangle {
     }
 
     focus := FocusScope {
+        accessible-role: list;
+        accessible-label: root.accessible-summary;
+        accessible-description: "Use the arrow keys to move between nodes, and Escape to select nothing.";
+        for n in root.access-nodes: Rectangle {
+            x: n.x;
+            y: n.y;
+            width: n.w;
+            height: n.h;
+            accessible-role: list-item;
+            accessible-label: n.label;
+            accessible-item-selectable: true;
+            accessible-item-selected: n.selected;
+            accessible-item-index: n.position - 1;
+            accessible-item-count: n.count;
+            accessible-action-default => { root.node-activated(n.node); }
+        }
         key-pressed(event) => {
             if (root.key(event.text, event.modifiers.shift)) {
                 accept

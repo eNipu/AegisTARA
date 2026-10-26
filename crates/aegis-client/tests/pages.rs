@@ -7,6 +7,7 @@ use std::sync::Arc;
 use aegis_client::commands::{Edit, EditError};
 use aegis_client::outline::to_outline;
 use aegis_client::pages::{self, comparison};
+use aegis_client::pdf::{Block, report_doc, report_pdf};
 use aegis_client::report::{ReportContext, report_html, risk_register_csv, tree_svg};
 use aegis_client::view::{Selection, UiState, inspector, shown_tree};
 use aegis_client::workspace::{Origin, Workspace};
@@ -574,4 +575,209 @@ fn exports_are_complete_escaped_and_deterministic() {
         "{}",
         &svg[..40]
     );
+}
+
+// ---- the PDF report (job 050) --------------------------------------------
+
+fn context(unsaved: bool) -> ReportContext {
+    ReportContext {
+        project: "Brake ECU".into(),
+        user: "Mira Chen".into(),
+        now_ms: 1_792_956_600_000,
+        seq: 42,
+        unsaved,
+    }
+}
+
+/// The text of a PDF as `pdftotext` reads it, one string per page. The
+/// tests fail instead of skipping on CI, where poppler is installed.
+fn pdf_pages(pdf: &[u8]) -> Option<Vec<String>> {
+    use std::io::Write as _;
+    let child = std::process::Command::new("pdftotext")
+        .args(["-enc", "UTF-8", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "pdftotext is missing on CI (poppler-utils)"
+        );
+        eprintln!("pdftotext is not installed: skipping the text checks");
+        return None;
+    };
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(pdf)
+        .expect("write");
+    let out = child.wait_with_output().expect("pdftotext");
+    assert!(out.status.success(), "pdftotext refused the file");
+    let text = String::from_utf8(out.stdout).expect("utf-8");
+    let mut pages: Vec<String> = text.split('\x0c').map(str::to_owned).collect();
+    if pages.last().is_some_and(|p| p.trim().is_empty()) {
+        pages.pop();
+    }
+    Some(pages)
+}
+
+fn words(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn the_pdf_report_has_every_section_and_is_deterministic() {
+    let mut t = tara();
+    apply(
+        &mut t.ws,
+        &Edit::RenameThreat {
+            threat: t.threat,
+            name: "Spoofed <script>alert(1)</script>, \"quoted\" and Bremsensteuergerät Größe"
+                .into(),
+        },
+    );
+    let ctx = context(false);
+    let pdf = report_pdf(&t.ws, &ctx).expect("pdf");
+    assert!(pdf.starts_with(b"%PDF-1."), "{:?}", &pdf[..8]);
+    assert!(
+        pdf.ends_with(b"%%EOF\n") || pdf.ends_with(b"%%EOF"),
+        "complete file"
+    );
+    assert_eq!(
+        pdf,
+        report_pdf(&t.ws, &ctx).expect("pdf"),
+        "same input, same bytes"
+    );
+
+    // Kept for a human to open (like the window screenshots).
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/report-samples");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("tara-report.pdf"), &pdf).expect("write");
+
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    let all = words(&pages.join(" "));
+    for section in [
+        "Brake ECU",
+        "1. Executive summary",
+        "2. Assets",
+        "3. Damage scenarios",
+        "4. Threat scenarios",
+        "5. Attack trees",
+        "6. Risk register and treatment",
+        "7. Security controls",
+        "8. Cybersecurity goals and claims",
+        "9. Open problems",
+        "Brake request on CAN-2",
+        "Confidential. Exported by Mira Chen on 25 Oct 2026 19:30 UTC.",
+    ] {
+        assert!(all.contains(section), "missing {section:?} in:\n{all}");
+    }
+    // Unicode survives (the font is embedded), and text is printed as it is.
+    assert!(all.contains("Bremsensteuergerät Größe"), "{all}");
+    assert!(
+        all.contains("<script>alert(1)</script>"),
+        "plain text, not markup"
+    );
+    assert!(!all.contains("Draft:"), "saved state has no draft note");
+    // The attack tree is in the report as its outline.
+    assert!(
+        all.contains("OR") || all.contains("AND"),
+        "tree outline: {all}"
+    );
+}
+
+#[test]
+fn every_page_has_the_watermark_and_a_page_number_and_tables_continue() {
+    let mut t = tara();
+    for i in 0..120 {
+        apply(
+            &mut t.ws,
+            &Edit::AddAsset {
+                id: AssetId::new_v7(),
+                name: format!("Gateway interface number {i}"),
+                properties: vec![0],
+            },
+        );
+    }
+    let pdf = report_pdf(&t.ws, &context(true)).expect("pdf");
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    assert!(pages.len() >= 3, "{} pages", pages.len());
+    let total = pages.len();
+    for (i, page) in pages.iter().enumerate() {
+        let text = words(page);
+        assert!(
+            text.contains("Confidential. Exported by Mira Chen"),
+            "page {}",
+            i + 1
+        );
+        assert!(
+            text.contains(&format!("Page {} of {total}", i + 1)),
+            "page {}: {text}",
+            i + 1
+        );
+    }
+    // The first page says it is a draft; a long table repeats its header row.
+    assert!(words(&pages[0]).contains("Draft:"));
+    // Header words are never cut in the middle, even in narrow columns.
+    let with_header = pages
+        .iter()
+        .filter(|p| words(p).contains("Non-repudiation"))
+        .count();
+    assert!(
+        with_header >= 2,
+        "the header row repeats on a new page ({with_header})"
+    );
+    // Nothing is lost between pages.
+    let all = words(&pages.join(" "));
+    for i in [0, 59, 119] {
+        assert!(
+            all.contains(&format!("Gateway interface number {i}")),
+            "row {i}"
+        );
+    }
+}
+
+#[test]
+fn very_long_words_and_lines_are_wrapped_not_lost() {
+    let mut t = tara();
+    // One word far wider than the page, then many short ones (256 characters
+    // is the longest name the model takes).
+    let long = format!("{} {}", "Ab".repeat(100), "word ".repeat(10).trim_end());
+    apply(
+        &mut t.ws,
+        &Edit::RenameThreat {
+            threat: t.threat,
+            name: long.clone(),
+        },
+    );
+    let pdf = report_pdf(&t.ws, &context(false)).expect("pdf");
+    let Some(pages) = pdf_pages(&pdf) else { return };
+    let all = words(&pages.join(" ")).replace(' ', "");
+    assert!(
+        all.contains(&long.replace(' ', "")),
+        "the whole name is on the pages"
+    );
+}
+
+#[test]
+fn the_pdf_and_the_html_report_have_the_same_sections() {
+    let t = tara();
+    let ctx = context(false);
+    let html = report_html(&t.ws, &ctx);
+    let doc = report_doc(&t.ws, &ctx);
+    let from_html: Vec<String> = html
+        .split("<h2>")
+        .skip(1)
+        .map(|s| s.split("</h2>").next().unwrap_or_default().to_owned())
+        .collect();
+    let from_doc: Vec<String> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading(2, text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(from_doc, from_html);
 }

@@ -261,8 +261,23 @@ async fn a_tara_is_built_page_by_page_from_the_window() {
             .is_some_and(|p| p.ends_with(".csv"))
     })
     .await;
+    app.window.invoke_export_pdf();
+    app.until("pdf", |vm| {
+        project(vm)
+            .last_export
+            .as_deref()
+            .is_some_and(|p| p.ends_with(".pdf"))
+    })
+    .await;
     let files: Vec<_> = std::fs::read_dir(&dir).expect("dir").collect();
-    assert_eq!(files.len(), 2);
+    assert_eq!(files.len(), 3);
+    let pdf = files
+        .into_iter()
+        .map(|f| f.expect("entry").path())
+        .find(|p| p.extension().is_some_and(|e| e == "pdf"))
+        .expect("a pdf file");
+    let bytes = std::fs::read(&pdf).expect("read");
+    assert!(bytes.starts_with(b"%PDF-"), "a real PDF file");
     save(&app.frame(), "p12-reports");
     let _ = std::fs::remove_dir_all(&dir);
 
