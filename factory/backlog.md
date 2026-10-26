@@ -52,6 +52,7 @@
 - [x] A screen reader path for attack tree nodes on the canvas: a sentence per node on screen, the selection spoken through the canvas label, keyboard reach and activation (gap G14) (051-screen-reader-path)
 - [x] The event log on every server: company-login-only and development servers keep and show an event log too, with retention by age and by row count so a login flood cannot fill the disk, plus a stress test (052-event-log-everywhere)
 - [x] Attack tree pictures in the PDF report: the canvas display list as vector paths, with an overview and readable detail panels for very tall or deep trees, and a stress test with a million boxes (053-pdf-tree-figures)
+- [x] Download the installer after the update check: streaming HTTPS download capped by the signed size, SHA-256 checked as it arrives, file named only when right, Help menu entry (054-installer-download)
 
 ## Waiting for a customer order
 

@@ -61,8 +61,12 @@ docker compose -f deploy/compose.test.yaml up --build
 ## Updates
 
 Clients check a signed update manifest (`AEGIS-UPDATE-1...`). It is signed with
-a key that is different from the license key. The check takes the manifest
-text; fetching it over the network is not built yet, so load it from a file
-or a share. The HTTPS client it will use (rustls with the OS trust store)
-exists in `aegis-auth`. A client only offers a release that is newer than the one it
-runs, and checks the installer's size and SHA-256 before it is used.
+a key that is different from the license key. Help, "Check for updates" fetches
+it from `update_url` (settings file) or `AEGIS_UPDATE_URL`, over HTTPS. A
+client only offers a release that is newer than the one it runs. Help,
+"Download update" then saves the installer to the user's Downloads folder
+(`AEGIS_UPDATE_DIR` changes it) and checks its size and SHA-256 against the
+manifest while it arrives. A file that fails is deleted. The app never runs
+the installer: the user closes the app and opens the file (ADR 0048). A site
+without internet leaves `update_url` empty and hands out installers and
+manifests itself.

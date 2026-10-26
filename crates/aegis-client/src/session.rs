@@ -52,7 +52,7 @@ use crate::state::{
     ProjectEntry, ProjectView, ServerSettingsView, Severity, SyncView, UserRow, ViewModel,
 };
 use crate::time::format_ms;
-use crate::updates::{UpdateChecker, UpdateError, UpdateStatus};
+use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use crate::view::{
     AdminAction, Page, UiState, inspector, risks_differ, shown_tree, threat_rows, tree_view,
     use_server_risks,
@@ -100,6 +100,11 @@ pub struct SessionConfig {
     pub update_url: String,
     /// Checks the manifest against the update keys of this build.
     pub update_checker: Arc<UpdateChecker>,
+    /// Where a downloaded installer is saved (job 054).
+    pub update_dir: std::path::PathBuf,
+    /// The HTTP client for update checks and downloads. Tests give it a
+    /// client that trusts a test certificate authority.
+    pub update_http: Arc<aegis_auth::http::HyperClient>,
 }
 
 impl SessionConfig {
@@ -117,6 +122,8 @@ impl SessionConfig {
             watch_silence: Duration::from_secs(60),
             update_url: String::new(),
             update_checker: Arc::new(UpdateChecker::for_this_build()),
+            update_dir: crate::updates::default_download_dir(),
+            update_http: Arc::new(aegis_auth::http::HyperClient::new()),
         }
     }
 
@@ -205,6 +212,8 @@ impl Session {
             settings: None,
             audit_rows: Vec::new(),
             events_error: None,
+            offered: None,
+            downloading: false,
         };
         let task = tokio::spawn(actor.run());
         (Session { commands, view }, task)
@@ -365,6 +374,7 @@ enum Internal<P> {
     },
     Users(Result<Vec<pb::UserInfo>, ClientError>),
     Updates(Result<UpdateStatus, UpdateError>),
+    Downloaded(Result<std::path::PathBuf, UpdateError>),
     Events(Result<Vec<pb::EventInfo>, ClientError>),
     Settings(Result<pb::ServerSettings, ClientError>),
     SettingsSet(Result<pb::ServerSettings, ClientError>),
@@ -410,6 +420,10 @@ struct Actor<P: CredentialProvider> {
     settings: Option<ServerSettingsView>,
     audit_rows: Vec<crate::audit::EventRow>,
     events_error: Option<String>,
+    /// The release the last update check offered, for "Download update".
+    offered: Option<UpdateOffer>,
+    /// An installer download is running.
+    downloading: bool,
 }
 
 impl<P: CredentialProvider> Actor<P> {
@@ -786,15 +800,29 @@ impl<P: CredentialProvider> Actor<P> {
                     self.notice(
                         Severity::Info,
                         format!(
-                            "AegisTARA {} is available ({} MB). Download it from {}. {notes}",
+                            "AegisTARA {} is available ({} MB). Choose Help, Download update, or fetch it from {}. {notes}",
                             offer.release,
                             offer.bytes().div_ceil(1_000_000),
-                            offer.url()
+                            offer.url(),
                         ),
                     );
+                    self.offered = Some(offer);
                 }
                 Err(e) => self.notice(Severity::Error, format!("Could not check for updates: {e}")),
             },
+            Internal::Downloaded(result) => {
+                self.downloading = false;
+                match result {
+                    Ok(path) => self.notice(
+                        Severity::Info,
+                        format!(
+                            "The update was downloaded and checked against the signed manifest: {}. Close AegisTARA, then open that file to install it.",
+                            path.display()
+                        ),
+                    ),
+                    Err(e) => self.notice(Severity::Error, format!("Could not download the update: {e}")),
+                }
+            }
             Internal::Settings(result) => match result {
                 Ok(s) => self.settings = Some(settings_view(&s)),
                 Err(e) => self.on_failure("Could not load the server settings", &e),
@@ -942,15 +970,49 @@ impl<P: CredentialProvider> Actor<P> {
             );
             return;
         }
-        let (url, checker) = (
+        let (url, checker, http) = (
             self.config.update_url.clone(),
             Arc::clone(&self.config.update_checker),
+            Arc::clone(&self.config.update_http),
         );
         let events = self.events.clone();
         tokio::spawn(async move {
-            let http = aegis_auth::http::HyperClient::new();
-            let result = checker.check_url(&http, &url).await;
+            let result = checker.check_url(&*http, &url).await;
             let _ = events.send(Internal::Updates(result)).await;
+        });
+    }
+
+    /// Downloads the installer of the release the last check offered, in the
+    /// background. Nothing is run or opened.
+    fn download_update(&mut self) {
+        let Some(offer) = self.offered.clone() else {
+            self.notice(
+                Severity::Info,
+                "There is no update to download. Choose Help, Check for updates first.",
+            );
+            return;
+        };
+        if self.downloading {
+            self.notice(Severity::Info, "The update is already being downloaded.");
+            return;
+        }
+        self.downloading = true;
+        self.notice(
+            Severity::Info,
+            format!(
+                "Downloading AegisTARA {} ({} MB)...",
+                offer.release,
+                offer.bytes().div_ceil(1_000_000)
+            ),
+        );
+        let (dir, events, http) = (
+            self.config.update_dir.clone(),
+            self.events.clone(),
+            Arc::clone(&self.config.update_http),
+        );
+        tokio::spawn(async move {
+            let result = offer.download(&*http, &dir, |_| {}).await;
+            let _ = events.send(Internal::Downloaded(result)).await;
         });
     }
 
@@ -1852,6 +1914,7 @@ impl<P: CredentialProvider> Actor<P> {
             Command::LoadHistory => self.load_history(),
             Command::Export { kind, path } => self.export(kind, path),
             Command::CheckForUpdates => self.check_for_updates(),
+            Command::DownloadUpdate => self.download_update(),
             Command::LoadEvents => self.load_events(),
             Command::LoadUsers => {
                 self.load_users();

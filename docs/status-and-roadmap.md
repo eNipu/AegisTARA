@@ -58,6 +58,7 @@
 | 051 | Screen reader path for the canvas | 0045 |
 | 052 | Event log on every server, retention, stress test | 0046 |
 | 053 | Attack tree pictures in the PDF | 0047 |
+| 054 | Installer download with hash check | 0048 |
 
 Jobs 027 to 051 have **not** been through the factory review stages (code, security, UX, UI). The list is in `docs/review-requirements.md`.
 
@@ -171,7 +172,7 @@ Everything else in the backlog is ticked. Open items, in order:
 2. Watch the first CI run of the `server image` job and run the release checklist once (G12).
 3. ~~Event store for company-login-only servers~~ done (052, ADR 0046).
 4. ~~Attack tree picture inside the PDF~~ done (053, ADR 0047). Still open: make the HTML report use the same document model (see `brainstorm-logs-and-reports.md`).
-5. Installer download, hash check and install after the update check (ADR 0042).
+5. ~~Installer download and hash check~~ done (054, ADR 0048). Still open: running the installer from the app (a per platform decision).
 6. Admin: groups and policies (direction §6).
 7. Phase 4, AI wave 1.
 
