@@ -1,6 +1,6 @@
 # Brainstorm, round 2: AI, languages, library, UI, traceability, market
 
-- Status: brainstorm with decisions. The decisions are recorded as D12 to D19
+- Status: brainstorm with decisions. The decisions are recorded as D12 to D24
   in [decisions.md](decisions.md); the requirements are in
   [requirements.md](requirements.md); the work is in
   [`factory/backlog.md`](../factory/backlog.md) (jobs 060 onward); the planned
@@ -19,9 +19,11 @@
    themselves). A small tuned model of our own is an optional add-on once we
    have a public training set and a measured golden set. The rule stays: AI
    proposes, the engine computes, a human decides.
-2. **Japan is the first export market.** That means a Japanese UI, Japanese
-   PDF fonts, Japanese reports, a local partner, and a security check sheet
-   answer pack. The UI language and the content language are two different
+2. **Japan is the first export market, consultancy first.** The owner's
+   Japanese consultancy uses AegisTARA in house and sells it to clients who
+   want to run it themselves (section 9.5). That needs a Japanese UI,
+   Japanese PDF fonts, Japanese reports and a security check sheet answer
+   pack. The UI language and the content language are two different
    things and are built separately.
 3. **The attack tree library is the reuse engine.** Copy with a remembered
    origin; search by words, typos, topics and context without AI; meaning
@@ -229,9 +231,39 @@ catalogs never need a server.
 - **All markets:** export control classification of the product (it contains
   cryptography); ask a trade lawyer once, before the first export sale.
 
+### 2.5 Beyond automotive (D24)
+
+Many organizations must do TARA-like risk assessment, not only car makers.
+The core is already methodology-neutral (D1, [brainstorm.md](brainstorm.md)
+section 2 lists twelve domains). What the owner wants next:
+
+| Domain | Rules | Methods and catalogs | Pack order |
+|---|---|---|---|
+| Automotive | ISO/SAE 21434, UN R155 | Attack potential, R155 Annex 5 | 1 (built) |
+| Products with digital elements in the EU (consumer IoT, small electronics, industrial devices, software) | EU CRA Annex I (risk assessment is mandatory), EN 18031 for radio equipment; CRA harmonised standards are being drafted | Generic likelihood x impact, STRIDE, MITRE EMB3D | 2 |
+| Services and cloud providers | ISO/IEC 27005, NIST SP 800-30 | STRIDE, MITRE ATT&CK (Enterprise, Cloud) | 3 |
+| Medical devices | FDA premarket guidance, IEC 81001-5-1, EU MDR | STRIDE, attack trees, CVSS with the medical rubric | On demand |
+| Industrial | IEC 62443-3-2 and 4-1 | Zones and conduits, ATT&CK for ICS | On demand |
+
+What the model needs for that, beyond what packs already hold (scales,
+impact categories, feasibility methods, risk matrix, threat categories,
+catalog ID syntax):
+
+- **Element names from the pack**: "damage scenario" is "harm" or "impact"
+  elsewhere; "item" is "product" or "service". Pages and reports read the
+  names from the pack.
+- **Catalog text**: today a pack holds the catalog ID syntax only. A catalog
+  pack (CAPEC, ATT&CK, EMB3D) carries names and descriptions, where the
+  catalog's terms allow redistribution with attribution (D5 review list).
+- **A generic likelihood method** for packs without attack potential.
+
+Japanese makers that export to the EU need the CRA as much as European ones,
+so a Japan-based consultancy that speaks both regulations, and a tool with
+bilingual reports, has a clear position.
+
 ---
 
-## 3. Attack tree reuse: library, loops, fuzzy search, suggestions
+## 3. Attack tree reuse: library, fuzzy search, suggestions
 
 The library note ([brainstorm-attack-tree-library.md](brainstorm-attack-tree-library.md))
 asked eight questions. Decisions (D14):
@@ -257,20 +289,29 @@ operations** (`AddTreeNode`, `LinkTreeNode`, `UnlinkTreeNode`,
 cap is no longer tied to the line size. This is also what the outline editor,
 the library and AI drafting all need.
 
-### 3.2 "Technical attack trees and attack loops"
+### 3.2 Attack trees, technical attack trees, attack lists (owner, 2026-10-26)
 
-Interpretation to confirm with the owner:
+The owner's practice has three levels. "Attack loop" in the first draft was
+a misreading; there are no loops.
 
-- **Technical attack trees:** trees whose leaves are concrete technical steps
-  (interfaces, protocols, tools), as opposed to goal-level trees. They are
-  the most reusable library content because the same ECU or bus attack
-  recurs across products. Tag them by interface type (CAN, Ethernet, OBD,
-  Bluetooth, cellular, USB, debug port) and asset type.
-- **Attack loops:** repeated sequences (recon, foothold, escalate, pivot,
-  repeat on the next ECU). The engine stays a DAG (rule A3, cycle detection),
-  so a loop is stored as a **template fragment with a repeat count**, unrolled
-  into a `SeqAnd` chain at insert time, with the origin note remembering the
-  loop. The report can show it folded.
+| Level | What it is | Reuse | Library kind |
+|---|---|---|---|
+| **Attack tree** | The goal-level tree for one threat scenario of one item ("Spoofed brake request on this vehicle") | Low: specific to the item | Complete tree, or a template |
+| **Technical attack tree** | A smaller tree for a technical goal that recurs across products ("Denial of service on a CAN bus", "Code execution on an ECU over UDS", "Extract keys through a debug port") | **High**: the same tree appears in many projects | Fragment, grafted under a gate of an attack tree |
+| **Attack list** | Atomic steps with typical attack potential factors ("Reach the OBD port", "Flood the bus with high-priority frames") | Highest | Leaf |
+
+This fits ISO/SAE 21434. Clause 15.6 (attack path analysis) leaves the
+method open; top-down methods such as attack trees are one option; reusing proven sub-trees
+is common practice and makes analyses more consistent across projects. Two
+cautions, both already in D14: feasibility depends on the item and its
+environment, so reused ratings are marked "from library, review"; and a
+reused tree must be checked against the item's real interfaces (an attack
+on a debug port does not apply when the port is fused off).
+
+Tag technical attack trees and attack list items by interface type (CAN,
+Ethernet, OBD, Bluetooth, cellular, USB, debug port), asset type and
+attack type (denial of service, spoofing, tampering, extraction) so search
+and suggestions find them.
 
 ### 3.3 Fuzzy and topic search without AI (works air gapped)
 
@@ -430,9 +471,24 @@ Decision (D17), the report builder:
 | Step | What | Why first |
 |---|---|---|
 | 1 | **ReqIF export and import** of goals, requirements, controls, claims, with stable identifiers | One standard file works with Polarion, JAMA, DOORS, codebeamer; air gapped; no credentials |
-| 2 | **Jira connector**: create or link an issue for a requirement or a control; pull its status | Jira is everywhere, including at Japanese suppliers |
-| 3 | **Polarion connector** (REST on current versions) | Common at EU OEMs and Tier 1s |
-| 4 | **JAMA connector** (REST) | Common in US and some EU programs |
+| 2 | **Jira connector**: create or link an issue for a requirement or a control; pull its status | Jira is everywhere, including at Japanese suppliers; the free Jira Cloud plan (up to 10 users) has the full REST API with a personal API token, so we can build and test it without buying anything |
+| 3 | **Polarion connector** (REST on current versions) | Common at EU OEMs and Tier 1s; no free tier, so only with a customer's test instance |
+| 4 | **JAMA connector** (REST) | Common in US and some EU programs; no free tier, same condition |
+
+### 8.2 Decision (D20): how AegisTARA is extended
+
+Plugins in three layers, the simplest first. No native code is loaded into
+the server or the app (a Rust plugin ABI is not stable, and loaded code
+would bypass every check).
+
+| Layer | What a plugin is | Example | Needs |
+|---|---|---|---|
+| Data | A file in a published, versioned format with decode caps | Methodology packs, library packs, ReqIF, XLSX | Nothing new; exists or planned |
+| External | A separate program in any language that uses the **public API** with a service account token, and follows changes through the `Watch` stream | A company's own Redmine, Backlog or GitHub Issues bridge; a CI job that exports reports | Service accounts and API tokens, published `aegis.proto`, an API guide (job 106) |
+| Built in | A connector inside the server behind one Rust trait | Jira, then Polarion, JAMA | Job 094 |
+
+A WebAssembly plugin host is the upgrade path if a customer needs custom
+logic inside the server; not before.
 
 Connector rules:
 
@@ -487,9 +543,82 @@ Named-user annual subscription; the server is free to install. Trials use a
 A vendor-hosted single-tenant instance (EU region and Tokyo region) for
 small customers and trials would shorten sales a lot. It changes D3 (we
 would hold customer data), brings TISAX and ISO 27001 into scope, and needs
-the horizontal scaling work (SEC-12). **Not decided; owner call.**
+the horizontal scaling work (SEC-12). **Owner decision 2026-10-26: not now.**
+D3 stays. Revisit when trial requests outgrow the consultancy instance
+(section 9.5).
+
+### 9.5 Business model: consultancy first, product second (owner, 2026-10-26)
+
+Start in Japan as a TARA consultancy that uses AegisTARA in house, then sell
+the tool to the clients who want to run it themselves.
+
+| Stage | Offer | AegisTARA's role |
+|---|---|---|
+| 1 | TARA as a service: a fixed-price work package per item (ECU, gateway, product) ending in a report, plus workshops and reviews | Internal tool in standalone mode (D22). Client data stays under NDA on the consultant's machine; the project folder is handed over with the report, and the consultant's copy is deleted as the contract says |
+| 2 | Project license: the client's team uses AegisTARA for one vehicle, ECU or product program, with consulting hours bundled | Standalone for one or two people; the client's own server (D3) for a team |
+| 3 | Annual named-user subscription and editions (section 9.1) | Product sales, direct or through a partner |
+| 4 | A distributor or systems integrator for wider reach | Partner resells; the consultancy keeps the expert services |
+
+Two kinds of customer, both served: those who **only want the report**
+(stage 1) and those who **want the tool** (stages 2 and 3).
+
+Market reference (2026-10, public sources only; no vendor publishes list
+prices for TARA tools):
+
+- itemis SECURE is reported to use a per-project license, quote only,
+  on-premise.
+- ThreatZ (vxlabs) publishes a Team plan at USD 1,199 per month, a
+  Professional plan at USD 499 per user per month, and a managed TARA
+  service from USD 5,000 per project.
+- Panasonic Automotive Systems opened a free three-month trial of its
+  VERZEUSE for TARA in May 2026 (a question-driven tool), aiming at a paid
+  service later: a domestic competitor in Japan.
+- ETAS (Bosch group) sells CycurRISK (ESCRYPT) for attack trees and damage
+  scenarios; Macnica lists it in Japan. No public prices.
+- Consultancies report a shortage of automotive security people in Japan,
+  which supports stage 1.
+
+Consequence for the product: the license token already carries customer,
+seats, expiry and features, so a **project license is a license file with an
+expiry tied to the program** and no new mechanism. Library content the
+consultancy builds must come from generic know-how, never from a client's
+deliverables, and contracts should say so.
 
 ---
+
+### 9.6 Partners in Japan, by stage
+
+At stage 1 a partner brings **projects**, not license sales.
+
+| Partner type | What they bring | What they get | Stage |
+|---|---|---|---|
+| Automotive engineering service and outsourcing companies | Access to OEM and Tier 1 programs that need TARA capacity | An expert they subcontract to; often the easiest first contract | 1 |
+| Penetration testing firms | Clients who need the TARA before and after a test | TARA work they do not do; their test results become verification evidence (TRC-03) | 1 |
+| Testing, inspection and certification bodies | Clients who failed or fear an R155 or CRA audit; auditors may not consult on what they audit, so they refer | A competent referral | 1, 2 |
+| Universities and research labs | Credibility, interns, joint research grants | Real problems and data | 1 to 3 |
+| Technical trading companies and tool distributors | Purchasing channels into large companies, Japanese contracts and support | Margin on licenses | 3, 4 |
+
+Rules for picking a distributor later: one that does **not** already carry a
+competing TARA tool (Macnica carries CycurRISK), that has automotive or
+embedded customers, and that can give first-line support in Japanese.
+
+Visibility: escar Asia, Automotive World (Tokyo), EdgeTech+ (Yokohama), the
+JSAE automotive engineering exposition, talks and articles in Japanese
+(MONOist and similar trade media), and public seminars on R155 and the CRA.
+Public support for founders (Japan Finance Corporation start-up loans,
+chamber of commerce advice, prefectural start-up centers) is worth a visit.
+
+### 9.7 Other markets, in order
+
+| Market | Why | How |
+|---|---|---|
+| EU (Germany first) | CRA for every product maker; 21434 at OEMs and suppliers; the owner's network | Remote consulting, then direct licenses |
+| Japanese makers exporting to the EU | The CRA applies to them too | The Japan consultancy, bilingual reports |
+| South Korea | UN R155 applies; large OEM and supplier base; active TARA training market | A partner, later |
+| India | AIS-189 cybersecurity rules aligned with R155; a growing supplier base | A partner, later |
+| Taiwan and Southeast Asia | Electronics makers exporting to the EU (CRA) | Remote consulting |
+| US | 21434 through OEM requirements; FDA rules for medical devices | After a medical pack |
+| China | GB 44495 is mandatory, but data rules and local tools make it hard | Not planned |
 
 ## 10. Other ideas worth keeping
 
@@ -513,15 +642,14 @@ the horizontal scaling work (SEC-12). **Not decided; owner call.**
 
 ## 11. Questions for the owner
 
-1. Is "attack loop" the repeated recon-to-pivot sequence (section 3.2), or
-   something else?
-2. Which partner model for Japan: a distributor, a systems integrator, or a
-   Japanese subsidiary later?
-3. Is a vendor-hosted SaaS option (section 9.4) wanted, given it changes D3?
-4. Which ALM tool does the first customer use (decides the first live
-   connector)?
-5. Who translates: a professional translator per release (recommended for
+Answered on 2026-10-26: "attack loop" was a misreading (section 3.2);
+Japan starts consultancy first (section 9.5); no vendor-hosted SaaS for now;
+D7 accepted with the free Slint license.
+
+Still open:
+
+1. Which ALM tool does the first customer use (decides whether Polarion or
+   JAMA follows Jira)?
+2. Who translates: a professional translator per release (recommended for
    the UI and manuals), or machine translation with review?
-6. D4 and D7 are still open (decisions.md). D7 matters for distribution: the
-   Slint royalty-free license needs an attribution badge on the download
-   page; a commercial Slint license removes that.
+3. D4 (one editor per project at a time) still needs a yes.

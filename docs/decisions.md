@@ -8,7 +8,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Automotive first (ISO/SAE 21434, UN R155).
 - Native desktop client. Not a browser app.
 - The customer company hosts the server in its own cloud. Users log in with their own company credentials.
-- Many users per company. One editor per project at a time in v1.
+- Many users per company. One editor per project at a time; others read a saved version (D4, D23).
 - Proprietary product. Open source libraries are welcome, but only with permissive licenses.
 - AI features are in the backlog. The v1 architecture gets ready for them now.
 - Password login for testing. Company SSO (Entra ID, Google, other OIDC) when a customer orders it.
@@ -16,6 +16,8 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - AI: the customer's own model through one server gateway first; our own small model later (D12).
 - Japan is the first export market; English and Japanese ship first (D13).
 - Library, item definition, traceability, report builder, ReqIF-first integrations and a built-in role table are decided (D14 to D19).
+- Extensions through data files, a public API and built-in connectors (D20). No vendor-hosted service for now; consultancy first in Japan (D21).
+- A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24).
 
 ---
 
@@ -47,7 +49,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Interpretation of "single user":** many people in a company use the same server. In v1 only one person edits a given project at a time. Others can open it read-only and see changes live.
 - **Why:** Much simpler than real-time co-editing. Fits engineering review culture (check out, edit, check in).
 - **Consequence:** Store every change as an operation from day one. This keeps the path open to real-time co-editing later without a rewrite.
-- **Please confirm** this interpretation.
+- **Confirmed by the owner (2026-10-26), with one change:** others get **read-only access to a saved version**, not a live view. Nobody needs to watch edits as they happen, and the live view costs a lot of machinery. See D23.
 
 ## D5. Proprietary product, permissive open source dependencies
 
@@ -57,6 +59,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Review first:** MPL-2.0, Slint royalty-free license (chosen in D7, needs your approval), any AI model license, any data catalog license.
 - **Not allowed:** GPL, LGPL, AGPL, SSPL, Business Source License, Commons Clause, non-commercial licenses.
 - **Non-shipped tooling (added 2026-10-21):** crates used only to build, test, fuzz or benchmark (dev-dependencies and fuzz crates, never linked into a shipped binary) may also use NCSA (the LLVM license, permissive). Each such crate needs a per-crate exception in `deny.toml` that names the crate and version and points to D5. Everything that ships keeps the allow list above.
+- **Development tools, widened by the owner (2026-10-26):** tools used only during development (editors, test and benchmark crates, CI tools, paid tools under their own license) may have any license, including copyleft, paid or with other obligations, as long as nothing from them is linked into, copied into or shipped with the product (binaries, installers, container images, packs, reports). The allow list above is unchanged for everything that ships. `deny.toml` keeps checking the shipped dependency graph; job 110 adjusts how it treats dev-dependencies.
 - **Enforcement:** `cargo-deny` in CI. `cargo-about` generates the third-party notices shown in the About dialog.
 - **Correction to the brainstorm:** Garage and MinIO are AGPL. Do not use them. Use the cloud provider's object storage or PostgreSQL.
 
@@ -74,6 +77,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Why:** In a five-way spike, all toolkits could do right-click editing of feasibility values. Slint did it with built-in menus and widgets, has a stable 1.x API, and renders fully on a CPU-only renderer for users on remote desktops. Details: [spikes/RESULTS.md](../spikes/RESULTS.md).
 - **Condition:** use Slint under its Royalty-free License 2.0. This requires an "About Slint" notice in the app and a Slint badge on the download page. If that is not acceptable, buy the commercial license or switch to iced (MIT), the tested fallback.
 - **Before locking:** run the Slint spike on a real Windows laptop and over RDP or Citrix.
+- **Accepted by the owner (2026-10-26):** use the free royalty-free license with the attribution; buy a commercial Slint license when a customer asks for it or the business grows.
 - **Replaces:** the earlier lead pick of iced in direction-v1.md section 4.
 
 ## D8. Engineering standards are requirements
@@ -87,9 +91,9 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 
 - **Date:** 2026-10-25
 - **Context:** the roadmap (docs/status-and-roadmap.md, G4 and G5) lists D4 and D7 as open. Phases 1 and 2 cannot start without an answer, so the build proceeds on the safest reading of each, and each one is cheap to reverse.
-- **D4 (edit lock):** the interpretation is built as written. Many users share one server, one editor holds a project's lease at a time, others observe read-only. The lease is 2 minutes and is renewed by the client. The lock lives behind one small trait in `aegis-server`, so per-module locks or co-editing replace it without touching the op path.
+- **D4 (edit lock):** the interpretation is built as written (confirmed 2026-10-26; the live view is removed by D23). Many users share one server, one editor holds a project's lease at a time, others observe read-only. The lease is 2 minutes and is renewed by the client. The lock lives behind one small trait in `aegis-server`, so per-module locks or co-editing replace it without touching the op path.
 - **D7 (Slint):** the shell is built on Slint under the Royalty-free License 2.0. The condition is met by default: the app has an "About Slint" notice, and `docs/release-checklist.md` lists the download-page badge. The Slint crates are the only entry in `deny.toml` `[licenses] exceptions` that is not tooling, it names `slint` and cites this decision, and it applies to `crates/aegis-shell` only. All UI-independent logic lives in `aegis-client`, so switching to iced or buying the commercial license rewrites only `aegis-shell`.
-- **Still needed from the owner:** a yes or no on both. If D7 is rejected, delete `crates/aegis-shell` and its exception.
+- **Owner answers:** D4 confirmed and D7 accepted on 2026-10-26.
 - **Housekeeping (G3):** the branches `claude/pipeline-tasks-3ca78e`, `factory/016-store-trees-and-provenance`, `factory/jobs-013-015` and `factory/jobs-017-019` are fully merged into `master` (0 commits ahead, checked 2026-10-25). The mockup content is in `docs/design/`. No local worktree exists. Deleting remote branches is left to the owner.
 
 ## D10. Password login for testing; company SSO when a customer orders it
@@ -146,7 +150,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 
 - **Date:** 2026-10-26
 - **Decision:** ReqIF export and import first (air gapped, works with Polarion, JAMA, DOORS, codebeamer). Then live connectors in the server, never in the desktop app: Jira first, Polarion and JAMA when a customer order names them. Push and link with status pull, not full two-way sync.
-- **Why:** connector tokens are company secrets and the server already sits inside the company network.
+- **Why:** connector tokens are company secrets and the server already sits inside the company network. Jira comes first also because its free Cloud plan has the full REST API, so it is built and tested without a paid license; Polarion and JAMA have no free tier.
 
 ## D19. Project access: a built-in role table, not Cedar
 
@@ -155,10 +159,40 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Why:** fixes SEC-02 with the least new machinery; the library, AI and connectors need these permissions.
 - **Moves:** backlog item 058 out of "waiting for a design session".
 
+## D20. Extensions: data files, a public API, built-in connectors; no loaded code
+
+- **Date:** 2026-10-26
+- **Decision:** AegisTARA is extended in three layers: (1) data plugins, files in published formats (methodology packs, library packs, ReqIF, XLSX); (2) external plugins, separate programs in any language that call the public gRPC API with a service account token and follow changes through `Watch`; (3) built-in connectors in the server behind one Rust trait (Jira first). No native code is loaded into the server or the app. A WebAssembly plugin host is the upgrade path if a customer needs custom logic inside the server.
+- **Why:** modular and open without a plugin ABI to maintain, and every external plugin passes the same access checks as a user.
+- **Details:** [brainstorm-product-v2.md](brainstorm-product-v2.md) section 8.2; job 106.
+
+## D21. No vendor-hosted service for now; consultancy first in Japan
+
+- **Date:** 2026-10-26
+- **Decision:** D3 stays: customers host their own server, and their data never passes through us. The owner's consultancy works in the standalone app (D22) under NDA and hands the project file over with the report. A vendor-hosted service is revisited when trial demand outgrows that.
+- **Details:** [brainstorm-product-v2.md](brainstorm-product-v2.md) sections 9.4 and 9.5.
+
+## D22. A standalone app with no server, for consultancy and small projects
+
+- **Date:** 2026-10-26
+- **Decision:** the desktop app can run alone. It starts the server library inside its own process, bound to the loopback address only, with a project-folder store (the snapshot and op log formats `aegis-model` already has) instead of PostgreSQL, and no login. The client code path stays the same, so every feature works in both modes. A standalone project folder can be imported into a customer server later. The license file is checked by the app in this mode.
+- **Why:** the consultancy (D21) works alone, and small customers should not have to run a server for one project. Reusing the server library keeps one code path instead of two.
+
+## D23. Remove the live observer view; viewers read a saved version
+
+- **Date:** 2026-10-26
+- **Decision:** read-only users open the project as last saved by the server (or a baseline). They see a "newer version available, reload" notice instead of a live stream. The editor keeps its lease and "numbers checked" through ordinary calls. Streaming ops and risk events to observers (ADR 0033), and the `Watch` heartbeat and silence watchdog where nothing else needs them, are removed. Job 108 decides the exact cut with the code in front of it.
+- **Rule from the owner:** features that add technical complexity without business value are reduced or removed. Added to [engineering-standards.md](engineering-standards.md) section 1.
+
+## D24. Beyond automotive: EU CRA and other domains through packs
+
+- **Date:** 2026-10-26
+- **Decision:** the core stays methodology-neutral (D1). After the ISO/SAE 21434 pack comes a product-security pack for EU CRA (any product with digital elements), then STRIDE with MITRE catalogs (CAPEC, ATT&CK, EMB3D) for services, cloud and small electronics. Medical (IEC 81001-5-1, FDA) and industrial (IEC 62443) packs follow customer demand. Packs may rename the element types ("damage scenario" becomes "harm"), and catalog packs may carry catalog text where the catalog's license allows it (D5 review).
+- **Why:** many companies must do TARA-like risk assessment under the CRA, including Japanese makers that export to the EU.
+- **Details:** [brainstorm-product-v2.md](brainstorm-product-v2.md) section 2.5, [brainstorm.md](brainstorm.md) section 2.
+
 ## Open
 
-- Confirm D4 interpretation (working assumption in D9).
-- Accept or reject the Slint attribution condition (D7, working assumption in D9). This now also decides the download page for the Japanese partner.
 - Delete the four merged remote branches listed in D9.
 - Pick the first SSO provider when a customer order arrives (D10).
-- The questions in [brainstorm-product-v2.md](brainstorm-product-v2.md) section 11: the meaning of "attack loop", the Japan partner model, a vendor-hosted SaaS option (would change D3), the first customer's ALM tool, and who translates.
+- The questions in [brainstorm-product-v2.md](brainstorm-product-v2.md) section 11: the first customer's ALM tool, and who translates.

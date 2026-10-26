@@ -23,7 +23,7 @@
 | Client core (`aegis-client`) | **Complete (033)** | Optimistic editing, undo as edits, lease handling, view model, 10 end-to-end tests against the real server |
 | Desktop app (`aegis-shell`) | **Complete (033, 041)** | Menus with Lucide icons, every TARA page, outline tree editor, baselines and comparison, history, exports, admin, server and login screens; headless UI tests with screenshots |
 | Offline licensing (`aegis-license`) | **Complete (034)** | Ed25519 license files, grace period, seat ledger, issuer tool, server gate |
-| Live observers | **Complete (035)** | Ops plus recomputed risks streamed to observers; the client cross-checks its own numbers |
+| Live observers | **Complete (035), to be removed (D23, job 108)** | Ops plus recomputed risks streamed to observers. The owner decided read-only users see a saved version instead |
 | Release scaffolding | **Built and deployed (036, 040, 046, 048)** | Release profile, Dockerfile, Compose files, signed update manifest, now fetched over HTTPS (Help > Check for updates, 048). CI builds the image and starts it (046; its docker lines first run in CI) |
 | TLS to PostgreSQL, `https://` clients, seat restore | **Complete (037, 038, 039)** | `AEGIS_DB_TLS`, rustls with ring and OS roots, seats rebuilt from the op log |
 | Transport through proxies | **Complete (040)** | gRPC-Web next to gRPC, `/healthz`, `PORT`, `Watch` heartbeats and a client silence watchdog |
@@ -124,8 +124,8 @@ flowchart TD
     P1["Phase 1 — Server skeleton<br/>(tonic gRPC, lease lock D4, audit log,<br/>PostgreSQL snapshots + oplog)"]
     P2["Phase 2 — Client core<br/>(canvas display list, Slint shell,<br/>OIDC PKCE + DPoP + keychain)"]
     P3["Phase 3 — Release readiness<br/>(installers/updates, offline Ed25519<br/>license tokens, live read-only view)"]
-    P4["Phase 4 — Harden and fill model gaps<br/>(SEC findings, roles, descriptions,<br/>node-level tree ops)"]
-    P5["Phase 5 — Japan-ready product<br/>(i18n en+ja, CJK fonts, report builder,<br/>XLSX, figures, item definition,<br/>library phase 0, Excel import, UI pass)"]
+    P4["Phase 4 — Consultancy-ready<br/>(standalone app, no live view,<br/>descriptions, tree ops, library 0,<br/>CRA pack, en+ja, report builder,<br/>XLSX, figures, item definition)"]
+    P5["Phase 5 — Client deployments<br/>(SEC findings, roles, catalog packs,<br/>UI pass, CRA readiness, bundle,<br/>manuals and security pack)"]
     P6["Phase 6 — Traceability and integrations<br/>(trace links, requirements, matrix,<br/>ReqIF, diagram canvas, Jira)"]
     P7["Phase 7 — AI<br/>(gateway, suggestion branches,<br/>golden set, wave 1, semantic search)"]
     P0 --> P1
@@ -139,7 +139,7 @@ flowchart TD
     P5 --> P7
 ```
 
-> **Phases 0 to 3 are built** on the branch named above, with the open items in section 3. Phases 4 to 7 come from [requirements.md](requirements.md) (decisions D12 to D19, jobs 057, 058 and 060 to 105). Phase 7 can start once Phase 4 is done and the library (057) exists; it does not wait for Phase 6.
+> **Phases 0 to 3 are built** on the branch named above, with the open items in section 3. Phases 4 to 7 come from [requirements.md](requirements.md) (decisions D12 to D24, jobs 057, 058 and 060 to 112). The order follows the business model: consultancy first (D21). Phase 7 can start once Phase 4 is done and the library (057) exists; it does not wait for Phase 6.
 
 ### Phase 0 — Housekeeping (unblocks everything) — done
 - Root workspace, README refresh, worktree cleanup, D4/D7 decisions, §4 drift fix.
@@ -160,13 +160,13 @@ flowchart TD
 - Installers + auto-update (§10), offline Ed25519 license tokens (§12), live read-only observers (§7).
 - **Exit:** a sovereign (air-gapped) demo deployment. The Railway test server is the first step.
 
-### Phase 4 — Harden and fill model gaps (jobs 060 to 065, 058)
-- Close SEC-01 to SEC-10; roles and project membership (D19, fixes SEC-02); description text on every element; node-level attack tree ops and a raised per-tree cap.
-- **Exit:** the security review's High and Medium findings are closed; a 500-node tree edits within the 5 ms budget.
+### Phase 4 — Consultancy-ready (jobs 107, 108, 110, 064, 065, 057, 109, 111, 066 to 068, 070 to 074, 080)
+- What the owner's consultancy needs first (D21): the standalone app (D22), the live view removed (D23), description text, node-level tree ops and the library, pack-defined names and the EU CRA pack (D24), English and Japanese, the report builder, XLSX, figures, the item definition, Excel import.
+- **Exit:** on a laptop with no server, the owner imports an Excel TARA, completes it in Japanese with library trees, and hands over a Japanese PDF, an XLSX and the project folder; the same for a CRA product.
 
-### Phase 5 — Japan-ready product (jobs 066 to 074, 057, 080 to 085, 099 to 103)
-- English and Japanese UI, Japanese PDF, report builder with profiles, XLSX, figures, item definition, library phase 0, Excel TARA import, command palette and panels, signed installer, CRA readiness, manuals and security pack in both languages.
-- **Exit:** a Japanese engineer imports an Excel TARA, completes it in Japanese, and exports a Japanese PDF and XLSX with an architecture figure.
+### Phase 5 — Client deployments (jobs 060 to 063, 058, 069, 112, 081 to 085, 100 to 103)
+- What a client running AegisTARA on its own server needs: the security findings closed, roles (D19, fixes SEC-02), bilingual content, catalog packs, the UI pass, CRA readiness of our product, the offline bundle, manuals and the security pack.
+- **Exit:** a client team installs the server from the offline bundle, imports the consultancy's project folder, and works with roles; the security review's High and Medium findings are closed.
 
 ### Phase 6 — Traceability and integrations (jobs 075 to 079, 087, 094 to 096, 104)
 - Requirements and verification, trace links with suspect marking, traceability matrix, ReqIF, architecture diagram canvas, company library, Jira connector (Polarion and JAMA on order).

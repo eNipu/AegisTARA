@@ -1696,11 +1696,25 @@ else".
 # Part III: the target system (planned, not built)
 
 Part III is the architecture for the work in
-[requirements.md](requirements.md) (decisions D12 to D19, jobs 057, 058 and
+[requirements.md](requirements.md) (decisions D12 to D24, jobs 057, 058 and
 060 onward). **Rule for maintainers: when a job builds a part described
 here, move that part into Part I or Part II in the same commit and delete it
 here.** Nothing in Part III is a promise about field names; the job's spec
 and ADR decide those.
+
+## III.0 Planned removals (D23, rule P7)
+
+Read-only users no longer follow the editor live. Job 108 removes, where
+nothing else needs them:
+
+| Part (described in Part II today) | Replaced by |
+|---|---|
+| Observer op stream and `RisksEvent` in `Watch` (ADR 0033), the observer view in the client | Open the last saved version or a baseline; a "newer version available, reload" notice (a cheap version check on a timer or on focus) |
+| `Heartbeat` every 20 s and the client `watch_silence` watchdog | Nothing, if `Watch` goes; otherwise kept only for the editor |
+| Lease changes pushed through `Watch` | The editor learns of a broken lease from `RenewLock` or `SubmitOps` answers |
+| Server numbers pushed to the editor | `GetRisks` after a confirmed batch keeps the "numbers checked" mark (job 047) |
+
+Part II keeps describing the built code until job 108 lands.
 
 ## III.1 Target system context
 
@@ -1735,6 +1749,25 @@ flowchart LR
     CORE <--> FILES
 ```
 
+### III.1a Standalone mode (D22)
+
+```mermaid
+flowchart LR
+    subgraph App["One desktop process"]
+        UI2["Slint window"] <--> CORE2["aegis-client\n(same code path)"]
+        CORE2 -- "gRPC on 127.0.0.1 only,\nrandom port, no login" --> SRV2["aegis-server library\n(same service and actor)"]
+        SRV2 --> FS["Folder store\nsnapshot + op log +\nattachments"]
+        LIC["License file check\n(aegis-license)"] --> SRV2
+    end
+    FS <--> DIR[("Project folder\non disk")]
+    DIR -. "hand over, then import" .-> CUST["Customer server\n(D3)"]
+```
+
+The standalone app is the same client talking to the same server code; only
+the store and the login differ. Nothing listens on a public address. A
+project folder is the consultancy deliverable next to the report, and a
+customer imports it into their own server with history and provenance kept.
+
 What stays true from Part II: one server per customer, the server owns all
 project state, every change is a validated `Op`, numbers come only from the
 engine, and everything works air gapped except the two dotted arrows.
@@ -1755,7 +1788,8 @@ appears (the trigger is named in the table).
 | | `library/` | Library pack format (like methodology packs: versioned JSON, caps, hash), n-gram index, facet filter, insert batch builder with origin note (LIB-01 to LIB-04) | |
 | `aegis-canvas` | `diagram.rs` | Data-flow diagram layout and drawing into the same display list (ARC-03) | |
 | `aegis-proto` | new RPC groups | Access, attachments (chunked streams), library, report profiles, AI (suggest stream, accept, reject), connectors | |
-| `aegis-server` | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
+| `aegis-server` | `store/folder.rs` | `ProjectStore` over a project folder (snapshot, op log, attachments), used by standalone mode (SHP-01, SHP-02) | |
+| | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
 | | `store/blob.rs` | Attachments in PostgreSQL with size caps (ARC-01) | |
 | | `library.rs` | Company library: states, publish permission, usage counts (LIB-05, LIB-06) | |
 | | `secrets.rs` | Encrypted credentials, key from the environment or the cloud key service | |
@@ -1765,8 +1799,12 @@ appears (the trigger is named in the table).
 | | `report/` | `report.rs` and `pdf.rs` move here; one `ReportDoc` feeds `html.rs`, `pdf.rs`, `xlsx.rs`; `profile.rs` holds section and filter choices (RPT-01 to RPT-05) | `aegis-report` crate when the command line tool (RPT-07) must run without the client |
 | | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
 | `aegis-shell` | `ui/` with `@tr()`, `translations/ja/aegis-shell.po` | Bundled UI catalogs (L10N-01); panel slots, command palette, history panel (UI-01 to UI-04) | |
+| | `standalone.rs` | Starts the in-process server on loopback with the folder store; File > New/Open project folder (SHP-01) | |
+| `aegis-model` | `methodology/` (extended) | Element type names per pack, a plain likelihood method, catalog packs with text (DOM-01, DOM-02, DOM-04) | |
 
 Repository additions: `packs/library/` (the built-in demo library pack),
+`packs/cra/` (the EU CRA pack), `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
+where licenses allow),
 `crates/aegis-client/locales/`, `crates/aegis-shell/translations/`,
 `crates/aegis-client/assets/fonts/NotoSansJP-*` (subset at export time by
 krilla).
