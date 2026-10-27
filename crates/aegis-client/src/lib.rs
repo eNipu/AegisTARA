@@ -4,6 +4,7 @@ pub mod audit;
 pub mod commands;
 pub mod connection;
 pub mod error;
+pub mod library;
 pub mod outline;
 pub mod pages;
 pub mod pdf;

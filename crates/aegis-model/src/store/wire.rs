@@ -1267,6 +1267,16 @@ pub(super) struct SnapshotWire {
     pub(super) cybersecurity_claims: Vec<ClaimWire>,
     #[serde(default)]
     pub(super) descriptions: Vec<DescriptionWire>,
+    #[serde(default)]
+    pub(super) review_marks: Vec<ReviewMarkWire>,
+}
+
+/// A step whose rating awaits review.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReviewMarkWire {
+    pub(super) tree: WireId<TreeId>,
+    pub(super) node: WireId<NodeId>,
 }
 
 /// What a description belongs to, as written: `{"kind":"asset","id":...}`
@@ -1458,6 +1468,13 @@ pub(super) struct RecordWire {
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum OpWire {
+    SetReviewMark {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        marked: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     AddTreeNode {
         tree: WireId<TreeId>,
         parent: WireId<NodeId>,

@@ -463,6 +463,9 @@ pub struct Project {
     descriptions: BTreeMap<ElementRef, Described>,
     /// Derived: the bytes of all description texts together (D10).
     description_bytes: usize,
+    /// Steps whose rating came from a library item and awaits review
+    /// (job 057), in ID order.
+    review_marks: std::collections::BTreeSet<(TreeId, NodeId)>,
 }
 
 /// Adds `ids` to the `modified` list of `diff`, except the ones that were
@@ -572,6 +575,7 @@ impl Project {
             refs: RefCounts::default(),
             descriptions: BTreeMap::new(),
             description_bytes: 0,
+            review_marks: std::collections::BTreeSet::new(),
         }
     }
 
@@ -3810,6 +3814,12 @@ impl Project {
     }
 
     fn lint_trees(&self, findings: &mut Vec<LintFinding>) {
+        for &(tree, node) in &self.review_marks {
+            findings.push(LintFinding::new(LintCode::LibraryRatingNotReviewed {
+                tree,
+                node,
+            }));
+        }
         let factor_count = self.methodology.feasibility_factor_count();
         for (idx, id, entry) in self.trees.iter() {
             if self.refs.trees.get(idx.index()).copied().unwrap_or(0) == 0 {
@@ -4325,6 +4335,21 @@ impl Project {
                 text,
                 provenance,
             } => return self.check_set_description(*target, text, provenance),
+            Op::SetReviewMark {
+                tree,
+                node,
+                provenance,
+                ..
+            } => {
+                let (entry, idx) = self.tree_node(*tree, *node)?;
+                if !matches!(entry.tree.get(idx), Some(Node::Step { .. })) {
+                    return Err(ModelError::NotAStep {
+                        tree: *tree,
+                        node: *node,
+                    });
+                }
+                check_provenance(provenance)?;
+            }
             Op::AddTreeNode {
                 tree,
                 parent,
@@ -4603,6 +4628,26 @@ impl Project {
                 text,
                 provenance,
             } => Ok(self.commit_set_description(target, text, provenance)),
+            Op::SetReviewMark {
+                tree,
+                node,
+                marked,
+                provenance,
+            } => {
+                let entry = self.tree_mut(tree)?;
+                let provenance = std::mem::replace(&mut entry.provenance, provenance);
+                let was = if marked {
+                    !self.review_marks.insert((tree, node))
+                } else {
+                    self.review_marks.remove(&(tree, node))
+                };
+                Ok(Op::SetReviewMark {
+                    tree,
+                    node,
+                    marked: was,
+                    provenance,
+                })
+            }
             Op::AddTreeNode {
                 tree,
                 parent,
@@ -5149,10 +5194,11 @@ impl Project {
     ) -> Result<(), ModelError> {
         let (entry, idx) = self.tree_node(tree, id)?;
         entry.tree.check_remove(idx)?;
-        let rated = entry
-            .step_feasibility
-            .get(idx.index())
-            .is_some_and(Option::is_some)
+        let rated = self.review_marks.contains(&(tree, id))
+            || entry
+                .step_feasibility
+                .get(idx.index())
+                .is_some_and(Option::is_some)
             || entry
                 .step_factors
                 .get(idx.index())
@@ -5420,6 +5466,18 @@ impl Project {
     #[must_use]
     pub fn description_provenance(&self, target: ElementRef) -> Option<&Provenance> {
         self.descriptions.get(&target).map(|d| &d.provenance)
+    }
+
+    /// Whether the rating of a step is marked as needing review. Time
+    /// O(log n).
+    #[must_use]
+    pub fn review_marked(&self, tree: TreeId, node: NodeId) -> bool {
+        self.review_marks.contains(&(tree, node))
+    }
+
+    /// Every step marked as needing review, in ID order. Time O(1) to start.
+    pub fn review_marks(&self) -> impl Iterator<Item = (TreeId, NodeId)> + '_ {
+        self.review_marks.iter().copied()
     }
 
     /// How many descriptions the project has, notes included. Time O(1).
@@ -5822,6 +5880,9 @@ impl Project {
     }
 
     fn check_remove_tree(&self, id: TreeId) -> Result<(), ModelError> {
+        if let Some(&(_, node)) = self.review_marks.iter().find(|(t, _)| *t == id) {
+            return Err(ModelError::NodeIsRated(node));
+        }
         if let Some((_, entry)) = self
             .trees
             .idx(&id)
@@ -6966,6 +7027,7 @@ impl PartialEq for Project {
             || *self.methodology == *other.methodology;
         same_methodology
             && self.descriptions == other.descriptions
+            && self.review_marks == other.review_marks
             && self.assets.len() == other.assets.len()
             && self.damages.len() == other.damages.len()
             && self.threats.len() == other.threats.len()
@@ -7723,6 +7785,7 @@ impl ProjectEvalCache {
         }
         match op {
             Op::SetDescription { .. }
+            | Op::SetReviewMark { .. }
             | Op::RenameTreeNode { .. }
             | Op::AddAsset { .. }
             | Op::RenameAsset { .. }

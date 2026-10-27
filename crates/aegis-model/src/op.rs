@@ -29,6 +29,7 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | Op | Inverse | Cost |
 /// |---|---|---|
 /// | `SetDescription` | the same with the old text and provenance (empty text clears) | O(log n + text) |
+/// | `SetReviewMark` | the same with the old mark and tree provenance | O(log n) |
 /// | `AddTreeNode` | `RemoveTreeNode` with the old tree provenance | O(V + E) |
 /// | `RemoveTreeNode` | `AddTreeNode` with the node, its place and the old tree provenance | O(V + E) |
 /// | `LinkTreeNode` | `UnlinkTreeNode` with the old tree provenance | O(k + d + e) |
@@ -96,6 +97,19 @@ use crate::tree::{AttackTree, GateKind, Node};
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Op {
+    /// Marks or unmarks a step as "its rating needs review". A library
+    /// insert marks the ratings it brings; a person reviews and unmarks. A
+    /// marked step cannot be removed, and the linter reports it.
+    SetReviewMark {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A step of the tree.
+        node: NodeId,
+        /// Marked (needs review) or not.
+        marked: bool,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
     /// Sets the description of an element, or the notes of the project
     /// ([`ElementRef::Project`]). Empty text clears it. Plain text, at most
     /// [`ElementRef::max_chars`] chars. An element that has a description
@@ -581,6 +595,7 @@ impl Op {
     pub const fn provenance(&self) -> Option<&Provenance> {
         match self {
             Self::SetDescription { provenance, .. }
+            | Self::SetReviewMark { provenance, .. }
             | Self::AddTreeNode { provenance, .. }
             | Self::RemoveTreeNode { provenance, .. }
             | Self::LinkTreeNode { provenance, .. }
