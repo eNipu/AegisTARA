@@ -1442,15 +1442,29 @@ impl<P: CredentialProvider> Actor<P> {
         }
     }
 
+    /// A lock event: who holds the lock now, per the server.
+    ///
+    /// While editing, a lock event that does not name us is **not** proof
+    /// that the lease is gone. A stream opens with the lock state as of the
+    /// moment the server took the subscription, and this client opens its
+    /// stream while it opens the project, before it takes the lease: that
+    /// "no lock" snapshot can reach us after we are already editing, because
+    /// the stream's first message and the acquire are two independent calls.
+    /// The release we ask for at the end of an edit produces the same event,
+    /// and it is equally expected. So a lock event only reports a change:
+    /// while editing we confirm with the server (a renew, which is refused
+    /// if the lease is really gone) and keep the project until the answer
+    /// says otherwise.
     fn on_lock_event(&mut self, holder: &str) {
         let me = self.me().to_owned();
-        let Some(open) = self.open.as_mut() else {
+        let held_now = Some(holder.to_owned()).filter(|h| !h.is_empty());
+        let editing = self.open.as_ref().is_some_and(|o| o.mode == Mode::Editing);
+        if editing && held_now.as_deref() != Some(me.as_str()) {
+            self.renew_lease();
             return;
-        };
-        open.lock_holder = Some(holder.to_owned()).filter(|h| !h.is_empty());
-        // Our lease was taken away (admin break) or expired.
-        if open.mode == Mode::Editing && holder != me {
-            self.lose_lease("An administrator took the edit lock, or it expired.");
+        }
+        if let Some(open) = self.open.as_mut() {
+            open.lock_holder = held_now;
         }
     }
 
@@ -1634,20 +1648,29 @@ impl<P: CredentialProvider> Actor<P> {
         self.finish_ending();
     }
 
+    /// The user is done editing: save what is pending, then release.
+    ///
+    /// Editing stops when the release goes out, not when its answer comes
+    /// back: the release itself makes the server announce a free lock, and a
+    /// renew that was in flight when we asked may still be refused. Neither
+    /// says anything was lost, and read-only is what the user asked for.
     fn finish_ending(&mut self) {
-        let Some(open) = self.open.as_mut() else {
-            return;
+        let (epoch, id, token) = {
+            let Some(open) = self.open.as_mut() else {
+                return;
+            };
+            if !open.ending || open.ws.pending_batches() > 0 {
+                return;
+            }
+            let Some(lease) = open.lease.take() else {
+                return;
+            };
+            (open.epoch, open.id.clone(), lease.token.clone())
         };
-        if !open.ending || open.ws.pending_batches() > 0 {
-            return;
-        }
-        let Some(lease) = open.lease.as_ref() else {
-            return;
-        };
-        let (epoch, id, token) = (open.epoch, open.id.clone(), lease.token.clone());
-        open.ending = false;
+        self.set_read_only();
         self.spawn(move |conn| async move {
-            // Whether or not the release call works, we stop editing.
+            // Whether or not the release call works, we stop editing: the
+            // lease expires on its own if the call never arrives.
             let _ = conn.release(&id, &token).await;
             Internal::Released { epoch }
         });
@@ -1673,6 +1696,11 @@ impl<P: CredentialProvider> Actor<P> {
         let Some(open) = self.open.as_mut().filter(|o| o.epoch == epoch) else {
             return;
         };
+        // The lease is already gone: we released it, or lost it and went
+        // read-only. A refusal now says nothing, so do not report one.
+        if open.mode != Mode::Editing {
+            return;
+        }
         match result {
             Ok(_) => {
                 if let Some(lease) = open.lease.as_mut() {

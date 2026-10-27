@@ -90,6 +90,9 @@ export component AppWindow inherits Window {
     in property <string> login-error;
     in property <bool> login-busy;
     in-out property <string> server-url;
+    in-out property <string> standalone-folder;
+    in-out property <string> standalone-license;
+    in property <bool> standalone-mode: false;
     // 0 automatic, 1 gRPC over HTTP/2, 2 gRPC-Web over HTTP/1.1
     in-out property <int> transport-index: 0;
     in-out property <string> login-user;
@@ -312,6 +315,8 @@ export component AppWindow inherits Window {
     callback connect-server(string, int);
     callback password-log-in(string, string, bool);
     callback dev-log-in(string);
+    callback new-project-folder(string, string);
+    callback open-project-folder(string, string);
     callback change-server();
     callback use-password-login();
     callback use-company-login();
@@ -488,6 +493,9 @@ export component AppWindow inherits Window {
             MenuItem { title: "New project…"; icon: @image-url("icons/file-plus.svg"); enabled: root.online; activated => { root.ask("new-project", "New project", "Project name", ""); } }
             MenuItem { title: "Projects"; icon: @image-url("icons/folder-open.svg"); enabled: root.online; activated => { root.close-project(); } }
             MenuItem { title: "Close project"; icon: @image-url("icons/folder-x.svg"); enabled: root.in-project; activated => { root.close-project(); } }
+            MenuItem { title: "New project folder…"; icon: @image-url("icons/file-plus.svg"); activated => { root.change-server(); } }
+            MenuItem { title: "Open project folder…"; icon: @image-url("icons/folder-open.svg"); activated => { root.change-server(); } }
+            MenuSeparator {}
             MenuSeparator {}
             MenuItem { title: "Export TARA report (PDF)"; icon: @image-url("icons/file-down.svg"); enabled: root.in-project; activated => { root.export-pdf(); } }
             MenuItem { title: "Export TARA report (HTML)"; icon: @image-url("icons/file-text.svg"); enabled: root.in-project; activated => { root.export-report(); } }
@@ -496,7 +504,7 @@ export component AppWindow inherits Window {
             MenuSeparator {}
             MenuItem { title: "Change password…"; icon: @image-url("icons/key-round.svg"); enabled: root.online && root.is-password; activated => { root.pw-current = ""; root.pw-new = ""; root.pw-repeat = ""; root.password-open = true; } }
             MenuItem { title: "Change server…"; icon: @image-url("icons/server.svg"); activated => { root.change-server(); } }
-            MenuItem { title: "Log out"; icon: @image-url("icons/log-out.svg"); enabled: root.online; activated => { root.confirm("log-out", "Log out of this server?"); } }
+            MenuItem { title: "Log out"; icon: @image-url("icons/log-out.svg"); enabled: root.online && !root.standalone-mode; activated => { root.confirm("log-out", "Log out of this server?"); } }
         }
         Menu {
             title: "Edit";
@@ -608,6 +616,39 @@ export component AppWindow inherits Window {
                 if root.connection == 2: HorizontalLayout {
                     spacing: 8px;
                     Button { text: "Try again"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.retry(); } }
+                    Text { text: "Or work without a server"; color: Theme.graphite; font-size: 13px; }
+                    Field {
+                        label: "Project folder";
+                        LineEdit {
+                            text <=> root.standalone-folder;
+                            placeholder-text: "/path/to/project-folder";
+                            accessible-label: "Standalone project folder";
+                        }
+                    }
+                    Field {
+                        label: "Signed license file";
+                        LineEdit {
+                            text <=> root.standalone-license;
+                            placeholder-text: "/path/to/license.aegis";
+                            accessible-label: "Standalone license file";
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "New folder";
+                            icon: @image-url("icons/file-plus.svg");
+                            enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
+                            clicked => { root.new-project-folder(root.standalone-folder, root.standalone-license); }
+                        }
+                        Button {
+                            text: "Open folder";
+                            icon: @image-url("icons/folder-open.svg");
+                            primary: true;
+                            enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
+                            clicked => { root.open-project-folder(root.standalone-folder, root.standalone-license); }
+                        }
+                    }
                     Button { text: "Change server"; icon: @image-url("icons/server.svg"); clicked => { root.change-server(); } }
                 }
                 // Password login.
@@ -760,7 +801,7 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                Text { text: "Logged in as " + root.user + ". " + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
+                Text { text: (root.standalone-mode ? "Standalone project. " : "Logged in as " + root.user + ". ") + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
             }
         }
     }

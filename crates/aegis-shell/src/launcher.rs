@@ -47,6 +47,11 @@ enum Event {
     },
     OidcLoggedIn(Result<(), String>),
     Restored(bool),
+    StandaloneStarted {
+        project_folder: std::path::PathBuf,
+        license_path: std::path::PathBuf,
+        result: Result<crate::standalone::Standalone, String>,
+    },
 }
 
 struct Current {
@@ -68,6 +73,7 @@ pub struct Launcher {
     inbox: mpsc::Receiver<Event>,
     wake: Arc<dyn Fn() + Send + Sync>,
     current: RefCell<Option<Current>>,
+    standalone: RefCell<Option<crate::standalone::Standalone>>,
     /// Called with every new session, so the app can wake the UI on its
     /// view model changes.
     on_session: RefCell<Option<SessionHook>>,
@@ -141,6 +147,7 @@ impl Launcher {
             inbox,
             wake,
             current: RefCell::new(None),
+            standalone: RefCell::new(None),
             on_session: RefCell::new(None),
         });
         let hooks = Self::hooks(&launcher);
@@ -149,6 +156,8 @@ impl Launcher {
         {
             let s = launcher.settings.borrow();
             window.set_server_url(s.server_url.as_str().into());
+            window.set_standalone_folder(s.standalone_folder.as_str().into());
+            window.set_standalone_license(s.standalone_license.as_str().into());
             window.set_transport_index(transport_position(&s.transport));
             window.set_login_user(s.username.as_str().into());
             window.set_export_dir(s.export_dir().display().to_string().into());
@@ -165,6 +174,8 @@ impl Launcher {
         let w5 = weak.clone();
         let w6 = weak.clone();
         let w7 = weak.clone();
+        let w8 = weak.clone();
+        let w9 = weak.clone();
         Hooks {
             use_password: Some(Box::new(move || {
                 if let Some(l) = w6.upgrade() {
@@ -184,6 +195,16 @@ impl Launcher {
             connect_server: Some(Box::new(move |url, kind| {
                 if let Some(l) = w1.upgrade() {
                     l.connect(&url, kind);
+                }
+            })),
+            new_project_folder: Some(Box::new(move |folder, license| {
+                if let Some(l) = w8.upgrade() {
+                    l.create_standalone(folder.into(), license.into());
+                }
+            })),
+            open_project_folder: Some(Box::new(move |folder, license| {
+                if let Some(l) = w9.upgrade() {
+                    l.open_standalone(folder.into(), license.into());
                 }
             })),
             password_log_in: Some(Box::new(move |user, password, remember| {
@@ -263,11 +284,101 @@ impl Launcher {
         self.start_session(Arc::new(AppProvider::Dev(DevLogin::new(user, admin))), user);
     }
 
+    /// Opens a single-user project folder without showing a login screen.
+    /// The license is checked before the loopback listener starts.
+    pub fn open_standalone(
+        self: &Rc<Self>,
+        project_folder: std::path::PathBuf,
+        license_path: std::path::PathBuf,
+    ) {
+        self.start_standalone(project_folder, license_path, false);
+    }
+
+    /// Creates a project in a folder that does not already contain one.
+    pub fn create_standalone(
+        self: &Rc<Self>,
+        project_folder: std::path::PathBuf,
+        license_path: std::path::PathBuf,
+    ) {
+        self.start_standalone(project_folder, license_path, true);
+    }
+
+    fn start_standalone(
+        self: &Rc<Self>,
+        project_folder: std::path::PathBuf,
+        license_path: std::path::PathBuf,
+        create: bool,
+    ) {
+        self.controller().set_session(None);
+        // The old server holds the folder lock, so it must be gone before the
+        // new one opens (it may be the same folder).
+        let old = self.standalone.borrow_mut().take();
+        if let Some(w) = self.window.upgrade() {
+            w.set_login_busy(true);
+            w.set_login_error("".into());
+            w.set_connection(0);
+            w.set_connection_text("Opening the project folder…".into());
+        }
+        let events = self.events.clone();
+        let wake = Arc::clone(&self.wake);
+        self.runtime.spawn(async move {
+            if let Some(old) = old {
+                let _ = old.stop().await;
+            }
+            let result = if create {
+                crate::standalone::Standalone::create(&project_folder, &license_path).await
+            } else {
+                crate::standalone::Standalone::open(&project_folder, &license_path).await
+            };
+            let _ = events.send(Event::StandaloneStarted {
+                project_folder,
+                license_path,
+                result,
+            });
+            wake();
+        });
+    }
+
+    /// Stops the embedded server, if one runs, in the background.
+    fn stop_standalone(&self) {
+        if let Some(old) = self.standalone.borrow_mut().take() {
+            self.runtime.spawn(async move {
+                let _ = old.stop().await;
+            });
+        }
+    }
+
+    /// Connects the client to a started embedded server and remembers the
+    /// folder and license paths. The license was checked before `server`
+    /// existed.
+    pub fn attach_standalone(
+        self: &Rc<Self>,
+        server: crate::standalone::Standalone,
+        project_folder: std::path::PathBuf,
+        license_path: std::path::PathBuf,
+    ) {
+        {
+            let mut s = self.settings.borrow_mut();
+            s.standalone_folder = project_folder.display().to_string();
+            s.standalone_license = license_path.display().to_string();
+        }
+        self.save_settings();
+        let url = server.url().to_owned();
+        *self.standalone.borrow_mut() = Some(server);
+        if let Some(w) = self.window.upgrade() {
+            w.set_login_busy(false);
+            w.set_login_error("".into());
+            w.set_standalone_mode(true);
+        }
+        self.start_dev(&url, "standalone", true, TransportKind::Grpc);
+    }
+
     fn show_server_screen(&self, text: &str) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
         w.set_connection(4);
+        w.set_standalone_mode(false);
         w.set_connection_text(text.into());
         w.set_login_busy(false);
         w.set_has_project(false);
@@ -275,6 +386,8 @@ impl Launcher {
 
     /// Connects to `url`: asks it how to log in.
     pub fn connect(self: &Rc<Self>, url: &str, transport: i32) {
+        self.controller().set_session(None);
+        self.stop_standalone();
         let url = url.trim().trim_end_matches('/').to_owned();
         let Some(w) = self.window.upgrade() else {
             return;
@@ -286,6 +399,7 @@ impl Launcher {
         let name = transport_name(transport);
         let kind = TransportKind::parse(name, &url).unwrap_or_else(|_| TransportKind::auto(&url));
         w.set_server_url(url.as_str().into());
+        w.set_standalone_mode(false);
         w.set_login_busy(true);
         w.set_login_error("".into());
         w.set_connection(0);
@@ -564,8 +678,20 @@ impl Launcher {
     /// Back to the server screen.
     pub fn change_server(self: &Rc<Self>) {
         self.controller().set_session(None);
+        self.stop_standalone();
         self.current.borrow_mut().take();
         self.show_server_screen("Enter the address of your AegisTARA server.");
+    }
+
+    /// Shuts down the client and, in standalone mode, the embedded server.
+    pub async fn shutdown(&self) {
+        if let Some(session) = self.controller().session() {
+            let _ = session.send(Command::Shutdown);
+        }
+        let server = self.standalone.borrow_mut().take();
+        if let Some(server) = server {
+            let _ = server.stop().await;
+        }
     }
 
     /// Handles the answers of network tasks. Call it on the UI thread.
@@ -597,6 +723,19 @@ impl Launcher {
                     }
                 }
                 Event::Restored(false) => {}
+                Event::StandaloneStarted {
+                    project_folder,
+                    license_path,
+                    result,
+                } => match result {
+                    Ok(server) => self.attach_standalone(server, project_folder, license_path),
+                    Err(e) => {
+                        self.show_server_screen(&e);
+                        if let Some(w) = self.window.upgrade() {
+                            w.set_login_error(e.into());
+                        }
+                    }
+                },
             }
         }
         self.controller().apply_latest();

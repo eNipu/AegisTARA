@@ -71,6 +71,10 @@ pub struct Hooks {
     pub log_in: Option<Box<dyn Fn()>>,
     /// Connect to a server: address and transport position.
     pub connect_server: Option<Box<dyn Fn(String, i32)>>,
+    /// Create a standalone project folder: folder and license paths.
+    pub new_project_folder: Option<Box<dyn Fn(String, String)>>,
+    /// Open a standalone project folder: folder and license paths.
+    pub open_project_folder: Option<Box<dyn Fn(String, String)>>,
     /// Password login: user, password, keep the login.
     pub password_log_in: Option<PasswordLogIn>,
     /// Development login: user.
@@ -311,6 +315,16 @@ impl Controller {
                 h(url.to_string(), kind);
             }
         );
+        on!(on_new_project_folder, |c, folder, license| {
+            if let Some(h) = &c.hooks.new_project_folder {
+                h(folder.to_string(), license.to_string());
+            }
+        });
+        on!(on_open_project_folder, |c, folder, license| {
+            if let Some(h) = &c.hooks.open_project_folder {
+                h(folder.to_string(), license.to_string());
+            }
+        });
         on!(on_password_log_in, |c, user, password, remember| {
             if let Some(h) = &c.hooks.password_log_in {
                 h(user.to_string(), password.to_string(), remember);

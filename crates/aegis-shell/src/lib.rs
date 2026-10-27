@@ -25,3 +25,4 @@ pub mod controller;
 pub mod headless;
 pub mod launcher;
 pub mod provider;
+pub mod standalone;
