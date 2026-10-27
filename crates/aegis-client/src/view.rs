@@ -247,6 +247,113 @@ pub fn shown_tree(ws: &Workspace, ui: &UiState) -> Option<TreeId> {
     project.attack_tree_id(threat.attack_tree()?)
 }
 
+/// One description box on a page: the text of the selected element, or the
+/// project notes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DescriptionView {
+    /// What the text belongs to; edits go there.
+    pub target: aegis_model::ElementRef,
+    /// Which box this is on the page (`project`, `asset`, `damage`,
+    /// `threat`, `tree`, `control`, `goal`, `claim`).
+    pub kind: &'static str,
+    /// The text, empty when there is none.
+    pub text: String,
+    /// Who wrote it and when, empty when there is no text.
+    pub by: String,
+}
+
+/// The description boxes the page offers, for what is selected on it.
+/// Pages that show no element (problems, versions, history, reports,
+/// administration) offer none, and neither does a selection that no longer
+/// exists. Time O(log n).
+#[must_use]
+pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
+    use aegis_model::ElementRef as E;
+    let project = ws.project();
+    let mut targets: Vec<(&'static str, E)> = Vec::new();
+    let mut push = |kind, live: bool, target: E| {
+        if live {
+            targets.push((kind, target));
+        }
+    };
+    match ui.page {
+        Page::Overview => push("project", true, E::Project),
+        Page::Assets => {
+            if let Some(id) = ui.selected_asset {
+                push("asset", project.asset_idx(&id).is_some(), E::Asset(id));
+            }
+        }
+        Page::Damage => {
+            if let Some(id) = ui.selected_damage {
+                push(
+                    "damage",
+                    project.damage_scenario_idx(&id).is_some(),
+                    E::Damage(id),
+                );
+            }
+        }
+        Page::Threats | Page::Risks => {
+            if let Some(id) = ui.selected_threat {
+                push(
+                    "threat",
+                    project.threat_scenario_idx(&id).is_some(),
+                    E::Threat(id),
+                );
+            }
+        }
+        Page::Trees => {
+            if let Some(id) = shown_tree(ws, ui) {
+                push("tree", true, E::Tree(id));
+            }
+        }
+        Page::Controls => {
+            if let Some(id) = ui.selected_control {
+                push(
+                    "control",
+                    project.security_control_idx(&id).is_some(),
+                    E::Control(id),
+                );
+            }
+        }
+        Page::Goals => {
+            if let Some(id) = ui.selected_goal {
+                push(
+                    "goal",
+                    project.cybersecurity_goal_idx(&id).is_some(),
+                    E::Goal(id),
+                );
+            }
+            if let Some(id) = ui.selected_claim {
+                push(
+                    "claim",
+                    project.cybersecurity_claim_idx(&id).is_some(),
+                    E::Claim(id),
+                );
+            }
+        }
+        Page::Problems | Page::Versions | Page::History | Page::Reports | Page::Admin => {}
+    }
+    targets
+        .into_iter()
+        .map(|(kind, target)| DescriptionView {
+            target,
+            kind,
+            text: project.description(target).unwrap_or_default().to_owned(),
+            by: project
+                .description_provenance(target)
+                .map_or_else(String::new, |p| {
+                    let when = crate::time::format_ms(p.timestamp_ms());
+                    match (p.actor(), when.as_str()) {
+                        ("", "") => String::new(),
+                        ("", when) => format!("Written {when}"),
+                        (who, "") => format!("Written by {who}"),
+                        (who, when) => format!("Written by {who}, {when}"),
+                    }
+                }),
+        })
+        .collect()
+}
+
 /// A control attached to the selected step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MitigationView {
@@ -323,6 +430,8 @@ pub struct Inspector {
     pub attachable: Vec<(ControlId, String)>,
     /// The step's feasibility after controls, if they change it.
     pub residual: Option<String>,
+    /// The rating came from the library and nobody has reviewed it.
+    pub needs_review: bool,
 }
 
 fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
@@ -364,7 +473,7 @@ pub fn local_risk_keys(ws: &Workspace) -> HashMap<String, (String, String)> {
 /// Whether the server's numbers differ from this engine's for the same
 /// project state. Time O(threats).
 #[must_use]
-pub fn risks_differ(ws: &Workspace, server: &pb::RisksEvent) -> bool {
+pub fn risks_differ(ws: &Workspace, server: &pb::GetRisksResponse) -> bool {
     let local = local_risk_keys(ws);
     local.len() != server.threats.len()
         || server.threats.iter().any(|t| {
@@ -376,7 +485,7 @@ pub fn risks_differ(ws: &Workspace, server: &pb::RisksEvent) -> bool {
 
 /// Replaces the risks in `rows` with the server's. For a client whose engine
 /// differs from the server's, or whose own numbers were found wrong.
-pub fn use_server_risks(ws: &Workspace, rows: &mut [ThreatRow], server: &pb::RisksEvent) {
+pub fn use_server_risks(ws: &Workspace, rows: &mut [ThreatRow], server: &pb::GetRisksResponse) {
     let m = ws.project().methodology();
     let view = |key: &str| {
         m.risk_level(key)
@@ -662,5 +771,6 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         mitigations,
         attachable,
         residual,
+        needs_review: project.review_marked(tree_id, node_id),
     })
 }

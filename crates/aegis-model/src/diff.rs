@@ -560,9 +560,23 @@ pub struct ProjectDiff {
     pub(crate) cybersecurity_goals: EntityDiff<GoalId>,
     pub(crate) cybersecurity_claims: EntityDiff<ClaimId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
+    pub(crate) notes_changed: bool,
 }
 
 impl ProjectDiff {
+    /// Whether the project notes differ. Description changes of elements
+    /// show as `modified` in the element's own list. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(!ProjectDiff::default().notes_changed());
+    /// ```
+    #[must_use]
+    pub fn notes_changed(&self) -> bool {
+        self.notes_changed
+    }
+
     /// Returns the added, removed, and modified [`AssetId`]s in canonical
     /// order.
     ///

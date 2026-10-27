@@ -34,10 +34,7 @@ impl TestServer {
         let registry = Arc::new(Registry::new(
             Arc::new(MemoryStore::new()),
             Arc::new(Methodologies::builtin().expect("builtin")),
-            Arc::new(ServerConfig {
-                heartbeat: Duration::from_millis(200),
-                ..ServerConfig::default()
-            }),
+            Arc::new(ServerConfig::default()),
         ));
         let accounts = Arc::new(
             Accounts::open(
@@ -177,7 +174,7 @@ async fn without_a_session_every_call_needs_a_login() {
 }
 
 /// Everything a project needs, over one transport: create, open, edit lock,
-/// a watch with heartbeats, baselines, history, export audit.
+/// the project status, baselines, history, export audit.
 async fn project_round_trip(server: &TestServer, kind: TransportKind) {
     let (conn, _) = server.log_in(kind, "admin", ADMIN_PASSWORD).await;
     let me = conn.who_am_i().await.expect("whoami");
@@ -196,19 +193,9 @@ async fn project_round_trip(server: &TestServer, kind: TransportKind) {
     let downloaded = conn.open_project(&id).await.expect("open");
     assert_eq!(downloaded.last_seq, 0);
 
-    // A watch stream stays open and sends heartbeats while nothing happens.
-    let mut watch = conn.watch(&id, 0).await.expect("watch");
-    let mut heartbeats = 0;
-    while heartbeats < 2 {
-        let event = tokio::time::timeout(Duration::from_secs(5), watch.message())
-            .await
-            .expect("an event in time")
-            .expect("stream ok")
-            .expect("stream open");
-        if matches!(event.event, Some(pb::watch_event::Event::Heartbeat(_))) {
-            heartbeats += 1;
-        }
-    }
+    // Anyone may ask where the project stands without taking the lock.
+    let status = conn.status(&id).await.expect("status");
+    assert_eq!((status.last_seq, status.lock_holder.as_str()), (0, ""));
 
     let lease = conn.acquire(&id).await.expect("lock");
     let renamed = conn

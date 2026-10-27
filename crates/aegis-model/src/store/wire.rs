@@ -312,6 +312,7 @@ macro_rules! caps {
 
 caps! {
     NameCap = super::MAX_NAME_BYTES, Limit::NAME;
+    DescriptionCap = super::MAX_DESCRIPTION_BYTES, Limit::DESCRIPTION;
     ActorCap = super::MAX_ACTOR_BYTES, Limit::ACTOR;
     KeyCap = super::MAX_KEY_BYTES, Limit::KEY;
     VersionCap = super::MAX_METHODOLOGY_VERSION_BYTES, Limit::VERSION;
@@ -327,6 +328,7 @@ caps! {
 pub(crate) struct BoundedStr<C>(pub(crate) Arc<str>, PhantomData<C>);
 
 pub(super) type Name = BoundedStr<NameCap>;
+pub(super) type DescriptionText = BoundedStr<DescriptionCap>;
 pub(super) type Actor = BoundedStr<ActorCap>;
 pub(crate) type Key = BoundedStr<KeyCap>;
 pub(crate) type VersionText = BoundedStr<VersionCap>;
@@ -1014,7 +1016,7 @@ pub(super) fn unwrap_provenance(p: Option<ProvenanceWire>) -> Provenance {
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum GateKindWire {
+pub(super) enum GateKindWire {
     And,
     Or,
     SeqAnd,
@@ -1263,6 +1265,89 @@ pub(super) struct SnapshotWire {
     pub(super) cybersecurity_goals: Vec<GoalWire>,
     #[serde(default)]
     pub(super) cybersecurity_claims: Vec<ClaimWire>,
+    #[serde(default)]
+    pub(super) descriptions: Vec<DescriptionWire>,
+    #[serde(default)]
+    pub(super) review_marks: Vec<ReviewMarkWire>,
+}
+
+/// A step whose rating awaits review.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReviewMarkWire {
+    pub(super) tree: WireId<TreeId>,
+    pub(super) node: WireId<NodeId>,
+}
+
+/// What a description belongs to, as written: `{"kind":"asset","id":...}`
+/// or `{"kind":"project"}`.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum TargetWire {
+    Project,
+    Asset { id: WireId<AssetId> },
+    Damage { id: WireId<DamageId> },
+    Threat { id: WireId<ThreatId> },
+    Tree { id: WireId<TreeId> },
+    Control { id: WireId<ControlId> },
+    Goal { id: WireId<GoalId> },
+    Claim { id: WireId<ClaimId> },
+}
+
+impl TargetWire {
+    pub(super) fn into_ref(self) -> crate::description::ElementRef {
+        use crate::description::ElementRef as E;
+        match self {
+            Self::Project => E::Project,
+            Self::Asset { id } => E::Asset(id.0),
+            Self::Damage { id } => E::Damage(id.0),
+            Self::Threat { id } => E::Threat(id.0),
+            Self::Tree { id } => E::Tree(id.0),
+            Self::Control { id } => E::Control(id.0),
+            Self::Goal { id } => E::Goal(id.0),
+            Self::Claim { id } => E::Claim(id.0),
+        }
+    }
+}
+
+/// The writing side of [`TargetWire`].
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum TargetView {
+    Project,
+    Asset { id: Text<AssetId> },
+    Damage { id: Text<DamageId> },
+    Threat { id: Text<ThreatId> },
+    Tree { id: Text<TreeId> },
+    Control { id: Text<ControlId> },
+    Goal { id: Text<GoalId> },
+    Claim { id: Text<ClaimId> },
+}
+
+impl From<crate::description::ElementRef> for TargetView {
+    fn from(target: crate::description::ElementRef) -> Self {
+        use crate::description::ElementRef as E;
+        match target {
+            E::Project => Self::Project,
+            E::Asset(id) => Self::Asset { id: Text(id) },
+            E::Damage(id) => Self::Damage { id: Text(id) },
+            E::Threat(id) => Self::Threat { id: Text(id) },
+            E::Tree(id) => Self::Tree { id: Text(id) },
+            E::Control(id) => Self::Control { id: Text(id) },
+            E::Goal(id) => Self::Goal { id: Text(id) },
+            E::Claim(id) => Self::Claim { id: Text(id) },
+        }
+    }
+}
+
+/// A snapshot description.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DescriptionWire {
+    pub(super) target: TargetWire,
+    pub(super) text: DescriptionText,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
 }
 
 /// A snapshot asset: 48 bytes plus its name.
@@ -1383,6 +1468,67 @@ pub(super) struct RecordWire {
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum OpWire {
+    SetReviewMark {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        marked: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    AddTreeNode {
+        tree: WireId<TreeId>,
+        parent: WireId<NodeId>,
+        id: WireId<NodeId>,
+        label: Name,
+        #[serde(default, deserialize_with = "some")]
+        gate: Option<GateKindWire>,
+        index: u32,
+        position: u32,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveTreeNode {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    LinkTreeNode {
+        tree: WireId<TreeId>,
+        parent: WireId<NodeId>,
+        child: WireId<NodeId>,
+        position: u32,
+        slot: u32,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkTreeNode {
+        tree: WireId<TreeId>,
+        parent: WireId<NodeId>,
+        child: WireId<NodeId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameTreeNode {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        label: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetTreeNodeGate {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        gate: GateKindWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetDescription {
+        target: TargetWire,
+        text: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     AddAsset {
         id: WireId<AssetId>,
         name: Name,

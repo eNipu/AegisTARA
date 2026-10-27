@@ -26,9 +26,11 @@
 //!   gate are written under its first line only.
 //! - Nodes keep their identity (and so their ratings, factors and controls)
 //!   when their text and kind stay the same. A renamed node is a new node.
+//!   The root is the exception: it is always the tree's root, and a new text
+//!   for the first line renames it.
 //!
 //! Parsing is O(lines x depth); a tree has at most [`MAX_ATTACK_TREE_NODES`]
-//! nodes, so the text is at most a few kilobytes.
+//! nodes, so the text is at most [`MAX_OUTLINE_BYTES`].
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -37,8 +39,9 @@ use aegis_model::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, NodeId, Nod
 
 /// Longest node text, in characters.
 pub const MAX_LABEL_CHARS: usize = 256;
-/// Longest outline accepted, in bytes (R3): enough for the largest tree.
-pub const MAX_OUTLINE_BYTES: usize = 64 * 1024;
+/// Longest outline accepted, in bytes (R3): enough for the largest tree
+/// (4,096 nodes of 256 characters, with indentation).
+pub const MAX_OUTLINE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Why an outline is not a tree. Lines count from 1.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -192,9 +195,15 @@ pub fn parse_outline(
     }
 
     // Old IDs by (label, kind).
+    // The root is the tree's root whatever its text says, so changing the
+    // text of the first line renames the root; it never replaces the tree.
+    let root_id = previous
+        .and_then(|t| t.id_of(t.root()))
+        .unwrap_or_else(NodeId::new_v7);
     let old: HashMap<(&str, Option<GateKind>), NodeId> = previous
         .map(|t| {
             t.iter()
+                .filter(|(idx, ..)| *idx != t.root())
                 .map(|(_, id, node)| ((node.label(), node.gate_kind()), id))
                 .collect()
         })
@@ -209,11 +218,8 @@ pub fn parse_outline(
         None => Node::step(label),
     };
 
-    let mut tree = AttackTree::new(
-        id_for(first.label, first.kind),
-        node_of(first.label, first.kind),
-    )
-    .map_err(|_| OutlineError::Empty)?;
+    let mut tree = AttackTree::new(root_id, node_of(first.label, first.kind))
+        .map_err(|_| OutlineError::Empty)?;
     // Text to (node, kind, whether its children were written).
     let mut by_label: HashMap<&str, (NodeIdx, Option<GateKind>, bool)> = HashMap::new();
     by_label.insert(first.label, (tree.root(), first.kind, true));

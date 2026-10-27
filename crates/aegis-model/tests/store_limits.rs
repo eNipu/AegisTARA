@@ -12,9 +12,9 @@ use aegis_model::{
     AttackPotentialDef, AttackTree, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
     GateKind, ImpactCategoryDef, LevelDef, Limit, MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS,
     MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES,
-    MAX_PROJECT_FILE_BYTES, MAX_STEP_MITIGATIONS, Methodology, MethodologyDef, Node, Op,
-    OpLogReader, PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef,
-    StoreError, ThreatCategoryDef,
+    MAX_PROJECT_FILE_BYTES, MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology, MethodologyDef,
+    Node, Op, OpLogReader, PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment,
+    SegmentDef, StoreError, ThreatCategoryDef,
 };
 use common::{
     asset_id, builtin, claim_id, control_id, damage_id, goal_id, node_id, read_log, save,
@@ -242,21 +242,24 @@ fn caps_actor() {
 
 #[test]
 fn caps_attack_tree_nodes() {
-    let want = Limit::AttackTreeNodes { max: 32 };
-    let nodes33: Vec<Value> = (0..33)
+    // A snapshot holds trees of up to MAX_ATTACK_TREE_NODES nodes. (An op
+    // log line of that many nodes is longer than the record cap, which is
+    // what limits it there; see `caps_the_op_record`.)
+    let want = Limit::AttackTreeNodes {
+        max: MAX_ATTACK_TREE_NODES,
+    };
+    let n = MAX_ATTACK_TREE_NODES + 1;
+    let nodes: Vec<Value> = (0..n as u64)
         .map(|i| json!({"id": id(100 + i), "label": "s"}))
         .collect();
-    let children33: Vec<Value> = (0..33).map(|i| json!(id(100 + i))).collect();
-    let parents33: Vec<Value> = (0..33).map(|i| json!(id(100 + i))).collect();
+    let children: Vec<Value> = (0..n as u64).map(|i| json!(id(100 + i))).collect();
+    let parents: Vec<Value> = (0..n as u64).map(|i| json!(id(100 + i))).collect();
     for bad_nodes in [
-        Value::Array(nodes33),
-        json!([{"id": id(1), "label": "g", "gate": "or", "children": children33}]),
+        Value::Array(nodes),
+        json!([{"id": id(1), "label": "g", "gate": "or", "children": children}]),
         json!([{"id": id(1), "label": "g", "gate": "or", "children": [id(2)]},
-               {"id": id(2), "label": "s", "parents": parents33}]),
+               {"id": id(2), "label": "s", "parents": parents}]),
     ] {
-        let op = json!({"op": "add_attack_tree", "id": id(10),
-                        "nodes": bad_nodes, "step_feasibility": {}});
-        assert_limit(&log_error(&log_with(&op)), want);
         let trees = json!([{"id": id(10), "nodes": bad_nodes, "step_feasibility": {}}]);
         assert_limit(
             &snapshot_error(&snapshot_with_trees(
@@ -273,13 +276,12 @@ fn caps_attack_tree_nodes() {
 
 #[test]
 fn caps_step_feasibility() {
-    let want = Limit::StepFeasibility { max: 32 };
-    let feas: serde_json::Map<String, Value> =
-        (0..33).map(|i| (id(100 + i), json!("low"))).collect();
-    let op = json!({"op": "add_attack_tree", "id": id(10),
-                    "nodes": [{"id": id(100), "label": "s"}],
-                    "step_feasibility": feas});
-    assert_limit(&log_error(&log_with(&op)), want);
+    let want = Limit::StepFeasibility {
+        max: MAX_ATTACK_TREE_NODES,
+    };
+    let feas: serde_json::Map<String, Value> = (0..=MAX_ATTACK_TREE_NODES as u64)
+        .map(|i| (id(100 + i), json!("low")))
+        .collect();
     let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
                         "step_feasibility": feas}]);
     assert_limit(
@@ -314,7 +316,7 @@ fn caps_step_mitigations() {
     );
 
     // 33 outer nodes in step_mitigations trips Limit::AttackTreeNodes.
-    let nodes33: serde_json::Map<String, Value> = (0..33)
+    let nodes33: serde_json::Map<String, Value> = (0..=MAX_ATTACK_TREE_NODES as u64)
         .map(|i| (id(100 + i), json!({id(200): "low"})))
         .collect();
     let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
@@ -328,7 +330,9 @@ fn caps_step_mitigations() {
             json!([]),
             trees,
         )),
-        Limit::AttackTreeNodes { max: 32 },
+        Limit::AttackTreeNodes {
+            max: MAX_ATTACK_TREE_NODES,
+        },
     );
 }
 
@@ -366,7 +370,7 @@ fn caps_step_factors() {
     );
 
     // 33 outer nodes in step_factors trips Limit::AttackTreeNodes.
-    let nodes33: serde_json::Map<String, Value> = (0..33)
+    let nodes33: serde_json::Map<String, Value> = (0..=MAX_ATTACK_TREE_NODES as u64)
         .map(|i| (id(100 + i), json!({"elapsed-time": "le-1d"})))
         .collect();
     let trees = json!([{"id": id(10), "nodes": [{"id": id(100), "label": "s"}],
@@ -380,7 +384,9 @@ fn caps_step_factors() {
             json!([]),
             trees,
         )),
-        Limit::AttackTreeNodes { max: 32 },
+        Limit::AttackTreeNodes {
+            max: MAX_ATTACK_TREE_NODES,
+        },
     );
 }
 
@@ -716,7 +722,7 @@ fn limits_admit_every_valid_project() {
     let flvl = m.feasibility_levels().last().expect("feasibility").0;
     let mut step_feasibility = Vec::new();
     let mut first_step_idx = None;
-    for i in 2..MAX_ATTACK_TREE_NODES as u64 {
+    for i in 2..MAX_TREE_OP_NODES as u64 {
         let sid = node_id(500 + i);
         let idx = tree
             .add_child(tree.root(), sid, Node::step(long_name.to_string()))
@@ -728,7 +734,7 @@ fn limits_admit_every_valid_project() {
     }
     tree.link(sub_gate_idx, first_step_idx.expect("first step"))
         .expect("link shared step");
-    assert_eq!(tree.len(), MAX_ATTACK_TREE_NODES);
+    assert_eq!(tree.len(), MAX_TREE_OP_NODES);
     ops.push(Op::AddAttackTree {
         id: tree_id(1),
         tree,

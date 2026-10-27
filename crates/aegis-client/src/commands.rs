@@ -30,6 +30,16 @@ pub const TREATMENTS: [RiskTreatment; 4] = [
 /// A change to the project, as the UI states it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Edit {
+    // ---- descriptions and notes ----
+    /// Sets the description of an element, or the notes of the project
+    /// ([`ElementRef::Project`]). Empty text clears it.
+    SetDescription {
+        /// What the text belongs to.
+        target: aegis_model::ElementRef,
+        /// The text; line breaks are normalized to `\n`.
+        text: String,
+    },
+
     // ---- attack tree steps ----
     /// Sets or clears the direct feasibility rating of a step.
     SetStepFeasibility {
@@ -244,6 +254,25 @@ pub enum Edit {
         tree: TreeId,
     },
 
+    /// Copies a library item into the project (see [`crate::library`]).
+    InsertLibraryItem {
+        /// The pack.
+        pack: std::sync::Arc<aegis_model::library::LibraryPack>,
+        /// Position of the item in the pack.
+        item: usize,
+        /// Where it goes.
+        mode: crate::library::InsertMode,
+        /// Ratings and sharing.
+        options: crate::library::InsertOptions,
+    },
+    /// Says a person has checked a rating that came from the library.
+    MarkReviewed {
+        /// The tree.
+        tree: TreeId,
+        /// The step.
+        node: NodeId,
+    },
+
     // ---- controls, goals, claims ----
     /// Adds a security control.
     AddControl {
@@ -316,6 +345,10 @@ pub enum Edit {
 /// Why an edit could not be turned into ops. The text is for the user.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EditError {
+    /// The first line of an outline would turn the root from a gate into a
+    /// step or the other way round.
+    #[error("the first line must stay a gate (OR, AND, SEQ), or a step if the tree is one step")]
+    RootKind,
     /// The feasibility level position does not exist.
     #[error("unknown feasibility level")]
     UnknownLevel,
@@ -348,6 +381,42 @@ pub enum EditError {
     /// The catalog reference does not parse.
     #[error("the reference does not match the catalog's format")]
     BadCatalogRef,
+    /// A library item cannot go there.
+    #[error("{0}")]
+    Library(String),
+}
+
+/// An element with a description cannot be removed, so every removal in an
+/// edit is preceded by an op that clears its description. The edit is one
+/// undo step, and undo brings back the element and then its text.
+fn clear_descriptions_before_removal(
+    project: &Project,
+    ops: Vec<Op>,
+    provenance: &Provenance,
+) -> Vec<Op> {
+    use aegis_model::ElementRef as E;
+    let mut out = Vec::with_capacity(ops.len());
+    for op in ops {
+        let target = match &op {
+            Op::RemoveAsset { id } => Some(E::Asset(*id)),
+            Op::RemoveDamageScenario { id } => Some(E::Damage(*id)),
+            Op::RemoveThreatScenario { id } => Some(E::Threat(*id)),
+            Op::RemoveAttackTree { id } => Some(E::Tree(*id)),
+            Op::RemoveSecurityControl { id } => Some(E::Control(*id)),
+            Op::RemoveCybersecurityGoal { id } => Some(E::Goal(*id)),
+            Op::RemoveCybersecurityClaim { id } => Some(E::Claim(*id)),
+            _ => None,
+        };
+        if let Some(target) = target.filter(|t| project.description(*t).is_some()) {
+            out.push(Op::SetDescription {
+                target,
+                text: "".into(),
+                provenance: provenance.clone(),
+            });
+        }
+        out.push(op);
+    }
+    out
 }
 
 fn name(text: &str) -> Result<std::sync::Arc<str>, EditError> {
@@ -375,45 +444,12 @@ fn feasibility(
         .transpose()
 }
 
-/// Ops that clear everything attached to a tree's steps (factors and
-/// mitigations), in node order.
-fn clear_tree_attachments(project: &Project, tree: TreeId, p: &Provenance) -> Vec<Op> {
-    let m = project.methodology();
-    let Some(t_idx) = project.attack_tree_idx(&tree) else {
-        return Vec::new();
-    };
-    let Some(t) = project.attack_tree(t_idx) else {
-        return Vec::new();
-    };
-    let mut ops = Vec::new();
-    for (idx, node_id, node) in t.iter() {
-        if node.gate_kind().is_some() {
-            continue;
-        }
-        for factor in m.feasibility_factors() {
-            if project.step_factor(t_idx, idx, factor).is_some() {
-                ops.push(Op::SetStepFactor {
-                    tree,
-                    node: node_id,
-                    factor,
-                    level: None,
-                    provenance: p.clone(),
-                });
-            }
-        }
-        for mitigation in project.step_mitigations(t_idx, idx) {
-            if let Some(control) = project.security_control_id(mitigation.control()) {
-                ops.push(Op::SetStepMitigation {
-                    tree,
-                    node: node_id,
-                    control,
-                    feasibility: None,
-                    provenance: p.clone(),
-                });
-            }
-        }
+/// The node without its children, for a tree reduced to its root.
+fn root_node_without_children(node: &aegis_model::Node) -> aegis_model::Node {
+    match node.gate_kind() {
+        Some(kind) => aegis_model::Node::gate(kind, node.label()),
+        None => aegis_model::Node::step(node.label()),
     }
-    ops
 }
 
 fn threats_on_tree(project: &Project, tree: TreeId) -> Vec<ThreatId> {
@@ -425,85 +461,6 @@ fn threats_on_tree(project: &Project, tree: TreeId) -> Vec<ThreatId> {
         .filter(|(_, _, t)| t.attack_tree() == Some(t_idx))
         .map(|(_, id, _)| id)
         .collect()
-}
-
-/// The ops that replace `tree`'s structure with `new`, keeping the tree ID
-/// and, for every node whose ID survives as a step, its direct rating,
-/// factors and mitigations. Linked threats stay linked. Time O(V x F) for V
-/// nodes and F factors.
-fn replace_tree_ops(project: &Project, tree: TreeId, new: AttackTree, p: &Provenance) -> Vec<Op> {
-    let m = project.methodology();
-    let Some(t_idx) = project.attack_tree_idx(&tree) else {
-        return Vec::new();
-    };
-    let Some(old) = project.attack_tree(t_idx) else {
-        return Vec::new();
-    };
-    let threats = threats_on_tree(project, tree);
-    let mut ops: Vec<Op> = threats
-        .iter()
-        .map(|&threat| Op::SetThreatAttackTree {
-            threat,
-            tree: None,
-            provenance: p.clone(),
-        })
-        .collect();
-    ops.extend(clear_tree_attachments(project, tree, p));
-    ops.push(Op::RemoveAttackTree { id: tree });
-
-    // What survives: steps of the new tree that were steps of the old one.
-    let kept = |node: &NodeId| {
-        old.idx_of(node)
-            .filter(|i| old.get(*i).is_some_and(|n| n.gate_kind().is_none()))
-    };
-    let mut ratings = Vec::new();
-    let mut restore = Vec::new();
-    for (_, node_id, node) in new.iter() {
-        if node.gate_kind().is_some() {
-            continue;
-        }
-        let Some(old_idx) = kept(&node_id) else {
-            continue;
-        };
-        if let Some(level) = project.step_feasibility(t_idx, old_idx) {
-            ratings.push((node_id, level));
-        }
-        for factor in m.feasibility_factors() {
-            if let Some(level) = project.step_factor(t_idx, old_idx, factor) {
-                restore.push(Op::SetStepFactor {
-                    tree,
-                    node: node_id,
-                    factor,
-                    level: Some(level),
-                    provenance: p.clone(),
-                });
-            }
-        }
-        for mitigation in project.step_mitigations(t_idx, old_idx) {
-            if let Some(control) = project.security_control_id(mitigation.control()) {
-                restore.push(Op::SetStepMitigation {
-                    tree,
-                    node: node_id,
-                    control,
-                    feasibility: Some(mitigation.feasibility()),
-                    provenance: p.clone(),
-                });
-            }
-        }
-    }
-    ops.push(Op::AddAttackTree {
-        id: tree,
-        tree: new,
-        step_feasibility: ratings,
-        provenance: p.clone(),
-    });
-    ops.extend(restore);
-    ops.extend(threats.into_iter().map(|threat| Op::SetThreatAttackTree {
-        threat,
-        tree: Some(tree),
-        provenance: p.clone(),
-    }));
-    ops
 }
 
 impl Edit {
@@ -524,7 +481,13 @@ impl Edit {
     ) -> Result<Vec<Op>, EditError> {
         let m = project.methodology();
         let p = Provenance::human(actor, now_ms);
-        Ok(match self {
+        let clearing = p.clone();
+        let ops = match self {
+            Edit::SetDescription { target, text } => vec![Op::SetDescription {
+                target: *target,
+                text: text.replace("\r\n", "\n").replace('\r', "\n").into(),
+                provenance: p,
+            }],
             Edit::SetStepFeasibility { tree, node, level } => vec![Op::SetStepFeasibility {
                 tree: *tree,
                 node: *node,
@@ -859,7 +822,7 @@ impl Edit {
                     .and_then(|i| project.attack_tree(i))
                     .ok_or(EditError::Missing)?;
                 let new = parse_outline(outline, Some(old))?;
-                replace_tree_ops(project, *tree, new, &p)
+                crate::tree_diff::replace_tree_ops(project, *tree, &new, &p)?
             }
             Edit::RemoveTree { tree } => {
                 if project.attack_tree_idx(tree).is_none() {
@@ -873,11 +836,41 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
-                ops.extend(clear_tree_attachments(project, *tree, &p));
+                // Take the tree apart node by node: an op carries a whole tree
+                // only up to MAX_TREE_OP_NODES nodes.
+                let old = project
+                    .attack_tree_idx(tree)
+                    .and_then(|i| project.attack_tree(i))
+                    .ok_or(EditError::Missing)?;
+                let root = old.root();
+                let root_id = old.id_of(root).ok_or(EditError::Missing)?;
+                let root_node = old.get(root).ok_or(EditError::Missing)?;
+                let bare = AttackTree::new(root_id, root_node_without_children(root_node))
+                    .map_err(|_| EditError::Missing)?;
+                ops.extend(crate::tree_diff::replace_tree_ops(
+                    project, *tree, &bare, &p,
+                )?);
+                if root_node.gate_kind().is_none() {
+                    ops.extend(crate::tree_diff::clear_step_ops(
+                        project, *tree, root_id, &p,
+                    ));
+                }
                 ops.push(Op::RemoveAttackTree { id: *tree });
                 ops
             }
 
+            Edit::InsertLibraryItem {
+                pack,
+                item,
+                mode,
+                options,
+            } => crate::library::insert_ops(project, pack, *item, mode, options, actor, now_ms)?,
+            Edit::MarkReviewed { tree, node } => vec![Op::SetReviewMark {
+                tree: *tree,
+                node: *node,
+                marked: false,
+                provenance: p,
+            }],
             Edit::AddControl { id, name: n } => vec![Op::AddSecurityControl {
                 id: *id,
                 name: name(n)?,
@@ -992,7 +985,8 @@ impl Edit {
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
             }
-        })
+        };
+        Ok(clear_descriptions_before_removal(project, ops, &clearing))
     }
 
     /// The entity this edit creates, so the session can select it.
@@ -1004,6 +998,10 @@ impl Edit {
             Edit::AddDamage { id, .. } => Some(Selection::Damage(*id)),
             Edit::AddThreat { id, .. } => Some(Selection::Threat(*id)),
             Edit::NewTree { id, .. } => Some(Selection::Tree(*id)),
+            Edit::InsertLibraryItem {
+                mode: crate::library::InsertMode::NewTree { id, .. },
+                ..
+            } => Some(Selection::Tree(*id)),
             Edit::AddControl { id, .. } => Some(Selection::Control(*id)),
             Edit::AddGoal { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),
@@ -1048,6 +1046,9 @@ pub enum Command {
     SelectNode(Option<usize>),
     /// Show the residual (after controls) evaluation instead of the inherent one.
     ShowResidual(bool),
+    /// Reload the open project from the server (a read-only view whose
+    /// project has a newer version).
+    Reload,
     /// Take the edit lock.
     BeginEdit,
     /// Finish pending edits and give the edit lock up.

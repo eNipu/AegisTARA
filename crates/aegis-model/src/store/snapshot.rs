@@ -9,7 +9,7 @@ use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
     self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
     NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
-    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, Text,
+    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, TargetView, Text,
 };
 use crate::error::StoreError;
 use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
@@ -35,6 +35,10 @@ struct SnapshotView<'a> {
     cybersecurity_goals: Goals<'a>,
     #[serde(skip_serializing_if = "Claims::is_empty")]
     cybersecurity_claims: Claims<'a>,
+    #[serde(skip_serializing_if = "Descriptions::is_empty")]
+    descriptions: Descriptions<'a>,
+    #[serde(skip_serializing_if = "ReviewMarks::is_empty")]
+    review_marks: ReviewMarks<'a>,
 }
 
 /// What every entity view needs.
@@ -52,6 +56,57 @@ struct Trees<'a>(Ctx<'a>);
 struct Controls<'a>(&'a Project);
 struct Goals<'a>(&'a Project);
 struct Claims<'a>(&'a Project);
+struct Descriptions<'a>(&'a Project);
+struct ReviewMarks<'a>(&'a Project);
+
+impl ReviewMarks<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.review_marks().next().is_none()
+    }
+}
+
+#[derive(Serialize)]
+struct ReviewMarkView {
+    tree: Text<TreeId>,
+    node: Text<crate::id::NodeId>,
+}
+
+impl Serialize for ReviewMarks<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.review_marks().map(|(tree, node)| ReviewMarkView {
+            tree: Text(tree),
+            node: Text(node),
+        }))
+    }
+}
+
+impl Descriptions<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.description_count() == 0
+    }
+}
+
+#[derive(Serialize)]
+struct DescriptionView<'a> {
+    target: TargetView,
+    text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+impl Serialize for Descriptions<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.0
+                .descriptions()
+                .map(|(target, text, provenance)| DescriptionView {
+                    target: target.into(),
+                    text,
+                    provenance: ProvenanceView::of(provenance),
+                }),
+        )
+    }
+}
 
 impl Trees<'_> {
     fn is_empty(&self) -> bool {
@@ -393,6 +448,8 @@ impl Project {
             security_controls: Controls(self),
             cybersecurity_goals: Goals(self),
             cybersecurity_claims: Claims(self),
+            descriptions: Descriptions(self),
+            review_marks: ReviewMarks(self),
         };
         let mut out = BufWriter::new(w);
         serde_json::to_writer(&mut out, &view).map_err(wire::encode_error)?;
@@ -473,6 +530,7 @@ impl Project {
     /// # Ok(())
     /// # }
     /// ```
+    #[allow(clippy::too_many_lines)]
     pub fn load<R: Read>(r: R, methodology: Arc<Methodology>) -> Result<Project, StoreError> {
         let mut input = CappedReader::new(r, MAX_PROJECT_FILE_BYTES);
         let decoded = wire::decode(&methodology, None, || {
@@ -525,15 +583,18 @@ impl Project {
                 provenance: wire::unwrap_provenance(cl.provenance),
             })?;
         }
+        // Marks go on with their tree, under the tree's own provenance.
+        let mut marks: std::collections::BTreeSet<(crate::id::TreeId, crate::id::NodeId)> =
+            snapshot
+                .review_marks
+                .iter()
+                .map(|m| (m.tree.0, m.node.0))
+                .collect();
         for tr in snapshot.attack_trees {
             let provenance = wire::unwrap_provenance(tr.provenance);
             let id = tr.id.0;
-            project.apply(Op::AddAttackTree {
-                id,
-                tree: tr.nodes.0,
-                step_feasibility: tr.step_feasibility.0,
-                provenance: provenance.clone(),
-            })?;
+            // A snapshot may hold a bigger tree than one op can carry.
+            project.load_attack_tree(id, tr.nodes.0, tr.step_feasibility.0, provenance.clone())?;
             for (node, factors) in tr.step_factors.0 {
                 for (factor, level) in factors {
                     project.apply(Op::SetStepFactor {
@@ -556,9 +617,36 @@ impl Project {
                     })?;
                 }
             }
+            let own: Vec<_> = marks.iter().filter(|(t, _)| *t == id).copied().collect();
+            for (tree, node) in own {
+                marks.remove(&(tree, node));
+                project.apply(Op::SetReviewMark {
+                    tree,
+                    node,
+                    marked: true,
+                    provenance: provenance.clone(),
+                })?;
+            }
         }
         for t in snapshot.threat_scenarios {
             apply_snapshot_threat(&mut project, t)?;
+        }
+        // Marks that name no tree of this snapshot are refused by the model.
+        for (tree, node) in marks {
+            project.apply(Op::SetReviewMark {
+                tree,
+                node,
+                marked: true,
+                provenance: crate::provenance::Provenance::default(),
+            })?;
+        }
+        // Descriptions last: every element they name exists by now.
+        for d in snapshot.descriptions {
+            project.apply(Op::SetDescription {
+                target: d.target.into_ref(),
+                text: d.text.0,
+                provenance: wire::unwrap_provenance(d.provenance),
+            })?;
         }
         Ok(project)
     }

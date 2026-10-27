@@ -9,9 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use tokio::sync::{broadcast, mpsc};
 use tokio_stream::Stream;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::accounts::service::{no_event_log, password_login_off, user_info};
@@ -19,7 +17,7 @@ use crate::accounts::service::{no_event_log, password_login_off, user_info};
 /// Events returned when the request names no limit.
 const DEFAULT_EVENTS: usize = 200;
 use crate::accounts::{Accounts, AuditKind, EventLog, UserUpdate, bearer};
-use crate::actor::{Accepted, Event, OpenData, RiskReport, Subscription};
+use crate::actor::{OpenData, RiskReport};
 use crate::auth::{AuthMethod, Principal};
 use crate::error::ServerError;
 use crate::ids::ProjectId;
@@ -165,28 +163,6 @@ fn lease(project: ProjectId, grant: &Grant) -> pb::Lease {
     }
 }
 
-fn accepted(a: &Accepted) -> pb::AcceptedOp {
-    pb::AcceptedOp {
-        seq: a.seq,
-        actor: a.actor.to_string(),
-        timestamp_ms: a.timestamp_ms,
-        op: a.op.clone(),
-    }
-}
-
-fn watch_event(event: &Event) -> pb::WatchEvent {
-    use pb::watch_event::Event as E;
-    pb::WatchEvent {
-        event: Some(match event {
-            Event::Op(op) => E::Op(accepted(op)),
-            Event::Lock(holder) => E::Lock(pb::LockEvent {
-                holder: holder.to_string(),
-            }),
-            Event::Risks(report) => E::Risks(risks_event(report)),
-        }),
-    }
-}
-
 fn risk_entries(report: &RiskReport) -> Vec<pb::ThreatRiskEntry> {
     report
         .threats
@@ -197,13 +173,6 @@ fn risk_entries(report: &RiskReport) -> Vec<pb::ThreatRiskEntry> {
             residual_risk: t.residual.clone().unwrap_or_default(),
         })
         .collect()
-}
-
-fn risks_event(report: &RiskReport) -> pb::RisksEvent {
-    pb::RisksEvent {
-        as_of_seq: report.as_of_seq,
-        threats: risk_entries(report),
-    }
 }
 
 fn baseline_info(b: &BaselineMeta) -> pb::BaselineInfo {
@@ -276,82 +245,9 @@ fn chunk_snapshot(
 
 type BoxStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 
-/// Forwards a subscription to a client: the lock state, the backlog, then
-/// live events, until the client leaves or falls behind (R4).
-async fn forward(
-    sub: Subscription,
-    after: u64,
-    heartbeat: std::time::Duration,
-    out: mpsc::Sender<Result<pb::WatchEvent, Status>>,
-) {
-    let Subscription {
-        backlog,
-        mut live,
-        lock_holder,
-        risks,
-    } = sub;
-    let first = Event::Lock(lock_holder.unwrap_or_else(|| Arc::from("")));
-    if out.send(Ok(watch_event(&first))).await.is_err() {
-        return;
-    }
-    let mut last = after;
-    for op in backlog {
-        last = op.seq;
-        if out.send(Ok(watch_event(&Event::Op(op)))).await.is_err() {
-            return;
-        }
-    }
-    // The risks as of now come after the backlog ops they include.
-    if let Some(report) = risks
-        && out
-            .send(Ok(watch_event(&Event::Risks(report))))
-            .await
-            .is_err()
-    {
-        return;
-    }
-    loop {
-        let Ok(received) = tokio::time::timeout(heartbeat, live.recv()).await else {
-            let beat = pb::WatchEvent {
-                event: Some(pb::watch_event::Event::Heartbeat(pb::Heartbeat {})),
-            };
-            if out.send(Ok(beat)).await.is_err() {
-                return;
-            }
-            continue;
-        };
-        match received {
-            Ok(event) => {
-                match &event {
-                    Event::Op(op) => {
-                        if op.seq <= last {
-                            continue;
-                        }
-                        last = op.seq;
-                    }
-                    // Numbers older than what the observer has seen are stale.
-                    Event::Risks(report) if report.as_of_seq < last => continue,
-                    Event::Risks(_) | Event::Lock(_) => {}
-                }
-                if out.send(Ok(watch_event(&event))).await.is_err() {
-                    return;
-                }
-            }
-            Err(broadcast::error::RecvError::Lagged(_)) => {
-                let _ = out
-                    .send(Err(ServerError::OutOfRange { after: last }.into()))
-                    .await;
-                return;
-            }
-            Err(broadcast::error::RecvError::Closed) => return,
-        }
-    }
-}
-
 #[tonic::async_trait]
 impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
     type OpenProjectStream = BoxStream<pb::OpenProjectChunk>;
-    type WatchStream = BoxStream<pb::WatchEvent>;
     type GetBaselineStream = BoxStream<pb::OpenProjectChunk>;
 
     async fn get_server_info(
@@ -526,20 +422,23 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         Ok(Response::new(pb::SubmitOpsResponse { last_seq }))
     }
 
-    async fn watch(
+    async fn get_project_status(
         &self,
-        request: Request<pb::WatchRequest>,
-    ) -> Result<Response<Self::WatchStream>, Status> {
+        request: Request<pb::GetProjectStatusRequest>,
+    ) -> Result<Response<pb::ProjectStatus>, Status> {
         Principal::of(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
-        let after = request.get_ref().after_seq;
-        let sub = self
+        let status = self
             .registry
-            .with(id, |h| async move { h.subscribe(after).await })
+            .with(id, |h| async move { h.status().await })
             .await?;
-        let (tx, rx) = mpsc::channel(self.registry.config().observer_buffer.max(1));
-        tokio::spawn(forward(sub, after, self.registry.config().heartbeat, tx));
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
+        Ok(Response::new(pb::ProjectStatus {
+            last_seq: status.last_seq,
+            lock_holder: status
+                .lock_holder
+                .map(|h| h.to_string())
+                .unwrap_or_default(),
+        }))
     }
 
     async fn verify_audit(
@@ -939,103 +838,6 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn op_event(seq: u64) -> Event {
-        Event::Op(Arc::new(Accepted {
-            seq,
-            actor: Arc::from("a"),
-            timestamp_ms: 0,
-            op: Bytes::new(),
-        }))
-    }
-
-    async fn drain(
-        mut rx: mpsc::Receiver<Result<pb::WatchEvent, Status>>,
-    ) -> Vec<Result<pb::WatchEvent, Status>> {
-        let mut out = Vec::new();
-        while let Some(item) = rx.recv().await {
-            out.push(item);
-        }
-        out
-    }
-
-    fn seq_of(item: &Result<pb::WatchEvent, Status>) -> Option<u64> {
-        match item {
-            Ok(pb::WatchEvent {
-                event: Some(pb::watch_event::Event::Op(op)),
-            }) => Some(op.seq),
-            _ => None,
-        }
-    }
-
-    #[tokio::test]
-    async fn forward_sends_lock_state_backlog_then_live_without_repeats() {
-        let (tx, live) = broadcast::channel(8);
-        let sub = Subscription {
-            backlog: vec![match op_event(3) {
-                Event::Op(a) => a,
-                Event::Lock(_) | Event::Risks(_) => unreachable!(),
-            }],
-            live,
-            lock_holder: Some(Arc::from("alice")),
-            risks: None,
-        };
-        // A live event that the backlog already covers is skipped.
-        tx.send(op_event(3)).expect("receiver exists");
-        tx.send(op_event(4)).expect("receiver exists");
-        drop(tx);
-        let (out, rx) = mpsc::channel(16);
-        forward(sub, 2, std::time::Duration::from_secs(60), out).await;
-        let items = drain(rx).await;
-        assert!(matches!(
-            &items[0],
-            Ok(pb::WatchEvent { event: Some(pb::watch_event::Event::Lock(l)) }) if l.holder == "alice"
-        ));
-        let seqs: Vec<_> = items.iter().filter_map(seq_of).collect();
-        assert_eq!(seqs, vec![3, 4]);
-    }
-
-    #[tokio::test]
-    async fn forward_tells_a_lagging_observer_to_resync() {
-        let (tx, live) = broadcast::channel(2);
-        let sub = Subscription {
-            backlog: vec![],
-            live,
-            lock_holder: None,
-            risks: None,
-        };
-        // Ten events into a buffer of two before the observer reads any.
-        for seq in 1..=10 {
-            tx.send(op_event(seq)).expect("receiver exists");
-        }
-        let (out, rx) = mpsc::channel(16);
-        forward(sub, 0, std::time::Duration::from_secs(60), out).await;
-        let items = drain(rx).await;
-        let last = items.last().expect("something was sent");
-        let status = last.as_ref().expect_err("ends with an error");
-        assert_eq!(status.code(), tonic::Code::OutOfRange);
-    }
-
-    #[tokio::test]
-    async fn forward_stops_when_the_client_leaves() {
-        let (tx, live) = broadcast::channel(8);
-        let sub = Subscription {
-            backlog: vec![],
-            live,
-            lock_holder: None,
-            risks: None,
-        };
-        let (out, rx) = mpsc::channel(1);
-        drop(rx);
-        tx.send(op_event(1)).expect("receiver exists");
-        // Returns instead of waiting for more events.
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            forward(sub, 0, std::time::Duration::from_secs(60), out),
-        )
-        .await
-        .expect("forward ends");
-    }
 
     #[test]
     fn chunks_cover_the_snapshot_and_put_the_header_first() {

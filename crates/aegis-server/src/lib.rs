@@ -3,7 +3,7 @@
 //! The server is the source of truth for projects. A client edits by
 //! sending typed ops; the server checks the edit lease, decodes each op with
 //! the capped decoder, applies it through `Project::apply` (the same engine
-//! the client embeds), stores it, and streams it to observers. Design and
+//! the client embeds), and stores it. Design and
 //! numbers: `docs/adr/0026-server-skeleton.md`.
 //!
 //! Layers, bottom up:
@@ -26,6 +26,7 @@ pub mod config;
 pub mod error;
 pub mod health;
 pub mod ids;
+pub mod import;
 pub mod lease;
 pub mod license;
 pub mod methodologies;
@@ -38,10 +39,11 @@ pub use auth::Principal;
 pub use config::ServerConfig;
 pub use error::ServerError;
 pub use ids::ProjectId;
+pub use import::{ImportError, ImportReport};
 pub use license::LicenseGate;
 pub use registry::Registry;
 pub use service::AegisService;
-pub use store::{MemoryStore, PostgresStore, ProjectStore};
+pub use store::{FolderStore, MemoryStore, PostgresStore, ProjectStore};
 
 /// The generated protobuf messages and gRPC service (the `aegis-proto` crate).
 pub use aegis_proto as pb;

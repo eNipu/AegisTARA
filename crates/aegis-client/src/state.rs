@@ -338,6 +338,9 @@ pub struct ProjectView {
     pub mode: Mode,
     /// Who holds the edit lock, if anyone.
     pub lock_holder: Option<String>,
+    /// The server holds a newer version than the one shown. Only a read-only
+    /// view sets it; `Command::Reload` loads the newer one.
+    pub newer_version: bool,
     /// Save state.
     pub sync: SyncView,
     /// The threat list.
@@ -356,6 +359,9 @@ pub struct ProjectView {
     pub can_redo: bool,
     /// Whether the residual evaluation is shown.
     pub show_residual: bool,
+    /// The description boxes of the page on screen (see
+    /// [`crate::view::page_descriptions`]).
+    pub descriptions: Vec<crate::view::DescriptionView>,
     /// The project has no assets yet (offer the sample).
     pub is_empty: bool,
     /// The last sequence number the server confirmed.

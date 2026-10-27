@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
+use crate::description::ElementRef;
 use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
 use crate::methodology::{
     CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory, Level,
     ThreatCategory,
 };
 use crate::provenance::Provenance;
-use crate::tree::AttackTree;
+use crate::tree::{AttackTree, GateKind, Node};
 
 /// One change to a [`Project`](crate::Project).
 ///
@@ -27,6 +28,14 @@ use crate::tree::AttackTree;
 ///
 /// | Op | Inverse | Cost |
 /// |---|---|---|
+/// | `SetDescription` | the same with the old text and provenance (empty text clears) | O(log n + text) |
+/// | `SetReviewMark` | the same with the old mark and tree provenance | O(log n) |
+/// | `AddTreeNode` | `RemoveTreeNode` with the old tree provenance | O(V + E) |
+/// | `RemoveTreeNode` | `AddTreeNode` with the node, its place and the old tree provenance | O(V + E) |
+/// | `LinkTreeNode` | `UnlinkTreeNode` with the old tree provenance | O(k + d + e) |
+/// | `UnlinkTreeNode` | `LinkTreeNode` at the old place with the old tree provenance | O(k + p) |
+/// | `RenameTreeNode` | the same with the old label and provenance | O(1) |
+/// | `SetTreeNodeGate` | the same with the old gate and provenance | O(1) |
 /// | `AddAsset` | `RemoveAsset` | O(log n) |
 /// | `RenameAsset` | `RenameAsset` with the old name and provenance | O(log n) |
 /// | `SetAssetProperties` | the same with the old set and provenance | O(log n + p) |
@@ -88,6 +97,115 @@ use crate::tree::AttackTree;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Op {
+    /// Marks or unmarks a step as "its rating needs review". A library
+    /// insert marks the ratings it brings; a person reviews and unmarks. A
+    /// marked step cannot be removed, and the linter reports it.
+    SetReviewMark {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A step of the tree.
+        node: NodeId,
+        /// Marked (needs review) or not.
+        marked: bool,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Sets the description of an element, or the notes of the project
+    /// ([`ElementRef::Project`]). Empty text clears it. Plain text, at most
+    /// [`ElementRef::max_chars`] chars. An element that has a description
+    /// cannot be removed until it is cleared.
+    SetDescription {
+        /// What the text belongs to; an element must exist.
+        target: ElementRef,
+        /// The new text.
+        text: Arc<str>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Adds one node to an attack tree, as child number `position` of the
+    /// gate `parent`, at arena index `index`. A node added at the end has
+    /// `index` = the number of nodes and `position` = the number of children
+    /// of `parent`. Trees of up to [`MAX_ATTACK_TREE_NODES`](crate::MAX_ATTACK_TREE_NODES)
+    /// nodes are built from these ops.
+    AddTreeNode {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// Existing gate of the tree.
+        parent: NodeId,
+        /// Unused node ID.
+        id: NodeId,
+        /// A step, or a gate without children.
+        node: Node,
+        /// Arena index of the new node: after `parent`, at most the number
+        /// of nodes.
+        index: u32,
+        /// Place among the children of `parent`.
+        position: u32,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Removes a node nothing hangs on: not the root, no children, not
+    /// shared, and for a step no rating, factors or controls. Clear those
+    /// first (an edit does it in the same batch).
+    RemoveTreeNode {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// The node.
+        id: NodeId,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Shares the node `child` with a second gate: adds it to the children
+    /// of `parent` at `position`, as extra parent number `slot` of `child`.
+    /// Rejected if it would close a cycle.
+    LinkTreeNode {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// The gate that gets the child.
+        parent: NodeId,
+        /// The shared node.
+        child: NodeId,
+        /// Place among the children of `parent`.
+        position: u32,
+        /// Place among the extra parents of `child` (their number, for a
+        /// new link).
+        slot: u32,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Removes an extra edge made by `LinkTreeNode`.
+    UnlinkTreeNode {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// The gate.
+        parent: NodeId,
+        /// The shared node.
+        child: NodeId,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Changes the label of a node.
+    RenameTreeNode {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// The node.
+        id: NodeId,
+        /// New label, non-empty after trimming, at most 256 chars.
+        label: Arc<str>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Changes how a gate combines its children.
+    SetTreeNodeGate {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A gate of the tree.
+        id: NodeId,
+        /// The new gate kind.
+        gate: GateKind,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
     /// Adds an asset. The property set must be non-empty.
     AddAsset {
         /// Unused asset ID.
@@ -476,7 +594,15 @@ impl Op {
     #[must_use]
     pub const fn provenance(&self) -> Option<&Provenance> {
         match self {
-            Self::AddAsset { provenance, .. }
+            Self::SetDescription { provenance, .. }
+            | Self::SetReviewMark { provenance, .. }
+            | Self::AddTreeNode { provenance, .. }
+            | Self::RemoveTreeNode { provenance, .. }
+            | Self::LinkTreeNode { provenance, .. }
+            | Self::UnlinkTreeNode { provenance, .. }
+            | Self::RenameTreeNode { provenance, .. }
+            | Self::SetTreeNodeGate { provenance, .. }
+            | Self::AddAsset { provenance, .. }
             | Self::RenameAsset { provenance, .. }
             | Self::SetAssetProperties { provenance, .. }
             | Self::AddDamageScenario { provenance, .. }

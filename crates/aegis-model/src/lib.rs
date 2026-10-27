@@ -226,10 +226,12 @@ extern crate self as aegis_model;
 mod asset;
 mod control;
 mod damage;
+mod description;
 mod diff;
 mod error;
 mod eval;
 mod id;
+pub mod library;
 mod lint;
 mod methodology;
 mod op;
@@ -259,6 +261,9 @@ pub use control::{
     SecurityControl, StepMitigation,
 };
 pub use damage::DamageScenario;
+pub use description::{
+    ElementRef, MAX_DESCRIPTION_CHARS, MAX_DESCRIPTION_TOTAL_BYTES, MAX_NOTES_CHARS,
+};
 pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
 pub use eval::{
@@ -286,9 +291,9 @@ pub use sensitivity::{
     FeasibilityTippingPoint, ImpactTippingPoint, StepTippingPoint, ThreatSensitivity,
 };
 pub use store::{
-    Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_KEY_BYTES, MAX_LABEL_BYTES,
-    MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES, MAX_PACK_FILE_BYTES,
-    MAX_PROJECT_FILE_BYTES, OpCodec, OpLogReader, OpLogWriter, VocabKind,
+    Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES,
+    MAX_LABEL_BYTES, MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES,
+    MAX_PACK_FILE_BYTES, MAX_PROJECT_FILE_BYTES, OpCodec, OpLogReader, OpLogWriter, VocabKind,
 };
 pub use threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
-pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node};
+pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Node, RemovedNode};

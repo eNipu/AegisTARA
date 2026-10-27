@@ -171,6 +171,25 @@ fn tree_figure(ws: &Workspace, tree: aegis_model::TreeId) -> Option<Figure> {
     })
 }
 
+/// Description text as paragraphs, one per line, so line breaks survive.
+fn desc_blocks(b: &mut Vec<Block>, text: &str) {
+    for line in text.lines() {
+        b.push(Block::Paragraph(line.to_owned(), Style::Normal));
+    }
+}
+
+/// The descriptions of a section, if any element has one.
+fn desc_list(b: &mut Vec<Block>, items: &[(String, String)]) {
+    if items.is_empty() {
+        return;
+    }
+    b.push(Block::Heading(3, "Descriptions".to_owned()));
+    for (name, text) in items {
+        b.push(Block::Paragraph(name.clone(), Style::Muted));
+        desc_blocks(b, text);
+    }
+}
+
 fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Block {
     Block::Table {
         headers: headers.iter().map(|h| (*h).to_owned()).collect(),
@@ -238,6 +257,11 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
         ));
     }
 
+    if let Some(notes) = crate::report::description_of(ws, aegis_model::ElementRef::Project) {
+        b.push(Heading(2, "Project notes".to_owned()));
+        desc_blocks(&mut b, &notes);
+    }
+
     // ---- executive summary ----
     let ov = pages::overview(ws);
     b.push(Heading(2, "1. Executive summary".to_owned()));
@@ -286,6 +310,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
             })
             .collect(),
     ));
+    desc_list(
+        &mut b,
+        &crate::report::section_descriptions(ws, crate::report::Described::Assets),
+    );
 
     // ---- damage ----
     b.push(Heading(2, "3. Damage scenarios".to_owned()));
@@ -313,6 +341,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
             })
             .collect(),
     ));
+    desc_list(
+        &mut b,
+        &crate::report::section_descriptions(ws, crate::report::Described::Damage),
+    );
 
     // ---- threats ----
     b.push(Heading(2, "4. Threat scenarios".to_owned()));
@@ -321,6 +353,9 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
             continue;
         };
         b.push(Heading(3, t.name.clone()));
+        if let Some(text) = crate::report::description_of(ws, aegis_model::ElementRef::Threat(id)) {
+            desc_blocks(&mut b, &text);
+        }
         let damages: Vec<&str> = t
             .damages
             .iter()
@@ -372,6 +407,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     }
     for row in trees {
         b.push(Heading(3, row.title.clone()));
+        if let Some(text) = crate::report::description_of(ws, aegis_model::ElementRef::Tree(row.id))
+        {
+            desc_blocks(&mut b, &text);
+        }
         b.push(Paragraph(
             format!(
                 "{} nodes. Feasibility at the root: {}. Threat scenarios: {}.",
@@ -409,6 +448,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
             .map(|c| vec![c.name, c.steps.to_string(), c.goals.to_string()])
             .collect(),
     ));
+    desc_list(
+        &mut b,
+        &crate::report::section_descriptions(ws, crate::report::Described::Controls),
+    );
 
     // ---- goals and claims ----
     b.push(Heading(2, "8. Cybersecurity goals and claims".to_owned()));
@@ -420,6 +463,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
             .map(|g| vec![g.name, g.controls.to_string(), g.threats.to_string()])
             .collect(),
     ));
+    desc_list(
+        &mut b,
+        &crate::report::section_descriptions(ws, crate::report::Described::Goals),
+    );
     b.push(Heading(3, "Claims".to_owned()));
     b.push(table(
         &["Claim", "Threat scenarios"],
@@ -428,6 +475,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
             .map(|c| vec![c.name, c.threats.to_string()])
             .collect(),
     ));
+    desc_list(
+        &mut b,
+        &crate::report::section_descriptions(ws, crate::report::Described::Claims),
+    );
 
     // ---- problems ----
     b.push(Heading(2, "9. Open problems".to_owned()));

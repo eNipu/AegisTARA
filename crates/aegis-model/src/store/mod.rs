@@ -93,6 +93,14 @@ pub const MAX_NAME_BYTES: usize = 1024;
 /// ```
 pub const MAX_ACTOR_BYTES: usize = 1024;
 
+/// Longest description or notes text accepted while decoding, in bytes: four
+/// bytes for each of [`MAX_NOTES_CHARS`](crate::MAX_NOTES_CHARS).
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_DESCRIPTION_BYTES, 4 * aegis_model::MAX_NOTES_CHARS);
+/// ```
+pub const MAX_DESCRIPTION_BYTES: usize = 4 * crate::description::MAX_NOTES_CHARS;
+
 /// Longest decoded vocabulary key, in bytes: 64, the longest key a
 /// methodology may declare. Also caps the methodology key in a header.
 ///
@@ -175,6 +183,11 @@ pub enum Limit {
     },
     /// A name is longer than [`MAX_NAME_BYTES`].
     NameBytes {
+        /// The cap, in bytes.
+        max: usize,
+    },
+    /// A description or notes text is longer than [`MAX_DESCRIPTION_BYTES`].
+    DescriptionBytes {
         /// The cap, in bytes.
         max: usize,
     },
@@ -311,6 +324,9 @@ impl Limit {
     pub(crate) const NAME: Limit = Limit::NameBytes {
         max: MAX_NAME_BYTES,
     };
+    pub(crate) const DESCRIPTION: Limit = Limit::DescriptionBytes {
+        max: MAX_DESCRIPTION_BYTES,
+    };
     pub(crate) const ACTOR: Limit = Limit::ActorBytes {
         max: MAX_ACTOR_BYTES,
     };
@@ -377,6 +393,9 @@ impl fmt::Display for Limit {
             Limit::ProjectFileBytes { max } => write!(f, "project file is larger than {max} bytes"),
             Limit::OpRecordBytes { max } => write!(f, "op log line is longer than {max} bytes"),
             Limit::NameBytes { max } => write!(f, "name is longer than {max} bytes"),
+            Limit::DescriptionBytes { max } => {
+                write!(f, "description is longer than {max} bytes")
+            }
             Limit::ActorBytes { max } => write!(f, "provenance actor is longer than {max} bytes"),
             Limit::KeyBytes { max } => write!(f, "key is longer than {max} bytes"),
             Limit::MethodologyVersionBytes { max } => {

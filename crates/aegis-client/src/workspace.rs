@@ -74,17 +74,6 @@ pub enum WorkspaceError {
         /// What the server said.
         found: u64,
     },
-    /// A remote op arrived while local edits are pending.
-    #[error("remote ops cannot be applied over pending edits")]
-    PendingEdits,
-    /// A remote op does not follow the confirmed sequence.
-    #[error("remote op {found} does not follow {expected}")]
-    Gap {
-        /// The next sequence number expected.
-        expected: u64,
-        /// The one that arrived.
-        found: u64,
-    },
     /// Nothing is waiting to be sent.
     #[error("no edits are pending")]
     NothingPending,
@@ -352,31 +341,6 @@ impl Workspace {
         }
     }
 
-    /// Applies an op another editor made (observer mode). Undo history is
-    /// cleared: it described a project that no longer exists.
-    ///
-    /// # Errors
-    ///
-    /// [`WorkspaceError::PendingEdits`], [`WorkspaceError::Gap`], or the
-    /// model's refusal (the caller should resync).
-    pub fn apply_remote(&mut self, seq: u64, op: Op) -> Result<(), WorkspaceError> {
-        if !self.pending.is_empty() {
-            return Err(WorkspaceError::PendingEdits);
-        }
-        let expected = self.confirmed_seq + 1;
-        if seq != expected {
-            return Err(WorkspaceError::Gap {
-                expected,
-                found: seq,
-            });
-        }
-        self.project.apply_cached(op, &mut self.cache)?;
-        self.confirmed_seq = seq;
-        self.undo.clear();
-        self.redo.clear();
-        Ok(())
-    }
-
     /// Replaces everything with a fresh copy from the server.
     pub fn reset(&mut self, project: Project, seq: u64) {
         *self = Workspace::new(project, seq);
@@ -564,36 +528,6 @@ mod tests {
             "the state was not changed by the bad answer"
         );
         assert_eq!(ws.on_accepted(2), Err(WorkspaceError::NothingPending));
-    }
-
-    #[test]
-    fn remote_ops_apply_in_order_and_only_without_pending_edits() {
-        let mut ws = Workspace::empty(methodology());
-        ws.apply_remote(1, add(1, "A")).expect("first");
-        assert_eq!(
-            ws.apply_remote(3, rename(1, "x")),
-            Err(WorkspaceError::Gap {
-                expected: 2,
-                found: 3
-            })
-        );
-        ws.apply_remote(2, rename(1, "A2")).expect("second");
-        assert_eq!(ws.confirmed_seq(), 2);
-        assert_eq!(name_of(ws.project(), 1).as_deref(), Some("A2"));
-        ws.apply(vec![rename(1, "mine")], Origin::Edit)
-            .expect("applies");
-        assert_eq!(
-            ws.apply_remote(3, rename(1, "theirs")),
-            Err(WorkspaceError::PendingEdits)
-        );
-        // A remote edit invalidates undo history.
-        let mut ws = Workspace::empty(methodology());
-        ws.apply(vec![add(1, "A")], Origin::Edit).expect("applies");
-        ws.next_submission().expect("sent");
-        ws.on_accepted(1).expect("accepted");
-        assert!(ws.can_undo());
-        ws.apply_remote(2, rename(1, "B")).expect("remote");
-        assert!(!ws.can_undo());
     }
 
     #[test]

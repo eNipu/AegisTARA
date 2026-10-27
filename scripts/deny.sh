@@ -6,10 +6,16 @@
 #   `scripts/deny.sh licenses bans sources` runs fully offline.
 #
 # Checks each crates/*/Cargo.toml, then each non-shipped fuzz crate
-# crates/*/fuzz/Cargo.toml (decision D5: tooling-only license exceptions must
-# still be checked), in sorted order. Keeps going after a failure, prints one
-# summary line per crate, and exits 1 if any crate failed.
+# crates/*/fuzz/Cargo.toml, in sorted order. Keeps going after a failure,
+# prints one summary line per crate, and exits 1 if any crate failed.
 # The full cargo-deny report is printed only for failing crates.
+#
+# Licenses (decision D5, widened 2026-10-26): the allow list applies to what
+# ships. cargo-deny already leaves dev-dependencies out of the license check
+# (tools/deny-fixtures/run.sh proves it), and a fuzz crate is development
+# tooling that nothing ships, so its licenses are not checked at all. Its
+# advisories, bans and sources still are, and [bans] keeps its tooling crates
+# out of every shipped crate.
 #
 # Cost: one cargo-deny run per crate, O(D) in its locked dependencies.
 set -eu
@@ -40,7 +46,21 @@ for manifest in "$repo_root"/crates/*/Cargo.toml "$repo_root"/crates/*/fuzz/Carg
     crate=${manifest#"$repo_root"/crates/}
     crate=${crate%/Cargo.toml}
     checked=$((checked + 1))
-    if cargo deny --manifest-path "$manifest" --config "$config" check "$@" >"$log" 2>&1; then
+    # A fuzz crate is not shipped: leave `licenses` out of its checks.
+    wanted=
+    for check in "$@"; do
+        case "$crate:$check" in
+            */fuzz:licenses) ;;
+            *) wanted="$wanted $check" ;;
+        esac
+    done
+    if [ -z "$wanted" ]; then
+        echo "ok    $crate (licenses are not checked: development tooling, not shipped)"
+        continue
+    fi
+    # $wanted is a short list of check names, so word splitting is intended.
+    # shellcheck disable=SC2086
+    if cargo deny --manifest-path "$manifest" --config "$config" check $wanted >"$log" 2>&1; then
         echo "ok    $crate"
     else
         echo "FAIL  $crate"

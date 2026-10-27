@@ -16,7 +16,7 @@
 | Area | State | Evidence |
 |---|---|---|
 | Domain model, risk engine, analysis, persistence (`aegis-model`) | **Complete (jobs 001–026)** | See the table below |
-| Cargo workspace, CI, supply chain | **Complete (027, 028)** | Root workspace, `scripts/ci.sh`, `scripts/deny.sh`, 9 policy fixtures, Postgres service in CI |
+| Cargo workspace, CI, supply chain | **Complete (027, 028)** | Root workspace, `scripts/ci.sh`, `scripts/deny.sh`, 11 policy fixtures, Postgres service in CI |
 | Server (`aegis-server`, `aegis-proto`) | **Complete (029, 030)** | gRPC API, one actor per project, atomic batches, edit lease (D4), observers, MemoryStore and PostgresStore, hash-chained audit, `VerifyAudit` |
 | Login (`aegis-auth`, server accounts) | **Complete (031, 038, 040, 045)** | Password login for testing (Argon2id, opaque tokens, throttle, user admin). OIDC code flow + PKCE, DPoP, JWKS cache, keychain, HTTPS with the OS trust store. `AEGIS_AUTH=both` runs company and password login together, and an admin turns the password form off in the app (045). Company SSO per customer is in the backlog (D10) |
 | Canvas (`aegis-canvas`) | **Complete (032)** | Linear-time layout (1M nodes in 51 ms), R-tree hit test, display list, SVG snapshots, keyboard navigation |
@@ -208,7 +208,7 @@ Everything else in the backlog is ticked. Open items, in order:
 ```bash
 scripts/ci.sh                  # fmt, clippy -D warnings, all tests, doc build
 scripts/deny.sh                # license/advisory policy (cargo-deny 0.20.2)
-tools/deny-fixtures/run.sh     # 9 policy fixtures
+tools/deny-fixtures/run.sh     # 11 policy fixtures
 ```
 
 **Orientation in 15 minutes:**

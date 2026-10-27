@@ -158,17 +158,24 @@ async fn a_logged_in_user_edits_a_project_as_themselves() {
     assert_eq!(lease.holder, "alice");
 
     // A streaming call works too (the proof covers the opening request).
-    let mut watch = client
-        .watch(pb::WatchRequest {
-            project_id: project.project_id,
-            after_seq: 0,
+    let mut open = client
+        .open_project(pb::OpenProjectRequest {
+            project_id: project.project_id.clone(),
         })
         .await
-        .expect("watch")
+        .expect("open")
         .into_inner();
-    let first = watch.message().await.expect("ok").expect("event");
-    assert!(matches!(first.event, Some(pb::watch_event::Event::Lock(l)) if l.holder == "alice"));
-    drop(watch);
+    let first = open.message().await.expect("ok").expect("chunk");
+    assert_eq!(first.header.expect("header").lock_holder, "alice");
+    drop(open);
+    let status = client
+        .get_project_status(pb::GetProjectStatusRequest {
+            project_id: project.project_id,
+        })
+        .await
+        .expect("status")
+        .into_inner();
+    assert_eq!(status.lock_holder, "alice");
     env.stop().await;
 }
 

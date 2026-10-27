@@ -1,5 +1,6 @@
-//! The session against a real server: optimistic editing, saving, live
-//! viewing, lock loss, and reloading, over loopback gRPC.
+//! The session against a real server: optimistic editing, saving, the
+//! read-only view and its "newer version" offer, lock loss, and reloading,
+//! over loopback gRPC.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -29,7 +30,7 @@ const SAMPLE_OPS: u64 = 16;
 // ---------------------------------------------------------------------------
 
 /// Delays every request whose path ends in `SubmitOps`, to model a slow
-/// link, and counts `Watch` calls.
+/// link, and counts `GetProjectStatus` calls (the version check).
 #[derive(Clone)]
 struct SlowSubmit(Duration, Arc<AtomicUsize>);
 
@@ -39,7 +40,7 @@ impl<S> Layer<S> for SlowSubmit {
         SlowSubmitService {
             inner,
             delay: self.0,
-            watches: Arc::clone(&self.1),
+            status_calls: Arc::clone(&self.1),
         }
     }
 }
@@ -48,7 +49,7 @@ impl<S> Layer<S> for SlowSubmit {
 struct SlowSubmitService<S> {
     inner: S,
     delay: Duration,
-    watches: Arc<AtomicUsize>,
+    status_calls: Arc<AtomicUsize>,
 }
 
 impl<S, B> Service<http::Request<B>> for SlowSubmitService<S>
@@ -69,8 +70,8 @@ where
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let slow = request.uri().path().ends_with("SubmitOps");
-        if request.uri().path().ends_with("/Watch") {
-            self.watches.fetch_add(1, Ordering::Relaxed);
+        if request.uri().path().ends_with("/GetProjectStatus") {
+            self.status_calls.fetch_add(1, Ordering::Relaxed);
         }
         let delay = self.delay;
         Box::pin(async move {
@@ -101,8 +102,8 @@ impl Drop for Client {
 
 struct TestServer {
     url: String,
-    /// `Watch` calls the server received.
-    watches: Arc<AtomicUsize>,
+    /// `GetProjectStatus` calls the server received.
+    status_calls: Arc<AtomicUsize>,
     stop: Option<oneshot::Sender<()>>,
     done: Option<tokio::task::JoinHandle<()>>,
 }
@@ -146,8 +147,8 @@ impl TestServer {
         let (stop, stopped) = oneshot::channel::<()>();
         let service = AegisService::new(Arc::clone(&registry)).into_server();
         let layer = AuthLayer::new(Arc::new(DevAuthn), &url);
-        let watches = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&watches);
+        let status_calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&status_calls);
         let done = tokio::spawn(async move {
             server::builder()
                 .layer(layer)
@@ -162,7 +163,7 @@ impl TestServer {
         });
         TestServer {
             url,
-            watches,
+            status_calls,
             stop: Some(stop),
             done: Some(done),
         }
@@ -450,6 +451,31 @@ async fn an_edit_shows_at_once_and_is_saved_behind_the_scenes() {
 }
 
 #[tokio::test]
+async fn ending_an_edit_is_not_reported_as_losing_the_lock() {
+    // Releasing the lease makes the server announce a free lock. That is the
+    // event the user asked for, so it must not be shown as a lock loss (nor
+    // reload the project).
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    alice.send(Command::EndEdit).expect("sent");
+    let view = until(&alice, "released", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::ReadOnly && p.lock_holder.is_none())
+    })
+    .await;
+    assert!(
+        !view.notices.iter().any(|n| n.text.contains("edit lock")),
+        "{:?}",
+        view.notices
+    );
+    drop(alice);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn rating_a_step_updates_the_risks_immediately_and_undo_restores_them() {
     let server = TestServer::start(Duration::ZERO).await;
     let alice = server.session("alice", false);
@@ -551,38 +577,50 @@ async fn rating_a_step_updates_the_risks_immediately_and_undo_restores_them() {
 }
 
 #[tokio::test]
-async fn a_second_user_follows_the_editor_live_and_cannot_edit() {
+async fn a_second_user_reads_a_saved_version_and_is_offered_the_newer_one() {
     let server = TestServer::start(Duration::ZERO).await;
     let alice = server.session("alice", false);
-    let bob = server.session("bob", false);
+    let bob = server.session_with("bob", false, |c| {
+        c.version_check = Duration::from_millis(100);
+    });
     let id = create_and_open(&alice, "Brake").await;
     start_editing(&alice).await;
 
     until(&bob, "online", online).await;
     bob.send(Command::OpenProject { id }).expect("sent");
     let view = until(&bob, "bob sees the project", |vm| vm.project.is_some()).await;
-    assert_eq!(
-        view.project
-            .as_ref()
-            .expect("project")
-            .lock_holder
-            .as_deref(),
-        Some("alice")
+    let project = view.project.as_ref().expect("project");
+    assert_eq!(project.lock_holder.as_deref(), Some("alice"));
+    assert!(!project.newer_version);
+
+    // Alice builds the sample. Bob's screen does not change by itself: he is
+    // told that a newer version exists and keeps reading the one he has.
+    alice.send(Command::CreateSample).expect("sent");
+    let view = until(&bob, "bob is told a newer version exists", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.newer_version)
+    })
+    .await;
+    let project = view.project.as_ref().expect("project");
+    assert_eq!(project.mode, Mode::ReadOnly);
+    assert_eq!(project.confirmed_seq, 0, "still the version he opened");
+    assert!(project.threats.is_empty());
+    let view = until(&alice, "alice is current", project_ready).await;
+    assert!(
+        !view.project.as_ref().expect("project").newer_version,
+        "an editor is never offered a reload"
     );
 
-    // Alice builds the sample; Bob's screen fills in without Bob doing anything.
-    alice.send(Command::CreateSample).expect("sent");
+    // Bob reloads and reads Alice's saved work. His numbers are checked
+    // against the server's after the reload, with no complaint.
+    bob.send(Command::Reload).expect("sent");
     let view = until(&bob, "bob sees the threats", |vm| {
         vm.project.as_ref().is_some_and(|p| p.threats.len() == 2)
     })
     .await;
-    assert_eq!(view.project.as_ref().expect("project").mode, Mode::ReadOnly);
-    assert_eq!(
-        view.project.as_ref().expect("project").confirmed_seq,
-        SAMPLE_OPS
-    );
-    // The server sends its recomputed risks after the batch; Bob's own
-    // numbers match them, which his view records, with no complaint.
+    let project = view.project.as_ref().expect("project");
+    assert_eq!(project.mode, Mode::ReadOnly);
+    assert_eq!(project.confirmed_seq, SAMPLE_OPS);
+    assert!(!project.newer_version);
     let view = until(
         &bob,
         "bob's numbers are checked against the server's",
@@ -611,7 +649,8 @@ async fn a_second_user_follows_the_editor_live_and_cannot_edit() {
     .await;
     assert_eq!(view.project.as_ref().expect("project").mode, Mode::ReadOnly);
 
-    // Alice finishes; the lock is free and Bob can take it.
+    // Alice finishes; the next version check shows the lock is free and Bob
+    // can take it.
     alice.send(Command::EndEdit).expect("sent");
     until(&bob, "lock free", |vm| {
         vm.project.as_ref().is_some_and(|p| p.lock_holder.is_none())
@@ -633,47 +672,73 @@ async fn a_second_user_follows_the_editor_live_and_cannot_edit() {
 }
 
 #[tokio::test]
-async fn a_silent_live_stream_is_restarted_and_updates_still_arrive() {
-    // No heartbeats, and a client that gives up on a stream after 300 ms of
-    // silence: like a proxy that dropped the connection without closing it.
-    let server = TestServer::start_config(
-        Duration::ZERO,
-        None,
-        ServerConfig {
-            heartbeat: Duration::from_secs(3600),
-            ..ServerConfig::default()
-        },
-    )
-    .await;
+async fn taking_the_lock_on_an_old_copy_reloads_it_first() {
+    // Bob never presses Reload; asking for the lock still gives him the
+    // newest version before he edits, so he cannot save onto an old base.
+    let server = TestServer::start(Duration::ZERO).await;
     let alice = server.session("alice", false);
     let bob = server.session_with("bob", false, |c| {
-        c.watch_silence = Duration::from_millis(300);
+        c.version_check = Duration::from_secs(3600);
     });
-    let id = create_and_open(&alice, "Quiet").await;
+    let id = create_and_open(&alice, "Brake").await;
     start_editing(&alice).await;
     until(&bob, "online", online).await;
     bob.send(Command::OpenProject { id }).expect("sent");
-    until(&bob, "bob sees the project", project_ready).await;
-    let before = server.watches.load(Ordering::Relaxed);
-
-    // Quiet for more than two silence windows: the stream is restarted.
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let after = server.watches.load(Ordering::Relaxed);
-    assert!(after >= before + 2, "watch calls {before} -> {after}");
-
-    // And the restarted stream still delivers the editor's work.
+    until(&bob, "bob sees the project", |vm| vm.project.is_some()).await;
     alice.send(Command::CreateSample).expect("sent");
-    let view = until(&bob, "bob sees the threats", |vm| {
-        vm.project.as_ref().is_some_and(|p| p.threats.len() == 2)
+    until(&alice, "saved", project_ready).await;
+    alice.send(Command::EndEdit).expect("sent");
+    until(&alice, "released", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::ReadOnly)
     })
     .await;
-    assert!(
-        !view.notices.iter().any(|n| n.severity == Severity::Error),
-        "{:?}",
-        view.notices
-    );
+
+    start_editing(&bob).await;
+    let view = until(&bob, "bob has the newest copy", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.mode == Mode::Editing && p.confirmed_seq == SAMPLE_OPS && p.threats.len() == 2
+        })
+    })
+    .await;
+    assert!(!view.project.as_ref().expect("project").newer_version);
     drop(alice);
     drop(bob);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn only_a_read_only_view_checks_for_a_newer_version_and_not_too_often() {
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session_with("alice", false, |c| {
+        c.version_check = Duration::from_millis(200);
+    });
+    create_and_open(&alice, "Quiet").await;
+    start_editing(&alice).await;
+    let before = server.status_calls.load(Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(
+        server.status_calls.load(Ordering::Relaxed),
+        before,
+        "an editor is the only writer and asks nothing"
+    );
+
+    alice.send(Command::EndEdit).expect("sent");
+    until(&alice, "read-only", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::ReadOnly)
+    })
+    .await;
+    let before = server.status_calls.load(Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let asked = server.status_calls.load(Ordering::Relaxed) - before;
+    assert!(
+        (2..=6).contains(&asked),
+        "a read-only view asks about every 200 ms, not in a loop: {asked} calls in a second"
+    );
+    drop(alice);
     server.stop().await;
 }
 

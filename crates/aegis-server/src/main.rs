@@ -31,6 +31,13 @@
 //! | `AEGIS_PACKS_DIR` | unset | Directory of extra methodology pack files |
 //! | `RUST_LOG` | `info` | Log filter |
 //!
+//! `aegis-server import-folder <project folder>` copies a standalone project
+//! folder (from the desktop app's standalone mode) into the database with its
+//! history, actors, times, audit chain and baselines intact, then exits. It
+//! reads the same variables as the server (`AEGIS_DATABASE_URL` is required,
+//! and so is a valid license), and refuses a folder whose history was changed
+//! or whose project ID the server already holds.
+//!
 //! TLS ends at the load balancer in the reference deployment (direction
 //! section 1), so the server speaks plain HTTP/2 and HTTP/1.1 (gRPC-Web)
 //! behind it. `GET /healthz` answers `200` for health probes.
@@ -61,7 +68,7 @@ use aegis_server::config::ServerConfig;
 use aegis_server::license::system_clock_arc;
 use aegis_server::methodologies::Methodologies;
 use aegis_server::pb::get_login_options_response::Method;
-use aegis_server::store::{DbTls, PostgresOptions};
+use aegis_server::store::{DbTls, FolderStore, PostgresOptions};
 use aegis_server::{
     AegisService, LicenseGate, MemoryStore, PostgresStore, ProjectStore, Registry, server,
 };
@@ -103,7 +110,15 @@ async fn main() -> ExitCode {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
-    match run().await {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.as_slice() {
+        [] => run().await,
+        [command, folder] if command == "import-folder" => {
+            import_folder(PathBuf::from(folder)).await
+        }
+        _ => Err("usage: aegis-server [import-folder <project folder>]".to_owned()),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             tracing::error!("{message}");
@@ -321,12 +336,7 @@ async fn run() -> Result<(), String> {
     let license = license()?;
     let kind = auth_kind()?;
 
-    let mut methodologies = Methodologies::builtin().map_err(|e| e.to_string())?;
-    if let Some(dir) = var("AEGIS_PACKS_DIR") {
-        methodologies
-            .add_dir(&PathBuf::from(dir))
-            .map_err(|e| e.to_string())?;
-    }
+    let methodologies = hosted_methodologies()?;
     let setup = Setup {
         listen,
         license,
@@ -336,25 +346,7 @@ async fn run() -> Result<(), String> {
 
     match var("AEGIS_DATABASE_URL").or_else(|| var("DATABASE_URL")) {
         Some(url) => {
-            let pool_size = match var("AEGIS_DB_POOL") {
-                Some(v) => v
-                    .parse()
-                    .map_err(|_| "AEGIS_DB_POOL is not a number".to_owned())?,
-                None => PostgresOptions::default().pool_size,
-            };
-            let tls: DbTls = match var("AEGIS_DB_TLS") {
-                Some(v) => v.parse().map_err(|e| format!("AEGIS_DB_TLS: {e}"))?,
-                None => DbTls::Off,
-            };
-            let options = PostgresOptions {
-                pool_size,
-                tls,
-                ..PostgresOptions::default()
-            };
-            let store = PostgresStore::connect(&url, &options)
-                .await
-                .map_err(|e| format!("cannot open the database: {e}"))?;
-            tracing::info!(?tls, "using PostgreSQL");
+            let store = connect_postgres(&url).await?;
             let accounts =
                 AccountBackend::Postgres(PostgresAccounts::new(store.pool(), store.org()));
             start(setup, Arc::new(store), accounts).await
@@ -371,6 +363,74 @@ async fn run() -> Result<(), String> {
             .await
         }
     }
+}
+
+/// The built-in methodology plus any packs in `AEGIS_PACKS_DIR`.
+fn hosted_methodologies() -> Result<Methodologies, String> {
+    let mut methodologies = Methodologies::builtin().map_err(|e| e.to_string())?;
+    if let Some(dir) = var("AEGIS_PACKS_DIR") {
+        methodologies
+            .add_dir(&PathBuf::from(dir))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(methodologies)
+}
+
+async fn connect_postgres(url: &str) -> Result<PostgresStore, String> {
+    let pool_size = match var("AEGIS_DB_POOL") {
+        Some(v) => v
+            .parse()
+            .map_err(|_| "AEGIS_DB_POOL is not a number".to_owned())?,
+        None => PostgresOptions::default().pool_size,
+    };
+    let tls: DbTls = match var("AEGIS_DB_TLS") {
+        Some(v) => v.parse().map_err(|e| format!("AEGIS_DB_TLS: {e}"))?,
+        None => DbTls::Off,
+    };
+    let options = PostgresOptions {
+        pool_size,
+        tls,
+        ..PostgresOptions::default()
+    };
+    let store = PostgresStore::connect(url, &options)
+        .await
+        .map_err(|e| format!("cannot open the database: {e}"))?;
+    tracing::info!(?tls, "using PostgreSQL");
+    Ok(store)
+}
+
+/// `aegis-server import-folder <folder>`: see the module docs.
+async fn import_folder(folder: PathBuf) -> Result<(), String> {
+    // Local checks first, so a wrong path or a missing license fails before
+    // the database is touched.
+    let source = tokio::task::spawn_blocking(move || FolderStore::open_existing(&folder))
+        .await
+        .map_err(|e| format!("cannot open the project folder: {e}"))?
+        .map_err(|e| format!("cannot open the project folder: {e}"))?;
+    let _license = license()?;
+    let url = var("AEGIS_DATABASE_URL")
+        .or_else(|| var("DATABASE_URL"))
+        .ok_or_else(|| {
+            "AEGIS_DATABASE_URL is required: a server without a database keeps nothing".to_owned()
+        })?;
+    let store = connect_postgres(&url).await?;
+    let registry = Registry::new(
+        Arc::new(store),
+        Arc::new(hosted_methodologies()?),
+        Arc::new(ServerConfig::default()),
+    );
+    let report = registry
+        .import_folder(&source)
+        .await
+        .map_err(|e| format!("not imported: {e}"))?;
+    tracing::info!(
+        project = %report.project.id,
+        name = %report.project.name,
+        ops = report.ops,
+        baselines = report.baselines,
+        "project imported"
+    );
+    Ok(())
 }
 
 async fn start<S: ProjectStore>(
@@ -468,8 +528,8 @@ async fn serve<S: ProjectStore>(
     let serving = server::router(service, public, layer).serve_with_shutdown(listen, async move {
         stop_signal().await;
         tracing::info!("shutting down");
-        // Unloading the projects writes their snapshots and ends every
-        // `Watch` stream, which lets the graceful drain finish.
+        // Unloading the projects writes their snapshots before the
+        // graceful drain finishes.
         registry.shutdown().await;
         let _ = stopping.send(());
     });

@@ -106,8 +106,8 @@ impl<S: ProjectStore> TestServer<S> {
         let service = service.into_server();
         let reg = Arc::clone(&registry);
         let done = tokio::spawn(async move {
-            // Unload the projects first: that ends every `Watch` stream, so
-            // the graceful drain of the connections can finish.
+            // Unload the projects first: that writes their snapshots before
+            // the graceful drain of the connections finishes.
             server::builder()
                 .layer(tonic::service::InterceptorLayer::new(dev_interceptor))
                 .add_service(service)
