@@ -1268,7 +1268,8 @@ without credentials.
 | Server | `GetServerInfo`, `GetMethodology` |
 | Projects | `CreateProject`, `ListProjects`, `OpenProject` (stream of chunks), `RenameProject`, `DeleteProject` (admin) |
 | Edit lock | `AcquireLock`, `RenewLock`, `ReleaseLock`, `BreakLock` (admin) |
-| Editing | `SubmitOps` (batch, at most `max_batch_ops`), `Watch` (stream: ops, lease changes, risk updates, `Heartbeat`) |
+| Editing | `SubmitOps` (batch, at most `max_batch_ops`) |
+| Looking | `GetProjectStatus` (newest sequence number and lock holder; no lease needed) |
 | Results | `GetRisks`, `VerifyAudit` (admin) |
 | Versions | `CreateBaseline`, `ListBaselines`, `GetBaseline` (stream of chunks) |
 | History | `ListHistory` (newest ops, capped by `max_history`) |
@@ -1278,10 +1279,10 @@ without credentials.
 | Event log (admin) | `ListEvents` (limit 0 = 200, capped at 1000; newest first; `no_event_log` when the server has no accounts) |
 | Login switch | `GetServerSettings` (any logged-in user), `SetPasswordLogin` (admin). `ServerSettings { password_login_enabled, company_login_available }` |
 
-`Watch` sends a `Heartbeat` every `heartbeat` (default 20 s) so proxies that
-close idle streams keep the connection open. The client restarts a stream
-that stays silent for `watch_silence` (60 s), which catches a connection a
-proxy dropped without closing (R6).
+There is no live stream (decision D23, job 108). A read-only client sees
+the version it loaded; every `version_check` (30 s) it calls
+`GetProjectStatus` and, if the server is ahead, offers a reload. Only
+`OpenProject` and `GetBaseline` stream, and they end by themselves.
 
 ## II.4 Server (`crates/aegis-server`)
 
@@ -1333,7 +1334,7 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `accounts/service.rs` | `AccountsService`, `LoginOptions`, `PUBLIC_PATH_PREFIX`, `RETRY_AFTER_HEADER` | The public `Accounts` gRPC service. |
 | `service.rs` | `AegisService<S>` | All `Aegis` handlers. Maps `ServerError` to a status. `with_accounts()` adds the account calls. |
 | `registry.rs` | `Registry<S>` | Owns the open project actors (map of `ProjectId` to `ProjectHandle`), caps (`max_open_projects`, `max_projects`), name checks, baselines, seat restore. |
-| `actor.rs` | `ProjectHandle`, `Accepted`, `Event`, `OpenData`, `Subscription`, `RiskReport`, `ThreatRiskRow`, `Loaded` | One task per open project (C1). Bounded mailbox (`mailbox`, R4). Commands include `Rename` and `Delete`. |
+| `actor.rs` | `ProjectHandle`, `OpenData`, `Status`, `RiskReport`, `ThreatRiskRow`, `Loaded` | One task per open project (C1). Bounded mailbox (`mailbox`, R4). Commands include `Status`, `Rename` and `Delete`. `Status` answers from memory (nothing is serialized). |
 | `lease.rs` | `LeaseToken`, `Grant`, `LeaseState` | Edit lock with expiry (`lease`, default 120 s). |
 | `license.rs` | `LicenseGate`, `LoadError`, `ClockSecs` | License check and seat ledger, `restore()` from recent editors. |
 | `methodologies.rs` | `Methodologies`, `HostedMethodology`, `PackLoadError` | Built-in packs plus `AEGIS_PACKS_DIR`. |
@@ -1342,9 +1343,9 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `store/memory.rs` | `MemoryStore` | Tests and development. |
 | `store/postgres.rs` | `PostgresStore`, `PostgresOptions`, `DbTls { Off, Encrypt, Verify }` | `Encrypt` accepts any certificate (libpq `require`); `Verify` checks it against the OS roots (libpq `verify-full`). |
 | `store/audit.rs` | `Hash`, `ChainVerifier`, `ChainReport` | SHA-256 hash chain over stored ops. |
-| `ids.rs` | `ProjectId`, `BadProjectId` | |
 | `store/folder.rs` | `FolderStore`, `STREAM_BATCH_OPS`, `STREAM_BATCH_BYTES` | `ProjectStore` over one project folder, for standalone mode (II.4.7). |
 | `import.rs` | `ImportReport`, `ImportError`, `Registry::import_folder` | Copies a standalone folder into the server's store with its history intact (II.4.7). |
+| `ids.rs` | `ProjectId`, `BadProjectId` | |
 | `error.rs` | `ServerError` | |
 
 `ProjectStore` methods: `create`, `list`, `count`, `load`, `append`,
@@ -1454,17 +1455,13 @@ Rules the code follows:
 | `lease` | 120 s | Edit lock lifetime |
 | `idle_unload` | 15 min | Unload a project actor nobody uses |
 | `mailbox` / `mailbox_wait` | 64 / 5 s | R4 |
-| `observer_buffer` | 1024 | Per `Watch` stream, R4 |
-| `recent_ops` | 1024 | Ops kept for reconnect |
 | `snapshot_every` | 1000 ops | Snapshot cadence |
 | `max_batch_ops` | 1024 | Ops per `SubmitOps` |
 | `max_open_projects` / `max_projects` | 256 / 10 000 | R3 |
 | `chunk_bytes` | 256 KiB | Stream chunk size |
-| `risks_event_max_threats` | 2 000 | Risk events in `Watch` |
 | `max_project_name_chars` | 256 | |
 | `max_baselines` | 1 000 per project | R3 |
 | `max_history` | 500 | `ListHistory` rows |
-| `heartbeat` | 20 s | `Watch` heartbeat |
 
 (The defaults are in `config.rs`; that file is the source of truth if this
 table and the code ever differ.)
@@ -1552,6 +1549,9 @@ The license counts active editors in a rolling window (`SEAT_WINDOW_SECS`).
 After a restart the ledger would be empty, so a restart could let extra
 editors in. At start the server reads `active_editors` (distinct actors with
 ops inside the window, from the `aegis_project_op_time` index) and calls
+`LicenseGate::restore()`. The ledger is derived state rebuilt from the store
+(D10).
+
 ### II.4.7 Project folders and import (standalone mode, D22)
 
 ```mermaid
@@ -1615,9 +1615,6 @@ project ID the server already holds is refused untouched. Imported actors keep
 their names, so if their edits are inside the license's seat window they hold
 a seat after the next start (II.4.6).
 
-`LicenseGate::restore()`. The ledger is derived state rebuilt from the store
-(D10).
-
 ## II.5 Client core (`crates/aegis-client`)
 
 ### II.5.1 Modules and types
@@ -1627,7 +1624,7 @@ a seat after the next start (II.4.6).
 | `transport.rs` | `TransportKind { Grpc, GrpcWeb }`, `Transport { Grpc(Channel), Web { client, origin } }`, `check_url()` | `auto`: gRPC-Web for `https://`, gRPC otherwise. HTTPS uses rustls with the OS trust store. `CONNECT_TIMEOUT = 10 s`, `CALL_TIMEOUT = 30 s`. |
 | `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name, password_enabled }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` holds the token and sends it as `authorization: Bearer`. |
 | `error.rs` | `ClientError`, `ServerCode` | `ServerCode` maps status details to cases the UI can explain (`InvalidCredentials`, `Throttled { retry_after_s }`, `PasswordLoginOff`, `LockHeld`, ...). |
-| `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, watch_silence, update_url, update_checker }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s (`LoadEvents` among them) and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
+| `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, version_check, update_url, update_checker }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s (`LoadEvents` among them) and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
 | `workspace.rs` | `Workspace`, `Submission`, `Origin`, `WorkspaceError`, `MAX_SUBMIT_OPS` | Optimistic local copy. Local ops apply at once and are kept with their inverses until the server confirms. Pending ops are sent in batches of at most `MAX_SUBMIT_OPS`, so a long offline queue is never rejected as too large. |
 | `commands.rs` | `Edit`, `EditError`, `Command` | `Edit` is a user intent (add asset, rate a step, link a control, ...). It expands to model `Op`s, including safe cascades (deleting an asset first unlinks what uses it). `Command` is everything the UI can ask of the session. |
 | `outline.rs` | `OutlineError`, `parse()`, `render()` | Text outline editor for attack trees (indent = child, `OR`/`AND`/`SEQ` gates, `- ` steps; lines with the same text are one shared node). |
@@ -1662,10 +1659,38 @@ sequenceDiagram
         S->>W: roll back with inverses
         S-->>UI: Notice (error)
     end
-    Srv-->>S: Watch: ops from others, lease, risks, heartbeat
-    S->>W: rebase local ops on the new server ops
-    S-->>UI: new ViewModel
+    S->>Srv: GetRisks (after open and after each confirmed batch)
+    Srv-->>S: the server's numbers
+    S-->>UI: new ViewModel ("numbers checked")
 ```
+
+A lost lease shows in the answer to `RenewLock` (every third of the lease) or
+to a save; either one rolls back unsaved edits and reloads read-only.
+`GetRisks` is asked once at a time: a batch confirmed while a call is in
+flight asks again when it returns.
+
+### II.5.2a Read-only view and the newer version (D23)
+
+```mermaid
+sequenceDiagram
+    participant UI as Window
+    participant S as Session actor
+    participant Srv as Server
+    S->>Srv: OpenProject (snapshot, last_seq, lock holder)
+    loop every version_check, read-only only
+        S->>Srv: GetProjectStatus
+        Srv-->>S: last_seq, lock holder
+    end
+    Note over S: last_seq ahead of confirmed_seq sets newer_version
+    UI->>S: Command::Reload
+    S->>Srv: OpenProject (resync, read-only)
+```
+
+The view shows the version that was loaded; it never changes by itself. The
+band says "A newer version is available" and offers Reload (also in the
+Project menu). Taking the edit lock on an old copy reloads first
+(the lease carries the sequence number it was granted at). An editor makes no
+status calls: it is the only writer.
 
 ### II.5.3 Baselines and comparison
 
@@ -1687,6 +1712,7 @@ then calls `RecordExport`, so the server's event log shows who exported what.
 |---|---|---|
 | `src/main.rs` | | Starts a 2-thread tokio runtime and the window (software renderer). Reads `AEGIS_URL`, `AEGIS_TRANSPORT`, `AEGIS_DEV_USER`, `AEGIS_DEV_ADMIN`. |
 | `src/launcher.rs` | `Launcher` | Owns the login steps: server screen, ask the server for `GetLoginOptions`, password or company login, start the `Session`, log out, change server. Saves `Settings`. Network results come back on a bounded channel and are handled on the UI thread in `pump()`. |
+| `src/standalone.rs` | `Standalone` | The embedded server: reads and verifies the license, opens the `FolderStore`, restores seats, binds loopback, serves the normal gRPC service until `stop()` (which waits for the snapshots). `Launcher::open_standalone`/`create_standalone` run it and connect the `Session` with the development login; File > New/Open project folder and the server screen start it. `AEGIS_STANDALONE=<folder>` (with `AEGIS_LICENSE_FILE`) starts in this mode. |
 | `src/controller.rs` | `Controller`, `Hooks`, `PasswordLogIn` | Copies the `ViewModel` into the window and turns window callbacks into `Command`s. |
 | `src/provider.rs` | `AppProvider { Oidc, Password, Dev }`, `OidcProvider`, `OidcSettings`, `PasswordProvider` | Credentials for each call. `PasswordProvider` can keep the session token in the OS keychain ("keep me logged in"); the password itself is never stored. |
 | `src/headless.rs` | `Headless`, `Frame` | Software-rendered window for tests and screenshots. |
@@ -1712,7 +1738,6 @@ sequenceDiagram
     U->>L: user, password, keep me logged in
     L->>P: LogIn
     P->>A: log_in (throttle, Argon2id, decoy)
-| `src/standalone.rs` | `Standalone` | The embedded server: reads and verifies the license, opens the `FolderStore`, restores seats, binds loopback, serves the normal gRPC service until `stop()` (which waits for the snapshots). `Launcher::open_standalone`/`create_standalone` run it and connect the `Session` with the development login; File > New/Open project folder and the server screen start it. `AEGIS_STANDALONE=<folder>` (with `AEGIS_LICENSE_FILE`) starts in this mode. |
     A-->>P: token, expiry, user
     P-->>L: PasswordSession
     L->>L: PasswordProvider.set(token), keychain if kept
@@ -1747,9 +1772,9 @@ else".
 | Rule | Where it shows |
 |---|---|
 | R3 caps | `ServerConfig`, `AccountsConfig.max_users`, throttle map cap, settings read cap, stream size caps, `MAX_SUBMIT_OPS` |
-| R4 bounded queues | actor mailbox, observer buffer, launcher event channel, hashing semaphore |
+| R4 bounded queues | actor mailbox, launcher event channel, hashing semaphore |
 | R5 blocking work off async | Argon2id on `spawn_blocking` |
-| R6 timeouts | `CALL_TIMEOUT` (server and client), `CONNECT_TIMEOUT`, `hashing_wait`, `mailbox_wait`, `Watch` heartbeat (server) and `watch_silence` (client, 60 s) |
+| R6 timeouts | `CALL_TIMEOUT` (server and client), `CONNECT_TIMEOUT`, `hashing_wait`, `mailbox_wait`, `version_check` (client, 30 s) |
 | C1 one owner | project actor, client session actor |
 | C2 no lock across await | `Accounts` state and throttle mutexes |
 | D7 ordered output | `BTreeMap` in `pages.rs` and `Accounts` users |
@@ -1768,20 +1793,6 @@ Part III is the architecture for the work in
 here, move that part into Part I or Part II in the same commit and delete it
 here.** Nothing in Part III is a promise about field names; the job's spec
 and ADR decide those.
-
-## III.0 Planned removals (D23, rule P7)
-
-Read-only users no longer follow the editor live. Job 108 removes, where
-nothing else needs them:
-
-| Part (described in Part II today) | Replaced by |
-|---|---|
-| Observer op stream and `RisksEvent` in `Watch` (ADR 0033), the observer view in the client | Open the last saved version or a baseline; a "newer version available, reload" notice (a cheap version check on a timer or on focus) |
-| `Heartbeat` every 20 s and the client `watch_silence` watchdog | Nothing, if `Watch` goes; otherwise kept only for the editor |
-| Lease changes pushed through `Watch` | The editor learns of a broken lease from `RenewLock` or `SubmitOps` answers |
-| Server numbers pushed to the editor | `GetRisks` after a confirmed batch keeps the "numbers checked" mark (job 047) |
-
-Part II keeps describing the built code until job 108 lands.
 
 ## III.1 Target system context
 

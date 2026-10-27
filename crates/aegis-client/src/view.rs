@@ -364,7 +364,7 @@ pub fn local_risk_keys(ws: &Workspace) -> HashMap<String, (String, String)> {
 /// Whether the server's numbers differ from this engine's for the same
 /// project state. Time O(threats).
 #[must_use]
-pub fn risks_differ(ws: &Workspace, server: &pb::RisksEvent) -> bool {
+pub fn risks_differ(ws: &Workspace, server: &pb::GetRisksResponse) -> bool {
     let local = local_risk_keys(ws);
     local.len() != server.threats.len()
         || server.threats.iter().any(|t| {
@@ -376,7 +376,7 @@ pub fn risks_differ(ws: &Workspace, server: &pb::RisksEvent) -> bool {
 
 /// Replaces the risks in `rows` with the server's. For a client whose engine
 /// differs from the server's, or whose own numbers were found wrong.
-pub fn use_server_risks(ws: &Workspace, rows: &mut [ThreatRow], server: &pb::RisksEvent) {
+pub fn use_server_risks(ws: &Workspace, rows: &mut [ThreatRow], server: &pb::GetRisksResponse) {
     let m = ws.project().methodology();
     let view = |key: &str| {
         m.risk_level(key)

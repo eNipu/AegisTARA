@@ -5,7 +5,7 @@ use std::time::Duration;
 use tonic::transport::Server;
 
 /// Longest a unary call may run before the transport cancels it (R6).
-/// Streaming bodies (`OpenProject`, `Watch`) are not limited by it.
+/// Streaming bodies (`OpenProject`) are not limited by it.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Most requests in flight on one connection.
@@ -13,7 +13,7 @@ pub const MAX_CONCURRENT_PER_CONNECTION: usize = 64;
 
 /// A tonic server builder with the standard limits: call timeout,
 /// per-connection concurrency, HTTP/2 keep-alive pings that detect dead
-/// clients (so a vanished client's `Watch` stream ends), and `TCP_NODELAY`.
+/// clients (so a vanished client's `OpenProject` stream ends), and `TCP_NODELAY`.
 ///
 /// HTTP/1.1 is accepted next to HTTP/2, so gRPC-Web (`tonic_web::GrpcWebLayer`)
 /// works through proxies that only forward HTTP/1.1, such as Railway's edge

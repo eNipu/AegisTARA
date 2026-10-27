@@ -338,6 +338,9 @@ pub struct ProjectView {
     pub mode: Mode,
     /// Who holds the edit lock, if anyone.
     pub lock_holder: Option<String>,
+    /// The server holds a newer version than the one shown. Only a read-only
+    /// view sets it; `Command::Reload` loads the newer one.
+    pub newer_version: bool,
     /// Save state.
     pub sync: SyncView,
     /// The threat list.

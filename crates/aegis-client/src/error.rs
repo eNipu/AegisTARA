@@ -26,8 +26,6 @@ pub enum ServerCode {
     MalformedOp,
     /// The model refused an op.
     RejectedOp,
-    /// A watcher asked for history the server no longer holds.
-    OutOfRange,
     /// The server is busy or full.
     Busy,
     /// The project does not exist.
@@ -158,7 +156,6 @@ impl From<tonic::Status> for ClientError {
             "stale_base" => ServerCode::StaleBase { current },
             "malformed_op" => ServerCode::MalformedOp,
             "rejected_op" => ServerCode::RejectedOp,
-            "out_of_range" => ServerCode::OutOfRange,
             "busy" => ServerCode::Busy,
             "unknown_project" => ServerCode::UnknownProject,
             "not_admin" => ServerCode::NotAdmin,

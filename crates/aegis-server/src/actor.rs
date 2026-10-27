@@ -1,15 +1,14 @@
 //! One task per open project (rule C1).
 //!
-//! The actor owns the [`Project`], its [`ProjectEvalCache`], the edit lease,
-//! and the observer channel. Everything else talks to it through a bounded
-//! mailbox (R4), so ops are applied one at a time in arrival order and no
+//! The actor owns the [`Project`], its [`ProjectEvalCache`] and the edit
+//! lease. Everything else talks to it through a bounded mailbox (R4), so ops are applied one at a time in arrival order and no
 //! lock protects the project.
 //!
 //! # Accepting ops
 //!
 //! `SubmitOps` is atomic. The actor checks the lease and the base sequence,
 //! decodes every op (capped, R3), applies them in order, stores them, and
-//! only then answers and tells observers:
+//! only then answers:
 //!
 //! 1. any op fails to apply: the already applied ops are undone with their
 //!    inverses, nothing is stored;
@@ -25,16 +24,14 @@
 //!
 //! # Lifetime
 //!
-//! The actor unloads itself after `idle_unload` without a lease or
-//! observers, writing a final snapshot first. A new request loads it again.
+//! The actor unloads itself after `idle_unload` without a lease, writing a final snapshot first. A new request loads it again.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
 use aegis_model::{OpCodec, Project, ProjectEvalCache, ThreatId};
 use bytes::Bytes;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use crate::auth::Principal;
@@ -43,30 +40,6 @@ use crate::error::ServerError;
 use crate::ids::ProjectId;
 use crate::lease::{Grant, LeaseState};
 use crate::store::{ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot};
-
-/// One accepted op, shared between the recent-ops ring and every observer.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Accepted {
-    /// Position in the project's history.
-    pub seq: u64,
-    /// Subject that submitted the op.
-    pub actor: Arc<str>,
-    /// Acceptance time, milliseconds since the Unix epoch.
-    pub timestamp_ms: u64,
-    /// Canonical op bytes (`OpCodec::encode`).
-    pub op: Bytes,
-}
-
-/// What observers are told.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Event {
-    /// An op was accepted.
-    Op(Arc<Accepted>),
-    /// The lease changed hands. Empty holder: the lock is free.
-    Lock(Arc<str>),
-    /// The recomputed risks after an accepted batch.
-    Risks(Arc<RiskReport>),
-}
 
 /// A serialized project and the sequence number it is current as of.
 #[derive(Debug)]
@@ -81,18 +54,13 @@ pub struct OpenData {
     pub lock_holder: Option<Arc<str>>,
 }
 
-/// An observer's start: ops it missed, then live events.
+/// A project's newest sequence number and who holds its lease.
 #[derive(Debug)]
-pub struct Subscription {
-    /// Ops with `seq > after_seq` that were already accepted.
-    pub backlog: Vec<Arc<Accepted>>,
-    /// Events from now on. Nothing is missed or repeated between the two.
-    pub live: broadcast::Receiver<Event>,
-    /// Lease holder at subscription time.
+pub struct Status {
+    /// Sequence number of the last accepted op.
+    pub last_seq: u64,
+    /// Current lease holder, if any.
     pub lock_holder: Option<Arc<str>>,
-    /// The risks as of the current sequence number, when the project is
-    /// small enough to send them. Sent after the backlog.
-    pub risks: Option<Arc<RiskReport>>,
 }
 
 /// The official risk of each threat scenario at one sequence number.
@@ -131,7 +99,7 @@ enum Cmd {
         ops: Vec<Bytes>,
         reply: Reply<u64>,
     },
-    Subscribe(u64, Reply<Subscription>),
+    Status(Reply<Status>),
     Risks(Reply<RiskReport>),
     Rename {
         who: Principal,
@@ -244,14 +212,14 @@ impl ProjectHandle {
         .await
     }
 
-    /// Starts observing from `after_seq`.
+    /// The newest sequence number and the lease holder. Cheap: nothing is
+    /// serialized.
     ///
     /// # Errors
     ///
-    /// [`ServerError::OutOfRange`] if the ops after `after_seq` are no
-    /// longer in memory or `after_seq` is in the future.
-    pub async fn subscribe(&self, after_seq: u64) -> Result<Subscription, ServerError> {
-        self.call(|r| Cmd::Subscribe(after_seq, r)).await
+    /// [`ServerError::Busy`] or [`ServerError::Unloaded`].
+    pub async fn status(&self) -> Result<Status, ServerError> {
+        self.call(Cmd::Status).await
     }
 
     /// Computes the official risks.
@@ -284,7 +252,7 @@ impl ProjectHandle {
     }
 
     /// Deletes the project from storage and stops the actor. Refused while
-    /// anyone holds the lease. Observers' streams end.
+    /// anyone holds the lease.
     ///
     /// # Errors
     ///
@@ -367,7 +335,6 @@ pub fn spawn<S: ProjectStore>(
     config: &ServerConfig,
 ) -> ProjectHandle {
     let (tx, rx) = mpsc::channel(config.mailbox);
-    let (events, _) = broadcast::channel(config.observer_buffer.max(1));
     let id = loaded.meta.id;
     let codec = OpCodec::new(Arc::clone(loaded.project.methodology()));
     let now = Instant::now();
@@ -381,14 +348,10 @@ pub fn spawn<S: ProjectStore>(
         seq: loaded.seq,
         snapshot_seq: loaded.snapshot_seq,
         lease: LeaseState::new(config.lease),
-        recent: VecDeque::with_capacity(config.recent_ops.min(1024)),
-        events,
         idle_unload: config.idle_unload,
         last_activity: now,
         idle_check_at: now + config.idle_unload,
         snapshot_every: config.snapshot_every.max(1),
-        recent_cap: config.recent_ops,
-        risks_max_threats: config.risks_event_max_threats,
         max_batch: config.max_batch_ops,
         wall_clock: config.wall_clock,
         broken: false,
@@ -419,15 +382,10 @@ struct Actor<S> {
     /// Sequence number the stored snapshot is current as of.
     snapshot_seq: u64,
     lease: LeaseState,
-    /// The last `recent_cap` accepted ops, oldest first, contiguous.
-    recent: VecDeque<Arc<Accepted>>,
-    events: broadcast::Sender<Event>,
     idle_unload: Duration,
     last_activity: Instant,
     idle_check_at: Instant,
     snapshot_every: u64,
-    recent_cap: usize,
-    risks_max_threats: usize,
     max_batch: usize,
     wall_clock: fn() -> u64,
     /// Memory no longer matches storage; stop and let the next request
@@ -485,22 +443,15 @@ impl<S: ProjectStore> Actor<S> {
 
     fn on_timer(&mut self) -> Flow {
         let now = Instant::now();
-        if self.lease.sweep(now).is_some() {
-            self.emit(Event::Lock(Arc::from("")));
-        }
+        // An expired lease is dropped here; nobody needs to be told.
+        let _ = self.lease.sweep(now);
         if now >= self.idle_check_at {
-            let unused = self.lease.expiry().is_none() && self.events.receiver_count() == 0;
-            if unused {
+            if self.lease.expiry().is_none() {
                 return Flow::Stop;
             }
             self.idle_check_at = now + self.idle_unload;
         }
         Flow::Continue
-    }
-
-    fn emit(&self, event: Event) {
-        // No receivers is normal; the send error only says so.
-        let _ = self.events.send(event);
     }
 
     async fn handle(&mut self, cmd: Cmd) -> Flow {
@@ -515,9 +466,6 @@ impl<S: ProjectStore> Actor<S> {
                     .lease
                     .acquire(Instant::now(), &who)
                     .map(|g| Grant { last_seq: seq, ..g });
-                if r.is_ok() {
-                    self.emit(Event::Lock(Arc::clone(&who.subject)));
-                }
                 let _ = reply.send(r);
             }
             Cmd::Renew(who, token, reply) => {
@@ -530,16 +478,10 @@ impl<S: ProjectStore> Actor<S> {
             }
             Cmd::Release(who, token, reply) => {
                 let r = self.lease.release(Instant::now(), &who, &token).map(|_| ());
-                if r.is_ok() {
-                    self.emit(Event::Lock(Arc::from("")));
-                }
                 let _ = reply.send(r);
             }
             Cmd::Break(who, reply) => {
                 let r = self.lease.break_lease(Instant::now(), &who);
-                if matches!(r, Ok(Some(_))) {
-                    self.emit(Event::Lock(Arc::from("")));
-                }
                 let _ = reply.send(r.map(|_| ()));
             }
             Cmd::Submit {
@@ -552,8 +494,11 @@ impl<S: ProjectStore> Actor<S> {
                 let r = self.submit(&who, &token, base_seq, &ops).await;
                 let _ = reply.send(r);
             }
-            Cmd::Subscribe(after, reply) => {
-                let _ = reply.send(self.subscribe(after));
+            Cmd::Status(reply) => {
+                let _ = reply.send(Ok(Status {
+                    last_seq: self.seq,
+                    lock_holder: self.lease.holder(Instant::now()).cloned(),
+                }));
             }
             Cmd::Risks(reply) => {
                 let _ = reply.send(Ok(self.risks()));
@@ -655,29 +600,6 @@ impl<S: ProjectStore> Actor<S> {
         })
     }
 
-    fn subscribe(&self, after: u64) -> Result<Subscription, ServerError> {
-        if after > self.seq {
-            return Err(ServerError::OutOfRange { after });
-        }
-        // The ring holds seq (first..=self.seq); older ops are gone.
-        let first_held = self.recent.front().map_or(self.seq + 1, |a| a.seq);
-        if after + 1 < first_held {
-            return Err(ServerError::OutOfRange { after });
-        }
-        let backlog = self
-            .recent
-            .iter()
-            .filter(|a| a.seq > after)
-            .map(Arc::clone)
-            .collect();
-        Ok(Subscription {
-            backlog,
-            live: self.events.subscribe(),
-            lock_holder: self.lease.holder(Instant::now()).cloned(),
-            risks: self.observer_risks(),
-        })
-    }
-
     async fn submit(
         &mut self,
         who: &Principal,
@@ -745,38 +667,8 @@ impl<S: ProjectStore> Actor<S> {
             return Err(ServerError::Internal);
         }
 
-        for op in stored {
-            let accepted = Arc::new(Accepted {
-                seq: op.seq,
-                actor: Arc::clone(&who.subject),
-                timestamp_ms: op.timestamp_ms,
-                op: Bytes::from(op.op),
-            });
-            self.seq = accepted.seq;
-            if self.recent_cap > 0 {
-                if self.recent.len() == self.recent_cap {
-                    self.recent.pop_front();
-                }
-                self.recent.push_back(Arc::clone(&accepted));
-            }
-            self.emit(Event::Op(accepted));
-        }
-        // One recomputation per batch, and only when someone is watching.
-        // The cache is incremental, so this reads results that the batch
-        // already invalidated and refilled.
-        if self.events.receiver_count() > 0
-            && let Some(report) = self.observer_risks()
-        {
-            self.emit(Event::Risks(report));
-        }
+        self.seq += stored.len() as u64;
         Ok(self.seq)
-    }
-
-    /// The risks for observers, or `None` for a project too large to send
-    /// them for. Time O(threats).
-    fn observer_risks(&self) -> Option<Arc<RiskReport>> {
-        (self.project.threat_scenario_count() <= self.risks_max_threats)
-            .then(|| Arc::new(self.risks()))
     }
 
     /// Undoes applied ops, newest first. If an inverse is refused the

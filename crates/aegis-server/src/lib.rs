@@ -3,7 +3,7 @@
 //! The server is the source of truth for projects. A client edits by
 //! sending typed ops; the server checks the edit lease, decodes each op with
 //! the capped decoder, applies it through `Project::apply` (the same engine
-//! the client embeds), stores it, and streams it to observers. Design and
+//! the client embeds), and stores it. Design and
 //! numbers: `docs/adr/0026-server-skeleton.md`.
 //!
 //! Layers, bottom up:

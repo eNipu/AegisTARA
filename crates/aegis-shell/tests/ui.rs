@@ -405,7 +405,7 @@ async fn a_second_user_sees_the_project_read_only_and_follows_the_editor() {
         .expect("row")
         .inherent
         .to_string();
-    save(&bob.frame(), "09-observer");
+    save(&bob.frame(), "09-read-only-second-user");
 
     // Alice rates a step; Bob sees the new risk without doing anything.
     let (x, y) = node_position(&alice, "Exploit");
@@ -416,12 +416,40 @@ async fn a_second_user_sees_the_project_read_only_and_follows_the_editor() {
         })
         .await;
     alice.window.invoke_set_rating(1);
-    bob.until("bob follows", |_| {
+
+    // Bob's window does not change by itself. It offers the newer version.
+    bob.until("bob is offered the newer version", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.newer_version)
+    })
+    .await;
+    bob.controller.apply_latest();
+    assert!(bob.window.get_newer_version());
+    assert!(
+        bob.window.get_band_text().contains("newer version"),
+        "{}",
+        bob.window.get_band_text()
+    );
+    assert_eq!(
+        bob.window
+            .get_threats()
+            .row_data(0)
+            .expect("row")
+            .inherent
+            .as_str(),
+        before,
+        "the version he opened stays as it was until he reloads"
+    );
+    save(&bob.frame(), "09b-newer-version");
+
+    // Reload shows Alice's saved work.
+    bob.window.invoke_reload();
+    bob.until("bob sees the new risk", |_| {
         bob.controller.apply_latest();
         let now = bob.window.get_threats().row_data(0).expect("row").inherent;
         now.as_str() != before
     })
     .await;
+    assert!(!bob.window.get_newer_version());
 
     drop(bob);
     drop(alice);

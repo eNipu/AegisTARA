@@ -181,7 +181,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 ## D23. Remove the live observer view; viewers read a saved version
 
 - **Date:** 2026-10-26
-- **Decision:** read-only users open the project as last saved by the server (or a baseline). They see a "newer version available, reload" notice instead of a live stream. The editor keeps its lease and "numbers checked" through ordinary calls. Streaming ops and risk events to observers (ADR 0033), and the `Watch` heartbeat and silence watchdog where nothing else needs them, are removed. Job 108 decides the exact cut with the code in front of it.
+- **Decision:** read-only users open the project as last saved by the server (or a baseline). They see a "newer version available, reload" notice instead of a live stream. The editor keeps its lease and "numbers checked" through ordinary calls. Streaming ops and risk events to observers (ADR 0033), and the `Watch` heartbeat and silence watchdog where nothing else needs them, are removed. Job 108 (done 2026-10-27, ADR 0033 update) cut the whole `Watch` stream and added `GetProjectStatus` for the "newer version available" notice.
 - **Rule from the owner:** features that add technical complexity without business value are reduced or removed. Added to [engineering-standards.md](engineering-standards.md) section 1.
 
 ## D24. Beyond automotive: EU CRA and other domains through packs
