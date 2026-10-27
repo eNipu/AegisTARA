@@ -95,6 +95,14 @@ pub(crate) fn clear_step_ops(
         return Vec::new();
     };
     let mut ops = Vec::new();
+    if project.review_marked(tree, node) {
+        ops.push(Op::SetReviewMark {
+            tree,
+            node,
+            marked: false,
+            provenance: p.clone(),
+        });
+    }
     if project.step_feasibility(t_idx, idx).is_some() {
         ops.push(Op::SetStepFeasibility {
             tree,

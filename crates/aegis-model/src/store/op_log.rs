@@ -51,6 +51,13 @@ struct RecordView<'a> {
 #[derive(Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum OpView<'a> {
+    SetReviewMark {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        marked: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddTreeNode {
         tree: Text<TreeId>,
         parent: Text<NodeId>,
@@ -452,6 +459,17 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             tree: Text(*tree),
             id: Text(*id),
             gate: GateKindWire::from(*gate),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetReviewMark {
+            tree,
+            node,
+            marked,
+            provenance,
+        } => OpView::SetReviewMark {
+            tree: Text(*tree),
+            node: Text(*node),
+            marked: *marked,
             provenance: ProvenanceView::of(provenance),
         },
         Op::SetDescription {
@@ -888,6 +906,17 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             tree: tree.0,
             id: id.0,
             gate: gate.into(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetReviewMark {
+            tree,
+            node,
+            marked,
+            provenance,
+        } => Op::SetReviewMark {
+            tree: tree.0,
+            node: node.0,
+            marked,
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetDescription {

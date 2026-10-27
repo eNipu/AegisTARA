@@ -231,6 +231,7 @@ mod diff;
 mod error;
 mod eval;
 mod id;
+pub mod library;
 mod lint;
 mod methodology;
 mod op;

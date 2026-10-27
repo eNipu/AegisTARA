@@ -430,6 +430,8 @@ pub struct Inspector {
     pub attachable: Vec<(ControlId, String)>,
     /// The step's feasibility after controls, if they change it.
     pub residual: Option<String>,
+    /// The rating came from the library and nobody has reviewed it.
+    pub needs_review: bool,
 }
 
 fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
@@ -769,5 +771,6 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         mitigations,
         attachable,
         residual,
+        needs_review: project.review_marked(tree_id, node_id),
     })
 }

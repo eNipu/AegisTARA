@@ -175,6 +175,15 @@ pub enum LintCode {
         /// The empty gate node.
         node: NodeId,
     },
+    /// The rating of a step came from a library item and nobody has marked it
+    /// as reviewed. Feasibility depends on the product, so a reused rating
+    /// must be looked at before it reaches a report.
+    LibraryRatingNotReviewed {
+        /// The attack tree.
+        tree: TreeId,
+        /// The step whose rating came from a library item.
+        node: NodeId,
+    },
     /// A leaf step node in a project attack tree has no inherent feasibility
     /// rating (neither complete attack potential factor ratings nor a direct
     /// step feasibility rating), preventing tree evaluation.
@@ -259,7 +268,8 @@ impl LintCode {
             | Self::ClaimOnNonRetainOrShareThreat { .. }
             | Self::CybersecurityGoalWithoutControls { .. }
             | Self::CybersecurityGoalUnlinked { .. }
-            | Self::CybersecurityClaimUnlinked { .. } => LintSeverity::Warning,
+            | Self::CybersecurityClaimUnlinked { .. }
+            | Self::LibraryRatingNotReviewed { .. } => LintSeverity::Warning,
             Self::ThreatWithoutFeasibility { .. }
             | Self::ReduceTreatmentWithoutControls { .. }
             | Self::AttackTreeGateEmpty { .. }
@@ -311,6 +321,10 @@ impl fmt::Display for LintCode {
             Self::AttackTreeGateEmpty { tree, node } => {
                 write!(f, "attack tree {tree} gate {node} has no children")
             }
+            Self::LibraryRatingNotReviewed { tree, node } => write!(
+                f,
+                "the rating of step {node} in attack tree {tree} came from a library item and has not been reviewed"
+            ),
             Self::AttackTreeStepUnrated { tree, node } => write!(
                 f,
                 "attack tree {tree} step {node} has no feasibility rating"

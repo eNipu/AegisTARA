@@ -254,6 +254,25 @@ pub enum Edit {
         tree: TreeId,
     },
 
+    /// Copies a library item into the project (see [`crate::library`]).
+    InsertLibraryItem {
+        /// The pack.
+        pack: std::sync::Arc<aegis_model::library::LibraryPack>,
+        /// Position of the item in the pack.
+        item: usize,
+        /// Where it goes.
+        mode: crate::library::InsertMode,
+        /// Ratings and sharing.
+        options: crate::library::InsertOptions,
+    },
+    /// Says a person has checked a rating that came from the library.
+    MarkReviewed {
+        /// The tree.
+        tree: TreeId,
+        /// The step.
+        node: NodeId,
+    },
+
     // ---- controls, goals, claims ----
     /// Adds a security control.
     AddControl {
@@ -362,6 +381,9 @@ pub enum EditError {
     /// The catalog reference does not parse.
     #[error("the reference does not match the catalog's format")]
     BadCatalogRef,
+    /// A library item cannot go there.
+    #[error("{0}")]
+    Library(String),
 }
 
 /// An element with a description cannot be removed, so every removal in an
@@ -837,6 +859,18 @@ impl Edit {
                 ops
             }
 
+            Edit::InsertLibraryItem {
+                pack,
+                item,
+                mode,
+                options,
+            } => crate::library::insert_ops(project, pack, *item, mode, options, actor, now_ms)?,
+            Edit::MarkReviewed { tree, node } => vec![Op::SetReviewMark {
+                tree: *tree,
+                node: *node,
+                marked: false,
+                provenance: p,
+            }],
             Edit::AddControl { id, name: n } => vec![Op::AddSecurityControl {
                 id: *id,
                 name: name(n)?,
@@ -964,6 +998,10 @@ impl Edit {
             Edit::AddDamage { id, .. } => Some(Selection::Damage(*id)),
             Edit::AddThreat { id, .. } => Some(Selection::Threat(*id)),
             Edit::NewTree { id, .. } => Some(Selection::Tree(*id)),
+            Edit::InsertLibraryItem {
+                mode: crate::library::InsertMode::NewTree { id, .. },
+                ..
+            } => Some(Selection::Tree(*id)),
             Edit::AddControl { id, .. } => Some(Selection::Control(*id)),
             Edit::AddGoal { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),

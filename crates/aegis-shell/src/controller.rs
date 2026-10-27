@@ -21,12 +21,14 @@ use std::sync::Arc;
 use aegis_canvas::{Direction, Point, RenderOptions, Size, Viewport, render};
 use aegis_client::audit::EventGroup;
 use aegis_client::commands::{Command, Edit};
+use aegis_client::library::{InsertMode, InsertOptions, LibraryView};
 use aegis_client::report::ExportKind;
 use aegis_client::session::Session;
 use aegis_client::state::{
     ConnectionView, Mode, NumbersCheck, ProjectView, Severity, SyncView, ViewModel,
 };
 use aegis_client::view::{AdminAction, Page, RiskView, Selection};
+use aegis_model::library::LibraryPack;
 use aegis_model::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
 use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
 
@@ -94,6 +96,8 @@ pub struct Controller {
     window: slint::Weak<AppWindow>,
     session: RefCell<Option<Session>>,
     state: RefCell<State>,
+    /// The Library panel's search, narrowing and pick (job 057).
+    library: RefCell<LibraryView>,
     hooks: Hooks,
 }
 
@@ -200,6 +204,7 @@ impl Controller {
                 event_group: None,
                 session: None,
             }),
+            library: RefCell::new(LibraryView::new(Arc::new(LibraryPack::builtin_demo()))),
             hooks,
         });
         controller.wire(window);
@@ -696,6 +701,35 @@ impl Controller {
                 });
             }
         );
+        on!(on_mark_reviewed, |c| {
+            if let Some((tree, node)) =
+                c.with_project(|p| p.inspector.as_ref().map(|i| (i.tree, i.node)))
+            {
+                c.edit(Edit::MarkReviewed { tree, node });
+            }
+        });
+        on!(on_library_opened, |c| c.show_library());
+        on!(on_library_query, |c, text| {
+            c.library.borrow_mut().set_query(&text);
+            c.show_library();
+        });
+        on!(on_library_facet, |c, i| {
+            if let Some(i) = pos(i) {
+                c.library.borrow_mut().toggle_facet(i);
+                c.show_library();
+            }
+        });
+        on!(on_library_clear_filters, |c| {
+            c.library.borrow_mut().clear_filters();
+            c.show_library();
+        });
+        on!(on_library_pick, |c, i| {
+            c.library.borrow_mut().pick(pos(i));
+            c.show_library();
+        });
+        on!(on_library_insert, |c, mode, ratings, share| {
+            c.insert_library_item(mode, ratings, share);
+        });
         on!(on_remove_tree, |c| if let Some(tree) = c.shown_tree() {
             c.edit(Edit::RemoveTree { tree });
         });
@@ -988,6 +1022,81 @@ impl Controller {
     }
 
     // ---- what is selected -------------------------------------------------
+
+    /// Draws the Library panel's state, and which places the selection on
+    /// the canvas offers.
+    fn show_library(&self) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let lib = self.library.borrow();
+        w.set_library_rows(rows(lib.rows()));
+        w.set_library_selected(
+            lib.picked_row()
+                .and_then(|r| i32::try_from(r).ok())
+                .unwrap_or(-1),
+        );
+        w.set_library_preview(s(&lib.preview()));
+        w.set_library_facets(model(lib.facet_choices().iter().map(|c| s(c)).collect()));
+        w.set_library_filter(s(&lib.filter_text()));
+        let place = self.library_place();
+        w.set_library_can_gate(matches!(place, Some((_, Some(false)))));
+        w.set_library_can_leaf(matches!(place, Some((_, Some(true)))));
+    }
+
+    /// The tree on the canvas and, when a node of it is selected, whether
+    /// that node is a step.
+    fn library_place(&self) -> Option<(TreeId, Option<bool>)> {
+        self.with_project(|p| {
+            let tree = p.tree.as_ref()?.tree;
+            let node = p
+                .inspector
+                .as_ref()
+                .filter(|i| i.tree == tree)
+                .map(|i| i.is_step);
+            Some((tree, node))
+        })
+    }
+
+    fn insert_library_item(&self, mode: i32, ratings: bool, share: bool) {
+        let (item, pack) = {
+            let lib = self.library.borrow();
+            let Some(item) = lib.picked_item() else {
+                return;
+            };
+            (item, Arc::clone(lib.pack()))
+        };
+        let mode = match (mode, self.library_place()) {
+            (0, _) => InsertMode::NewTree {
+                id: TreeId::new_v7(),
+                threat: None,
+            },
+            (1, Some((tree, Some(false)))) => {
+                let Some(gate) = self.with_project(|p| p.inspector.as_ref().map(|i| i.node)) else {
+                    return;
+                };
+                InsertMode::UnderGate { tree, gate }
+            }
+            (2, Some((tree, Some(true)))) => {
+                let Some(leaf) = self.with_project(|p| p.inspector.as_ref().map(|i| i.node)) else {
+                    return;
+                };
+                InsertMode::InPlaceOfLeaf { tree, leaf }
+            }
+            _ => return,
+        };
+        self.edit(Edit::InsertLibraryItem {
+            pack,
+            item,
+            mode,
+            options: InsertOptions {
+                with_ratings: ratings,
+                share_all: share,
+                ..InsertOptions::default()
+            },
+        });
+        self.send(Command::ShowPage(Page::Trees));
+    }
 
     fn selected_asset(&self) -> Option<AssetId> {
         self.with_project(|p| p.data.asset.as_ref().map(|a| a.id))
@@ -1936,6 +2045,7 @@ impl Controller {
                 w.set_inspector_title(s(&i.title));
                 w.set_inspector_kind(s(&i.kind));
                 w.set_inspector_is_step(i.is_step);
+                w.set_inspector_needs_review(i.needs_review);
                 w.set_level_options(with_none(
                     "Not rated",
                     i.levels.iter().map(|c| c.label.clone()),
