@@ -122,16 +122,12 @@ the review D5 asks for. The comment points to the decision that approved it, so
 the reason is traceable. Slint and MPL-2.0 are not approved yet.
 
 The first exception came with job 010 (ADR 0009): `libfuzzer-sys@0.4.13`
-may use NCSA, under the D5 rule for non-shipped tooling. Two more pieces keep
-that exception from leaking into a shipped binary:
-
-- `[bans] deny` lists `libfuzzer-sys` with `wrappers = ["aegis-model-fuzz"]`,
-  so any other crate that depends on it fails the `bans` check. A
-  tooling-only exception always gets such a ban entry.
-- `scripts/deny.sh` also checks every `crates/*/fuzz/Cargo.toml`, so the fuzz
-  crate's own licenses are checked in CI even though it is not a production
-  crate. `tools/deny-fixtures` has a `bad-ncsa` case proving NCSA stays off
-  the global allow list.
+may use NCSA, under the D5 rule for non-shipped tooling. **Job 110 (below)
+removed it**: development tooling is no longer license-checked, so the
+exception is not needed. `[bans] deny` still lists `libfuzzer-sys` with
+`wrappers = ["aegis-model-fuzz"]`, so any other crate that depends on it fails
+the `bans` check, and `tools/deny-fixtures` has a `bad-ncsa` case proving NCSA
+stays off the allow list.
 
 `[advisories] ignore` stays empty for the same reason: an advisory is fixed or
 reviewed, never silenced without a record.
@@ -160,3 +156,35 @@ The config uses the current format and prints no deprecation warnings under
   exits 1, so the runner can fail.
 - Cost: one cargo-deny run per crate, O(D) in its locked dependencies, plus
   one advisory database fetch. Seconds, not on any product path.
+
+## Update: job 110-deny-dev-policy (2026-10-27, D5 widened by the owner 2026-10-26)
+
+The owner widened D5: tools used only during development (test and benchmark
+crates, fuzzers, CI tools) may have any license, as long as nothing from them
+ships. The allow list stays as it is for what ships.
+
+What the check was found to do, and what changed:
+
+- **Dev-dependencies.** cargo-deny 0.20.2 already leaves dev-dependencies out of
+  the license check: `cargo deny list` on `aegis-model` shows no `proptest`,
+  `dhat` or `divan`, and a fixture whose only GPL crate is a dev-dependency
+  passes with no config change. Nothing was changed for this. Two fixtures now
+  pin it, so a cargo-deny upgrade that changes the default fails the fixture
+  run instead of the next release: `ok-dev-gpl` (a GPL dev-dependency passes)
+  and `bad-gpl-also-dev` (the same crate as a normal dependency too still
+  fails, so listing a crate under `[dev-dependencies]` cannot hide a shipped
+  use). If the default ever changes, the fix is `--exclude-dev` on the license
+  runs. A global `[graph] exclude-dev = true` was rejected: it would also drop
+  dev-dependencies from the advisory and ban checks, and a dev tool still runs
+  on build machines.
+- **Fuzz crates.** `scripts/deny.sh` leaves `licenses` out of the checks for
+  `crates/*/fuzz`. The fuzz crate's advisories, bans and sources are still
+  checked. The `libfuzzer-sys` NCSA exception in `deny.toml` is gone because
+  it has nothing left to allow.
+- `[bans]` is unchanged: the tooling-only crate stays out of every shipped
+  crate, and Slint stays confined to the desktop shell.
+
+Fixture count: 9 to 11 (`tools/deny-fixtures/run.sh`). The fixtures are written
+to run from a checkout of the repository; run from a git worktree inside
+another Cargo workspace they fail to find their manifests, which is an
+environment limit and not a policy result.

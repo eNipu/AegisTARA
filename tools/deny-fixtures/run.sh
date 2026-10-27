@@ -12,7 +12,9 @@
 # bad-mpl    MPL-2.0 (review first)                              fail
 # bad-slint  GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0   fail
 # bad-and    MIT AND GPL-3.0-only                                fail
-# bad-ncsa   NCSA (tooling-only, per-crate exception; D5)        fail
+# bad-ncsa   NCSA (no exception; it is not on the allow list)    fail
+# ok-dev-gpl GPL-3.0-only, as a dev-dependency only (D5 widened)  pass
+# bad-gpl-also-dev  GPL-3.0-only as a normal dependency too       fail
 #
 # Usage: tools/deny-fixtures/run.sh
 # Runs offline (no registry dependencies). Exits 1 on any mismatch.
@@ -64,6 +66,8 @@ bad-mpl   fail
 bad-slint fail
 bad-and   fail
 bad-ncsa  fail
+ok-dev-gpl pass
+bad-gpl-also-dev fail
 CASES
 
 if [ "$mismatches" -ne 0 ]; then
