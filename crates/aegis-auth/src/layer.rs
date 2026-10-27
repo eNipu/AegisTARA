@@ -214,7 +214,7 @@ mod tests {
         };
         let layer = SignRequests::new(Arc::new(Fixed(Ok(creds))), "https://h/");
         let mut service = layer.layer(Echo);
-        let request = http::Request::post("/aegis.v1.Aegis/Watch")
+        let request = http::Request::post("/aegis.v1.Aegis/OpenProject")
             .body(())
             .expect("request");
         let headers = service.call(request).await.expect("sent");

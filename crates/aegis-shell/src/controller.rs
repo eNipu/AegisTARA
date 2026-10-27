@@ -418,6 +418,7 @@ impl Controller {
                 c.send(Command::ShowPage(page));
             }
         );
+        on!(on_reload, |c| c.send(Command::Reload));
         on!(on_begin_edit, |c| c.send(Command::BeginEdit));
         on!(on_end_edit, |c| c.send(Command::EndEdit));
         on!(on_undo, |c| c.send(Command::Undo));
@@ -1318,20 +1319,27 @@ impl Controller {
             .me
             .as_ref()
             .map_or(view.user.as_str(), |m| m.subject.as_str());
-        let (kind, band) = match (&project.mode, project.lock_holder.as_deref(), project.sync) {
+        let (kind, mut band) = match (&project.mode, project.lock_holder.as_deref(), project.sync) {
             (_, _, SyncView::Resyncing) => (1, "Reloading the project from the server…".to_owned()),
             (Mode::Editing, _, _) => (
                 2,
-                "You're editing. Others on the project see your changes live.".to_owned(),
+                "You're editing. Others read the last saved version.".to_owned(),
             ),
             (Mode::ReadOnly, Some(holder), _) if holder != me => (
                 1,
-                format!("Read-only. {holder} is editing; their changes appear here live."),
+                format!(
+                    "Read-only. {holder} is editing; you see the version saved when you opened it."
+                ),
             ),
             (Mode::ReadOnly, _, _) => {
                 (0, "Read-only. Press Edit to change the project.".to_owned())
             }
         };
+        let newer = project.newer_version && project.mode == Mode::ReadOnly;
+        if newer {
+            band.push_str(" A newer version is available.");
+        }
+        w.set_newer_version(newer);
         w.set_band_kind(kind);
         w.set_band_text(s(&band));
         w.set_sync_text(s(&match project.sync {

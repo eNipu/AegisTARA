@@ -528,8 +528,8 @@ async fn serve<S: ProjectStore>(
     let serving = server::router(service, public, layer).serve_with_shutdown(listen, async move {
         stop_signal().await;
         tracing::info!("shutting down");
-        // Unloading the projects writes their snapshots and ends every
-        // `Watch` stream, which lets the graceful drain finish.
+        // Unloading the projects writes their snapshots before the
+        // graceful drain finishes.
         registry.shutdown().await;
         let _ = stopping.send(());
     });

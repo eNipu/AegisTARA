@@ -59,6 +59,7 @@ impl TestServer {
     pub fn session(&self, user: &str) -> Session {
         let mut config = SessionConfig::new(user);
         config.retry_delay = Duration::from_millis(100);
+        config.version_check = Duration::from_millis(100);
         Session::start(&self.url, Arc::new(DevLogin::new(user, false)), config).0
     }
 
@@ -66,6 +67,7 @@ impl TestServer {
     pub fn admin_session(&self, user: &str) -> Session {
         let mut config = SessionConfig::new(user);
         config.retry_delay = Duration::from_millis(100);
+        config.version_check = Duration::from_millis(100);
         Session::start(&self.url, Arc::new(DevLogin::new(user, true)), config).0
     }
 

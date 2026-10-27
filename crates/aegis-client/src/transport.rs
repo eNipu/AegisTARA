@@ -9,8 +9,7 @@
 //! - **gRPC-Web** over HTTP/1.1: for proxies that cannot carry gRPC, such as
 //!   Railway's edge and many corporate proxies (direction section 8). The
 //!   default for `https://` addresses, because it works through every
-//!   proxy. Streams (open, watch) work the same; the server sends a
-//!   heartbeat so idle proxies keep them open.
+//!   proxy. Streams (the project download) work the same.
 //!
 //! Limits (R6): connecting takes at most 10 s; a unary call at most 30 s
 //! until its answer starts. A stream is not limited once it has started.

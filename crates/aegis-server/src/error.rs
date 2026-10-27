@@ -67,13 +67,6 @@ pub enum ServerError {
         /// Why.
         source: ModelError,
     },
-    /// An observer asked for ops the server no longer holds in memory, or
-    /// for a future sequence number.
-    #[error("sequence {after} is out of range; reopen the project")]
-    OutOfRange {
-        /// Sequence number asked for.
-        after: u64,
-    },
     /// The license is over (past its grace period): reading works, editing
     /// does not.
     #[error("the license has expired")]
@@ -112,7 +105,6 @@ impl ServerError {
             ServerError::StaleBase { .. } => "stale_base",
             ServerError::MalformedOp { .. } => "malformed_op",
             ServerError::RejectedOp { .. } => "rejected_op",
-            ServerError::OutOfRange { .. } => "out_of_range",
             ServerError::LicenseExpired => "license_expired",
             ServerError::LicenseSeats => "license_seats",
             ServerError::Busy => "busy",
@@ -136,7 +128,6 @@ impl ServerError {
             | ServerError::LockInvalid
             | ServerError::StaleBase { .. }
             | ServerError::LicenseExpired => Code::FailedPrecondition,
-            ServerError::OutOfRange { .. } => Code::OutOfRange,
             ServerError::Busy | ServerError::LicenseSeats => Code::ResourceExhausted,
             ServerError::Store(_) | ServerError::Unloaded => Code::Unavailable,
             ServerError::Internal => Code::Internal,

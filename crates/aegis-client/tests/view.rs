@@ -227,8 +227,8 @@ fn edits_turn_into_typed_ops_and_change_what_the_view_shows() {
     );
 }
 
-/// What a correct server sends for this workspace.
-fn server_event(ws: &Workspace) -> aegis_proto::RisksEvent {
+/// What a correct server answers for this workspace.
+fn server_event(ws: &Workspace) -> aegis_proto::GetRisksResponse {
     let mut threats: Vec<_> = local_risk_keys(ws)
         .into_iter()
         .map(|(id, (inherent, residual))| aegis_proto::ThreatRiskEntry {
@@ -238,7 +238,7 @@ fn server_event(ws: &Workspace) -> aegis_proto::RisksEvent {
         })
         .collect();
     threats.sort_by(|a, b| a.threat_id.cmp(&b.threat_id));
-    aegis_proto::RisksEvent {
+    aegis_proto::GetRisksResponse {
         as_of_seq: 16,
         threats,
     }

@@ -111,6 +111,8 @@ export component AppWindow inherits Window {
 
     // ---- open project ----
     in property <bool> editing;
+    // The server holds a newer saved version than the one shown.
+    in property <bool> newer-version;
     in property <string> band-text;
     // 0 read-only (free), 1 read-only (someone else edits), 2 editing
     in property <int> band-kind;
@@ -313,10 +315,10 @@ export component AppWindow inherits Window {
     callback retry();
     callback log-in();
     callback connect-server(string, int);
-    callback password-log-in(string, string, bool);
-    callback dev-log-in(string);
     callback new-project-folder(string, string);
     callback open-project-folder(string, string);
+    callback password-log-in(string, string, bool);
+    callback dev-log-in(string);
     callback change-server();
     callback use-password-login();
     callback use-company-login();
@@ -333,6 +335,7 @@ export component AppWindow inherits Window {
     callback rename-project(string);
     callback delete-project();
     callback show-page(int);
+    callback reload();
     callback begin-edit();
     callback end-edit();
     callback undo();
@@ -490,12 +493,12 @@ export component AppWindow inherits Window {
     MenuBar {
         Menu {
             title: "File";
-            MenuItem { title: "New project…"; icon: @image-url("icons/file-plus.svg"); enabled: root.online; activated => { root.ask("new-project", "New project", "Project name", ""); } }
-            MenuItem { title: "Projects"; icon: @image-url("icons/folder-open.svg"); enabled: root.online; activated => { root.close-project(); } }
-            MenuItem { title: "Close project"; icon: @image-url("icons/folder-x.svg"); enabled: root.in-project; activated => { root.close-project(); } }
             MenuItem { title: "New project folder…"; icon: @image-url("icons/file-plus.svg"); activated => { root.change-server(); } }
             MenuItem { title: "Open project folder…"; icon: @image-url("icons/folder-open.svg"); activated => { root.change-server(); } }
             MenuSeparator {}
+            MenuItem { title: "New project…"; icon: @image-url("icons/file-plus.svg"); enabled: root.online; activated => { root.ask("new-project", "New project", "Project name", ""); } }
+            MenuItem { title: "Projects"; icon: @image-url("icons/folder-open.svg"); enabled: root.online; activated => { root.close-project(); } }
+            MenuItem { title: "Close project"; icon: @image-url("icons/folder-x.svg"); enabled: root.in-project; activated => { root.close-project(); } }
             MenuSeparator {}
             MenuItem { title: "Export TARA report (PDF)"; icon: @image-url("icons/file-down.svg"); enabled: root.in-project; activated => { root.export-pdf(); } }
             MenuItem { title: "Export TARA report (HTML)"; icon: @image-url("icons/file-text.svg"); enabled: root.in-project; activated => { root.export-report(); } }
@@ -535,6 +538,7 @@ export component AppWindow inherits Window {
             MenuItem { title: "Rename project…"; icon: @image-url("icons/pencil.svg"); enabled: root.in-project && root.editing; activated => { root.ask("rename-project", "Rename project", "Project name", root.project-name); } }
             MenuItem { title: "Add the sample TARA"; icon: @image-url("icons/plus.svg"); enabled: root.in-project && root.editing && root.is-empty; activated => { root.create-sample(); } }
             MenuSeparator {}
+            MenuItem { title: "Reload newer version"; icon: @image-url("icons/refresh-cw.svg"); enabled: root.in-project && root.newer-version; activated => { root.reload(); } }
             MenuItem { title: "Create baseline…"; icon: @image-url("icons/flag.svg"); enabled: root.in-project; activated => { root.ask("create-baseline", "Create baseline", "Baseline name, for example B1 Design freeze", ""); } }
             MenuItem { title: "Versions and comparison"; icon: @image-url("icons/git-compare.svg"); enabled: root.in-project; activated => { root.show-page(Pages.versions); } }
             MenuItem { title: "History"; icon: @image-url("icons/history.svg"); enabled: root.in-project; activated => { root.show-page(Pages.history); } }
@@ -612,10 +616,6 @@ export component AppWindow inherits Window {
                         enabled: root.server-url != "" && !root.login-busy;
                         clicked => { root.connect-server(root.server-url, root.transport-index); }
                     }
-                }
-                if root.connection == 2: HorizontalLayout {
-                    spacing: 8px;
-                    Button { text: "Try again"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.retry(); } }
                     Text { text: "Or work without a server"; color: Theme.graphite; font-size: 13px; }
                     Field {
                         label: "Project folder";
@@ -649,6 +649,10 @@ export component AppWindow inherits Window {
                             clicked => { root.open-project-folder(root.standalone-folder, root.standalone-license); }
                         }
                     }
+                }
+                if root.connection == 2: HorizontalLayout {
+                    spacing: 8px;
+                    Button { text: "Try again"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.retry(); } }
                     Button { text: "Change server"; icon: @image-url("icons/server.svg"); clicked => { root.change-server(); } }
                 }
                 // Password login.
@@ -833,9 +837,16 @@ export component AppWindow inherits Window {
                     horizontal-stretch: 1;
                     accessible-role: text;
                 }
+                if root.newer-version: Button {
+                    text: "Reload";
+                    icon: @image-url("icons/refresh-cw.svg");
+                    primary: true;
+                    accessible-label: "Reload the newer version";
+                    clicked => { root.reload(); }
+                }
                 if root.band-kind == 0: Button {
                     text: "Edit";
-                    primary: true;
+                    primary: root.band-kind == 0 && !root.newer-version;
                     clicked => { root.begin-edit(); }
                 }
                 if root.band-kind == 2: Button {
