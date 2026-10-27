@@ -130,6 +130,73 @@ pub(crate) fn risk_text(r: Option<&crate::view::RiskView>) -> String {
     r.map_or_else(|| "not rated".to_owned(), |v| v.label.clone())
 }
 
+/// A report section whose elements may carry descriptions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Described {
+    Assets,
+    Damage,
+    Controls,
+    Goals,
+    Claims,
+}
+
+/// `(name, text)` of the elements of a section that have a description, in
+/// project order. Empty when none has. Time O(n log n).
+pub(crate) fn section_descriptions(ws: &Workspace, section: Described) -> Vec<(String, String)> {
+    use aegis_model::ElementRef as E;
+    let p = ws.project();
+    let mut out = Vec::new();
+    let mut add = |name: &str, target: E| {
+        if let Some(text) = p.description(target) {
+            out.push((name.to_owned(), text.to_owned()));
+        }
+    };
+    match section {
+        Described::Assets => p
+            .assets()
+            .for_each(|(_, id, x)| add(x.name(), E::Asset(id))),
+        Described::Damage => p
+            .damage_scenarios()
+            .for_each(|(_, id, x)| add(x.name(), E::Damage(id))),
+        Described::Controls => p
+            .security_controls()
+            .for_each(|(_, id, x)| add(x.name(), E::Control(id))),
+        Described::Goals => p
+            .cybersecurity_goals()
+            .for_each(|(_, id, x)| add(x.name(), E::Goal(id))),
+        Described::Claims => p
+            .cybersecurity_claims()
+            .for_each(|(_, id, x)| add(x.name(), E::Claim(id))),
+    }
+    out
+}
+
+/// The description text of one element, if it has any.
+pub(crate) fn description_of(ws: &Workspace, target: aegis_model::ElementRef) -> Option<String> {
+    ws.project().description(target).map(str::to_owned)
+}
+
+/// A description as HTML: the text keeps its line breaks.
+fn desc_html(out: &mut String, text: &str) {
+    let _ = writeln!(out, "<p class=\"desc\">{}</p>", esc(text));
+}
+
+/// The descriptions of a section, if any element has one.
+fn desc_list_html(out: &mut String, items: &[(String, String)]) {
+    if items.is_empty() {
+        return;
+    }
+    out.push_str("<h3>Descriptions</h3>\n");
+    for (name, text) in items {
+        let _ = writeln!(
+            out,
+            "<p class=\"desc\"><strong>{}</strong>\n{}</p>",
+            esc(name),
+            esc(text)
+        );
+    }
+}
+
 /// The risk register as CSV. Time O(threats log threats).
 #[must_use]
 pub fn risk_register_csv(ws: &Workspace, ctx: &ReportContext) -> String {
@@ -169,6 +236,7 @@ pub fn tree_svg(ws: &Workspace, tree: aegis_model::TreeId, residual: bool) -> Op
 }
 
 const STYLE: &str = r"
+.desc{white-space:pre-wrap}
 body{font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1D2733;margin:32px auto;max-width:1100px;line-height:1.45}
 h1{font-size:28px;margin:0 0 4px}h2{font-size:20px;border-bottom:2px solid #1D2733;padding-bottom:4px;margin-top:36px}
 h3{font-size:16px;margin:20px 0 6px}
@@ -292,6 +360,10 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     if ctx.unsaved {
         out.push_str("<p class=\"draft\">Draft: this report includes changes that are not saved on the server yet.</p>\n");
     }
+    if let Some(notes) = description_of(ws, aegis_model::ElementRef::Project) {
+        out.push_str("<h2>Project notes</h2>\n");
+        desc_html(&mut out, &notes);
+    }
 
     // ---- executive summary ----
     let ov = pages::overview(ws);
@@ -344,6 +416,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
             row
         }),
     );
+    desc_list_html(&mut out, &section_descriptions(ws, Described::Assets));
 
     // ---- damage ----
     out.push_str("<h2>3. Damage scenarios</h2>\n");
@@ -367,6 +440,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
             row
         }),
     );
+    desc_list_html(&mut out, &section_descriptions(ws, Described::Damage));
 
     // ---- threats ----
     out.push_str("<h2>4. Threat scenarios</h2>\n");
@@ -375,6 +449,9 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
             continue;
         };
         let _ = writeln!(out, "<h3>{}</h3>", esc(&t.name));
+        if let Some(text) = description_of(ws, aegis_model::ElementRef::Threat(id)) {
+            desc_html(&mut out, &text);
+        }
         let damages: Vec<&str> = t
             .damages
             .iter()
@@ -438,6 +515,9 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
                 &row.threats
             })
         );
+        if let Some(text) = description_of(ws, aegis_model::ElementRef::Tree(row.id)) {
+            desc_html(&mut out, &text);
+        }
         if let Some(svg) = tree_svg(ws, row.id, false) {
             // The SVG adapter escapes its own text (aegis-canvas).
             let _ = writeln!(out, "<div class=\"svg\">{svg}</div>");
@@ -463,6 +543,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
             .into_iter()
             .map(|c| vec![c.name, c.steps.to_string(), c.goals.to_string()]),
     );
+    desc_list_html(&mut out, &section_descriptions(ws, Described::Controls));
 
     // ---- goals and claims ----
     out.push_str("<h2>8. Cybersecurity goals and claims</h2>\n<h3>Goals</h3>\n");
@@ -473,6 +554,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
             .into_iter()
             .map(|g| vec![g.name, g.controls.to_string(), g.threats.to_string()]),
     );
+    desc_list_html(&mut out, &section_descriptions(ws, Described::Goals));
     out.push_str("<h3>Claims</h3>\n");
     table(
         &mut out,
@@ -481,6 +563,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
             .into_iter()
             .map(|c| vec![c.name, c.threats.to_string()]),
     );
+    desc_list_html(&mut out, &section_descriptions(ws, Described::Claims));
 
     // ---- problems ----
     out.push_str("<h2>9. Open problems</h2>\n");

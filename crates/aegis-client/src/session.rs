@@ -60,8 +60,8 @@ use crate::state::{
 use crate::time::format_ms;
 use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use crate::view::{
-    AdminAction, Page, UiState, inspector, risks_differ, shown_tree, threat_rows, tree_view,
-    use_server_risks,
+    AdminAction, Page, UiState, inspector, page_descriptions, risks_differ, shown_tree,
+    threat_rows, tree_view, use_server_risks,
 };
 use crate::workspace::{Origin, Workspace, WorkspaceError};
 
@@ -2264,6 +2264,7 @@ impl<P: CredentialProvider> Actor<P> {
                 } else {
                     SyncView::Synced
                 },
+                descriptions: page_descriptions(&open.ws, &open.ui),
                 is_empty: open.ws.project().asset_count() == 0,
                 inspector: inspector(&open.ws, &open.ui),
                 can_undo: open.ws.can_undo(),

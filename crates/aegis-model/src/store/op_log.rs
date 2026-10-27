@@ -8,9 +8,9 @@ use serde::Serialize;
 use super::wire::{
     self, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, HeaderView, HeaderWire, Ids,
     ImpactsInOrder, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys, ProvenanceView,
-    RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, Text,
+    RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, TargetView, Text,
 };
-use super::{Limit, MAX_ACTOR_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
+use super::{Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
@@ -50,6 +50,12 @@ struct RecordView<'a> {
 #[derive(Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum OpView<'a> {
+    SetDescription {
+        target: TargetView,
+        text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddAsset {
         id: Text<AssetId>,
         name: &'a str,
@@ -279,6 +285,7 @@ fn within_caps(op: &Op) -> bool {
     }
     let name_ok = |name: &str| name.len() <= MAX_NAME_BYTES;
     match op {
+        Op::SetDescription { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
         Op::AddAsset { name, .. }
         | Op::RenameAsset { name, .. }
         | Op::AddDamageScenario { name, .. }
@@ -321,6 +328,15 @@ fn within_caps(op: &Op) -> bool {
 fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a> {
     let props = |set| PropertyKeys { m, order, set };
     match op {
+        Op::SetDescription {
+            target,
+            text,
+            provenance,
+        } => OpView::SetDescription {
+            target: (*target).into(),
+            text,
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::AddAsset {
             id,
             name,
@@ -670,6 +686,15 @@ fn encode_record(
 #[allow(clippy::too_many_lines)]
 fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
     Ok(match w {
+        OpWire::SetDescription {
+            target,
+            text,
+            provenance,
+        } => Op::SetDescription {
+            target: target.into_ref(),
+            text: text.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::AddAsset {
             id,
             name,

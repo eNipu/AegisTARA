@@ -307,6 +307,29 @@ pub enum ModelError {
         /// Which entity kind had an empty name.
         kind: EntityKind,
     },
+    /// A description or notes text is longer than `max` chars.
+    #[error("text is longer than {max} chars")]
+    DescriptionTooLong {
+        /// The limit, in chars.
+        max: usize,
+    },
+    /// A description or notes text has a control character other than a tab
+    /// or a line break. Carries no text.
+    #[error("text contains a control character")]
+    InvalidText,
+    /// All descriptions of the project together would exceed `max` bytes.
+    #[error("the descriptions of the project are larger than {max} bytes together")]
+    DescriptionTotalTooLarge {
+        /// The limit, in bytes.
+        max: usize,
+    },
+    /// A {kind} with a description cannot be removed; clear the description
+    /// first (in the same batch).
+    #[error("the {kind} has a description; clear it before removing the {kind}")]
+    DescriptionNotCleared {
+        /// Which kind of element.
+        kind: EntityKind,
+    },
     /// A name is longer than `max` chars.
     #[error("{kind} name is longer than {max} chars")]
     NameTooLong {
