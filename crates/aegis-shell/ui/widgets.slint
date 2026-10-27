@@ -11,6 +11,14 @@ export struct ProjectItem {
     methodology: string,
 }
 
+// One description box of the page: which element it is for, its text, and
+// who wrote it.
+export struct DescriptionItem {
+    kind: string,
+    text: string,
+    by: string,
+}
+
 export struct ThreatItem {
     name: string,
     asset: string,
@@ -145,6 +153,42 @@ export component PageTitle inherits HorizontalLayout {
 }
 
 // A framed area with padding.
+// The description of an element (or the notes of the project), shown as
+// text. It is edited in a window of its own: a text box on the page would
+// keep the Tab key for itself and trap a keyboard user.
+export component DescriptionBox inherits VerticalLayout {
+    in property <string> label: "Description";
+    in property <string> text;
+    in property <string> by;
+    in property <bool> editable;
+    callback edit-requested();
+    spacing: 4px;
+    HorizontalLayout {
+        height: 30px;
+        spacing: 6px;
+        SectionTitle { text: root.label; vertical-alignment: center; horizontal-stretch: 1; }
+        Button {
+            width: 64px;
+            text: root.text == "" ? "Add" : "Edit";
+            enabled: root.editable;
+            accessible-label: (root.text == "" ? "Add " : "Edit ") + root.label;
+            clicked => { root.edit-requested(); }
+        }
+    }
+    // Long text is cut here; the edit window shows all of it.
+    Text {
+        text: root.text == "" ? "None yet." : root.text;
+        color: root.text == "" ? Theme.graphite : Theme.ink;
+        font-size: 13px;
+        wrap: word-wrap;
+        overflow: elide;
+        max-height: 110px;
+        accessible-role: AccessibleRole.text;
+        accessible-label: root.label + ": " + (root.text == "" ? "none yet" : root.text);
+    }
+    if root.by != "": Text { text: root.by; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+}
+
 export component Panel inherits Rectangle {
     background: Theme.panel;
     border-width: 1px;

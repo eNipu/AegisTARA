@@ -30,6 +30,16 @@ pub const TREATMENTS: [RiskTreatment; 4] = [
 /// A change to the project, as the UI states it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Edit {
+    // ---- descriptions and notes ----
+    /// Sets the description of an element, or the notes of the project
+    /// ([`ElementRef::Project`]). Empty text clears it.
+    SetDescription {
+        /// What the text belongs to.
+        target: aegis_model::ElementRef,
+        /// The text; line breaks are normalized to `\n`.
+        text: String,
+    },
+
     // ---- attack tree steps ----
     /// Sets or clears the direct feasibility rating of a step.
     SetStepFeasibility {
@@ -350,6 +360,39 @@ pub enum EditError {
     BadCatalogRef,
 }
 
+/// An element with a description cannot be removed, so every removal in an
+/// edit is preceded by an op that clears its description. The edit is one
+/// undo step, and undo brings back the element and then its text.
+fn clear_descriptions_before_removal(
+    project: &Project,
+    ops: Vec<Op>,
+    provenance: &Provenance,
+) -> Vec<Op> {
+    use aegis_model::ElementRef as E;
+    let mut out = Vec::with_capacity(ops.len());
+    for op in ops {
+        let target = match &op {
+            Op::RemoveAsset { id } => Some(E::Asset(*id)),
+            Op::RemoveDamageScenario { id } => Some(E::Damage(*id)),
+            Op::RemoveThreatScenario { id } => Some(E::Threat(*id)),
+            Op::RemoveAttackTree { id } => Some(E::Tree(*id)),
+            Op::RemoveSecurityControl { id } => Some(E::Control(*id)),
+            Op::RemoveCybersecurityGoal { id } => Some(E::Goal(*id)),
+            Op::RemoveCybersecurityClaim { id } => Some(E::Claim(*id)),
+            _ => None,
+        };
+        if let Some(target) = target.filter(|t| project.description(*t).is_some()) {
+            out.push(Op::SetDescription {
+                target,
+                text: "".into(),
+                provenance: provenance.clone(),
+            });
+        }
+        out.push(op);
+    }
+    out
+}
+
 fn name(text: &str) -> Result<std::sync::Arc<str>, EditError> {
     let t = text.trim();
     if t.is_empty() {
@@ -524,7 +567,13 @@ impl Edit {
     ) -> Result<Vec<Op>, EditError> {
         let m = project.methodology();
         let p = Provenance::human(actor, now_ms);
-        Ok(match self {
+        let clearing = p.clone();
+        let ops = match self {
+            Edit::SetDescription { target, text } => vec![Op::SetDescription {
+                target: *target,
+                text: text.replace("\r\n", "\n").replace('\r', "\n").into(),
+                provenance: p,
+            }],
             Edit::SetStepFeasibility { tree, node, level } => vec![Op::SetStepFeasibility {
                 tree: *tree,
                 node: *node,
@@ -992,7 +1041,8 @@ impl Edit {
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
             }
-        })
+        };
+        Ok(clear_descriptions_before_removal(project, ops, &clearing))
     }
 
     /// The entity this edit creates, so the session can select it.

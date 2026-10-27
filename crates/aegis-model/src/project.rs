@@ -10,6 +10,7 @@ use crate::control::{
     SecurityControl, StepMitigation,
 };
 use crate::damage::DamageScenario;
+use crate::description::{Described, ElementRef, MAX_DESCRIPTION_TOTAL_BYTES, check_text};
 use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
@@ -458,6 +459,22 @@ pub struct Project {
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
     /// Derived data, rebuilt from `threats`, `trees`, and `goals` (D10).
     refs: RefCounts,
+    /// Descriptions and the project's notes, in ID order (job 064).
+    descriptions: BTreeMap<ElementRef, Described>,
+    /// Derived: the bytes of all description texts together (D10).
+    description_bytes: usize,
+}
+
+/// Adds `ids` to the `modified` list of `diff`, except the ones that were
+/// added or removed (those are already listed), keeping the list sorted.
+fn merge_modified<I: Copy + Ord>(diff: &mut EntityDiff<I>, ids: Vec<I>) {
+    let mut modified = diff.modified.to_vec();
+    modified.extend(ids.into_iter().filter(|id| {
+        diff.added.binary_search(id).is_err() && diff.removed.binary_search(id).is_err()
+    }));
+    modified.sort_unstable();
+    modified.dedup();
+    diff.modified = modified.into_boxed_slice();
 }
 
 /// Checks an entity name. Time O(name length).
@@ -553,6 +570,8 @@ impl Project {
             goals: Arena::new(),
             claims: Arena::new(),
             refs: RefCounts::default(),
+            descriptions: BTreeMap::new(),
+            description_bytes: 0,
         }
     }
 
@@ -3987,7 +4006,9 @@ impl Project {
             &cybersecurity_goals,
             &cybersecurity_claims,
         );
-        Ok(ProjectDiff {
+        // A changed description changes no number, so it is merged after the
+        // risk deltas: it marks the element modified and nothing more.
+        let mut diff = ProjectDiff {
             assets,
             damage_scenarios,
             threat_scenarios,
@@ -3996,7 +4017,45 @@ impl Project {
             cybersecurity_goals,
             cybersecurity_claims,
             risk_deltas,
-        })
+            notes_changed: false,
+        };
+        self.merge_description_changes(other, &mut diff);
+        Ok(diff)
+    }
+
+    /// Marks elements whose description differs as modified, and sets the
+    /// notes flag. Time O(d log d), d = descriptions in both projects.
+    fn merge_description_changes(&self, other: &Self, diff: &mut ProjectDiff) {
+        let changed = self
+            .descriptions
+            .keys()
+            .chain(other.descriptions.keys())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter(|t| self.description(*t) != other.description(*t));
+        let (mut assets, mut damages, mut threats, mut trees) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut controls, mut goals, mut claims) = (Vec::new(), Vec::new(), Vec::new());
+        for target in changed {
+            match target {
+                ElementRef::Project => diff.notes_changed = true,
+                ElementRef::Asset(id) => assets.push(id),
+                ElementRef::Damage(id) => damages.push(id),
+                ElementRef::Threat(id) => threats.push(id),
+                ElementRef::Tree(id) => trees.push(id),
+                ElementRef::Control(id) => controls.push(id),
+                ElementRef::Goal(id) => goals.push(id),
+                ElementRef::Claim(id) => claims.push(id),
+            }
+        }
+        merge_modified(&mut diff.assets, assets);
+        merge_modified(&mut diff.damage_scenarios, damages);
+        merge_modified(&mut diff.threat_scenarios, threats);
+        merge_modified(&mut diff.attack_trees, trees);
+        merge_modified(&mut diff.security_controls, controls);
+        merge_modified(&mut diff.cybersecurity_goals, goals);
+        merge_modified(&mut diff.cybersecurity_claims, claims);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4261,6 +4320,11 @@ impl Project {
     #[allow(clippy::too_many_lines)]
     pub fn validate(&self, op: &Op) -> Result<(), ModelError> {
         match op {
+            Op::SetDescription {
+                target,
+                text,
+                provenance,
+            } => return self.check_set_description(*target, text, provenance),
             Op::AddAsset {
                 id,
                 name,
@@ -4477,6 +4541,11 @@ impl Project {
     #[allow(clippy::too_many_lines)]
     fn commit(&mut self, op: Op) -> Result<Op, ModelError> {
         match op {
+            Op::SetDescription {
+                target,
+                text,
+                provenance,
+            } => Ok(self.commit_set_description(target, text, provenance)),
             Op::AddAsset {
                 id,
                 name,
@@ -4911,7 +4980,133 @@ impl Project {
         Ok(())
     }
 
+    /// Checks a description change. Time O(text length).
+    fn check_set_description(
+        &self,
+        target: ElementRef,
+        text: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        match target {
+            ElementRef::Project => {}
+            ElementRef::Asset(id) => {
+                self.live_asset(id)?;
+            }
+            ElementRef::Damage(id) => {
+                self.live_damage(id)?;
+            }
+            ElementRef::Threat(id) => {
+                self.live_threat(id)?;
+            }
+            ElementRef::Tree(id) => {
+                self.live_tree(id)?;
+            }
+            ElementRef::Control(id) => {
+                self.live_control(id)?;
+            }
+            ElementRef::Goal(id) => {
+                self.live_goal(id)?;
+            }
+            ElementRef::Claim(id) => {
+                self.live_claim(id)?;
+            }
+        }
+        check_text(text, target.max_chars())?;
+        check_provenance(provenance)?;
+        let old = self.descriptions.get(&target).map_or(0, |d| d.text.len());
+        if self.description_bytes - old + text.len() > MAX_DESCRIPTION_TOTAL_BYTES {
+            return Err(ModelError::DescriptionTotalTooLarge {
+                max: MAX_DESCRIPTION_TOTAL_BYTES,
+            });
+        }
+        Ok(())
+    }
+
+    /// An element with a description must have it cleared first.
+    fn require_no_description(
+        &self,
+        target: ElementRef,
+        kind: EntityKind,
+    ) -> Result<(), ModelError> {
+        if self.descriptions.contains_key(&target) {
+            return Err(ModelError::DescriptionNotCleared { kind });
+        }
+        Ok(())
+    }
+
+    /// Stores or clears a description and returns the inverse. Time
+    /// O(log n + text length).
+    fn commit_set_description(
+        &mut self,
+        target: ElementRef,
+        text: Arc<str>,
+        provenance: Provenance,
+    ) -> Op {
+        let old = if text.is_empty() {
+            self.descriptions.remove(&target)
+        } else {
+            self.description_bytes += text.len();
+            self.descriptions
+                .insert(target, Described { text, provenance })
+        };
+        let (old_text, old_provenance) = old.map_or_else(
+            || (Arc::<str>::from(""), Provenance::default()),
+            |d| (d.text, d.provenance),
+        );
+        self.description_bytes -= old_text.len();
+        Op::SetDescription {
+            target,
+            text: old_text,
+            provenance: old_provenance,
+        }
+    }
+
+    /// The description of an element, or the notes of the project
+    /// ([`ElementRef::Project`]). `None` when there is none. Time O(log n).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ElementRef, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.description(ElementRef::Project), None);
+    /// project.apply(Op::SetDescription {
+    ///     target: ElementRef::Project,
+    ///     text: "Scope: the brake ECU.".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.description(ElementRef::Project), Some("Scope: the brake ECU."));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn description(&self, target: ElementRef) -> Option<&str> {
+        self.descriptions.get(&target).map(|d| &*d.text)
+    }
+
+    /// Who wrote the description and when. Time O(log n).
+    #[must_use]
+    pub fn description_provenance(&self, target: ElementRef) -> Option<&Provenance> {
+        self.descriptions.get(&target).map(|d| &d.provenance)
+    }
+
+    /// How many descriptions the project has, notes included. Time O(1).
+    #[must_use]
+    pub fn description_count(&self) -> usize {
+        self.descriptions.len()
+    }
+
+    /// Every description in ID order: the target, the text and the
+    /// provenance. Time O(1) to start, O(1) per item.
+    pub fn descriptions(&self) -> impl Iterator<Item = (ElementRef, &str, &Provenance)> {
+        self.descriptions
+            .iter()
+            .map(|(target, d)| (*target, &*d.text, &d.provenance))
+    }
+
     fn check_remove_asset(&self, id: AssetId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Asset(id), EntityKind::Asset)?;
         let (idx, _) = self.live_asset(id)?;
         let threats = self.refs.assets.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -4965,6 +5160,7 @@ impl Project {
     }
 
     fn check_remove_damage(&self, id: DamageId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Damage(id), EntityKind::DamageScenario)?;
         let idx = self.live_damage(id)?;
         let threats = self.refs.damages.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -5112,6 +5308,7 @@ impl Project {
     }
 
     fn check_remove_threat(&self, id: ThreatId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Threat(id), EntityKind::ThreatScenario)?;
         let t = self.threat_ref(id)?;
         if let Some(tree_idx) = t.attack_tree {
             let tree = self
@@ -5262,6 +5459,7 @@ impl Project {
     }
 
     fn check_remove_tree(&self, id: TreeId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Tree(id), EntityKind::AttackTree)?;
         let (idx, entry) = self.live_tree(id)?;
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -5306,6 +5504,7 @@ impl Project {
     }
 
     fn check_remove_control(&self, id: ControlId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Control(id), EntityKind::SecurityControl)?;
         let idx = self.live_control(id)?;
         let steps = self.refs.controls.get(idx.index()).copied().unwrap_or(0);
         if steps > 0 {
@@ -5383,6 +5582,7 @@ impl Project {
     }
 
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
         let (idx, _) = self.live_goal(id)?;
         let threats = self.refs.goals.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -5411,6 +5611,7 @@ impl Project {
     }
 
     fn check_remove_claim(&self, id: ClaimId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Claim(id), EntityKind::CybersecurityClaim)?;
         let idx = self.live_claim(id)?;
         let threats = self.refs.claims.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -6390,6 +6591,7 @@ impl PartialEq for Project {
         let same_methodology = Arc::ptr_eq(&self.methodology, &other.methodology)
             || *self.methodology == *other.methodology;
         same_methodology
+            && self.descriptions == other.descriptions
             && self.assets.len() == other.assets.len()
             && self.damages.len() == other.damages.len()
             && self.threats.len() == other.threats.len()
@@ -7146,7 +7348,8 @@ impl ProjectEvalCache {
             return;
         }
         match op {
-            Op::AddAsset { .. }
+            Op::SetDescription { .. }
+            | Op::AddAsset { .. }
             | Op::RenameAsset { .. }
             | Op::SetAssetProperties { .. }
             | Op::RemoveAsset { .. }

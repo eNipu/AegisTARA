@@ -84,7 +84,8 @@ flowchart TB
 | `damage.rs` | `DamageScenario` | Adverse consequence rated across methodology impact categories (`Box<[Option<Level>]>`). |
 | `threat.rs` | `ThreatScenario`, `ImpactRisk`, `ThreatRisk` | Threat targeting an `Asset`, violating `PropertySet`, linked to `CatalogRef`s, `DamageScenario`s, optional `AttackTree` / `direct_feasibility`, `RiskTreatment`, `CybersecurityGoal`, and `CybersecurityClaim`. |
 | `control.rs` | `SecurityControl`, `StepMitigation`, `RiskTreatment`, `CybersecurityGoal`, `CybersecurityClaim` | Security controls, per-step feasibility mitigations, treatment decisions (`Avoid`, `Reduce`, `Share`, `Retain`), goals, and claims. |
-| `op.rs` | `Op` (37 variants) | Complete set of validated, single-op-invertible project mutations. |
+| `description.rs` | `ElementRef`, `MAX_DESCRIPTION_CHARS`, `MAX_NOTES_CHARS`, `MAX_DESCRIPTION_TOTAL_BYTES` | Plain description text on the seven entity kinds and the project's notes (`ElementRef::Project`), kept in one ordered map on `Project`, set by `Op::SetDescription` (ADR 0051). |
+| `op.rs` | `Op` (38 variants) | Complete set of validated, single-op-invertible project mutations. |
 | `project.rs` | `Project`, `Arena<Id, Idx, T>`, `TreeEntry`, `RefCounts`, `ProjectEvalCache` | Aggregate root owning the 7 entity arenas, sparse reference counts (`RefCounts`), and incremental project evaluation cache (`ProjectEvalCache`). |
 | `paths.rs` | `AttackPath<V>`, `AttackPaths<V>`, `ChokePoint<V>` | Lazy best-first minimal cut-set enumeration (`BinaryHeap<SearchState<V>>`), choke-point ranking, and greedy top-$k$ hitting sets. |
 | `sensitivity.rs` | `StepTippingPoint`, `FeasibilityTippingPoint`, `ImpactTippingPoint`, `ThreatSensitivity` | Single-parameter $\pm 1$ tipping-point sensitivity analysis for attack trees and threat scenarios. |
@@ -1835,7 +1836,7 @@ appears (the trigger is named in the table).
 
 | Crate | New modules | Holds | Split trigger |
 |---|---|---|---|
-| `aegis-model` | `text.rs` | `Text { value, lang, translations }` for descriptions and notes (FND-01, FND-04) | |
+| `aegis-model` | `text.rs` | `Text { value, lang, translations }`: a language tag and translations on top of the description text of job 064 (FND-04) | |
 | | `tree.rs` (extended), `op.rs` | Node-level tree ops and the raised per-tree cap (FND-02, FND-03) | |
 | | `item.rs` | `Component`, `Interface`, `DataFlow`, `TrustBoundary`, asset binding (ARC-02) | |
 | | `trace.rs` | `Requirement`, `Verification`, `TraceLink`, `ExternalRef`, suspect state (TRC-01 to TRC-03) | |

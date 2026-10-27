@@ -9,12 +9,12 @@ import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, Abo
 import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
-    ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
+    DescriptionItem, DescriptionBox, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, Panel, Swatch,
     LinkList, CheckList, Tile, Bars
 } from "widgets.slint";
 
-export { DrawItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem }
+export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem }
 
 // Page numbers, in the order of aegis_client::view::Page::ALL.
 global Pages {
@@ -60,6 +60,31 @@ component NameEditor inherits HorizontalLayout {
         clicked => { root.renamed(edit.text); }
     }
     changed name => { edit.text = root.name; }
+}
+
+// The description boxes of the page that are for `kind`. A page has at most
+// two (goals and claims), so there are two slots; a repeater here would put
+// the Edit buttons in a focus chain that Tab does not get through.
+component DescriptionFor inherits VerticalLayout {
+    in property <[DescriptionItem]> items;
+    in property <string> kind;
+    in property <bool> editable;
+    in property <string> label: "Description";
+    callback edit-requested(int, string, string);
+    if root.items.length > 0 && root.items[0].kind == root.kind: DescriptionBox {
+        label: root.label;
+        text: root.items[0].text;
+        by: root.items[0].by;
+        editable: root.editable;
+        edit-requested => { root.edit-requested(0, root.label, root.items[0].text); }
+    }
+    if root.items.length > 1 && root.items[1].kind == root.kind: DescriptionBox {
+        label: root.label;
+        text: root.items[1].text;
+        by: root.items[1].by;
+        editable: root.editable;
+        edit-requested => { root.edit-requested(1, root.label, root.items[1].text); }
+    }
 }
 
 export component AppWindow inherits Window {
@@ -111,6 +136,14 @@ export component AppWindow inherits Window {
 
     // ---- open project ----
     in property <bool> editing;
+    // The description boxes of the page on screen, and saving one.
+    in property <[DescriptionItem]> descriptions;
+    callback set-description(int, string);
+    // The window that edits one description.
+    in-out property <bool> description-open: false;
+    in-out property <int> description-index: 0;
+    in-out property <string> description-title;
+    in-out property <string> description-draft;
     // The server holds a newer saved version than the one shown.
     in property <bool> newer-version;
     in property <string> band-text;
@@ -987,6 +1020,7 @@ export component AppWindow inherits Window {
                         padding: 20px;
                         spacing: 16px;
                         PageTitle { title: "Overview"; subtitle: "The project at a glance: what is analysed, how risky it is, and what is still open."; icon: @image-url("icons/layout-dashboard.svg"); }
+                        DescriptionFor { items: root.descriptions; kind: "project"; label: "Project notes"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         HorizontalLayout {
                             vertical-stretch: 0;
                             spacing: 10px;
@@ -1048,6 +1082,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: "Asset"; }
                         NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         SectionTitle { text: "Security properties"; }
                         CheckList { items: root.asset-properties; editable: root.editing; toggled(i, on) => { root.toggle-asset-property(i, on); } }
                         SectionTitle { text: "Threat scenarios on this asset"; }
@@ -1083,6 +1118,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: "Damage scenario"; }
                         NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         SectionTitle { text: "Impact rating"; }
                         for f[fi] in root.damage-impacts: Field {
                             label: f.label;
@@ -1137,6 +1173,7 @@ export component AppWindow inherits Window {
                             width: root.side-width + 12px;
                             SectionTitle { text: "Threat scenario"; }
                             NameEditor { name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
+                            DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                             Text { text: "On asset " + root.td-asset; color: Theme.graphite; font-size: 12px; }
                             HorizontalLayout {
                                 spacing: 8px;
@@ -1208,6 +1245,7 @@ export component AppWindow inherits Window {
                             Button { text: "Delete"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-tree", "Delete this attack tree? Its threat scenarios lose their tree."); } }
                         }
                         if root.has-tree: Button { text: "Export SVG"; icon: @image-url("icons/image.svg"); clicked => { root.export-svg(); } }
+                        DescriptionFor { items: root.descriptions; kind: "tree"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         // Legend.
                         VerticalLayout {
                             spacing: 4px;
@@ -1406,6 +1444,7 @@ export component AppWindow inherits Window {
                     if root.has-threat-detail: Panel {
                         width: min(360px, root.side-width);
                         Text { text: root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
+                        DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         HorizontalLayout {
                             spacing: 8px;
                             Swatch { tone: root.td-inherent-tone; y: 4px; }
@@ -1460,6 +1499,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: "Security control"; }
                         NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         SectionTitle { text: "Attached to"; }
                         LinkList { items: root.control-steps; empty-text: "No attack step yet."; clicked(i) => { root.control-step-clicked(i); } }
                         SectionTitle { text: "Part of goals"; }
@@ -1507,6 +1547,7 @@ export component AppWindow inherits Window {
                         if root.has-goal: Panel {
                             SectionTitle { text: "Cybersecurity goal"; }
                             NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
+                            DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                             SectionTitle { text: "Controls that realize it"; }
                             CheckList { items: root.goal-controls; editable: root.editing; empty-text: "Add security controls first."; toggled(i, on) => { root.toggle-goal-control(i, on); } }
                             SectionTitle { text: "Threat scenarios"; }
@@ -1516,6 +1557,7 @@ export component AppWindow inherits Window {
                         if root.has-claim: Panel {
                             SectionTitle { text: "Cybersecurity claim"; }
                             NameEditor { name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
+                            DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                             SectionTitle { text: "Threat scenarios"; }
                             LinkList { items: root.claim-threats; clicked(i) => { root.claim-threat-clicked(i); } }
                             Button { text: "Remove claim"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-claim", "Remove claim \"" + root.claim-name + "\"?"); } }
@@ -1906,6 +1948,58 @@ export component AppWindow inherits Window {
                     Button { text: "Yes"; primary: true; clicked => { root.confirm-done(root.confirm-kind); } }
                 }
             }
+        }
+    }
+
+    if root.description-open: Rectangle {
+        background: #000000A0;
+        FocusScope {
+            // The text box keeps Tab for itself, so the keys that leave it are
+            // fixed: Ctrl+Enter saves, Escape cancels.
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.description-open = false;
+                    return accept;
+                }
+                if (event.text == Key.Return && event.modifiers.control) {
+                    root.set-description(root.description-index, root.description-draft);
+                    root.description-open = false;
+                    return accept;
+                }
+                reject
+            }
+            Rectangle {
+                width: min(parent.width - 48px, 640px);
+                height: min(parent.height - 48px, 440px);
+                background: Theme.panel;
+                border-width: 1px;
+                border-color: Theme.rule;
+                border-radius: 2px;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    Text { text: root.description-title; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                    Text {
+                        text: "Plain text. Ctrl+Enter saves, Escape cancels.";
+                        color: Theme.graphite;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    description-edit := TextEdit {
+                        vertical-stretch: 1;
+                        text <=> root.description-draft;
+                        wrap: word-wrap;
+                        accessible-label: root.description-title;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        Button { text: "Cancel"; clicked => { root.description-open = false; } }
+                        Button { text: "Save"; primary: true; clicked => { root.set-description(root.description-index, root.description-draft); root.description-open = false; } }
+                    }
+                }
+            }
+            init => { description-edit.focus(); }
         }
     }
 

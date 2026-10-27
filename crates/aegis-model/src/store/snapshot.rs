@@ -9,7 +9,7 @@ use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
     self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
     NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
-    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, Text,
+    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, TargetView, Text,
 };
 use crate::error::StoreError;
 use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
@@ -35,6 +35,8 @@ struct SnapshotView<'a> {
     cybersecurity_goals: Goals<'a>,
     #[serde(skip_serializing_if = "Claims::is_empty")]
     cybersecurity_claims: Claims<'a>,
+    #[serde(skip_serializing_if = "Descriptions::is_empty")]
+    descriptions: Descriptions<'a>,
 }
 
 /// What every entity view needs.
@@ -52,6 +54,35 @@ struct Trees<'a>(Ctx<'a>);
 struct Controls<'a>(&'a Project);
 struct Goals<'a>(&'a Project);
 struct Claims<'a>(&'a Project);
+struct Descriptions<'a>(&'a Project);
+
+impl Descriptions<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.description_count() == 0
+    }
+}
+
+#[derive(Serialize)]
+struct DescriptionView<'a> {
+    target: TargetView,
+    text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+impl Serialize for Descriptions<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.0
+                .descriptions()
+                .map(|(target, text, provenance)| DescriptionView {
+                    target: target.into(),
+                    text,
+                    provenance: ProvenanceView::of(provenance),
+                }),
+        )
+    }
+}
 
 impl Trees<'_> {
     fn is_empty(&self) -> bool {
@@ -393,6 +424,7 @@ impl Project {
             security_controls: Controls(self),
             cybersecurity_goals: Goals(self),
             cybersecurity_claims: Claims(self),
+            descriptions: Descriptions(self),
         };
         let mut out = BufWriter::new(w);
         serde_json::to_writer(&mut out, &view).map_err(wire::encode_error)?;
@@ -559,6 +591,14 @@ impl Project {
         }
         for t in snapshot.threat_scenarios {
             apply_snapshot_threat(&mut project, t)?;
+        }
+        // Descriptions last: every element they name exists by now.
+        for d in snapshot.descriptions {
+            project.apply(Op::SetDescription {
+                target: d.target.into_ref(),
+                text: d.text.0,
+                provenance: wire::unwrap_provenance(d.provenance),
+            })?;
         }
         Ok(project)
     }

@@ -32,8 +32,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecMod
 
 use crate::adapter::{bucket, draw_items};
 use crate::{
-    AccessNode, AppWindow, CheckItem, CountItem, DiffItem, FactorItem, LinkItem, MitigationItem,
-    NoticeItem, ProblemItem, ProjectItem, ThreatItem,
+    AccessNode, AppWindow, CheckItem, CountItem, DescriptionItem, DiffItem, FactorItem, LinkItem,
+    MitigationItem, NoticeItem, ProblemItem, ProjectItem, ThreatItem,
 };
 
 /// Pixels the pointer must move before a press becomes a drag.
@@ -448,6 +448,20 @@ impl Controller {
                 name: name.to_string(),
                 properties: all.unwrap_or_default(),
             });
+        });
+        on!(on_set_description, |c, index, text| {
+            let target = c.with_project(|p| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| p.descriptions.get(i))
+                    .map(|d| d.target)
+            });
+            if let Some(target) = target {
+                c.edit(Edit::SetDescription {
+                    target,
+                    text: text.to_string(),
+                });
+            }
         });
         on!(on_rename_asset, |c, name| {
             if let Some(asset) = c.selected_asset() {
@@ -1315,6 +1329,17 @@ impl Controller {
         w.set_has_project(true);
         w.set_project_name(s(&project.entry.name));
         w.set_editing(project.mode == Mode::Editing);
+        w.set_descriptions(model(
+            project
+                .descriptions
+                .iter()
+                .map(|d| DescriptionItem {
+                    kind: s(d.kind),
+                    text: s(&d.text),
+                    by: s(&d.by),
+                })
+                .collect(),
+        ));
         let me = view
             .me
             .as_ref()
