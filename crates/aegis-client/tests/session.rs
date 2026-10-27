@@ -82,6 +82,64 @@ where
     }
 }
 
+/// Holds back the answer of every `Watch` call: the lock state the server
+/// took when it accepted the subscription then reaches the client later than
+/// it otherwise would, which is what happens on a loaded machine.
+#[derive(Clone)]
+struct HoldWatch(Duration);
+
+impl<S> Layer<S> for HoldWatch {
+    type Service = HoldWatchService<S>;
+    fn layer(&self, inner: S) -> HoldWatchService<S> {
+        HoldWatchService {
+            inner,
+            hold: self.0,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct HoldWatchService<S> {
+    inner: S,
+    hold: Duration,
+}
+
+impl<S, B> Service<http::Request<B>> for HoldWatchService<S>
+where
+    S: Service<http::Request<B>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    S::Response: Send + 'static,
+    S::Error: Send + 'static,
+    B: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<S::Response, S::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: http::Request<B>) -> Self::Future {
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+        let hold = self.hold;
+        let hold = request
+            .uri()
+            .path()
+            .ends_with("/Watch")
+            .then_some(hold)
+            .filter(|d| !d.is_zero());
+        Box::pin(async move {
+            let response = inner.call(request).await;
+            if let Some(hold) = hold {
+                tokio::time::sleep(hold).await;
+            }
+            response
+        })
+    }
+}
+
 /// A session that stops itself when the test is done, so no client keeps a
 /// stream open against a server that is trying to shut down.
 struct Client(Session);
@@ -132,6 +190,17 @@ impl TestServer {
         gate: Option<Arc<aegis_server::LicenseGate>>,
         config: ServerConfig,
     ) -> Self {
+        Self::start_delayed(submit_delay, Duration::ZERO, gate, config).await
+    }
+
+    /// Like [`start_config`](Self::start_config), and holds every `Watch`
+    /// answer back by `watch_hold`.
+    async fn start_delayed(
+        submit_delay: Duration,
+        watch_hold: Duration,
+        gate: Option<Arc<aegis_server::LicenseGate>>,
+        config: ServerConfig,
+    ) -> Self {
         let registry = Registry::new(
             Arc::new(MemoryStore::new()),
             Arc::new(Methodologies::builtin().expect("builtin")),
@@ -152,6 +221,7 @@ impl TestServer {
             server::builder()
                 .layer(layer)
                 .layer(SlowSubmit(submit_delay, counter))
+                .layer(HoldWatch(watch_hold))
                 .add_service(service)
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                     let _ = stopped.await;
@@ -444,6 +514,71 @@ async fn an_edit_shows_at_once_and_is_saved_behind_the_scenes() {
     assert!(
         sent.elapsed() >= Duration::from_millis(300),
         "the save really was slow"
+    );
+    drop(alice);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_watch_answer_that_lands_late_does_not_take_the_lease_away() {
+    // The server takes the watch subscription while the lock is still free -
+    // the client opens the project, and then its stream, before it asks for
+    // the lease - and answers 300 ms later, so the stream's first message
+    // (the lock state as of the subscription) arrives after the client is
+    // already editing, with a save still in flight. That stale "no lock"
+    // must not be read as "the lock was taken away": the sample must be
+    // saved, not discarded.
+    let server = TestServer::start_delayed(
+        Duration::from_millis(500),
+        Duration::from_millis(300),
+        None,
+        ServerConfig {
+            lease: Duration::from_secs(30),
+            ..ServerConfig::default()
+        },
+    )
+    .await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    alice.send(Command::CreateSample).expect("sent");
+
+    let view = until(&alice, "the sample is saved", |vm| {
+        project_ready(vm) && vm.project.as_ref().is_some_and(|p| p.threats.len() == 2)
+    })
+    .await;
+    let project = view.project.as_ref().expect("project");
+    assert_eq!(project.confirmed_seq, SAMPLE_OPS);
+    assert_eq!(project.mode, Mode::Editing, "still the editor");
+    assert!(
+        !view.notices.iter().any(|n| n.text.contains("edit lock")),
+        "{:?}",
+        view.notices
+    );
+    drop(alice);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn ending_an_edit_is_not_reported_as_losing_the_lock() {
+    // Releasing the lease makes the server announce a free lock. That is the
+    // event the user asked for, so it must not be shown as a lock loss (nor
+    // reload the project).
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    alice.send(Command::EndEdit).expect("sent");
+    let view = until(&alice, "released", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::ReadOnly && p.lock_holder.is_none())
+    })
+    .await;
+    assert!(
+        !view.notices.iter().any(|n| n.text.contains("edit lock")),
+        "{:?}",
+        view.notices
     );
     drop(alice);
     server.stop().await;

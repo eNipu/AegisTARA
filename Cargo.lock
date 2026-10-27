@@ -291,6 +291,7 @@ dependencies = [
  "aegis-auth",
  "aegis-canvas",
  "aegis-client",
+ "aegis-license",
  "aegis-model",
  "aegis-server",
  "png",

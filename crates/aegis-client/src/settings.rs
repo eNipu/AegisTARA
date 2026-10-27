@@ -36,6 +36,10 @@ pub struct Settings {
     /// Where the signed update manifest is (`https://...`); empty for none.
     /// `AEGIS_UPDATE_URL` overrides it. An air gapped site leaves it empty.
     pub update_url: String,
+    /// Last standalone project folder; empty until one is chosen.
+    pub standalone_folder: String,
+    /// Signed license used for standalone mode; never a password or token.
+    pub standalone_license: String,
 }
 
 /// The configuration folder of this app, if the OS tells us one.
@@ -163,6 +167,8 @@ mod tests {
             username: "mira".into(),
             update_url: "https://updates.example.com/m".into(),
             export_dir: String::new(),
+            standalone_folder: "/work/brake.aegis".into(),
+            standalone_license: "/work/vendor.aegis".into(),
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);

@@ -1241,12 +1241,13 @@ flowchart TB
     shell["aegis-shell\n(Slint desktop app)"]
     server --> model & proto & auth & license
     client --> model & proto & auth & license & canvas
-    shell --> client & canvas & model & auth
+    shell --> client & canvas & model & auth & server & license
 ```
 
 No crate depends on `aegis-shell`. `aegis-client` has no UI code, so every
 client behavior is testable without a window (standards T-rules). The shell
-tests start a real server in process (`aegis-server` is a dev-dependency).
+tests start a real server in process. The shell also links `aegis-server` and
+`aegis-license` itself, to run the embedded server of standalone mode (II.4.7).
 
 ## II.3 Wire contract (`crates/aegis-proto/proto/aegis/v1/aegis.proto`)
 
@@ -1321,7 +1322,7 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 
 | Module | Types | Notes |
 |---|---|---|
-| `main.rs` | | Reads environment variables (table in the module docs), opens the store and accounts, loads the license, restores seats, serves. `PORT` (Railway) means `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset. |
+| `main.rs` | | Reads environment variables (table in the module docs), opens the store and accounts, loads the license, restores seats, serves. `aegis-server import-folder <folder>` imports a standalone project folder instead of serving (II.4.7). `PORT` (Railway) means `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset. |
 | `server.rs` | `Layers<A>`, `builder()`, `router()` | See II.4.1. |
 | `health.rs` | `HealthLayer`, `Health<S>` | Answers `GET /healthz` before any other layer. |
 | `auth.rs` | `AuthMethod { Oidc, Password, Dev }`, `Principal { subject, admin, method }` | The principal is what every handler sees. |
@@ -1342,6 +1343,8 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `store/postgres.rs` | `PostgresStore`, `PostgresOptions`, `DbTls { Off, Encrypt, Verify }` | `Encrypt` accepts any certificate (libpq `require`); `Verify` checks it against the OS roots (libpq `verify-full`). |
 | `store/audit.rs` | `Hash`, `ChainVerifier`, `ChainReport` | SHA-256 hash chain over stored ops. |
 | `ids.rs` | `ProjectId`, `BadProjectId` | |
+| `store/folder.rs` | `FolderStore`, `STREAM_BATCH_OPS`, `STREAM_BATCH_BYTES` | `ProjectStore` over one project folder, for standalone mode (II.4.7). |
+| `import.rs` | `ImportReport`, `ImportError`, `Registry::import_folder` | Copies a standalone folder into the server's store with its history intact (II.4.7). |
 | `error.rs` | `ServerError` | |
 
 `ProjectStore` methods: `create`, `list`, `count`, `load`, `append`,
@@ -1549,6 +1552,69 @@ The license counts active editors in a rolling window (`SEAT_WINDOW_SECS`).
 After a restart the ledger would be empty, so a restart could let extra
 editors in. At start the server reads `active_editors` (distinct actors with
 ops inside the window, from the `aegis_project_op_time` index) and calls
+### II.4.7 Project folders and import (standalone mode, D22)
+
+```mermaid
+flowchart LR
+    subgraph App["One desktop process"]
+        UI2["Slint window"] <--> CORE2["aegis-client\n(same code path)"]
+        CORE2 -- "gRPC on 127.0.0.1 only,\nrandom port, no login" --> SRV2["aegis-server library\n(same service and actor)"]
+        SRV2 --> FS["FolderStore"]
+        LIC["License file check\n(aegis-license)"] --> SRV2
+    end
+    FS <--> DIR[("Project folder\non disk")]
+    DIR -. "hand over, then\naegis-server import-folder" .-> CUST["Customer server\n(D3)"]
+```
+
+The standalone app is the same client talking to the same server code; only
+the store and the login differ. The app checks the signed license file
+(`TrustedKeys::vendor()`) **before** it binds the listener, then binds
+`127.0.0.1:0` only. A bad license, a damaged folder or an unreadable manifest
+never opens a port. The embedded server trusts the development header: any
+process of the same machine that finds the port can act as the user. That is
+the cost of "no login" on a single-user desktop (D22); it is not reachable
+from the network.
+
+**Folder layout** (`store/folder.rs`, one project per folder):
+
+| File | Content |
+|---|---|
+| `ops.jsonl` | An `aegis-oplog` v1 stream, byte for byte what `OpLogWriter` writes: header line, then `{"seq":N,"op":{...}}` per accepted op. `OpLogReader` reads it. |
+| `ops.meta` | Sidecar, same order: magic `AEGISOP1`, then per op `seq`, acceptance time, actor length, `prev` and `hash` of the audit chain, and the actor. These four facts are not in the op-log format. |
+| `snapshots/<uuid>.aegis` | `Project::save` bytes: the current snapshot and one per baseline. Never rewritten; a new snapshot gets a new name. |
+| `manifest.json` | The commit record, replaced atomically (write, fsync, rename, fsync the folder): project facts, `last_seq`, chain head, the snapshot name, size and SHA-256, and the baseline list. |
+| `.aegis.lock` | OS file lock. One `FolderStore` (and its clones) owns a folder; a second open fails, also from another process. |
+
+**Commit and recovery.** The manifest rename is the commit point. An append
+writes and syncs the log, then the sidecar, then commits the manifest, so
+ops past `last_seq` are uncommitted. Opening a folder reads the committed
+history once (so damage is found at open and reported as `Corrupt`, never
+repaired), cuts both files back to the committed lengths, and deletes
+snapshot files and manifest temporaries that the manifest does not name. The
+store keeps the committed lengths in memory, so a failed append is undone
+before the next one in O(1), and an append never re-reads the log.
+`ProjectStore` guarantees hold as for the other backends: atomic batches, gap
+free sequence, `Sequence` on a stale writer, `verify_chain` over the stored
+bytes. Reads that walk the history (`load`, `recent_ops`, `verify_chain`,
+`active_editors`) stream it once: time O(history), space O(result). The
+ceiling is a linear scan per call; a byte-offset index would make
+`recent_ops` O(limit) if a standalone log ever grows that large.
+
+**Import** (`Registry::import_folder`, command `aegis-server import-folder
+<folder>`) copies; it does not replay. The project keeps its ID, every op
+keeps its bytes, actor and acceptance time, the audit chain is recomputed
+over identical inputs and so comes out identical, the folder's snapshot is
+reused and baselines keep their IDs, names, authors and snapshots. Steps:
+check the methodology is hosted at the same version, verify the folder's
+chain, check the server's project limit, create the project from an empty
+snapshot, stream the ops in batches of at most 256 ops or 4 MiB (memory
+O(batch)), save the snapshot, copy the baselines, then compare the result:
+chain head and count, stored state against the folder's, and a rebuild through
+`Loaded::rebuild`. Any failure after the project exists deletes it again. A
+project ID the server already holds is refused untouched. Imported actors keep
+their names, so if their edits are inside the license's seat window they hold
+a seat after the next start (II.4.6).
+
 `LicenseGate::restore()`. The ledger is derived state rebuilt from the store
 (D10).
 
@@ -1646,6 +1712,7 @@ sequenceDiagram
     U->>L: user, password, keep me logged in
     L->>P: LogIn
     P->>A: log_in (throttle, Argon2id, decoy)
+| `src/standalone.rs` | `Standalone` | The embedded server: reads and verifies the license, opens the `FolderStore`, restores seats, binds loopback, serves the normal gRPC service until `stop()` (which waits for the snapshots). `Launcher::open_standalone`/`create_standalone` run it and connect the `Session` with the development login; File > New/Open project folder and the server screen start it. `AEGIS_STANDALONE=<folder>` (with `AEGIS_LICENSE_FILE`) starts in this mode. |
     A-->>P: token, expiry, user
     P-->>L: PasswordSession
     L->>L: PasswordProvider.set(token), keychain if kept
@@ -1749,29 +1816,6 @@ flowchart LR
     CORE <--> FILES
 ```
 
-### III.1a Standalone mode (D22)
-
-```mermaid
-flowchart LR
-    subgraph App["One desktop process"]
-        UI2["Slint window"] <--> CORE2["aegis-client\n(same code path)"]
-        CORE2 -- "gRPC on 127.0.0.1 only,\nrandom port, no login" --> SRV2["aegis-server library\n(same service and actor)"]
-        SRV2 --> FS["Folder store\nsnapshot + op log +\nattachments"]
-        LIC["License file check\n(aegis-license)"] --> SRV2
-    end
-    FS <--> DIR[("Project folder\non disk")]
-    DIR -. "hand over, then import" .-> CUST["Customer server\n(D3)"]
-```
-
-The standalone app is the same client talking to the same server code; only
-the store and the login differ. Nothing listens on a public address. A
-project folder is the consultancy deliverable next to the report, and a
-customer imports it into their own server with history and provenance kept.
-
-What stays true from Part II: one server per customer, the server owns all
-project state, every change is a validated `Op`, numbers come only from the
-engine, and everything works air gapped except the two dotted arrows.
-
 ## III.2 Where new code goes
 
 No new crate is planned. Each part starts as a module in the crate that
@@ -1788,8 +1832,7 @@ appears (the trigger is named in the table).
 | | `library/` | Library pack format (like methodology packs: versioned JSON, caps, hash), n-gram index, facet filter, insert batch builder with origin note (LIB-01 to LIB-04) | |
 | `aegis-canvas` | `diagram.rs` | Data-flow diagram layout and drawing into the same display list (ARC-03) | |
 | `aegis-proto` | new RPC groups | Access, attachments (chunked streams), library, report profiles, AI (suggest stream, accept, reject), connectors | |
-| `aegis-server` | `store/folder.rs` | `ProjectStore` over a project folder (snapshot, op log, attachments), used by standalone mode (SHP-01, SHP-02) | |
-| | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
+| `aegis-server` | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
 | | `store/blob.rs` | Attachments in PostgreSQL with size caps (ARC-01) | |
 | | `library.rs` | Company library: states, publish permission, usage counts (LIB-05, LIB-06) | |
 | | `secrets.rs` | Encrypted credentials, key from the environment or the cloud key service | |
@@ -1799,7 +1842,6 @@ appears (the trigger is named in the table).
 | | `report/` | `report.rs` and `pdf.rs` move here; one `ReportDoc` feeds `html.rs`, `pdf.rs`, `xlsx.rs`; `profile.rs` holds section and filter choices (RPT-01 to RPT-05) | `aegis-report` crate when the command line tool (RPT-07) must run without the client |
 | | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
 | `aegis-shell` | `ui/` with `@tr()`, `translations/ja/aegis-shell.po` | Bundled UI catalogs (L10N-01); panel slots, command palette, history panel (UI-01 to UI-04) | |
-| | `standalone.rs` | Starts the in-process server on loopback with the folder store; File > New/Open project folder (SHP-01) | |
 | `aegis-model` | `methodology/` (extended) | Element type names per pack, a plain likelihood method, catalog packs with text (DOM-01, DOM-02, DOM-04) | |
 
 Repository additions: `packs/library/` (the built-in demo library pack),

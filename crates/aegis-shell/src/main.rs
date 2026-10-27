@@ -22,7 +22,6 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use aegis_client::commands::Command;
 use aegis_client::transport::TransportKind;
 use aegis_shell::AppWindow;
 use aegis_shell::launcher::Launcher;
@@ -114,31 +113,42 @@ fn run() -> Result<(), String> {
     if let Some(url) = env("AEGIS_URL") {
         window.set_server_url(url.as_str().into());
     }
+    if let Some(license) = env("AEGIS_LICENSE_FILE") {
+        window.set_standalone_license(license.as_str().into());
+    }
     let transport = env("AEGIS_TRANSPORT").unwrap_or_default();
-    match (env("AEGIS_DEV_USER"), env("AEGIS_URL")) {
-        (Some(user), url) => {
-            tracing::warn!("development login as {user}: only for a development server");
-            let url = url.unwrap_or_else(|| "http://127.0.0.1:50051".to_owned());
-            let kind = TransportKind::parse(&transport, &url)
-                .map_err(|e| format!("AEGIS_TRANSPORT: {e}"))?;
-            launcher.start_dev(&url, &user, env("AEGIS_DEV_ADMIN").is_some(), kind);
+    if let Some(folder) = env("AEGIS_STANDALONE") {
+        launcher.open_standalone(
+            folder.into(),
+            env("AEGIS_LICENSE_FILE")
+                .map(Into::into)
+                .unwrap_or_else(|| "license.aegis".into()),
+        );
+    } else {
+        match (env("AEGIS_DEV_USER"), env("AEGIS_URL")) {
+            (Some(user), url) => {
+                tracing::warn!("development login as {user}: only for a development server");
+                let url = url.unwrap_or_else(|| "http://127.0.0.1:50051".to_owned());
+                let kind = TransportKind::parse(&transport, &url)
+                    .map_err(|e| format!("AEGIS_TRANSPORT: {e}"))?;
+                launcher.start_dev(&url, &user, env("AEGIS_DEV_ADMIN").is_some(), kind);
+            }
+            (None, Some(url)) => {
+                let position = match transport.as_str() {
+                    "grpc" => 1,
+                    "grpc-web" => 2,
+                    _ => 0,
+                };
+                launcher.connect(&url, position);
+            }
+            (None, None) => launcher.start(),
         }
-        (None, Some(url)) => {
-            let position = match transport.as_str() {
-                "grpc" => 1,
-                "grpc-web" => 2,
-                _ => 0,
-            };
-            launcher.connect(&url, position);
-        }
-        (None, None) => launcher.start(),
     }
 
     window
         .run()
         .map_err(|e| format!("the window failed: {e}"))?;
-    if let Some(session) = launcher.controller().session() {
-        let _ = session.send(Command::Shutdown);
-    }
+    drop(_enter);
+    runtime.block_on(launcher.shutdown());
     Ok(())
 }
