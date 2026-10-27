@@ -560,12 +560,8 @@ impl Project {
         for tr in snapshot.attack_trees {
             let provenance = wire::unwrap_provenance(tr.provenance);
             let id = tr.id.0;
-            project.apply(Op::AddAttackTree {
-                id,
-                tree: tr.nodes.0,
-                step_feasibility: tr.step_feasibility.0,
-                provenance: provenance.clone(),
-            })?;
+            // A snapshot may hold a bigger tree than one op can carry.
+            project.load_attack_tree(id, tr.nodes.0, tr.step_feasibility.0, provenance.clone())?;
             for (node, factors) in tr.step_factors.0 {
                 for (factor, level) in factors {
                     project.apply(Op::SetStepFactor {

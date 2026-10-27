@@ -1016,7 +1016,7 @@ pub(super) fn unwrap_provenance(p: Option<ProvenanceWire>) -> Provenance {
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum GateKindWire {
+pub(super) enum GateKindWire {
     And,
     Or,
     SeqAnd,
@@ -1458,6 +1458,54 @@ pub(super) struct RecordWire {
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum OpWire {
+    AddTreeNode {
+        tree: WireId<TreeId>,
+        parent: WireId<NodeId>,
+        id: WireId<NodeId>,
+        label: Name,
+        #[serde(default, deserialize_with = "some")]
+        gate: Option<GateKindWire>,
+        index: u32,
+        position: u32,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveTreeNode {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    LinkTreeNode {
+        tree: WireId<TreeId>,
+        parent: WireId<NodeId>,
+        child: WireId<NodeId>,
+        position: u32,
+        slot: u32,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkTreeNode {
+        tree: WireId<TreeId>,
+        parent: WireId<NodeId>,
+        child: WireId<NodeId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameTreeNode {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        label: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetTreeNodeGate {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        gate: GateKindWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetDescription {
         target: TargetWire,
         text: DescriptionText,

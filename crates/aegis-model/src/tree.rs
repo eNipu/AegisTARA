@@ -17,9 +17,36 @@ use crate::id::{NodeId, NodeIdx};
 /// `u32::MAX` nodes.
 ///
 /// ```
-/// assert_eq!(aegis_model::MAX_ATTACK_TREE_NODES, 32);
+/// assert_eq!(aegis_model::MAX_ATTACK_TREE_NODES, 4_096);
 /// ```
-pub const MAX_ATTACK_TREE_NODES: usize = 32;
+pub const MAX_ATTACK_TREE_NODES: usize = 4_096;
+
+/// Most nodes in a tree that one op may carry whole (`AddAttackTree`, and the
+/// inverse of `RemoveAttackTree`): the old per-tree cap. It keeps those ops
+/// inside the op log's record cap; a bigger tree is built and taken apart one
+/// node at a time (job 065).
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_TREE_OP_NODES, 32);
+/// ```
+pub const MAX_TREE_OP_NODES: usize = 32;
+
+/// A node taken out of a tree by [`AttackTree::remove_leaf`], with where it
+/// was, so that it can be put back exactly (undo).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedNode {
+    /// The node's public ID.
+    pub id: NodeId,
+    /// The node.
+    pub node: Node,
+    /// Its arena index before the removal.
+    pub index: NodeIdx,
+    /// Its owner (before the removal; the owner is before the node, so its
+    /// index did not change).
+    pub owner: NodeIdx,
+    /// Its position among the owner's children.
+    pub position: usize,
+}
 
 /// Decoded parts of one attack tree node: `(id, label, gate_and_children, parents)`.
 pub(crate) type WireNodeParts = (
@@ -361,6 +388,52 @@ impl AttackTree {
     /// # }
     /// ```
     pub fn link(&mut self, parent: NodeIdx, child: NodeIdx) -> Result<(), ModelError> {
+        let position = self
+            .nodes
+            .get(parent.index())
+            .map_or(0, |n| n.children().len());
+        let slot = self.linked_parents.get(child.index()).map_or(0, Vec::len);
+        self.link_at(parent, child, position, slot)
+    }
+
+    /// Like [`link`](Self::link), at a chosen place: `position` among the
+    /// children of `parent`, and `slot` among the extra parents of `child`.
+    /// Undoing an [`unlink`](Self::unlink) uses it to restore both orders.
+    ///
+    /// Time as for `link`, plus O(k + p) to insert.
+    ///
+    /// # Errors
+    ///
+    /// As [`link`](Self::link), then [`ModelError::BadNodePlacement`] if
+    /// `position` or `slot` is past the end.
+    pub fn link_at(
+        &mut self,
+        parent: NodeIdx,
+        child: NodeIdx,
+        position: usize,
+        slot: usize,
+    ) -> Result<(), ModelError> {
+        self.check_link(parent, child, position, slot)?;
+        // The checks passed, so both slots exist and both inserts happen.
+        if let (Some(Node::Gate { children, .. }), Some(linked)) = (
+            self.nodes.get_mut(parent.index()),
+            self.linked_parents.get_mut(child.index()),
+        ) {
+            children.insert(position, child);
+            linked.insert(slot, parent);
+            self.link_count = self.link_count.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    /// Everything `link_at` checks, without changing the tree.
+    pub(crate) fn check_link(
+        &self,
+        parent: NodeIdx,
+        child: NodeIdx,
+        position: usize,
+        slot: usize,
+    ) -> Result<(), ModelError> {
         let (Some(parent_node), Some(&parent_id)) =
             (self.nodes.get(parent.index()), self.ids.get(parent.index()))
         else {
@@ -385,17 +458,290 @@ impl AttackTree {
                 path: self.ids_for(&path),
             });
         }
-        // All checks passed. Both slots exist (indices checked above), so
-        // both pushes happen or neither does.
-        if let (Some(Node::Gate { children, .. }), Some(linked)) = (
-            self.nodes.get_mut(parent.index()),
-            self.linked_parents.get_mut(child.index()),
-        ) {
-            children.push(child);
-            linked.push(parent);
-            self.link_count = self.link_count.saturating_add(1);
+        let slots = self.linked_parents.get(child.index()).map_or(0, Vec::len);
+        if position > parent_node.children().len() || slot > slots {
+            return Err(ModelError::BadNodePlacement);
         }
         Ok(())
+    }
+
+    /// Removes the extra edge `parent -> child` made by [`link`](Self::link)
+    /// and returns where it was: its position among the children of `parent`
+    /// and its slot among the extra parents of `child`. The owner's edge is
+    /// not an extra edge and cannot be removed this way.
+    ///
+    /// Time O(k + p).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownNode`] for a node not in this tree,
+    /// [`ModelError::NotLinked`] if there is no such extra edge.
+    ///
+    /// ```
+    /// use aegis_model::{AttackTree, GateKind, ModelError, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::And, "root"))?;
+    /// let g1 = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::Or, "g1"))?;
+    /// let g2 = tree.add_child(tree.root(), NodeId::new_v7(), Node::gate(GateKind::Or, "g2"))?;
+    /// let s = tree.add_child(g1, NodeId::new_v7(), Node::step("s"))?;
+    /// tree.link(g2, s)?;
+    /// assert_eq!(tree.unlink(g2, s)?, (0, 0));
+    /// assert!(matches!(tree.unlink(g1, s), Err(ModelError::NotLinked { .. })));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unlink(
+        &mut self,
+        parent: NodeIdx,
+        child: NodeIdx,
+    ) -> Result<(usize, usize), ModelError> {
+        let (position, slot) = self.check_unlink(parent, child)?;
+        if let Some(Node::Gate { children, .. }) = self.nodes.get_mut(parent.index()) {
+            children.remove(position);
+        }
+        if let Some(linked) = self.linked_parents.get_mut(child.index()) {
+            linked.remove(slot);
+        }
+        self.link_count = self.link_count.saturating_sub(1);
+        Ok((position, slot))
+    }
+
+    /// Everything `unlink` checks, and where the edge is: `(position, slot)`.
+    pub(crate) fn check_unlink(
+        &self,
+        parent: NodeIdx,
+        child: NodeIdx,
+    ) -> Result<(usize, usize), ModelError> {
+        let (Some(&parent_id), Some(&child_id)) =
+            (self.ids.get(parent.index()), self.ids.get(child.index()))
+        else {
+            return Err(ModelError::UnknownNode(
+                if self.ids.get(parent.index()).is_none() {
+                    parent
+                } else {
+                    child
+                },
+            ));
+        };
+        let not_linked = ModelError::NotLinked {
+            parent: parent_id,
+            child: child_id,
+        };
+        let slot = self
+            .linked_parents
+            .get(child.index())
+            .and_then(|l| l.iter().position(|p| *p == parent))
+            .ok_or_else(|| not_linked.clone())?;
+        let Some(Node::Gate { children, .. }) = self.nodes.get(parent.index()) else {
+            return Err(not_linked);
+        };
+        let position = children
+            .iter()
+            .position(|c| *c == child)
+            .ok_or(not_linked)?;
+        Ok((position, slot))
+    }
+
+    /// Inserts `node` as a child of the gate `parent`, at arena index `at`
+    /// and at `position` among its children, and shifts every later node up
+    /// by one. [`add_child`](Self::add_child) is the case `at == len()` and
+    /// `position == children(parent).len()`. A new owner must come before its
+    /// node in the arena, so `at` is after `parent` and at most `len()`.
+    ///
+    /// Time O(V + E) for the shift (one pass over the arena).
+    ///
+    /// # Errors
+    ///
+    /// On any error the tree is unchanged: [`ModelError::UnknownNode`],
+    /// [`ModelError::NotAGate`], [`ModelError::ChildrenNotEmpty`],
+    /// [`ModelError::DuplicateId`], [`ModelError::BadNodePlacement`] for an
+    /// `at` or `position` out of range, [`ModelError::CapacityExceeded`].
+    ///
+    /// ```
+    /// use aegis_model::{AttackTree, GateKind, ModelError, Node, NodeId};
+    ///
+    /// # fn main() -> Result<(), ModelError> {
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// let b_id = NodeId::new_v7();
+    /// let b = tree.add_child(tree.root(), b_id, Node::step("b"))?;
+    /// // Insert "a" at b's index, first among the children: "b" moves to index 2.
+    /// let a = tree.insert_child(tree.root(), b, 0, NodeId::new_v7(), Node::step("a"))?;
+    /// let b = tree.idx_of(&b_id).ok_or(ModelError::UnknownNode(b))?;
+    /// assert_eq!((a.index(), b.index()), (1, 2));
+    /// assert_eq!(tree.children(tree.root()), &[a, b]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn insert_child(
+        &mut self,
+        parent: NodeIdx,
+        at: NodeIdx,
+        position: usize,
+        id: NodeId,
+        node: Node,
+    ) -> Result<NodeIdx, ModelError> {
+        self.check_insert(parent, at, position, id, &node)?;
+        let from = at.index();
+        self.shift(from, 1);
+        self.nodes.insert(from, node);
+        self.ids.insert(from, id);
+        self.owners.insert(from, Some(parent));
+        self.linked_parents.insert(from, Vec::new());
+        self.by_id.insert(id, at);
+        if let Some(Node::Gate { children, .. }) = self.nodes.get_mut(parent.index()) {
+            children.insert(position, at);
+        }
+        Ok(at)
+    }
+
+    /// Everything `insert_child` checks, without changing the tree.
+    pub(crate) fn check_insert(
+        &self,
+        parent: NodeIdx,
+        at: NodeIdx,
+        position: usize,
+        id: NodeId,
+        node: &Node,
+    ) -> Result<(), ModelError> {
+        match self.nodes.get(parent.index()) {
+            None => return Err(ModelError::UnknownNode(parent)),
+            Some(Node::Step { .. }) => return Err(ModelError::NotAGate(parent)),
+            Some(Node::Gate { children, .. }) => {
+                if position > children.len() {
+                    return Err(ModelError::BadNodePlacement);
+                }
+            }
+        }
+        if !node.children().is_empty() {
+            return Err(ModelError::ChildrenNotEmpty);
+        }
+        if self.by_id.contains_key(&id) {
+            return Err(ModelError::DuplicateId(id));
+        }
+        if at.index() <= parent.index() || at.index() > self.nodes.len() {
+            return Err(ModelError::BadNodePlacement);
+        }
+        NodeIdx::try_from_usize(self.nodes.len()).ok_or(ModelError::CapacityExceeded)?;
+        Ok(())
+    }
+
+    /// Removes the node `idx` and shifts every later node down by one.
+    /// Only a node nothing hangs on can go: not the root, no children, no
+    /// extra parents (unlink them first). Returns what is needed to put it
+    /// back exactly: see [`RemovedNode`].
+    ///
+    /// Time O(V + E).
+    ///
+    /// # Errors
+    ///
+    /// On any error the tree is unchanged: [`ModelError::UnknownNode`],
+    /// [`ModelError::CannotRemoveRoot`], [`ModelError::NodeHasChildren`],
+    /// [`ModelError::NodeIsShared`].
+    pub fn remove_leaf(&mut self, idx: NodeIdx) -> Result<RemovedNode, ModelError> {
+        let (id, owner, position) = self.check_remove(idx)?;
+        if let Some(Node::Gate { children, .. }) = self.nodes.get_mut(owner.index()) {
+            children.remove(position);
+        }
+        let node = self.nodes.remove(idx.index());
+        self.ids.remove(idx.index());
+        self.owners.remove(idx.index());
+        self.linked_parents.remove(idx.index());
+        self.by_id.remove(&id);
+        self.shift(idx.index() + 1, -1);
+        Ok(RemovedNode {
+            id,
+            node,
+            index: idx,
+            owner,
+            position,
+        })
+    }
+
+    /// Everything `remove_leaf` checks, and what it needs: the node's ID, its
+    /// owner and its position among the owner's children.
+    pub(crate) fn check_remove(
+        &self,
+        idx: NodeIdx,
+    ) -> Result<(NodeId, NodeIdx, usize), ModelError> {
+        let Some(&id) = self.ids.get(idx.index()) else {
+            return Err(ModelError::UnknownNode(idx));
+        };
+        if idx == self.root {
+            return Err(ModelError::CannotRemoveRoot);
+        }
+        if !self.nodes[idx.index()].children().is_empty() {
+            return Err(ModelError::NodeHasChildren(id));
+        }
+        if !self.linked_parents[idx.index()].is_empty() {
+            return Err(ModelError::NodeIsShared(id));
+        }
+        let owner = self.owners[idx.index()].ok_or(ModelError::CannotRemoveRoot)?;
+        let position = self
+            .nodes
+            .get(owner.index())
+            .and_then(|n| n.children().iter().position(|c| *c == idx))
+            .ok_or(ModelError::UnknownNode(idx))?;
+        Ok((id, owner, position))
+    }
+
+    /// Changes the label of `idx` and returns the old one. Time O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownNode`].
+    pub fn set_label(&mut self, idx: NodeIdx, label: Arc<str>) -> Result<Arc<str>, ModelError> {
+        match self.nodes.get_mut(idx.index()) {
+            Some(Node::Gate { label: l, .. } | Node::Step { label: l }) => {
+                Ok(std::mem::replace(l, label))
+            }
+            None => Err(ModelError::UnknownNode(idx)),
+        }
+    }
+
+    /// Changes how the gate `idx` combines its children and returns the old
+    /// kind. Time O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownNode`], [`ModelError::NotAGate`] for a step.
+    pub fn set_gate_kind(&mut self, idx: NodeIdx, kind: GateKind) -> Result<GateKind, ModelError> {
+        match self.nodes.get_mut(idx.index()) {
+            Some(Node::Gate { kind: k, .. }) => Ok(std::mem::replace(k, kind)),
+            Some(Node::Step { .. }) => Err(ModelError::NotAGate(idx)),
+            None => Err(ModelError::UnknownNode(idx)),
+        }
+    }
+
+    /// Moves every index at or after `from` by `by` (+1 after an insert, -1
+    /// after a removal): child lists, owners, extra parents and the ID map.
+    /// The root is index 0 and never moves. Time O(V + E).
+    fn shift(&mut self, from: usize, by: isize) {
+        let moved = |i: NodeIdx| {
+            if i.index() >= from {
+                NodeIdx::try_from_usize(i.index().saturating_add_signed(by)).unwrap_or(i)
+            } else {
+                i
+            }
+        };
+        for node in &mut self.nodes {
+            if let Node::Gate { children, .. } = node {
+                for c in children {
+                    *c = moved(*c);
+                }
+            }
+        }
+        for owner in self.owners.iter_mut().flatten() {
+            *owner = moved(*owner);
+        }
+        for parents in &mut self.linked_parents {
+            for p in parents {
+                *p = moved(*p);
+            }
+        }
+        for idx in self.by_id.values_mut() {
+            *idx = moved(*idx);
+        }
     }
 
     /// Returns every node in topological order: for every edge

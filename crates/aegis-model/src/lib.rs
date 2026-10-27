@@ -295,4 +295,4 @@ pub use store::{
     MAX_PACK_FILE_BYTES, MAX_PROJECT_FILE_BYTES, OpCodec, OpLogReader, OpLogWriter, VocabKind,
 };
 pub use threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
-pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node};
+pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Node, RemovedNode};
