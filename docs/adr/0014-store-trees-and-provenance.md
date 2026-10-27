@@ -1,6 +1,6 @@
 # ADR 0014: Store persistence for attack trees and provenance
 
-- Status: proposed (job 016-store-trees-and-provenance)
+- Status: proposed (job 016-store-trees-and-provenance); the node cap of decision 3 was replaced by job 065 (see the update at the end)
 - Date: 2026-10-25
 - Crate: `crates/aegis-model` (`src/tree.rs`, `src/project.rs`,
   `src/error.rs`, `src/lib.rs`, `src/store/`)
@@ -171,3 +171,101 @@ of 9,533 3-node attack trees with 2 rated steps each):
   `OpLogReader::read` with canonical byte-for-byte determinism.
 - Existing v1 snapshots and op logs without attack trees or non-default
   provenance continue to load and save with zero format changes.
+
+## Update: job 065-tree-node-ops (2026-10-27, FND-02 and FND-03)
+
+Decision 3 above capped a tree at 32 nodes so that `AddAttackTree` and the
+inverse of `RemoveAttackTree`, which carry a whole tree, fit one op-log record
+(64 KiB). Bigger trees need ops that carry one node.
+
+### Two caps
+
+| Cap | Value | Applies to |
+|---|---|---|
+| `MAX_ATTACK_TREE_NODES` | 4,096 | nodes in one tree of a project; the snapshot's `nodes` list |
+| `MAX_TREE_OP_NODES` | 32 | nodes an op carries whole: `AddAttackTree`, and so `RemoveAttackTree` (its inverse) |
+
+A tree larger than 32 nodes is built by `AddTreeNode` ops and taken apart by
+`RemoveTreeNode`; `RemoveAttackTree` on one is refused with
+`TreeTooLargeForOneOp`. A snapshot may hold a tree of any size up to the cap
+(`Project::load` has its own path that skips only the whole-op cap).
+The op-log decode cap is still 4,096 nodes, but a record that long is refused
+first by the 64 KiB record cap, so the writer refuses to write more than
+`MAX_TREE_OP_NODES` in one `add_attack_tree` record.
+
+### Six node ops
+
+`AddTreeNode`, `RemoveTreeNode`, `LinkTreeNode`, `UnlinkTreeNode`,
+`RenameTreeNode`, `SetTreeNodeGate`. Each carries the tree's provenance like
+every other change to a tree, and each is undone by the next one:
+
+| Op | Inverse |
+|---|---|
+| `AddTreeNode` (at arena `index`, child `position`) | `RemoveTreeNode` |
+| `RemoveTreeNode` | `AddTreeNode` at the node's old index and position |
+| `LinkTreeNode` (`position` among the gate's children, `slot` among the node's extra parents) | `UnlinkTreeNode` |
+| `UnlinkTreeNode` | `LinkTreeNode` at the old position and slot |
+| `RenameTreeNode`, `SetTreeNodeGate` | the same with the old label or gate |
+
+The `index`, `position` and `slot` are what make undo exact: a tree is equal to
+another only if its arena order, child order and extra-parent order are, and
+the snapshot writes all three. Inserting or removing a node shifts the arena
+(O(V + E)): child lists, owners, extra parents, the ID map and the per-node
+rating vectors of the project move together.
+
+### What blocks a removal
+
+`RemoveTreeNode` refuses the root (`CannotRemoveRoot`), a node with children
+(`NodeHasChildren`), a node shared with another gate (`NodeIsShared`: unlink it
+first) and a step with a rating, factors or controls (`NodeIsRated`). So the
+inverse of a removal never has to carry a rating, the same rule as for
+descriptions (ADR 0051). An edit clears and unlinks first, in the same batch.
+
+### Evaluation cache
+
+A structural op rebuilds the evaluation of that one tree (O(V + E)) and
+refreshes the threats that use it; other trees and threats are untouched. A
+rename changes no value and updates nothing. A test applies 120 random node ops
+and compares the incremental cache with a fresh one after each.
+
+### Cost (A1, 5 ms budget)
+
+`benches/tree_nodes.rs`, release build, one threat on a full tree of 4,096
+nodes, the op and its inverse together (the median of 20 runs):
+
+| Case | Op and inverse |
+|---|---|
+| Insert at the front (shifts every later node) | 170 microseconds |
+| Remove the node at the front | 174 microseconds |
+| Change a gate | 111 microseconds |
+| Rate a step (existing op, for scale) | 119 microseconds |
+| Rename a node | 0.12 microseconds |
+
+The worst case is about 0.2 ms for one op: 25 times under the budget.
+
+### The outline editor
+
+`Edit::ReplaceTree` no longer removes and re-adds the tree. `tree_diff.rs`
+compares the tree with the outline and sends the ops for the difference:
+nodes with the same ID and owner stay (with their ratings), others are cleared,
+unlinked and removed (children first), new ones are added in outline order at
+the end of the arena, new shared edges are linked, and a step that moved gets
+its rating back. A node whose kept siblings would end up in another order is
+replaced too, since there is no op that moves a child. The first line is the
+tree's root: a new text renames it and a new gate kind sets its gate. Threats
+stay attached throughout, and it is one batch and one undo step. A randomized
+test checks 100+ edits between random outlines, including shared steps: the
+result is the outline's tree, and one undo restores the project exactly.
+
+One edit is at most 1,024 ops (a submission): a bigger change is refused with
+`TooLarge` and made in steps. `RemoveTree` takes a big tree apart the same
+way, so a tree of more than about 1,000 nodes is deleted in several steps. The
+outline text cap is raised to 2 MiB to hold the largest tree.
+
+### Not done
+
+- No op moves a child to another owner or changes the order of children; the
+  outline editor replaces the node instead.
+- A node's description (ADR 0051) is not there yet.
+- The canvas draws a 4,096-node tree with the existing layout (linear time);
+  no new screen measurement was made beyond the tests of job 053.

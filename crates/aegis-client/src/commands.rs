@@ -326,6 +326,10 @@ pub enum Edit {
 /// Why an edit could not be turned into ops. The text is for the user.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EditError {
+    /// The first line of an outline would turn the root from a gate into a
+    /// step or the other way round.
+    #[error("the first line must stay a gate (OR, AND, SEQ), or a step if the tree is one step")]
+    RootKind,
     /// The feasibility level position does not exist.
     #[error("unknown feasibility level")]
     UnknownLevel,
@@ -418,45 +422,12 @@ fn feasibility(
         .transpose()
 }
 
-/// Ops that clear everything attached to a tree's steps (factors and
-/// mitigations), in node order.
-fn clear_tree_attachments(project: &Project, tree: TreeId, p: &Provenance) -> Vec<Op> {
-    let m = project.methodology();
-    let Some(t_idx) = project.attack_tree_idx(&tree) else {
-        return Vec::new();
-    };
-    let Some(t) = project.attack_tree(t_idx) else {
-        return Vec::new();
-    };
-    let mut ops = Vec::new();
-    for (idx, node_id, node) in t.iter() {
-        if node.gate_kind().is_some() {
-            continue;
-        }
-        for factor in m.feasibility_factors() {
-            if project.step_factor(t_idx, idx, factor).is_some() {
-                ops.push(Op::SetStepFactor {
-                    tree,
-                    node: node_id,
-                    factor,
-                    level: None,
-                    provenance: p.clone(),
-                });
-            }
-        }
-        for mitigation in project.step_mitigations(t_idx, idx) {
-            if let Some(control) = project.security_control_id(mitigation.control()) {
-                ops.push(Op::SetStepMitigation {
-                    tree,
-                    node: node_id,
-                    control,
-                    feasibility: None,
-                    provenance: p.clone(),
-                });
-            }
-        }
+/// The node without its children, for a tree reduced to its root.
+fn root_node_without_children(node: &aegis_model::Node) -> aegis_model::Node {
+    match node.gate_kind() {
+        Some(kind) => aegis_model::Node::gate(kind, node.label()),
+        None => aegis_model::Node::step(node.label()),
     }
-    ops
 }
 
 fn threats_on_tree(project: &Project, tree: TreeId) -> Vec<ThreatId> {
@@ -468,85 +439,6 @@ fn threats_on_tree(project: &Project, tree: TreeId) -> Vec<ThreatId> {
         .filter(|(_, _, t)| t.attack_tree() == Some(t_idx))
         .map(|(_, id, _)| id)
         .collect()
-}
-
-/// The ops that replace `tree`'s structure with `new`, keeping the tree ID
-/// and, for every node whose ID survives as a step, its direct rating,
-/// factors and mitigations. Linked threats stay linked. Time O(V x F) for V
-/// nodes and F factors.
-fn replace_tree_ops(project: &Project, tree: TreeId, new: AttackTree, p: &Provenance) -> Vec<Op> {
-    let m = project.methodology();
-    let Some(t_idx) = project.attack_tree_idx(&tree) else {
-        return Vec::new();
-    };
-    let Some(old) = project.attack_tree(t_idx) else {
-        return Vec::new();
-    };
-    let threats = threats_on_tree(project, tree);
-    let mut ops: Vec<Op> = threats
-        .iter()
-        .map(|&threat| Op::SetThreatAttackTree {
-            threat,
-            tree: None,
-            provenance: p.clone(),
-        })
-        .collect();
-    ops.extend(clear_tree_attachments(project, tree, p));
-    ops.push(Op::RemoveAttackTree { id: tree });
-
-    // What survives: steps of the new tree that were steps of the old one.
-    let kept = |node: &NodeId| {
-        old.idx_of(node)
-            .filter(|i| old.get(*i).is_some_and(|n| n.gate_kind().is_none()))
-    };
-    let mut ratings = Vec::new();
-    let mut restore = Vec::new();
-    for (_, node_id, node) in new.iter() {
-        if node.gate_kind().is_some() {
-            continue;
-        }
-        let Some(old_idx) = kept(&node_id) else {
-            continue;
-        };
-        if let Some(level) = project.step_feasibility(t_idx, old_idx) {
-            ratings.push((node_id, level));
-        }
-        for factor in m.feasibility_factors() {
-            if let Some(level) = project.step_factor(t_idx, old_idx, factor) {
-                restore.push(Op::SetStepFactor {
-                    tree,
-                    node: node_id,
-                    factor,
-                    level: Some(level),
-                    provenance: p.clone(),
-                });
-            }
-        }
-        for mitigation in project.step_mitigations(t_idx, old_idx) {
-            if let Some(control) = project.security_control_id(mitigation.control()) {
-                restore.push(Op::SetStepMitigation {
-                    tree,
-                    node: node_id,
-                    control,
-                    feasibility: Some(mitigation.feasibility()),
-                    provenance: p.clone(),
-                });
-            }
-        }
-    }
-    ops.push(Op::AddAttackTree {
-        id: tree,
-        tree: new,
-        step_feasibility: ratings,
-        provenance: p.clone(),
-    });
-    ops.extend(restore);
-    ops.extend(threats.into_iter().map(|threat| Op::SetThreatAttackTree {
-        threat,
-        tree: Some(tree),
-        provenance: p.clone(),
-    }));
-    ops
 }
 
 impl Edit {
@@ -908,7 +800,7 @@ impl Edit {
                     .and_then(|i| project.attack_tree(i))
                     .ok_or(EditError::Missing)?;
                 let new = parse_outline(outline, Some(old))?;
-                replace_tree_ops(project, *tree, new, &p)
+                crate::tree_diff::replace_tree_ops(project, *tree, &new, &p)?
             }
             Edit::RemoveTree { tree } => {
                 if project.attack_tree_idx(tree).is_none() {
@@ -922,7 +814,25 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
-                ops.extend(clear_tree_attachments(project, *tree, &p));
+                // Take the tree apart node by node: an op carries a whole tree
+                // only up to MAX_TREE_OP_NODES nodes.
+                let old = project
+                    .attack_tree_idx(tree)
+                    .and_then(|i| project.attack_tree(i))
+                    .ok_or(EditError::Missing)?;
+                let root = old.root();
+                let root_id = old.id_of(root).ok_or(EditError::Missing)?;
+                let root_node = old.get(root).ok_or(EditError::Missing)?;
+                let bare = AttackTree::new(root_id, root_node_without_children(root_node))
+                    .map_err(|_| EditError::Missing)?;
+                ops.extend(crate::tree_diff::replace_tree_ops(
+                    project, *tree, &bare, &p,
+                )?);
+                if root_node.gate_kind().is_none() {
+                    ops.extend(crate::tree_diff::clear_step_ops(
+                        project, *tree, root_id, &p,
+                    ));
+                }
                 ops.push(Op::RemoveAttackTree { id: *tree });
                 ops
             }

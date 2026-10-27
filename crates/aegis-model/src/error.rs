@@ -307,6 +307,43 @@ pub enum ModelError {
         /// Which entity kind had an empty name.
         kind: EntityKind,
     },
+    /// A node is placed where it cannot go: an arena index that is not after
+    /// its owner or not within the tree, or a position past the end of a
+    /// child list or of the extra parents of a node.
+    #[error("the node cannot be placed there")]
+    BadNodePlacement,
+    /// The root of an attack tree cannot be removed.
+    #[error("the root of an attack tree cannot be removed")]
+    CannotRemoveRoot,
+    /// A node with children cannot be removed; remove the children first.
+    #[error("the node {0} has children")]
+    NodeHasChildren(NodeId),
+    /// A node that is also a child of another gate cannot be removed;
+    /// unlink it first.
+    #[error("the node {0} is shared with another gate")]
+    NodeIsShared(NodeId),
+    /// A step with a rating, factors or mitigations cannot be removed; clear
+    /// them first.
+    #[error("the step {0} still has a rating, factors or controls")]
+    NodeIsRated(NodeId),
+    /// `child` is not an extra child of `parent` (there is no such edge, or
+    /// it is the owner's edge, which unlinking does not remove).
+    #[error("{child} is not linked under {parent}")]
+    NotLinked {
+        /// The gate.
+        parent: NodeId,
+        /// The node.
+        child: NodeId,
+    },
+    /// The attack tree has too many nodes to be added or removed by one op;
+    /// take it apart node by node.
+    #[error("attack tree {tree} has more than {max} nodes for one op")]
+    TreeTooLargeForOneOp {
+        /// The tree.
+        tree: TreeId,
+        /// The limit, in nodes.
+        max: usize,
+    },
     /// A description or notes text is longer than `max` chars.
     #[error("text is longer than {max} chars")]
     DescriptionTooLong {
@@ -697,7 +734,7 @@ pub enum ModelError {
     /// let err = ModelError::TooManyAttackTreeNodes { tree, max: MAX_ATTACK_TREE_NODES };
     /// assert_eq!(
     ///     err.to_string(),
-    ///     format!("attack tree {tree} would have more than 32 nodes"),
+    ///     format!("attack tree {tree} would have more than {MAX_ATTACK_TREE_NODES} nodes"),
     /// );
     /// ```
     #[error("attack tree {tree} would have more than {max} nodes")]

@@ -14,6 +14,7 @@ pub mod settings;
 pub mod state;
 pub mod time;
 pub mod transport;
+mod tree_diff;
 pub mod updates;
 pub mod view;
 pub mod workspace;

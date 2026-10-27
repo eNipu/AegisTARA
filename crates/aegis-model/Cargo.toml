@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "pack"
 harness = false
+
+[[bench]]
+name = "tree_nodes"
+harness = false

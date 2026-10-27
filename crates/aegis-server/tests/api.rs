@@ -485,6 +485,82 @@ async fn bad_requests_are_refused_with_reasons() {
 }
 
 #[tokio::test]
+async fn a_tree_of_many_nodes_is_built_by_atomic_batches_and_survives_a_restart() {
+    use aegis_model::{AttackTree, GateKind, Node, NodeId, TreeId};
+    let store = std::sync::Arc::new(aegis_server::MemoryStore::new());
+    let m = methodology();
+    let codec = OpCodec::new(m.clone());
+    let first = TestServer::start_on(std::sync::Arc::clone(&store), fast_config()).await;
+    let mut alice = first.client("alice").await;
+    let id = create_project(&mut alice, "p").await;
+    let lease = lock(&mut alice, &id).await;
+
+    let (tree, root) = (TreeId::new_v7(), NodeId::new_v7());
+    let mut seq = submit(
+        &mut alice,
+        &id,
+        &lease,
+        0,
+        &[Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        }],
+        &codec,
+    )
+    .await
+    .expect("accepted");
+
+    let add = |i: u32, id: NodeId| Op::AddTreeNode {
+        tree,
+        parent: root,
+        id,
+        node: Node::step(format!("step {i}")),
+        index: i,
+        position: i - 1,
+        provenance: Provenance::default(),
+    };
+    // A batch whose last op is refused changes nothing.
+    let mut bad: Vec<Op> = (1..=40).map(|i| add(i, NodeId::new_v7())).collect();
+    bad.push(add(99, NodeId::new_v7()));
+    let err = submit(&mut alice, &id, &lease, seq, &bad, &codec)
+        .await
+        .expect_err("one bad op refuses the batch");
+    assert_eq!(error_code(&err), "rejected_op");
+    let (after_refusal, _) = open(&mut alice, &id, &m).await;
+    assert_eq!(after_refusal, seq, "nothing of the batch was kept");
+
+    // Batches of 500 nodes build a tree of 1,501 nodes: far more than one op
+    // can carry.
+    let mut next = 1u32;
+    for _ in 0..3 {
+        let batch: Vec<Op> = (0..500)
+            .map(|_| {
+                let op = add(next, NodeId::new_v7());
+                next += 1;
+                op
+            })
+            .collect();
+        seq = submit(&mut alice, &id, &lease, seq, &batch, &codec)
+            .await
+            .expect("accepted");
+    }
+    let (_, before) = open(&mut alice, &id, &m).await;
+    first.stop().await;
+
+    // After a restart the snapshot (and the ops after it) rebuild the tree.
+    let second = TestServer::start_on(store, fast_config()).await;
+    let mut alice = second.client("alice").await;
+    let (seq_after, after) = open(&mut alice, &id, &m).await;
+    assert_eq!(seq_after, seq);
+    assert_eq!(after, before);
+    let tree_idx = after.attack_tree_idx(&tree).expect("tree");
+    assert_eq!(after.attack_tree(tree_idx).expect("tree").len(), 1_501);
+    second.stop().await;
+}
+
+#[tokio::test]
 async fn projects_survive_a_server_restart_identically() {
     common::restart_keeps_every_project_identical(std::sync::Arc::new(
         aegis_server::MemoryStore::new(),
