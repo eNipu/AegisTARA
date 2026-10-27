@@ -1,0 +1,8 @@
+[package]
+name = "fixture-ok-dev-gpl"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+dep-bad-gpl = { path = "../deps/bad-gpl" }

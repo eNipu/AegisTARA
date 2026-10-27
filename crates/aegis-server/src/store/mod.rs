@@ -20,12 +20,14 @@
 //!   and `verify_chain` recomputes it.
 
 mod audit;
+mod folder;
 mod memory;
 mod postgres;
 
 use std::future::Future;
 
 pub use audit::{ChainReport, ChainVerifier, Hash, genesis, link};
+pub use folder::FolderStore;
 pub use memory::MemoryStore;
 pub use postgres::{DbTls, PostgresOptions, PostgresStore};
 

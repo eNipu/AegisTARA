@@ -662,29 +662,24 @@ impl<P: CredentialProvider> Connection<P> {
             .last_seq)
     }
 
-    /// Starts watching a project from `after_seq`.
+    /// The project's newest sequence number and lock holder.
     ///
     /// # Errors
     ///
-    /// [`ServerCode::OutOfRange`](crate::error::ServerCode::OutOfRange) if the
-    /// server no longer holds those ops.
-    pub async fn watch(
-        &self,
-        project: &str,
-        after_seq: u64,
-    ) -> Result<tonic::Streaming<pb::WatchEvent>, ClientError> {
+    /// Any [`ClientError`].
+    pub async fn status(&self, project: &str) -> Result<pb::ProjectStatus, ClientError> {
         Ok(self
             .client
             .clone()
-            .watch(pb::WatchRequest {
+            .get_project_status(pb::GetProjectStatusRequest {
                 project_id: project.to_owned(),
-                after_seq,
             })
             .await?
             .into_inner())
     }
 
-    /// The server's official risks (used when the engines differ).
+    /// The server's official risks, to check this engine's numbers against
+    /// or to show when the engines differ.
     ///
     /// # Errors
     ///

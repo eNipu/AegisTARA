@@ -6,18 +6,19 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::wire::{
-    self, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, HeaderView, HeaderWire, Ids,
-    ImpactsInOrder, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys, ProvenanceView,
-    RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, Text,
+    self, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, GateKindWire, HeaderView, HeaderWire,
+    Ids, ImpactsInOrder, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys,
+    ProvenanceView, RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, TargetView,
+    Text,
 };
-use super::{Limit, MAX_ACTOR_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
+use super::{Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
-use crate::tree::MAX_ATTACK_TREE_NODES;
+use crate::tree::MAX_TREE_OP_NODES;
 
 /// One record of an op log: its sequence number and the op.
 ///
@@ -50,6 +51,67 @@ struct RecordView<'a> {
 #[derive(Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum OpView<'a> {
+    SetReviewMark {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        marked: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    AddTreeNode {
+        tree: Text<TreeId>,
+        parent: Text<NodeId>,
+        id: Text<NodeId>,
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateKindWire>,
+        index: u32,
+        position: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveTreeNode {
+        tree: Text<TreeId>,
+        id: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    LinkTreeNode {
+        tree: Text<TreeId>,
+        parent: Text<NodeId>,
+        child: Text<NodeId>,
+        position: u32,
+        slot: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkTreeNode {
+        tree: Text<TreeId>,
+        parent: Text<NodeId>,
+        child: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameTreeNode {
+        tree: Text<TreeId>,
+        id: Text<NodeId>,
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetTreeNodeGate {
+        tree: Text<TreeId>,
+        id: Text<NodeId>,
+        gate: GateKindWire,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetDescription {
+        target: TargetView,
+        text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddAsset {
         id: Text<AssetId>,
         name: &'a str,
@@ -279,6 +341,9 @@ fn within_caps(op: &Op) -> bool {
     }
     let name_ok = |name: &str| name.len() <= MAX_NAME_BYTES;
     match op {
+        Op::SetDescription { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
+        Op::AddTreeNode { node, .. } => name_ok(node.label()),
+        Op::RenameTreeNode { label, .. } => name_ok(label),
         Op::AddAsset { name, .. }
         | Op::RenameAsset { name, .. }
         | Op::AddDamageScenario { name, .. }
@@ -307,8 +372,8 @@ fn within_caps(op: &Op) -> bool {
             step_feasibility,
             ..
         } => {
-            tree.len() <= MAX_ATTACK_TREE_NODES
-                && step_feasibility.len() <= MAX_ATTACK_TREE_NODES
+            tree.len() <= MAX_TREE_OP_NODES
+                && step_feasibility.len() <= MAX_TREE_OP_NODES
                 && tree.iter().all(|(_, _, n)| name_ok(n.label()))
         }
         _ => true,
@@ -321,6 +386,101 @@ fn within_caps(op: &Op) -> bool {
 fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a> {
     let props = |set| PropertyKeys { m, order, set };
     match op {
+        Op::AddTreeNode {
+            tree,
+            parent,
+            id,
+            node,
+            index,
+            position,
+            provenance,
+        } => OpView::AddTreeNode {
+            tree: Text(*tree),
+            parent: Text(*parent),
+            id: Text(*id),
+            label: node.label(),
+            gate: node.gate_kind().map(GateKindWire::from),
+            index: *index,
+            position: *position,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveTreeNode {
+            tree,
+            id,
+            provenance,
+        } => OpView::RemoveTreeNode {
+            tree: Text(*tree),
+            id: Text(*id),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::LinkTreeNode {
+            tree,
+            parent,
+            child,
+            position,
+            slot,
+            provenance,
+        } => OpView::LinkTreeNode {
+            tree: Text(*tree),
+            parent: Text(*parent),
+            child: Text(*child),
+            position: *position,
+            slot: *slot,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkTreeNode {
+            tree,
+            parent,
+            child,
+            provenance,
+        } => OpView::UnlinkTreeNode {
+            tree: Text(*tree),
+            parent: Text(*parent),
+            child: Text(*child),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameTreeNode {
+            tree,
+            id,
+            label,
+            provenance,
+        } => OpView::RenameTreeNode {
+            tree: Text(*tree),
+            id: Text(*id),
+            label,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetTreeNodeGate {
+            tree,
+            id,
+            gate,
+            provenance,
+        } => OpView::SetTreeNodeGate {
+            tree: Text(*tree),
+            id: Text(*id),
+            gate: GateKindWire::from(*gate),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetReviewMark {
+            tree,
+            node,
+            marked,
+            provenance,
+        } => OpView::SetReviewMark {
+            tree: Text(*tree),
+            node: Text(*node),
+            marked: *marked,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetDescription {
+            target,
+            text,
+            provenance,
+        } => OpView::SetDescription {
+            target: (*target).into(),
+            text,
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::AddAsset {
             id,
             name,
@@ -670,6 +830,104 @@ fn encode_record(
 #[allow(clippy::too_many_lines)]
 fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
     Ok(match w {
+        OpWire::AddTreeNode {
+            tree,
+            parent,
+            id,
+            label,
+            gate,
+            index,
+            position,
+            provenance,
+        } => Op::AddTreeNode {
+            tree: tree.0,
+            parent: parent.0,
+            id: id.0,
+            node: match gate {
+                Some(kind) => crate::tree::Node::gate(kind.into(), label.0),
+                None => crate::tree::Node::step(label.0),
+            },
+            index,
+            position,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveTreeNode {
+            tree,
+            id,
+            provenance,
+        } => Op::RemoveTreeNode {
+            tree: tree.0,
+            id: id.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::LinkTreeNode {
+            tree,
+            parent,
+            child,
+            position,
+            slot,
+            provenance,
+        } => Op::LinkTreeNode {
+            tree: tree.0,
+            parent: parent.0,
+            child: child.0,
+            position,
+            slot,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkTreeNode {
+            tree,
+            parent,
+            child,
+            provenance,
+        } => Op::UnlinkTreeNode {
+            tree: tree.0,
+            parent: parent.0,
+            child: child.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameTreeNode {
+            tree,
+            id,
+            label,
+            provenance,
+        } => Op::RenameTreeNode {
+            tree: tree.0,
+            id: id.0,
+            label: label.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetTreeNodeGate {
+            tree,
+            id,
+            gate,
+            provenance,
+        } => Op::SetTreeNodeGate {
+            tree: tree.0,
+            id: id.0,
+            gate: gate.into(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetReviewMark {
+            tree,
+            node,
+            marked,
+            provenance,
+        } => Op::SetReviewMark {
+            tree: tree.0,
+            node: node.0,
+            marked,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetDescription {
+            target,
+            text,
+            provenance,
+        } => Op::SetDescription {
+            target: target.into_ref(),
+            text: text.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::AddAsset {
             id,
             name,

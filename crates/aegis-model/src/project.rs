@@ -10,6 +10,7 @@ use crate::control::{
     SecurityControl, StepMitigation,
 };
 use crate::damage::DamageScenario;
+use crate::description::{Described, ElementRef, MAX_DESCRIPTION_TOTAL_BYTES, check_text};
 use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
@@ -29,7 +30,7 @@ use crate::sensitivity::{
     FeasibilityTippingPoint, ImpactTippingPoint, StepTippingPoint, ThreatSensitivity,
 };
 use crate::threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
-use crate::tree::{AttackTree, MAX_ATTACK_TREE_NODES, Node};
+use crate::tree::{AttackTree, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Node};
 
 /// Longest entity name, in chars.
 pub const MAX_NAME_CHARS: usize = 256;
@@ -458,6 +459,25 @@ pub struct Project {
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
     /// Derived data, rebuilt from `threats`, `trees`, and `goals` (D10).
     refs: RefCounts,
+    /// Descriptions and the project's notes, in ID order (job 064).
+    descriptions: BTreeMap<ElementRef, Described>,
+    /// Derived: the bytes of all description texts together (D10).
+    description_bytes: usize,
+    /// Steps whose rating came from a library item and awaits review
+    /// (job 057), in ID order.
+    review_marks: std::collections::BTreeSet<(TreeId, NodeId)>,
+}
+
+/// Adds `ids` to the `modified` list of `diff`, except the ones that were
+/// added or removed (those are already listed), keeping the list sorted.
+fn merge_modified<I: Copy + Ord>(diff: &mut EntityDiff<I>, ids: Vec<I>) {
+    let mut modified = diff.modified.to_vec();
+    modified.extend(ids.into_iter().filter(|id| {
+        diff.added.binary_search(id).is_err() && diff.removed.binary_search(id).is_err()
+    }));
+    modified.sort_unstable();
+    modified.dedup();
+    diff.modified = modified.into_boxed_slice();
 }
 
 /// Checks an entity name. Time O(name length).
@@ -553,6 +573,9 @@ impl Project {
             goals: Arena::new(),
             claims: Arena::new(),
             refs: RefCounts::default(),
+            descriptions: BTreeMap::new(),
+            description_bytes: 0,
+            review_marks: std::collections::BTreeSet::new(),
         }
     }
 
@@ -3791,6 +3814,12 @@ impl Project {
     }
 
     fn lint_trees(&self, findings: &mut Vec<LintFinding>) {
+        for &(tree, node) in &self.review_marks {
+            findings.push(LintFinding::new(LintCode::LibraryRatingNotReviewed {
+                tree,
+                node,
+            }));
+        }
         let factor_count = self.methodology.feasibility_factor_count();
         for (idx, id, entry) in self.trees.iter() {
             if self.refs.trees.get(idx.index()).copied().unwrap_or(0) == 0 {
@@ -3987,7 +4016,9 @@ impl Project {
             &cybersecurity_goals,
             &cybersecurity_claims,
         );
-        Ok(ProjectDiff {
+        // A changed description changes no number, so it is merged after the
+        // risk deltas: it marks the element modified and nothing more.
+        let mut diff = ProjectDiff {
             assets,
             damage_scenarios,
             threat_scenarios,
@@ -3996,7 +4027,45 @@ impl Project {
             cybersecurity_goals,
             cybersecurity_claims,
             risk_deltas,
-        })
+            notes_changed: false,
+        };
+        self.merge_description_changes(other, &mut diff);
+        Ok(diff)
+    }
+
+    /// Marks elements whose description differs as modified, and sets the
+    /// notes flag. Time O(d log d), d = descriptions in both projects.
+    fn merge_description_changes(&self, other: &Self, diff: &mut ProjectDiff) {
+        let changed = self
+            .descriptions
+            .keys()
+            .chain(other.descriptions.keys())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter(|t| self.description(*t) != other.description(*t));
+        let (mut assets, mut damages, mut threats, mut trees) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut controls, mut goals, mut claims) = (Vec::new(), Vec::new(), Vec::new());
+        for target in changed {
+            match target {
+                ElementRef::Project => diff.notes_changed = true,
+                ElementRef::Asset(id) => assets.push(id),
+                ElementRef::Damage(id) => damages.push(id),
+                ElementRef::Threat(id) => threats.push(id),
+                ElementRef::Tree(id) => trees.push(id),
+                ElementRef::Control(id) => controls.push(id),
+                ElementRef::Goal(id) => goals.push(id),
+                ElementRef::Claim(id) => claims.push(id),
+            }
+        }
+        merge_modified(&mut diff.assets, assets);
+        merge_modified(&mut diff.damage_scenarios, damages);
+        merge_modified(&mut diff.threat_scenarios, threats);
+        merge_modified(&mut diff.attack_trees, trees);
+        merge_modified(&mut diff.security_controls, controls);
+        merge_modified(&mut diff.cybersecurity_goals, goals);
+        merge_modified(&mut diff.cybersecurity_claims, claims);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4261,6 +4330,83 @@ impl Project {
     #[allow(clippy::too_many_lines)]
     pub fn validate(&self, op: &Op) -> Result<(), ModelError> {
         match op {
+            Op::SetDescription {
+                target,
+                text,
+                provenance,
+            } => return self.check_set_description(*target, text, provenance),
+            Op::SetReviewMark {
+                tree,
+                node,
+                provenance,
+                ..
+            } => {
+                let (entry, idx) = self.tree_node(*tree, *node)?;
+                if !matches!(entry.tree.get(idx), Some(Node::Step { .. })) {
+                    return Err(ModelError::NotAStep {
+                        tree: *tree,
+                        node: *node,
+                    });
+                }
+                check_provenance(provenance)?;
+            }
+            Op::AddTreeNode {
+                tree,
+                parent,
+                id,
+                node,
+                index,
+                position,
+                provenance,
+            } => {
+                return self
+                    .check_add_tree_node(*tree, *parent, *id, node, *index, *position, provenance);
+            }
+            Op::RemoveTreeNode {
+                tree,
+                id,
+                provenance,
+            } => return self.check_remove_tree_node(*tree, *id, provenance),
+            Op::LinkTreeNode {
+                tree,
+                parent,
+                child,
+                position,
+                slot,
+                provenance,
+            } => {
+                return self
+                    .check_link_tree_node(*tree, *parent, *child, *position, *slot, provenance);
+            }
+            Op::UnlinkTreeNode {
+                tree,
+                parent,
+                child,
+                provenance,
+            } => return self.check_unlink_tree_node(*tree, *parent, *child, provenance),
+            Op::RenameTreeNode {
+                tree,
+                id,
+                label,
+                provenance,
+            } => {
+                let (_, idx) = self.tree_node(*tree, *id)?;
+                let _ = idx;
+                check_name(EntityKind::TreeNode, label)?;
+                check_provenance(provenance)?;
+            }
+            Op::SetTreeNodeGate {
+                tree,
+                id,
+                provenance,
+                ..
+            } => {
+                let (entry, idx) = self.tree_node(*tree, *id)?;
+                if !matches!(entry.tree.get(idx), Some(Node::Gate { .. })) {
+                    return Err(ModelError::NotAGate(idx));
+                }
+                check_provenance(provenance)?;
+            }
             Op::AddAsset {
                 id,
                 name,
@@ -4477,6 +4623,99 @@ impl Project {
     #[allow(clippy::too_many_lines)]
     fn commit(&mut self, op: Op) -> Result<Op, ModelError> {
         match op {
+            Op::SetDescription {
+                target,
+                text,
+                provenance,
+            } => Ok(self.commit_set_description(target, text, provenance)),
+            Op::SetReviewMark {
+                tree,
+                node,
+                marked,
+                provenance,
+            } => {
+                let entry = self.tree_mut(tree)?;
+                let provenance = std::mem::replace(&mut entry.provenance, provenance);
+                let was = if marked {
+                    !self.review_marks.insert((tree, node))
+                } else {
+                    self.review_marks.remove(&(tree, node))
+                };
+                Ok(Op::SetReviewMark {
+                    tree,
+                    node,
+                    marked: was,
+                    provenance,
+                })
+            }
+            Op::AddTreeNode {
+                tree,
+                parent,
+                id,
+                node,
+                index,
+                position,
+                provenance,
+            } => self.commit_add_tree_node(tree, parent, id, node, index, position, provenance),
+            Op::RemoveTreeNode {
+                tree,
+                id,
+                provenance,
+            } => self.commit_remove_tree_node(tree, id, provenance),
+            Op::LinkTreeNode {
+                tree,
+                parent,
+                child,
+                position,
+                slot,
+                provenance,
+            } => self.commit_link_tree_node(tree, parent, child, position, slot, provenance),
+            Op::UnlinkTreeNode {
+                tree,
+                parent,
+                child,
+                provenance,
+            } => self.commit_unlink_tree_node(tree, parent, child, provenance),
+            Op::RenameTreeNode {
+                tree,
+                id,
+                label,
+                provenance,
+            } => {
+                let entry = self.tree_mut(tree)?;
+                let idx = entry
+                    .tree
+                    .idx_of(&id)
+                    .ok_or(ModelError::UnknownTreeNode { tree, node: id })?;
+                let label = entry.tree.set_label(idx, label)?;
+                let provenance = std::mem::replace(&mut entry.provenance, provenance);
+                Ok(Op::RenameTreeNode {
+                    tree,
+                    id,
+                    label,
+                    provenance,
+                })
+            }
+            Op::SetTreeNodeGate {
+                tree,
+                id,
+                gate,
+                provenance,
+            } => {
+                let entry = self.tree_mut(tree)?;
+                let idx = entry
+                    .tree
+                    .idx_of(&id)
+                    .ok_or(ModelError::UnknownTreeNode { tree, node: id })?;
+                let gate = entry.tree.set_gate_kind(idx, gate)?;
+                let provenance = std::mem::replace(&mut entry.provenance, provenance);
+                Ok(Op::SetTreeNodeGate {
+                    tree,
+                    id,
+                    gate,
+                    provenance,
+                })
+            }
             Op::AddAsset {
                 id,
                 name,
@@ -4911,7 +5150,352 @@ impl Project {
         Ok(())
     }
 
+    /// A live tree and a node in it.
+    fn tree_node(&self, tree: TreeId, node: NodeId) -> Result<(&TreeEntry, NodeIdx), ModelError> {
+        let (_, entry) = self.live_tree(tree)?;
+        let idx = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        Ok((entry, idx))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_add_tree_node(
+        &self,
+        tree: TreeId,
+        parent: NodeId,
+        id: NodeId,
+        node: &Node,
+        index: u32,
+        position: u32,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, parent_idx) = self.tree_node(tree, parent)?;
+        if entry.tree.len() >= MAX_ATTACK_TREE_NODES {
+            return Err(ModelError::TooManyAttackTreeNodes {
+                tree,
+                max: MAX_ATTACK_TREE_NODES,
+            });
+        }
+        check_name(EntityKind::TreeNode, node.label())?;
+        check_provenance(provenance)?;
+        let at = NodeIdx::try_from_usize(index as usize).ok_or(ModelError::BadNodePlacement)?;
+        entry
+            .tree
+            .check_insert(parent_idx, at, position as usize, id, node)
+    }
+
+    fn check_remove_tree_node(
+        &self,
+        tree: TreeId,
+        id: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, idx) = self.tree_node(tree, id)?;
+        entry.tree.check_remove(idx)?;
+        let rated = self.review_marks.contains(&(tree, id))
+            || entry
+                .step_feasibility
+                .get(idx.index())
+                .is_some_and(Option::is_some)
+            || entry
+                .step_factors
+                .get(idx.index())
+                .is_some_and(|row| row.iter().any(Option::is_some))
+            || entry
+                .step_mitigations
+                .get(idx.index())
+                .is_some_and(|m| !m.is_empty());
+        if rated {
+            return Err(ModelError::NodeIsRated(id));
+        }
+        check_provenance(provenance)
+    }
+
+    fn check_link_tree_node(
+        &self,
+        tree: TreeId,
+        parent: NodeId,
+        child: NodeId,
+        position: u32,
+        slot: u32,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, parent_idx) = self.tree_node(tree, parent)?;
+        let child_idx = entry
+            .tree
+            .idx_of(&child)
+            .ok_or(ModelError::UnknownTreeNode { tree, node: child })?;
+        entry
+            .tree
+            .check_link(parent_idx, child_idx, position as usize, slot as usize)?;
+        check_provenance(provenance)
+    }
+
+    fn check_unlink_tree_node(
+        &self,
+        tree: TreeId,
+        parent: NodeId,
+        child: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, parent_idx) = self.tree_node(tree, parent)?;
+        let child_idx = entry
+            .tree
+            .idx_of(&child)
+            .ok_or(ModelError::UnknownTreeNode { tree, node: child })?;
+        entry.tree.check_unlink(parent_idx, child_idx)?;
+        check_provenance(provenance)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn commit_add_tree_node(
+        &mut self,
+        tree: TreeId,
+        parent: NodeId,
+        id: NodeId,
+        node: Node,
+        index: u32,
+        position: u32,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let entry = self.tree_mut(tree)?;
+        let parent_idx = entry
+            .tree
+            .idx_of(&parent)
+            .ok_or(ModelError::UnknownTreeNode { tree, node: parent })?;
+        let at = NodeIdx::try_from_usize(index as usize).ok_or(ModelError::BadNodePlacement)?;
+        entry
+            .tree
+            .insert_child(parent_idx, at, position as usize, id, node)?;
+        entry.step_feasibility.insert(at.index(), None);
+        entry.step_factors.insert(at.index(), Box::default());
+        entry.step_mitigations.insert(at.index(), Box::default());
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        Ok(Op::RemoveTreeNode {
+            tree,
+            id,
+            provenance,
+        })
+    }
+
+    fn commit_remove_tree_node(
+        &mut self,
+        tree: TreeId,
+        id: NodeId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let entry = self.tree_mut(tree)?;
+        let idx = entry
+            .tree
+            .idx_of(&id)
+            .ok_or(ModelError::UnknownTreeNode { tree, node: id })?;
+        let removed = entry.tree.remove_leaf(idx)?;
+        entry.step_feasibility.remove(idx.index());
+        entry.step_factors.remove(idx.index());
+        entry.step_mitigations.remove(idx.index());
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        let parent = entry
+            .tree
+            .id_of(removed.owner)
+            .ok_or(ModelError::UnknownNode(removed.owner))?;
+        Ok(Op::AddTreeNode {
+            tree,
+            parent,
+            id,
+            node: removed.node,
+            index: u32::try_from(removed.index.index()).unwrap_or(u32::MAX),
+            position: u32::try_from(removed.position).unwrap_or(u32::MAX),
+            provenance,
+        })
+    }
+
+    fn commit_link_tree_node(
+        &mut self,
+        tree: TreeId,
+        parent: NodeId,
+        child: NodeId,
+        position: u32,
+        slot: u32,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let entry = self.tree_mut(tree)?;
+        let (Some(p), Some(c)) = (entry.tree.idx_of(&parent), entry.tree.idx_of(&child)) else {
+            return Err(ModelError::UnknownTreeNode { tree, node: parent });
+        };
+        entry.tree.link_at(p, c, position as usize, slot as usize)?;
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        Ok(Op::UnlinkTreeNode {
+            tree,
+            parent,
+            child,
+            provenance,
+        })
+    }
+
+    fn commit_unlink_tree_node(
+        &mut self,
+        tree: TreeId,
+        parent: NodeId,
+        child: NodeId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let entry = self.tree_mut(tree)?;
+        let (Some(p), Some(c)) = (entry.tree.idx_of(&parent), entry.tree.idx_of(&child)) else {
+            return Err(ModelError::UnknownTreeNode { tree, node: parent });
+        };
+        let (position, slot) = entry.tree.unlink(p, c)?;
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        Ok(Op::LinkTreeNode {
+            tree,
+            parent,
+            child,
+            position: u32::try_from(position).unwrap_or(u32::MAX),
+            slot: u32::try_from(slot).unwrap_or(u32::MAX),
+            provenance,
+        })
+    }
+
+    /// Checks a description change. Time O(text length).
+    fn check_set_description(
+        &self,
+        target: ElementRef,
+        text: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        match target {
+            ElementRef::Project => {}
+            ElementRef::Asset(id) => {
+                self.live_asset(id)?;
+            }
+            ElementRef::Damage(id) => {
+                self.live_damage(id)?;
+            }
+            ElementRef::Threat(id) => {
+                self.live_threat(id)?;
+            }
+            ElementRef::Tree(id) => {
+                self.live_tree(id)?;
+            }
+            ElementRef::Control(id) => {
+                self.live_control(id)?;
+            }
+            ElementRef::Goal(id) => {
+                self.live_goal(id)?;
+            }
+            ElementRef::Claim(id) => {
+                self.live_claim(id)?;
+            }
+        }
+        check_text(text, target.max_chars())?;
+        check_provenance(provenance)?;
+        let old = self.descriptions.get(&target).map_or(0, |d| d.text.len());
+        if self.description_bytes - old + text.len() > MAX_DESCRIPTION_TOTAL_BYTES {
+            return Err(ModelError::DescriptionTotalTooLarge {
+                max: MAX_DESCRIPTION_TOTAL_BYTES,
+            });
+        }
+        Ok(())
+    }
+
+    /// An element with a description must have it cleared first.
+    fn require_no_description(
+        &self,
+        target: ElementRef,
+        kind: EntityKind,
+    ) -> Result<(), ModelError> {
+        if self.descriptions.contains_key(&target) {
+            return Err(ModelError::DescriptionNotCleared { kind });
+        }
+        Ok(())
+    }
+
+    /// Stores or clears a description and returns the inverse. Time
+    /// O(log n + text length).
+    fn commit_set_description(
+        &mut self,
+        target: ElementRef,
+        text: Arc<str>,
+        provenance: Provenance,
+    ) -> Op {
+        let old = if text.is_empty() {
+            self.descriptions.remove(&target)
+        } else {
+            self.description_bytes += text.len();
+            self.descriptions
+                .insert(target, Described { text, provenance })
+        };
+        let (old_text, old_provenance) = old.map_or_else(
+            || (Arc::<str>::from(""), Provenance::default()),
+            |d| (d.text, d.provenance),
+        );
+        self.description_bytes -= old_text.len();
+        Op::SetDescription {
+            target,
+            text: old_text,
+            provenance: old_provenance,
+        }
+    }
+
+    /// The description of an element, or the notes of the project
+    /// ([`ElementRef::Project`]). `None` when there is none. Time O(log n).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ElementRef, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.description(ElementRef::Project), None);
+    /// project.apply(Op::SetDescription {
+    ///     target: ElementRef::Project,
+    ///     text: "Scope: the brake ECU.".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.description(ElementRef::Project), Some("Scope: the brake ECU."));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn description(&self, target: ElementRef) -> Option<&str> {
+        self.descriptions.get(&target).map(|d| &*d.text)
+    }
+
+    /// Who wrote the description and when. Time O(log n).
+    #[must_use]
+    pub fn description_provenance(&self, target: ElementRef) -> Option<&Provenance> {
+        self.descriptions.get(&target).map(|d| &d.provenance)
+    }
+
+    /// Whether the rating of a step is marked as needing review. Time
+    /// O(log n).
+    #[must_use]
+    pub fn review_marked(&self, tree: TreeId, node: NodeId) -> bool {
+        self.review_marks.contains(&(tree, node))
+    }
+
+    /// Every step marked as needing review, in ID order. Time O(1) to start.
+    pub fn review_marks(&self) -> impl Iterator<Item = (TreeId, NodeId)> + '_ {
+        self.review_marks.iter().copied()
+    }
+
+    /// How many descriptions the project has, notes included. Time O(1).
+    #[must_use]
+    pub fn description_count(&self) -> usize {
+        self.descriptions.len()
+    }
+
+    /// Every description in ID order: the target, the text and the
+    /// provenance. Time O(1) to start, O(1) per item.
+    pub fn descriptions(&self) -> impl Iterator<Item = (ElementRef, &str, &Provenance)> {
+        self.descriptions
+            .iter()
+            .map(|(target, d)| (*target, &*d.text, &d.provenance))
+    }
+
     fn check_remove_asset(&self, id: AssetId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Asset(id), EntityKind::Asset)?;
         let (idx, _) = self.live_asset(id)?;
         let threats = self.refs.assets.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -4965,6 +5549,7 @@ impl Project {
     }
 
     fn check_remove_damage(&self, id: DamageId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Damage(id), EntityKind::DamageScenario)?;
         let idx = self.live_damage(id)?;
         let threats = self.refs.damages.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -5112,6 +5697,7 @@ impl Project {
     }
 
     fn check_remove_threat(&self, id: ThreatId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Threat(id), EntityKind::ThreatScenario)?;
         let t = self.threat_ref(id)?;
         if let Some(tree_idx) = t.attack_tree {
             let tree = self
@@ -5156,13 +5742,45 @@ impl Project {
         step_feasibility: &[(NodeId, FeasibilityLevel)],
         provenance: &Provenance,
     ) -> Result<(), ModelError> {
+        self.check_add_tree_max(id, tree, step_feasibility, provenance, MAX_TREE_OP_NODES)
+    }
+
+    /// Loads a whole tree from a snapshot. An op carries at most
+    /// [`MAX_TREE_OP_NODES`] nodes, a snapshot up to [`MAX_ATTACK_TREE_NODES`];
+    /// every other check is the same as for `AddAttackTree`.
+    pub(crate) fn load_attack_tree(
+        &mut self,
+        id: TreeId,
+        tree: AttackTree,
+        step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
+        provenance: Provenance,
+    ) -> Result<(), ModelError> {
+        self.check_add_tree_max(
+            id,
+            &tree,
+            &step_feasibility,
+            &provenance,
+            MAX_ATTACK_TREE_NODES,
+        )?;
+        self.commit_add_tree(id, tree, step_feasibility, provenance)
+            .map(|_| ())
+    }
+
+    fn check_add_tree_max(
+        &self,
+        id: TreeId,
+        tree: &AttackTree,
+        step_feasibility: &[(NodeId, FeasibilityLevel)],
+        provenance: &Provenance,
+        max_nodes: usize,
+    ) -> Result<(), ModelError> {
         if self.trees.idx(&id).is_some() {
             return Err(ModelError::DuplicateAttackTree(id));
         }
-        if tree.len() > MAX_ATTACK_TREE_NODES {
+        if tree.len() > max_nodes {
             return Err(ModelError::TooManyAttackTreeNodes {
                 tree: id,
-                max: MAX_ATTACK_TREE_NODES,
+                max: max_nodes,
             });
         }
         for (_, _, node) in tree.iter() {
@@ -5262,6 +5880,21 @@ impl Project {
     }
 
     fn check_remove_tree(&self, id: TreeId) -> Result<(), ModelError> {
+        if let Some(&(_, node)) = self.review_marks.iter().find(|(t, _)| *t == id) {
+            return Err(ModelError::NodeIsRated(node));
+        }
+        if let Some((_, entry)) = self
+            .trees
+            .idx(&id)
+            .and_then(|i| self.trees.get(i).map(|e| (i, e)))
+            && entry.tree.len() > MAX_TREE_OP_NODES
+        {
+            return Err(ModelError::TreeTooLargeForOneOp {
+                tree: id,
+                max: MAX_TREE_OP_NODES,
+            });
+        }
+        self.require_no_description(ElementRef::Tree(id), EntityKind::AttackTree)?;
         let (idx, entry) = self.live_tree(id)?;
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -5306,6 +5939,7 @@ impl Project {
     }
 
     fn check_remove_control(&self, id: ControlId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Control(id), EntityKind::SecurityControl)?;
         let idx = self.live_control(id)?;
         let steps = self.refs.controls.get(idx.index()).copied().unwrap_or(0);
         if steps > 0 {
@@ -5383,6 +6017,7 @@ impl Project {
     }
 
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
         let (idx, _) = self.live_goal(id)?;
         let threats = self.refs.goals.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -5411,6 +6046,7 @@ impl Project {
     }
 
     fn check_remove_claim(&self, id: ClaimId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Claim(id), EntityKind::CybersecurityClaim)?;
         let idx = self.live_claim(id)?;
         let threats = self.refs.claims.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -6390,6 +7026,8 @@ impl PartialEq for Project {
         let same_methodology = Arc::ptr_eq(&self.methodology, &other.methodology)
             || *self.methodology == *other.methodology;
         same_methodology
+            && self.descriptions == other.descriptions
+            && self.review_marks == other.review_marks
             && self.assets.len() == other.assets.len()
             && self.damages.len() == other.damages.len()
             && self.threats.len() == other.threats.len()
@@ -7146,7 +7784,10 @@ impl ProjectEvalCache {
             return;
         }
         match op {
-            Op::AddAsset { .. }
+            Op::SetDescription { .. }
+            | Op::SetReviewMark { .. }
+            | Op::RenameTreeNode { .. }
+            | Op::AddAsset { .. }
             | Op::RenameAsset { .. }
             | Op::SetAssetProperties { .. }
             | Op::RemoveAsset { .. }
@@ -7186,6 +7827,12 @@ impl ProjectEvalCache {
                     self.update_tree_removed(project);
                 }
             }
+
+            Op::AddTreeNode { tree, .. }
+            | Op::RemoveTreeNode { tree, .. }
+            | Op::LinkTreeNode { tree, .. }
+            | Op::UnlinkTreeNode { tree, .. }
+            | Op::SetTreeNodeGate { tree, .. } => self.update_tree_structure(project, *tree),
 
             Op::SetStepFeasibility { tree, node, .. } | Op::SetStepFactor { tree, node, .. } => {
                 self.update_step(project, *tree, *node, true);
@@ -7732,6 +8379,26 @@ impl ProjectEvalCache {
             self.recomputed_nodes = self.recomputed_nodes.saturating_add(n.saturating_mul(2));
             if let Some(slot) = self.trees.get_mut(tree_idx.index()) {
                 *slot = Some(Self::build_tree_eval(project, entry));
+            }
+        }
+    }
+
+    /// The shape of a tree changed: indices moved or a gate changed meaning,
+    /// so this tree's evaluation is rebuilt (O(V + E)) and the threats that
+    /// use it are refreshed from it. Other trees and threats are untouched.
+    fn update_tree_structure(&mut self, project: &Project, tree: TreeId) {
+        let Some(tree_idx) = project.attack_tree_idx(&tree) else {
+            return;
+        };
+        self.update_tree_added(project, tree_idx);
+        let linked = self
+            .tree_threats
+            .get(tree_idx.index())
+            .cloned()
+            .unwrap_or_default();
+        for threat_idx in linked {
+            for residual in [false, true] {
+                self.sync_threat_from_tree(project, threat_idx, tree_idx, residual, &[], true);
             }
         }
     }

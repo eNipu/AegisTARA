@@ -522,18 +522,41 @@ mod tests {
         assert!(matches!(r, Err(AuthError::Http(m)) if m == "disk full"));
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn a_server_that_goes_silent_is_given_up_on() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         // Promises 100 bytes, sends 10, then says nothing.
         let reply = response("200 OK", "content-length: 100\r\n", &[0u8; 10]);
-        let url = one_shot(reply, Duration::from_secs(3600)).await;
-        let started = tokio::time::Instant::now();
-        let r = HyperClient::new().download(&url, 100, |_| Ok(())).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}/installer", listener.local_addr().expect("addr"));
+        let (sent, sent_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut head = [0u8; 2048];
+            let _ = socket.read(&mut head).await;
+            let _ = socket.write_all(&reply).await;
+            let _ = sent.send(());
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        });
+        let download =
+            tokio::spawn(async move { HyperClient::new().download(&url, 100, |_| Ok(())).await });
+        // The connection and the first bytes use real time. Only then is the
+        // clock frozen and the silence skipped: freezing it from the start
+        // lets the clock jump past the connect timeout while the socket is
+        // still connecting.
+        sent_rx.await.expect("reply sent");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::pause();
+        tokio::time::advance(DOWNLOAD_IDLE + Duration::from_secs(1)).await;
+        let r = download.await.expect("task");
         assert!(
             matches!(&r, Err(AuthError::Http(m)) if m.contains("stalled")),
             "{r:?}"
         );
-        assert!(started.elapsed() < Duration::from_secs(120));
     }
 
     #[tokio::test]

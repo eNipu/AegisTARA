@@ -78,17 +78,19 @@ flowchart TB
 | `id.rs` | `NodeIdx`..`ClaimIdx` (`u32`), `NodeId`..`ClaimId` (`Uuid` v7) | 4-byte arena indices for $O(1)$ slice access and 16-byte time-ordered UUIDv7 external identifiers. |
 | `provenance.rs` | `Provenance`, `ProvenanceSource` | Tracks `actor`, `timestamp_ms`, and `source` (`Human`, `Import`, `Catalog`, `Ai`) on every entity and mutation. |
 | `methodology/` | `Methodology`, `MethodologyDef`, `AttackPotential`, `PotentialBand`, `CatalogRef`, `PropertySet`, scale `u8` newtypes | Validates and compiles methodology packs (including built-in ISO/SAE 21434 + UN R155 Annex 5), 2D risk matrices, catalog syntax, and CEM multi-factor attack potential scoring. |
-| `tree.rs` | `AttackTree`, `Node`, `GateKind` | Arena-allocated rooted DAG with `And`, `Or`, and `SeqAnd` gates, eager DFS cycle prevention on `link()`, and iterative Kahn's `topological_order()`. |
+| `tree.rs` | `AttackTree`, `Node`, `GateKind`, `RemovedNode`, `MAX_ATTACK_TREE_NODES` (4,096), `MAX_TREE_OP_NODES` (32) | Arena-allocated rooted DAG with `And`, `Or`, and `SeqAnd` gates, eager DFS cycle prevention on `link()`, and iterative Kahn's `topological_order()`. |
 | `eval.rs` | `AttributeDomain`, `MaxMin<T>`, `MinTime`, `Evaluation<V>`, `Derivation`, `Explanation`, `TreeEvalCache<V>` | Single-pass bottom-up DAG evaluator, step-by-step explain-why traces, and rank-ordered incremental tree evaluation cache with value-change early cutoff. |
 | `asset.rs` | `Asset` | Item asset holding a `PropertySet` bitset of security properties and `Provenance`. |
 | `damage.rs` | `DamageScenario` | Adverse consequence rated across methodology impact categories (`Box<[Option<Level>]>`). |
 | `threat.rs` | `ThreatScenario`, `ImpactRisk`, `ThreatRisk` | Threat targeting an `Asset`, violating `PropertySet`, linked to `CatalogRef`s, `DamageScenario`s, optional `AttackTree` / `direct_feasibility`, `RiskTreatment`, `CybersecurityGoal`, and `CybersecurityClaim`. |
 | `control.rs` | `SecurityControl`, `StepMitigation`, `RiskTreatment`, `CybersecurityGoal`, `CybersecurityClaim` | Security controls, per-step feasibility mitigations, treatment decisions (`Avoid`, `Reduce`, `Share`, `Retain`), goals, and claims. |
-| `op.rs` | `Op` (37 variants) | Complete set of validated, single-op-invertible project mutations. |
+| `description.rs` | `ElementRef`, `MAX_DESCRIPTION_CHARS`, `MAX_NOTES_CHARS`, `MAX_DESCRIPTION_TOTAL_BYTES` | Plain description text on the seven entity kinds and the project's notes (`ElementRef::Project`), kept in one ordered map on `Project`, set by `Op::SetDescription` (ADR 0051). |
+| `library.rs` | `LibraryPack`, `LibraryItem`, `ItemNode`, `Facet`, `LibraryIndex`, `LibraryError`, `MAX_LIBRARY_*` | Attack tree library packs (versioned JSON, license, SHA-256 hash, decode caps), the built-in demo pack in `packs/`, and n-gram search with facets that works for Japanese (ADR 0052). |
+| `op.rs` | `Op` (45 variants) | Complete set of validated, single-op-invertible project mutations. |
 | `project.rs` | `Project`, `Arena<Id, Idx, T>`, `TreeEntry`, `RefCounts`, `ProjectEvalCache` | Aggregate root owning the 7 entity arenas, sparse reference counts (`RefCounts`), and incremental project evaluation cache (`ProjectEvalCache`). |
 | `paths.rs` | `AttackPath<V>`, `AttackPaths<V>`, `ChokePoint<V>` | Lazy best-first minimal cut-set enumeration (`BinaryHeap<SearchState<V>>`), choke-point ranking, and greedy top-$k$ hitting sets. |
 | `sensitivity.rs` | `StepTippingPoint`, `FeasibilityTippingPoint`, `ImpactTippingPoint`, `ThreatSensitivity` | Single-parameter $\pm 1$ tipping-point sensitivity analysis for attack trees and threat scenarios. |
-| `lint.rs` | `LintSeverity`, `LintCode` (22 variants: 4 `Error`, 18 `Warning`), `LintFinding` | Deterministic completeness and consistency linter over `Project` (zero entity names in output, rule R6). |
+| `lint.rs` | `LintSeverity`, `LintCode` (23 variants: 4 `Error`, 19 `Warning`), `LintFinding` | Deterministic completeness and consistency linter over `Project` (zero entity names in output, rule R6). |
 | `diff.rs` | `EntityDiff<Id>`, `RiskSnapshot`, `RiskChange`, `RiskDelta`, `ThreatRiskDelta`, `ProjectDiff` | Deterministic structural and inherent/residual risk delta comparison between two `Project` versions. |
 | `store/` | `OpLogWriter<W>`, `OpLogReader<R>`, `StoreError` | Key-based JSON snapshot (`aegis-project`) and JSON Lines append-only operation log (`aegis-oplog`) with decode-time size caps (rule R3). |
 | `error.rs` | `ModelError` | Structured error enum for all domain, graph, capacity, and validation failures. |
@@ -1241,12 +1243,13 @@ flowchart TB
     shell["aegis-shell\n(Slint desktop app)"]
     server --> model & proto & auth & license
     client --> model & proto & auth & license & canvas
-    shell --> client & canvas & model & auth
+    shell --> client & canvas & model & auth & server & license
 ```
 
 No crate depends on `aegis-shell`. `aegis-client` has no UI code, so every
 client behavior is testable without a window (standards T-rules). The shell
-tests start a real server in process (`aegis-server` is a dev-dependency).
+tests start a real server in process. The shell also links `aegis-server` and
+`aegis-license` itself, to run the embedded server of standalone mode (II.4.7).
 
 ## II.3 Wire contract (`crates/aegis-proto/proto/aegis/v1/aegis.proto`)
 
@@ -1267,7 +1270,8 @@ without credentials.
 | Server | `GetServerInfo`, `GetMethodology` |
 | Projects | `CreateProject`, `ListProjects`, `OpenProject` (stream of chunks), `RenameProject`, `DeleteProject` (admin) |
 | Edit lock | `AcquireLock`, `RenewLock`, `ReleaseLock`, `BreakLock` (admin) |
-| Editing | `SubmitOps` (batch, at most `max_batch_ops`), `Watch` (stream: ops, lease changes, risk updates, `Heartbeat`) |
+| Editing | `SubmitOps` (batch, at most `max_batch_ops`) |
+| Looking | `GetProjectStatus` (newest sequence number and lock holder; no lease needed) |
 | Results | `GetRisks`, `VerifyAudit` (admin) |
 | Versions | `CreateBaseline`, `ListBaselines`, `GetBaseline` (stream of chunks) |
 | History | `ListHistory` (newest ops, capped by `max_history`) |
@@ -1277,10 +1281,10 @@ without credentials.
 | Event log (admin) | `ListEvents` (limit 0 = 200, capped at 1000; newest first; `no_event_log` when the server has no accounts) |
 | Login switch | `GetServerSettings` (any logged-in user), `SetPasswordLogin` (admin). `ServerSettings { password_login_enabled, company_login_available }` |
 
-`Watch` sends a `Heartbeat` every `heartbeat` (default 20 s) so proxies that
-close idle streams keep the connection open. The client restarts a stream
-that stays silent for `watch_silence` (60 s), which catches a connection a
-proxy dropped without closing (R6).
+There is no live stream (decision D23, job 108). A read-only client sees
+the version it loaded; every `version_check` (30 s) it calls
+`GetProjectStatus` and, if the server is ahead, offers a reload. Only
+`OpenProject` and `GetBaseline` stream, and they end by themselves.
 
 ## II.4 Server (`crates/aegis-server`)
 
@@ -1321,7 +1325,7 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 
 | Module | Types | Notes |
 |---|---|---|
-| `main.rs` | | Reads environment variables (table in the module docs), opens the store and accounts, loads the license, restores seats, serves. `PORT` (Railway) means `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset. |
+| `main.rs` | | Reads environment variables (table in the module docs), opens the store and accounts, loads the license, restores seats, serves. `aegis-server import-folder <folder>` imports a standalone project folder instead of serving (II.4.7). `PORT` (Railway) means `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset. |
 | `server.rs` | `Layers<A>`, `builder()`, `router()` | See II.4.1. |
 | `health.rs` | `HealthLayer`, `Health<S>` | Answers `GET /healthz` before any other layer. |
 | `auth.rs` | `AuthMethod { Oidc, Password, Dev }`, `Principal { subject, admin, method }` | The principal is what every handler sees. |
@@ -1332,7 +1336,7 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `accounts/service.rs` | `AccountsService`, `LoginOptions`, `PUBLIC_PATH_PREFIX`, `RETRY_AFTER_HEADER` | The public `Accounts` gRPC service. |
 | `service.rs` | `AegisService<S>` | All `Aegis` handlers. Maps `ServerError` to a status. `with_accounts()` adds the account calls. |
 | `registry.rs` | `Registry<S>` | Owns the open project actors (map of `ProjectId` to `ProjectHandle`), caps (`max_open_projects`, `max_projects`), name checks, baselines, seat restore. |
-| `actor.rs` | `ProjectHandle`, `Accepted`, `Event`, `OpenData`, `Subscription`, `RiskReport`, `ThreatRiskRow`, `Loaded` | One task per open project (C1). Bounded mailbox (`mailbox`, R4). Commands include `Rename` and `Delete`. |
+| `actor.rs` | `ProjectHandle`, `OpenData`, `Status`, `RiskReport`, `ThreatRiskRow`, `Loaded` | One task per open project (C1). Bounded mailbox (`mailbox`, R4). Commands include `Status`, `Rename` and `Delete`. `Status` answers from memory (nothing is serialized). |
 | `lease.rs` | `LeaseToken`, `Grant`, `LeaseState` | Edit lock with expiry (`lease`, default 120 s). |
 | `license.rs` | `LicenseGate`, `LoadError`, `ClockSecs` | License check and seat ledger, `restore()` from recent editors. |
 | `methodologies.rs` | `Methodologies`, `HostedMethodology`, `PackLoadError` | Built-in packs plus `AEGIS_PACKS_DIR`. |
@@ -1341,6 +1345,8 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `store/memory.rs` | `MemoryStore` | Tests and development. |
 | `store/postgres.rs` | `PostgresStore`, `PostgresOptions`, `DbTls { Off, Encrypt, Verify }` | `Encrypt` accepts any certificate (libpq `require`); `Verify` checks it against the OS roots (libpq `verify-full`). |
 | `store/audit.rs` | `Hash`, `ChainVerifier`, `ChainReport` | SHA-256 hash chain over stored ops. |
+| `store/folder.rs` | `FolderStore`, `STREAM_BATCH_OPS`, `STREAM_BATCH_BYTES` | `ProjectStore` over one project folder, for standalone mode (II.4.7). |
+| `import.rs` | `ImportReport`, `ImportError`, `Registry::import_folder` | Copies a standalone folder into the server's store with its history intact (II.4.7). |
 | `ids.rs` | `ProjectId`, `BadProjectId` | |
 | `error.rs` | `ServerError` | |
 
@@ -1451,17 +1457,13 @@ Rules the code follows:
 | `lease` | 120 s | Edit lock lifetime |
 | `idle_unload` | 15 min | Unload a project actor nobody uses |
 | `mailbox` / `mailbox_wait` | 64 / 5 s | R4 |
-| `observer_buffer` | 1024 | Per `Watch` stream, R4 |
-| `recent_ops` | 1024 | Ops kept for reconnect |
 | `snapshot_every` | 1000 ops | Snapshot cadence |
 | `max_batch_ops` | 1024 | Ops per `SubmitOps` |
 | `max_open_projects` / `max_projects` | 256 / 10 000 | R3 |
 | `chunk_bytes` | 256 KiB | Stream chunk size |
-| `risks_event_max_threats` | 2 000 | Risk events in `Watch` |
 | `max_project_name_chars` | 256 | |
 | `max_baselines` | 1 000 per project | R3 |
 | `max_history` | 500 | `ListHistory` rows |
-| `heartbeat` | 20 s | `Watch` heartbeat |
 
 (The defaults are in `config.rs`; that file is the source of truth if this
 table and the code ever differ.)
@@ -1552,6 +1554,69 @@ ops inside the window, from the `aegis_project_op_time` index) and calls
 `LicenseGate::restore()`. The ledger is derived state rebuilt from the store
 (D10).
 
+### II.4.7 Project folders and import (standalone mode, D22)
+
+```mermaid
+flowchart LR
+    subgraph App["One desktop process"]
+        UI2["Slint window"] <--> CORE2["aegis-client\n(same code path)"]
+        CORE2 -- "gRPC on 127.0.0.1 only,\nrandom port, no login" --> SRV2["aegis-server library\n(same service and actor)"]
+        SRV2 --> FS["FolderStore"]
+        LIC["License file check\n(aegis-license)"] --> SRV2
+    end
+    FS <--> DIR[("Project folder\non disk")]
+    DIR -. "hand over, then\naegis-server import-folder" .-> CUST["Customer server\n(D3)"]
+```
+
+The standalone app is the same client talking to the same server code; only
+the store and the login differ. The app checks the signed license file
+(`TrustedKeys::vendor()`) **before** it binds the listener, then binds
+`127.0.0.1:0` only. A bad license, a damaged folder or an unreadable manifest
+never opens a port. The embedded server trusts the development header: any
+process of the same machine that finds the port can act as the user. That is
+the cost of "no login" on a single-user desktop (D22); it is not reachable
+from the network.
+
+**Folder layout** (`store/folder.rs`, one project per folder):
+
+| File | Content |
+|---|---|
+| `ops.jsonl` | An `aegis-oplog` v1 stream, byte for byte what `OpLogWriter` writes: header line, then `{"seq":N,"op":{...}}` per accepted op. `OpLogReader` reads it. |
+| `ops.meta` | Sidecar, same order: magic `AEGISOP1`, then per op `seq`, acceptance time, actor length, `prev` and `hash` of the audit chain, and the actor. These four facts are not in the op-log format. |
+| `snapshots/<uuid>.aegis` | `Project::save` bytes: the current snapshot and one per baseline. Never rewritten; a new snapshot gets a new name. |
+| `manifest.json` | The commit record, replaced atomically (write, fsync, rename, fsync the folder): project facts, `last_seq`, chain head, the snapshot name, size and SHA-256, and the baseline list. |
+| `.aegis.lock` | OS file lock. One `FolderStore` (and its clones) owns a folder; a second open fails, also from another process. |
+
+**Commit and recovery.** The manifest rename is the commit point. An append
+writes and syncs the log, then the sidecar, then commits the manifest, so
+ops past `last_seq` are uncommitted. Opening a folder reads the committed
+history once (so damage is found at open and reported as `Corrupt`, never
+repaired), cuts both files back to the committed lengths, and deletes
+snapshot files and manifest temporaries that the manifest does not name. The
+store keeps the committed lengths in memory, so a failed append is undone
+before the next one in O(1), and an append never re-reads the log.
+`ProjectStore` guarantees hold as for the other backends: atomic batches, gap
+free sequence, `Sequence` on a stale writer, `verify_chain` over the stored
+bytes. Reads that walk the history (`load`, `recent_ops`, `verify_chain`,
+`active_editors`) stream it once: time O(history), space O(result). The
+ceiling is a linear scan per call; a byte-offset index would make
+`recent_ops` O(limit) if a standalone log ever grows that large.
+
+**Import** (`Registry::import_folder`, command `aegis-server import-folder
+<folder>`) copies; it does not replay. The project keeps its ID, every op
+keeps its bytes, actor and acceptance time, the audit chain is recomputed
+over identical inputs and so comes out identical, the folder's snapshot is
+reused and baselines keep their IDs, names, authors and snapshots. Steps:
+check the methodology is hosted at the same version, verify the folder's
+chain, check the server's project limit, create the project from an empty
+snapshot, stream the ops in batches of at most 256 ops or 4 MiB (memory
+O(batch)), save the snapshot, copy the baselines, then compare the result:
+chain head and count, stored state against the folder's, and a rebuild through
+`Loaded::rebuild`. Any failure after the project exists deletes it again. A
+project ID the server already holds is refused untouched. Imported actors keep
+their names, so if their edits are inside the license's seat window they hold
+a seat after the next start (II.4.6).
+
 ## II.5 Client core (`crates/aegis-client`)
 
 ### II.5.1 Modules and types
@@ -1561,10 +1626,12 @@ ops inside the window, from the `aegis_project_op_time` index) and calls
 | `transport.rs` | `TransportKind { Grpc, GrpcWeb }`, `Transport { Grpc(Channel), Web { client, origin } }`, `check_url()` | `auto`: gRPC-Web for `https://`, gRPC otherwise. HTTPS uses rustls with the OS trust store. `CONNECT_TIMEOUT = 10 s`, `CALL_TIMEOUT = 30 s`. |
 | `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name, password_enabled }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` holds the token and sends it as `authorization: Bearer`. |
 | `error.rs` | `ClientError`, `ServerCode` | `ServerCode` maps status details to cases the UI can explain (`InvalidCredentials`, `Throttled { retry_after_s }`, `PasswordLoginOff`, `LockHeld`, ...). |
-| `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, watch_silence, update_url, update_checker }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s (`LoadEvents` among them) and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
+| `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, version_check, update_url, update_checker }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s (`LoadEvents` among them) and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. |
 | `workspace.rs` | `Workspace`, `Submission`, `Origin`, `WorkspaceError`, `MAX_SUBMIT_OPS` | Optimistic local copy. Local ops apply at once and are kept with their inverses until the server confirms. Pending ops are sent in batches of at most `MAX_SUBMIT_OPS`, so a long offline queue is never rejected as too large. |
 | `commands.rs` | `Edit`, `EditError`, `Command` | `Edit` is a user intent (add asset, rate a step, link a control, ...). It expands to model `Op`s, including safe cascades (deleting an asset first unlinks what uses it). `Command` is everything the UI can ask of the session. |
-| `outline.rs` | `OutlineError`, `parse()`, `render()` | Text outline editor for attack trees (indent = child, `OR`/`AND`/`SEQ` gates, `- ` steps; lines with the same text are one shared node). |
+| `outline.rs` | `OutlineError`, `parse()`, `render()` | Text outline editor for attack trees (indent = child, `OR`/`AND`/`SEQ` gates, `- ` steps; lines with the same text are one shared node). The first line is always the tree's root. |
+| `library.rs` | `InsertMode`, `InsertOptions`, `insert_ops()`, `matching_labels()`, `LibraryView` | Copies a library item into the project as one batch (new tree, under a gate, in place of a step; origin note; ratings marked for review; no silent merging of names) and holds the Library panel's search, facet and pick state (ADR 0052). |
+| `tree_diff.rs` | `replace_tree_ops()`, `clear_step_ops()` | Turns "this tree should become that outline" into the node ops that change only the difference, valid in order and one undo step (ADR 0014, job 065). |
 | `pages.rs` | `Vocabulary`, `Overview`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
 | `view.rs` | `Page` (13 pages), `Selection`, `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice` | What the window shows for the current page and selection. |
 | `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` (`ViewModel` also has `events`, `events_error`; `LicenseView` has dates, features and `lines()`) | The whole UI state, published on a `watch` channel. |
@@ -1596,10 +1663,38 @@ sequenceDiagram
         S->>W: roll back with inverses
         S-->>UI: Notice (error)
     end
-    Srv-->>S: Watch: ops from others, lease, risks, heartbeat
-    S->>W: rebase local ops on the new server ops
-    S-->>UI: new ViewModel
+    S->>Srv: GetRisks (after open and after each confirmed batch)
+    Srv-->>S: the server's numbers
+    S-->>UI: new ViewModel ("numbers checked")
 ```
+
+A lost lease shows in the answer to `RenewLock` (every third of the lease) or
+to a save; either one rolls back unsaved edits and reloads read-only.
+`GetRisks` is asked once at a time: a batch confirmed while a call is in
+flight asks again when it returns.
+
+### II.5.2a Read-only view and the newer version (D23)
+
+```mermaid
+sequenceDiagram
+    participant UI as Window
+    participant S as Session actor
+    participant Srv as Server
+    S->>Srv: OpenProject (snapshot, last_seq, lock holder)
+    loop every version_check, read-only only
+        S->>Srv: GetProjectStatus
+        Srv-->>S: last_seq, lock holder
+    end
+    Note over S: last_seq ahead of confirmed_seq sets newer_version
+    UI->>S: Command::Reload
+    S->>Srv: OpenProject (resync, read-only)
+```
+
+The view shows the version that was loaded; it never changes by itself. The
+band says "A newer version is available" and offers Reload (also in the
+Project menu). Taking the edit lock on an old copy reloads first
+(the lease carries the sequence number it was granted at). An editor makes no
+status calls: it is the only writer.
 
 ### II.5.3 Baselines and comparison
 
@@ -1621,6 +1716,7 @@ then calls `RecordExport`, so the server's event log shows who exported what.
 |---|---|---|
 | `src/main.rs` | | Starts a 2-thread tokio runtime and the window (software renderer). Reads `AEGIS_URL`, `AEGIS_TRANSPORT`, `AEGIS_DEV_USER`, `AEGIS_DEV_ADMIN`. |
 | `src/launcher.rs` | `Launcher` | Owns the login steps: server screen, ask the server for `GetLoginOptions`, password or company login, start the `Session`, log out, change server. Saves `Settings`. Network results come back on a bounded channel and are handled on the UI thread in `pump()`. |
+| `src/standalone.rs` | `Standalone` | The embedded server: reads and verifies the license, opens the `FolderStore`, restores seats, binds loopback, serves the normal gRPC service until `stop()` (which waits for the snapshots). `Launcher::open_standalone`/`create_standalone` run it and connect the `Session` with the development login; File > New/Open project folder and the server screen start it. `AEGIS_STANDALONE=<folder>` (with `AEGIS_LICENSE_FILE`) starts in this mode. |
 | `src/controller.rs` | `Controller`, `Hooks`, `PasswordLogIn` | Copies the `ViewModel` into the window and turns window callbacks into `Command`s. |
 | `src/provider.rs` | `AppProvider { Oidc, Password, Dev }`, `OidcProvider`, `OidcSettings`, `PasswordProvider` | Credentials for each call. `PasswordProvider` can keep the session token in the OS keychain ("keep me logged in"); the password itself is never stored. |
 | `src/headless.rs` | `Headless`, `Frame` | Software-rendered window for tests and screenshots. |
@@ -1680,9 +1776,9 @@ else".
 | Rule | Where it shows |
 |---|---|
 | R3 caps | `ServerConfig`, `AccountsConfig.max_users`, throttle map cap, settings read cap, stream size caps, `MAX_SUBMIT_OPS` |
-| R4 bounded queues | actor mailbox, observer buffer, launcher event channel, hashing semaphore |
+| R4 bounded queues | actor mailbox, launcher event channel, hashing semaphore |
 | R5 blocking work off async | Argon2id on `spawn_blocking` |
-| R6 timeouts | `CALL_TIMEOUT` (server and client), `CONNECT_TIMEOUT`, `hashing_wait`, `mailbox_wait`, `Watch` heartbeat (server) and `watch_silence` (client, 60 s) |
+| R6 timeouts | `CALL_TIMEOUT` (server and client), `CONNECT_TIMEOUT`, `hashing_wait`, `mailbox_wait`, `version_check` (client, 30 s) |
 | C1 one owner | project actor, client session actor |
 | C2 no lock across await | `Accounts` state and throttle mutexes |
 | D7 ordered output | `BTreeMap` in `pages.rs` and `Accounts` users |
@@ -1701,20 +1797,6 @@ Part III is the architecture for the work in
 here, move that part into Part I or Part II in the same commit and delete it
 here.** Nothing in Part III is a promise about field names; the job's spec
 and ADR decide those.
-
-## III.0 Planned removals (D23, rule P7)
-
-Read-only users no longer follow the editor live. Job 108 removes, where
-nothing else needs them:
-
-| Part (described in Part II today) | Replaced by |
-|---|---|
-| Observer op stream and `RisksEvent` in `Watch` (ADR 0033), the observer view in the client | Open the last saved version or a baseline; a "newer version available, reload" notice (a cheap version check on a timer or on focus) |
-| `Heartbeat` every 20 s and the client `watch_silence` watchdog | Nothing, if `Watch` goes; otherwise kept only for the editor |
-| Lease changes pushed through `Watch` | The editor learns of a broken lease from `RenewLock` or `SubmitOps` answers |
-| Server numbers pushed to the editor | `GetRisks` after a confirmed batch keeps the "numbers checked" mark (job 047) |
-
-Part II keeps describing the built code until job 108 lands.
 
 ## III.1 Target system context
 
@@ -1749,29 +1831,6 @@ flowchart LR
     CORE <--> FILES
 ```
 
-### III.1a Standalone mode (D22)
-
-```mermaid
-flowchart LR
-    subgraph App["One desktop process"]
-        UI2["Slint window"] <--> CORE2["aegis-client\n(same code path)"]
-        CORE2 -- "gRPC on 127.0.0.1 only,\nrandom port, no login" --> SRV2["aegis-server library\n(same service and actor)"]
-        SRV2 --> FS["Folder store\nsnapshot + op log +\nattachments"]
-        LIC["License file check\n(aegis-license)"] --> SRV2
-    end
-    FS <--> DIR[("Project folder\non disk")]
-    DIR -. "hand over, then import" .-> CUST["Customer server\n(D3)"]
-```
-
-The standalone app is the same client talking to the same server code; only
-the store and the login differ. Nothing listens on a public address. A
-project folder is the consultancy deliverable next to the report, and a
-customer imports it into their own server with history and provenance kept.
-
-What stays true from Part II: one server per customer, the server owns all
-project state, every change is a validated `Op`, numbers come only from the
-engine, and everything works air gapped except the two dotted arrows.
-
 ## III.2 Where new code goes
 
 No new crate is planned. Each part starts as a module in the crate that
@@ -1780,7 +1839,7 @@ appears (the trigger is named in the table).
 
 | Crate | New modules | Holds | Split trigger |
 |---|---|---|---|
-| `aegis-model` | `text.rs` | `Text { value, lang, translations }` for descriptions and notes (FND-01, FND-04) | |
+| `aegis-model` | `text.rs` | `Text { value, lang, translations }`: a language tag and translations on top of the description text of job 064 (FND-04) | |
 | | `tree.rs` (extended), `op.rs` | Node-level tree ops and the raised per-tree cap (FND-02, FND-03) | |
 | | `item.rs` | `Component`, `Interface`, `DataFlow`, `TrustBoundary`, asset binding (ARC-02) | |
 | | `trace.rs` | `Requirement`, `Verification`, `TraceLink`, `ExternalRef`, suspect state (TRC-01 to TRC-03) | |
@@ -1788,8 +1847,7 @@ appears (the trigger is named in the table).
 | | `library/` | Library pack format (like methodology packs: versioned JSON, caps, hash), n-gram index, facet filter, insert batch builder with origin note (LIB-01 to LIB-04) | |
 | `aegis-canvas` | `diagram.rs` | Data-flow diagram layout and drawing into the same display list (ARC-03) | |
 | `aegis-proto` | new RPC groups | Access, attachments (chunked streams), library, report profiles, AI (suggest stream, accept, reject), connectors | |
-| `aegis-server` | `store/folder.rs` | `ProjectStore` over a project folder (snapshot, op log, attachments), used by standalone mode (SHP-01, SHP-02) | |
-| | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
+| `aegis-server` | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
 | | `store/blob.rs` | Attachments in PostgreSQL with size caps (ARC-01) | |
 | | `library.rs` | Company library: states, publish permission, usage counts (LIB-05, LIB-06) | |
 | | `secrets.rs` | Encrypted credentials, key from the environment or the cloud key service | |
@@ -1799,7 +1857,6 @@ appears (the trigger is named in the table).
 | | `report/` | `report.rs` and `pdf.rs` move here; one `ReportDoc` feeds `html.rs`, `pdf.rs`, `xlsx.rs`; `profile.rs` holds section and filter choices (RPT-01 to RPT-05) | `aegis-report` crate when the command line tool (RPT-07) must run without the client |
 | | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
 | `aegis-shell` | `ui/` with `@tr()`, `translations/ja/aegis-shell.po` | Bundled UI catalogs (L10N-01); panel slots, command palette, history panel (UI-01 to UI-04) | |
-| | `standalone.rs` | Starts the in-process server on loopback with the folder store; File > New/Open project folder (SHP-01) | |
 | `aegis-model` | `methodology/` (extended) | Element type names per pack, a plain likelihood method, catalog packs with text (DOM-01, DOM-02, DOM-04) | |
 
 Repository additions: `packs/library/` (the built-in demo library pack),

@@ -1176,6 +1176,17 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::LibraryRatingNotReviewed { tree, node } => {
+            let s = Selection::Tree(tree);
+            (
+                format!(
+                    "Step \"{}\" in attack tree {} has a rating copied from the library that nobody has reviewed.",
+                    node_label(project, tree, node),
+                    q(s)
+                ),
+                s,
+            )
+        }
         L::AttackTreeStepUnrated { tree, node } => {
             let s = Selection::Tree(tree);
             (

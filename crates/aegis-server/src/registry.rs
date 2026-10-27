@@ -146,7 +146,7 @@ impl<S: ProjectStore> Registry<S> {
         &self.store
     }
 
-    /// Deletes a project: its actor stops (observers' streams end) and its
+    /// Deletes a project: its actor stops and its
     /// history and baselines are removed.
     ///
     /// # Errors

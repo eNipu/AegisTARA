@@ -16,8 +16,11 @@ aegis-auth = { workspace = true, features = ["os-keychain"] }
 aegis-canvas.workspace = true
 aegis-client.workspace = true
 aegis-model.workspace = true
+aegis-license.workspace = true
+aegis-server.workspace = true
 slint.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -26,6 +29,7 @@ slint-build.workspace = true
 
 [dev-dependencies]
 aegis-auth = { workspace = true, features = ["test-support"] }
+aegis-license = { workspace = true, features = ["issuer"] }
 aegis-server.workspace = true
 png.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

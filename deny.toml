@@ -2,6 +2,13 @@
 # Pinned tool: cargo-deny 0.20.2 (`cargo install cargo-deny --version 0.20.2 --locked`).
 # Rationale: docs/adr/0003-cargo-deny-policy.md
 # Run all crates: scripts/deny.sh
+#
+# What this policy covers (D5, widened 2026-10-26, job 110): the dependency
+# graph that ships. Development tools may have any license as long as nothing
+# of them ships. cargo-deny leaves dev-dependencies out of the license check
+# and scripts/deny.sh skips the license check for the non-shipped fuzz crate;
+# tools/deny-fixtures/run.sh proves both, and proves that a copyleft crate
+# which is also a normal dependency still fails.
 
 [graph]
 # Check optional dependencies too, so enabling a feature cannot pull in an
@@ -32,10 +39,6 @@ unused-allowed-license = "allow"
 # crate and version, with a comment pointing to the approving decision, e.g.
 #   { crate = "name@1.2.3", allow = ["<SPDX-ID>"] },  # approved in D<N>
 exceptions = [
-    # Approved in D5 (docs/decisions.md, non-shipped tooling): the libFuzzer
-    # runtime, used only by the cargo-fuzz crate crates/aegis-model/fuzz.
-    # [bans] below keeps it out of every shipped crate.
-    { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
     # The desktop shell's toolkit, Slint, under its Royalty-free License 2.0
     # (decision D7). The licence expression of every Slint crate is
     # "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR

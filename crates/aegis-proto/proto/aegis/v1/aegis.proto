@@ -22,7 +22,8 @@ service Aegis {
 
   // Streams the project snapshot (format aegis-project v1) in chunks. The
   // first chunk carries the header fields. `last_seq` is the sequence number
-  // the snapshot is current as of; pass it to Watch to follow later ops.
+  // the snapshot is current as of; compare it with GetProjectStatus to learn
+  // that a newer version exists.
   rpc OpenProject(OpenProjectRequest) returns (stream OpenProjectChunk);
 
   // Edit lease (decision D4): one editor per project at a time.
@@ -36,10 +37,10 @@ service Aegis {
   // accepted, or none is and the project is unchanged. Requires the lease.
   rpc SubmitOps(SubmitOpsRequest) returns (SubmitOpsResponse);
 
-  // Streams accepted ops from `after_seq`, then live. Read-only; needs no
-  // lease. Ends with OUT_OF_RANGE if the client fell too far behind: reopen
-  // the project and watch again from its `last_seq`.
-  rpc Watch(WatchRequest) returns (stream WatchEvent);
+  // A cheap look at a project: its newest sequence number and who holds the
+  // edit lock. Read-only clients ask now and then to learn that a newer
+  // version exists (decision D23). Needs no lease.
+  rpc GetProjectStatus(GetProjectStatusRequest) returns (ProjectStatus);
 
   // The official recomputed risks of every threat scenario.
   rpc GetRisks(GetRisksRequest) returns (GetRisksResponse);
@@ -428,45 +429,15 @@ message SubmitOpsResponse {
   uint64 last_seq = 1;
 }
 
-message WatchRequest {
+message GetProjectStatusRequest {
   string project_id = 1;
-  uint64 after_seq = 2;
 }
 
-message WatchEvent {
-  oneof event {
-    AcceptedOp op = 1;
-    LockEvent lock = 2;
-    // The official recomputed risks. Sent once after the backlog, then once
-    // after every accepted batch, so an observer can check its own numbers
-    // against the server's, or show the server's when its engine differs.
-    RisksEvent risks = 3;
-    // Sent when nothing else happened for a while, so proxies that close
-    // idle connections keep the stream open. Carries no data.
-    Heartbeat heartbeat = 4;
-  }
-}
-
-message Heartbeat {}
-
-message RisksEvent {
-  // Every op up to this sequence number is included in the numbers.
-  uint64 as_of_seq = 1;
-  // Every threat scenario, in arena order. The full list each time, so an
-  // observer never needs an earlier event to read this one.
-  repeated ThreatRiskEntry threats = 2;
-}
-
-message AcceptedOp {
-  uint64 seq = 1;
-  string actor = 2;
-  uint64 timestamp_ms = 3;
-  bytes op = 4;
-}
-
-message LockEvent {
-  // Empty when the lock became free.
-  string holder = 1;
+message ProjectStatus {
+  // Sequence number of the last accepted op.
+  uint64 last_seq = 1;
+  // Current lease holder, empty if the project is unlocked.
+  string lock_holder = 2;
 }
 
 message GetRisksRequest {

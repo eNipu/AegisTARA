@@ -1874,7 +1874,7 @@ fn threat_attack_tree_integrity_and_validation() {
             .add_child(tree32.root(), node_id(600 + i), Node::step("s"))
             .expect("step");
     }
-    assert_eq!(tree32.len(), aegis_model::MAX_ATTACK_TREE_NODES);
+    assert_eq!(tree32.len(), aegis_model::MAX_TREE_OP_NODES);
     let mut tree33 = tree32.clone();
     tree33
         .add_child(tree33.root(), node_id(699), Node::step("s"))

@@ -22,13 +22,19 @@
 //! ```text
 //!             BeginEdit: acquire lease          lease lost / released
 //!  ReadOnly ─────────────────────────► Editing ───────────────────────► ReadOnly
-//!     ▲  watching: remote ops applied    │ watching: lock events only     │
+//!     ▲  every `version_check`: is there    │ the lease is checked by the
+//!     │  a newer version? (notice only)     │ renewal and by every save
 //!     └──────────────────────────────────┴──── resync (reload) on any doubt
 //! ```
 //!
-//! While editing, only this client can change the project, so the watch
-//! stream's op events are ignored (they are this client's own ops, which can
-//! arrive before the save's answer) and only lock events are used.
+//! There is no live stream (decision D23). A read-only user sees the project
+//! as last loaded; now and then the client asks the server for the newest
+//! sequence number and, if it is ahead, raises a "newer version" flag that
+//! the UI turns into a reload offer. The editor is the only writer, so it
+//! needs no stream: a lost lease shows in the answer to a renewal or a save.
+//! After the project opens and after every confirmed batch the client asks
+//! the server for its own risk numbers (`GetRisks`) to check against its
+//! engine.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -54,8 +60,8 @@ use crate::state::{
 use crate::time::format_ms;
 use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use crate::view::{
-    AdminAction, Page, UiState, inspector, risks_differ, shown_tree, threat_rows, tree_view,
-    use_server_risks,
+    AdminAction, Page, UiState, inspector, page_descriptions, risks_differ, shown_tree,
+    threat_rows, tree_view, use_server_risks,
 };
 use crate::workspace::{Origin, Workspace, WorkspaceError};
 
@@ -85,17 +91,15 @@ pub struct SessionConfig {
     pub user: String,
     /// Wall clock in milliseconds since the epoch.
     pub clock_ms: fn() -> u64,
-    /// Wait before reconnecting or restarting a stream.
+    /// Wait before reconnecting or retrying a save.
     pub retry_delay: Duration,
     /// Which protocol to speak.
     pub transport: crate::transport::TransportKind,
     /// Called after [`Command::LogOut`].
     pub on_log_out: Option<LogOutHook>,
-    /// Longest a `Watch` stream may stay silent before it is treated as
-    /// broken and restarted (R6). The server sends a heartbeat every 20 s,
-    /// so only a dead connection that no one closed (a proxy dropping it
-    /// without a reset) reaches this.
-    pub watch_silence: Duration,
+    /// How often a read-only client asks whether the project has a newer
+    /// version on the server.
+    pub version_check: Duration,
     /// Where the signed update manifest is. Empty: no address is set.
     pub update_url: String,
     /// Checks the manifest against the update keys of this build.
@@ -108,8 +112,8 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
-    /// Defaults for `user`: system clock, 2 s retry delay, 60 s watch
-    /// silence, the default transport for the server address (decided at
+    /// Defaults for `user`: system clock, 2 s retry delay, 30 s version
+    /// check, the default transport for the server address (decided at
     /// start).
     #[must_use]
     pub fn new(user: &str) -> Self {
@@ -119,7 +123,7 @@ impl SessionConfig {
             retry_delay: Duration::from_secs(2),
             transport: crate::transport::TransportKind::Grpc,
             on_log_out: None,
-            watch_silence: Duration::from_secs(60),
+            version_check: Duration::from_secs(30),
             update_url: String::new(),
             update_checker: Arc::new(UpdateChecker::for_this_build()),
             update_dir: crate::updates::DownloadDir::for_this_user(),
@@ -207,6 +211,7 @@ impl Session {
             next_notice: 1,
             epoch: 0,
             renew: None,
+            check: None,
             me: None,
             users: Vec::new(),
             admin_text: None,
@@ -274,7 +279,14 @@ struct Open {
     ending: bool,
     /// After a reload, continue into edit mode with this lease.
     resume_edit: Option<Lease>,
-    watch: Option<JoinHandle<()>>,
+    /// The server's newest sequence number, when it is ahead of ours.
+    newer_seq: Option<u64>,
+    /// A status call is in flight.
+    status_pending: bool,
+    /// A `GetRisks` call is in flight.
+    risks_pending: bool,
+    /// Another batch was confirmed while a `GetRisks` call was in flight.
+    risks_again: bool,
     /// The methodology's labels.
     vocab: Arc<pages::Vocabulary>,
     /// Baselines, oldest first.
@@ -287,14 +299,6 @@ struct Open {
     last_export: Option<String>,
 }
 
-impl Open {
-    fn stop_tasks(&mut self) {
-        if let Some(w) = self.watch.take() {
-            w.abort();
-        }
-    }
-}
-
 /// The result of loading a project: everything the actor needs to start.
 struct Loaded {
     summary: pb::ProjectSummary,
@@ -302,12 +306,6 @@ struct Loaded {
     lock_holder: String,
     methodology: Arc<Methodology>,
     project: Project,
-}
-
-enum WatchItem {
-    Event(pb::WatchEvent),
-    /// The stream ended, with the error if it failed.
-    Ended(Option<ClientError>),
 }
 
 enum Internal<P> {
@@ -333,12 +331,13 @@ enum Internal<P> {
         epoch: u64,
         result: Result<u64, ClientError>,
     },
-    Watch {
+    Status {
         epoch: u64,
-        item: WatchItem,
+        result: Result<pb::ProjectStatus, ClientError>,
     },
-    RestartWatch {
+    Risks {
         epoch: u64,
+        result: Result<pb::GetRisksResponse, ClientError>,
     },
     RetrySubmit {
         epoch: u64,
@@ -398,7 +397,7 @@ struct Actor<P: CredentialProvider> {
     conn: Option<Connection<P>>,
     info: Option<ServerInfo>,
     /// The latest recomputed risks the server sent, and for which project.
-    server_risks: Option<(String, pb::RisksEvent)>,
+    server_risks: Option<(String, pb::GetRisksResponse)>,
     /// The project and the sequence number at which the local numbers last
     /// matched the server's.
     verified: Option<(String, u64)>,
@@ -417,6 +416,8 @@ struct Actor<P: CredentialProvider> {
     next_notice: u64,
     epoch: u64,
     renew: Option<tokio::time::Interval>,
+    /// Asks a read-only client's server for a newer version.
+    check: Option<tokio::time::Interval>,
     me: Option<Me>,
     users: Vec<UserRow>,
     admin_text: Option<String>,
@@ -443,6 +444,14 @@ impl<P: CredentialProvider> Actor<P> {
                     None => std::future::pending().await,
                 }
             };
+            let check_tick = async {
+                match self.check.as_mut() {
+                    Some(interval) => {
+                        interval.tick().await;
+                    }
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 command = self.commands.recv() => {
                     match command {
@@ -452,6 +461,7 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 Some(event) = self.event_rx.recv() => self.on_event(event),
                 () = renew_tick => self.renew_lease(),
+                () = check_tick => self.request_status(),
             }
             self.publish();
         }
@@ -501,10 +511,6 @@ impl<P: CredentialProvider> Actor<P> {
             tokio::time::sleep(delay).await;
             let _ = events.send(event).await;
         });
-    }
-
-    fn me(&self) -> &str {
-        &self.config.user
     }
 
     // ---- connection ------------------------------------------------------
@@ -627,8 +633,8 @@ impl<P: CredentialProvider> Actor<P> {
                 }
             }
             Internal::Submitted { epoch, result } => self.on_submitted(epoch, result),
-            Internal::Watch { epoch, item } => self.on_watch(epoch, item),
-            Internal::RestartWatch { epoch } => self.start_watch(epoch),
+            Internal::Status { epoch, result } => self.on_status(epoch, result),
+            Internal::Risks { epoch, result } => self.on_risks(epoch, result),
             Internal::RetrySubmit { epoch } => {
                 if self.open.as_ref().is_some_and(|o| o.epoch == epoch) {
                     self.resend();
@@ -1274,6 +1280,7 @@ impl<P: CredentialProvider> Actor<P> {
             Some(open) => {
                 open.ws = ws;
                 open.lock_holder = holder;
+                open.newer_seq = None;
                 open.resyncing = false;
                 open.mode = Mode::ReadOnly;
                 open.lease = None;
@@ -1307,19 +1314,26 @@ impl<P: CredentialProvider> Actor<P> {
                     resyncing: false,
                     ending: false,
                     resume_edit: None,
-                    watch: None,
+                    newer_seq: None,
+                    status_pending: false,
+                    risks_pending: false,
+                    risks_again: false,
                 });
             }
         }
-        self.start_watch(epoch);
+        let period = self.config.version_check.max(Duration::from_millis(50));
+        let mut interval = tokio::time::interval_at(Instant::now() + period, period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        self.check = Some(interval);
+        self.request_risks();
     }
 
     fn close_project(&mut self, release: bool) {
         self.renew = None;
+        self.check = None;
         let Some(mut open) = self.open.take() else {
             return;
         };
-        open.stop_tasks();
         if release
             && let Some(lease) = open.lease.take()
             && let Some(conn) = self.conn.clone()
@@ -1342,8 +1356,10 @@ impl<P: CredentialProvider> Actor<P> {
             return;
         }
         tracing::info!(reason, "resyncing project");
-        open.stop_tasks();
         open.resyncing = true;
+        open.status_pending = false;
+        open.risks_pending = false;
+        open.risks_again = false;
         open.mode = Mode::ReadOnly;
         open.ending = false;
         self.renew = None;
@@ -1362,118 +1378,100 @@ impl<P: CredentialProvider> Actor<P> {
         self.start_open(epoch, id);
     }
 
-    // ---- watching --------------------------------------------------------
+    // ---- version check and server numbers --------------------------------
 
-    fn start_watch(&mut self, epoch: u64) {
-        let Some(conn) = self.conn.clone() else {
-            return;
-        };
-        let Some(open) = self.open.as_mut().filter(|o| o.epoch == epoch) else {
-            return;
-        };
-        if let Some(old) = open.watch.take() {
-            old.abort();
-        }
-        let (id, after) = (open.id.clone(), open.ws.confirmed_seq());
-        let events = self.events.clone();
-        let silence = self.config.watch_silence;
-        open.watch = Some(tokio::spawn(async move {
-            let mut stream = match conn.watch(&id, after).await {
-                Ok(s) => s,
-                Err(e) => {
-                    let _ = events
-                        .send(Internal::Watch {
-                            epoch,
-                            item: WatchItem::Ended(Some(e)),
-                        })
-                        .await;
-                    return;
-                }
-            };
-            loop {
-                let item = match tokio::time::timeout(silence, stream.message()).await {
-                    Ok(Ok(Some(event))) => WatchItem::Event(event),
-                    Ok(Ok(None)) => WatchItem::Ended(None),
-                    Ok(Err(status)) => WatchItem::Ended(Some(status.into())),
-                    Err(_) => WatchItem::Ended(Some(ClientError::Transport(
-                        "no live updates from the server for too long".into(),
-                    ))),
-                };
-                let ended = matches!(item, WatchItem::Ended(_));
-                if events.send(Internal::Watch { epoch, item }).await.is_err() || ended {
-                    return;
-                }
-            }
-        }));
-    }
-
-    fn on_watch(&mut self, epoch: u64, item: WatchItem) {
-        if self.open.as_ref().is_none_or(|o| o.epoch != epoch) {
-            return;
-        }
-        match item {
-            WatchItem::Ended(error) => {
-                // A server that no longer has our history, or a gap: reload.
-                if matches!(
-                    error.as_ref().and_then(ClientError::code),
-                    Some(ServerCode::OutOfRange)
-                ) {
-                    self.resync("the server no longer holds the history after our position");
-                    return;
-                }
-                if let Some(e) = &error
-                    && matches!(e, ClientError::LoginRequired)
-                {
-                    self.on_failure("Live updates stopped", e);
-                    return;
-                }
-                let delay = self.config.retry_delay;
-                self.after(delay, Internal::RestartWatch { epoch });
-            }
-            WatchItem::Event(event) => {
-                use pb::watch_event::Event;
-                match event.event {
-                    Some(Event::Lock(lock)) => self.on_lock_event(&lock.holder),
-                    Some(Event::Op(op)) => self.on_remote_op(op),
-                    Some(Event::Risks(risks)) => self.on_server_risks(risks),
-                    Some(Event::Heartbeat(_)) | None => {}
-                }
-            }
-        }
-    }
-
-    fn on_lock_event(&mut self, holder: &str) {
-        let me = self.me().to_owned();
+    /// Asks the server for the project's newest sequence number and lock
+    /// holder. Only a read-only client needs the answer: an editor is the
+    /// only writer.
+    fn request_status(&mut self) {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        open.lock_holder = Some(holder.to_owned()).filter(|h| !h.is_empty());
-        // Our lease was taken away (admin break) or expired.
-        if open.mode == Mode::Editing && holder != me {
-            self.lose_lease("An administrator took the edit lock, or it expired.");
+        if open.mode != Mode::ReadOnly || open.resyncing || open.status_pending {
+            return;
+        }
+        open.status_pending = true;
+        let (epoch, id) = (open.epoch, open.id.clone());
+        self.spawn(move |conn| async move {
+            Internal::Status {
+                epoch,
+                result: conn.status(&id).await,
+            }
+        });
+    }
+
+    fn on_status(&mut self, epoch: u64, result: Result<pb::ProjectStatus, ClientError>) {
+        let Some(open) = self.open.as_mut().filter(|o| o.epoch == epoch) else {
+            return;
+        };
+        open.status_pending = false;
+        match result {
+            // Only a read-only view follows what the server says; an editor
+            // holds the lease itself.
+            Ok(status) if open.mode == Mode::ReadOnly && !open.resyncing => {
+                open.lock_holder = Some(status.lock_holder).filter(|h| !h.is_empty());
+                open.newer_seq = Some(status.last_seq).filter(|seq| *seq > open.ws.confirmed_seq());
+            }
+            Ok(_) => {}
+            Err(ClientError::LoginRequired) => {
+                self.on_failure(
+                    "Could not check for a newer version",
+                    &ClientError::LoginRequired,
+                );
+            }
+            // A missed check is not worth a message; the next one tries again.
+            Err(e) => tracing::debug!(error = %e, "version check failed"),
         }
     }
 
-    /// The server's recomputed risks. When they describe exactly the state
-    /// shown here, they are checked against this engine's numbers (accuracy:
-    /// two engines must agree). A difference means one of them is wrong; the
-    /// server's is the official one, so the project is reloaded once and, if
-    /// it persists, the server's numbers are shown.
-    fn on_server_risks(&mut self, risks: pb::RisksEvent) {
-        let Some(open) = self.open.as_ref() else {
+    /// Asks the server for its own risk numbers, to check this engine's
+    /// (accuracy: two engines must agree) or to show them when the engines
+    /// differ. One call at a time; a batch confirmed meanwhile asks again.
+    fn request_risks(&mut self) {
+        let Some(open) = self.open.as_mut() else {
             return;
         };
-        self.server_risks = Some((open.id.clone(), risks));
-        self.compare_server_risks();
+        if open.resyncing {
+            return;
+        }
+        if open.risks_pending {
+            open.risks_again = true;
+            return;
+        }
+        open.risks_pending = true;
+        let (epoch, id) = (open.epoch, open.id.clone());
+        self.spawn(move |conn| async move {
+            Internal::Risks {
+                epoch,
+                result: conn.risks(&id).await,
+            }
+        });
+    }
+
+    fn on_risks(&mut self, epoch: u64, result: Result<pb::GetRisksResponse, ClientError>) {
+        let Some(open) = self.open.as_mut().filter(|o| o.epoch == epoch) else {
+            return;
+        };
+        open.risks_pending = false;
+        let again = std::mem::take(&mut open.risks_again);
+        match result {
+            Ok(risks) => {
+                self.server_risks = Some((open.id.clone(), risks));
+                self.compare_server_risks();
+            }
+            // The numbers stay "being checked"; the next batch asks again.
+            Err(e) => tracing::debug!(error = %e, "server numbers not fetched"),
+        }
+        if again {
+            self.request_risks();
+        }
     }
 
     /// Compares the newest server numbers with this computer's, if they
     /// describe exactly the state shown. Runs when the server's numbers
-    /// arrive and again when one of our own batches is confirmed: the
-    /// server's numbers for a change can arrive on the `Watch` stream a
-    /// moment before the answer to our `SubmitOps`, and a comparison that
-    /// ran only once would then never happen for an editor's own edits.
-    /// O(threats).
+    /// arrive and again when one of our own batches is confirmed (the
+    /// numbers may have been fetched a moment before the answer to our
+    /// `SubmitOps` came). O(threats).
     fn compare_server_risks(&mut self) {
         let engine_ok = self.engine_ok();
         let Some(open) = self.open.as_ref() else {
@@ -1507,25 +1505,15 @@ impl<P: CredentialProvider> Actor<P> {
         self.resync("the local risks differ from the server's");
     }
 
-    fn on_remote_op(&mut self, op: pb::AcceptedOp) {
-        let Some(open) = self.open.as_mut() else {
-            return;
-        };
-        // While editing, ops can only be our own; read-only applies them.
-        if open.mode == Mode::Editing || open.resyncing || op.seq <= open.ws.confirmed_seq() {
-            return;
-        }
-        let applied = open
-            .codec
-            .decode(&op.op)
-            .map_err(|_| ())
-            .and_then(|decoded| open.ws.apply_remote(op.seq, decoded).map_err(|_| ()));
-        if applied.is_err() {
-            self.resync("a remote op could not be applied");
+    // ---- editing mode ----------------------------------------------------
+
+    /// Reloads the open project from the server (the "newer version" offer).
+    /// An editor is always current, so only a read-only view reloads.
+    fn reload(&mut self) {
+        if self.open.as_ref().is_some_and(|o| o.mode == Mode::ReadOnly) {
+            self.resync("the user asked to reload");
         }
     }
-
-    // ---- editing mode ----------------------------------------------------
 
     fn begin_edit(&mut self) {
         if !self.engine_ok() {
@@ -1581,6 +1569,7 @@ impl<P: CredentialProvider> Actor<P> {
                 }
             }
             Ok(lease) => {
+                open.lock_holder = Some(lease.holder.clone()).filter(|h| !h.is_empty());
                 let length = Duration::from_millis(lease.expires_in_ms.max(1000));
                 let mine = Lease {
                     token: lease.token,
@@ -1619,6 +1608,8 @@ impl<P: CredentialProvider> Actor<P> {
             open.lease = None;
             open.mode = Mode::ReadOnly;
             open.ending = false;
+            // We held it; the next version check says who has it now.
+            open.lock_holder = None;
         }
     }
 
@@ -1634,20 +1625,29 @@ impl<P: CredentialProvider> Actor<P> {
         self.finish_ending();
     }
 
+    /// The user is done editing: save what is pending, then release.
+    ///
+    /// Editing stops when the release goes out, not when its answer comes
+    /// back: the release itself makes the server announce a free lock, and a
+    /// renew that was in flight when we asked may still be refused. Neither
+    /// says anything was lost, and read-only is what the user asked for.
     fn finish_ending(&mut self) {
-        let Some(open) = self.open.as_mut() else {
-            return;
+        let (epoch, id, token) = {
+            let Some(open) = self.open.as_mut() else {
+                return;
+            };
+            if !open.ending || open.ws.pending_batches() > 0 {
+                return;
+            }
+            let Some(lease) = open.lease.take() else {
+                return;
+            };
+            (open.epoch, open.id.clone(), lease.token.clone())
         };
-        if !open.ending || open.ws.pending_batches() > 0 {
-            return;
-        }
-        let Some(lease) = open.lease.as_ref() else {
-            return;
-        };
-        let (epoch, id, token) = (open.epoch, open.id.clone(), lease.token.clone());
-        open.ending = false;
+        self.set_read_only();
         self.spawn(move |conn| async move {
-            // Whether or not the release call works, we stop editing.
+            // Whether or not the release call works, we stop editing: the
+            // lease expires on its own if the call never arrives.
             let _ = conn.release(&id, &token).await;
             Internal::Released { epoch }
         });
@@ -1673,6 +1673,11 @@ impl<P: CredentialProvider> Actor<P> {
         let Some(open) = self.open.as_mut().filter(|o| o.epoch == epoch) else {
             return;
         };
+        // The lease is already gone: we released it, or lost it and went
+        // read-only. A refusal now says nothing, so do not report one.
+        if open.mode != Mode::Editing {
+            return;
+        }
         match result {
             Ok(_) => {
                 if let Some(lease) = open.lease.as_mut() {
@@ -1786,6 +1791,13 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 self.pump();
                 self.compare_server_risks();
+                if self
+                    .open
+                    .as_ref()
+                    .is_some_and(|o| o.ws.pending_batches() == 0)
+                {
+                    self.request_risks();
+                }
                 self.finish_ending();
             }
             Err(e) => self.on_submit_failed(epoch, &e),
@@ -1863,6 +1875,7 @@ impl<P: CredentialProvider> Actor<P> {
                     open.ui.show_residual = on;
                 }
             }
+            Command::Reload => self.reload(),
             Command::BeginEdit => self.begin_edit(),
             Command::EndEdit => self.end_edit(),
             Command::Edit(edit) => {
@@ -2241,6 +2254,7 @@ impl<P: CredentialProvider> Actor<P> {
                 entry: open.entry.clone(),
                 mode: open.mode,
                 lock_holder: open.lock_holder.clone(),
+                newer_version: open.newer_seq.is_some() && open.mode == Mode::ReadOnly,
                 sync: if open.resyncing {
                     SyncView::Resyncing
                 } else if open.ws.pending_batches() > 0 {
@@ -2250,6 +2264,7 @@ impl<P: CredentialProvider> Actor<P> {
                 } else {
                     SyncView::Synced
                 },
+                descriptions: page_descriptions(&open.ws, &open.ui),
                 is_empty: open.ws.project().asset_count() == 0,
                 inspector: inspector(&open.ws, &open.ui),
                 can_undo: open.ws.can_undo(),

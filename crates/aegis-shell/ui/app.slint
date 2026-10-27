@@ -9,12 +9,12 @@ import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, Abo
 import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
-    ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
+    DescriptionItem, DescriptionBox, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, Panel, Swatch,
     LinkList, CheckList, Tile, Bars
 } from "widgets.slint";
 
-export { DrawItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem }
+export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem }
 
 // Page numbers, in the order of aegis_client::view::Page::ALL.
 global Pages {
@@ -62,6 +62,31 @@ component NameEditor inherits HorizontalLayout {
     changed name => { edit.text = root.name; }
 }
 
+// The description boxes of the page that are for `kind`. A page has at most
+// two (goals and claims), so there are two slots; a repeater here would put
+// the Edit buttons in a focus chain that Tab does not get through.
+component DescriptionFor inherits VerticalLayout {
+    in property <[DescriptionItem]> items;
+    in property <string> kind;
+    in property <bool> editable;
+    in property <string> label: "Description";
+    callback edit-requested(int, string, string);
+    if root.items.length > 0 && root.items[0].kind == root.kind: DescriptionBox {
+        label: root.label;
+        text: root.items[0].text;
+        by: root.items[0].by;
+        editable: root.editable;
+        edit-requested => { root.edit-requested(0, root.label, root.items[0].text); }
+    }
+    if root.items.length > 1 && root.items[1].kind == root.kind: DescriptionBox {
+        label: root.label;
+        text: root.items[1].text;
+        by: root.items[1].by;
+        editable: root.editable;
+        edit-requested => { root.edit-requested(1, root.label, root.items[1].text); }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "AegisTARA";
     preferred-width: 1360px;
@@ -90,6 +115,9 @@ export component AppWindow inherits Window {
     in property <string> login-error;
     in property <bool> login-busy;
     in-out property <string> server-url;
+    in-out property <string> standalone-folder;
+    in-out property <string> standalone-license;
+    in property <bool> standalone-mode: false;
     // 0 automatic, 1 gRPC over HTTP/2, 2 gRPC-Web over HTTP/1.1
     in-out property <int> transport-index: 0;
     in-out property <string> login-user;
@@ -108,6 +136,16 @@ export component AppWindow inherits Window {
 
     // ---- open project ----
     in property <bool> editing;
+    // The description boxes of the page on screen, and saving one.
+    in property <[DescriptionItem]> descriptions;
+    callback set-description(int, string);
+    // The window that edits one description.
+    in-out property <bool> description-open: false;
+    in-out property <int> description-index: 0;
+    in-out property <string> description-title;
+    in-out property <string> description-draft;
+    // The server holds a newer saved version than the one shown.
+    in property <bool> newer-version;
     in property <string> band-text;
     // 0 read-only (free), 1 read-only (someone else edits), 2 editing
     in property <int> band-kind;
@@ -208,6 +246,8 @@ export component AppWindow inherits Window {
     in property <string> outline-text;
     in property <bool> has-inspector;
     in property <string> inspector-title;
+    in property <bool> inspector-needs-review;
+    callback mark-reviewed();
     in property <string> inspector-kind;
     in property <bool> inspector-is-step;
     in property <[string]> level-options;
@@ -300,6 +340,17 @@ export component AppWindow inherits Window {
     in-out property <string> confirm-kind;
     in-out property <string> confirm-text;
     in-out property <bool> outline-open: false;
+    in-out property <bool> library-open: false;
+    in property <[[StandardListViewItem]]> library-rows;
+    in property <int> library-selected: -1;
+    in property <string> library-preview;
+    in property <[string]> library-facets;
+    in property <string> library-filter;
+    in property <bool> library-can-gate;
+    in property <bool> library-can-leaf;
+    in-out property <int> library-mode: 0;
+    in-out property <bool> library-ratings: false;
+    in-out property <bool> library-share: false;
     in-out property <string> outline-draft;
     in-out property <bool> password-open: false;
     in-out property <string> pw-current;
@@ -310,6 +361,8 @@ export component AppWindow inherits Window {
     callback retry();
     callback log-in();
     callback connect-server(string, int);
+    callback new-project-folder(string, string);
+    callback open-project-folder(string, string);
     callback password-log-in(string, string, bool);
     callback dev-log-in(string);
     callback change-server();
@@ -328,6 +381,7 @@ export component AppWindow inherits Window {
     callback rename-project(string);
     callback delete-project();
     callback show-page(int);
+    callback reload();
     callback begin-edit();
     callback end-edit();
     callback undo();
@@ -369,6 +423,12 @@ export component AppWindow inherits Window {
     callback pick-tree(int);
     callback new-tree(string);
     callback apply-outline(string);
+    callback library-opened();
+    callback library-query(string);
+    callback library-facet(int);
+    callback library-clear-filters();
+    callback library-pick(int);
+    callback library-insert(int, bool, bool);
     callback remove-tree();
     callback attach-control(int, int);
     callback set-mitigation(int, int);
@@ -485,6 +545,9 @@ export component AppWindow inherits Window {
     MenuBar {
         Menu {
             title: "File";
+            MenuItem { title: "New project folder…"; icon: @image-url("icons/file-plus.svg"); activated => { root.change-server(); } }
+            MenuItem { title: "Open project folder…"; icon: @image-url("icons/folder-open.svg"); activated => { root.change-server(); } }
+            MenuSeparator {}
             MenuItem { title: "New project…"; icon: @image-url("icons/file-plus.svg"); enabled: root.online; activated => { root.ask("new-project", "New project", "Project name", ""); } }
             MenuItem { title: "Projects"; icon: @image-url("icons/folder-open.svg"); enabled: root.online; activated => { root.close-project(); } }
             MenuItem { title: "Close project"; icon: @image-url("icons/folder-x.svg"); enabled: root.in-project; activated => { root.close-project(); } }
@@ -496,7 +559,7 @@ export component AppWindow inherits Window {
             MenuSeparator {}
             MenuItem { title: "Change password…"; icon: @image-url("icons/key-round.svg"); enabled: root.online && root.is-password; activated => { root.pw-current = ""; root.pw-new = ""; root.pw-repeat = ""; root.password-open = true; } }
             MenuItem { title: "Change server…"; icon: @image-url("icons/server.svg"); activated => { root.change-server(); } }
-            MenuItem { title: "Log out"; icon: @image-url("icons/log-out.svg"); enabled: root.online; activated => { root.confirm("log-out", "Log out of this server?"); } }
+            MenuItem { title: "Log out"; icon: @image-url("icons/log-out.svg"); enabled: root.online && !root.standalone-mode; activated => { root.confirm("log-out", "Log out of this server?"); } }
         }
         Menu {
             title: "Edit";
@@ -527,6 +590,7 @@ export component AppWindow inherits Window {
             MenuItem { title: "Rename project…"; icon: @image-url("icons/pencil.svg"); enabled: root.in-project && root.editing; activated => { root.ask("rename-project", "Rename project", "Project name", root.project-name); } }
             MenuItem { title: "Add the sample TARA"; icon: @image-url("icons/plus.svg"); enabled: root.in-project && root.editing && root.is-empty; activated => { root.create-sample(); } }
             MenuSeparator {}
+            MenuItem { title: "Reload newer version"; icon: @image-url("icons/refresh-cw.svg"); enabled: root.in-project && root.newer-version; activated => { root.reload(); } }
             MenuItem { title: "Create baseline…"; icon: @image-url("icons/flag.svg"); enabled: root.in-project; activated => { root.ask("create-baseline", "Create baseline", "Baseline name, for example B1 Design freeze", ""); } }
             MenuItem { title: "Versions and comparison"; icon: @image-url("icons/git-compare.svg"); enabled: root.in-project; activated => { root.show-page(Pages.versions); } }
             MenuItem { title: "History"; icon: @image-url("icons/history.svg"); enabled: root.in-project; activated => { root.show-page(Pages.history); } }
@@ -603,6 +667,39 @@ export component AppWindow inherits Window {
                         primary: true;
                         enabled: root.server-url != "" && !root.login-busy;
                         clicked => { root.connect-server(root.server-url, root.transport-index); }
+                    }
+                    Text { text: "Or work without a server"; color: Theme.graphite; font-size: 13px; }
+                    Field {
+                        label: "Project folder";
+                        LineEdit {
+                            text <=> root.standalone-folder;
+                            placeholder-text: "/path/to/project-folder";
+                            accessible-label: "Standalone project folder";
+                        }
+                    }
+                    Field {
+                        label: "Signed license file";
+                        LineEdit {
+                            text <=> root.standalone-license;
+                            placeholder-text: "/path/to/license.aegis";
+                            accessible-label: "Standalone license file";
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "New folder";
+                            icon: @image-url("icons/file-plus.svg");
+                            enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
+                            clicked => { root.new-project-folder(root.standalone-folder, root.standalone-license); }
+                        }
+                        Button {
+                            text: "Open folder";
+                            icon: @image-url("icons/folder-open.svg");
+                            primary: true;
+                            enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
+                            clicked => { root.open-project-folder(root.standalone-folder, root.standalone-license); }
+                        }
                     }
                 }
                 if root.connection == 2: HorizontalLayout {
@@ -760,7 +857,7 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                Text { text: "Logged in as " + root.user + ". " + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
+                Text { text: (root.standalone-mode ? "Standalone project. " : "Logged in as " + root.user + ". ") + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
             }
         }
     }
@@ -792,9 +889,16 @@ export component AppWindow inherits Window {
                     horizontal-stretch: 1;
                     accessible-role: text;
                 }
+                if root.newer-version: Button {
+                    text: "Reload";
+                    icon: @image-url("icons/refresh-cw.svg");
+                    primary: true;
+                    accessible-label: "Reload the newer version";
+                    clicked => { root.reload(); }
+                }
                 if root.band-kind == 0: Button {
                     text: "Edit";
-                    primary: true;
+                    primary: root.band-kind == 0 && !root.newer-version;
                     clicked => { root.begin-edit(); }
                 }
                 if root.band-kind == 2: Button {
@@ -935,6 +1039,7 @@ export component AppWindow inherits Window {
                         padding: 20px;
                         spacing: 16px;
                         PageTitle { title: "Overview"; subtitle: "The project at a glance: what is analysed, how risky it is, and what is still open."; icon: @image-url("icons/layout-dashboard.svg"); }
+                        DescriptionFor { items: root.descriptions; kind: "project"; label: "Project notes"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         HorizontalLayout {
                             vertical-stretch: 0;
                             spacing: 10px;
@@ -996,6 +1101,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: "Asset"; }
                         NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         SectionTitle { text: "Security properties"; }
                         CheckList { items: root.asset-properties; editable: root.editing; toggled(i, on) => { root.toggle-asset-property(i, on); } }
                         SectionTitle { text: "Threat scenarios on this asset"; }
@@ -1031,6 +1137,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: "Damage scenario"; }
                         NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         SectionTitle { text: "Impact rating"; }
                         for f[fi] in root.damage-impacts: Field {
                             label: f.label;
@@ -1085,6 +1192,7 @@ export component AppWindow inherits Window {
                             width: root.side-width + 12px;
                             SectionTitle { text: "Threat scenario"; }
                             NameEditor { name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
+                            DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                             Text { text: "On asset " + root.td-asset; color: Theme.graphite; font-size: 12px; }
                             HorizontalLayout {
                                 spacing: 8px;
@@ -1155,7 +1263,9 @@ export component AppWindow inherits Window {
                             Button { text: "Edit outline"; icon: @image-url("icons/pencil.svg"); enabled: root.editing; clicked => { root.outline-draft = root.outline-text; root.outline-open = true; } }
                             Button { text: "Delete"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-tree", "Delete this attack tree? Its threat scenarios lose their tree."); } }
                         }
+                        Button { text: "Library"; icon: @image-url("icons/box.svg"); accessible-description: "Search the attack tree library and copy an item into the project"; clicked => { root.library-opened(); root.library-open = true; } }
                         if root.has-tree: Button { text: "Export SVG"; icon: @image-url("icons/image.svg"); clicked => { root.export-svg(); } }
+                        DescriptionFor { items: root.descriptions; kind: "tree"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         // Legend.
                         VerticalLayout {
                             spacing: 4px;
@@ -1242,6 +1352,11 @@ export component AppWindow inherits Window {
                                     wrap: word-wrap;
                                 }
                                 Text { text: root.inspector-kind; color: Theme.graphite; font-size: 12px; }
+                                if root.inspector-needs-review: HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { text: "This rating was copied from the library and has not been reviewed."; color: Theme.ink; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
+                                    Button { text: "Reviewed"; enabled: root.editing; accessible-description: "Confirm this rating after checking it"; clicked => { root.mark-reviewed(); } }
+                                }
                                 if root.evaluated-text != "": HorizontalLayout {
                                     spacing: 8px;
                                     Rectangle { width: 16px; height: 16px; y: 6px; background: Theme.tone(root.evaluated-tone); }
@@ -1354,6 +1469,7 @@ export component AppWindow inherits Window {
                     if root.has-threat-detail: Panel {
                         width: min(360px, root.side-width);
                         Text { text: root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
+                        DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         HorizontalLayout {
                             spacing: 8px;
                             Swatch { tone: root.td-inherent-tone; y: 4px; }
@@ -1408,6 +1524,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: "Security control"; }
                         NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         SectionTitle { text: "Attached to"; }
                         LinkList { items: root.control-steps; empty-text: "No attack step yet."; clicked(i) => { root.control-step-clicked(i); } }
                         SectionTitle { text: "Part of goals"; }
@@ -1455,6 +1572,7 @@ export component AppWindow inherits Window {
                         if root.has-goal: Panel {
                             SectionTitle { text: "Cybersecurity goal"; }
                             NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
+                            DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                             SectionTitle { text: "Controls that realize it"; }
                             CheckList { items: root.goal-controls; editable: root.editing; empty-text: "Add security controls first."; toggled(i, on) => { root.toggle-goal-control(i, on); } }
                             SectionTitle { text: "Threat scenarios"; }
@@ -1464,6 +1582,7 @@ export component AppWindow inherits Window {
                         if root.has-claim: Panel {
                             SectionTitle { text: "Cybersecurity claim"; }
                             NameEditor { name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
+                            DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                             SectionTitle { text: "Threat scenarios"; }
                             LinkList { items: root.claim-threats; clicked(i) => { root.claim-threat-clicked(i); } }
                             Button { text: "Remove claim"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-claim", "Remove claim \"" + root.claim-name + "\"?"); } }
@@ -1857,6 +1976,58 @@ export component AppWindow inherits Window {
         }
     }
 
+    if root.description-open: Rectangle {
+        background: #000000A0;
+        FocusScope {
+            // The text box keeps Tab for itself, so the keys that leave it are
+            // fixed: Ctrl+Enter saves, Escape cancels.
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.description-open = false;
+                    return accept;
+                }
+                if (event.text == Key.Return && event.modifiers.control) {
+                    root.set-description(root.description-index, root.description-draft);
+                    root.description-open = false;
+                    return accept;
+                }
+                reject
+            }
+            Rectangle {
+                width: min(parent.width - 48px, 640px);
+                height: min(parent.height - 48px, 440px);
+                background: Theme.panel;
+                border-width: 1px;
+                border-color: Theme.rule;
+                border-radius: 2px;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    Text { text: root.description-title; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                    Text {
+                        text: "Plain text. Ctrl+Enter saves, Escape cancels.";
+                        color: Theme.graphite;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    description-edit := TextEdit {
+                        vertical-stretch: 1;
+                        text <=> root.description-draft;
+                        wrap: word-wrap;
+                        accessible-label: root.description-title;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        Button { text: "Cancel"; clicked => { root.description-open = false; } }
+                        Button { text: "Save"; primary: true; clicked => { root.set-description(root.description-index, root.description-draft); root.description-open = false; } }
+                    }
+                }
+            }
+            init => { description-edit.focus(); }
+        }
+    }
+
     if root.outline-open: Rectangle {
         background: #000000A0;
         Rectangle {
@@ -1890,6 +2061,98 @@ export component AppWindow inherits Window {
                     Button { text: "Apply"; primary: true; clicked => { root.apply-outline(root.outline-draft); root.outline-open = false; } }
                 }
             }
+        }
+    }
+
+    if root.library-open: Rectangle {
+        background: #000000A0;
+        Rectangle {
+            width: min(parent.width - 48px, 980px);
+            height: min(parent.height - 48px, 640px);
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.rule;
+            border-radius: 2px;
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                Text { text: "Attack tree library"; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    lib-search := LineEdit {
+                        horizontal-stretch: 1;
+                        placeholder-text: "Search (English or Japanese)";
+                        accessible-label: "Search the library";
+                        edited(t) => { root.library-query(t); }
+                    }
+                    ComboBox {
+                        width: 260px;
+                        model: root.library-facets;
+                        current-index: -1;
+                        accessible-label: "Narrow by";
+                        selected(v) => { root.library-facet(self.current-index); }
+                    }
+                    Button { text: "Clear"; enabled: root.library-filter != ""; clicked => { root.library-clear-filters(); } }
+                }
+                Text { visible: root.library-filter != ""; text: "Narrowed by " + root.library-filter; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    vertical-stretch: 1;
+                    Table {
+                        horizontal-stretch: 1;
+                        label: "Library items";
+                        columns: [{ title: "Item", horizontal-stretch: 1 }, { title: "Kind", width: 90px, min-width: 90px }];
+                        rows: root.library-rows;
+                        selected: root.library-selected;
+                        picked(i) => { root.library-pick(i); }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        border-width: 1px;
+                        border-color: Theme.rule;
+                        Text {
+                            x: 8px; y: 8px;
+                            width: parent.width - 16px;
+                            text: root.library-preview == "" ? "Pick an item to see it here." : root.library-preview;
+                            font-family: "monospace";
+                            font-size: 12px;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                            accessible-role: AccessibleRole.text;
+                            accessible-label: "Preview";
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    ComboBox {
+                        width: 250px;
+                        model: ["As a new tree", "Under the selected gate", "In place of the selected step"];
+                        current-index <=> root.library-mode;
+                        accessible-label: "Where to put it";
+                    }
+                    CheckBox { text: "With the suggested ratings (marked for review)"; checked <=> root.library-ratings; }
+                    CheckBox { text: "Share steps the tree already has"; checked <=> root.library-share; }
+                }
+                Text {
+                    visible: (root.library-mode == 1 && !root.library-can-gate) || (root.library-mode == 2 && !root.library-can-leaf);
+                    text: root.library-mode == 1 ? "Select a gate of the tree on the canvas first." : "Select a step (not the root) of the tree on the canvas first.";
+                    color: Theme.graphite;
+                    font-size: 12px;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button { text: "Close"; clicked => { root.library-open = false; } }
+                    Button {
+                        text: "Insert";
+                        primary: true;
+                        enabled: root.editing && root.library-selected >= 0 && (root.library-mode == 0 || (root.library-mode == 1 && root.library-can-gate) || (root.library-mode == 2 && root.library-can-leaf));
+                        clicked => { root.library-insert(root.library-mode, root.library-ratings, root.library-share); root.library-open = false; }
+                    }
+                }
+            }
+            init => { lib-search.focus(); }
         }
     }
 

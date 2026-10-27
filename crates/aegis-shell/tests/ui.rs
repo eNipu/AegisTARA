@@ -405,7 +405,7 @@ async fn a_second_user_sees_the_project_read_only_and_follows_the_editor() {
         .expect("row")
         .inherent
         .to_string();
-    save(&bob.frame(), "09-observer");
+    save(&bob.frame(), "09-read-only-second-user");
 
     // Alice rates a step; Bob sees the new risk without doing anything.
     let (x, y) = node_position(&alice, "Exploit");
@@ -416,12 +416,40 @@ async fn a_second_user_sees_the_project_read_only_and_follows_the_editor() {
         })
         .await;
     alice.window.invoke_set_rating(1);
-    bob.until("bob follows", |_| {
+
+    // Bob's window does not change by itself. It offers the newer version.
+    bob.until("bob is offered the newer version", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.newer_version)
+    })
+    .await;
+    bob.controller.apply_latest();
+    assert!(bob.window.get_newer_version());
+    assert!(
+        bob.window.get_band_text().contains("newer version"),
+        "{}",
+        bob.window.get_band_text()
+    );
+    assert_eq!(
+        bob.window
+            .get_threats()
+            .row_data(0)
+            .expect("row")
+            .inherent
+            .as_str(),
+        before,
+        "the version he opened stays as it was until he reloads"
+    );
+    save(&bob.frame(), "09b-newer-version");
+
+    // Reload shows Alice's saved work.
+    bob.window.invoke_reload();
+    bob.until("bob sees the new risk", |_| {
         bob.controller.apply_latest();
         let now = bob.window.get_threats().row_data(0).expect("row").inherent;
         now.as_str() != before
     })
     .await;
+    assert!(!bob.window.get_newer_version());
 
     drop(bob);
     drop(alice);
@@ -598,6 +626,105 @@ async fn activating_a_node_entry_selects_that_node() {
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].node, last.node);
     assert!(after[0].label.ends_with("Selected."));
+    drop(app);
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_library_panel_searches_and_copies_an_item_into_the_project() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server, "alice").await;
+    let trees = |app: &App| {
+        app.session
+            .view()
+            .project
+            .as_ref()
+            .map_or(0, |p| p.data.trees.len())
+    };
+    let before = trees(&app);
+
+    // Opening the panel lists the whole demo pack; typing narrows it.
+    app.window.invoke_library_opened();
+    app.frame();
+    let all = app.window.get_library_rows().row_count();
+    assert!(all >= 10, "{all}");
+    app.window.invoke_library_query("flood".into());
+    let found = app.window.get_library_rows().row_count();
+    assert!(found >= 1 && found < all, "{found} of {all}");
+    assert_eq!(app.window.get_library_selected(), -1);
+
+    // Picking shows the preview with the license.
+    app.window.invoke_library_pick(0);
+    assert!(app.window.get_library_preview().contains("CC0-1.0"));
+    assert!(app.window.get_library_selected() >= 0);
+
+    // The selection on the canvas is the root gate or nothing: a step cannot
+    // be replaced until one is selected.
+    assert!(!app.window.get_library_can_leaf());
+
+    // As a new tree (mode 0), without ratings.
+    app.window.invoke_library_insert(0, false, false);
+    app.until("tree copied", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.data.trees.len() == before + 1 && p.sync == SyncView::Synced)
+    })
+    .await;
+    assert_eq!(trees(&app), before + 1);
+
+    // One undo takes the copy away.
+    app.window.invoke_undo();
+    app.until("undone", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.data.trees.len() == before)
+    })
+    .await;
+
+    // With ratings: the steps come marked, and the inspector says so until a
+    // person confirms the rating.
+    app.window
+        .invoke_library_query("deny service can bus".into());
+    app.window.invoke_library_pick(0);
+    app.window.invoke_library_insert(0, true, false);
+    app.until("tree with ratings", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.data.trees.len() == before + 1 && p.sync == SyncView::Synced && p.tree.is_some()
+        })
+    })
+    .await;
+    app.frame();
+    app.frame();
+    let (x, y) = node_position(&app, "Flood the bus");
+    app.headless.click(x, y);
+    app.until("step selected", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.inspector.is_some())
+    })
+    .await;
+    app.controller.apply_latest();
+    assert!(app.window.get_inspector_needs_review());
+    app.window.invoke_mark_reviewed();
+    app.until("reviewed", |vm| {
+        vm.project
+            .as_ref()
+            .and_then(|p| p.inspector.as_ref())
+            .is_some_and(|i| !i.needs_review)
+    })
+    .await;
+    app.window.invoke_undo();
+    app.window.invoke_undo();
+    app.until("back", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.data.trees.len() == before)
+    })
+    .await;
+
+    // A place that the selection does not offer inserts nothing.
+    app.window.invoke_library_insert(2, false, false);
+    app.frame();
+    assert_eq!(trees(&app), before);
+
     drop(app);
     server.stop().await;
 }
