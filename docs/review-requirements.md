@@ -1,7 +1,7 @@
 # Review requirements
 
 This page lists what must be reviewed before the work on this branch is
-accepted. The owner asked for the build first and the review after. All completed jobs (`027`–`041` and `045`–`056`) have now been reviewed; see `factory/jobs/<job-id>/` and `docs/security-and-architecture-review.md` for full architectural and security findings.
+accepted. The owner asked for the build first and the review after. All completed jobs (`027`–`041`, `045`–`057`, `064`–`065`, `107`–`108`, and `110`) have now been reviewed; see `factory/jobs/<job-id>/` and `docs/security-and-architecture-review.md` for full architectural and security findings.
 
 ## Pending reviews
 
@@ -37,6 +37,12 @@ Add a row for every new job.
 | 054 installer download (`054-installer-download`) | PASS | PASS | PASS | PASS |
 | 055 session admin (`055-session-admin`) | PASS | PASS | PASS | PASS |
 | 056 UI fixes and monkey tests (`056-ui-fixes-and-monkey-tests`) | PASS | PASS | PASS | PASS |
+| 107 standalone mode (`107-standalone-mode`) | PASS | PASS | PASS | PASS |
+| 108 remove live view (`108-remove-live-view`) | PASS | PASS | PASS | PASS |
+| 110 deny dev policy (`110-deny-dev-policy`) | PASS | PASS | N/A (PASS) | N/A (PASS) |
+| 064 element descriptions (`064-element-descriptions`) | PASS | PASS | PASS | PASS |
+| 065 tree node ops (`065-tree-node-ops`) | PASS | PASS | PASS | PASS |
+| 057 attack tree library (`057-attack-tree-library`) | PASS | PASS | PASS | PASS |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)

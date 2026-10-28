@@ -919,7 +919,109 @@
       "decision": "APPROVE",
       "updated_at": "2026-10-26T16:30:00Z",
       "notes": "Completed and reviewed (docs/review-requirements.md)."
+    },
+    {
+      "id": "107-standalone-mode",
+      "title": "Standalone local mode with folder-backed ProjectStore, launcher, and server import (D22)",
+      "stage": "merged",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "decision": "APPROVE",
+      "updated_at": "2026-10-28T06:00:00Z",
+      "notes": "Completed and reviewed (docs/adr/0050-standalone-mode.md)."
+    },
+    {
+      "id": "108-remove-live-view",
+      "title": "Remove live observer stream and replace with lightweight status check and reload (D23, P7)",
+      "stage": "merged",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "decision": "APPROVE",
+      "updated_at": "2026-10-28T06:05:00Z",
+      "notes": "Completed and reviewed (docs/adr/0033-live-observers.md)."
+    },
+    {
+      "id": "110-deny-dev-policy",
+      "title": "License check policy for development-only tools (D5)",
+      "stage": "merged",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "decision": "APPROVE",
+      "updated_at": "2026-10-28T06:10:00Z",
+      "notes": "Completed and reviewed (docs/adr/0003-cargo-deny-policy.md)."
+    },
+    {
+      "id": "064-element-descriptions",
+      "title": "Description text on every TARA element and project notes (FND-01)",
+      "stage": "merged",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "decision": "APPROVE",
+      "updated_at": "2026-10-28T06:15:00Z",
+      "notes": "Completed and reviewed (docs/adr/0051-element-descriptions.md)."
+    },
+    {
+      "id": "065-tree-node-ops",
+      "title": "Node-level attack tree operations, 4,096-node tree cap, and interactive node expansion (FND-02, FND-03)",
+      "stage": "merged",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "decision": "APPROVE",
+      "updated_at": "2026-10-28T06:20:00Z",
+      "notes": "Completed and reviewed (docs/adr/0014-store-trees-and-provenance.md)."
+    },
+    {
+      "id": "057-attack-tree-library",
+      "title": "Attack tree pattern library Phase 0: pack format, demo pack, n-gram search, review marks, and insertion (ADR 0052)",
+      "stage": "merged",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "decision": "APPROVE",
+      "updated_at": "2026-10-28T06:25:00Z",
+      "notes": "Completed and reviewed (docs/adr/0052-attack-tree-library.md)."
     }
   ],
-  "updated_at": "2026-10-26T18:24:00Z"
+  "updated_at": "2026-10-28T06:25:00Z"
 }

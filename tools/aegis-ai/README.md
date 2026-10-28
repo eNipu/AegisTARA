@@ -31,6 +31,14 @@ The roadmap is broken down into **12 verifiable tasks** across 5 milestones:
 
 ---
 
+## Future Model Iteration Backlog
+
+| ID | Task | Scope | Status |
+|---|---|---|---|
+| **AI-13** | **Web / API / Cloud Application TARA Corpus & Model Head** | Extend `fetch_open_cyber_catalogs.py` and `CompiledDataset` with an opt-in Web/API/Cloud profile (`--domain web-api` alongside the default `--domain embedded`) ingesting **MITRE CAPEC Web/API execution flows** (authentication bypass, broken object-level authorization, token replay, SSRF, injection, API rate-limit abuse), **CWE Web/API weaknesses**, and **STRIDE for Services & Cloud** (aligned with `factory/backlog.md` job `112-catalog-packs`), keeping embedded/automotive predictions clean while supporting backend, companion-app, and off-board cloud TARA. | **Backlog (v2)** |
+
+---
+
 ## Quick Start on Your MacBook Pro (Apple M2 Max, 32 GB)
 
 ### 1. Fetch Open-Source MITRE Catalogs & Generate Verified Datasets
