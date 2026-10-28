@@ -133,6 +133,7 @@ Defenses:
 | E3 | Test plan generation | Turns top risks into penetration test cases, and feeds results back as evidence |
 | E4 | MCP server | Exposes AegisTARA to the company's own AI assistants through the Model Context Protocol (Rust SDK: `rmcp`), with the same permissions |
 | E5 | Company memory | Learns the company's style and past decisions through retrieval over approved TARAs |
+| E6 | Web / API / Cloud Application TARA Model Pack | Extends `tools/aegis-ai` (**Aegis-Core**) beyond embedded/automotive (`MITRE EMB3D` + embedded `CAPEC` + `UN R155`) with a switchable domain corpus covering web applications, REST/gRPC/GraphQL APIs, OAuth2/OIDC authentication, and cloud backends (`OWASP API Security Top 10`, `OWASP Top 10`, `CAPEC` web/API attack patterns, and `STRIDE` for services/cloud, aligned with job `112-catalog-packs`) |
 
 ---
 

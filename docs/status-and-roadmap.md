@@ -60,8 +60,15 @@
 | 053 | Attack tree pictures in the PDF | 0047 |
 | 054 | Installer download with hash check | 0048 |
 | 055 | Admin: list and end sessions | 0049 |
+| 056 | UI fixes and monkey tests | — |
+| 107 | Standalone folder mode, launcher, and server import | 0050 |
+| 108 | Remove live observer view (`GetProjectStatus` + Reload) | 0033 |
+| 110 | License check policy for dev-only tools (11 fixtures) | 0003 |
+| 064 | Element descriptions and project notes | 0051 |
+| 065 | Node-level attack tree ops (4,096 nodes) and interactive node expansion | 0014 |
+| 057 | Attack tree pattern library Phase 0 (`library-demo.json`, n-gram search, review marks) | 0052 |
 
-Jobs 027 to 051 have **not** been through the factory review stages (code, security, UX, UI). The list is in `docs/review-requirements.md`.
+All completed jobs (`001`–`041`, `045`–`057`, `064`–`065`, `107`–`108`, and `110`) have completed the four factory review stages (`code`, `security`, `ux`, `ui`). See `docs/review-requirements.md` and `factory/jobs/<id>/`.
 
 ---
 

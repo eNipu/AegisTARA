@@ -539,10 +539,11 @@ impl HistoryReader {
             .checked_add(line.len() as u64 + 1)
             .ok_or_else(|| corrupt("op log is too large"))?;
         let (seq, op_bytes) = parse_op_line(&line)?;
-        let fixed = read_exact::<84>(&mut self.sidecar)?;
-        let sidecar_seq = u64::from_be_bytes(fixed[..8].try_into().expect("fixed slice"));
-        let timestamp_ms = u64::from_be_bytes(fixed[8..16].try_into().expect("fixed slice"));
-        let actor_len = u32::from_be_bytes(fixed[16..20].try_into().expect("fixed slice")) as usize;
+        let sidecar_seq = u64::from_be_bytes(read_exact::<8>(&mut self.sidecar)?);
+        let timestamp_ms = u64::from_be_bytes(read_exact::<8>(&mut self.sidecar)?);
+        let actor_len = u32::from_be_bytes(read_exact::<4>(&mut self.sidecar)?) as usize;
+        let prev = read_exact::<32>(&mut self.sidecar)?;
+        let hash = read_exact::<32>(&mut self.sidecar)?;
         if actor_len > MAX_ACTOR_BYTES || sidecar_seq != seq {
             return Err(corrupt("op sidecar does not match the op log"));
         }
@@ -553,8 +554,6 @@ impl HistoryReader {
             .checked_add(84 + actor_len as u64)
             .ok_or_else(|| corrupt("op sidecar is too large"))?;
         let actor = String::from_utf8(actor).map_err(corrupt)?;
-        let prev = fixed[20..52].try_into().expect("fixed slice");
-        let hash = fixed[52..84].try_into().expect("fixed slice");
         Ok(Some((
             StoredOp {
                 seq,
