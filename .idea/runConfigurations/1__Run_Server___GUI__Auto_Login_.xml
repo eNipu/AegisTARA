@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="1. Run Server + GUI (Auto-Login)" type="CompoundRunConfigurationType">
+    <toRun name="5. Server (Dev Auto-Login)" type="CargoCommandRunConfiguration" />
+    <toRun name="6. GUI (Dev Auto-Login)" type="CargoCommandRunConfiguration" />
+    <method v="2" />
+  </configuration>
+</component>

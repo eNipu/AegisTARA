@@ -40,6 +40,51 @@ cargo build --workspace
 cargo test --workspace
 ```
 
+## Running in RustRover
+
+Open the repository root (`AegisTARA/`) in RustRover so it attaches the root
+`Cargo.toml` workspace (`crates/*`).
+
+### One-click Run Configurations
+
+Use the Run Configuration dropdown in the top-right toolbar and click the green
+**Run** button:
+
+| Run Configuration | Purpose |
+|---|---|
+| **`1. Run Server + GUI (Auto-Login)`** | Starts the local in-memory server on `127.0.0.1:50051` and launches the desktop GUI already logged in as `admin` (skips the login screen). |
+| **`2. Run Server + GUI (Password Login)`** | Starts the local server with password authentication and opens the desktop GUI at the login screen. Log in with user **`admin`** and password **`aegis-admin-dev`**. |
+| **`3. Server (Password Login)`** | Starts `aegis-server` alone on `127.0.0.1:50051` with password login (`admin` / `aegis-admin-dev`). |
+| **`4. GUI (Desktop App)`** | Starts `aegis-shell` alone, pointed at `http://127.0.0.1:50051`. |
+| **`5. Server (Dev Auto-Login)`** | Starts `aegis-server` alone on `127.0.0.1:50051` with development auth (`AEGIS_AUTH=dev`). |
+| **`6. GUI (Dev Auto-Login)`** | Starts `aegis-shell` alone, auto-logged in as `admin` against `http://127.0.0.1:50051`. |
+| **`7. Build Workspace`** | Builds all workspace targets (`build --workspace --features aegis-server/dev-license,aegis-auth/os-keychain`). |
+| **`8. Test Workspace`** | Runs the full test suite (`test --workspace`). |
+| **`9. Smoke Test Server`** | Runs the `smoke` example client against `http://127.0.0.1:50051` (`admin` / `aegis-admin-dev`) to verify a running password-login server. |
+
+### Manual Setup / Reference
+
+The shared run configurations are tracked in `.idea/runConfigurations/`. To
+recreate or customize them manually in **Run → Edit Configurations…**
+(`+` → **Cargo** / **Compound**) with working directory `$PROJECT_DIR$`:
+
+1. **Server (`aegis-server`)**
+   - **Command:** `run --package aegis-server --bin aegis-server --features aegis-server/dev-license,aegis-auth/os-keychain`
+   - **Environment variables (Password Login):**
+     `AEGIS_DEV_LICENSE=1`; `AEGIS_AUTH=password`; `AEGIS_ADMIN_USERNAME=admin`; `AEGIS_ADMIN_PASSWORD=aegis-admin-dev`; `AEGIS_LISTEN=127.0.0.1:50051`; `AEGIS_SERVER_NAME=AegisTARA Local`; `RUST_LOG=info`
+   - **Environment variables (Dev Auto-Login):**
+     `AEGIS_DEV_LICENSE=1`; `AEGIS_AUTH=dev`; `AEGIS_LISTEN=127.0.0.1:50051`; `AEGIS_SERVER_NAME=AegisTARA Dev`; `RUST_LOG=info`
+2. **GUI (`aegis-shell`)**
+   - **Command:** `run --package aegis-shell --bin aegis-shell --features aegis-server/dev-license,aegis-auth/os-keychain`
+   - **Environment variables (Password Login):**
+     `AEGIS_URL=http://127.0.0.1:50051`; `RUST_LOG=info`
+   - **Environment variables (Dev Auto-Login):**
+     `AEGIS_URL=http://127.0.0.1:50051`; `AEGIS_DEV_USER=admin`; `AEGIS_DEV_ADMIN=1`; `RUST_LOG=info`
+3. **Both at once (`Compound`)**
+   - Add a **Compound** configuration containing the Server and matching GUI configurations so both launch with one click.
+
+> **Tip:** Passing `--features aegis-server/dev-license,aegis-auth/os-keychain` to both the server and GUI configurations keeps a single unified Cargo feature graph, preventing recompilation when switching between targets.
+
 ## Documents
 
 1. [docs/decisions.md](docs/decisions.md): decisions made so far. Start here.
