@@ -46,6 +46,9 @@ export component Canvas inherits Rectangle {
     in property <[AccessNode]> access-nodes;
     callback node-activated(int);
     in property <[DrawItem]> items;
+    in property <[DrawItem]> path-items;
+    in property <[DrawItem]> rect-items;
+    in property <[DrawItem]> text-items;
     in property <string> accessible-summary;
 
     callback pointer-down(length, length);
@@ -66,9 +69,8 @@ export component Canvas inherits Rectangle {
     changed height => { root.resized(self.width, self.height); }
     init => { root.resized(self.width, self.height); }
 
-    // Edges first in the list, so they are drawn first (underneath).
-    for item in root.items: Path {
-        visible: item.kind == 1;
+    // Coalesced edge paths first, drawn underneath node cards.
+    for item in root.path-items: Path {
         x: 0px;
         y: 0px;
         width: root.width;
@@ -77,14 +79,13 @@ export component Canvas inherits Rectangle {
         viewbox-y: 0;
         viewbox-width: self.width / 1px;
         viewbox-height: self.height / 1px;
-        commands: item.kind == 1 ? item.commands : "";
+        commands: item.commands;
         fill: transparent;
         stroke: item.stroke >= 0 ? Theme.paint(item.stroke) : transparent;
         stroke-width: item.stroke-width;
     }
 
-    for item in root.items: Rectangle {
-        visible: item.kind == 0;
+    for item in root.rect-items: Rectangle {
         x: item.x;
         y: item.y;
         width: item.w;
@@ -95,16 +96,16 @@ export component Canvas inherits Rectangle {
         border-color: item.stroke >= 0 ? Theme.paint(item.stroke) : transparent;
     }
 
-    for item in root.items: Text {
-        visible: item.kind == 2;
+    for item in root.text-items: Text {
         x: item.align-end ? item.x - 400px : item.x;
         // The engine gives the baseline; Slint places the top of the text.
         y: item.y - item.size * 0.95;
         width: 400px;
         height: item.size * 1.3;
-        text: item.kind == 2 ? item.text : "";
+        text: item.text;
         font-size: item.size;
-        font-weight: item.bold ? 700 : 400;
+        font-weight: item.bold ? Theme.weight-bold : Theme.weight-semibold;
+        letter-spacing: item.bold ? Theme.tracking-label : 0px;
         color: Theme.paint(item.fill);
         horizontal-alignment: item.align-end ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
         vertical-alignment: top;

@@ -126,9 +126,10 @@ export component Table inherits VerticalLayout {
 }
 
 export component SectionTitle inherits Text {
-    font-size: 12px;
-    font-weight: 600;
-    color: Theme.graphite;
+    font-size: Theme.font-label;
+    font-weight: Theme.weight-bold;
+    letter-spacing: Theme.tracking-label;
+    color: Theme.ink;
 }
 
 export component PageTitle inherits HorizontalLayout {
@@ -146,8 +147,21 @@ export component PageTitle inherits HorizontalLayout {
     }
     VerticalLayout {
         horizontal-stretch: 1;
-        Text { text: root.title; font-size: 20px; font-weight: 700; color: Theme.ink; }
-        if root.subtitle != "": Text { text: root.subtitle; font-size: 12px; color: Theme.graphite; wrap: word-wrap; }
+        spacing: 2px;
+        Text {
+            text: root.title;
+            font-size: Theme.font-display;
+            font-weight: Theme.weight-heavy;
+            letter-spacing: Theme.tracking-tight;
+            color: Theme.ink;
+        }
+        if root.subtitle != "": Text {
+            text: root.subtitle;
+            font-size: Theme.font-body;
+            font-weight: Theme.weight-medium;
+            color: Theme.graphite;
+            wrap: word-wrap;
+        }
     }
     @children
 }
@@ -190,9 +204,10 @@ export component SplashHeader inherits Rectangle {
         y: 6px;
         height: 16px;
         text: root.badge-text;
-        font-size: 10px;
-        font-weight: 600;
-        color: Theme.slate;
+        font-size: Theme.font-caption;
+        font-weight: Theme.weight-bold;
+        letter-spacing: Theme.tracking-header;
+        color: Theme.slate-light;
         vertical-alignment: center;
     }
     if root.status-text != "": HorizontalLayout {
@@ -209,9 +224,10 @@ export component SplashHeader inherits Rectangle {
         }
         Text {
             text: root.status-text;
-            font-size: 10px;
-            font-weight: 700;
-            color: Theme.slate-light;
+            font-size: Theme.font-caption;
+            font-weight: Theme.weight-heavy;
+            letter-spacing: Theme.tracking-header;
+            color: Theme.platinum;
             vertical-alignment: center;
         }
     }
@@ -270,14 +286,15 @@ export component DescriptionBox inherits VerticalLayout {
     Text {
         text: root.text == "" ? "None yet." : root.text;
         color: root.text == "" ? Theme.graphite : Theme.ink;
-        font-size: 13px;
+        font-size: Theme.font-body;
+        font-weight: root.text == "" ? Theme.weight-regular : Theme.weight-medium;
         wrap: word-wrap;
         overflow: elide;
         max-height: 110px;
         accessible-role: AccessibleRole.text;
         accessible-label: root.label + ": " + (root.text == "" ? "none yet" : root.text);
     }
-    if root.by != "": Text { text: root.by; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+    if root.by != "": Text { text: root.by; color: Theme.graphite; font-size: Theme.font-caption; font-weight: Theme.weight-medium; wrap: word-wrap; }
 }
 
 export component Panel inherits Rectangle {
@@ -305,7 +322,7 @@ export component LinkList inherits VerticalLayout {
     in property <string> empty-text: "None.";
     callback clicked(int);
     spacing: 2px;
-    if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: 12px; }
+    if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: Theme.font-label; }
     for item[i] in root.items: Rectangle {
         height: 30px;
         background: area.has-hover ? Theme.wash : transparent;
@@ -318,8 +335,8 @@ export component LinkList inherits VerticalLayout {
             padding-right: 6px;
             spacing: 8px;
             if item.tone > 0: Swatch { tone: item.tone; y: 9px; }
-            Text { text: item.label; color: Theme.accent; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-            Text { text: item.detail; color: Theme.graphite; font-size: 12px; vertical-alignment: center; overflow: elide; }
+            Text { text: item.label; color: Theme.accent; font-size: Theme.font-body; font-weight: Theme.weight-semibold; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            Text { text: item.detail; color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-medium; vertical-alignment: center; overflow: elide; }
         }
         area := TouchArea { clicked => { root.clicked(i); } }
     }
@@ -332,7 +349,7 @@ export component CheckList inherits VerticalLayout {
     in property <string> empty-text: "None.";
     callback toggled(int, bool);
     spacing: 2px;
-    if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: 12px; }
+    if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: Theme.font-label; }
     for item[i] in root.items: CheckBox {
         text: item.label;
         checked: item.checked;
@@ -353,8 +370,8 @@ export component Tile inherits Rectangle {
     border-radius: 2px;
     VerticalLayout {
         padding: 10px;
-        Text { text: root.count; font-size: 22px; font-weight: 700; color: Theme.ink; }
-        Text { text: root.label; font-size: 12px; color: Theme.graphite; overflow: elide; }
+        Text { text: root.count; font-size: 24px; font-weight: Theme.weight-heavy; letter-spacing: Theme.tracking-tight; color: Theme.ink; }
+        Text { text: root.label; font-size: Theme.font-label; font-weight: Theme.weight-semibold; color: Theme.graphite; overflow: elide; }
     }
 }
 
@@ -368,7 +385,7 @@ export component Bars inherits VerticalLayout {
     SectionTitle { text: root.title; }
     for item in root.items: HorizontalLayout {
         spacing: 8px;
-        Text { text: item.label; width: 90px; font-size: 12px; color: Theme.ink; overflow: elide; }
+        Text { text: item.label; width: 90px; font-size: Theme.font-label; font-weight: Theme.weight-medium; color: Theme.ink; overflow: elide; }
         Rectangle {
             horizontal-stretch: 1;
             height: 14px;
@@ -378,6 +395,6 @@ export component Bars inherits VerticalLayout {
                 background: item.tone == 0 ? Theme.rule : Theme.tone(item.tone);
             }
         }
-        Text { text: item.count; width: 32px; font-size: 12px; color: Theme.ink; horizontal-alignment: right; }
+        Text { text: item.count; width: 32px; font-size: Theme.font-label; font-weight: Theme.weight-bold; color: Theme.ink; horizontal-alignment: right; }
     }
 }

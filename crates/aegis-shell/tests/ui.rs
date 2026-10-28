@@ -728,3 +728,97 @@ async fn the_library_panel_searches_and_copies_an_item_into_the_project() {
     drop(app);
     server.stop().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_inspector_expands_tree_nodes_at_leaf_and_intermediate_points() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server, "alice").await;
+
+    let initial_len = app
+        .session
+        .view()
+        .project
+        .as_ref()
+        .expect("project")
+        .scene()
+        .expect("scene")
+        .len();
+
+    // Select a leaf step ("Exploit the debug port on the TCU board").
+    let (x, y) = node_position(&app, "Exploit");
+    app.headless.click(x, y);
+    app.until("step selected", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.inspector.is_some())
+    })
+    .await;
+    app.controller.apply_latest();
+    assert!(app.window.get_inspector_is_step());
+    assert!(!app.window.get_inspector_is_root());
+
+    // 1. Expand at the end of a leaf step: add a child step, which branches
+    // the step into an AND gate and moves its rating onto the new child.
+    app.window
+        .invoke_add_tree_child(0, "Locate exposed JTAG pads".into());
+    app.until("leaf branched with child", |vm| {
+        vm.project
+            .as_ref()
+            .and_then(|p| p.scene())
+            .is_some_and(|s| s.len() == initial_len + 1)
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(
+        app.window.get_inspector_title().as_str(),
+        "Locate exposed JTAG pads"
+    );
+
+    // 2. Add a sibling step under that newly created gate.
+    app.window
+        .invoke_add_sibling_node(0, "Attach logic analyzer".into());
+    app.until("sibling added", |vm| {
+        vm.project
+            .as_ref()
+            .and_then(|p| p.scene())
+            .is_some_and(|s| s.len() == initial_len + 2)
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(
+        app.window.get_inspector_title().as_str(),
+        "Attach logic analyzer"
+    );
+    assert!(app.window.get_inspector_can_move_up());
+
+    // 3. Insert an intermediate OR gate above the selected node.
+    app.window
+        .invoke_insert_parent_gate(0, "Hardware interface access".into());
+    app.until("intermediate parent gate inserted", |vm| {
+        vm.project
+            .as_ref()
+            .and_then(|p| p.scene())
+            .is_some_and(|s| s.len() == initial_len + 3)
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(
+        app.window.get_inspector_title().as_str(),
+        "Hardware interface access"
+    );
+    assert!(!app.window.get_inspector_is_step());
+    assert_eq!(app.window.get_inspector_gate_index(), 0);
+
+    // 4. Change the gate logic to SEQ (index 2).
+    app.window.invoke_set_tree_node_gate(2);
+    app.until("gate changed to SEQ", |vm| {
+        vm.project
+            .as_ref()
+            .and_then(|p| p.inspector.as_ref())
+            .is_some_and(|i| i.gate_index == 2)
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(app.window.get_inspector_gate_index(), 2);
+
+    drop(app);
+    server.stop().await;
+}

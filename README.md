@@ -83,7 +83,7 @@ recreate or customize them manually in **Run → Edit Configurations…**
 3. **Both at once (`Compound`)**
    - Add a **Compound** configuration containing the Server and matching GUI configurations so both launch with one click.
 
-> **Tip:** Passing `--features aegis-server/dev-license,aegis-auth/os-keychain` to both the server and GUI configurations keeps a single unified Cargo feature graph, preventing recompilation when switching between targets.
+> **Tip:** Passing `--features aegis-server/dev-license,aegis-auth/os-keychain` to both the server and GUI configurations keeps a single unified Cargo feature graph, preventing recompilation when switching between targets. The root `Cargo.toml` also sets `[profile.dev.package."*"] opt-level = 2` (and `opt-level = 1` for workspace crates) so Slint's CPU software renderer, path rasterizer, and font shaping run smoothly even in debug/dev runs.
 
 ## Documents
 

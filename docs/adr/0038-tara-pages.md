@@ -33,11 +33,20 @@ The UI sends `Edit`s, not raw ops. An `Edit` expands to model ops. Removing
 something that others use first removes the links, so the server never sees
 an op that fails validation, and undo restores everything in one step.
 
-### 4. Attack trees are edited as an outline
+### 4. Attack trees are edited via the interactive Inspector, Library, or outline
 
-A text outline (indent = child, `OR`/`AND`/`SEQ` gates, same text = shared
-step) covers every tree the model can hold and is fast with a keyboard. The
-canvas shows the result. A drag and drop editor can come later.
+Attack trees can be built and expanded in three ways:
+1. **Interactive Inspector controls** when any gate or leaf step is selected on
+   the canvas: rename in-place, switch gate kind (`OR`/`AND`/`SEQ`), add a child
+   step or gate at the end of a node, branch a leaf step into a gate (preserving
+   its feasibility rating, attack-potential factors, control mitigations, and
+   review mark on the new child), insert an intermediate parent gate above a
+   node, add a sibling node, reorder siblings up/down, or delete a node/subtree.
+2. **Attack Tree Library panel** (ADR 0052): search and graft reusable trees or
+   fragments under a gate or in place of a leaf step.
+3. **Text outline editor** (indent = child, `OR`/`AND`/`SEQ` gates, same text =
+   shared step), which covers every tree up to 4,096 nodes (`MAX_ATTACK_TREE_NODES`)
+   and reconciles diffs via `tree_diff.rs`.
 
 ### 5. Icons from Lucide
 

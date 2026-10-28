@@ -145,6 +145,8 @@ pub enum Selection {
     Threat(ThreatId),
     /// An attack tree.
     Tree(TreeId),
+    /// A specific node in an attack tree.
+    TreeNode(TreeId, NodeId),
     /// A security control.
     Control(ControlId),
     /// A cybersecurity goal.
@@ -432,6 +434,15 @@ pub struct Inspector {
     pub residual: Option<String>,
     /// The rating came from the library and nobody has reviewed it.
     pub needs_review: bool,
+    /// Whether this node is the root of the tree.
+    pub is_root: bool,
+    /// Position of the gate kind in [`crate::commands::GATES`] (`0` = OR,
+    /// `1` = AND, `2` = SEQ), or `0` for steps.
+    pub gate_index: usize,
+    /// Whether this node can move up among its owner gate's children.
+    pub can_move_up: bool,
+    /// Whether this node can move down among its owner gate's children.
+    pub can_move_down: bool,
 }
 
 fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
@@ -591,9 +602,20 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
 /// The tree of the selected threat, laid out and annotated with the
 /// evaluation (inherent or residual).
 ///
-/// Time O(n log n) in the tree size (at most 32 nodes in a project).
+/// Time O(n log n) in the tree size (at most 4,096 nodes in a tree).
 #[must_use]
 pub fn tree_view(ws: &Workspace, ui: &UiState) -> Option<TreeView> {
+    tree_view_cached(ws, ui, None)
+}
+
+/// Like [`tree_view`], reusing `cached` when its `(tree_id, residual)` matches
+/// the currently shown tree and mode.
+#[must_use]
+pub fn tree_view_cached(
+    ws: &Workspace,
+    ui: &UiState,
+    cached: Option<&(TreeId, bool, Arc<Scene>)>,
+) -> Option<TreeView> {
     let project = ws.project();
     let tree_id = shown_tree(ws, ui)?;
     let tree_idx = project.attack_tree_idx(&tree_id)?;
@@ -614,12 +636,17 @@ pub fn tree_view(ws: &Workspace, ui: &UiState) -> Option<TreeView> {
                 .find(|(_, _, t)| t.attack_tree() == Some(tree_idx))
                 .map(|(_, id, _)| id)
         });
-    let scene = tree_scene(ws, tree_id, ui.show_residual)?;
+    let scene = match cached {
+        Some((c_tree, c_res, c_scene)) if *c_tree == tree_id && *c_res == ui.show_residual => {
+            Arc::clone(c_scene)
+        }
+        _ => Arc::new(tree_scene(ws, tree_id, ui.show_residual)?),
+    };
     let selected = ui.selected_node.and_then(|n| tree.idx_of(&n));
     Some(TreeView {
         threat: threat_id,
         tree: tree_id,
-        scene: Arc::new(scene),
+        scene,
         selected,
         residual: ui.show_residual,
     })
@@ -751,6 +778,24 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         (Vec::new(), Vec::new(), None)
     };
 
+    let is_root = idx == tree.root();
+    let gate_index = match node.gate_kind() {
+        Some(GateKind::Or) | None => 0,
+        Some(GateKind::And) => 1,
+        Some(GateKind::SeqAnd) => 2,
+    };
+    let (can_move_up, can_move_down) = tree
+        .owner(idx)
+        .map(|owner_idx| {
+            let siblings = tree.children(owner_idx);
+            let pos = siblings.iter().position(|c| *c == idx);
+            (
+                pos.is_some_and(|p| p > 0),
+                pos.is_some_and(|p| p + 1 < siblings.len()),
+            )
+        })
+        .unwrap_or((false, false));
+
     Some(Inspector {
         tree: tree_id,
         node: node_id,
@@ -772,5 +817,9 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         attachable,
         residual,
         needs_review: project.review_marked(tree_id, node_id),
+        is_root,
+        gate_index,
+        can_move_up,
+        can_move_down,
     })
 }

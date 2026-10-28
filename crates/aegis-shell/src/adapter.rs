@@ -46,10 +46,67 @@ const KIND_RECT: i32 = 0;
 const KIND_PATH: i32 = 1;
 const KIND_TEXT: i32 = 2;
 
-/// Converts a display list. Time O(items), plus O(segments) per dashed curve.
+/// Converts a display list, coalescing consecutive paths that share a stroke
+/// so the software path rasterizer runs once per stroke layer instead of once
+/// per edge. Time O(items), plus O(segments) per dashed curve.
 #[must_use]
 pub fn draw_items(list: &DisplayList) -> Vec<DrawItem> {
-    list.items.iter().map(draw_item).collect()
+    let mut out: Vec<DrawItem> = Vec::with_capacity(list.items.len());
+    for item in &list.items {
+        let next = draw_item(item);
+        if next.kind == KIND_PATH
+            && let Some(prev) = out.last_mut()
+            && prev.kind == KIND_PATH
+            && prev.stroke == next.stroke
+            && (prev.stroke_width - next.stroke_width).abs() < 1e-4
+        {
+            let mut merged = String::with_capacity(prev.commands.len() + 1 + next.commands.len());
+            merged.push_str(prev.commands.as_str());
+            if !merged.is_empty() && !next.commands.is_empty() {
+                merged.push(' ');
+            }
+            merged.push_str(next.commands.as_str());
+            prev.commands = merged.into();
+            continue;
+        }
+        out.push(next);
+    }
+    out
+}
+
+/// Splits a display list into `(paths, rects, texts)` with same-stroke paths
+/// coalesced, avoiding dummy hidden components in Slint `for` loops.
+#[must_use]
+pub fn draw_layers(list: &DisplayList) -> (Vec<DrawItem>, Vec<DrawItem>, Vec<DrawItem>) {
+    let mut paths: Vec<DrawItem> = Vec::with_capacity(4);
+    let mut rects: Vec<DrawItem> = Vec::with_capacity(list.items.len() / 2);
+    let mut texts: Vec<DrawItem> = Vec::with_capacity(list.items.len() / 2);
+    for item in &list.items {
+        let next = draw_item(item);
+        match next.kind {
+            KIND_PATH => {
+                if let Some(prev) = paths.last_mut()
+                    && prev.stroke == next.stroke
+                    && (prev.stroke_width - next.stroke_width).abs() < 1e-4
+                {
+                    let mut merged =
+                        String::with_capacity(prev.commands.len() + 1 + next.commands.len());
+                    merged.push_str(prev.commands.as_str());
+                    if !merged.is_empty() && !next.commands.is_empty() {
+                        merged.push(' ');
+                    }
+                    merged.push_str(next.commands.as_str());
+                    prev.commands = merged.into();
+                } else {
+                    paths.push(next);
+                }
+            }
+            KIND_RECT => rects.push(next),
+            KIND_TEXT => texts.push(next),
+            _ => {}
+        }
+    }
+    (paths, rects, texts)
 }
 
 fn blank() -> DrawItem {

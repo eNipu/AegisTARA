@@ -1012,6 +1012,11 @@ fn named(project: &Project, s: Selection) -> &str {
             .and_then(|i| project.attack_tree(i))
             .and_then(|t| t.get(t.root()))
             .map(aegis_model::Node::label),
+        Selection::TreeNode(tree, node) => project
+            .attack_tree_idx(&tree)
+            .and_then(|i| project.attack_tree(i))
+            .and_then(|t| t.idx_of(&node).and_then(|n| t.get(n)))
+            .map(aegis_model::Node::label),
         Selection::Control(id) => project
             .security_control_idx(&id)
             .and_then(|i| project.security_control(i))
@@ -1380,7 +1385,7 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Asset(_) => Page::Assets,
         Selection::Damage(_) => Page::Damage,
         Selection::Threat(_) => Page::Threats,
-        Selection::Tree(_) => Page::Trees,
+        Selection::Tree(_) | Selection::TreeNode(_, _) => Page::Trees,
         Selection::Control(_) => Page::Controls,
         Selection::Goal(_) | Selection::Claim(_) => Page::Goals,
     }
@@ -1399,6 +1404,10 @@ pub fn select(ui: &mut UiState, s: Selection) {
                 ui.selected_node = None;
             }
             ui.selected_tree = Some(id);
+        }
+        Selection::TreeNode(tree, node) => {
+            ui.selected_tree = Some(tree);
+            ui.selected_node = Some(node);
         }
         Selection::Control(id) => ui.selected_control = Some(id),
         Selection::Goal(id) => ui.selected_goal = Some(id),

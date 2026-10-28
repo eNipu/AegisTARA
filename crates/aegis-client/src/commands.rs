@@ -13,8 +13,8 @@
 //! the user decides what happens to those threats.
 
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ControlId, DamageId, GoalId, NodeId, Op, Project, PropertySet,
-    Provenance, RiskTreatment, ThreatId, TreeId,
+    AssetId, AttackTree, ClaimId, ControlId, DamageId, GateKind, GoalId, NodeId, Op, Project,
+    PropertySet, Provenance, RiskTreatment, ThreatId, TreeId,
 };
 
 use crate::outline::{OutlineError, parse_outline};
@@ -26,6 +26,9 @@ pub const TREATMENTS: [RiskTreatment; 4] = [
     RiskTreatment::Share,
     RiskTreatment::Retain,
 ];
+
+/// The attack tree gate kinds, in the order the view offers them (`OR`, `AND`, `SEQ`).
+pub const GATES: [GateKind; 3] = [GateKind::Or, GateKind::And, GateKind::SeqAnd];
 
 /// A change to the project, as the UI states it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,6 +255,107 @@ pub enum Edit {
     RemoveTree {
         /// The tree.
         tree: TreeId,
+    },
+    /// Renames a single node (root, intermediate gate or leaf step) in place,
+    /// keeping its identity, children, ratings, factors and controls.
+    RenameTreeNode {
+        /// The tree.
+        tree: TreeId,
+        /// The node to rename.
+        node: NodeId,
+        /// New text.
+        label: String,
+    },
+    /// Changes a gate node's logic (`OR`, `AND` or `SEQ`) in place, keeping
+    /// its identity and children.
+    SetTreeNodeGate {
+        /// The tree.
+        tree: TreeId,
+        /// The gate node.
+        node: NodeId,
+        /// New gate kind.
+        gate: GateKind,
+    },
+    /// Expands an attack tree at the end of `parent`: appends a new step
+    /// (`gate: None`) or gate (`gate: Some(kind)`) as the last child of
+    /// `parent`. If `parent` is currently a leaf step, `parent` is converted
+    /// into an `OR` gate in place and `id` is added under it.
+    AddTreeChild {
+        /// The tree.
+        tree: TreeId,
+        /// The parent gate (or leaf step to expand into a gate).
+        parent: NodeId,
+        /// New child node ID.
+        id: NodeId,
+        /// `None` for a step, `Some(kind)` for a gate.
+        gate: Option<GateKind>,
+        /// Child text.
+        label: String,
+    },
+    /// Branches a leaf step `node` into a gate of kind `gate` at its current
+    /// position and creates a child step `id` under it, transferring any
+    /// existing feasibility rating, attack-potential factors, security
+    /// controls and review mark from `node` onto `id`.
+    BranchStepToGate {
+        /// The tree.
+        tree: TreeId,
+        /// The step node to convert into a gate.
+        node: NodeId,
+        /// New child step ID.
+        id: NodeId,
+        /// Gate kind for `node`.
+        gate: GateKind,
+        /// Text for the new child step `id`.
+        child_label: String,
+    },
+    /// Expands an attack tree at an intermediate point by inserting a new gate
+    /// `id` at `node`: for a non-root node, `id` takes `node`'s slot under its
+    /// owner and wraps `node` (and its subtree) as `id`'s child; for the root
+    /// gate, `id` wraps all of the root gate's current children under `id`.
+    InsertParentGate {
+        /// The tree.
+        tree: TreeId,
+        /// The node to wrap under the new intermediate gate.
+        node: NodeId,
+        /// New intermediate gate ID.
+        id: NodeId,
+        /// Gate kind for `id`.
+        gate: GateKind,
+        /// Text for the new intermediate gate `id`.
+        label: String,
+    },
+    /// Adds a sibling step (`gate: None`) or gate (`gate: Some(kind)`) right
+    /// after `node` under `node`'s owner gate.
+    AddSiblingNode {
+        /// The tree.
+        tree: TreeId,
+        /// Existing non-root node whose owner receives the new sibling.
+        node: NodeId,
+        /// New sibling node ID.
+        id: NodeId,
+        /// `None` for a step, `Some(kind)` for a gate.
+        gate: Option<GateKind>,
+        /// Text for the new sibling.
+        label: String,
+    },
+    /// Moves a non-root node up (`delta = -1`) or down (`delta = 1`) among its
+    /// owner gate's children.
+    MoveTreeNode {
+        /// The tree.
+        tree: TreeId,
+        /// The node to reorder.
+        node: NodeId,
+        /// Relative offset (`-1` or `+1`).
+        delta: isize,
+    },
+    /// Removes a non-root node and any descendants reachable only through it
+    /// (clearing step ratings, factors and controls first). Shared descendants
+    /// that remain reachable via another gate are preserved.
+    RemoveTreeNode {
+        /// The tree.
+        tree: TreeId,
+        /// The node to remove.
+        node: NodeId,
     },
 
     /// Copies a library item into the project (see [`crate::library`]).
@@ -858,6 +962,155 @@ impl Edit {
                 ops.push(Op::RemoveAttackTree { id: *tree });
                 ops
             }
+            Edit::RenameTreeNode { tree, node, label } => {
+                let old = project
+                    .attack_tree_idx(tree)
+                    .and_then(|i| project.attack_tree(i))
+                    .ok_or(EditError::Missing)?;
+                if old.idx_of(node).is_none() {
+                    return Err(EditError::Missing);
+                }
+                vec![Op::RenameTreeNode {
+                    tree: *tree,
+                    id: *node,
+                    label: name(label)?,
+                    provenance: p,
+                }]
+            }
+            Edit::SetTreeNodeGate { tree, node, gate } => {
+                let old = project
+                    .attack_tree_idx(tree)
+                    .and_then(|i| project.attack_tree(i))
+                    .ok_or(EditError::Missing)?;
+                let idx = old.idx_of(node).ok_or(EditError::Missing)?;
+                if old
+                    .get(idx)
+                    .and_then(aegis_model::Node::gate_kind)
+                    .is_none()
+                {
+                    return Err(EditError::Missing);
+                }
+                vec![Op::SetTreeNodeGate {
+                    tree: *tree,
+                    id: *node,
+                    gate: *gate,
+                    provenance: p,
+                }]
+            }
+            Edit::AddTreeChild {
+                tree,
+                parent,
+                id,
+                gate,
+                label,
+            } => {
+                let label = name(label)?;
+                let old = project
+                    .attack_tree_idx(tree)
+                    .and_then(|i| project.attack_tree(i))
+                    .ok_or(EditError::Missing)?;
+                let p_idx = old.idx_of(parent).ok_or(EditError::Missing)?;
+                let p_node = old.get(p_idx).ok_or(EditError::Missing)?;
+                if p_node.gate_kind().is_some() {
+                    let node = match gate {
+                        Some(k) => aegis_model::Node::gate(*k, label),
+                        None => aegis_model::Node::step(label),
+                    };
+                    vec![Op::AddTreeNode {
+                        tree: *tree,
+                        parent: *parent,
+                        id: *id,
+                        node,
+                        index: u32::try_from(old.len()).unwrap_or(u32::MAX),
+                        position: u32::try_from(old.children(p_idx).len()).unwrap_or(u32::MAX),
+                        provenance: p,
+                    }]
+                } else {
+                    crate::tree_diff::branch_step_ops(
+                        project,
+                        *tree,
+                        *parent,
+                        *id,
+                        GateKind::Or,
+                        *gate,
+                        label,
+                        false,
+                        &p,
+                    )?
+                }
+            }
+            Edit::BranchStepToGate {
+                tree,
+                node,
+                id,
+                gate,
+                child_label,
+            } => crate::tree_diff::branch_step_ops(
+                project,
+                *tree,
+                *node,
+                *id,
+                *gate,
+                None,
+                name(child_label)?,
+                true,
+                &p,
+            )?,
+            Edit::InsertParentGate {
+                tree,
+                node,
+                id,
+                gate,
+                label,
+            } => crate::tree_diff::insert_parent_gate_ops(
+                project,
+                *tree,
+                *node,
+                *id,
+                *gate,
+                name(label)?,
+                &p,
+            )?,
+            Edit::AddSiblingNode {
+                tree,
+                node,
+                id,
+                gate,
+                label,
+            } => {
+                let label = name(label)?;
+                let old = project
+                    .attack_tree_idx(tree)
+                    .and_then(|i| project.attack_tree(i))
+                    .ok_or(EditError::Missing)?;
+                let n_idx = old.idx_of(node).ok_or(EditError::Missing)?;
+                let owner_idx = old.owner(n_idx).ok_or(EditError::Missing)?;
+                let owner_id = old.id_of(owner_idx).ok_or(EditError::Missing)?;
+                let pos = old
+                    .children(owner_idx)
+                    .iter()
+                    .position(|c| *c == n_idx)
+                    .map_or(old.children(owner_idx).len(), |i| i + 1);
+                let new_node = match gate {
+                    Some(k) => aegis_model::Node::gate(*k, label),
+                    None => aegis_model::Node::step(label),
+                };
+                vec![Op::AddTreeNode {
+                    tree: *tree,
+                    parent: owner_id,
+                    id: *id,
+                    node: new_node,
+                    index: u32::try_from(old.len()).unwrap_or(u32::MAX),
+                    position: u32::try_from(pos).unwrap_or(u32::MAX),
+                    provenance: p,
+                }]
+            }
+            Edit::MoveTreeNode { tree, node, delta } => {
+                crate::tree_diff::move_node_ops(project, *tree, *node, *delta, &p)?
+            }
+            Edit::RemoveTreeNode { tree, node } => {
+                crate::tree_diff::remove_node_ops(project, *tree, *node, &p)?
+            }
 
             Edit::InsertLibraryItem {
                 pack,
@@ -998,6 +1251,10 @@ impl Edit {
             Edit::AddDamage { id, .. } => Some(Selection::Damage(*id)),
             Edit::AddThreat { id, .. } => Some(Selection::Threat(*id)),
             Edit::NewTree { id, .. } => Some(Selection::Tree(*id)),
+            Edit::AddTreeChild { tree, id, .. }
+            | Edit::BranchStepToGate { tree, id, .. }
+            | Edit::InsertParentGate { tree, id, .. }
+            | Edit::AddSiblingNode { tree, id, .. } => Some(Selection::TreeNode(*tree, *id)),
             Edit::InsertLibraryItem {
                 mode: crate::library::InsertMode::NewTree { id, .. },
                 ..

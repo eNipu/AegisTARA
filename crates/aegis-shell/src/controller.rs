@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use aegis_canvas::{Direction, Point, RenderOptions, Size, Viewport, render};
 use aegis_client::audit::EventGroup;
-use aegis_client::commands::{Command, Edit};
+use aegis_client::commands::{Command, Edit, GATES};
 use aegis_client::library::{InsertMode, InsertOptions, LibraryView};
 use aegis_client::report::ExportKind;
 use aegis_client::session::Session;
@@ -29,10 +29,10 @@ use aegis_client::state::{
 };
 use aegis_client::view::{AdminAction, Page, RiskView, Selection};
 use aegis_model::library::LibraryPack;
-use aegis_model::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
+use aegis_model::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
 use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
 
-use crate::adapter::{bucket, draw_items};
+use crate::adapter::{bucket, draw_items, draw_layers};
 use crate::{
     AccessNode, AppWindow, CheckItem, CountItem, DescriptionItem, DiffItem, FactorItem, LinkItem,
     MitigationItem, NoticeItem, ProblemItem, ProjectItem, ThreatItem,
@@ -733,6 +733,109 @@ impl Controller {
         on!(on_remove_tree, |c| if let Some(tree) = c.shown_tree() {
             c.edit(Edit::RemoveTree { tree });
         });
+        on!(on_rename_tree_node, |c, name| {
+            if let Some((tree, node)) =
+                c.with_project(|p| p.inspector.as_ref().map(|i| (i.tree, i.node)))
+            {
+                c.edit(Edit::RenameTreeNode {
+                    tree,
+                    node,
+                    label: name.to_string(),
+                });
+            }
+        });
+        on!(on_set_tree_node_gate, |c, i| {
+            let target = c.with_project(|p| {
+                let ins = p.inspector.as_ref()?;
+                let gate = *GATES.get(pos(i)?)?;
+                Some((ins.tree, ins.node, gate))
+            });
+            if let Some((tree, node, gate)) = target {
+                c.edit(Edit::SetTreeNodeGate { tree, node, gate });
+            }
+        });
+        on!(on_add_tree_child, |c, kind, label| {
+            let target = c.with_project(|p| {
+                let ins = p.inspector.as_ref()?;
+                let gate = after_none(kind).and_then(|k| GATES.get(k).copied());
+                Some((ins.tree, ins.node, gate))
+            });
+            if let Some((tree, parent, gate)) = target {
+                c.edit(Edit::AddTreeChild {
+                    tree,
+                    parent,
+                    id: NodeId::new_v7(),
+                    gate,
+                    label: label.to_string(),
+                });
+            }
+        });
+        on!(on_branch_step_to_gate, |c, gate, label| {
+            let target = c.with_project(|p| {
+                let ins = p.inspector.as_ref()?;
+                let gate = *GATES.get(pos(gate)?)?;
+                Some((ins.tree, ins.node, gate))
+            });
+            if let Some((tree, node, gate)) = target {
+                c.edit(Edit::BranchStepToGate {
+                    tree,
+                    node,
+                    id: NodeId::new_v7(),
+                    gate,
+                    child_label: label.to_string(),
+                });
+            }
+        });
+        on!(on_insert_parent_gate, |c, gate, label| {
+            let target = c.with_project(|p| {
+                let ins = p.inspector.as_ref()?;
+                let gate = *GATES.get(pos(gate)?)?;
+                Some((ins.tree, ins.node, gate))
+            });
+            if let Some((tree, node, gate)) = target {
+                c.edit(Edit::InsertParentGate {
+                    tree,
+                    node,
+                    id: NodeId::new_v7(),
+                    gate,
+                    label: label.to_string(),
+                });
+            }
+        });
+        on!(on_add_sibling_node, |c, kind, label| {
+            let target = c.with_project(|p| {
+                let ins = p.inspector.as_ref()?;
+                let gate = after_none(kind).and_then(|k| GATES.get(k).copied());
+                Some((ins.tree, ins.node, gate))
+            });
+            if let Some((tree, node, gate)) = target {
+                c.edit(Edit::AddSiblingNode {
+                    tree,
+                    node,
+                    id: NodeId::new_v7(),
+                    gate,
+                    label: label.to_string(),
+                });
+            }
+        });
+        on!(on_move_tree_node, |c, delta| {
+            if let Some((tree, node)) =
+                c.with_project(|p| p.inspector.as_ref().map(|i| (i.tree, i.node)))
+            {
+                c.edit(Edit::MoveTreeNode {
+                    tree,
+                    node,
+                    delta: isize::try_from(delta).unwrap_or(0),
+                });
+            }
+        });
+        on!(on_remove_tree_node, |c| {
+            if let Some((tree, node)) =
+                c.with_project(|p| p.inspector.as_ref().map(|i| (i.tree, i.node)))
+            {
+                c.edit(Edit::RemoveTreeNode { tree, node });
+            }
+        });
         on!(on_attach_control, |c, ci, level| {
             let target = c.with_project(|p| {
                 let i = p.inspector.as_ref()?;
@@ -1178,7 +1281,7 @@ impl Controller {
             st.shown_tree = None;
         }
         if let Some(view) = self.view() {
-            self.apply_canvas(&view);
+            self.apply_canvas(&view, None);
         }
     }
 
@@ -1196,7 +1299,7 @@ impl Controller {
             }
             st.viewport.pan_by_screen(dx, dy);
         }
-        self.redraw();
+        self.redraw_inner(false);
     }
 
     fn release(&self, at: Point) {
@@ -1207,6 +1310,7 @@ impl Controller {
                 .is_some_and(|p| p.travelled <= DRAG_THRESHOLD)
         };
         if !click {
+            self.redraw_inner(true);
             return;
         }
         let (scene, world) = {
@@ -1350,7 +1454,13 @@ impl Controller {
         let Some(w) = self.window.upgrade() else {
             return;
         };
-        self.state.borrow_mut().view = Some(Arc::clone(view));
+        let prev = self.state.borrow_mut().view.replace(Arc::clone(view));
+        if prev
+            .as_ref()
+            .is_some_and(|old| old.revision == view.revision)
+        {
+            return;
+        }
 
         let (code, text) = match &view.connection {
             ConnectionView::Connecting => (0, "Connecting to the server…".to_owned()),
@@ -1395,60 +1505,86 @@ impl Controller {
             }
             _ => String::new(),
         }));
-        w.set_projects(model(
-            view.projects
-                .iter()
-                .map(|p| ProjectItem {
-                    id: s(&p.id),
-                    name: s(&p.name),
-                    methodology: s(&p.methodology),
-                })
-                .collect(),
-        ));
-        w.set_notices(model(
-            view.notices
-                .iter()
-                .map(|n| NoticeItem {
-                    id: i32::try_from(n.id).unwrap_or(i32::MAX),
-                    severity: match n.severity {
-                        Severity::Info => 0,
-                        Severity::Warning => 1,
-                        Severity::Error => 2,
-                    },
-                    text: s(&n.text),
-                })
-                .collect(),
-        ));
+        if prev
+            .as_ref()
+            .is_none_or(|old| old.projects != view.projects)
+        {
+            w.set_projects(model(
+                view.projects
+                    .iter()
+                    .map(|p| ProjectItem {
+                        id: s(&p.id),
+                        name: s(&p.name),
+                        methodology: s(&p.methodology),
+                    })
+                    .collect(),
+            ));
+        }
+        if prev.as_ref().is_none_or(|old| old.notices != view.notices) {
+            w.set_notices(model(
+                view.notices
+                    .iter()
+                    .map(|n| NoticeItem {
+                        id: i32::try_from(n.id).unwrap_or(i32::MAX),
+                        severity: match n.severity {
+                            Severity::Info => 0,
+                            Severity::Warning => 1,
+                            Severity::Error => 2,
+                        },
+                        text: s(&n.text),
+                    })
+                    .collect(),
+            ));
+        }
         w.set_admin_text(s(view.admin_text.as_deref().unwrap_or("")));
         w.set_settings_known(view.settings.is_some());
         if let Some(settings) = view.settings {
             w.set_password_login_on(settings.password_login_enabled);
             w.set_company_login_available(settings.company_login_available);
         }
-        self.apply_users();
-        self.apply_sessions();
-        self.apply_events();
+        if prev.as_ref().is_none_or(|old| old.users != view.users) {
+            self.apply_users();
+        }
+        if prev
+            .as_ref()
+            .is_none_or(|old| old.sessions != view.sessions)
+        {
+            self.apply_sessions();
+        }
+        if prev.as_ref().is_none_or(|old| {
+            old.events != view.events
+                || old.events_error != view.events_error
+                || old.connection != view.connection
+        }) {
+            self.apply_events();
+        }
 
         let Some(project) = view.project.as_ref() else {
             w.set_has_project(false);
             w.set_draw(model(Vec::new()));
+            w.set_draw_paths(model(Vec::new()));
+            w.set_draw_rects(model(Vec::new()));
+            w.set_draw_texts(model(Vec::new()));
             self.state.borrow_mut().shown_tree = None;
             return;
         };
+        let prev_proj = prev.as_ref().and_then(|old| old.project.as_ref());
         w.set_has_project(true);
         w.set_project_name(s(&project.entry.name));
         w.set_editing(project.mode == Mode::Editing);
-        w.set_descriptions(model(
-            project
-                .descriptions
-                .iter()
-                .map(|d| DescriptionItem {
-                    kind: s(d.kind),
-                    text: s(&d.text),
-                    by: s(&d.by),
-                })
-                .collect(),
-        ));
+        if prev_proj.is_none_or(|old| old.descriptions != project.descriptions) {
+            w.set_descriptions(model(
+                project
+                    .descriptions
+                    .iter()
+                    .map(|d| DescriptionItem {
+                        kind: s(d.kind),
+                        text: s(&d.text),
+                        by: s(&d.by),
+                    })
+                    .collect(),
+            ));
+        }
         let me = view
             .me
             .as_ref()
@@ -1497,17 +1633,36 @@ impl Controller {
         w.set_show_residual(project.show_residual);
         w.set_is_empty(project.is_empty);
         w.set_page(i32::try_from(project.page.index()).unwrap_or(0));
-        w.set_nav_counts(model(
-            project
-                .nav_counts
-                .iter()
-                .map(|c| c.map_or_else(SharedString::new, |n| s(&n.to_string())))
-                .collect(),
-        ));
-        self.apply_vocabulary(&w, project);
-        self.apply_threats(&w, project);
-        self.apply_pages(&w, project);
-        self.apply_canvas(view);
+        if prev_proj.is_none_or(|old| old.nav_counts != project.nav_counts) {
+            w.set_nav_counts(model(
+                project
+                    .nav_counts
+                    .iter()
+                    .map(|c| c.map_or_else(SharedString::new, |n| s(&n.to_string())))
+                    .collect(),
+            ));
+        }
+        if prev_proj.is_none_or(|old| !Arc::ptr_eq(&old.vocab, &project.vocab)) {
+            self.apply_vocabulary(&w, project);
+        }
+        if prev_proj.is_none_or(|old| {
+            old.threats != project.threats
+                || old.selected_threat != project.selected_threat
+                || old.data.threat != project.data.threat
+        }) {
+            self.apply_threats(&w, project);
+        }
+        if prev_proj.is_none_or(|old| {
+            old.data != project.data
+                || old.baselines != project.baselines
+                || old.comparison != project.comparison
+                || old.history != project.history
+                || old.last_export != project.last_export
+                || old.tree.as_ref().map(|t| t.tree) != project.tree.as_ref().map(|t| t.tree)
+        }) {
+            self.apply_pages(&w, project);
+        }
+        self.apply_canvas(view, prev_proj);
     }
 
     fn apply_vocabulary(&self, w: &AppWindow, p: &ProjectView) {
@@ -1993,7 +2148,7 @@ impl Controller {
     }
 
     /// The tree, its title, and the inspector.
-    fn apply_canvas(&self, view: &Arc<ViewModel>) {
+    fn apply_canvas(&self, view: &Arc<ViewModel>, prev_proj: Option<&ProjectView>) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
@@ -2039,70 +2194,96 @@ impl Controller {
             _ => "No attack tree".to_owned(),
         }));
 
-        match project.inspector.as_ref() {
-            Some(i) => {
-                w.set_has_inspector(true);
-                w.set_inspector_title(s(&i.title));
-                w.set_inspector_kind(s(&i.kind));
-                w.set_inspector_is_step(i.is_step);
-                w.set_inspector_needs_review(i.needs_review);
-                w.set_level_options(with_none(
-                    "Not rated",
-                    i.levels.iter().map(|c| c.label.clone()),
-                ));
-                w.set_rating_index(i.rating.map_or(0, |r| i32::try_from(r + 1).unwrap_or(0)));
-                w.set_effective_text(s(i.effective.as_deref().unwrap_or("")));
-                w.set_potential_text(s(i.potential.as_deref().unwrap_or("")));
-                w.set_evaluated_text(s(i.evaluated.as_deref().unwrap_or("")));
-                w.set_evaluated_tone(evaluated_tone(project, i.evaluated.is_some()));
-                w.set_why_lines(model(i.why.iter().map(|l| s(l)).collect()));
-                w.set_factors(model(
-                    i.factors
-                        .iter()
-                        .map(|f| FactorItem {
-                            label: s(&f.label),
-                            options: with_none(
-                                "Not rated",
-                                f.options.iter().map(|c| c.label.clone()),
-                            ),
-                            selected: f.selected.map_or(0, |x| i32::try_from(x + 1).unwrap_or(0)),
-                        })
-                        .collect(),
-                ));
-                w.set_mitigations(model(
-                    i.mitigations
-                        .iter()
-                        .map(|m| MitigationItem {
-                            name: s(&m.name),
-                            level: i32::try_from(m.level).unwrap_or(0),
-                        })
-                        .collect(),
-                ));
-                w.set_attach_names(model(i.attachable.iter().map(|(_, n)| s(n)).collect()));
-                if pos(w.get_attach_control_index()).is_none_or(|x| x >= i.attachable.len()) {
-                    w.set_attach_control_index(0);
+        if prev_proj.is_none_or(|old| old.inspector != project.inspector) {
+            match project.inspector.as_ref() {
+                Some(i) => {
+                    w.set_has_inspector(true);
+                    w.set_inspector_title(s(&i.title));
+                    w.set_inspector_kind(s(&i.kind));
+                    w.set_inspector_is_step(i.is_step);
+                    w.set_inspector_is_root(i.is_root);
+                    w.set_inspector_gate_index(i32::try_from(i.gate_index).unwrap_or(0));
+                    w.set_inspector_can_move_up(i.can_move_up);
+                    w.set_inspector_can_move_down(i.can_move_down);
+                    w.set_inspector_needs_review(i.needs_review);
+                    w.set_level_options(with_none(
+                        "Not rated",
+                        i.levels.iter().map(|c| c.label.clone()),
+                    ));
+                    w.set_rating_index(i.rating.map_or(0, |r| i32::try_from(r + 1).unwrap_or(0)));
+                    w.set_effective_text(s(i.effective.as_deref().unwrap_or("")));
+                    w.set_potential_text(s(i.potential.as_deref().unwrap_or("")));
+                    w.set_evaluated_text(s(i.evaluated.as_deref().unwrap_or("")));
+                    w.set_evaluated_tone(evaluated_tone(project, i.evaluated.is_some()));
+                    w.set_why_lines(model(i.why.iter().map(|l| s(l)).collect()));
+                    w.set_factors(model(
+                        i.factors
+                            .iter()
+                            .map(|f| FactorItem {
+                                label: s(&f.label),
+                                options: with_none(
+                                    "Not rated",
+                                    f.options.iter().map(|c| c.label.clone()),
+                                ),
+                                selected: f
+                                    .selected
+                                    .map_or(0, |x| i32::try_from(x + 1).unwrap_or(0)),
+                            })
+                            .collect(),
+                    ));
+                    w.set_mitigations(model(
+                        i.mitigations
+                            .iter()
+                            .map(|m| MitigationItem {
+                                name: s(&m.name),
+                                level: i32::try_from(m.level).unwrap_or(0),
+                            })
+                            .collect(),
+                    ));
+                    w.set_attach_names(model(i.attachable.iter().map(|(_, n)| s(n)).collect()));
+                    if pos(w.get_attach_control_index()).is_none_or(|x| x >= i.attachable.len()) {
+                        w.set_attach_control_index(0);
+                    }
+                    w.set_step_residual_text(s(i.residual.as_deref().unwrap_or("")));
                 }
-                w.set_step_residual_text(s(i.residual.as_deref().unwrap_or("")));
+                None => w.set_has_inspector(false),
             }
-            None => w.set_has_inspector(false),
         }
 
         // A tree that was not on the canvas before is fitted to the window.
         let tree_id = project.tree.as_ref().map(|t| t.tree);
+        let mut refitted = false;
         {
             let mut st = self.state.borrow_mut();
             if tree_id != st.shown_tree {
                 st.shown_tree = tree_id;
+                refitted = true;
                 if let Some(t) = &project.tree {
                     st.viewport.fit(t.scene.bounds(), 32.0);
                 }
             }
         }
-        self.redraw();
+        let canvas_changed = refitted
+            || prev_proj.is_none_or(|old| {
+                old.selected_node != project.selected_node
+                    || old.show_residual != project.show_residual
+                    || match (&old.tree, &project.tree) {
+                        (Some(a), Some(b)) => a.tree != b.tree || !Arc::ptr_eq(&a.scene, &b.scene),
+                        (None, None) => false,
+                        _ => true,
+                    }
+            });
+        if canvas_changed {
+            self.redraw();
+        }
     }
 
     /// Re-renders the display list for the current view model and viewport.
     fn redraw(&self) {
+        self.redraw_inner(true);
+    }
+
+    fn redraw_inner(&self, include_access: bool) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
@@ -2110,16 +2291,29 @@ impl Controller {
         let Some(project) = st.view.as_ref().and_then(|v| v.project.as_ref()) else {
             return;
         };
-        let items = match &project.tree {
+        match &project.tree {
             Some(tree) => {
                 let options = RenderOptions {
                     selected: project.selected_node,
                 };
-                draw_items(&render(&tree.scene, &st.viewport, &options))
+                let list = render(&tree.scene, &st.viewport, &options);
+                w.set_draw(model(draw_items(&list)));
+                let (paths, rects, texts) = draw_layers(&list);
+                w.set_draw_paths(model(paths));
+                w.set_draw_rects(model(rects));
+                w.set_draw_texts(model(texts));
             }
-            None => Vec::new(),
-        };
-        w.set_draw(model(items));
+            None => {
+                w.set_draw(model(Vec::new()));
+                w.set_draw_paths(model(Vec::new()));
+                w.set_draw_rects(model(Vec::new()));
+                w.set_draw_texts(model(Vec::new()));
+            }
+        }
+        w.set_zoom_text(s(&format!("{:.0}%", st.viewport.zoom * 100.0)));
+        if !include_access {
+            return;
+        }
         // The nodes on screen, in words, for screen readers.
         let access = match &project.tree {
             Some(tree) => {
@@ -2149,7 +2343,6 @@ impl Controller {
             None => Vec::new(),
         };
         w.set_access_nodes(model(access));
-        w.set_zoom_text(s(&format!("{:.0}%", st.viewport.zoom * 100.0)));
     }
 }
 
