@@ -1,0 +1,45 @@
+# Non-shipped development subproject for building, verifying, and training
+# AegisTARA's compact in-house TARA and attack-tree completion models.
+#
+# Lives under `tools/` (excluded from the production workspace in root
+# Cargo.toml) so dataset generation and training utilities never affect
+# shipped binaries or `scripts/deny.sh`.
+
+[package]
+name = "aegis-ai"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Dataset compiler, DSL parser, and aegis-model verifier for AegisTARA's compact local AI model."
+
+[dependencies]
+aegis-model = { path = "../../crates/aegis-model" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+# Standalone workspace so `tools/aegis-ai` stays independent of production crates
+# while providing the workspace keys `aegis-model` inherits.
+[workspace]
+resolver = "3"
+members = ["."]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+license = "LicenseRef-Proprietary"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+uuid = { version = "1", features = ["v7"] }
+dhat = "0.3.3"
+divan = "0.1.21"
+proptest = "1"
