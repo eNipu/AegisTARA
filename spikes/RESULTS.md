@@ -70,4 +70,4 @@ None of these blocks the product. All have workarounds in the spike.
 
 ## Run it yourself
 
-Each folder (`slint/`, `gpui/`, `iced/`, `freya/`, `egui/`) has a README with build and run steps for Windows, macOS, and Linux, plus its screenshots.
+Only `slint/` (the chosen toolkit) is kept on `master`. The `gpui/`, `iced/`, `freya/` and `egui/` spikes, each with a README with build and run steps and its screenshots, live on the `archive/ui-spikes` branch (`git switch archive/ui-spikes`). Start there if the Slint license condition is rejected and iced becomes the fallback.
