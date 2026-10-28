@@ -79,6 +79,15 @@ lto = "fat"
 codegen-units = 1
 strip = "symbols"
 
+# Keep dev builds responsive: optimize third-party rendering/crypto crates
+# (Slint software renderer, path rasterizer, font shaping) while keeping fast
+# incremental compiles for workspace crates.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
 # Password hashing is deliberately slow; unoptimized it takes seconds per
 # hash and makes the login tests crawl. Optimize just these crates in dev.
 [profile.dev.package.argon2]

@@ -243,19 +243,37 @@ nodes, the op and its inverse together (the median of 20 runs):
 
 The worst case is about 0.2 ms for one op: 25 times under the budget.
 
-### The outline editor
+### The outline editor & interactive node expansion
 
 `Edit::ReplaceTree` no longer removes and re-adds the tree. `tree_diff.rs`
-compares the tree with the outline and sends the ops for the difference:
-nodes with the same ID and owner stay (with their ratings), others are cleared,
-unlinked and removed (children first), new ones are added in outline order at
-the end of the arena, new shared edges are linked, and a step that moved gets
-its rating back. A node whose kept siblings would end up in another order is
-replaced too, since there is no op that moves a child. The first line is the
-tree's root: a new text renames it and a new gate kind sets its gate. Threats
-stay attached throughout, and it is one batch and one undo step. A randomized
-test checks 100+ edits between random outlines, including shared steps: the
-result is the outline's tree, and one undo restores the project exactly.
+compares the tree with the target shape and sends the ops for the difference:
+nodes with the same ID and owner stay (with their ratings), and among siblings
+under the same owner a Fenwick-tree (Binary Indexed Tree) Maximum-Weight
+Increasing Subsequence (`mwis_mask`, $O(k \log k)$ time) selects the stationary
+subset with maximum op-weight (`keep_weight`: owned subtree size + ratings +
+factors + controls + review marks), so moving a lightweight leaf past a large
+gate subtree replaces only the leaf. Other nodes are cleared, unlinked and
+removed (children first), new ones are added in topological owner-before-child
+order (`Shape::rebuild_order`) at the end of the arena (hitting the $O(1)$
+append fast-path in `AttackTree::shift`), new shared edges are linked, and a
+step that moved or was branched gets its rating, attack-potential factors,
+control mitigations, and review mark back (`transfer_step_ops`). The first line
+is the tree's root: a new text renames it and a new gate kind sets its gate.
+Threats stay attached throughout, and it is one batch and one undo step. A
+randomized test checks 100+ edits between random outlines, including shared
+steps: the result is the outline's tree, and one undo restores the project
+exactly.
+
+In addition to full-outline replacement, `tree_diff.rs` exposes direct
+interactive node-expansion helpers used by the Attack Trees Inspector
+(`Edit::RenameTreeNode`, `Edit::SetTreeNodeGate`, `Edit::AddTreeChild`,
+`Edit::BranchStepToGate`, `Edit::InsertParentGate`, `Edit::AddSiblingNode`,
+`Edit::MoveTreeNode`, `Edit::RemoveTreeNode`), enabling analysts to expand a
+tree at the end of any gate or leaf step (automatically transferring ratings,
+factors, controls, and review marks onto the new child when branching a leaf
+step into a gate), splice an intermediate gate above any non-root node, add
+sibling nodes, reorder children, or delete a subtree while safely re-parenting
+shared DAG descendants that remain reachable from the root.
 
 One edit is at most 1,024 ops (a submission): a bigger change is refused with
 `TooLarge` and made in steps. `RemoveTree` takes a big tree apart the same
@@ -264,8 +282,10 @@ outline text cap is raised to 2 MiB to hold the largest tree.
 
 ### Not done
 
-- No op moves a child to another owner or changes the order of children; the
-  outline editor replaces the node instead.
+- No single model `Op` moves a child to another owner or changes the order of
+  children in place without removing/re-adding the moved subset; `tree_diff.rs`
+  minimizes the replaced subset via `mwis_mask` and restores step ratings via
+  `transfer_step_ops`.
 - A node's description (ADR 0051) is not there yet.
 - The canvas draws a 4,096-node tree with the existing layout (linear time);
   no new screen measurement was made beyond the tests of job 053.

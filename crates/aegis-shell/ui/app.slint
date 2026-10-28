@@ -241,6 +241,9 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> tree-rows;
     in property <int> tree-selected: -1;
     in property <[DrawItem]> draw;
+    in property <[DrawItem]> draw-paths;
+    in property <[DrawItem]> draw-rects;
+    in property <[DrawItem]> draw-texts;
     in property <[AccessNode]> access-nodes;
     in property <bool> has-tree;
     in property <string> tree-title;
@@ -253,6 +256,12 @@ export component AppWindow inherits Window {
     callback mark-reviewed();
     in property <string> inspector-kind;
     in property <bool> inspector-is-step;
+    in property <bool> inspector-is-root;
+    in property <int> inspector-gate-index;
+    in property <bool> inspector-can-move-up;
+    in property <bool> inspector-can-move-down;
+    in-out property <string> new-node-label;
+    in-out property <int> new-node-kind: 0;
     in property <[string]> level-options;
     in property <int> rating-index;
     in property <string> effective-text;
@@ -433,6 +442,14 @@ export component AppWindow inherits Window {
     callback library-pick(int);
     callback library-insert(int, bool, bool);
     callback remove-tree();
+    callback rename-tree-node(string);
+    callback set-tree-node-gate(int);
+    callback add-tree-child(int, string);
+    callback branch-step-to-gate(int, string);
+    callback insert-parent-gate(int, string);
+    callback add-sibling-node(int, string);
+    callback move-tree-node(int);
+    callback remove-tree-node();
     callback attach-control(int, int);
     callback set-mitigation(int, int);
     callback detach-control(int);
@@ -528,6 +545,7 @@ export component AppWindow inherits Window {
         if (kind == "remove-damage") { root.remove-damage(); }
         if (kind == "remove-threat") { root.remove-threat(); }
         if (kind == "remove-tree") { root.remove-tree(); }
+        if (kind == "remove-tree-node") { root.remove-tree-node(); }
         if (kind == "remove-control") { root.remove-control(); }
         if (kind == "remove-goal") { root.remove-goal(); }
         if (kind == "remove-claim") { root.remove-claim(); }
@@ -825,8 +843,9 @@ export component AppWindow inherits Window {
                         Image { source: @image-url("icons/folder-open.svg"); width: 20px; height: 20px; y: 5px; colorize: Theme.accent; }
                         Text {
                             text: "Projects";
-                            font-size: 20px;
-                            font-weight: 700;
+                            font-size: Theme.font-display;
+                            font-weight: Theme.weight-heavy;
+                            letter-spacing: Theme.tracking-tight;
                             color: Theme.ink;
                             vertical-alignment: center;
                         }
@@ -837,6 +856,8 @@ export component AppWindow inherits Window {
                     if root.projects.length == 0: Text {
                         text: "There are no projects yet. Create the first one below.";
                         color: Theme.graphite;
+                        font-size: Theme.font-body;
+                        font-weight: Theme.weight-medium;
                         wrap: word-wrap;
                     }
                     ScrollView {
@@ -859,7 +880,8 @@ export component AppWindow inherits Window {
                                     Text {
                                         text: p.name;
                                         color: Theme.ink;
-                                        font-weight: 600;
+                                        font-size: Theme.font-h2;
+                                        font-weight: Theme.weight-bold;
                                         vertical-alignment: center;
                                         horizontal-stretch: 1;
                                         overflow: elide;
@@ -867,7 +889,8 @@ export component AppWindow inherits Window {
                                     Text {
                                         text: p.methodology;
                                         color: Theme.graphite;
-                                        font-size: 12px;
+                                        font-size: Theme.font-label;
+                                        font-weight: Theme.weight-semibold;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -896,7 +919,7 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    Text { text: (root.standalone-mode ? "Standalone project. " : "Logged in as " + root.user + ". ") + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
+                    Text { text: (root.standalone-mode ? "Standalone project. " : "Logged in as " + root.user + ". ") + root.engine-text; color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-medium; overflow: elide; }
                 }
             }
         }
@@ -924,7 +947,8 @@ export component AppWindow inherits Window {
                 Text {
                     text: root.band-text;
                     color: root.band-kind == 2 ? Theme.band-text : Theme.ink;
-                    font-size: 13px;
+                    font-size: Theme.font-body;
+                    font-weight: Theme.weight-semibold;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     accessible-role: text;
@@ -965,8 +989,9 @@ export component AppWindow inherits Window {
                 Button { text: "Projects"; icon: @image-url("icons/folder-open.svg"); clicked => { root.close-project(); } }
                 Text {
                     text: root.project-name;
-                    font-size: 16px;
-                    font-weight: 700;
+                    font-size: Theme.font-h1;
+                    font-weight: Theme.weight-heavy;
+                    letter-spacing: Theme.tracking-tight;
                     color: Theme.ink;
                     vertical-alignment: center;
                     overflow: elide;
@@ -975,7 +1000,8 @@ export component AppWindow inherits Window {
                 Text {
                     text: root.sync-text;
                     color: Theme.graphite;
-                    font-size: 13px;
+                    font-size: Theme.font-label;
+                    font-weight: Theme.weight-semibold;
                     vertical-alignment: center;
                 }
                 HorizontalLayout {
@@ -992,7 +1018,8 @@ export component AppWindow inherits Window {
                     Text {
                         text: root.numbers-text;
                         color: root.numbers-kind == 0 ? Theme.ink : root.numbers-kind == 1 ? Theme.graphite : Theme.high;
-                        font-size: 13px;
+                        font-size: Theme.font-label;
+                        font-weight: Theme.weight-semibold;
                         vertical-alignment: center;
                     }
                 }
@@ -1055,8 +1082,8 @@ export component AppWindow inherits Window {
                                 Text {
                                     text: item.label;
                                     color: Theme.ink;
-                                    font-size: 13px;
-                                    font-weight: root.page == i ? 700 : 400;
+                                    font-size: Theme.font-body;
+                                    font-weight: root.page == i ? Theme.weight-bold : Theme.weight-medium;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                     overflow: elide;
@@ -1064,7 +1091,8 @@ export component AppWindow inherits Window {
                                 Text {
                                     text: root.nav-counts[i];
                                     color: i == Pages.problems && root.nav-counts[i] != "" && root.nav-counts[i] != "0" ? Theme.high : Theme.graphite;
-                                    font-size: 12px;
+                                    font-size: Theme.font-label;
+                                    font-weight: root.page == i ? Theme.weight-bold : Theme.weight-semibold;
                                     vertical-alignment: center;
                                 }
                             }
@@ -1320,7 +1348,7 @@ export component AppWindow inherits Window {
                             for entry[i] in ["High", "Medium", "Low", "Very low"]: HorizontalLayout {
                                 spacing: 8px;
                                 Swatch { tone: 4 - i; y: 2px; }
-                                Text { text: entry; font-size: 12px; color: Theme.graphite; }
+                                Text { text: entry; font-size: Theme.font-label; font-weight: Theme.weight-medium; color: Theme.graphite; }
                             }
                         }
                     }
@@ -1331,12 +1359,15 @@ export component AppWindow inherits Window {
                             Rectangle {
                                 height: 30px;
                                 background: Theme.panel;
-                                Text { x: 12px; text: root.tree-title; color: Theme.graphite; font-size: 13px; vertical-alignment: center; overflow: elide; width: parent.width - 24px; }
+                                Text { x: 12px; text: root.tree-title; color: Theme.ink; font-size: Theme.font-body; font-weight: Theme.weight-semibold; vertical-alignment: center; overflow: elide; width: parent.width - 24px; }
                             }
                             Rectangle {
                                 vertical-stretch: 1;
                                 Canvas {
                                     items: root.draw;
+                                    path-items: root.draw-paths;
+                                    rect-items: root.draw-rects;
+                                    text-items: root.draw-texts;
                                     access-nodes: root.access-nodes;
                                     node-activated(n) => { root.canvas-node-activated(n); }
                                     accessible-summary: root.canvas-summary;
@@ -1357,6 +1388,7 @@ export component AppWindow inherits Window {
                                         : "Choose an attack tree on the left.";
                                     color: Theme.graphite;
                                     font-size: 14px;
+                                    font-weight: Theme.weight-medium;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                     wrap: word-wrap;
@@ -1379,10 +1411,11 @@ export component AppWindow inherits Window {
                         width: root.inspector-width;
                         background: Theme.panel;
                         if !root.has-inspector: Text {
-                            text: "Select a node on the canvas to see why it has its rating.";
+                            text: "Select a node on the canvas to inspect its feasibility or expand the attack tree.";
                             color: Theme.graphite;
                             wrap: word-wrap;
-                            font-size: 13px;
+                            font-size: Theme.font-body;
+                            font-weight: Theme.weight-medium;
                             x: 16px;
                             y: 16px;
                             width: parent.width - 32px;
@@ -1393,12 +1426,28 @@ export component AppWindow inherits Window {
                                 spacing: 10px;
                                 Text {
                                     text: root.inspector-title;
-                                    font-size: 16px;
-                                    font-weight: 700;
+                                    font-size: Theme.font-h1;
+                                    font-weight: Theme.weight-heavy;
+                                    letter-spacing: Theme.tracking-tight;
                                     color: Theme.ink;
                                     wrap: word-wrap;
                                 }
-                                Text { text: root.inspector-kind; color: Theme.graphite; font-size: 12px; }
+                                Text { text: root.inspector-kind; color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-semibold; }
+                                if root.editing: NameEditor {
+                                    name: root.inspector-title;
+                                    editable: root.editing;
+                                    renamed(t) => { root.rename-tree-node(t); }
+                                }
+                                if !root.inspector-is-step: Field {
+                                    label: "Gate logic";
+                                    Choice {
+                                        options: ["OR — any child suffices", "AND — all children needed", "SEQ — children in order"];
+                                        index: root.inspector-gate-index;
+                                        editable: root.editing;
+                                        label: "Gate logic";
+                                        picked(i) => { root.set-tree-node-gate(i); }
+                                    }
+                                }
                                 if root.inspector-needs-review: HorizontalLayout {
                                     spacing: 8px;
                                     Text { text: "This rating was copied from the library and has not been reviewed."; color: Theme.ink; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
@@ -1409,8 +1458,8 @@ export component AppWindow inherits Window {
                                     Rectangle { width: 16px; height: 16px; y: 6px; background: Theme.tone(root.evaluated-tone); }
                                     Text {
                                         text: root.evaluated-text + " attack feasibility";
-                                        font-size: 15px;
-                                        font-weight: 600;
+                                        font-size: Theme.font-h2;
+                                        font-weight: Theme.weight-bold;
                                         color: Theme.ink;
                                     }
                                 }
@@ -1421,7 +1470,95 @@ export component AppWindow inherits Window {
                                         text: line;
                                         wrap: word-wrap;
                                         color: Theme.ink;
-                                        font-size: 13px;
+                                        font-size: Theme.font-body;
+                                    }
+                                }
+                                // ---- Interactive Tree Expansion (End of Node & Intermediate Points) ----
+                                if root.editing: VerticalLayout {
+                                    spacing: 6px;
+                                    Rectangle { height: 1px; background: Theme.rule; }
+                                    SectionTitle { text: root.inspector-is-step ? "Expand step or insert gate" : "Expand gate or restructure"; }
+                                    LineEdit {
+                                        text <=> root.new-node-label;
+                                        placeholder-text: root.inspector-is-step ? "New child or gate label" : "New child or gate label";
+                                        accessible-label: "New node label";
+                                        accepted(t) => {
+                                            root.add-tree-child(root.new-node-kind, t);
+                                            root.new-node-label = "";
+                                        }
+                                    }
+                                    Choice {
+                                        options: ["Attack step (leaf)", "OR gate", "AND gate", "SEQ gate"];
+                                        index: root.new-node-kind;
+                                        label: "New node kind";
+                                        picked(i) => { root.new-node-kind = i; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Button {
+                                            horizontal-stretch: 1;
+                                            text: root.inspector-is-step ? "Branch with child" : "Add child";
+                                            icon: @image-url("icons/plus.svg");
+                                            primary: true;
+                                            clicked => {
+                                                root.add-tree-child(root.new-node-kind, root.new-node-label);
+                                                root.new-node-label = "";
+                                            }
+                                        }
+                                        if !root.inspector-is-root: Button {
+                                            horizontal-stretch: 1;
+                                            text: "Add sibling";
+                                            icon: @image-url("icons/plus.svg");
+                                            clicked => {
+                                                root.add-sibling-node(root.new-node-kind, root.new-node-label);
+                                                root.new-node-label = "";
+                                            }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        Text { text: "Insert gate above:"; font-size: Theme.font-caption; font-weight: Theme.weight-semibold; color: Theme.graphite; vertical-alignment: center; horizontal-stretch: 1; }
+                                        Button {
+                                            text: "OR";
+                                            clicked => {
+                                                root.insert-parent-gate(0, root.new-node-label);
+                                                root.new-node-label = "";
+                                            }
+                                        }
+                                        Button {
+                                            text: "AND";
+                                            clicked => {
+                                                root.insert-parent-gate(1, root.new-node-label);
+                                                root.new-node-label = "";
+                                            }
+                                        }
+                                        Button {
+                                            text: "SEQ";
+                                            clicked => {
+                                                root.insert-parent-gate(2, root.new-node-label);
+                                                root.new-node-label = "";
+                                            }
+                                        }
+                                    }
+                                    if !root.inspector-is-root: HorizontalLayout {
+                                        spacing: 6px;
+                                        Button {
+                                            horizontal-stretch: 1;
+                                            text: "Move up";
+                                            enabled: root.inspector-can-move-up;
+                                            clicked => { root.move-tree-node(-1); }
+                                        }
+                                        Button {
+                                            horizontal-stretch: 1;
+                                            text: "Move down";
+                                            enabled: root.inspector-can-move-down;
+                                            clicked => { root.move-tree-node(1); }
+                                        }
+                                        Button {
+                                            text: "Delete";
+                                            icon: @image-url("icons/trash-2.svg");
+                                            clicked => { root.confirm("remove-tree-node", "Delete node \"" + root.inspector-title + "\" and its unshared children?"); }
+                                        }
                                     }
                                 }
                                 if root.inspector-is-step: VerticalLayout {

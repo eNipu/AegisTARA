@@ -590,20 +590,22 @@ fn grams(text: &str) -> BTreeSet<String> {
 /// A search index over one pack. Built once, O(pack text).
 #[derive(Clone, Debug)]
 pub struct LibraryIndex {
-    /// Per item: gram to the weight of the best field it appears in.
-    weights: Vec<HashMap<String, u32>>,
+    /// Inverted index: gram to sorted posting list `(item_idx, best_weight)`.
+    postings: HashMap<String, Vec<(u32, u8)>>,
     facets: Vec<BTreeSet<(Facet, String)>>,
+    all_facet_counts: Vec<(Facet, String, usize)>,
 }
 
 impl LibraryIndex {
     /// Indexes the items of `pack`.
     #[must_use]
     pub fn new(pack: &LibraryPack) -> Self {
-        let mut weights = Vec::with_capacity(pack.items.len());
+        let mut postings: HashMap<String, Vec<(u32, u8)>> = HashMap::new();
         let mut facets = Vec::with_capacity(pack.items.len());
-        for it in &pack.items {
-            let mut w: HashMap<String, u32> = HashMap::new();
-            let mut add = |text: &str, weight: u32| {
+        let mut facet_totals: BTreeMap<(Facet, String), usize> = BTreeMap::new();
+        for (item_idx, it) in pack.items.iter().enumerate() {
+            let mut w: HashMap<String, u8> = HashMap::new();
+            let mut add = |text: &str, weight: u8| {
                 for g in grams(text) {
                     let slot = w.entry(g).or_insert(0);
                     *slot = (*slot).max(weight);
@@ -619,15 +621,29 @@ impl LibraryIndex {
                 add(&n.label, 1);
                 stack.extend(n.children.iter());
             }
-            weights.push(w);
-            facets.push(
-                it.facets
-                    .iter()
-                    .flat_map(|(f, vs)| vs.iter().map(move |v| (*f, v.clone())))
-                    .collect(),
-            );
+            let idx = u32::try_from(item_idx).unwrap_or(u32::MAX);
+            for (g, weight) in w {
+                postings.entry(g).or_default().push((idx, weight));
+            }
+            let item_facets: BTreeSet<(Facet, String)> = it
+                .facets
+                .iter()
+                .flat_map(|(f, vs)| vs.iter().map(move |v| (*f, v.clone())))
+                .collect();
+            for f in &item_facets {
+                *facet_totals.entry(f.clone()).or_default() += 1;
+            }
+            facets.push(item_facets);
         }
-        Self { weights, facets }
+        let all_facet_counts = facet_totals
+            .into_iter()
+            .map(|((f, v), n)| (f, v, n))
+            .collect();
+        Self {
+            postings,
+            facets,
+            all_facet_counts,
+        }
     }
 
     fn passes(&self, i: usize, filter: &FacetFilter) -> bool {
@@ -640,26 +656,36 @@ impl LibraryIndex {
     #[must_use]
     pub fn search(&self, query: &str, filter: &FacetFilter) -> Vec<Hit> {
         let q = grams(query);
-        let mut hits = Vec::new();
-        for i in 0..self.weights.len() {
-            if !self.passes(i, filter) {
-                continue;
-            }
-            if q.is_empty() {
-                hits.push(Hit { index: i, score: 0 });
-                continue;
-            }
-            let (mut found, mut total) = (0usize, 0u32);
-            for g in &q {
-                if let Some(w) = self.weights[i].get(g) {
-                    found += 1;
-                    total += w;
+        if q.is_empty() {
+            return (0..self.facets.len())
+                .filter(|&i| self.passes(i, filter))
+                .map(|index| Hit { index, score: 0 })
+                .collect();
+        }
+        let mut acc = vec![(0u32, 0u32); self.facets.len()];
+        let mut touched = Vec::new();
+        for g in &q {
+            if let Some(list) = self.postings.get(g) {
+                for &(idx, w) in list {
+                    let i = idx as usize;
+                    if acc[i].0 == 0 {
+                        touched.push(i);
+                    }
+                    acc[i].0 += 1;
+                    acc[i].1 += u32::from(w);
                 }
             }
-            if found * 2 < q.len() {
+        }
+        touched.sort_unstable();
+        let q_len = q.len();
+        let denom = 4 * u32::try_from(q_len).unwrap_or(u32::MAX);
+        let mut hits = Vec::with_capacity(touched.len());
+        for i in touched {
+            let (found, total) = acc[i];
+            if (found as usize) * 2 < q_len || !self.passes(i, filter) {
                 continue;
             }
-            let score = total * 1000 / (4 * u32::try_from(q.len()).unwrap_or(u32::MAX));
+            let score = total * 1000 / denom;
             hits.push(Hit { index: i, score });
         }
         // Stable: equal scores keep pack order.
@@ -671,6 +697,9 @@ impl LibraryIndex {
     /// have each, in facet and value order.
     #[must_use]
     pub fn facet_counts(&self, filter: &FacetFilter) -> Vec<(Facet, String, usize)> {
+        if filter.is_empty() {
+            return self.all_facet_counts.clone();
+        }
         let mut counts: BTreeMap<(Facet, String), usize> = BTreeMap::new();
         for i in 0..self.facets.len() {
             if self.passes(i, filter) {

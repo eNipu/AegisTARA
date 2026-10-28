@@ -338,3 +338,187 @@ fn a_big_tree_grows_in_steps_and_one_edit_is_limited_to_one_submission() {
     // The project is unchanged by the refused edit.
     assert_eq!(tree_of(ws.project(), tree).len(), 905);
 }
+
+#[test]
+fn interactive_node_expansion_at_end_and_intermediate_points_preserves_ratings_and_undoes() {
+    let (mut ws, tree) = workspace_with(START);
+    let m = ws.project().methodology().clone();
+    let high = m.feasibility_level("high").expect("level");
+    let step_three = id_of(tree_of(ws.project(), tree), "Step three");
+    ws.apply(
+        vec![
+            Op::SetStepFeasibility {
+                tree,
+                node: step_three,
+                level: Some(high),
+                provenance: aegis_model::Provenance::default(),
+            },
+            Op::SetReviewMark {
+                tree,
+                node: step_three,
+                marked: true,
+                provenance: aegis_model::Provenance::default(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("rate step three");
+
+    // 1. End-of-node expansion: branch leaf "Step three" into an AND gate and
+    // transfer its rating and review mark onto its new child step.
+    let before_branch = ws.project().clone();
+    let sub_step = NodeId::new_v7();
+    let ops = Edit::BranchStepToGate {
+        tree,
+        node: step_three,
+        id: sub_step,
+        gate: aegis_model::GateKind::And,
+        child_label: "Sub-step A".into(),
+    }
+    .to_ops(ws.project(), "alice", 10)
+    .expect("branch ops");
+    ws.apply(ops, Origin::Edit).expect("branch applies");
+    assert_eq!(
+        to_outline(tree_of(ws.project(), tree)),
+        "OR Goal
+  SEQ Chain
+    - Step one
+    - Step two
+  AND Step three
+    - Sub-step A
+"
+    );
+    let t_idx = ws.project().attack_tree_idx(&tree).expect("tree");
+    let sub_idx = tree_of(ws.project(), tree).idx_of(&sub_step).expect("sub");
+    assert_eq!(ws.project().step_feasibility(t_idx, sub_idx), Some(high));
+    assert!(ws.project().review_marked(tree, sub_step));
+    ws.undo().expect("undo branch");
+    assert_eq!(ws.project(), &before_branch);
+    ws.redo().expect("redo branch");
+
+    // 2. End-of-node expansion on the newly created gate: append a second step.
+    let sub_step_b = NodeId::new_v7();
+    let ops = Edit::AddTreeChild {
+        tree,
+        parent: step_three,
+        id: sub_step_b,
+        gate: None,
+        label: "Sub-step B".into(),
+    }
+    .to_ops(ws.project(), "alice", 11)
+    .expect("add child ops");
+    assert_eq!(ops.len(), 1, "adding a child to a gate is a single op");
+    ws.apply(ops, Origin::Edit).expect("add child applies");
+
+    // 3. Intermediate-point expansion: insert a parent OR gate above "SEQ Chain"
+    // wrapping its entire subtree without losing "Sub-step A"'s rating/review mark.
+    let chain = id_of(tree_of(ws.project(), tree), "Chain");
+    let inter_gate = NodeId::new_v7();
+    let before_inter = ws.project().clone();
+    let ops = Edit::InsertParentGate {
+        tree,
+        node: chain,
+        id: inter_gate,
+        gate: aegis_model::GateKind::Or,
+        label: "Intermediate gate".into(),
+    }
+    .to_ops(ws.project(), "alice", 12)
+    .expect("insert parent gate ops");
+    ws.apply(ops, Origin::Edit).expect("insert parent gate");
+    assert_eq!(
+        to_outline(tree_of(ws.project(), tree)),
+        "OR Goal
+  OR Intermediate gate
+    SEQ Chain
+      - Step one
+      - Step two
+  AND Step three
+    - Sub-step A
+    - Sub-step B
+"
+    );
+    ws.undo().expect("undo intermediate gate");
+    assert_eq!(ws.project(), &before_inter);
+    ws.redo().expect("redo intermediate gate");
+
+    // 4. Add a sibling step next to "Chain" under "Intermediate gate".
+    let sibling = NodeId::new_v7();
+    let ops = Edit::AddSiblingNode {
+        tree,
+        node: chain,
+        id: sibling,
+        gate: None,
+        label: "Direct bypass".into(),
+    }
+    .to_ops(ws.project(), "alice", 13)
+    .expect("sibling ops");
+    assert_eq!(ops.len(), 1);
+    ws.apply(ops, Origin::Edit).expect("sibling applies");
+
+    // 5. Rename "Sub-step B" in-place and change "Step three" gate to SEQ.
+    let ops = Edit::RenameTreeNode {
+        tree,
+        node: sub_step_b,
+        label: "Sub-step B renamed".into(),
+    }
+    .to_ops(ws.project(), "alice", 14)
+    .expect("rename ops");
+    ws.apply(ops, Origin::Edit).expect("rename applies");
+    let ops = Edit::SetTreeNodeGate {
+        tree,
+        node: step_three,
+        gate: aegis_model::GateKind::SeqAnd,
+    }
+    .to_ops(ws.project(), "alice", 15)
+    .expect("set gate ops");
+    ws.apply(ops, Origin::Edit).expect("set gate applies");
+
+    // 6. Reorder "Sub-step B renamed" above "Sub-step A" using LIS diffing:
+    // "Sub-step A" stays untouched in place, only "Sub-step B renamed" moves!
+    let ops = Edit::MoveTreeNode {
+        tree,
+        node: sub_step_b,
+        delta: -1,
+    }
+    .to_ops(ws.project(), "alice", 16)
+    .expect("move ops");
+    assert_eq!(
+        ops.len(),
+        2,
+        "LIS keeps Sub-step A untouched; only Sub-step B is removed and re-added: {ops:?}"
+    );
+    ws.apply(ops, Origin::Edit).expect("move applies");
+    assert_eq!(
+        to_outline(tree_of(ws.project(), tree)),
+        "OR Goal
+  OR Intermediate gate
+    SEQ Chain
+      - Step one
+      - Step two
+    - Direct bypass
+  SEQ Step three
+    - Sub-step B renamed
+    - Sub-step A
+"
+    );
+
+    // 7. Remove "Intermediate gate" subtree in one undoable step.
+    let before_remove = ws.project().clone();
+    let ops = Edit::RemoveTreeNode {
+        tree,
+        node: inter_gate,
+    }
+    .to_ops(ws.project(), "alice", 17)
+    .expect("remove ops");
+    ws.apply(ops, Origin::Edit).expect("remove applies");
+    assert_eq!(
+        to_outline(tree_of(ws.project(), tree)),
+        "OR Goal
+  SEQ Step three
+    - Sub-step B renamed
+    - Sub-step A
+"
+    );
+    ws.undo().expect("undo remove");
+    assert_eq!(ws.project(), &before_remove);
+}

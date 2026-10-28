@@ -36,12 +36,15 @@ text. Japanese aliases make the items findable in Japanese.
 ### 3. Search is character n-grams, deterministic, no dependency
 
 Text is lower-cased, full-width ASCII made half-width, katakana folded to
-hiragana, and cut at non-alphanumerics. Bigrams and trigrams are compared;
-a query matches an item when at least half of its grams are found, scored by
-the field weights (name 4, alias and tag 3, facet 2, notes and labels 1).
-Equal scores keep pack order. Japanese works because n-grams need no word
-splitting. Facets (STRIDE, interface, asset, attack, catalog) narrow the list
-and show counts.
+hiragana, and cut at non-alphanumerics. Bigrams and trigrams are indexed in an
+inverted posting map (`postings: HashMap<String, Vec<(u32, u8)>>`) mapping each
+gram to sorted `(item_idx, best_weight)` pairs, alongside precomputed unfiltered
+facet counts (`all_facet_counts`). A query accumulates scores only across items
+touched by at least one query gram and matches an item when at least half of its
+grams are found, scored by the field weights (name 4, alias and tag 3, facet 2,
+notes and labels 1). Equal scores keep pack order. Japanese works because
+n-grams need no word splitting. Facets (STRIDE, interface, asset, attack,
+catalog) narrow the list and show counts ($O(1)$ when no filter is active).
 
 ### 4. Insert is a copy, in one batch, in one undo step
 

@@ -61,7 +61,7 @@ use crate::time::format_ms;
 use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use crate::view::{
     AdminAction, Page, UiState, inspector, page_descriptions, risks_differ, shown_tree,
-    threat_rows, tree_view, use_server_risks,
+    threat_rows, tree_view_cached, use_server_risks,
 };
 use crate::workspace::{Origin, Workspace, WorkspaceError};
 
@@ -297,6 +297,12 @@ struct Open {
     history: Vec<HistoryRow>,
     /// The last export written.
     last_export: Option<String>,
+    /// Cached laid-out scene for `(tree_id, show_residual)`, invalidated on
+    /// workspace edits/undo/redo.
+    cached_scene: Option<(aegis_model::TreeId, bool, Arc<aegis_canvas::Scene>)>,
+    /// Cached problem count for the sidebar badge, invalidated on workspace
+    /// edits/undo/redo.
+    cached_lint_count: Option<usize>,
 }
 
 /// The result of loading a project: everything the actor needs to start.
@@ -1318,6 +1324,8 @@ impl<P: CredentialProvider> Actor<P> {
                     status_pending: false,
                     risks_pending: false,
                     risks_again: false,
+                    cached_scene: None,
+                    cached_lint_count: None,
                 });
             }
         }
@@ -2037,7 +2045,7 @@ impl<P: CredentialProvider> Actor<P> {
             open.ui.selected_node = None;
             return;
         };
-        let Some(view) = tree_view(&open.ws, &open.ui) else {
+        let Some(view) = tree_view_cached(&open.ws, &open.ui, open.cached_scene.as_ref()) else {
             return;
         };
         let Some(idx) = u32::try_from(position)
@@ -2101,6 +2109,8 @@ impl<P: CredentialProvider> Actor<P> {
         }
         match open.ws.apply(ops, origin) {
             Ok(()) => {
+                open.cached_scene = None;
+                open.cached_lint_count = None;
                 self.pump();
                 true
             }
@@ -2168,7 +2178,11 @@ impl<P: CredentialProvider> Actor<P> {
         };
         let result = if undo { open.ws.undo() } else { open.ws.redo() };
         match result {
-            Ok(()) => self.pump(),
+            Ok(()) => {
+                open.cached_scene = None;
+                open.cached_lint_count = None;
+                self.pump();
+            }
             Err(e @ (WorkspaceError::NothingToUndo | WorkspaceError::NothingToRedo)) => {
                 self.notice(Severity::Info, format!("{e}."));
             }
@@ -2200,7 +2214,28 @@ impl<P: CredentialProvider> Actor<P> {
         self.ensure_selection();
         let engine_ok = self.engine_ok();
         self.revision += 1;
-        let project = self.open.as_ref().map(|open| {
+        let Some(open) = self.open.as_mut() else {
+            self.view_tx.send_replace(Arc::new(ViewModel {
+                revision: self.revision,
+                connection: self.connection.clone(),
+                projects: self.projects.clone(),
+                project: None,
+                notices: self.notices.iter().cloned().collect(),
+                user: self
+                    .me
+                    .as_ref()
+                    .map_or_else(|| self.config.user.clone(), |m| m.display_name.clone()),
+                me: self.me.clone(),
+                users: self.users.clone(),
+                admin_text: self.admin_text.clone(),
+                settings: self.settings,
+                events: self.audit_rows.clone(),
+                events_error: self.events_error.clone(),
+                sessions: self.session_rows.clone(),
+            }));
+            return;
+        };
+        let project = {
             let mut threats = threat_rows(&open.ws);
             // This engine's numbers are shown, except when it cannot be
             // trusted: it differs from the server's, or disagreed with it.
@@ -2232,7 +2267,13 @@ impl<P: CredentialProvider> Actor<P> {
                 .ui
                 .selected_threat
                 .and_then(|id| threats.iter().position(|t| t.id == id));
-            let tree = tree_view(&open.ws, &open.ui);
+            let tree = tree_view_cached(&open.ws, &open.ui, open.cached_scene.as_ref());
+            if let Some(tv) = &tree {
+                open.cached_scene = Some((tv.tree, tv.residual, Arc::clone(&tv.scene)));
+            }
+            if open.cached_lint_count.is_none() {
+                open.cached_lint_count = Some(open.ws.project().lint().len());
+            }
             let selected_node = tree.as_ref().and_then(|t| t.selected);
             let data = page_data(open);
             let comparison = (open.ui.page == Page::Versions)
@@ -2242,7 +2283,7 @@ impl<P: CredentialProvider> Actor<P> {
                     })
                 })
                 .flatten();
-            ProjectView {
+            Some(ProjectView {
                 page: open.ui.page,
                 vocab: Arc::clone(&open.vocab),
                 data,
@@ -2281,8 +2322,8 @@ impl<P: CredentialProvider> Actor<P> {
                 selected_threat,
                 tree,
                 selected_node,
-            }
-        });
+            })
+        };
         self.view_tx.send_replace(Arc::new(ViewModel {
             revision: self.revision,
             connection: self.connection.clone(),
@@ -2370,7 +2411,7 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
             Page::Trees => Some(p.attack_tree_count()),
             Page::Controls => Some(p.security_control_count()),
             Page::Goals => Some(p.cybersecurity_goal_count() + p.cybersecurity_claim_count()),
-            Page::Problems => Some(p.lint().len()),
+            Page::Problems => Some(open.cached_lint_count.unwrap_or_else(|| p.lint().len())),
             Page::Versions => Some(open.baselines.len()).filter(|n| *n > 0),
             _ => None,
         })

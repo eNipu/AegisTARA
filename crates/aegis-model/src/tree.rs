@@ -643,12 +643,12 @@ impl AttackTree {
         if let Some(Node::Gate { children, .. }) = self.nodes.get_mut(owner.index()) {
             children.remove(position);
         }
+        self.by_id.remove(&id);
+        self.shift(idx.index() + 1, -1);
         let node = self.nodes.remove(idx.index());
         self.ids.remove(idx.index());
         self.owners.remove(idx.index());
         self.linked_parents.remove(idx.index());
-        self.by_id.remove(&id);
-        self.shift(idx.index() + 1, -1);
         Ok(RemovedNode {
             id,
             node,
@@ -715,8 +715,12 @@ impl AttackTree {
 
     /// Moves every index at or after `from` by `by` (+1 after an insert, -1
     /// after a removal): child lists, owners, extra parents and the ID map.
-    /// The root is index 0 and never moves. Time O(V + E).
+    /// The root is index 0 and never moves. Time O(1) when appending at the
+    /// end of the arena (`from >= len()`), and O(V + E) otherwise.
     fn shift(&mut self, from: usize, by: isize) {
+        if from >= self.nodes.len() {
+            return;
+        }
         let moved = |i: NodeIdx| {
             if i.index() >= from {
                 NodeIdx::try_from_usize(i.index().saturating_add_signed(by)).unwrap_or(i)
@@ -731,16 +735,23 @@ impl AttackTree {
                 }
             }
         }
-        for owner in self.owners.iter_mut().flatten() {
+        for owner in self.owners[from..].iter_mut().flatten() {
             *owner = moved(*owner);
         }
-        for parents in &mut self.linked_parents {
-            for p in parents {
-                *p = moved(*p);
+        if self.link_count > 0 {
+            for parents in &mut self.linked_parents {
+                for p in parents {
+                    *p = moved(*p);
+                }
             }
         }
-        for idx in self.by_id.values_mut() {
-            *idx = moved(*idx);
+        for (offset, id) in self.ids[from..].iter().enumerate() {
+            let old_idx = from + offset;
+            if let Some(new_idx) = NodeIdx::try_from_usize(old_idx.saturating_add_signed(by))
+                && let Some(slot) = self.by_id.get_mut(id)
+            {
+                *slot = new_idx;
+            }
         }
     }
 

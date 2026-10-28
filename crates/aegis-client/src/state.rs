@@ -210,7 +210,7 @@ pub struct Notice {
 
 /// The data of the page on screen. Only the fields of that page are
 /// filled; the rest stay empty (the session builds one page per change).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageData {
     /// Overview page.
     pub overview: Option<Overview>,

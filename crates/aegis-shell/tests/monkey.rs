@@ -279,6 +279,30 @@ fn actions() -> Vec<fn(&AppWindow, &mut Rng)> {
             w.invoke_remove_tree();
         },
         |w, r| {
+            w.invoke_rename_tree_node(r.text().into());
+        },
+        |w, r| {
+            w.invoke_set_tree_node_gate(r.int());
+        },
+        |w, r| {
+            w.invoke_add_tree_child(r.int(), r.text().into());
+        },
+        |w, r| {
+            w.invoke_branch_step_to_gate(r.int(), r.text().into());
+        },
+        |w, r| {
+            w.invoke_insert_parent_gate(r.int(), r.text().into());
+        },
+        |w, r| {
+            w.invoke_add_sibling_node(r.int(), r.text().into());
+        },
+        |w, r| {
+            w.invoke_move_tree_node(r.int());
+        },
+        |w, _r| {
+            w.invoke_remove_tree_node();
+        },
+        |w, r| {
             w.invoke_attach_control(r.int(), r.int());
         },
         |w, r| {
