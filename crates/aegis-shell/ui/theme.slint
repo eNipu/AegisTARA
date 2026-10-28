@@ -1,23 +1,46 @@
-// Colors of the "drafting film" look (docs/design/aegis-design.html).
+// AegisTARA "Tactical Obsidian & Tungsten Crimson-Amber" color system.
 // The canvas engine sends paint *tokens* (integers); this file turns them
-// into colors, so dark mode is a palette switch here and costs the Rust side
-// nothing. Tokens: aegis_canvas::Paint, see src/adapter.rs.
+// into colors, so switching between Tactical Obsidian (dark) and Brushed
+// Platinum (light) is a palette switch here and costs the Rust side nothing.
+// Tokens: aegis_canvas::Paint, see src/adapter.rs.
 import { Palette } from "std-widgets.slint";
 
 export global Theme {
-    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    // Default to the signature Tactical Obsidian dark theme unless light mode
+    // is explicitly selected.
+    out property <bool> dark: Palette.color-scheme != ColorScheme.light;
 
-    out property <color> sheet: dark ? #151B21 : #E9EDF0;
-    out property <color> panel: dark ? #1E262E : #FFFFFF;
-    out property <color> ink: dark ? #E4EAF0 : #1D2733;
-    out property <color> graphite: dark ? #9AA8B5 : #5B6875;
-    out property <color> rule: dark ? #35424E : #C3CBD3;
-    out property <color> wash: dark ? #252F38 : #F3F5F7;
-    out property <color> accent: dark ? #A894F2 : #5A3FC0;
-    out property <color> accent-wash: dark ? #2B2547 : #ECE8FA;
-    out property <color> band: dark ? #E4EAF0 : #1D2733;
-    out property <color> band-text: dark ? #151B21 : #FFFFFF;
-    // Rating colors: Okabe-Ito based, the same in both themes.
+    // ---- Master Brand Tokens (always dark obsidian for splash/brand headers) ----
+    // Obsidian Background: #14181D (center radial) -> #0B0D10 (outer edge)
+    out property <color> obsidian-core: #14181D;
+    out property <color> obsidian-edge: #0B0D10;
+    out property <color> obsidian-wash: #1A2028;
+    out property <color> obsidian-rule: #28313B;
+    // "Aegis" & Telemetry Arcs (Brushed Platinum): #FFFFFF -> #E5E9F0 -> #B8C2CC
+    out property <color> platinum-pure: #FFFFFF;
+    out property <color> platinum: #E5E9F0;
+    out property <color> platinum-dim: #B8C2CC;
+    // "TARA" & Primary Reticle (Tungsten Crimson-Amber): #E04F26 -> #C83E1B -> #8F240C
+    out property <color> crimson-bright: #E04F26;
+    out property <color> crimson: #C83E1B;
+    out property <color> crimson-deep: #8F240C;
+    // Subtitle & Datum Lines (Tactical Slate): #CBD2D9 / #8C99A6
+    out property <color> slate-light: #CBD2D9;
+    out property <color> slate: #8C99A6;
+
+    // ---- Adaptive Workspace Tokens ----
+    out property <color> sheet: dark ? #0B0D10 : #EBEEF2;
+    out property <color> panel: dark ? #14181D : #FFFFFF;
+    out property <color> ink: dark ? #E5E9F0 : #14181D;
+    out property <color> graphite: dark ? #8C99A6 : #5A6673;
+    out property <color> rule: dark ? #28313B : #CBD2D9;
+    out property <color> wash: dark ? #1C222B : #F2F4F7;
+    out property <color> accent: dark ? #E04F26 : #C83E1B;
+    out property <color> accent-wash: dark ? #2B1915 : #FCECE8;
+    out property <color> band: dark ? #C83E1B : #14181D;
+    out property <color> band-text: #FFFFFF;
+
+    // Rating colors: Okabe-Ito based, high-contrast in both themes.
     out property <color> very-low: #009E73;
     out property <color> low: #56B4E9;
     out property <color> medium: #E69F00;

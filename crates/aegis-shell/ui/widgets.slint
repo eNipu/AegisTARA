@@ -142,7 +142,7 @@ export component PageTitle inherits HorizontalLayout {
         width: 22px;
         height: 22px;
         y: 4px;
-        colorize: Theme.ink;
+        colorize: Theme.accent;
     }
     VerticalLayout {
         horizontal-stretch: 1;
@@ -150,6 +150,97 @@ export component PageTitle inherits HorizontalLayout {
         if root.subtitle != "": Text { text: root.subtitle; font-size: 12px; color: Theme.graphite; wrap: word-wrap; }
     }
     @children
+}
+
+// Dark-mode tactical obsidian splash screen window header banner.
+// Uses the brand color system (#14181D -> #0B0D10 obsidian gradient,
+// #E04F26 -> #C83E1B tungsten crimson-amber reticle bar, #8C99A6 tactical
+// slate datum telemetry, and the wide AegisTARA splash header graphic).
+export component SplashHeader inherits Rectangle {
+    in property <string> badge-text: "ISO/SAE 21434 · UN R155";
+    in property <string> status-text: "";
+    in property <color> status-color: Theme.crimson-bright;
+    in property <length> banner-height: 136px;
+
+    height: root.banner-height;
+    clip: true;
+    background: @linear-gradient(180deg, Theme.obsidian-core 0%, Theme.obsidian-edge 100%);
+
+    // Top tungsten crimson-amber precision accent bar.
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 2px;
+        background: @linear-gradient(90deg, Theme.crimson-deep 0%, Theme.crimson-bright 50%, Theme.crimson-deep 100%);
+    }
+
+    // Subtle horizontal tactical datum hairline across the obsidian field.
+    Rectangle {
+        x: 16px;
+        y: 26px;
+        width: parent.width - 32px;
+        height: 1px;
+        background: #28313B80;
+    }
+
+    // Telemetry header micro-bar (left standard badge, right live status).
+    Text {
+        x: 16px;
+        y: 6px;
+        height: 16px;
+        text: root.badge-text;
+        font-size: 10px;
+        font-weight: 600;
+        color: Theme.slate;
+        vertical-alignment: center;
+    }
+    if root.status-text != "": HorizontalLayout {
+        x: parent.width - self.preferred-width - 16px;
+        y: 6px;
+        height: 16px;
+        spacing: 6px;
+        Rectangle {
+            width: 6px;
+            height: 6px;
+            y: 5px;
+            border-radius: 3px;
+            background: root.status-color;
+        }
+        Text {
+            text: root.status-text;
+            font-size: 10px;
+            font-weight: 700;
+            color: Theme.slate-light;
+            vertical-alignment: center;
+        }
+    }
+
+    // Hero reticle + AegisTARA wordmark + subtitle.
+    Image {
+        x: 12px;
+        y: 24px;
+        width: parent.width - 24px;
+        height: parent.height - 28px;
+        source: @image-url("brand/AegisTARA_Splash_Header_960x360.png");
+        image-fit: contain;
+    }
+
+    // Bottom datum hairline with centered tungsten reticle tick.
+    Rectangle {
+        x: 0px;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.obsidian-rule;
+    }
+    Rectangle {
+        x: (parent.width - 72px) / 2;
+        y: parent.height - 2px;
+        width: 72px;
+        height: 2px;
+        background: Theme.crimson-bright;
+    }
 }
 
 // A framed area with padding.

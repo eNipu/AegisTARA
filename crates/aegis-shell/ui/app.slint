@@ -5,12 +5,12 @@
 // made by the client core in Rust; the window shows the view model and sends
 // commands back. Menu and sidebar glyphs are Lucide icons (ISC license,
 // ui/icons/LICENSE-lucide.txt).
-import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, AboutSlint, StandardListView } from "std-widgets.slint";
+import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, AboutSlint, StandardListView, Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
-    CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, Panel, Swatch,
+    CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
     LinkList, CheckList, Tile, Bars
 } from "widgets.slint";
 
@@ -94,7 +94,10 @@ export component AppWindow inherits Window {
     min-width: 980px;
     min-height: 600px;
     background: Theme.sheet;
-    icon: @image-url("icons/shield.svg");
+    icon: @image-url("brand/App_Icon_Resolutions/AegisTARA_Icon_256x256.png");
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
 
     // Side panels follow the window: full size on a big window, narrower on a
     // small one, so a page never pushes its detail panel off the screen
@@ -584,6 +587,15 @@ export component AppWindow inherits Window {
             MenuItem { title: "Risk after controls"; icon: @image-url("icons/eye.svg"); checkable: true; checked: root.show-residual; enabled: root.in-project; activated => { root.set-residual(!root.show-residual); } }
             MenuItem { title: "Fit the tree"; icon: @image-url("icons/maximize.svg"); enabled: root.in-project && root.has-tree; activated => { root.fit(); } }
             MenuItem { title: "Zoom to 100%"; icon: @image-url("icons/zoom-in.svg"); enabled: root.in-project && root.has-tree; activated => { root.zoom-reset(); } }
+            MenuSeparator {}
+            MenuItem {
+                title: "Dark theme";
+                checkable: true;
+                checked: Theme.dark;
+                activated => {
+                    Palette.color-scheme = Theme.dark ? ColorScheme.light : ColorScheme.dark;
+                }
+            }
         }
         Menu {
             title: "Project";
@@ -613,153 +625,169 @@ export component AppWindow inherits Window {
     }
 
     // ===================================================================
-    // Not connected: one centered card.
+    // Not connected: one centered card with dark-mode splash header.
     // ===================================================================
     if root.connection != 1: Rectangle {
-        background: Theme.sheet;
+        background: Theme.dark
+            ? @linear-gradient(180deg, Theme.obsidian-core 0%, Theme.obsidian-edge 100%)
+            : Theme.sheet;
         Rectangle {
-            width: min(parent.width - 48px, 460px);
-            height: card-column.preferred-height + 48px;
+            width: min(parent.width - 48px, 500px);
+            height: splash-banner.height + card-column.preferred-height;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
-            card-column := VerticalLayout {
-                padding: 24px;
-                spacing: 12px;
-                HorizontalLayout {
-                    spacing: 10px;
-                    Image { source: @image-url("icons/shield.svg"); width: 28px; height: 28px; colorize: Theme.accent; }
-                    Text { text: "AegisTARA"; font-size: 22px; font-weight: 700; color: Theme.ink; vertical-alignment: center; }
+            border-radius: 3px;
+            clip: true;
+            VerticalLayout {
+                spacing: 0px;
+                splash-banner := SplashHeader {
+                    banner-height: root.connection == 4 ? 136px : 152px;
+                    status-text: root.connection == 0 ? "CONNECTING"
+                        : root.connection == 2 ? "OFFLINE"
+                        : root.connection == 3 ? "AUTH REQUIRED"
+                        : "SERVER & WORKSPACE";
+                    status-color: root.connection == 2 ? Theme.high
+                        : root.connection == 3 ? Theme.medium
+                        : Theme.crimson-bright;
                 }
-                if root.server-name != "" && root.connection == 3: Text { text: root.server-name; color: Theme.ink; font-size: 14px; }
-                Text {
-                    text: root.connection-text;
-                    wrap: word-wrap;
-                    color: Theme.graphite;
-                    font-size: 14px;
-                    accessible-role: text;
-                }
-                // Choose a server.
-                if root.connection == 4: VerticalLayout {
+                card-column := VerticalLayout {
+                    padding: 20px;
                     spacing: 10px;
-                    Field {
-                        label: "Server address";
-                        url-edit := LineEdit {
-                            text <=> root.server-url;
-                            placeholder-text: "https://aegis.example.com";
-                            accessible-label: "Server address";
-                            accepted(t) => { root.connect-server(t, root.transport-index); }
-                        }
+                    if root.server-name != "" && root.connection == 3: HorizontalLayout {
+                        spacing: 8px;
+                        Image { source: @image-url("icons/server.svg"); width: 16px; height: 16px; y: 2px; colorize: Theme.accent; }
+                        Text { text: root.server-name; color: Theme.ink; font-size: 14px; font-weight: 600; }
                     }
-                    Field {
-                        label: "Connection";
-                        Choice {
-                            options: ["Automatic", "gRPC (HTTP/2)", "gRPC-Web (HTTP/1.1, through any proxy)"];
-                            index: root.transport-index;
+                    Text {
+                        text: root.connection-text;
+                        wrap: word-wrap;
+                        color: Theme.graphite;
+                        font-size: 13px;
+                        accessible-role: text;
+                    }
+                    // Choose a server.
+                    if root.connection == 4: VerticalLayout {
+                        spacing: 8px;
+                        Field {
+                            label: "Server address";
+                            url-edit := LineEdit {
+                                text <=> root.server-url;
+                                placeholder-text: "https://aegis.example.com";
+                                accessible-label: "Server address";
+                                accepted(t) => { root.connect-server(t, root.transport-index); }
+                            }
+                        }
+                        Field {
                             label: "Connection";
-                            picked(i) => { root.transport-index = i; }
-                        }
-                    }
-                    Button {
-                        text: "Connect";
-                        icon: @image-url("icons/server.svg");
-                        primary: true;
-                        enabled: root.server-url != "" && !root.login-busy;
-                        clicked => { root.connect-server(root.server-url, root.transport-index); }
-                    }
-                    Text { text: "Or work without a server"; color: Theme.graphite; font-size: 13px; }
-                    Field {
-                        label: "Project folder";
-                        LineEdit {
-                            text <=> root.standalone-folder;
-                            placeholder-text: "/path/to/project-folder";
-                            accessible-label: "Standalone project folder";
-                        }
-                    }
-                    Field {
-                        label: "Signed license file";
-                        LineEdit {
-                            text <=> root.standalone-license;
-                            placeholder-text: "/path/to/license.aegis";
-                            accessible-label: "Standalone license file";
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Button {
-                            text: "New folder";
-                            icon: @image-url("icons/file-plus.svg");
-                            enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
-                            clicked => { root.new-project-folder(root.standalone-folder, root.standalone-license); }
+                            Choice {
+                                options: ["Automatic", "gRPC (HTTP/2)", "gRPC-Web (HTTP/1.1, through any proxy)"];
+                                index: root.transport-index;
+                                label: "Connection";
+                                picked(i) => { root.transport-index = i; }
+                            }
                         }
                         Button {
-                            text: "Open folder";
-                            icon: @image-url("icons/folder-open.svg");
+                            text: "Connect";
+                            icon: @image-url("icons/server.svg");
                             primary: true;
-                            enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
-                            clicked => { root.open-project-folder(root.standalone-folder, root.standalone-license); }
+                            enabled: root.server-url != "" && !root.login-busy;
+                            clicked => { root.connect-server(root.server-url, root.transport-index); }
+                        }
+                        Rectangle { height: 1px; background: Theme.rule; }
+                        Text { text: "Or work without a server"; color: Theme.graphite; font-size: 12px; font-weight: 600; }
+                        Field {
+                            label: "Project folder";
+                            LineEdit {
+                                text <=> root.standalone-folder;
+                                placeholder-text: "/path/to/project-folder";
+                                accessible-label: "Standalone project folder";
+                            }
+                        }
+                        Field {
+                            label: "Signed license file";
+                            LineEdit {
+                                text <=> root.standalone-license;
+                                placeholder-text: "/path/to/license.aegis";
+                                accessible-label: "Standalone license file";
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "New folder";
+                                icon: @image-url("icons/file-plus.svg");
+                                enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
+                                clicked => { root.new-project-folder(root.standalone-folder, root.standalone-license); }
+                            }
+                            Button {
+                                text: "Open folder";
+                                icon: @image-url("icons/folder-open.svg");
+                                primary: true;
+                                enabled: root.standalone-folder != "" && root.standalone-license != "" && !root.login-busy;
+                                clicked => { root.open-project-folder(root.standalone-folder, root.standalone-license); }
+                            }
                         }
                     }
-                }
-                if root.connection == 2: HorizontalLayout {
-                    spacing: 8px;
-                    Button { text: "Try again"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.retry(); } }
-                    Button { text: "Change server"; icon: @image-url("icons/server.svg"); clicked => { root.change-server(); } }
-                }
-                // Password login.
-                if root.connection == 3 && root.login-method == 1: VerticalLayout {
-                    spacing: 10px;
-                    Field {
-                        label: "User name";
-                        LineEdit {
-                            text <=> root.login-user;
-                            accessible-label: "User name";
-                        }
-                    }
-                    Field {
-                        label: "Password";
-                        LineEdit {
-                            text <=> root.login-password;
-                            input-type: password;
-                            accessible-label: "Password";
-                            accepted(t) => { root.password-log-in(root.login-user, root.login-password, root.remember); }
-                        }
-                    }
-                    CheckBox { text: "Keep me logged in on this computer"; checked <=> root.remember; }
-                    if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
-                    HorizontalLayout {
+                    if root.connection == 2: HorizontalLayout {
                         spacing: 8px;
-                        Button {
-                            text: root.login-busy ? "Logging in…" : "Log in";
-                            icon: @image-url("icons/log-in.svg");
-                            primary: true;
-                            enabled: root.login-user != "" && root.login-password != "" && !root.login-busy;
-                            clicked => { root.password-log-in(root.login-user, root.login-password, root.remember); }
+                        Button { text: "Try again"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.retry(); } }
+                        Button { text: "Change server"; icon: @image-url("icons/server.svg"); clicked => { root.change-server(); } }
+                    }
+                    // Password login.
+                    if root.connection == 3 && root.login-method == 1: VerticalLayout {
+                        spacing: 10px;
+                        Field {
+                            label: "User name";
+                            LineEdit {
+                                text <=> root.login-user;
+                                accessible-label: "User name";
+                            }
                         }
-                        Button { text: "Change server"; clicked => { root.change-server(); } }
-                        if root.password-also: Button { text: "Use company login"; icon: @image-url("icons/key-round.svg"); clicked => { root.use-company-login(); } }
+                        Field {
+                            label: "Password";
+                            LineEdit {
+                                text <=> root.login-password;
+                                input-type: password;
+                                accessible-label: "Password";
+                                accepted(t) => { root.password-log-in(root.login-user, root.login-password, root.remember); }
+                            }
+                        }
+                        CheckBox { text: "Keep me logged in on this computer"; checked <=> root.remember; }
+                        if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: root.login-busy ? "Logging in…" : "Log in";
+                                icon: @image-url("icons/log-in.svg");
+                                primary: true;
+                                enabled: root.login-user != "" && root.login-password != "" && !root.login-busy;
+                                clicked => { root.password-log-in(root.login-user, root.login-password, root.remember); }
+                            }
+                            Button { text: "Change server"; clicked => { root.change-server(); } }
+                            if root.password-also: Button { text: "Use company login"; icon: @image-url("icons/key-round.svg"); clicked => { root.use-company-login(); } }
+                        }
                     }
-                }
-                // Development login.
-                if root.connection == 3 && root.login-method == 2: VerticalLayout {
-                    spacing: 10px;
-                    Text { text: "Development server: no password is checked."; color: Theme.medium; font-size: 12px; }
-                    Field {
-                        label: "User name";
-                        LineEdit { text <=> root.login-user; accessible-label: "User name"; accepted(t) => { root.dev-log-in(t); } }
+                    // Development login.
+                    if root.connection == 3 && root.login-method == 2: VerticalLayout {
+                        spacing: 10px;
+                        Text { text: "Development server: no password is checked."; color: Theme.medium; font-size: 12px; }
+                        Field {
+                            label: "User name";
+                            LineEdit { text <=> root.login-user; accessible-label: "User name"; accepted(t) => { root.dev-log-in(t); } }
+                        }
+                        Button { text: "Continue"; primary: true; enabled: root.login-user != ""; clicked => { root.dev-log-in(root.login-user); } }
                     }
-                    Button { text: "Continue"; primary: true; enabled: root.login-user != ""; clicked => { root.dev-log-in(root.login-user); } }
-                }
-                // Company login.
-                if root.connection == 3 && root.login-method == 0: VerticalLayout {
-                    spacing: 8px;
-                    if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
-                    HorizontalLayout {
+                    // Company login.
+                    if root.connection == 3 && root.login-method == 0: VerticalLayout {
                         spacing: 8px;
-                        Button { text: "Log in"; primary: true; clicked => { root.log-in(); } }
-                        Button { text: "Change server"; clicked => { root.change-server(); } }
-                        if root.password-also: Button { text: "Use a user name and password"; clicked => { root.use-password-login(); } }
+                        if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { text: "Log in"; primary: true; clicked => { root.log-in(); } }
+                            Button { text: "Change server"; clicked => { root.change-server(); } }
+                            if root.password-also: Button { text: "Use a user name and password"; clicked => { root.use-password-login(); } }
+                        }
                     }
                 }
             }
@@ -770,94 +798,106 @@ export component AppWindow inherits Window {
     // Connected, no project open: the project list.
     // ===================================================================
     if root.connection == 1 && !root.has-project: Rectangle {
-        background: Theme.sheet;
+        background: Theme.dark
+            ? @linear-gradient(180deg, Theme.obsidian-core 0%, Theme.obsidian-edge 100%)
+            : Theme.sheet;
         Rectangle {
-            width: min(parent.width - 48px, 620px);
-            height: min(parent.height - 48px, 560px);
+            width: min(parent.width - 48px, 640px);
+            height: min(parent.height - 48px, 580px);
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: 3px;
+            clip: true;
             VerticalLayout {
-                padding: 24px;
-                spacing: 12px;
-                HorizontalLayout {
-                    spacing: 12px;
-                    Image { source: @image-url("icons/folder-open.svg"); width: 22px; height: 22px; y: 4px; colorize: Theme.ink; }
-                    Text {
-                        text: "Projects";
-                        font-size: 22px;
-                        font-weight: 700;
-                        color: Theme.ink;
-                        vertical-alignment: center;
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                    Button { text: "Refresh"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-projects(); } }
-                    Button { text: "About"; icon: @image-url("icons/info.svg"); clicked => { root.show-about = true; } }
+                spacing: 0px;
+                SplashHeader {
+                    banner-height: 136px;
+                    status-text: root.standalone-mode ? "STANDALONE" : "ONLINE";
+                    status-color: Theme.very-low;
                 }
-                if root.projects.length == 0: Text {
-                    text: "There are no projects yet. Create the first one below.";
-                    color: Theme.graphite;
-                    wrap: word-wrap;
-                }
-                ScrollView {
+                VerticalLayout {
                     vertical-stretch: 1;
-                    VerticalLayout {
-                        spacing: 4px;
-                        for p in root.projects: Rectangle {
-                            height: 44px;
-                            background: area.has-hover ? Theme.wash : transparent;
-                            border-width: 1px;
-                            border-color: Theme.rule;
-                            border-radius: 2px;
-                            accessible-role: button;
-                            accessible-label: "Open project " + p.name;
-                            accessible-action-default => { root.open-project(p.id); }
-                            HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                spacing: 12px;
-                                Text {
-                                    text: p.name;
-                                    color: Theme.ink;
-                                    font-weight: 600;
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 1;
-                                    overflow: elide;
+                    padding: 20px;
+                    spacing: 12px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Image { source: @image-url("icons/folder-open.svg"); width: 20px; height: 20px; y: 5px; colorize: Theme.accent; }
+                        Text {
+                            text: "Projects";
+                            font-size: 20px;
+                            font-weight: 700;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button { text: "Refresh"; icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-projects(); } }
+                        Button { text: "About"; icon: @image-url("icons/info.svg"); clicked => { root.show-about = true; } }
+                    }
+                    if root.projects.length == 0: Text {
+                        text: "There are no projects yet. Create the first one below.";
+                        color: Theme.graphite;
+                        wrap: word-wrap;
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 4px;
+                            for p in root.projects: Rectangle {
+                                height: 44px;
+                                background: area.has-hover ? Theme.wash : transparent;
+                                border-width: 1px;
+                                border-color: area.has-hover ? Theme.accent : Theme.rule;
+                                border-radius: 2px;
+                                accessible-role: button;
+                                accessible-label: "Open project " + p.name;
+                                accessible-action-default => { root.open-project(p.id); }
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    spacing: 12px;
+                                    Text {
+                                        text: p.name;
+                                        color: Theme.ink;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: p.methodology;
+                                        color: Theme.graphite;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
                                 }
-                                Text {
-                                    text: p.methodology;
-                                    color: Theme.graphite;
-                                    font-size: 12px;
-                                    vertical-alignment: center;
-                                }
+                                area := TouchArea { clicked => { root.open-project(p.id); } }
                             }
-                            area := TouchArea { clicked => { root.open-project(p.id); } }
                         }
                     }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "New project name";
+                            text <=> root.new-project-name;
+                            accepted(t) => {
+                                if (t != "") { root.create-project(t); root.new-project-name = ""; }
+                            }
+                        }
+                        Button {
+                            text: "Create";
+                            icon: @image-url("icons/file-plus.svg");
+                            primary: true;
+                            enabled: root.new-project-name != "";
+                            clicked => {
+                                root.create-project(root.new-project-name);
+                                root.new-project-name = "";
+                            }
+                        }
+                    }
+                    Text { text: (root.standalone-mode ? "Standalone project. " : "Logged in as " + root.user + ". ") + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
                 }
-                HorizontalLayout {
-                    spacing: 8px;
-                    LineEdit {
-                        horizontal-stretch: 1;
-                        placeholder-text: "New project name";
-                        text <=> root.new-project-name;
-                        accepted(t) => {
-                            if (t != "") { root.create-project(t); root.new-project-name = ""; }
-                        }
-                    }
-                    Button {
-                        text: "Create";
-                        icon: @image-url("icons/file-plus.svg");
-                        primary: true;
-                        enabled: root.new-project-name != "";
-                        clicked => {
-                            root.create-project(root.new-project-name);
-                            root.new-project-name = "";
-                        }
-                    }
-                }
-                Text { text: (root.standalone-mode ? "Standalone project. " : "Logged in as " + root.user + ". ") + root.engine-text; color: Theme.graphite; font-size: 12px; overflow: elide; }
             }
         }
     }
@@ -912,9 +952,16 @@ export component AppWindow inherits Window {
             height: 52px;
             background: Theme.panel;
             HorizontalLayout {
-                padding-left: 16px;
+                padding-left: 14px;
                 padding-right: 16px;
                 spacing: 10px;
+                Image {
+                    source: @image-url("brand/App_Icon_Resolutions/AegisTARA_Icon_64x64.png");
+                    width: 30px;
+                    height: 30px;
+                    y: 11px;
+                }
+                Rectangle { width: 1px; height: 24px; y: 14px; background: Theme.rule; }
                 Button { text: "Projects"; icon: @image-url("icons/folder-open.svg"); clicked => { root.close-project(); } }
                 Text {
                     text: root.project-name;
@@ -1860,7 +1907,14 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding-left: 12px;
                 padding-right: 12px;
-                spacing: 16px;
+                spacing: 12px;
+                Image {
+                    source: @image-url("brand/AegisTARA_Stencil_Light.svg");
+                    width: 15px;
+                    height: 15px;
+                    y: 5.5px;
+                    colorize: Theme.accent;
+                }
                 Text {
                     text: root.engine-text;
                     color: Theme.graphite;
@@ -1885,7 +1939,7 @@ export component AppWindow inherits Window {
         width: 400px;
         spacing: 6px;
         for n in root.notices: Rectangle {
-            background: n.severity == 2 ? #FDECEA : (n.severity == 1 ? #FFF4D6 : Theme.panel);
+            background: n.severity == 2 ? (Theme.dark ? #2E1512 : #FDECEA) : (n.severity == 1 ? (Theme.dark ? #2E230E : #FFF4D6) : Theme.panel);
             border-width: 1px;
             border-color: n.severity == 2 ? Theme.high : (n.severity == 1 ? Theme.medium : Theme.rule);
             border-radius: 2px;
@@ -1898,7 +1952,7 @@ export component AppWindow inherits Window {
                 notice-text := Text {
                     text: n.text;
                     wrap: word-wrap;
-                    color: #1D2733;
+                    color: Theme.ink;
                     font-size: 13px;
                     horizontal-stretch: 1;
                 }
@@ -1908,7 +1962,7 @@ export component AppWindow inherits Window {
                     accessible-role: button;
                     accessible-label: "Dismiss";
                     accessible-action-default => { root.dismiss-notice(n.id); }
-                    Image { source: @image-url("icons/x.svg"); width: 14px; height: 14px; colorize: #1D2733; }
+                    Image { source: @image-url("icons/x.svg"); width: 14px; height: 14px; colorize: Theme.ink; }
                     TouchArea { clicked => { root.dismiss-notice(n.id); } }
                 }
             }
@@ -2225,29 +2279,38 @@ export component AppWindow inherits Window {
         TouchArea { clicked => { root.show-about = false; } }
         Rectangle {
             width: min(parent.width - 48px, 520px);
-            height: about-column.preferred-height + 48px;
+            height: about-splash.height + about-column.preferred-height;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
-            about-column := VerticalLayout {
-                padding: 24px;
-                spacing: 12px;
-                Text { text: "AegisTARA"; font-size: 22px; font-weight: 700; color: Theme.ink; }
-                Text {
-                    text: "Threat analysis and risk assessment for vehicle cybersecurity.";
-                    color: Theme.graphite;
-                    wrap: word-wrap;
+            border-radius: 3px;
+            clip: true;
+            VerticalLayout {
+                spacing: 0px;
+                about-splash := SplashHeader {
+                    banner-height: 148px;
+                    status-text: "CYBERSECURITY TARA";
+                    status-color: Theme.crimson-bright;
                 }
-                Rectangle { height: 1px; background: Theme.rule; }
-                AboutSlint { }
-                Text {
-                    text: "This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Icons by Lucide (ISC license). Third-party licenses are listed in the release notices.";
-                    color: Theme.graphite;
-                    font-size: 12px;
-                    wrap: word-wrap;
+                about-column := VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    Text {
+                        text: "Threat analysis and risk assessment for vehicle cybersecurity.";
+                        color: Theme.ink;
+                        font-weight: 600;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { height: 1px; background: Theme.rule; }
+                    AboutSlint { }
+                    Text {
+                        text: "This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Icons by Lucide (ISC license). Third-party licenses are listed in the release notices.";
+                        color: Theme.graphite;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Button { text: "Close"; clicked => { root.show-about = false; } }
                 }
-                Button { text: "Close"; clicked => { root.show-about = false; } }
             }
         }
     }
