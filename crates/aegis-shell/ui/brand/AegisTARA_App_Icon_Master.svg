@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%">
+  <defs>
+    <radialGradient id="iconBg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#181D24" />
+      <stop offset="100%" stop-color="#0A0C0E" />
+    </radialGradient>
+    <linearGradient id="platinumGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="65%" stop-color="#E5E9F0" />
+      <stop offset="100%" stop-color="#AEBAC8" />
+    </linearGradient>
+    <linearGradient id="crimsonGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F0562B" />
+      <stop offset="55%" stop-color="#C83E1B" />
+      <stop offset="100%" stop-color="#8A220A" />
+    </linearGradient>
+    <filter id="iconShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.75" />
+    </filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="210" fill="url(#iconBg)" stroke="#262E38" stroke-width="6" />
+  <g id="icon-reticle">
+    <circle cx="467" cy="497" r="220" fill="none" stroke="#D94620" stroke-width="3.5" stroke-opacity="0.45" />
+    <circle cx="467" cy="497" r="310" fill="none" stroke="#D94620" stroke-width="3.5" stroke-opacity="0.35" />
+    <circle cx="512" cy="512" r="170" fill="none" stroke="#E04F26" stroke-width="3.5" stroke-opacity="0.6" />
+    <circle cx="512" cy="512" r="260" fill="none" stroke="#E04F26" stroke-width="4.5" stroke-opacity="0.75" />
+    <circle cx="512" cy="512" r="350" fill="none" stroke="#E04F26" stroke-width="5.0" stroke-opacity="0.85" />
+    <circle cx="512" cy="512" r="410" fill="none" stroke="#E04F26" stroke-width="3.0" stroke-opacity="0.5" />
+    <path d="M 270.35 342.79 A 295.00 295.00 0 0 1 753.65 342.79" fill="none" stroke="#E5E9F0" stroke-width="5.5" stroke-opacity="0.9" />
+    <path d="M 753.65 681.21 A 295.00 295.00 0 0 1 270.35 681.21" fill="none" stroke="#E5E9F0" stroke-width="5.5" stroke-opacity="0.9" />
+    <line x1="512" y1="80" x2="512" y2="944" stroke="#E04F26" stroke-width="4" stroke-opacity="0.8" />
+    <line x1="80" y1="512" x2="944" y2="512" stroke="#E04F26" stroke-width="4" stroke-opacity="0.8" />
+    <line x1="140" y1="402" x2="884" y2="402" stroke="#8C99A6" stroke-width="4" stroke-opacity="0.75" />
+  </g>
+  <g id="monogram" filter="url(#iconShadow)">
+    <path d="M490 0 449 170H218L176 0H0L228 717H436L665 0ZM367 463Q358 495 349.0 530.5Q340 566 333 606Q326 566 317.0 529.5Q308 493 300 463L254 297H414Z" fill="url(#platinumGrad)" transform="translate(293.65, 647.00) scale(0.380000, -0.380000)" />
+    <path d="M356 0H194V588H21V714H529V588H356Z" fill="url(#crimsonGrad)" transform="translate(521.35, 647.00) scale(0.380000, -0.380000)" />
+  </g>
+</svg>

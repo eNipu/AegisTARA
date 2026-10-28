@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%">
+  <!--
+    AegisTARA Monochrome Stencil (Light / Brushed Platinum on Dark)
+    Single-color (#E5E9F0) stencil for dark-mode UI chrome and Windows system tray.
+  -->
+  <g id="stencil-reticle" fill="none" stroke="#E5E9F0" stroke-linecap="round">
+    <circle cx="512" cy="512" r="420" stroke-width="44" />
+    <path d="M 244.0 318.0 A 330.0 330.0 0 0 1 780.0 318.0" stroke-width="36" />
+    <path d="M 780.0 706.0 A 330.0 330.0 0 0 1 244.0 706.0" stroke-width="36" />
+    <line x1="512" y1="36" x2="512" y2="176" stroke-width="44" />
+    <line x1="512" y1="848" x2="512" y2="988" stroke-width="44" />
+    <line x1="36" y1="512" x2="176" y2="512" stroke-width="44" />
+    <line x1="848" y1="512" x2="988" y2="512" stroke-width="44" />
+    <line x1="210" y1="358" x2="814" y2="358" stroke-width="28" stroke-opacity="0.85" />
+  </g>
+  <g id="stencil-monogram" fill="#E5E9F0">
+    <path d="M490 0 449 170H218L176 0H0L228 717H436L665 0ZM367 463Q358 495 349.0 530.5Q340 566 333 606Q326 566 317.0 529.5Q308 493 300 463L254 297H414Z" transform="translate(268.00, 668.00) scale(0.400000, -0.400000)" />
+    <path d="M356 0H194V588H21V714H529V588H356Z" transform="translate(524.00, 668.00) scale(0.400000, -0.400000)" />
+  </g>
+</svg>
