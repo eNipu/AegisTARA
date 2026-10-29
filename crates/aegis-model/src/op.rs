@@ -641,4 +641,77 @@ impl Op {
             | Self::RemoveCybersecurityClaim { .. } => None,
         }
     }
+
+    /// Returns a copy of this operation with its [`Provenance`] replaced by
+    /// `new_provenance`. Entity-removal variants that carry no provenance are
+    /// returned unchanged. Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::{AssetId, Op, Provenance, ProvenanceSource};
+    ///
+    /// let id = AssetId::new_v7();
+    /// let op = Op::RenameAsset {
+    ///     id,
+    ///     name: "ECU".into(),
+    ///     provenance: Provenance::default(),
+    /// }
+    /// .with_provenance(Provenance::ai("alice", 1_700_000_000_000));
+    /// assert_eq!(
+    ///     op.provenance().map(Provenance::source),
+    ///     Some(ProvenanceSource::Ai)
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_provenance(mut self, new_provenance: Provenance) -> Self {
+        match &mut self {
+            Self::SetDescription { provenance, .. }
+            | Self::SetReviewMark { provenance, .. }
+            | Self::AddTreeNode { provenance, .. }
+            | Self::RemoveTreeNode { provenance, .. }
+            | Self::LinkTreeNode { provenance, .. }
+            | Self::UnlinkTreeNode { provenance, .. }
+            | Self::RenameTreeNode { provenance, .. }
+            | Self::SetTreeNodeGate { provenance, .. }
+            | Self::AddAsset { provenance, .. }
+            | Self::RenameAsset { provenance, .. }
+            | Self::SetAssetProperties { provenance, .. }
+            | Self::AddDamageScenario { provenance, .. }
+            | Self::RenameDamageScenario { provenance, .. }
+            | Self::SetImpact { provenance, .. }
+            | Self::AddThreatScenario { provenance, .. }
+            | Self::RenameThreatScenario { provenance, .. }
+            | Self::SetThreatCategory { provenance, .. }
+            | Self::AddCatalogRef { provenance, .. }
+            | Self::RemoveCatalogRef { provenance, .. }
+            | Self::LinkDamage { provenance, .. }
+            | Self::UnlinkDamage { provenance, .. }
+            | Self::AddAttackTree { provenance, .. }
+            | Self::SetStepFeasibility { provenance, .. }
+            | Self::SetStepFactor { provenance, .. }
+            | Self::SetThreatFeasibility { provenance, .. }
+            | Self::SetThreatAttackTree { provenance, .. }
+            | Self::SetRiskTreatment { provenance, .. }
+            | Self::AddSecurityControl { provenance, .. }
+            | Self::RenameSecurityControl { provenance, .. }
+            | Self::SetStepMitigation { provenance, .. }
+            | Self::AddCybersecurityGoal { provenance, .. }
+            | Self::RenameCybersecurityGoal { provenance, .. }
+            | Self::LinkGoalControl { provenance, .. }
+            | Self::UnlinkGoalControl { provenance, .. }
+            | Self::AddCybersecurityClaim { provenance, .. }
+            | Self::RenameCybersecurityClaim { provenance, .. }
+            | Self::SetThreatGoal { provenance, .. }
+            | Self::SetThreatClaim { provenance, .. } => {
+                *provenance = new_provenance;
+            }
+            Self::RemoveAsset { .. }
+            | Self::RemoveDamageScenario { .. }
+            | Self::RemoveThreatScenario { .. }
+            | Self::RemoveAttackTree { .. }
+            | Self::RemoveSecurityControl { .. }
+            | Self::RemoveCybersecurityGoal { .. }
+            | Self::RemoveCybersecurityClaim { .. } => {}
+        }
+        self
+    }
 }

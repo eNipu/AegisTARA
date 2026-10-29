@@ -212,14 +212,15 @@ impl pb::accounts_server::Accounts for AccountsService {
         let Some(accounts) = &self.accounts else {
             return Err(password_login_off());
         };
+        let peer = request.remote_addr().map(|a| a.ip());
         let req = request.into_inner();
-        let session = accounts
-            .log_in(&req.username, &req.password, &req.client_name)
+        let mut session = accounts
+            .log_in_from(&req.username, &req.password, &req.client_name, peer)
             .await?;
         let now = accounts.now_ms();
         let sessions = accounts.user(&session.user.username).map_or(1, |(_, n)| n);
         Ok(Response::new(pb::LogInResponse {
-            session_token: session.token,
+            session_token: std::mem::take(&mut session.token),
             expires_in_ms: session.expires_ms.saturating_sub(now),
             user: Some(user_info(&session.user, sessions)),
         }))

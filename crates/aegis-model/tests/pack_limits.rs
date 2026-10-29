@@ -149,8 +149,53 @@ fn methodology_version_cap() {
 fn label_cap_in_every_position() {
     const LABEL: Limit = Limit::LabelBytes { max: 1024 };
     type Set = fn(&mut MethodologyDef, Arc<str>);
-    let positions: [(&str, Set); 10] = [
+    let positions: [(&str, Set); 25] = [
         ("methodology label", |d, l| d.label = l),
+        ("element_names asset singular", |d, l| {
+            d.element_names.asset.singular = l
+        }),
+        ("element_names asset plural", |d, l| {
+            d.element_names.asset.plural = l
+        }),
+        ("element_names damage_scenario singular", |d, l| {
+            d.element_names.damage_scenario.singular = l
+        }),
+        ("element_names damage_scenario plural", |d, l| {
+            d.element_names.damage_scenario.plural = l
+        }),
+        ("element_names threat_scenario singular", |d, l| {
+            d.element_names.threat_scenario.singular = l
+        }),
+        ("element_names threat_scenario plural", |d, l| {
+            d.element_names.threat_scenario.plural = l
+        }),
+        ("element_names attack_tree singular", |d, l| {
+            d.element_names.attack_tree.singular = l
+        }),
+        ("element_names attack_tree plural", |d, l| {
+            d.element_names.attack_tree.plural = l
+        }),
+        ("element_names security_control singular", |d, l| {
+            d.element_names.security_control.singular = l
+        }),
+        ("element_names security_control plural", |d, l| {
+            d.element_names.security_control.plural = l
+        }),
+        ("element_names cybersecurity_goal singular", |d, l| {
+            d.element_names.cybersecurity_goal.singular = l
+        }),
+        ("element_names cybersecurity_goal plural", |d, l| {
+            d.element_names.cybersecurity_goal.plural = l
+        }),
+        ("element_names cybersecurity_claim singular", |d, l| {
+            d.element_names.cybersecurity_claim.singular = l
+        }),
+        ("element_names cybersecurity_claim plural", |d, l| {
+            d.element_names.cybersecurity_claim.plural = l
+        }),
+        ("element_names feasibility", |d, l| {
+            d.element_names.feasibility = l
+        }),
         ("impact category label", |d, l| {
             d.impact_categories[2].label = l
         }),

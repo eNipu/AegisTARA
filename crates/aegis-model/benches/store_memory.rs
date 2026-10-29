@@ -129,6 +129,7 @@ fn short_keys() -> Arc<Methodology> {
         key: "short".into(),
         version: "1".into(),
         label: "Short keys".into(),
+        element_names: aegis_model::ElementNamesDef::default(),
         impact_categories: (0..32)
             .map(|i| {
                 let (key, label) = entry(format!("c{i}"));

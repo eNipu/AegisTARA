@@ -10,6 +10,7 @@
 //! entities carry. Text keys are resolved to indices once, at the boundary.
 
 mod catalog;
+mod cra;
 mod iso21434;
 mod pack;
 
@@ -63,7 +64,8 @@ pub const MAX_KEY_LEN: usize = 64;
 ///
 /// ```
 /// use aegis_model::{
-///     ImpactCategoryDef, LevelDef, Methodology, MethodologyDef, PropertyDef, ThreatCategoryDef,
+///     ElementNamesDef, ImpactCategoryDef, LevelDef, Methodology, MethodologyDef, PropertyDef,
+///     ThreatCategoryDef,
 /// };
 ///
 /// # fn main() -> Result<(), aegis_model::MethodologyError> {
@@ -71,6 +73,7 @@ pub const MAX_KEY_LEN: usize = 64;
 ///     key: "tiny".into(),
 ///     version: "1".into(),
 ///     label: "Tiny".into(),
+///     element_names: ElementNamesDef::default(),
 ///     impact_categories: vec![ImpactCategoryDef {
 ///         key: "harm".into(),
 ///         label: "Harm".into(),
@@ -113,9 +116,12 @@ pub struct MethodologyDef {
     pub version: Arc<str>,
     /// Display label.
     pub label: Arc<str>,
+    /// Pack-defined display names for the model's element types and the
+    /// feasibility or likelihood scale (DOM-01, DOM-02).
+    pub element_names: ElementNamesDef,
     /// Impact categories, 1 to 32.
     pub impact_categories: Vec<ImpactCategoryDef>,
-    /// Ordered scale of attack feasibility levels, lowest feasibility
+    /// Ordered scale of attack feasibility or likelihood levels, lowest
     /// first. Must hold between [`MIN_LEVELS`] (2) and [`MAX_LEVELS`] (16)
     /// levels with unique keys.
     pub feasibility_levels: Vec<LevelDef>,
@@ -129,8 +135,87 @@ pub struct MethodologyDef {
     /// Catalog schemes, 0 to 16.
     pub catalog_schemes: Vec<CatalogSchemeDef>,
     /// Optional multi-factor attack potential scheme, mapping per-factor
-    /// ratings on an attack step to a [`FeasibilityLevel`].
+    /// ratings on an attack step to a [`FeasibilityLevel`]. When `None`,
+    /// steps and threats use the plain direct-rating scale in
+    /// [`feasibility_levels`](Self::feasibility_levels) (DOM-02).
     pub attack_potential: Option<AttackPotentialDef>,
+}
+
+/// Singular and plural display names for one element kind in a [`MethodologyDef`].
+///
+/// ```
+/// use aegis_model::ElementNameDef;
+///
+/// let n = ElementNameDef::new("Harm", "Harms");
+/// assert_eq!(&*n.singular, "Harm");
+/// assert_eq!(&*n.plural, "Harms");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementNameDef {
+    /// Singular display label, for example `"Damage scenario"` or `"Harm"`.
+    pub singular: Arc<str>,
+    /// Plural display label, for example `"Damage scenarios"` or `"Harms"`.
+    pub plural: Arc<str>,
+}
+
+impl ElementNameDef {
+    /// Builds a singular and plural display name pair.
+    #[must_use]
+    pub fn new(singular: impl Into<Arc<str>>, plural: impl Into<Arc<str>>) -> Self {
+        Self {
+            singular: singular.into(),
+            plural: plural.into(),
+        }
+    }
+}
+
+/// Pack-defined display names for the model's element types and the
+/// feasibility or likelihood scale (DOM-01, DOM-02, Decision D24).
+///
+/// [`ElementNamesDef::default`] gives the ISO/SAE 21434 terminology so
+/// existing packs that omit `element_names` keep today's names unchanged.
+///
+/// ```
+/// use aegis_model::ElementNamesDef;
+///
+/// let names = ElementNamesDef::default();
+/// assert_eq!(&*names.damage_scenario.singular, "Damage scenario");
+/// assert_eq!(&*names.damage_scenario.plural, "Damage scenarios");
+/// assert_eq!(&*names.feasibility, "Attack feasibility");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementNamesDef {
+    /// Display names for assets (default: `"Asset"` / `"Assets"`).
+    pub asset: ElementNameDef,
+    /// Display names for damage scenarios (default: `"Damage scenario"` / `"Damage scenarios"`).
+    pub damage_scenario: ElementNameDef,
+    /// Display names for threat scenarios (default: `"Threat scenario"` / `"Threat scenarios"`).
+    pub threat_scenario: ElementNameDef,
+    /// Display names for attack trees (default: `"Attack tree"` / `"Attack trees"`).
+    pub attack_tree: ElementNameDef,
+    /// Display names for security controls (default: `"Security control"` / `"Security controls"`).
+    pub security_control: ElementNameDef,
+    /// Display names for cybersecurity goals (default: `"Cybersecurity goal"` / `"Cybersecurity goals"`).
+    pub cybersecurity_goal: ElementNameDef,
+    /// Display names for cybersecurity claims (default: `"Cybersecurity claim"` / `"Cybersecurity claims"`).
+    pub cybersecurity_claim: ElementNameDef,
+    /// Display label for the feasibility or likelihood scale (default: `"Attack feasibility"`).
+    pub feasibility: Arc<str>,
+}
+
+impl Default for ElementNamesDef {
+    fn default() -> Self {
+        Self {
+            asset: ElementNameDef::new("Asset", "Assets"),
+            damage_scenario: ElementNameDef::new("Damage scenario", "Damage scenarios"),
+            threat_scenario: ElementNameDef::new("Threat scenario", "Threat scenarios"),
+            attack_tree: ElementNameDef::new("Attack tree", "Attack trees"),
+            security_control: ElementNameDef::new("Security control", "Security controls"),
+            cybersecurity_goal: ElementNameDef::new("Cybersecurity goal", "Cybersecurity goals"),
+            cybersecurity_claim: ElementNameDef::new("Cybersecurity claim", "Cybersecurity claims"),
+            feasibility: Arc::from("Attack feasibility"),
+        }
+    }
 }
 
 /// One impact category, its ordered rating scale, and its 2D risk matrix.
@@ -963,6 +1048,7 @@ pub struct Methodology {
     key: Arc<str>,
     version: Arc<str>,
     label: Arc<str>,
+    element_names: ElementNamesDef,
     impact_categories: Vec<CategoryData>,
     impact_by_key: BTreeMap<Arc<str>, u8>,
     feasibility_levels: Vec<Entry>,
@@ -1095,12 +1181,13 @@ impl Methodology {
     /// `violates`; and the catalog schemes and their syntax.
     ///
     /// ```
-    /// use aegis_model::{Methodology, MethodologyDef, MethodologyError};
+    /// use aegis_model::{ElementNamesDef, Methodology, MethodologyDef, MethodologyError};
     ///
     /// let def = MethodologyDef {
     ///     key: "Not-A-Key".into(),
     ///     version: "1".into(),
     ///     label: "Bad".into(),
+    ///     element_names: ElementNamesDef::default(),
     ///     impact_categories: vec![],
     ///     feasibility_levels: vec![],
     ///     risk_levels: vec![],
@@ -1144,11 +1231,13 @@ impl Methodology {
                 Vec::new(),
             ),
         };
+        Self::check_element_names(&def.element_names)?;
 
         Ok(Methodology {
             key: def.key,
             version: def.version,
             label: def.label,
+            element_names: def.element_names,
             impact_categories: impacts.items,
             impact_by_key: impacts.by_key,
             feasibility_levels: feasibility.items,
@@ -1166,6 +1255,26 @@ impl Methodology {
             potential_bands,
             all_properties,
         })
+    }
+
+    fn check_element_names(names: &ElementNamesDef) -> Result<(), MethodologyError> {
+        let pairs: [(&str, &ElementNameDef); 7] = [
+            ("asset", &names.asset),
+            ("damage_scenario", &names.damage_scenario),
+            ("threat_scenario", &names.threat_scenario),
+            ("attack_tree", &names.attack_tree),
+            ("security_control", &names.security_control),
+            ("cybersecurity_goal", &names.cybersecurity_goal),
+            ("cybersecurity_claim", &names.cybersecurity_claim),
+        ];
+        for (key, pair) in pairs {
+            let k: Arc<str> = Arc::from(key);
+            check_label(&k, &pair.singular)?;
+            check_label(&k, &pair.plural)?;
+        }
+        let feas_key: Arc<str> = Arc::from("feasibility");
+        check_label(&feas_key, &names.feasibility)?;
+        Ok(())
     }
 
     fn build_feasibility_levels(defs: &[LevelDef]) -> Result<Vocab<Entry>, MethodologyError> {
@@ -1522,6 +1631,59 @@ impl Methodology {
     #[must_use]
     pub fn label(&self) -> &str {
         &self.label
+    }
+
+    /// Returns the pack-defined display names for element types and the
+    /// feasibility or likelihood scale (DOM-01, DOM-02). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(&*m.element_names().damage_scenario.singular, "Damage scenario");
+    /// assert_eq!(&*m.element_names().feasibility, "Attack feasibility");
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn element_names(&self) -> &ElementNamesDef {
+        &self.element_names
+    }
+
+    /// Returns the display label of the feasibility or likelihood scale, for
+    /// example `"Attack feasibility"` or `"Likelihood"` (DOM-02). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// assert_eq!(Methodology::iso21434_r155()?.feasibility_label(), "Attack feasibility");
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn feasibility_label(&self) -> &str {
+        &self.element_names.feasibility
+    }
+
+    /// Returns `true` if this methodology declares a multi-factor
+    /// `attack_potential` scheme, or `false` if steps and threats are rated
+    /// directly on the plain [`feasibility_levels`](Self::feasibility_levels)
+    /// scale (DOM-02). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// assert!(Methodology::iso21434_r155()?.has_attack_potential());
+    /// assert!(!Methodology::eu_cra()?.has_attack_potential());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn has_attack_potential(&self) -> bool {
+        !self.factors.is_empty()
     }
 
     // -- Impact categories and levels --------------------------------------
@@ -2876,6 +3038,7 @@ mod tests {
             key: "base".into(),
             version: "1.0".into(),
             label: "Base".into(),
+            element_names: ElementNamesDef::default(),
             impact_categories: vec![category("harm", 3), category("cost", 2)],
             feasibility_levels: vec![level("f0"), level("f1"), level("f2")],
             risk_levels: vec![level("r0"), level("r1")],
@@ -3787,6 +3950,55 @@ mod tests {
             &MethodologyError::UnknownBandFeasibilityLevel {
                 band: 1,
                 feasibility: "f9".into(),
+            },
+        );
+    }
+
+    #[test]
+    fn element_names_validation_and_plain_likelihood() {
+        let m = Methodology::new(base()).expect("valid");
+        assert!(!m.has_attack_potential());
+        assert_eq!(m.feasibility_label(), "Attack feasibility");
+        assert_eq!(
+            &*m.element_names().damage_scenario.singular,
+            "Damage scenario"
+        );
+
+        let mut custom = base();
+        custom.element_names.damage_scenario = ElementNameDef::new("Harm", "Harms");
+        custom.element_names.cybersecurity_goal =
+            ElementNameDef::new("Security requirement", "Security requirements");
+        custom.element_names.feasibility = "Likelihood".into();
+        let m_custom = Methodology::new(custom).expect("valid custom names");
+        assert_eq!(&*m_custom.element_names().damage_scenario.singular, "Harm");
+        assert_eq!(&*m_custom.element_names().damage_scenario.plural, "Harms");
+        assert_eq!(m_custom.feasibility_label(), "Likelihood");
+
+        let mut blank = base();
+        blank.element_names.damage_scenario.singular = "   ".into();
+        rejects(
+            blank,
+            &MethodologyError::BlankLabel {
+                key: "damage_scenario".into(),
+            },
+        );
+
+        let mut blank_feas = base();
+        blank_feas.element_names.feasibility = "".into();
+        rejects(
+            blank_feas,
+            &MethodologyError::BlankLabel {
+                key: "feasibility".into(),
+            },
+        );
+
+        let mut long = base();
+        long.element_names.asset.plural = "A".repeat(MAX_LABEL_CHARS + 1).into();
+        rejects(
+            long,
+            &MethodologyError::LabelTooLong {
+                key: "asset".into(),
+                max: MAX_LABEL_CHARS,
             },
         );
     }

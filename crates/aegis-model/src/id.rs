@@ -641,6 +641,91 @@ entity_ids! {
     pub struct ClaimId;
 }
 
+/// Stable public ID of a suggestion branch or suggestion item: an RFC 9562
+/// version 7 UUID.
+///
+/// ```
+/// use aegis_model::SuggestionId;
+///
+/// # fn main() -> Result<(), aegis_model::ModelError> {
+/// let id = SuggestionId::new_v7();
+/// assert_eq!(id.to_string().parse::<SuggestionId>()?, id);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SuggestionId(Uuid);
+
+impl SuggestionId {
+    /// Creates a fresh `UUIDv7` from the system clock and random bits. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::SuggestionId;
+    ///
+    /// let a = SuggestionId::new_v7();
+    /// assert_ne!(a, SuggestionId::new_v7());
+    /// assert_eq!(a.as_uuid().get_version_num(), 7);
+    /// ```
+    #[must_use]
+    pub fn new_v7() -> Self {
+        SuggestionId(Uuid::now_v7())
+    }
+
+    /// Wraps a UUID after checking that it is version 7 with the RFC 9562
+    /// variant. Time O(1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::NotVersion7`] for any other version or variant.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, SuggestionId};
+    /// use uuid::Uuid;
+    ///
+    /// let v4 = Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").ok();
+    /// assert_eq!(v4.map(SuggestionId::from_uuid), Some(Err(ModelError::NotVersion7)));
+    /// assert!(SuggestionId::from_uuid(Uuid::now_v7()).is_ok());
+    /// ```
+    pub fn from_uuid(u: Uuid) -> Result<Self, ModelError> {
+        check_v7(u).map(SuggestionId)
+    }
+
+    /// Returns the underlying UUID. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::SuggestionId;
+    ///
+    /// let id = SuggestionId::new_v7();
+    /// assert_eq!(id.as_uuid().get_version_num(), 7);
+    /// ```
+    #[must_use]
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+}
+
+impl FromStr for SuggestionId {
+    type Err = ModelError;
+
+    /// Parses any textual UUID form accepted by [`Uuid::parse_str`], then
+    /// checks that it is version 7.
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::InvalidUuid`] for malformed text,
+    /// [`ModelError::NotVersion7`] for a valid UUID of another version.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_v7(s).map(SuggestionId)
+    }
+}
+
+impl fmt::Display for SuggestionId {
+    /// Writes the hyphenated lowercase form.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.hyphenated(), f)
+    }
+}
+
 #[cfg(test)]
 mod parse {
     use super::*;
@@ -813,6 +898,11 @@ mod entity_ids {
     #[test]
     fn ids_node_id_unchanged() {
         id_checks!(NodeId);
+    }
+
+    #[test]
+    fn ids_suggestion_accepts_only_v7_and_round_trips() {
+        id_checks!(SuggestionId);
     }
 
     #[test]

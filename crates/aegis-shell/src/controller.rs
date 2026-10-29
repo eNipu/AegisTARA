@@ -35,7 +35,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecMod
 use crate::adapter::{bucket, draw_items, draw_layers};
 use crate::{
     AccessNode, AppWindow, CheckItem, CountItem, DescriptionItem, DiffItem, FactorItem, LinkItem,
-    MitigationItem, NoticeItem, ProblemItem, ProjectItem, ThreatItem,
+    MitigationItem, NoticeItem, ProblemItem, ProjectItem, SuggestionItem, ThreatItem,
 };
 
 /// Pixels the pointer must move before a press becomes a drag.
@@ -402,12 +402,21 @@ impl Controller {
         // ---- projects ----
         on!(on_open_project, |c, id| c
             .send(Command::OpenProject { id: id.to_string() }));
-        on!(on_create_project, |c, name| c.send(
-            Command::CreateProject {
+        on!(on_create_project, |c, name| {
+            let methodology_key = match c
+                .window
+                .upgrade()
+                .map(|w| w.get_new_project_methodology())
+                .unwrap_or(0)
+            {
+                1 => "eu-cra",
+                _ => "iso21434-r155",
+            };
+            c.send(Command::CreateProject {
                 name: name.to_string(),
-                methodology_key: "iso21434-r155".to_owned(),
-            }
-        ));
+                methodology_key: methodology_key.to_owned(),
+            });
+        });
         on!(on_refresh_projects, |c| c.send(Command::Refresh));
         on!(on_close_project, |c| c.send(Command::CloseProject));
         on!(on_rename_project, |c, name| c
@@ -835,6 +844,23 @@ impl Controller {
             {
                 c.edit(Edit::RemoveTreeNode { tree, node });
             }
+        });
+        on!(on_suggest_tree_nodes, |c| c.send(Command::SuggestTreeNodes));
+        on!(on_accept_suggestion, |c, i| {
+            if let Some(index) = pos(i) {
+                c.send(Command::AcceptSuggestion(index));
+            }
+        });
+        on!(on_accept_all_suggestions, |c| {
+            c.send(Command::AcceptAllSuggestions);
+        });
+        on!(on_reject_suggestion, |c, i| {
+            if let Some(index) = pos(i) {
+                c.send(Command::RejectSuggestion(index));
+            }
+        });
+        on!(on_reject_all_suggestions, |c| {
+            c.send(Command::RejectAllSuggestions);
         });
         on!(on_attach_control, |c, ci, level| {
             let target = c.with_project(|p| {
@@ -1667,6 +1693,12 @@ impl Controller {
 
     fn apply_vocabulary(&self, w: &AppWindow, p: &ProjectView) {
         let v = &p.vocab;
+        w.set_has_attack_potential(v.has_attack_potential);
+        w.set_feasibility_label(s(&v.element_names.feasibility));
+        w.set_damage_singular(s(&v.element_names.damage_scenario.singular));
+        w.set_damage_plural(s(&v.element_names.damage_scenario.plural));
+        w.set_goal_singular(s(&v.element_names.cybersecurity_goal.singular));
+        w.set_goal_plural(s(&v.element_names.cybersecurity_goal.plural));
         w.set_property_labels(model(v.properties.iter().map(|x| s(x)).collect()));
         w.set_threat_categories(model(v.threat_categories.iter().map(|x| s(x)).collect()));
         w.set_feasibility_options(with_none("Not rated", v.feasibility.iter().cloned()));
@@ -2194,6 +2226,25 @@ impl Controller {
             _ => "No attack tree".to_owned(),
         }));
 
+        if prev_proj.is_none_or(|old| {
+            old.suggestions != project.suggestions
+                || old.selected_suggestion != project.selected_suggestion
+        }) {
+            w.set_suggestion_rows(model(
+                project
+                    .suggestions
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, r)| SuggestionItem {
+                        label: s(&r.label),
+                        detail: s(&r.detail),
+                        kind: s(&r.kind),
+                        selected: project.selected_suggestion == Some(idx),
+                    })
+                    .collect(),
+            ));
+        }
+
         if prev_proj.is_none_or(|old| old.inspector != project.inspector) {
             match project.inspector.as_ref() {
                 Some(i) => {
@@ -2250,12 +2301,15 @@ impl Controller {
             }
         }
 
-        // A tree that was not on the canvas before is fitted to the window.
+        // A tree that was not on the canvas before, or newly synthesized ghost
+        // nodes, is fitted to the window.
         let tree_id = project.tree.as_ref().map(|t| t.tree);
+        let new_suggestions = prev_proj
+            .is_some_and(|old| old.suggestions.is_empty() && !project.suggestions.is_empty());
         let mut refitted = false;
         {
             let mut st = self.state.borrow_mut();
-            if tree_id != st.shown_tree {
+            if tree_id != st.shown_tree || new_suggestions {
                 st.shown_tree = tree_id;
                 refitted = true;
                 if let Some(t) = &project.tree {

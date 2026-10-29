@@ -36,18 +36,18 @@ async fn server_info_lists_the_engine_and_methodologies() {
         .into_inner();
     assert_eq!(info.engine_version, aegis_model::ENGINE_VERSION);
     assert_eq!(info.lease_ms, 60_000);
-    assert_eq!(info.methodologies.len(), 1);
-    assert_eq!(info.methodologies[0].key, METHODOLOGY);
+    let keys: Vec<&str> = info.methodologies.iter().map(|m| m.key.as_str()).collect();
+    assert_eq!(keys, vec!["eu-cra", METHODOLOGY]);
 
-    let pack = alice
-        .get_methodology(pb::GetMethodologyRequest {
-            key: METHODOLOGY.into(),
-        })
-        .await
-        .expect("pack")
-        .into_inner();
-    let m = aegis_model::Methodology::read_pack(pack.pack.as_ref()).expect("valid pack");
-    assert_eq!(m.key(), METHODOLOGY);
+    for key in ["eu-cra", METHODOLOGY] {
+        let pack = alice
+            .get_methodology(pb::GetMethodologyRequest { key: key.into() })
+            .await
+            .expect("pack")
+            .into_inner();
+        let m = aegis_model::Methodology::read_pack(pack.pack.as_ref()).expect("valid pack");
+        assert_eq!(m.key(), key);
+    }
 
     let missing = alice
         .get_methodology(pb::GetMethodologyRequest { key: "nope".into() })

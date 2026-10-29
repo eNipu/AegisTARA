@@ -15,8 +15,66 @@
 //! starts. Writing goes to a temporary file first and is renamed into place,
 //! so a crash never leaves half a file.
 
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Writes `bytes` to `path` via a new owner-only (`0600` on Unix) temporary
+/// file in the same directory and renames it into place (SEC-09). Refuses to
+/// overwrite a symbolic link.
+///
+/// # Errors
+///
+/// The I/O error.
+pub fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    if !dir.as_os_str().is_empty() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(path)
+        && meta.file_type().is_symlink()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to overwrite a symbolic link",
+        ));
+    }
+    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("aegis");
+    let pid = std::process::id();
+    for _ in 0..64 {
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!(".{stem}.{pid}.{seq}.tmp"));
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        match opts.open(&tmp) {
+            Ok(mut file) => {
+                let res = (|| {
+                    file.write_all(bytes)?;
+                    file.sync_all()?;
+                    drop(file);
+                    std::fs::rename(&tmp, path)
+                })();
+                if res.is_err() {
+                    let _ = std::fs::remove_file(&tmp);
+                }
+                return res;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique temporary file",
+    ))
+}
 
 /// Largest settings file read.
 pub const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
@@ -108,13 +166,8 @@ impl Settings {
     ///
     /// The I/O error.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(&tmp, path)
+        write_private_file(path, text.as_bytes())
     }
 
     /// The export folder to use.
@@ -177,6 +230,19 @@ mod tests {
         // Unknown fields from a newer app are ignored, missing ones default.
         std::fs::write(&path, r#"{"server_url":"x","future":1}"#).expect("write");
         assert_eq!(Settings::load(&path).server_url, "x");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            s.save(&path).expect("save again");
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "settings file must be owner-only (0600)");
+            let link = dir.join("symlink.json");
+            std::os::unix::fs::symlink(&path, &link).expect("symlink");
+            assert!(
+                write_private_file(&link, b"nope").is_err(),
+                "must refuse to overwrite a symbolic link"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

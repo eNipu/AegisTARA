@@ -58,6 +58,7 @@ pub fn second_def() -> MethodologyDef {
         key: s("med-device-demo"),
         version: s("2026.1"),
         label: s("Medical device demo"),
+        element_names: aegis_model::ElementNamesDef::default(),
         impact_categories: vec![
             ImpactCategoryDef {
                 key: s("patient-harm"),
@@ -359,6 +360,7 @@ pub fn wide() -> Methodology {
         key: "wide".into(),
         version: "1".into(),
         label: "Wide".into(),
+        element_names: aegis_model::ElementNamesDef::default(),
         impact_categories: (0..8)
             .map(|i| ImpactCategoryDef {
                 key: s(format!("c{i}")),
@@ -2378,6 +2380,7 @@ pub fn max_def() -> MethodologyDef {
         key: key_of_len("m", 0, 64),
         version: "\u{1}".repeat(64).into(),
         label: Arc::clone(&label),
+        element_names: aegis_model::ElementNamesDef::default(),
         impact_categories: (0..32)
             .map(|i| {
                 let (key, label) = entry("c", i);

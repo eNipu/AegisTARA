@@ -115,6 +115,12 @@ pub struct UserRecord {
     pub last_login_ms: u64,
 }
 
+impl Drop for UserRecord {
+    fn drop(&mut self) {
+        password::zeroize_string(&mut self.password_hash);
+    }
+}
+
 /// An open session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRecord {
@@ -157,13 +163,15 @@ pub enum AuditKind {
     PasswordLoginChanged,
     /// An admin ended someone's session (job 055).
     SessionRevoked,
+    /// Old events were removed by the retention trimmer (job 062, SEC-06).
+    EventsTrimmed,
 }
 
 impl AuditKind {
     /// Every kind, so a backend can read a stored name back. Adding a kind
     /// means adding it here; the test `every_kind_is_listed_and_round_trips`
     /// fails if it is missing.
-    pub const ALL: [AuditKind; 12] = [
+    pub const ALL: [AuditKind; 13] = [
         AuditKind::LoginOk,
         AuditKind::LoginFailed,
         AuditKind::Logout,
@@ -176,6 +184,7 @@ impl AuditKind {
         AuditKind::BaselineCreated,
         AuditKind::PasswordLoginChanged,
         AuditKind::SessionRevoked,
+        AuditKind::EventsTrimmed,
     ];
 
     /// The kind with this stored name, if there is one.
@@ -202,6 +211,7 @@ impl AuditKind {
             AuditKind::BaselineCreated => 9,
             AuditKind::PasswordLoginChanged => 10,
             AuditKind::SessionRevoked => 11,
+            AuditKind::EventsTrimmed => 12,
         }
     }
 
@@ -221,6 +231,7 @@ impl AuditKind {
             AuditKind::BaselineCreated => "baseline_created",
             AuditKind::PasswordLoginChanged => "password_login_changed",
             AuditKind::SessionRevoked => "session_revoked",
+            AuditKind::EventsTrimmed => "events_trimmed",
         }
     }
 }
@@ -289,6 +300,34 @@ impl AccountBackend {
         dispatch!(self, b => b.put_user(user).await)
     }
 
+    /// Atomically updates `user`, inserts `session`, and deletes `evicted`
+    /// sessions (SEC-07).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn put_login_session(
+        &self,
+        user: &UserRecord,
+        session: &SessionRecord,
+        evicted: &[SessionKey],
+    ) -> Result<(), StoreFault> {
+        dispatch!(self, b => b.put_login_session(user, session, evicted).await)
+    }
+
+    /// Atomically updates `user` and deletes `keys` sessions (SEC-07).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn put_user_and_delete_sessions(
+        &self,
+        user: &UserRecord,
+        keys: &[SessionKey],
+    ) -> Result<(), StoreFault> {
+        dispatch!(self, b => b.put_user_and_delete_sessions(user, keys).await)
+    }
+
     /// Deletes a user and their sessions.
     ///
     /// # Errors
@@ -325,6 +364,20 @@ impl AccountBackend {
         dispatch!(self, b => b.put_password_login(enabled).await)
     }
 
+    /// Atomically stores the password login switch and deletes `keys`
+    /// sessions (SEC-07).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn put_password_login_and_delete_sessions(
+        &self,
+        enabled: bool,
+        keys: &[SessionKey],
+    ) -> Result<(), StoreFault> {
+        dispatch!(self, b => b.put_password_login_and_delete_sessions(enabled, keys).await)
+    }
+
     /// Appends an audit event.
     ///
     /// # Errors
@@ -344,13 +397,29 @@ impl AccountBackend {
     }
 
     /// Removes events older than `cutoff_ms`, then the oldest ones beyond
-    /// `keep`. Returns how many went.
+    /// `keep`, advances the hash-chain tail anchor, and records an
+    /// [`AuditKind::EventsTrimmed`] event at `now_ms`. Returns how many went.
     ///
     /// # Errors
     ///
     /// [`StoreFault`] from the backend.
-    pub async fn trim_events(&self, cutoff_ms: u64, keep: usize) -> Result<u64, StoreFault> {
-        dispatch!(self, b => b.trim_events(cutoff_ms, keep).await)
+    pub async fn trim_events(
+        &self,
+        cutoff_ms: u64,
+        keep: usize,
+        now_ms: u64,
+    ) -> Result<u64, StoreFault> {
+        dispatch!(self, b => b.trim_events(cutoff_ms, keep, now_ms).await)
+    }
+
+    /// Verifies the SHA-256 hash chain over all surviving audit events
+    /// (SEC-06).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn verify_events(&self) -> Result<crate::store::audit::ChainReport, StoreFault> {
+        dispatch!(self, b => b.verify_events().await)
     }
 }
 
@@ -465,6 +534,13 @@ pub struct AccountsConfig {
     pub hashing_permits: usize,
     /// How long a login waits for a hashing permit before it is refused.
     pub hashing_wait: Duration,
+    /// Maximum concurrent `LogIn` checks in flight from one peer address
+    /// before additional concurrent requests from that address are refused
+    /// in front of the global hashing semaphore (SEC-04).
+    pub max_login_in_flight_per_addr: usize,
+    /// Failures from one peer address across any usernames before that
+    /// address is slowed down in front of the hashing semaphore (SEC-04).
+    pub free_addr_failures: u32,
     /// Wall clock in milliseconds since the Unix epoch.
     pub clock_ms: fn() -> u64,
     /// The server also has a company login (OIDC), so an admin may turn
@@ -482,24 +558,32 @@ impl Default for AccountsConfig {
             max_backoff: Duration::from_secs(15 * 60),
             hashing_permits: 4,
             hashing_wait: Duration::from_secs(5),
+            max_login_in_flight_per_addr: 2,
+            free_addr_failures: 20,
             clock_ms: crate::config::system_clock_ms,
             company_login: false,
         }
     }
 }
 
-/// Failure tracking for one user name.
+/// Failure tracking for one user name or peer address.
 #[derive(Clone, Copy, Debug, Default)]
 struct Failures {
     count: u32,
     /// No attempt is checked before this time.
     blocked_until_ms: u64,
+    /// Most recent failure timestamp, for LRU eviction when at capacity.
+    last_failed_ms: u64,
+    /// Whether the entry belongs to a known account (never evicted ahead of
+    /// unknown-username guesses).
+    known: bool,
 }
 
 /// Slows down guessing: per user name, exponential backoff after
 /// `free_failures` failures. Bounded (R4): at most [`Throttle::CAPACITY`]
-/// names are tracked; when full, the table is cleared (an attacker who
-/// floods it only resets everyone's counters to the free allowance).
+/// names are tracked; when full, the single oldest/unblocked entry (preferring
+/// unknown usernames over real accounts) is evicted so a flood of unknown
+/// usernames never wipes active lockouts (SEC-01).
 #[derive(Debug, Default)]
 struct Throttle {
     names: HashMap<String, Failures>,
@@ -517,12 +601,35 @@ impl Throttle {
         }
     }
 
+    #[cfg(test)]
     fn fail(&mut self, name: &str, now_ms: u64, config: &AccountsConfig) {
-        if self.names.len() >= Self::CAPACITY && !self.names.contains_key(name) {
-            self.names.clear();
+        self.fail_with(name, false, now_ms, config);
+    }
+
+    fn fail_with(&mut self, name: &str, known: bool, now_ms: u64, config: &AccountsConfig) {
+        if self.names.len() >= Self::CAPACITY
+            && !self.names.contains_key(name)
+            && let Some(evict) = self
+                .names
+                .iter()
+                .min_by_key(|(k, f)| {
+                    (
+                        f.known,
+                        f.blocked_until_ms > now_ms,
+                        f.blocked_until_ms,
+                        f.last_failed_ms,
+                        f.count,
+                        *k,
+                    )
+                })
+                .map(|(k, _)| k.clone())
+        {
+            self.names.remove(&evict);
         }
         let f = self.names.entry(name.to_owned()).or_default();
         f.count = f.count.saturating_add(1);
+        f.last_failed_ms = now_ms;
+        f.known |= known;
         if f.count >= config.free_failures {
             let doublings = (f.count - config.free_failures).min(20);
             let wait_ms = (1000u64 << doublings)
@@ -533,6 +640,108 @@ impl Throttle {
 
     fn succeed(&mut self, name: &str) {
         self.names.remove(name);
+    }
+}
+
+/// Per-address concurrency and failure limiter in front of the Argon2id
+/// semaphore for unauthenticated `LogIn` calls (SEC-04).
+#[derive(Clone, Copy, Debug, Default)]
+struct AddrState {
+    in_flight: usize,
+    failures: Failures,
+}
+
+#[derive(Debug, Default)]
+struct AddrThrottle {
+    addrs: HashMap<std::net::IpAddr, AddrState>,
+}
+
+impl AddrThrottle {
+    const CAPACITY: usize = 10_000;
+
+    fn acquire(
+        &mut self,
+        ip: std::net::IpAddr,
+        now_ms: u64,
+        config: &AccountsConfig,
+    ) -> Result<(), AccountError> {
+        if let Some(st) = self.addrs.get(&ip) {
+            if st.failures.blocked_until_ms > now_ms {
+                let retry_after_s = (st.failures.blocked_until_ms - now_ms).div_ceil(1000);
+                return Err(AccountError::Throttled { retry_after_s });
+            }
+            if st.in_flight >= config.max_login_in_flight_per_addr.max(1) {
+                return Err(AccountError::Busy);
+            }
+        }
+        if self.addrs.len() >= Self::CAPACITY
+            && !self.addrs.contains_key(&ip)
+            && let Some(evict) = self
+                .addrs
+                .iter()
+                .filter(|(_, st)| st.in_flight == 0)
+                .min_by_key(|(addr, st)| {
+                    (
+                        st.failures.blocked_until_ms > now_ms,
+                        st.failures.blocked_until_ms,
+                        st.failures.last_failed_ms,
+                        st.failures.count,
+                        **addr,
+                    )
+                })
+                .map(|(addr, _)| *addr)
+        {
+            self.addrs.remove(&evict);
+        }
+        if self.addrs.len() >= Self::CAPACITY && !self.addrs.contains_key(&ip) {
+            return Err(AccountError::Busy);
+        }
+        let st = self.addrs.entry(ip).or_default();
+        st.in_flight = st.in_flight.saturating_add(1);
+        Ok(())
+    }
+
+    fn release(&mut self, ip: std::net::IpAddr) {
+        if let Some(st) = self.addrs.get_mut(&ip) {
+            st.in_flight = st.in_flight.saturating_sub(1);
+            if st.in_flight == 0 && st.failures.count == 0 {
+                self.addrs.remove(&ip);
+            }
+        }
+    }
+
+    fn fail(&mut self, ip: std::net::IpAddr, now_ms: u64, config: &AccountsConfig) {
+        if let Some(st) = self.addrs.get_mut(&ip) {
+            let f = &mut st.failures;
+            f.count = f.count.saturating_add(1);
+            f.last_failed_ms = now_ms;
+            let free = config.free_addr_failures.max(1);
+            if f.count >= free {
+                let doublings = (f.count - free).min(20);
+                let wait_ms = (1000u64 << doublings)
+                    .min(u64::try_from(config.max_backoff.as_millis()).unwrap_or(u64::MAX));
+                f.blocked_until_ms = now_ms.saturating_add(wait_ms);
+            }
+        }
+    }
+
+    fn succeed(&mut self, ip: std::net::IpAddr) {
+        if let Some(st) = self.addrs.get_mut(&ip) {
+            st.failures = Failures::default();
+        }
+    }
+}
+
+struct AddrInFlightGuard<'a> {
+    throttle: &'a Mutex<AddrThrottle>,
+    peer: Option<std::net::IpAddr>,
+}
+
+impl Drop for AddrInFlightGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(ip) = self.peer {
+            lock(self.throttle).release(ip);
+        }
     }
 }
 
@@ -572,6 +781,12 @@ pub struct NewSession {
     pub user: UserRecord,
 }
 
+impl Drop for NewSession {
+    fn drop(&mut self) {
+        password::zeroize_string(&mut self.token);
+    }
+}
+
 /// A change an admin asks for. `None` leaves a field as it is.
 #[derive(Clone, Debug, Default)]
 pub struct UserUpdate {
@@ -588,14 +803,23 @@ pub struct UserUpdate {
 /// Password accounts: see the module docs.
 pub struct Accounts {
     backend: Arc<AccountBackend>,
+    events: EventLog,
     config: AccountsConfig,
     state: Mutex<State>,
     throttle: Mutex<Throttle>,
+    addr_throttle: Mutex<AddrThrottle>,
     hashing: Semaphore,
+    auth_hashing: Semaphore,
     decoy: String,
     random: SystemRandom,
     /// The admin switch. Read on every login and request, so an atomic.
     password_enabled: AtomicBool,
+}
+
+impl Drop for Accounts {
+    fn drop(&mut self) {
+        password::zeroize_string(&mut self.decoy);
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -637,12 +861,17 @@ impl Accounts {
                 state.sessions.insert(session.key, session);
             }
         }
+        let backend = Arc::new(backend);
+        let events = EventLog::new(Arc::clone(&backend), config.clock_ms);
         Ok(Accounts {
-            backend: Arc::new(backend),
+            backend,
+            events,
             hashing: Semaphore::new(config.hashing_permits.max(1)),
+            auth_hashing: Semaphore::new(config.hashing_permits.max(1)),
             config,
             state: Mutex::new(state),
             throttle: Mutex::new(Throttle::default()),
+            addr_throttle: Mutex::new(AddrThrottle::default()),
             decoy,
             random: SystemRandom::new(),
             password_enabled: AtomicBool::new(password_login.unwrap_or(true)),
@@ -659,17 +888,18 @@ impl Accounts {
         self.now()
     }
 
-    /// Writes an audit event. A failure is logged and does not fail the
-    /// caller's action, which has already been stored.
+    /// Writes an audit event. A failure is logged and queued for retry so
+    /// events are never silently dropped (SEC-06).
     pub async fn audit(&self, actor: &str, kind: AuditKind, target: &str, detail: &str) {
-        self.event_log().record(actor, kind, target, detail).await;
+        self.events.record(actor, kind, target, detail).await;
     }
 
-    /// The event log these accounts write to. It shares the backend, so the
-    /// server can read, trim and extend it without the user table.
+    /// The event log these accounts write to. It shares the backend and
+    /// retry queue, so the server can read, trim and extend it without the
+    /// user table.
     #[must_use]
     pub fn event_log(&self) -> EventLog {
-        EventLog::new(Arc::clone(&self.backend), self.config.clock_ms)
+        self.events.clone()
     }
 
     /// The newest audit events, newest first.
@@ -678,7 +908,7 @@ impl Accounts {
     ///
     /// [`AccountError::Store`].
     pub async fn recent_events(&self, limit: usize) -> Result<Vec<AuditEvent>, AccountError> {
-        Ok(self.event_log().recent(limit).await?)
+        Ok(self.events.recent(limit).await?)
     }
 
     /// Number of users.
@@ -710,11 +940,15 @@ impl Accounts {
 
     async fn hash_new(&self, username: &str, password: &str) -> Result<String, AccountError> {
         password::check_new(password, username)?;
-        let _permit = self.permit().await?;
-        let password = password.to_owned();
-        blocking(move || password::hash(&password))
-            .await?
-            .map_err(|_| AccountError::Internal)
+        let _permit = self.auth_permit().await?;
+        let mut password = password.to_owned();
+        blocking(move || {
+            let res = password::hash(&password);
+            password::zeroize_string(&mut password);
+            res
+        })
+        .await?
+        .map_err(|_| AccountError::Internal)
     }
 
     async fn permit(&self) -> Result<tokio::sync::SemaphorePermit<'_>, AccountError> {
@@ -724,10 +958,35 @@ impl Accounts {
             .map_err(|_| AccountError::Internal)
     }
 
-    async fn verify(&self, password: &str, hash: String) -> Result<bool, AccountError> {
+    async fn auth_permit(&self) -> Result<tokio::sync::SemaphorePermit<'_>, AccountError> {
+        tokio::time::timeout(self.config.hashing_wait, self.auth_hashing.acquire())
+            .await
+            .map_err(|_| AccountError::Busy)?
+            .map_err(|_| AccountError::Internal)
+    }
+
+    async fn verify(&self, password: &str, mut hash: String) -> Result<bool, AccountError> {
         let _permit = self.permit().await?;
-        let password = password.to_owned();
-        blocking(move || password::verify(&password, &hash)).await
+        let mut password = password.to_owned();
+        blocking(move || {
+            let ok = password::verify(&password, &hash);
+            password::zeroize_string(&mut password);
+            password::zeroize_string(&mut hash);
+            ok
+        })
+        .await
+    }
+
+    async fn verify_auth(&self, password: &str, mut hash: String) -> Result<bool, AccountError> {
+        let _permit = self.auth_permit().await?;
+        let mut password = password.to_owned();
+        blocking(move || {
+            let ok = password::verify(&password, &hash);
+            password::zeroize_string(&mut password);
+            password::zeroize_string(&mut hash);
+            ok
+        })
+        .await
     }
 
     fn new_token(&self) -> Result<String, AccountError> {
@@ -735,7 +994,9 @@ impl Accounts {
         self.random
             .fill(&mut bytes)
             .map_err(|_| AccountError::Internal)?;
-        Ok(format!("{TOKEN_PREFIX}{}", b64(&bytes)))
+        let token = format!("{TOKEN_PREFIX}{}", b64(&bytes));
+        password::zeroize_bytes(&mut bytes);
+        Ok(token)
     }
 
     /// Checks a name and password and opens a session.
@@ -753,14 +1014,58 @@ impl Accounts {
         password: &str,
         client_name: &str,
     ) -> Result<NewSession, AccountError> {
+        self.log_in_from(raw_username, password, client_name, None)
+            .await
+    }
+
+    /// Like [`log_in`](Self::log_in), enforcing the per-address concurrency
+    /// and failure limits in front of the Argon2id semaphore when `peer` is
+    /// known (SEC-04).
+    ///
+    /// # Errors
+    ///
+    /// As [`log_in`](Self::log_in).
+    pub async fn log_in_from(
+        &self,
+        raw_username: &str,
+        password: &str,
+        client_name: &str,
+        peer: Option<std::net::IpAddr>,
+    ) -> Result<NewSession, AccountError> {
         let now = self.now();
-        // A malformed name is answered like a wrong one, after the same work.
-        let name = normalize_username(raw_username).unwrap_or_default();
         if !self.password_login_enabled() {
-            self.audit(&name, AuditKind::LoginFailed, &name, "password_login_off")
+            let label = bounded(raw_username.trim(), MAX_USERNAME_BYTES);
+            self.audit(&label, AuditKind::LoginFailed, &label, "password_login_off")
                 .await;
             return Err(AccountError::PasswordLoginOff);
         }
+        if let Some(ip) = peer {
+            let acquired = lock(&self.addr_throttle).acquire(ip, now, &self.config);
+            if let Err(err) = acquired {
+                if matches!(err, AccountError::Throttled { .. }) {
+                    let label = bounded(raw_username.trim(), MAX_USERNAME_BYTES);
+                    self.audit(&label, AuditKind::LoginFailed, &label, "addr_throttled")
+                        .await;
+                }
+                return Err(err);
+            }
+        }
+        let _addr_guard = AddrInFlightGuard {
+            throttle: &self.addr_throttle,
+            peer,
+        };
+        // Reject syntactically invalid usernames before touching the throttle
+        // table or Argon2id permits so malformed names never share an empty
+        // throttle bucket or consume hashing permits (SEC-01).
+        let Ok(name) = normalize_username(raw_username) else {
+            if let Some(ip) = peer {
+                lock(&self.addr_throttle).fail(ip, now, &self.config);
+            }
+            let label = bounded(raw_username.trim(), MAX_USERNAME_BYTES);
+            self.audit(&label, AuditKind::LoginFailed, &label, "invalid_username")
+                .await;
+            return Err(AccountError::InvalidCredentials);
+        };
         let throttled = lock(&self.throttle).check(&name, now);
         if let Err(retry_after_s) = throttled {
             self.audit(&name, AuditKind::LoginFailed, &name, "throttled")
@@ -768,16 +1073,23 @@ impl Accounts {
             return Err(AccountError::Throttled { retry_after_s });
         }
         let user = lock(&self.state).users.get(&name).cloned();
+        let known = user.is_some();
         let hash = user
             .as_ref()
             .map_or_else(|| self.decoy.clone(), |u| u.password_hash.clone());
         let matches = self.verify(password, hash).await?;
         let Some(mut user) = user.filter(|u| matches && !u.disabled && !name.is_empty()) else {
-            lock(&self.throttle).fail(&name, now, &self.config);
+            lock(&self.throttle).fail_with(&name, known, now, &self.config);
+            if let Some(ip) = peer {
+                lock(&self.addr_throttle).fail(ip, now, &self.config);
+            }
             self.audit(&name, AuditKind::LoginFailed, &name, "").await;
             return Err(AccountError::InvalidCredentials);
         };
         lock(&self.throttle).succeed(&name);
+        if let Some(ip) = peer {
+            lock(&self.addr_throttle).succeed(ip);
+        }
 
         if password::needs_rehash(&user.password_hash)
             && let Ok(h) = self.hash_new(&name, password).await
@@ -785,7 +1097,6 @@ impl Accounts {
             user.password_hash = h;
         }
         user.last_login_ms = now;
-        self.backend.put_user(&user).await?;
 
         let token = self.new_token()?;
         let ttl = u64::try_from(self.config.session_ttl.as_millis()).unwrap_or(u64::MAX);
@@ -796,20 +1107,15 @@ impl Accounts {
             expires_ms: now.saturating_add(ttl),
             client_name: bounded(client_name, MAX_CLIENT_NAME_CHARS),
         };
-        self.backend.put_session(&session).await?;
-        // Close the oldest sessions past the per-user limit.
-        let evicted = {
+        // Update in-memory state and compute sessions past the per-user limit,
+        // then commit user + session + evictions atomically to the backend
+        // with full in-memory rollback on failure (SEC-07).
+        let (before_user, evicted_keys, evicted_records) = {
             let mut state = lock(&self.state);
-            // `set_password_login(false)` stores the switch before it clears
-            // the sessions under this lock. A login that got past the first
-            // check while the switch went off must not leave a session
-            // behind: it would come alive again when the switch goes on.
             if !self.password_login_enabled() {
-                drop(state);
-                self.backend.delete_sessions(&[session.key]).await?;
                 return Err(AccountError::PasswordLoginOff);
             }
-            state.users.insert(name.clone(), user.clone());
+            let before_user = state.users.insert(name.clone(), user.clone());
             state.sessions.insert(session.key, session.clone());
             let mut mine: Vec<(u64, SessionKey)> = state
                 .sessions
@@ -819,14 +1125,37 @@ impl Accounts {
                 .collect();
             mine.sort_unstable();
             let excess = mine.len().saturating_sub(self.config.max_sessions_per_user);
-            let evicted: Vec<SessionKey> = mine.iter().take(excess).map(|(_, k)| *k).collect();
-            for key in &evicted {
-                state.sessions.remove(key);
+            let evicted_keys: Vec<SessionKey> = mine.iter().take(excess).map(|(_, k)| *k).collect();
+            let mut evicted_records = Vec::with_capacity(evicted_keys.len());
+            for key in &evicted_keys {
+                if let Some(rec) = state.sessions.remove(key) {
+                    evicted_records.push(rec);
+                }
             }
-            evicted
+            (before_user, evicted_keys, evicted_records)
         };
-        if !evicted.is_empty() {
-            self.backend.delete_sessions(&evicted).await?;
+        if let Err(e) = self
+            .backend
+            .put_login_session(&user, &session, &evicted_keys)
+            .await
+        {
+            let mut state = lock(&self.state);
+            if let Some(prev) = before_user {
+                state.users.insert(name.clone(), prev);
+            }
+            state.sessions.remove(&session.key);
+            for rec in evicted_records {
+                state.sessions.insert(rec.key, rec);
+            }
+            return Err(e.into());
+        }
+        // `set_password_login(false)` stores the switch and clears sessions.
+        // A login that finished its backend transaction while the switch went
+        // off must not leave a session behind.
+        if !self.password_login_enabled() {
+            lock(&self.state).sessions.remove(&session.key);
+            self.backend.delete_sessions(&[session.key]).await?;
+            return Err(AccountError::PasswordLoginOff);
         }
         self.audit(&name, AuditKind::LoginOk, &name, &session.client_name)
             .await;
@@ -881,16 +1210,31 @@ impl Accounts {
         if !enabled && !self.config.company_login {
             return Err(AccountError::NoCompanyLogin);
         }
-        self.backend.put_password_login(enabled).await?;
-        self.password_enabled.store(enabled, Ordering::Release);
-        if !enabled {
-            let keys: Vec<SessionKey> = {
+        if enabled {
+            self.backend.put_password_login(true).await?;
+            self.password_enabled.store(true, Ordering::Release);
+        } else {
+            let (prev_enabled, keys, removed_sessions) = {
                 let mut state = lock(&self.state);
-                let keys = state.sessions.keys().copied().collect();
+                let prev_enabled = self.password_enabled.swap(false, Ordering::AcqRel);
+                let removed_sessions: Vec<SessionRecord> =
+                    state.sessions.values().cloned().collect();
+                let keys: Vec<SessionKey> = removed_sessions.iter().map(|s| s.key).collect();
                 state.sessions.clear();
-                keys
+                (prev_enabled, keys, removed_sessions)
             };
-            self.backend.delete_sessions(&keys).await?;
+            if let Err(e) = self
+                .backend
+                .put_password_login_and_delete_sessions(false, &keys)
+                .await
+            {
+                let mut state = lock(&self.state);
+                for rec in removed_sessions {
+                    state.sessions.insert(rec.key, rec);
+                }
+                self.password_enabled.store(prev_enabled, Ordering::Release);
+                return Err(e.into());
+            }
         }
         self.audit(
             actor,
@@ -920,7 +1264,10 @@ impl Accounts {
         let key = SessionKey::of(token);
         let removed = lock(&self.state).sessions.remove(&key);
         if let Some(session) = removed {
-            self.backend.delete_sessions(&[key]).await?;
+            if let Err(e) = self.backend.delete_sessions(&[key]).await {
+                lock(&self.state).sessions.insert(key, session);
+                return Err(e.into());
+            }
             self.audit(&session.username, AuditKind::Logout, &session.username, "")
                 .await;
         }
@@ -935,21 +1282,18 @@ impl Accounts {
     /// [`AccountError::Store`].
     pub async fn purge_expired(&self) -> Result<usize, AccountError> {
         let now = self.now();
-        let expired: Vec<SessionKey> = {
-            let mut state = lock(&self.state);
-            let keys: Vec<SessionKey> = state
-                .sessions
-                .values()
-                .filter(|s| s.expires_ms <= now)
-                .map(|s| s.key)
-                .collect();
-            for key in &keys {
-                state.sessions.remove(key);
-            }
-            keys
-        };
+        let expired: Vec<SessionKey> = lock(&self.state)
+            .sessions
+            .values()
+            .filter(|s| s.expires_ms <= now)
+            .map(|s| s.key)
+            .collect();
         if !expired.is_empty() {
             self.backend.delete_sessions(&expired).await?;
+            let mut state = lock(&self.state);
+            for key in &expired {
+                state.sessions.remove(key);
+            }
         }
         Ok(expired.len())
     }
@@ -974,29 +1318,48 @@ impl Accounts {
             .get(username)
             .cloned()
             .ok_or(AccountError::UnknownUser)?;
-        if !self.verify(current, user.password_hash.clone()).await? {
+        if !self
+            .verify_auth(current, user.password_hash.clone())
+            .await?
+        {
             return Err(AccountError::InvalidCredentials);
         }
         let hash = self.hash_new(username, new).await?;
         let mut user = user;
         user.password_hash = hash;
-        self.backend.put_user(&user).await?;
         let keep = keep.map(SessionKey::of);
-        let ended = {
+        let (before, ended_keys, ended_records) = {
             let mut state = lock(&self.state);
-            state.users.insert(user.username.clone(), user);
-            let ended: Vec<SessionKey> = state
+            let before = state
+                .users
+                .get(username)
+                .cloned()
+                .ok_or(AccountError::UnknownUser)?;
+            state.users.insert(user.username.clone(), user.clone());
+            let ended_keys: Vec<SessionKey> = state
                 .sessions_of(username)
                 .into_iter()
                 .filter(|k| Some(*k) != keep)
                 .collect();
-            for key in &ended {
-                state.sessions.remove(key);
+            let mut ended_records = Vec::with_capacity(ended_keys.len());
+            for key in &ended_keys {
+                if let Some(rec) = state.sessions.remove(key) {
+                    ended_records.push(rec);
+                }
             }
-            ended
+            (before, ended_keys, ended_records)
         };
-        if !ended.is_empty() {
-            self.backend.delete_sessions(&ended).await?;
+        if let Err(e) = self
+            .backend
+            .put_user_and_delete_sessions(&user, &ended_keys)
+            .await
+        {
+            let mut state = lock(&self.state);
+            state.users.insert(username.to_owned(), before);
+            for rec in ended_records {
+                state.sessions.insert(rec.key, rec);
+            }
+            return Err(e.into());
         }
         self.audit(username, AuditKind::PasswordChanged, username, "")
             .await;
@@ -1107,7 +1470,7 @@ impl Accounts {
         &self,
         actor: &str,
         username: &str,
-        change: UserUpdate,
+        mut change: UserUpdate,
     ) -> Result<UserRecord, AccountError> {
         let username = normalize_username(username)?;
         let mut user = lock(&self.state)
@@ -1124,11 +1487,14 @@ impl Accounts {
         if let Some(d) = change.disabled {
             user.disabled = d;
         }
-        if let Some(p) = &change.password {
-            user.password_hash = self.hash_new(&username, p).await?;
+        let changed_password = change.password.is_some();
+        if let Some(mut p) = change.password.take() {
+            let hash_res = self.hash_new(&username, &p).await;
+            password::zeroize_string(&mut p);
+            user.password_hash = hash_res?;
         }
-        let end_sessions = change.password.is_some() || user.disabled;
-        let (ended, before) = {
+        let end_sessions = changed_password || user.disabled;
+        let (ended_keys, ended_records, before) = {
             let mut state = lock(&self.state);
             let before = state
                 .users
@@ -1141,23 +1507,31 @@ impl Accounts {
                 return Err(AccountError::LastAdmin);
             }
             state.users.insert(username.clone(), user.clone());
-            let ended = if end_sessions {
+            let (ended_keys, ended_records) = if end_sessions {
                 let keys = state.sessions_of(&username);
+                let mut records = Vec::with_capacity(keys.len());
                 for key in &keys {
-                    state.sessions.remove(key);
+                    if let Some(rec) = state.sessions.remove(key) {
+                        records.push(rec);
+                    }
                 }
-                keys
+                (keys, records)
             } else {
-                Vec::new()
+                (Vec::new(), Vec::new())
             };
-            (ended, before)
+            (ended_keys, ended_records, before)
         };
-        if let Err(e) = self.backend.put_user(&user).await {
-            lock(&self.state).users.insert(username.clone(), before);
+        if let Err(e) = self
+            .backend
+            .put_user_and_delete_sessions(&user, &ended_keys)
+            .await
+        {
+            let mut state = lock(&self.state);
+            state.users.insert(username.clone(), before);
+            for rec in ended_records {
+                state.sessions.insert(rec.key, rec);
+            }
             return Err(e.into());
-        }
-        if !ended.is_empty() {
-            self.backend.delete_sessions(&ended).await?;
         }
         let mut detail = Vec::new();
         if change.display_name.is_some() {
@@ -1169,7 +1543,7 @@ impl Accounts {
         if let Some(d) = change.disabled {
             detail.push(if d { "disabled" } else { "enabled" });
         }
-        if change.password.is_some() {
+        if changed_password {
             detail.push("password");
         }
         self.audit(actor, AuditKind::UserUpdated, &username, &detail.join(","))
@@ -1185,7 +1559,7 @@ impl Accounts {
     /// store fault.
     pub async fn delete_user(&self, actor: &str, username: &str) -> Result<(), AccountError> {
         let username = normalize_username(username)?;
-        let removed = {
+        let (removed, removed_sessions) = {
             let mut state = lock(&self.state);
             let user = state
                 .users
@@ -1195,14 +1569,21 @@ impl Accounts {
                 return Err(AccountError::LastAdmin);
             }
             let keys = state.sessions_of(&username);
+            let mut sessions = Vec::with_capacity(keys.len());
             for key in &keys {
-                state.sessions.remove(key);
+                if let Some(rec) = state.sessions.remove(key) {
+                    sessions.push(rec);
+                }
             }
-            state.users.remove(&username)
+            (state.users.remove(&username), sessions)
         };
         if let Err(e) = self.backend.delete_user(&username).await {
+            let mut state = lock(&self.state);
             if let Some(user) = removed {
-                lock(&self.state).users.insert(username, user);
+                state.users.insert(username, user);
+            }
+            for rec in removed_sessions {
+                state.sessions.insert(rec.key, rec);
             }
             return Err(e.into());
         }
@@ -1873,5 +2254,87 @@ mod tests {
         ));
         advance(2000);
         assert!(a.log_in("fay", "fays long password", "").await.is_ok());
+    }
+
+    #[test]
+    fn throttle_evicts_oldest_unblocked_entry_without_clearing_active_lockouts() {
+        // SEC-01 regression test: filling Throttle::CAPACITY with unknown
+        // usernames must never wipe an active lockout on a target account.
+        let c = config();
+        let mut t = Throttle::default();
+        for _ in 0..10 {
+            t.fail_with("admin", true, 100, &c);
+        }
+        assert!(t.check("admin", 100).is_err(), "admin is locked out");
+
+        for i in 0..(Throttle::CAPACITY + 500) {
+            t.fail(&format!("guess_{i}"), 100 + i as u64, &c);
+        }
+        assert_eq!(t.names.len(), Throttle::CAPACITY);
+        assert!(
+            t.check("admin", 100).is_err(),
+            "admin lockout survives capacity flood"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_usernames_do_not_share_a_throttle_bucket_or_lock_out_valid_users() {
+        // SEC-01 regression test: malformed usernames are rejected before
+        // touching the per-username throttle map.
+        let a = accounts().await;
+        a.create_user("t", "alice", "", "alices long password", false)
+            .await
+            .expect("alice");
+        for bad in ["", "   ", ".dot", "-dash", "bad space", "bad$char"] {
+            assert!(matches!(
+                a.log_in(bad, "alices long password", "").await,
+                Err(AccountError::InvalidCredentials)
+            ));
+        }
+        assert!(lock(&a.throttle).names.is_empty());
+        assert!(a.log_in("alice", "alices long password", "").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn per_address_limit_throttles_one_peer_without_blocking_another() {
+        // SEC-04 regression test: a peer flooding failed logins across
+        // rotating usernames is throttled in front of the Argon2id semaphore,
+        // while another peer can still log in and authenticated users can
+        // still change their password.
+        let mut cfg = config();
+        cfg.free_addr_failures = 4;
+        cfg.max_login_in_flight_per_addr = 1;
+        let a = Accounts::open(AccountBackend::Memory(MemoryAccounts::new()), cfg)
+            .await
+            .expect("open");
+        a.create_user("t", "alice", "", "alices long password", false)
+            .await
+            .expect("alice");
+
+        let attacker: std::net::IpAddr = "192.0.2.10".parse().expect("ip");
+        let honest: std::net::IpAddr = "192.0.2.20".parse().expect("ip");
+
+        for i in 0..4 {
+            let _ = a
+                .log_in_from(&format!("user{i}"), "wrong password", "", Some(attacker))
+                .await;
+        }
+        assert!(matches!(
+            a.log_in_from("alice", "alices long password", "attacker", Some(attacker))
+                .await,
+            Err(AccountError::Throttled { .. })
+        ));
+        let session = a
+            .log_in_from("alice", "alices long password", "honest", Some(honest))
+            .await
+            .expect("honest peer is not blocked");
+        a.change_password(
+            "alice",
+            "alices long password",
+            "alices newer password",
+            Some(&session.token),
+        )
+        .await
+        .expect("authenticated password change uses dedicated permits");
     }
 }

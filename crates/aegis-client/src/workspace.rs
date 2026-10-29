@@ -30,7 +30,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use aegis_model::{Methodology, ModelError, Op, Project, ProjectEvalCache};
+use aegis_model::{
+    Methodology, ModelError, Op, Project, ProjectEvalCache, SuggestionBranch, SuggestionError,
+    SuggestionId,
+};
 
 /// Most edits that may wait for the server at once (R4). Past it, edits are
 /// refused until the server catches up.
@@ -77,6 +80,9 @@ pub enum WorkspaceError {
     /// Nothing is waiting to be sent.
     #[error("no edits are pending")]
     NothingPending,
+    /// A suggestion operation failed.
+    #[error("{0}")]
+    Suggestion(#[from] SuggestionError),
 }
 
 /// Where an edit came from, which decides what happens to the undo stacks.
@@ -115,6 +121,7 @@ pub struct Workspace {
     in_flight: usize,
     undo: Vec<Vec<Op>>,
     redo: Vec<Vec<Op>>,
+    suggestions: Option<SuggestionBranch>,
 }
 
 impl Workspace {
@@ -131,6 +138,7 @@ impl Workspace {
             in_flight: 0,
             undo: Vec::new(),
             redo: Vec::new(),
+            suggestions: None,
         }
     }
 
@@ -220,7 +228,137 @@ impl Workspace {
             Origin::Redo => push_bounded(&mut self.undo, reversed),
         }
         self.pending.push_back(Batch { ops, inverses });
+        if let Some(branch) = &self.suggestions
+            && (branch.is_empty() || branch.validate(&self.project).is_err())
+        {
+            self.suggestions = None;
+        }
         Ok(())
+    }
+
+    /// Pending suggestion branch kept apart from [`project`](Self::project)
+    /// until accepted or rejected (job 089, FND-05).
+    #[must_use]
+    pub fn suggestions(&self) -> Option<&SuggestionBranch> {
+        self.suggestions.as_ref().filter(|b| !b.is_empty())
+    }
+
+    /// Installs or clears the active [`SuggestionBranch`], validating non-empty
+    /// branches against [`project`](Self::project) first.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkspaceError::Suggestion`] if `branch` is rejected by
+    /// [`SuggestionBranch::validate`].
+    pub fn set_suggestions(
+        &mut self,
+        branch: Option<SuggestionBranch>,
+    ) -> Result<(), WorkspaceError> {
+        match branch {
+            Some(b) if !b.is_empty() => {
+                b.validate(&self.project)?;
+                self.suggestions = Some(b);
+            }
+            _ => {
+                self.suggestions = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// Clears any active [`SuggestionBranch`].
+    pub fn clear_suggestions(&mut self) {
+        self.suggestions = None;
+    }
+
+    /// Accepts one pending suggestion item by `id`, stamping its operations
+    /// with the branch's [`aegis_model::ProvenanceSource`] and `actor` /
+    /// `timestamp_ms`, and applying them as an undoable edit queued for the
+    /// server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkspaceError::Suggestion`] if `id` is unknown or invalid, or
+    /// an error of [`apply`](Self::apply).
+    pub fn accept_suggestion(
+        &mut self,
+        id: SuggestionId,
+        actor: &str,
+        timestamp_ms: u64,
+    ) -> Result<(), WorkspaceError> {
+        let mut branch = self
+            .suggestions
+            .take()
+            .ok_or(SuggestionError::UnknownSuggestion(id))?;
+        let ops = match branch.accept_one(id, &self.project, actor, timestamp_ms) {
+            Ok(ops) => ops,
+            Err(e) => {
+                self.suggestions = Some(branch);
+                return Err(e.into());
+            }
+        };
+        if !branch.is_empty() {
+            self.suggestions = Some(branch);
+        }
+        self.apply(ops, Origin::Edit)
+    }
+
+    /// Accepts all remaining items in the active [`SuggestionBranch`] in one
+    /// undoable edit queued for the server. Returns the number of accepted
+    /// suggestion items.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkspaceError::Suggestion`] or an error of
+    /// [`apply`](Self::apply).
+    pub fn accept_all_suggestions(
+        &mut self,
+        actor: &str,
+        timestamp_ms: u64,
+    ) -> Result<usize, WorkspaceError> {
+        let Some(mut branch) = self.suggestions.take() else {
+            return Ok(0);
+        };
+        let count = branch.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        let ops = match branch.accept_all(&self.project, actor, timestamp_ms) {
+            Ok(ops) => ops,
+            Err(e) => {
+                self.suggestions = Some(branch);
+                return Err(e.into());
+            }
+        };
+        self.apply(ops, Origin::Edit)?;
+        Ok(count)
+    }
+
+    /// Rejects one pending suggestion item by `id` without touching the
+    /// project.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkspaceError::Suggestion`] if `id` is not in the active
+    /// branch.
+    pub fn reject_suggestion(&mut self, id: SuggestionId) -> Result<(), WorkspaceError> {
+        let branch = self
+            .suggestions
+            .as_mut()
+            .ok_or(SuggestionError::UnknownSuggestion(id))?;
+        if !branch.reject_one(id) {
+            return Err(SuggestionError::UnknownSuggestion(id).into());
+        }
+        if branch.is_empty() {
+            self.suggestions = None;
+        }
+        Ok(())
+    }
+
+    /// Rejects all pending suggestion items without touching the project.
+    /// Returns how many items were discarded.
+    pub fn reject_all_suggestions(&mut self) -> usize {
+        self.suggestions.take().map_or(0, |mut b| b.reject_all())
     }
 
     /// Undoes the last edit by applying its reverse as a new edit.
@@ -327,6 +465,7 @@ impl Workspace {
         self.in_flight = 0;
         self.undo.clear();
         self.redo.clear();
+        self.suggestions = None;
         count
     }
 

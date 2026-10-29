@@ -26,11 +26,14 @@
 //! `require`), for managed databases with self-signed certificates. Both
 //! use rustls with ring (`aegis_auth::tls`).
 
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime, Timeouts};
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject as _;
 use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{IsolationLevel, NoTls, Row};
 use tokio_stream::StreamExt;
@@ -43,6 +46,9 @@ use super::{
 use crate::config::system_clock_ms;
 use crate::ids::ProjectId;
 
+/// Largest CA bundle read from `AEGIS_DB_CA_FILE` (1 MiB, R3).
+const MAX_CA_FILE_BYTES: u64 = 1024 * 1024;
+
 /// Migrations in order. A database that has applied a version this build
 /// does not know is refused (it was written by a newer server).
 const MIGRATIONS: &[(i32, &str)] = &[
@@ -52,6 +58,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
         include_str!("../../migrations/002_accounts_baselines.sql"),
     ),
     (3, include_str!("../../migrations/003_settings.sql")),
+    (4, include_str!("../../migrations/004_event_chain.sql")),
 ];
 
 /// How the server talks to PostgreSQL.
@@ -60,11 +67,12 @@ pub enum DbTls {
     /// Plain TCP. Only for a database on a private network.
     #[default]
     Off,
-    /// TLS without a certificate check (libpq `sslmode=require`). Protects
-    /// against eavesdropping, not against an active attacker.
+    /// TLS with the server certificate and host name checked against the OS
+    /// trust store or the configured [`PostgresOptions::ca_file`] (SEC-05).
     Encrypt,
-    /// TLS with the certificate checked against the OS trust store and the
-    /// host name (libpq `sslmode=verify-full`).
+    /// TLS with the server certificate and host name checked against the OS
+    /// trust store or the configured [`PostgresOptions::ca_file`] (libpq
+    /// `sslmode=verify-full`).
     Verify,
 }
 
@@ -81,73 +89,50 @@ impl std::str::FromStr for DbTls {
     }
 }
 
-/// Accepts any server certificate, for [`DbTls::Encrypt`]. The handshake
-/// signatures are still checked, so the session keys are genuine; only the
-/// identity of the server is not.
-#[derive(Debug)]
-struct AnyCertificate(Arc<rustls::crypto::CryptoProvider>);
-
-impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+fn load_ca_roots(path: &Path) -> Result<rustls::RootCertStore, StoreFault> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| backend(format!("cannot open CA file {}: {e}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CA_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| backend(format!("cannot read CA file {}: {e}", path.display())))?;
+    if bytes.len() as u64 > MAX_CA_FILE_BYTES {
+        return Err(backend("CA file exceeds 1 MiB"));
     }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
+    let certs = CertificateDer::pem_slice_iter(&bytes)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| backend(format!("invalid PEM in CA file {}: {e}", path.display())))?;
+    if certs.is_empty() {
+        return Err(backend(format!(
+            "CA file {} contains no certificates",
+            path.display()
+        )));
     }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
+    let mut roots = rustls::RootCertStore::empty();
+    let (added, _) = roots.add_parsable_certificates(certs);
+    if added == 0 {
+        return Err(backend(format!(
+            "CA file {} contains no usable root certificates",
+            path.display()
+        )));
     }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
+    Ok(roots)
 }
 
-fn rustls_config(tls: DbTls) -> Result<rustls::ClientConfig, StoreFault> {
+fn rustls_config(tls: DbTls, ca_file: Option<&Path>) -> Result<rustls::ClientConfig, StoreFault> {
     match tls {
         DbTls::Off => Err(backend("TLS is off")),
-        DbTls::Verify => aegis_auth::tls::client_config()
-            .map(|c| (*c).clone())
-            .map_err(backend),
-        DbTls::Encrypt => {
-            let provider = Arc::new(rustls::crypto::ring::default_provider());
-            Ok(
-                rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
-                    .with_safe_default_protocol_versions()
-                    .map_err(backend)?
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(AnyCertificate(provider)))
-                    .with_no_client_auth(),
-            )
+        DbTls::Encrypt | DbTls::Verify => {
+            if let Some(path) = ca_file {
+                let roots = load_ca_roots(path)?;
+                aegis_auth::tls::config_with_roots(roots)
+                    .map(|c| (*c).clone())
+                    .map_err(backend)
+            } else {
+                aegis_auth::tls::client_config()
+                    .map(|c| (*c).clone())
+                    .map_err(backend)
+            }
         }
     }
 }
@@ -169,6 +154,10 @@ pub struct PostgresOptions {
     pub statement_timeout: Duration,
     /// Transport security.
     pub tls: DbTls,
+    /// Optional PEM certificate authority bundle (`AEGIS_DB_CA_FILE`) used to
+    /// verify the PostgreSQL server certificate when TLS is enabled (SEC-05).
+    /// When `None`, the operating system root store is used.
+    pub ca_file: Option<PathBuf>,
 }
 
 impl Default for PostgresOptions {
@@ -179,6 +168,7 @@ impl Default for PostgresOptions {
             acquire_timeout: Duration::from_secs(5),
             statement_timeout: Duration::from_secs(30),
             tls: DbTls::Off,
+            ca_file: None,
         }
     }
 }
@@ -257,7 +247,10 @@ impl PostgresStore {
             DbTls::Off => Manager::from_config(config, NoTls, manager_config),
             tls => {
                 config.ssl_mode(tokio_postgres::config::SslMode::Require);
-                let connector = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config(tls)?);
+                let connector = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config(
+                    tls,
+                    options.ca_file.as_deref(),
+                )?);
                 Manager::from_config(config, connector, manager_config)
             }
         };
@@ -782,4 +775,32 @@ fn meta_of(row: &Row) -> Result<ProjectMeta, StoreFault> {
         methodology_version: row.try_get(3).map_err(backend)?,
         created_ms: to_u64(row.try_get(4).map_err(backend)?)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tls_encrypt_and_verify_both_require_verified_roots_or_configured_ca_file() {
+        assert!(rustls_config(DbTls::Off, None).is_err());
+        assert!(rustls_config(DbTls::Encrypt, None).is_ok());
+        assert!(rustls_config(DbTls::Verify, None).is_ok());
+
+        let dir = std::env::temp_dir().join(format!("aegis-pg-ca-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let empty = dir.join("empty.pem");
+        std::fs::write(&empty, b"").expect("write");
+        assert!(rustls_config(DbTls::Encrypt, Some(&empty)).is_err());
+        assert!(rustls_config(DbTls::Verify, Some(&empty)).is_err());
+
+        let invalid = dir.join("invalid.pem");
+        std::fs::write(
+            &invalid,
+            b"-----BEGIN CERTIFICATE-----\nnot-base64\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write");
+        assert!(rustls_config(DbTls::Encrypt, Some(&invalid)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

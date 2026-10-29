@@ -242,6 +242,7 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
                     key: key("m", 0, &mkey),
                     version,
                     label,
+                    element_names: aegis_model::ElementNamesDef::default(),
                     impact_categories: impacts
                         .into_iter()
                         .enumerate()

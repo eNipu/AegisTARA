@@ -6,12 +6,13 @@
 //! between two leaves at worst an orphan session row, which is refused
 //! (its user check fails) and purged on expiry.
 
-use deadpool_postgres::Pool;
+use deadpool_postgres::{GenericClient, Pool};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
 use super::{AuditEvent, AuditKind, LoadedAccounts, SessionKey, SessionRecord, UserRecord};
 use crate::store::StoreFault;
+use crate::store::audit::{ChainReport, EventChainVerifier, Hash, event_genesis, event_link};
 
 /// Rows one trim statement deletes at most.
 const TRIM_BATCH: i64 = 5000;
@@ -33,6 +34,13 @@ fn to_i64(v: u64) -> Result<i64, StoreFault> {
 
 fn to_u64(v: i64) -> Result<u64, StoreFault> {
     u64::try_from(v).map_err(|_| StoreFault::Corrupt("negative time".into()))
+}
+
+fn hash_of(bytes: Vec<u8>) -> Result<Hash, StoreFault> {
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| StoreFault::Corrupt("event hash is not 32 bytes".into()))
 }
 
 fn user_of(row: &Row) -> Result<UserRecord, StoreFault> {
@@ -121,45 +129,50 @@ impl PostgresAccounts {
 
     pub(super) async fn put_password_login(&self, enabled: bool) -> Result<(), StoreFault> {
         let client = self.client().await?;
-        client
-            .execute(
-                "INSERT INTO aegis_setting (org_id, key, value) VALUES ($1, 'password_login', $2)
-                 ON CONFLICT (org_id, key) DO UPDATE SET value = EXCLUDED.value",
-                &[&self.org, &if enabled { "on" } else { "off" }],
-            )
-            .await
-            .map_err(backend)?;
-        Ok(())
+        Self::exec_put_password_login(&client, self.org, enabled).await
+    }
+
+    pub(super) async fn put_password_login_and_delete_sessions(
+        &self,
+        enabled: bool,
+        keys: &[SessionKey],
+    ) -> Result<(), StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(backend)?;
+        Self::exec_put_password_login(&tx, self.org, enabled).await?;
+        Self::exec_delete_sessions(&tx, self.org, keys).await?;
+        tx.commit().await.map_err(backend)
     }
 
     pub(super) async fn put_user(&self, user: &UserRecord) -> Result<(), StoreFault> {
         let client = self.client().await?;
-        client
-            .execute(
-                "INSERT INTO aegis_user
-                     (org_id, username, display_name, password_hash, is_admin, disabled,
-                      created_ms, last_login_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                 ON CONFLICT (org_id, username) DO UPDATE SET
-                     display_name = EXCLUDED.display_name,
-                     password_hash = EXCLUDED.password_hash,
-                     is_admin = EXCLUDED.is_admin,
-                     disabled = EXCLUDED.disabled,
-                     last_login_ms = EXCLUDED.last_login_ms",
-                &[
-                    &self.org,
-                    &user.username,
-                    &user.display_name,
-                    &user.password_hash,
-                    &user.admin,
-                    &user.disabled,
-                    &to_i64(user.created_ms)?,
-                    &to_i64(user.last_login_ms)?,
-                ],
-            )
-            .await
-            .map_err(backend)?;
-        Ok(())
+        Self::exec_put_user(&client, self.org, user).await
+    }
+
+    pub(super) async fn put_login_session(
+        &self,
+        user: &UserRecord,
+        session: &SessionRecord,
+        evicted: &[SessionKey],
+    ) -> Result<(), StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(backend)?;
+        Self::exec_put_user(&tx, self.org, user).await?;
+        Self::exec_put_session(&tx, self.org, session).await?;
+        Self::exec_delete_sessions(&tx, self.org, evicted).await?;
+        tx.commit().await.map_err(backend)
+    }
+
+    pub(super) async fn put_user_and_delete_sessions(
+        &self,
+        user: &UserRecord,
+        keys: &[SessionKey],
+    ) -> Result<(), StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(backend)?;
+        Self::exec_put_user(&tx, self.org, user).await?;
+        Self::exec_delete_sessions(&tx, self.org, keys).await?;
+        tx.commit().await.map_err(backend)
     }
 
     pub(super) async fn delete_user(&self, username: &str) -> Result<(), StoreFault> {
@@ -177,23 +190,7 @@ impl PostgresAccounts {
 
     pub(super) async fn put_session(&self, session: &SessionRecord) -> Result<(), StoreFault> {
         let client = self.client().await?;
-        client
-            .execute(
-                "INSERT INTO aegis_session
-                     (token_hash, org_id, username, created_ms, expires_ms, client_name)
-                 VALUES ($1, $2, $3, $4, $5, $6)",
-                &[
-                    &session.key.0.as_slice(),
-                    &self.org,
-                    &session.username,
-                    &to_i64(session.created_ms)?,
-                    &to_i64(session.expires_ms)?,
-                    &session.client_name,
-                ],
-            )
-            .await
-            .map_err(backend)?;
-        Ok(())
+        Self::exec_put_session(&client, self.org, session).await
     }
 
     pub(super) async fn delete_sessions(&self, keys: &[SessionKey]) -> Result<(), StoreFault> {
@@ -201,35 +198,159 @@ impl PostgresAccounts {
             return Ok(());
         }
         let client = self.client().await?;
-        let hashes: Vec<&[u8]> = keys.iter().map(|k| k.0.as_slice()).collect();
-        client
-            .execute(
-                "DELETE FROM aegis_session WHERE org_id = $1 AND token_hash = ANY($2::bytea[])",
-                &[&self.org, &hashes],
-            )
-            .await
-            .map_err(backend)?;
+        Self::exec_delete_sessions(&client, self.org, keys).await
+    }
+
+    async fn exec_put_password_login(
+        conn: &impl GenericClient,
+        org: Uuid,
+        enabled: bool,
+    ) -> Result<(), StoreFault> {
+        conn.execute(
+            "INSERT INTO aegis_setting (org_id, key, value) VALUES ($1, 'password_login', $2)
+             ON CONFLICT (org_id, key) DO UPDATE SET value = EXCLUDED.value",
+            &[&org, &if enabled { "on" } else { "off" }],
+        )
+        .await
+        .map_err(backend)?;
         Ok(())
     }
 
-    pub(super) async fn record(&self, event: &AuditEvent) -> Result<(), StoreFault> {
-        let client = self.client().await?;
-        client
-            .execute(
-                "INSERT INTO aegis_event (org_id, at_ms, actor, kind, target, detail)
-                 VALUES ($1, $2, $3, $4, $5, $6)",
-                &[
-                    &self.org,
-                    &to_i64(event.at_ms)?,
-                    &event.actor,
-                    &event.kind.as_str(),
-                    &event.target,
-                    &event.detail,
-                ],
+    async fn exec_put_user(
+        conn: &impl GenericClient,
+        org: Uuid,
+        user: &UserRecord,
+    ) -> Result<(), StoreFault> {
+        conn.execute(
+            "INSERT INTO aegis_user
+                 (org_id, username, display_name, password_hash, is_admin, disabled,
+                  created_ms, last_login_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (org_id, username) DO UPDATE SET
+                 display_name = EXCLUDED.display_name,
+                 password_hash = EXCLUDED.password_hash,
+                 is_admin = EXCLUDED.is_admin,
+                 disabled = EXCLUDED.disabled,
+                 last_login_ms = EXCLUDED.last_login_ms",
+            &[
+                &org,
+                &user.username,
+                &user.display_name,
+                &user.password_hash,
+                &user.admin,
+                &user.disabled,
+                &to_i64(user.created_ms)?,
+                &to_i64(user.last_login_ms)?,
+            ],
+        )
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn exec_put_session(
+        conn: &impl GenericClient,
+        org: Uuid,
+        session: &SessionRecord,
+    ) -> Result<(), StoreFault> {
+        conn.execute(
+            "INSERT INTO aegis_session
+                 (token_hash, org_id, username, created_ms, expires_ms, client_name)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &[
+                &session.key.0.as_slice(),
+                &org,
+                &session.username,
+                &to_i64(session.created_ms)?,
+                &to_i64(session.expires_ms)?,
+                &session.client_name,
+            ],
+        )
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn exec_delete_sessions(
+        conn: &impl GenericClient,
+        org: Uuid,
+        keys: &[SessionKey],
+    ) -> Result<(), StoreFault> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let hashes: Vec<&[u8]> = keys.iter().map(|k| k.0.as_slice()).collect();
+        conn.execute(
+            "DELETE FROM aegis_session WHERE org_id = $1 AND token_hash = ANY($2::bytea[])",
+            &[&org, &hashes],
+        )
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn append_chained_event(
+        conn: &impl GenericClient,
+        org: Uuid,
+        prev: &Hash,
+        event: &AuditEvent,
+    ) -> Result<Hash, StoreFault> {
+        let next = event_link(prev, event);
+        conn.execute(
+            "INSERT INTO aegis_event
+                 (org_id, at_ms, actor, kind, target, detail, prev_hash, hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[
+                &org,
+                &to_i64(event.at_ms)?,
+                &event.actor,
+                &event.kind.as_str(),
+                &event.target,
+                &event.detail,
+                &prev.as_slice(),
+                &next.as_slice(),
+            ],
+        )
+        .await
+        .map_err(backend)?;
+        Ok(next)
+    }
+
+    async fn lock_chain(conn: &impl GenericClient, org: Uuid) -> Result<(Hash, Hash), StoreFault> {
+        let genesis = event_genesis(org);
+        conn.execute(
+            "INSERT INTO aegis_event_chain (org_id, tail_hash, head_hash)
+             VALUES ($1, $2, $2)
+             ON CONFLICT (org_id) DO NOTHING",
+            &[&org, &genesis.as_slice()],
+        )
+        .await
+        .map_err(backend)?;
+        let row = conn
+            .query_one(
+                "SELECT tail_hash, head_hash FROM aegis_event_chain
+                 WHERE org_id = $1 FOR UPDATE",
+                &[&org],
             )
             .await
             .map_err(backend)?;
-        Ok(())
+        let tail = hash_of(row.try_get(0).map_err(backend)?)?;
+        let head = hash_of(row.try_get(1).map_err(backend)?)?;
+        Ok((tail, head))
+    }
+
+    pub(super) async fn record(&self, event: &AuditEvent) -> Result<(), StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(backend)?;
+        let (_tail, head) = Self::lock_chain(&tx, self.org).await?;
+        let next = Self::append_chained_event(&tx, self.org, &head, event).await?;
+        tx.execute(
+            "UPDATE aegis_event_chain SET head_hash = $2 WHERE org_id = $1",
+            &[&self.org, &next.as_slice()],
+        )
+        .await
+        .map_err(backend)?;
+        tx.commit().await.map_err(backend)
     }
 
     pub(super) async fn recent_events(&self, limit: usize) -> Result<Vec<AuditEvent>, StoreFault> {
@@ -261,24 +382,78 @@ impl PostgresAccounts {
             .collect()
     }
 
-    /// Removes events older than `cutoff_ms`, then the oldest beyond `keep`.
+    /// Removes events older than `cutoff_ms`, then the oldest beyond `keep`,
+    /// advances the hash-chain tail anchor, and records an
+    /// [`AuditKind::EventsTrimmed`] event in the chain (SEC-06).
     ///
     /// Works in batches from the oldest rows in primary key order. Events
     /// are written in time order, so a batch with a young row ends the age
     /// pass: a log with nothing old costs one indexed read of
     /// [`TRIM_BATCH`] rows, and no call holds a long lock.
-    pub(super) async fn trim_events(&self, cutoff_ms: u64, keep: usize) -> Result<u64, StoreFault> {
-        let client = self.client().await?;
+    pub(super) async fn trim_events(
+        &self,
+        cutoff_ms: u64,
+        keep: usize,
+        now_ms: u64,
+    ) -> Result<u64, StoreFault> {
+        let mut client = self.client().await?;
         let cutoff = to_i64(cutoff_ms)?;
+        let cut_row = if keep == 0 {
+            client
+                .query_opt(
+                    "SELECT event_id, hash FROM aegis_event
+                     WHERE org_id = $1 ORDER BY event_id DESC LIMIT 1",
+                    &[&self.org],
+                )
+                .await
+                .map_err(backend)?
+        } else {
+            let offset = to_i64((keep - 1) as u64)?;
+            client
+                .query_opt(
+                    "WITH age_cut AS (
+                         SELECT max(event_id) AS id FROM aegis_event
+                         WHERE org_id = $1 AND at_ms < $2
+                     ),
+                     min_kept AS (
+                         SELECT event_id AS id FROM aegis_event
+                         WHERE org_id = $1 AND at_ms >= $2 AND kind <> 'events_trimmed'
+                         ORDER BY event_id DESC OFFSET $3 LIMIT 1
+                     ),
+                     cap_cut AS (
+                         SELECT max(e.event_id) AS id
+                         FROM aegis_event e, min_kept m
+                         WHERE e.org_id = $1 AND e.event_id < m.id
+                     ),
+                     chosen AS (
+                         SELECT GREATEST(
+                             (SELECT id FROM age_cut),
+                             (SELECT id FROM cap_cut)
+                         ) AS id
+                     )
+                     SELECT e.event_id, e.hash
+                     FROM aegis_event e JOIN chosen c ON e.event_id = c.id
+                     WHERE e.org_id = $1",
+                    &[&self.org, &cutoff, &offset],
+                )
+                .await
+                .map_err(backend)?
+        };
+        let Some(cut_row) = cut_row else {
+            return Ok(0);
+        };
+        let cut_id: i64 = cut_row.try_get(0).map_err(backend)?;
+        let cut_hash = hash_of(cut_row.try_get(1).map_err(backend)?)?;
+
         let mut removed = 0u64;
         loop {
             let n = client
                 .execute(
-                    "DELETE FROM aegis_event WHERE at_ms < $2 AND event_id IN (
+                    "DELETE FROM aegis_event WHERE event_id IN (
                          SELECT event_id FROM aegis_event
-                         WHERE org_id = $1
+                         WHERE org_id = $1 AND event_id <= $2
                          ORDER BY event_id LIMIT $3)",
-                    &[&self.org, &cutoff, &TRIM_BATCH],
+                    &[&self.org, &cut_id, &TRIM_BATCH],
                 )
                 .await
                 .map_err(backend)?;
@@ -287,17 +462,91 @@ impl PostgresAccounts {
                 break;
             }
         }
-        // The row cap: delete everything older than the keep-th newest id.
-        let keep = to_i64(keep as u64)?;
-        let n = client
+
+        let tx = client.transaction().await.map_err(backend)?;
+        let stragglers = tx
             .execute(
-                "DELETE FROM aegis_event WHERE org_id = $1 AND event_id < (
-                     SELECT event_id FROM aegis_event WHERE org_id = $1
-                     ORDER BY event_id DESC OFFSET $2 LIMIT 1)",
-                &[&self.org, &(keep - 1).max(0)],
+                "DELETE FROM aegis_event WHERE org_id = $1 AND event_id <= $2",
+                &[&self.org, &cut_id],
             )
             .await
             .map_err(backend)?;
-        Ok(removed + n)
+        removed += stragglers;
+        if removed == 0 {
+            return Ok(0);
+        }
+
+        let (mut tail, mut head) = Self::lock_chain(&tx, self.org).await?;
+        if cut_hash != [0u8; 32] {
+            if tail == head {
+                head = cut_hash;
+            }
+            tail = cut_hash;
+        }
+        let trim_event = AuditEvent {
+            at_ms: now_ms,
+            actor: "system".to_owned(),
+            kind: AuditKind::EventsTrimmed,
+            target: String::new(),
+            detail: format!("removed={removed}"),
+        };
+        let next = Self::append_chained_event(&tx, self.org, &head, &trim_event).await?;
+        tx.execute(
+            "UPDATE aegis_event_chain SET tail_hash = $2, head_hash = $3 WHERE org_id = $1",
+            &[&self.org, &tail.as_slice(), &next.as_slice()],
+        )
+        .await
+        .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
+        Ok(removed)
+    }
+
+    pub(super) async fn verify_events(&self) -> Result<ChainReport, StoreFault> {
+        let client = self.client().await?;
+        let genesis = event_genesis(self.org);
+        let chain_row = client
+            .query_opt(
+                "SELECT tail_hash, head_hash FROM aegis_event_chain WHERE org_id = $1",
+                &[&self.org],
+            )
+            .await
+            .map_err(backend)?;
+        let (tail, head) = match chain_row {
+            Some(row) => (
+                hash_of(row.try_get(0).map_err(backend)?)?,
+                hash_of(row.try_get(1).map_err(backend)?)?,
+            ),
+            None => (genesis, genesis),
+        };
+        let rows = client
+            .query(
+                "SELECT at_ms, actor, kind, target, detail, prev_hash, hash
+                 FROM aegis_event
+                 WHERE org_id = $1 AND hash <> $2
+                 ORDER BY event_id ASC",
+                &[&self.org, &[0u8; 32].as_slice()],
+            )
+            .await
+            .map_err(backend)?;
+        let mut verifier = EventChainVerifier::new(tail);
+        for row in &rows {
+            let kind_str: String = row.try_get(2).map_err(backend)?;
+            let Some(kind) = kind_of(&kind_str) else {
+                return Err(StoreFault::Corrupt(format!(
+                    "unknown audit event kind: {kind_str}"
+                )));
+            };
+            let event = AuditEvent {
+                at_ms: to_u64(row.try_get(0).map_err(backend)?)?,
+                actor: row.try_get(1).map_err(backend)?,
+                kind,
+                target: row.try_get(3).map_err(backend)?,
+                detail: row.try_get(4).map_err(backend)?,
+            };
+            let prev = hash_of(row.try_get(5).map_err(backend)?)?;
+            let hash = hash_of(row.try_get(6).map_err(backend)?)?;
+            verifier.push(&event, &prev, &hash);
+        }
+        Ok(verifier.finish(&head))
     }
 }

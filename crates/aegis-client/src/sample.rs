@@ -13,15 +13,19 @@ use aegis_model::{
 };
 
 /// Builds the example as ops. Returns `None` if `m` lacks a vocabulary the
-/// example needs (it is written for the built-in ISO/SAE 21434 pack).
+/// example needs (supports the built-in ISO/SAE 21434 and EU CRA packs).
 #[must_use]
 pub fn sample_ops(m: &Methodology, actor: &str, now_ms: u64) -> Option<Vec<Op>> {
     let p = Provenance::human(actor, now_ms);
     let integrity = m.property("integrity")?;
     let authenticity = m.property("authenticity")?;
-    let safety = m.impact_category("safety")?;
+    let safety = m
+        .impact_category("safety")
+        .or_else(|| m.impact_category("safety-health"))?;
     let severe = m.level(safety, "severe")?;
-    let financial = m.impact_category("financial")?;
+    let financial = m
+        .impact_category("financial")
+        .or_else(|| m.impact_category("financial-material"))?;
     let major = m.level(financial, "major")?;
     let spoofing = m.threat_category("spoofing")?;
     let tampering = m.threat_category("tampering")?;
@@ -158,20 +162,29 @@ pub fn sample_ops(m: &Methodology, actor: &str, now_ms: u64) -> Option<Vec<Op>> 
         },
     ];
 
-    // The downgrade step is rated through attack potential: 1 + 3 + 3 + 1 + 4 = 12 points.
-    for (factor, level) in [
-        ("elapsed-time", "le-1w"),
-        ("expertise", "proficient"),
-        ("knowledge", "restricted"),
-        ("window-of-opportunity", "easy"),
-        ("equipment", "specialized"),
-    ] {
-        let f = m.feasibility_factor(factor)?;
-        ops.push(Op::SetStepFactor {
+    if m.has_attack_potential() {
+        // The downgrade step is rated through attack potential: 1 + 3 + 3 + 1 + 4 = 12 points.
+        for (factor, level) in [
+            ("elapsed-time", "le-1w"),
+            ("expertise", "proficient"),
+            ("knowledge", "restricted"),
+            ("window-of-opportunity", "easy"),
+            ("equipment", "specialized"),
+        ] {
+            let f = m.feasibility_factor(factor)?;
+            ops.push(Op::SetStepFactor {
+                tree: tree_id,
+                node: downgrade,
+                factor: f,
+                level: Some(m.factor_level(f, level)?),
+                provenance: p.clone(),
+            });
+        }
+    } else {
+        ops.push(Op::SetStepFeasibility {
             tree: tree_id,
             node: downgrade,
-            factor: f,
-            level: Some(m.factor_level(f, level)?),
+            level: Some(medium),
             provenance: p.clone(),
         });
     }
@@ -188,50 +201,54 @@ mod tests {
 
     #[test]
     fn the_sample_applies_to_an_empty_project_and_has_the_advertised_shape() {
-        let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
-        let ops = sample_ops(&m, "demo", 1).expect("sample");
-        let mut project = Project::new(Arc::clone(&m));
-        for op in ops {
-            project.apply(op).expect("valid");
-        }
-        assert_eq!(project.asset_count(), 1);
-        assert_eq!(project.threat_scenario_count(), 2);
-        assert_eq!(project.attack_tree_count(), 1);
-        assert_eq!(project.security_control_count(), 2);
-        assert!(
-            project
-                .lint()
-                .iter()
-                .all(|f| f.severity() != aegis_model::LintSeverity::Error)
-        );
+        for m in [
+            Arc::new(Methodology::iso21434_r155().expect("builtin")),
+            Arc::new(Methodology::eu_cra().expect("builtin")),
+        ] {
+            let ops = sample_ops(&m, "demo", 1).expect("sample");
+            let mut project = Project::new(Arc::clone(&m));
+            for op in ops {
+                project.apply(op).expect("valid");
+            }
+            assert_eq!(project.asset_count(), 1);
+            assert_eq!(project.threat_scenario_count(), 2);
+            assert_eq!(project.attack_tree_count(), 1);
+            assert_eq!(project.security_control_count(), 2);
+            assert!(
+                project
+                    .lint()
+                    .iter()
+                    .all(|f| f.severity() != aegis_model::LintSeverity::Error)
+            );
 
-        // The control makes the residual risk differ from the inherent risk.
-        let (_, spoof, _) = project.threat_scenarios().next().expect("threat");
-        let inherent = project.evaluate_risk(spoof).expect("inherent").max_risk();
-        let residual = project
-            .evaluate_residual_risk(spoof)
-            .expect("residual")
-            .max_risk();
-        // Inherent: the open debug port makes the whole tree easy (high).
-        // Residual: both controls bring it down to low.
-        let high = m.feasibility_level("high").expect("level");
-        let low = m.feasibility_level("low").expect("level");
-        assert_eq!(
-            project
-                .evaluate_tree(tree_of(&project))
-                .expect("tree")
-                .root_value(),
-            &high
-        );
-        assert_eq!(
-            project
-                .evaluate_residual_tree(tree_of(&project))
-                .expect("tree")
-                .root_value(),
-            &low
-        );
-        assert!(inherent.is_some() && residual.is_some());
-        assert_ne!(inherent, residual);
+            // The control makes the residual risk differ from the inherent risk.
+            let (_, spoof, _) = project.threat_scenarios().next().expect("threat");
+            let inherent = project.evaluate_risk(spoof).expect("inherent").max_risk();
+            let residual = project
+                .evaluate_residual_risk(spoof)
+                .expect("residual")
+                .max_risk();
+            // Inherent: the open debug port makes the whole tree easy (high).
+            // Residual: both controls bring it down to low.
+            let high = m.feasibility_level("high").expect("level");
+            let low = m.feasibility_level("low").expect("level");
+            assert_eq!(
+                project
+                    .evaluate_tree(tree_of(&project))
+                    .expect("tree")
+                    .root_value(),
+                &high
+            );
+            assert_eq!(
+                project
+                    .evaluate_residual_tree(tree_of(&project))
+                    .expect("tree")
+                    .root_value(),
+                &low
+            );
+            assert!(inherent.is_some() && residual.is_some());
+            assert_ne!(inherent, residual);
+        }
     }
 
     fn tree_of(project: &Project) -> aegis_model::TreeId {

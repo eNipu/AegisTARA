@@ -10,11 +10,11 @@ import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
-    CountItem, DiffItem, ProblemItem, Choice, Table, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
+    CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, Table, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
     LinkList, CheckList, Tile, Bars
 } from "widgets.slint";
 
-export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem }
+export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
 
 // Page numbers, in the order of aegis_client::view::Page::ALL.
 global Pages {
@@ -136,9 +136,16 @@ export component AppWindow inherits Window {
     in property <bool> has-project;
     in property <string> project-name;
     in-out property <string> new-project-name: "";
+    in-out property <int> new-project-methodology: 0;
 
     // ---- open project ----
     in property <bool> editing;
+    in property <bool> has-attack-potential: true;
+    in property <string> feasibility-label: "Attack feasibility";
+    in property <string> damage-singular: "Damage scenario";
+    in property <string> damage-plural: "Damage scenarios";
+    in property <string> goal-singular: "Cybersecurity goal";
+    in property <string> goal-plural: "Cybersecurity goals";
     // The description boxes of the page on screen, and saving one.
     in property <[DescriptionItem]> descriptions;
     callback set-description(int, string);
@@ -271,6 +278,7 @@ export component AppWindow inherits Window {
     in property <int> evaluated-tone;
     in property <[string]> why-lines;
     in property <[MitigationItem]> mitigations;
+    in property <[SuggestionItem]> suggestion-rows;
     in property <[string]> attach-names;
     in property <string> step-residual-text;
     in-out property <int> attach-control-index: 0;
@@ -450,6 +458,11 @@ export component AppWindow inherits Window {
     callback add-sibling-node(int, string);
     callback move-tree-node(int);
     callback remove-tree-node();
+    callback suggest-tree-nodes();
+    callback accept-suggestion(int);
+    callback accept-all-suggestions();
+    callback reject-suggestion(int);
+    callback reject-all-suggestions();
     callback attach-control(int, int);
     callback set-mitigation(int, int);
     callback detach-control(int);
@@ -908,6 +921,11 @@ export component AppWindow inherits Window {
                                 if (t != "") { root.create-project(t); root.new-project-name = ""; }
                             }
                         }
+                        Choice {
+                            options: ["ISO/SAE 21434 (Automotive)", "EU CRA (Annex I)"];
+                            index <=> root.new-project-methodology;
+                            label: "Methodology";
+                        }
                         Button {
                             text: "Create";
                             icon: @image-url("icons/file-plus.svg");
@@ -1055,7 +1073,7 @@ export component AppWindow inherits Window {
                         for item[i] in [
                             { label: "Overview", icon: @image-url("icons/layout-dashboard.svg") },
                             { label: "Assets", icon: @image-url("icons/box.svg") },
-                            { label: "Damage scenarios", icon: @image-url("icons/triangle-alert.svg") },
+                            { label: root.damage-plural, icon: @image-url("icons/triangle-alert.svg") },
                             { label: "Threat scenarios", icon: @image-url("icons/swords.svg") },
                             { label: "Attack trees", icon: @image-url("icons/network.svg") },
                             { label: "Risks and treatment", icon: @image-url("icons/gauge.svg") },
@@ -1195,14 +1213,14 @@ export component AppWindow inherits Window {
                         horizontal-stretch: 3;
                         spacing: 10px;
                         PageTitle {
-                            title: "Damage scenarios";
-                            subtitle: "What could go wrong for road users, the company and the owner, rated per impact category.";
+                            title: root.damage-plural;
+                            subtitle: "What could go wrong, rated per impact category.";
                             icon: @image-url("icons/triangle-alert.svg");
-                            Button { text: "Add damage scenario"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-damage", "Add damage scenario", "What happens", ""); } }
+                            Button { text: "Add " + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-damage", "Add " + root.damage-singular, "What happens", ""); } }
                         }
                         Table {
-                            label: "Damage scenarios";
-                            columns: [{ title: "Damage scenario", horizontal-stretch: 2 }, { title: "Impact", horizontal-stretch: 2 }, { title: "Threats", horizontal-stretch: 1 }];
+                            label: root.damage-plural;
+                            columns: [{ title: root.damage-singular, horizontal-stretch: 2 }, { title: "Impact", horizontal-stretch: 2 }, { title: "Threats", horizontal-stretch: 1 }];
                             rows: root.damage-rows;
                             selected: root.damage-selected;
                             picked(i) => { root.pick-damage(i); }
@@ -1210,7 +1228,7 @@ export component AppWindow inherits Window {
                     }
                     if root.has-damage: Panel {
                         width: root.side-width;
-                        SectionTitle { text: "Damage scenario"; }
+                        SectionTitle { text: root.damage-singular; }
                         NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
                         DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         SectionTitle { text: "Impact rating"; }
@@ -1338,7 +1356,11 @@ export component AppWindow inherits Window {
                             Button { text: "Edit outline"; icon: @image-url("icons/pencil.svg"); enabled: root.editing; clicked => { root.outline-draft = root.outline-text; root.outline-open = true; } }
                             Button { text: "Delete"; icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-tree", "Delete this attack tree? Its threat scenarios lose their tree."); } }
                         }
-                        Button { text: "Library"; icon: @image-url("icons/box.svg"); accessible-description: "Search the attack tree library and copy an item into the project"; clicked => { root.library-opened(); root.library-open = true; } }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { horizontal-stretch: 1; text: "Library"; icon: @image-url("icons/box.svg"); accessible-description: "Search the attack tree library and copy an item into the project"; clicked => { root.library-opened(); root.library-open = true; } }
+                            if root.has-tree: Button { horizontal-stretch: 1; text: "Suggest steps"; icon: @image-url("icons/workflow.svg"); enabled: root.editing; accessible-description: "Synthesize ghost attack-tree steps with Aegis-Core Gear 1"; clicked => { root.suggest-tree-nodes(); } }
+                        }
                         if root.has-tree: Button { text: "Export SVG"; icon: @image-url("icons/image.svg"); clicked => { root.export-svg(); } }
                         DescriptionFor { items: root.descriptions; kind: "tree"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                         // Legend.
@@ -1410,7 +1432,7 @@ export component AppWindow inherits Window {
                     Rectangle {
                         width: root.inspector-width;
                         background: Theme.panel;
-                        if !root.has-inspector: Text {
+                        if !root.has-inspector && root.suggestion-rows.length == 0: Text {
                             text: "Select a node on the canvas to inspect its feasibility or expand the attack tree.";
                             color: Theme.graphite;
                             wrap: word-wrap;
@@ -1420,18 +1442,79 @@ export component AppWindow inherits Window {
                             y: 16px;
                             width: parent.width - 32px;
                         }
-                        if root.has-inspector: ScrollView {
+                        if root.has-inspector || root.suggestion-rows.length > 0: ScrollView {
                             VerticalLayout {
                                 padding: 16px;
                                 spacing: 10px;
-                                Text {
-                                    text: root.inspector-title;
-                                    font-size: Theme.font-h1;
-                                    font-weight: Theme.weight-heavy;
-                                    letter-spacing: Theme.tracking-tight;
-                                    color: Theme.ink;
-                                    wrap: word-wrap;
+                                if root.suggestion-rows.length > 0: VerticalLayout {
+                                    spacing: 8px;
+                                    SectionTitle { text: "AI suggestions (Gear 1)"; }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Button {
+                                            horizontal-stretch: 1;
+                                            text: "Accept all";
+                                            icon: @image-url("icons/badge-check.svg");
+                                            primary: true;
+                                            enabled: root.editing;
+                                            clicked => { root.accept-all-suggestions(); }
+                                        }
+                                        Button {
+                                            horizontal-stretch: 1;
+                                            text: "Dismiss all";
+                                            icon: @image-url("icons/x.svg");
+                                            clicked => { root.reject-all-suggestions(); }
+                                        }
+                                    }
+                                    for s[si] in root.suggestion-rows: Rectangle {
+                                        background: s.selected ? Theme.wash : Theme.sheet;
+                                        border-width: 1px;
+                                        border-color: s.selected ? Theme.accent : Theme.rule;
+                                        border-radius: 2px;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 4px;
+                                            Text {
+                                                text: s.label;
+                                                color: Theme.ink;
+                                                font-size: Theme.font-body;
+                                                font-weight: Theme.weight-semibold;
+                                                wrap: word-wrap;
+                                            }
+                                            Text {
+                                                text: s.kind + " · " + s.detail;
+                                                color: Theme.graphite;
+                                                font-size: Theme.font-caption;
+                                                wrap: word-wrap;
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 6px;
+                                                Button {
+                                                    horizontal-stretch: 1;
+                                                    text: "Accept";
+                                                    enabled: root.editing;
+                                                    clicked => { root.accept-suggestion(si); }
+                                                }
+                                                Button {
+                                                    horizontal-stretch: 1;
+                                                    text: "Dismiss";
+                                                    clicked => { root.reject-suggestion(si); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if root.has-inspector: Rectangle { height: 1px; background: Theme.rule; }
                                 }
+                                if root.has-inspector: VerticalLayout {
+                                    spacing: 10px;
+                                    Text {
+                                        text: root.inspector-title;
+                                        font-size: Theme.font-h1;
+                                        font-weight: Theme.weight-heavy;
+                                        letter-spacing: Theme.tracking-tight;
+                                        color: Theme.ink;
+                                        wrap: word-wrap;
+                                    }
                                 Text { text: root.inspector-kind; color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-semibold; }
                                 if root.editing: NameEditor {
                                     name: root.inspector-title;
@@ -1564,12 +1647,12 @@ export component AppWindow inherits Window {
                                 if root.inspector-is-step: VerticalLayout {
                                     spacing: 8px;
                                     Rectangle { height: 1px; background: Theme.rule; }
-                                    SectionTitle { text: "Feasibility rating"; }
+                                    SectionTitle { text: root.feasibility-label; }
                                     Choice {
                                         options: root.level-options;
                                         index: root.rating-index;
                                         editable: root.editing;
-                                        label: "Feasibility rating";
+                                        label: root.feasibility-label;
                                         picked(i) => { root.set-rating(i); }
                                     }
                                     if root.effective-text != "": Text {
@@ -1577,27 +1660,30 @@ export component AppWindow inherits Window {
                                         color: Theme.graphite;
                                         font-size: 12px;
                                     }
-                                    SectionTitle { text: "Attack potential"; }
-                                    if root.potential-text != "": Text {
-                                        text: root.potential-text + " from the five factors";
-                                        font-size: 13px;
-                                        color: Theme.ink;
-                                    }
-                                    if root.potential-text == "": Text {
-                                        text: "Rate all five factors to calculate it. Until then the rating above is used.";
-                                        font-size: 12px;
-                                        color: Theme.graphite;
-                                        wrap: word-wrap;
-                                    }
-                                    for f[fi] in root.factors: VerticalLayout {
-                                        spacing: 2px;
-                                        Text { text: f.label; font-size: 12px; color: Theme.graphite; }
-                                        Choice {
-                                            options: f.options;
-                                            index: f.selected;
-                                            editable: root.editing;
-                                            label: f.label;
-                                            picked(i) => { root.set-factor(fi, i); }
+                                    if root.has-attack-potential: VerticalLayout {
+                                        spacing: 8px;
+                                        SectionTitle { text: "Attack potential"; }
+                                        if root.potential-text != "": Text {
+                                            text: root.potential-text + " from the five factors";
+                                            font-size: 13px;
+                                            color: Theme.ink;
+                                        }
+                                        if root.potential-text == "": Text {
+                                            text: "Rate all five factors to calculate it. Until then the rating above is used.";
+                                            font-size: 12px;
+                                            color: Theme.graphite;
+                                            wrap: word-wrap;
+                                        }
+                                        for f[fi] in root.factors: VerticalLayout {
+                                            spacing: 2px;
+                                            Text { text: f.label; font-size: 12px; color: Theme.graphite; }
+                                            Choice {
+                                                options: f.options;
+                                                index: f.selected;
+                                                editable: root.editing;
+                                                label: f.label;
+                                                picked(i) => { root.set-factor(fi, i); }
+                                            }
                                         }
                                     }
                                     Rectangle { height: 1px; background: Theme.rule; }
@@ -1626,6 +1712,7 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                     if root.editing && root.attach-names.length == 0 && root.mitigations.length == 0: Text { text: "Add controls on the Security controls page to attach them here."; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                                }
                                 }
                             }
                         }
@@ -1733,10 +1820,10 @@ export component AppWindow inherits Window {
                             Button { text: "Add goal"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-goal", "Add cybersecurity goal", "Goal", ""); } }
                             Button { text: "Add claim"; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-claim", "Add cybersecurity claim", "Claim", ""); } }
                         }
-                        SectionTitle { text: "Cybersecurity goals"; }
+                        SectionTitle { text: root.goal-plural; }
                         Table {
-                            label: "Cybersecurity goals";
-                            columns: [{ title: "Goal", horizontal-stretch: 3 }, { title: "Controls", horizontal-stretch: 1 }, { title: "Threats", horizontal-stretch: 1 }];
+                            label: root.goal-plural;
+                            columns: [{ title: root.goal-singular, horizontal-stretch: 3 }, { title: "Controls", horizontal-stretch: 1 }, { title: "Threats", horizontal-stretch: 1 }];
                             rows: root.goal-rows;
                             selected: root.goal-selected;
                             picked(i) => { root.pick-goal(i); }
@@ -1754,7 +1841,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         spacing: 12px;
                         if root.has-goal: Panel {
-                            SectionTitle { text: "Cybersecurity goal"; }
+                            SectionTitle { text: root.goal-singular; }
                             NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
                             DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
                             SectionTitle { text: "Controls that realize it"; }

@@ -11,7 +11,7 @@ use crate::pages::{
     Vocabulary,
 };
 use crate::time::format_ms;
-use crate::view::{Inspector, Page, ThreatRow, TreeView};
+use crate::view::{Inspector, Page, SuggestionRow, ThreatRow, TreeView};
 
 /// How the client stands with the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -389,6 +389,11 @@ pub struct ProjectView {
     /// Per page in `Page::ALL` order: a count for the sidebar, if the page
     /// has one (entities, open problems).
     pub nav_counts: Vec<Option<usize>>,
+    /// Pending AI or catalog suggestion items for the open project (job 089).
+    pub suggestions: Vec<SuggestionRow>,
+    /// Position of the selected suggestion in `suggestions` when a ghost node
+    /// is selected on the canvas.
+    pub selected_suggestion: Option<usize>,
 }
 
 impl ProjectView {

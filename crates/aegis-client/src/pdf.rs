@@ -237,6 +237,7 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     use Block::{Heading, Paragraph};
     let project = ws.project();
     let m = project.methodology();
+    let names = m.element_names();
     let vocab = pages::vocabulary(m);
     let mut b: Vec<Block> = Vec::new();
 
@@ -268,10 +269,13 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     let above: usize = ov.residual.iter().take(2).map(|c| c.count).sum();
     b.push(Paragraph(
         format!(
-            "The project has {} threat scenarios on {} assets. After the planned and verified controls, {} threat scenario(s) remain in the two highest risk levels. {} blocking problem(s) and {} warning(s) are open.",
+            "The project has {} {} on {} {}. After the planned and verified controls, {} {}(s) remain in the two highest risk levels. {} blocking problem(s) and {} warning(s) are open.",
             project.threat_scenario_count(),
+            names.threat_scenario.plural.to_lowercase(),
             project.asset_count(),
+            names.asset.plural.to_lowercase(),
             above,
+            names.threat_scenario.singular.to_lowercase(),
             ov.errors,
             ov.warnings
         ),
@@ -290,8 +294,8 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     b.push(risk_rows(&ov.top));
 
     // ---- assets ----
-    b.push(Heading(2, "2. Assets".to_owned()));
-    let mut headers: Vec<&str> = vec!["Asset"];
+    b.push(Heading(2, format!("2. {}", names.asset.plural)));
+    let mut headers: Vec<&str> = vec![&names.asset.singular];
     headers.extend(vocab.properties.iter().map(String::as_str));
     headers.push("Threats");
     b.push(table(
@@ -316,8 +320,8 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     );
 
     // ---- damage ----
-    b.push(Heading(2, "3. Damage scenarios".to_owned()));
-    let mut headers: Vec<&str> = vec!["Damage scenario"];
+    b.push(Heading(2, format!("3. {}", names.damage_scenario.plural)));
+    let mut headers: Vec<&str> = vec![&names.damage_scenario.singular];
     headers.extend(vocab.impact_categories.iter().map(|c| c.label.as_str()));
     headers.push("Threats");
     b.push(table(
@@ -347,7 +351,7 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     );
 
     // ---- threats ----
-    b.push(Heading(2, "4. Threat scenarios".to_owned()));
+    b.push(Heading(2, format!("4. {}", names.threat_scenario.plural)));
     for (_, id, _) in project.threat_scenarios() {
         let Some(t) = pages::threat_detail(ws, id) else {
             continue;
@@ -365,7 +369,7 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
         b.push(table(
             &["Field", "Value"],
             vec![
-                vec!["Asset".into(), t.asset_name.clone()],
+                vec![names.asset.singular.to_string(), t.asset_name.clone()],
                 vec![
                     "Category".into(),
                     vocab
@@ -375,9 +379,9 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
                         .unwrap_or_default(),
                 ],
                 vec!["Catalog references".into(), t.catalog_refs.join(", ")],
-                vec!["Damage scenarios".into(), damages.join(", ")],
+                vec![names.damage_scenario.plural.to_string(), damages.join(", ")],
                 vec![
-                    "Attack feasibility".into(),
+                    names.feasibility.to_string(),
                     t.feasibility.clone().unwrap_or_else(|| "not rated".into()),
                 ],
                 vec![
@@ -400,7 +404,7 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     }
 
     // ---- attack trees ----
-    b.push(Heading(2, "5. Attack trees".to_owned()));
+    b.push(Heading(2, format!("5. {}", names.attack_tree.plural)));
     let trees = pages::tree_rows(ws);
     if trees.is_empty() {
         b.push(Paragraph("None.".to_owned(), Style::Muted));
@@ -413,9 +417,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
         }
         b.push(Paragraph(
             format!(
-                "{} nodes. Feasibility at the root: {}. Threat scenarios: {}.",
+                "{} nodes. Feasibility at the root: {}. {}: {}.",
                 row.nodes,
                 row.feasibility,
+                names.threat_scenario.plural,
                 if row.threats.is_empty() {
                     "none"
                 } else {
@@ -440,7 +445,7 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     b.push(risk_rows(&pages::risk_rows(ws)));
 
     // ---- controls ----
-    b.push(Heading(2, "7. Security controls".to_owned()));
+    b.push(Heading(2, format!("7. {}", names.security_control.plural)));
     b.push(table(
         &["Control", "Attack steps", "Goals"],
         pages::control_rows(ws)
@@ -454,10 +459,14 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     );
 
     // ---- goals and claims ----
-    b.push(Heading(2, "8. Cybersecurity goals and claims".to_owned()));
+    b.push(Heading(2, crate::report::section_8_heading(names)));
     b.push(Heading(3, "Goals".to_owned()));
     b.push(table(
-        &["Goal", "Controls", "Threat scenarios"],
+        &[
+            &names.cybersecurity_goal.singular,
+            "Controls",
+            &names.threat_scenario.plural,
+        ],
         pages::goal_rows(ws)
             .into_iter()
             .map(|g| vec![g.name, g.controls.to_string(), g.threats.to_string()])
@@ -469,7 +478,10 @@ pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     );
     b.push(Heading(3, "Claims".to_owned()));
     b.push(table(
-        &["Claim", "Threat scenarios"],
+        &[
+            &names.cybersecurity_claim.singular,
+            &names.threat_scenario.plural,
+        ],
         pages::claim_rows(ws)
             .into_iter()
             .map(|c| vec![c.name, c.threats.to_string()])

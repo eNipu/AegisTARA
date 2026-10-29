@@ -70,6 +70,8 @@ pub struct NodeStyle {
     pub tone: Tone,
     /// The node is on the highlighted (deciding) path.
     pub critical: bool,
+    /// The node is a ghost proposal from a suggestion branch (FND-05).
+    pub ghost: bool,
 }
 
 /// A connection between two nodes.

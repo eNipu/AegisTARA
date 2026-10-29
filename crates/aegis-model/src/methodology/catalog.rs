@@ -381,6 +381,7 @@ mod tests {
             key: "catalogs".into(),
             version: "1".into(),
             label: "Catalogs".into(),
+            element_names: crate::ElementNamesDef::default(),
             impact_categories: vec![ImpactCategoryDef {
                 key: "harm".into(),
                 label: "Harm".into(),

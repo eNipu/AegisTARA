@@ -74,6 +74,20 @@ fn argon2() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
+/// Overwrites `bytes` with zeroes using [`std::hint::black_box`] so the
+/// compiler does not elide the wipe (SEC-08).
+pub(crate) fn zeroize_bytes(bytes: &mut [u8]) {
+    bytes.fill(0);
+    std::hint::black_box(bytes);
+}
+
+/// Overwrites the heap buffer of `s` with zeroes in place before dropping it
+/// (SEC-08).
+pub(crate) fn zeroize_string(s: &mut String) {
+    let mut bytes = std::mem::take(s).into_bytes();
+    zeroize_bytes(&mut bytes);
+}
+
 /// Hashes a password with a fresh 16-byte salt from the OS generator.
 /// CPU-bound: call from `spawn_blocking`.
 ///
@@ -85,7 +99,9 @@ pub fn hash(password: &str) -> Result<String, String> {
     SystemRandom::new()
         .fill(&mut salt)
         .map_err(|_| "the random generator failed".to_owned())?;
-    let salt = SaltString::encode_b64(&salt).map_err(|e| e.to_string())?;
+    let salt_str = SaltString::encode_b64(&salt);
+    zeroize_bytes(&mut salt);
+    let salt = salt_str.map_err(|e| e.to_string())?;
     argon2()
         .hash_password(password.as_bytes(), &salt)
         .map(|h| h.to_string())
@@ -134,7 +150,11 @@ pub fn decoy() -> Result<String, String> {
     SystemRandom::new()
         .fill(&mut random)
         .map_err(|_| "the random generator failed".to_owned())?;
-    hash(&crate::accounts::b64(&random))
+    let mut secret = crate::accounts::b64(&random);
+    zeroize_bytes(&mut random);
+    let res = hash(&secret);
+    zeroize_string(&mut secret);
+    res
 }
 
 #[cfg(test)]

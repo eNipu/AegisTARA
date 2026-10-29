@@ -9,11 +9,31 @@ use ring::rand::{SecureRandom, SystemRandom};
 use crate::b64;
 use crate::error::AuthError;
 
+/// Overwrites `bytes` with zeroes using [`std::hint::black_box`] so the
+/// compiler does not elide the wipe (SEC-08).
+pub(crate) fn zeroize_bytes(bytes: &mut [u8]) {
+    bytes.fill(0);
+    std::hint::black_box(bytes);
+}
+
+/// Overwrites the heap buffer of `s` with zeroes in place before dropping it
+/// (SEC-08).
+pub(crate) fn zeroize_string(s: &mut String) {
+    let mut bytes = std::mem::take(s).into_bytes();
+    zeroize_bytes(&mut bytes);
+}
+
 /// A code verifier and its challenge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pkce {
     verifier: String,
     challenge: String,
+}
+
+impl Drop for Pkce {
+    fn drop(&mut self) {
+        zeroize_string(&mut self.verifier);
+    }
 }
 
 impl Pkce {
@@ -28,7 +48,9 @@ impl Pkce {
         SystemRandom::new()
             .fill(&mut raw)
             .map_err(|_| AuthError::Protocol)?;
-        Ok(Self::from_verifier(b64::encode(raw)))
+        let encoded = b64::encode(raw);
+        zeroize_bytes(&mut raw);
+        Ok(Self::from_verifier(encoded))
     }
 
     /// The pair for a given verifier (tests; the RFC's appendix B vector).
