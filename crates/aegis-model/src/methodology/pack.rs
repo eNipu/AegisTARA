@@ -17,23 +17,25 @@
 //! pretty printer, in the declared field order, so the same definition
 //! always gives the same bytes (P4).
 
+use std::collections::BTreeMap;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::sync::Arc;
 
 use serde::de::{Deserialize, Deserializer, Visitor};
-use serde::ser::{Serialize, SerializeStruct, Serializer};
+use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use super::{
     AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ElementNameDef, ElementNamesDef,
     FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, MAX_CATALOG_SCHEMES,
-    MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_LEVELS, MAX_PREFIX_LEN, MAX_PROPERTIES,
-    MAX_SEGMENTS, MAX_THREAT_CATEGORIES, Methodology, MethodologyDef, PotentialBandDef,
-    PropertyDef, SegmentDef, ThreatCategoryDef,
+    MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_INTERFACE_KINDS, MAX_LEVELS,
+    MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
+    Methodology, MethodologyDef, PackTranslationDef, PotentialBandDef, PropertyDef, SegmentDef,
+    ThreatCategoryDef,
 };
 use crate::error::PackError;
 use crate::store::wire::{
-    self, BoundedStr, BoundedVec, Cap, CappedReader, FORMAT_VERSION, Format, FormatName,
-    FormatVersion, Key, VersionText,
+    self, BoundedKeyMap, BoundedStr, BoundedVec, Cap, CappedReader, FORMAT_VERSION, Format,
+    FormatName, FormatVersion, Key, VersionText,
 };
 use crate::store::{Limit, MAX_LABEL_BYTES, MAX_PACK_FILE_BYTES};
 
@@ -60,11 +62,15 @@ pack_caps! {
     PrefixCap = MAX_PREFIX_LEN, Limit::CATALOG_PREFIX;
     ImpactCategoriesCap = MAX_IMPACT_CATEGORIES, Limit::IMPACT_CATEGORIES;
     LevelsCap = MAX_LEVELS, Limit::LEVELS;
+    ImpactLevelsMapCap = MAX_IMPACT_CATEGORIES * MAX_LEVELS, Limit::LEVELS;
     FeasibilityFactorsCap = MAX_FEASIBILITY_FACTORS, Limit::FEASIBILITY_FACTORS;
+    FactorLevelsMapCap = MAX_FEASIBILITY_FACTORS * MAX_LEVELS, Limit::LEVELS;
     PropertiesCap = MAX_PROPERTIES, Limit::PROPERTIES;
     ThreatCategoriesCap = MAX_THREAT_CATEGORIES, Limit::THREAT_CATEGORIES;
     CatalogSchemesCap = MAX_CATALOG_SCHEMES, Limit::CATALOG_SCHEMES;
     SegmentsCap = MAX_SEGMENTS, Limit::CATALOG_SEGMENTS;
+    InterfaceKindsCap = MAX_INTERFACE_KINDS, Limit::INTERFACE_KINDS;
+    PackTranslationsCap = MAX_PACK_TRANSLATIONS, Limit::PACK_TRANSLATIONS;
 }
 
 type Label = BoundedStr<LabelCap>;
@@ -140,6 +146,8 @@ struct DefWire {
     label: Label,
     #[serde(default)]
     element_names: Option<Object<ElementNamesWire>>,
+    #[serde(default)]
+    interface_kinds: Option<BoundedVec<Object<EntryWire>, InterfaceKindsCap>>,
     impact_categories: BoundedVec<Object<ImpactCategoryWire>, ImpactCategoriesCap>,
     feasibility_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
     risk_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
@@ -148,6 +156,8 @@ struct DefWire {
     properties: BoundedVec<Object<EntryWire>, PropertiesCap>,
     threat_categories: BoundedVec<Object<ThreatCategoryWire>, ThreatCategoriesCap>,
     catalog_schemes: BoundedVec<Object<CatalogSchemeWire>, CatalogSchemesCap>,
+    #[serde(default)]
+    translations: Option<BoundedKeyMap<Object<PackTranslationWire>, PackTranslationsCap>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -160,6 +170,14 @@ struct ElementNameWire {
 #[derive(Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ElementNamesWire {
+    #[serde(default)]
+    component: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    interface: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    data_flow: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    trust_boundary: Option<Object<ElementNameWire>>,
     #[serde(default)]
     asset: Option<Object<ElementNameWire>>,
     #[serde(default)]
@@ -176,6 +194,35 @@ struct ElementNamesWire {
     cybersecurity_claim: Option<Object<ElementNameWire>>,
     #[serde(default)]
     feasibility: Option<Label>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackTranslationWire {
+    #[serde(default)]
+    label: Option<Label>,
+    #[serde(default)]
+    element_names: Option<Object<ElementNamesWire>>,
+    #[serde(default)]
+    impact_categories: BoundedKeyMap<Label, ImpactCategoriesCap>,
+    #[serde(default)]
+    impact_levels: BoundedKeyMap<Label, ImpactLevelsMapCap>,
+    #[serde(default)]
+    feasibility_levels: BoundedKeyMap<Label, LevelsCap>,
+    #[serde(default)]
+    risk_levels: BoundedKeyMap<Label, LevelsCap>,
+    #[serde(default)]
+    properties: BoundedKeyMap<Label, PropertiesCap>,
+    #[serde(default)]
+    threat_categories: BoundedKeyMap<Label, ThreatCategoriesCap>,
+    #[serde(default)]
+    catalog_schemes: BoundedKeyMap<Label, CatalogSchemesCap>,
+    #[serde(default)]
+    feasibility_factors: BoundedKeyMap<Label, FeasibilityFactorsCap>,
+    #[serde(default)]
+    factor_levels: BoundedKeyMap<Label, FactorLevelsMapCap>,
+    #[serde(default)]
+    interface_kinds: BoundedKeyMap<Label, InterfaceKindsCap>,
 }
 
 /// A level or a property: a key and a label.
@@ -312,6 +359,12 @@ impl From<ElementNamesWire> for ElementNamesDef {
     fn from(w: ElementNamesWire) -> Self {
         let def = ElementNamesDef::default();
         ElementNamesDef {
+            component: w.component.map_or(def.component, |Object(n)| n.into()),
+            interface: w.interface.map_or(def.interface, |Object(n)| n.into()),
+            data_flow: w.data_flow.map_or(def.data_flow, |Object(n)| n.into()),
+            trust_boundary: w
+                .trust_boundary
+                .map_or(def.trust_boundary, |Object(n)| n.into()),
             asset: w.asset.map_or(def.asset, |Object(n)| n.into()),
             damage_scenario: w
                 .damage_scenario
@@ -330,6 +383,31 @@ impl From<ElementNamesWire> for ElementNamesDef {
                 .cybersecurity_claim
                 .map_or(def.cybersecurity_claim, |Object(n)| n.into()),
             feasibility: w.feasibility.map_or(def.feasibility, |l| l.0),
+            interface_kinds: Vec::new(),
+            translations: BTreeMap::new(),
+        }
+    }
+}
+
+fn unwrap_label_map<C>(m: BoundedKeyMap<Label, C>) -> BTreeMap<Arc<str>, Arc<str>> {
+    m.0.into_iter().map(|(k, v)| (k, v.0)).collect()
+}
+
+impl From<PackTranslationWire> for PackTranslationDef {
+    fn from(w: PackTranslationWire) -> Self {
+        PackTranslationDef {
+            label: w.label.map(|l| l.0),
+            element_names: w.element_names.map(|Object(n)| n.into()),
+            impact_categories: unwrap_label_map(w.impact_categories),
+            impact_levels: unwrap_label_map(w.impact_levels),
+            feasibility_levels: unwrap_label_map(w.feasibility_levels),
+            risk_levels: unwrap_label_map(w.risk_levels),
+            properties: unwrap_label_map(w.properties),
+            threat_categories: unwrap_label_map(w.threat_categories),
+            catalog_schemes: unwrap_label_map(w.catalog_schemes),
+            feasibility_factors: unwrap_label_map(w.feasibility_factors),
+            factor_levels: unwrap_label_map(w.factor_levels),
+            interface_kinds: unwrap_label_map(w.interface_kinds),
         }
     }
 }
@@ -338,14 +416,28 @@ impl From<ElementNamesWire> for ElementNamesDef {
 /// the `Arc<str>` handles move. Time O(m), m = vocabulary entries.
 impl From<DefWire> for MethodologyDef {
     fn from(w: DefWire) -> Self {
-        let entry = |e: Object<EntryWire>| (e.0.key.0, e.0.label.0);
+        let entry = |e: Object<EntryWire>| LevelDef {
+            key: e.0.key.0,
+            label: e.0.label.0,
+        };
+        let mut element_names = w
+            .element_names
+            .map_or_else(ElementNamesDef::default, |Object(names)| names.into());
+        if let Some(kinds) = w.interface_kinds {
+            element_names.interface_kinds = kinds.0.into_iter().map(entry).collect();
+        }
+        if let Some(translations) = w.translations {
+            element_names.translations = translations
+                .0
+                .into_iter()
+                .map(|(lang, Object(tr))| (lang, tr.into()))
+                .collect();
+        }
         MethodologyDef {
             key: w.key.0,
             version: w.version.0,
             label: w.label.0,
-            element_names: w
-                .element_names
-                .map_or_else(ElementNamesDef::default, |Object(names)| names.into()),
+            element_names,
             impact_categories: w
                 .impact_categories
                 .0
@@ -353,13 +445,7 @@ impl From<DefWire> for MethodologyDef {
                 .map(|Object(c)| ImpactCategoryDef {
                     key: c.key.0,
                     label: c.label.0,
-                    levels: c
-                        .levels
-                        .0
-                        .into_iter()
-                        .map(entry)
-                        .map(|(key, label)| LevelDef { key, label })
-                        .collect(),
+                    levels: c.levels.0.into_iter().map(entry).collect(),
                     risk_matrix: c
                         .risk_matrix
                         .0
@@ -368,27 +454,17 @@ impl From<DefWire> for MethodologyDef {
                         .collect(),
                 })
                 .collect(),
-            feasibility_levels: w
-                .feasibility_levels
-                .0
-                .into_iter()
-                .map(entry)
-                .map(|(key, label)| LevelDef { key, label })
-                .collect(),
-            risk_levels: w
-                .risk_levels
-                .0
-                .into_iter()
-                .map(entry)
-                .map(|(key, label)| LevelDef { key, label })
-                .collect(),
+            feasibility_levels: w.feasibility_levels.0.into_iter().map(entry).collect(),
+            risk_levels: w.risk_levels.0.into_iter().map(entry).collect(),
             attack_potential: w.attack_potential.map(|Object(ap)| ap.into()),
             properties: w
                 .properties
                 .0
                 .into_iter()
-                .map(entry)
-                .map(|(key, label)| PropertyDef { key, label })
+                .map(|Object(e)| PropertyDef {
+                    key: e.key.0,
+                    label: e.label.0,
+                })
                 .collect(),
             threat_categories: w
                 .threat_categories
@@ -468,14 +544,14 @@ impl Serialize for View<'_, Vec<Arc<str>>> {
 impl Serialize for View<'_, MethodologyDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("methodology", 11)?;
+        let mut st = s.serialize_struct("methodology", 13)?;
         st.serialize_field("key", &*d.key)?;
         st.serialize_field("version", &*d.version)?;
         st.serialize_field("label", &*d.label)?;
-        if d.element_names == ElementNamesDef::default() {
-            st.skip_field("element_names")?;
-        } else {
+        if d.element_names.has_custom_names() {
             st.serialize_field("element_names", &View(&d.element_names))?;
+        } else {
+            st.skip_field("element_names")?;
         }
         st.serialize_field("impact_categories", &View(d.impact_categories.as_slice()))?;
         st.serialize_field("feasibility_levels", &View(d.feasibility_levels.as_slice()))?;
@@ -487,6 +563,19 @@ impl Serialize for View<'_, MethodologyDef> {
         st.serialize_field("properties", &View(d.properties.as_slice()))?;
         st.serialize_field("threat_categories", &View(d.threat_categories.as_slice()))?;
         st.serialize_field("catalog_schemes", &View(d.catalog_schemes.as_slice()))?;
+        if d.element_names.interface_kinds.is_empty() {
+            st.skip_field("interface_kinds")?;
+        } else {
+            st.serialize_field(
+                "interface_kinds",
+                &View(d.element_names.interface_kinds.as_slice()),
+            )?;
+        }
+        if d.element_names.translations.is_empty() {
+            st.skip_field("translations")?;
+        } else {
+            st.serialize_field("translations", &View(&d.element_names.translations))?;
+        }
         st.end()
     }
 }
@@ -504,7 +593,18 @@ impl Serialize for View<'_, ElementNameDef> {
 impl Serialize for View<'_, ElementNamesDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let n = self.0;
-        let mut st = s.serialize_struct("element_names", 8)?;
+        let mut st = s.serialize_struct("element_names", 12)?;
+        if n.has_custom_item_names() {
+            st.serialize_field("component", &View(&n.component))?;
+            st.serialize_field("interface", &View(&n.interface))?;
+            st.serialize_field("data_flow", &View(&n.data_flow))?;
+            st.serialize_field("trust_boundary", &View(&n.trust_boundary))?;
+        } else {
+            st.skip_field("component")?;
+            st.skip_field("interface")?;
+            st.skip_field("data_flow")?;
+            st.skip_field("trust_boundary")?;
+        }
         st.serialize_field("asset", &View(&n.asset))?;
         st.serialize_field("damage_scenario", &View(&n.damage_scenario))?;
         st.serialize_field("threat_scenario", &View(&n.threat_scenario))?;
@@ -513,6 +613,92 @@ impl Serialize for View<'_, ElementNamesDef> {
         st.serialize_field("cybersecurity_goal", &View(&n.cybersecurity_goal))?;
         st.serialize_field("cybersecurity_claim", &View(&n.cybersecurity_claim))?;
         st.serialize_field("feasibility", &*n.feasibility)?;
+        st.end()
+    }
+}
+
+impl Serialize for View<'_, BTreeMap<Arc<str>, PackTranslationDef>> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(Some(self.0.len()))?;
+        for (lang, tr) in self.0 {
+            map.serialize_entry(&**lang, &View(tr))?;
+        }
+        map.end()
+    }
+}
+
+impl Serialize for View<'_, BTreeMap<Arc<str>, Arc<str>>> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(Some(self.0.len()))?;
+        for (k, v) in self.0 {
+            map.serialize_entry(&**k, &**v)?;
+        }
+        map.end()
+    }
+}
+
+impl Serialize for View<'_, PackTranslationDef> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let tr = self.0;
+        let mut st = s.serialize_struct("pack_translation", 12)?;
+        match &tr.label {
+            Some(lbl) => st.serialize_field("label", &**lbl)?,
+            None => st.skip_field("label")?,
+        }
+        match &tr.element_names {
+            Some(names) => st.serialize_field("element_names", &View(names))?,
+            None => st.skip_field("element_names")?,
+        }
+        if tr.impact_categories.is_empty() {
+            st.skip_field("impact_categories")?;
+        } else {
+            st.serialize_field("impact_categories", &View(&tr.impact_categories))?;
+        }
+        if tr.impact_levels.is_empty() {
+            st.skip_field("impact_levels")?;
+        } else {
+            st.serialize_field("impact_levels", &View(&tr.impact_levels))?;
+        }
+        if tr.feasibility_levels.is_empty() {
+            st.skip_field("feasibility_levels")?;
+        } else {
+            st.serialize_field("feasibility_levels", &View(&tr.feasibility_levels))?;
+        }
+        if tr.risk_levels.is_empty() {
+            st.skip_field("risk_levels")?;
+        } else {
+            st.serialize_field("risk_levels", &View(&tr.risk_levels))?;
+        }
+        if tr.properties.is_empty() {
+            st.skip_field("properties")?;
+        } else {
+            st.serialize_field("properties", &View(&tr.properties))?;
+        }
+        if tr.threat_categories.is_empty() {
+            st.skip_field("threat_categories")?;
+        } else {
+            st.serialize_field("threat_categories", &View(&tr.threat_categories))?;
+        }
+        if tr.catalog_schemes.is_empty() {
+            st.skip_field("catalog_schemes")?;
+        } else {
+            st.serialize_field("catalog_schemes", &View(&tr.catalog_schemes))?;
+        }
+        if tr.feasibility_factors.is_empty() {
+            st.skip_field("feasibility_factors")?;
+        } else {
+            st.serialize_field("feasibility_factors", &View(&tr.feasibility_factors))?;
+        }
+        if tr.factor_levels.is_empty() {
+            st.skip_field("factor_levels")?;
+        } else {
+            st.serialize_field("factor_levels", &View(&tr.factor_levels))?;
+        }
+        if tr.interface_kinds.is_empty() {
+            st.skip_field("interface_kinds")?;
+        } else {
+            st.serialize_field("interface_kinds", &View(&tr.interface_kinds))?;
+        }
         st.end()
     }
 }

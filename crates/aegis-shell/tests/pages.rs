@@ -51,7 +51,40 @@ async fn a_tara_is_built_page_by_page_from_the_window() {
     let server = TestServer::start().await;
     let app = editing_admin(&server).await;
 
-    // Assets: add, select, rename, turn a property off.
+    // Item definition: add two components, an interface, a data flow, and a trust boundary.
+    page(&app, Page::Item).await;
+    app.window.invoke_add_component("Brake ECU".into());
+    app.until("component 1", |vm| project(vm).data.components.len() == 1)
+        .await;
+    app.window.invoke_add_component("Telematics gateway".into());
+    app.until("component 2", |vm| project(vm).data.components.len() == 2)
+        .await;
+    app.window.invoke_add_interface("CAN-2 port".into(), 0, 0);
+    app.until("interface", |vm| project(vm).data.interfaces.len() == 1)
+        .await;
+    app.window
+        .invoke_add_data_flow("Brake command frame".into(), 1, 0);
+    app.until("data flow", |vm| project(vm).data.data_flows.len() == 1)
+        .await;
+    app.window
+        .invoke_add_trust_boundary("Safety-critical domain".into());
+    app.until("trust boundary", |vm| {
+        project(vm).data.trust_boundaries.len() == 1
+    })
+    .await;
+    app.controller.apply_latest();
+    app.window.invoke_toggle_trust_boundary_member(0, true);
+    app.until("boundary member", |vm| {
+        project(vm)
+            .data
+            .trust_boundary
+            .as_ref()
+            .is_some_and(|tb| tb.members.iter().any(|m| m.member))
+    })
+    .await;
+    save(&app.frame(), "p00-item");
+
+    // Assets: add, select, rename, bind to Brake ECU, turn a property off.
     page(&app, Page::Assets).await;
     app.window.invoke_add_asset("Brake request".into());
     app.until("asset", |vm| project(vm).data.assets.len() == 1)
@@ -60,6 +93,15 @@ async fn a_tara_is_built_page_by_page_from_the_window() {
         .await;
     app.controller.apply_latest();
     assert!(app.window.get_has_asset());
+    app.window.invoke_set_asset_component(1);
+    app.until("asset component bound", |vm| {
+        project(vm)
+            .data
+            .asset
+            .as_ref()
+            .is_some_and(|a| a.component.is_some())
+    })
+    .await;
     let properties = app.window.get_asset_properties();
     assert!(properties.row_count() >= 3);
     app.window.invoke_toggle_asset_property(0, false);
@@ -241,9 +283,26 @@ async fn a_tara_is_built_page_by_page_from_the_window() {
         .await;
     save(&app.frame(), "p11-history");
 
-    // Reports: all three exports land in the chosen folder.
+    // Reports: all four exports (HTML, CSV, PDF, XLSX) land in the chosen folder,
+    // plus figure attachment and Excel dry-run import.
     let dir = std::env::temp_dir().join(format!("aegis-ui-exports-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
     page(&app, Page::Reports).await;
+    let svg_path = dir.join("diagram.svg");
+    std::fs::write(
+        &svg_path,
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 60\"><rect width=\"120\" height=\"60\" fill=\"#e2e8f0\"/></svg>",
+    )
+    .expect("write svg");
+    app.window.invoke_add_figure(
+        svg_path.display().to_string().into(),
+        "Architecture diagram".into(),
+    );
+    app.until("figure attached", |vm| project(vm).figures.len() == 1)
+        .await;
+    std::fs::remove_file(&svg_path).expect("remove temp svg");
+
     app.window.set_export_dir(dir.display().to_string().into());
     app.window.invoke_export_report();
     app.until("report", |vm| {
@@ -269,15 +328,38 @@ async fn a_tara_is_built_page_by_page_from_the_window() {
             .is_some_and(|p| p.ends_with(".pdf"))
     })
     .await;
-    let files: Vec<_> = std::fs::read_dir(&dir).expect("dir").collect();
-    assert_eq!(files.len(), 3);
-    let pdf = files
-        .into_iter()
+    app.window.invoke_export_xlsx();
+    app.until("xlsx", |vm| {
+        project(vm)
+            .last_export
+            .as_deref()
+            .is_some_and(|p| p.ends_with(".xlsx"))
+    })
+    .await;
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .expect("dir")
         .map(|f| f.expect("entry").path())
+        .collect();
+    assert_eq!(files.len(), 4);
+    let pdf = files
+        .iter()
         .find(|p| p.extension().is_some_and(|e| e == "pdf"))
         .expect("a pdf file");
-    let bytes = std::fs::read(&pdf).expect("read");
+    let bytes = std::fs::read(pdf).expect("read");
     assert!(bytes.starts_with(b"%PDF-"), "a real PDF file");
+    let xlsx = files
+        .iter()
+        .find(|p| p.extension().is_some_and(|e| e == "xlsx"))
+        .expect("an xlsx file");
+    app.window
+        .invoke_preview_excel_import(xlsx.display().to_string().into());
+    app.until("excel preview", |vm| project(vm).excel_preview.is_some())
+        .await;
+    app.window.invoke_clear_excel_preview();
+    app.until("excel preview cleared", |vm| {
+        project(vm).excel_preview.is_none()
+    })
+    .await;
     save(&app.frame(), "p12-reports");
     let _ = std::fs::remove_dir_all(&dir);
 

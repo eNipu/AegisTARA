@@ -21,7 +21,10 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
+use crate::id::{
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ThreatId,
+    TreeId, TrustBoundaryId,
+};
 use crate::methodology::{FeasibilityLevel, RiskLevel};
 
 /// Added, removed, and modified entity IDs of one entity kind between a
@@ -552,6 +555,10 @@ impl ThreatRiskDelta {
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectDiff {
+    pub(crate) components: EntityDiff<ComponentId>,
+    pub(crate) interfaces: EntityDiff<InterfaceId>,
+    pub(crate) data_flows: EntityDiff<DataFlowId>,
+    pub(crate) trust_boundaries: EntityDiff<TrustBoundaryId>,
     pub(crate) assets: EntityDiff<AssetId>,
     pub(crate) damage_scenarios: EntityDiff<DamageId>,
     pub(crate) threat_scenarios: EntityDiff<ThreatId>,
@@ -575,6 +582,34 @@ impl ProjectDiff {
     #[must_use]
     pub fn notes_changed(&self) -> bool {
         self.notes_changed
+    }
+
+    /// Returns the added, removed, and modified [`ComponentId`]s in canonical
+    /// order. Time O(1), space O(1).
+    #[must_use]
+    pub fn components(&self) -> &EntityDiff<ComponentId> {
+        &self.components
+    }
+
+    /// Returns the added, removed, and modified [`InterfaceId`]s in canonical
+    /// order. Time O(1), space O(1).
+    #[must_use]
+    pub fn interfaces(&self) -> &EntityDiff<InterfaceId> {
+        &self.interfaces
+    }
+
+    /// Returns the added, removed, and modified [`DataFlowId`]s in canonical
+    /// order. Time O(1), space O(1).
+    #[must_use]
+    pub fn data_flows(&self) -> &EntityDiff<DataFlowId> {
+        &self.data_flows
+    }
+
+    /// Returns the added, removed, and modified [`TrustBoundaryId`]s in
+    /// canonical order. Time O(1), space O(1).
+    #[must_use]
+    pub fn trust_boundaries(&self) -> &EntityDiff<TrustBoundaryId> {
+        &self.trust_boundaries
     }
 
     /// Returns the added, removed, and modified [`AssetId`]s in canonical
@@ -726,7 +761,11 @@ impl ProjectDiff {
     /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.assets.is_empty()
+        self.components.is_empty()
+            && self.interfaces.is_empty()
+            && self.data_flows.is_empty()
+            && self.trust_boundaries.is_empty()
+            && self.assets.is_empty()
             && self.damage_scenarios.is_empty()
             && self.threat_scenarios.is_empty()
             && self.attack_trees.is_empty()

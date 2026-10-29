@@ -26,10 +26,10 @@ pub use doc::{Block, Figure, Panel, ReportDoc, Style, report_doc, report_doc_wit
 pub use html::{report_html, report_html_with_options};
 pub use pdf::{MAX_PAGES, PdfError, report_pdf, report_pdf_with_options};
 pub use profile::{
-    Classification, ReportBranding, ReportFilters, ReportLanguage, ReportOptions, ReportProfile,
-    ReportSections, RevisionEntry,
+    Classification, FigureAttachment, ReportBranding, ReportFilters, ReportLanguage, ReportOptions,
+    ReportProfile, ReportSections, RevisionEntry,
 };
-pub use xlsx::{report_workbook_xlsx, risk_register_xlsx};
+pub use xlsx::{report_workbook_xlsx, report_workbook_xlsx_with_figures, risk_register_xlsx};
 
 use crate::time::format_ms;
 

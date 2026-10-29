@@ -30,7 +30,8 @@ use std::sync::Arc;
 
 use krilla::Document;
 use krilla::color::rgb;
-use krilla::geom::{PathBuilder, Point, Rect, Size};
+use krilla::geom::{PathBuilder, Point, Rect, Size, Transform};
+use krilla::image::Image as PdfImage;
 use krilla::metadata::{DateTime, Metadata};
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
@@ -196,6 +197,14 @@ enum Item {
         w: f32,
         h: f32,
         list: Arc<DisplayList>,
+    },
+    /// A decoded raster or rasterized SVG image (job 073, RPT-06).
+    RasterImage {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        image: PdfImage,
     },
 }
 
@@ -531,24 +540,304 @@ fn figure_block(p: &mut Pages, fonts: &mut Fonts, figure: &Figure) {
     }
 }
 
-/// A logo image: the PDF renderer prints a caption with its alternative text
-/// (embedding raster images in krilla is out of scope; the HTML report
-/// embeds the logo itself).
-fn image_block(p: &mut Pages, fonts: &mut Fonts, alt: &str, bytes: &[u8]) {
+/// Decodes a PNG, JPEG, or sanitized static SVG into a `krilla` [`PdfImage`]
+/// (job 073, RPT-06). Returns `None` when `bytes` is not a valid image so the
+/// report builder degrades gracefully to the caption line.
+fn decode_pdf_image(media_type: &str, bytes: &[u8]) -> Option<PdfImage> {
+    if media_type == "image/png" || bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let data: krilla::Data = Arc::new(bytes.to_vec()).into();
+        return PdfImage::from_png(data, true).ok();
+    }
+    if media_type == "image/jpeg" || bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        let data: krilla::Data = Arc::new(bytes.to_vec()).into();
+        return PdfImage::from_jpeg(data, true).ok();
+    }
+    if media_type == "image/svg+xml" || bytes.iter().take(64).any(|b| *b == b'<') {
+        let (rgba, w, h) = rasterize_static_svg(bytes)?;
+        return Some(PdfImage::from_rgba8(rgba, w, h));
+    }
+    None
+}
+
+/// Minimal deterministic rasterizer for sanitized static SVG figures into an
+/// RGBA8 pixel buffer so SVG figures render as real images in the PDF.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines
+)]
+fn rasterize_static_svg(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let lower = text.to_ascii_lowercase();
+    let svg_pos = lower.find("<svg")?;
+    let svg_end = lower[svg_pos..].find('>')? + svg_pos;
+    let svg_tag = &text[svg_pos..=svg_end];
+
+    let parse_attr = |tag: &str, name: &str| -> Option<String> {
+        let pat = format!("{name}=");
+        let idx = tag.find(&pat)?;
+        let rest = &tag[idx + pat.len()..];
+        let quote = rest.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        let end = rest[1..].find(quote)?;
+        Some(rest[1..=end].to_owned())
+    };
+    let parse_num = |s: &str| -> Option<f32> {
+        let trimmed: String = s
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+            .collect();
+        trimmed.parse::<f32>().ok()
+    };
+
+    let mut w_f = parse_attr(svg_tag, "width").and_then(|v| parse_num(&v));
+    let mut h_f = parse_attr(svg_tag, "height").and_then(|v| parse_num(&v));
+    if (w_f.is_none() || h_f.is_none())
+        && let Some(vb) = parse_attr(svg_tag, "viewBox").or_else(|| parse_attr(svg_tag, "viewbox"))
+    {
+        let nums: Vec<f32> = vb
+            .split(|c: char| c.is_ascii_whitespace() || c == ',')
+            .filter(|s| !s.is_empty())
+            .filter_map(parse_num)
+            .collect();
+        if nums.len() == 4 && nums[2] > 0.0 && nums[3] > 0.0 {
+            w_f.get_or_insert(nums[2]);
+            h_f.get_or_insert(nums[3]);
+        }
+    }
+
+    let w = (w_f.unwrap_or(320.0).round() as u32).clamp(16, 1024);
+    let h = (h_f.unwrap_or(180.0).round() as u32).clamp(16, 1024);
+    let mut rgba = vec![255u8; (w as usize) * (h as usize) * 4];
+
+    // Light panel background (#F8FAFC) with a 1px border (#CBD5E1).
+    for y in 0..h {
+        for x in 0..w {
+            let border = x == 0 || y == 0 || x + 1 == w || y + 1 == h;
+            let (r, g, b) = if border {
+                (203, 213, 225)
+            } else {
+                (248, 250, 252)
+            };
+            let idx = ((y * w + x) as usize) * 4;
+            rgba[idx] = r;
+            rgba[idx + 1] = g;
+            rgba[idx + 2] = b;
+            rgba[idx + 3] = 255;
+        }
+    }
+
+    let parse_color = |raw: &str| -> Option<(u8, u8, u8)> {
+        let s = raw.trim();
+        if s.eq_ignore_ascii_case("none") || s.is_empty() {
+            return None;
+        }
+        if let Some(hex) = s.strip_prefix('#') {
+            if hex.len() == 6 {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                return Some((r, g, b));
+            }
+            if hex.len() == 3 {
+                let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+                let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+                let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+                return Some((r, g, b));
+            }
+        }
+        match s.to_ascii_lowercase().as_str() {
+            "black" => Some((20, 24, 31)),
+            "white" => Some((255, 255, 255)),
+            "red" => Some((220, 38, 38)),
+            "green" => Some((22, 163, 74)),
+            "blue" => Some((37, 99, 235)),
+            "gray" | "grey" => Some((100, 116, 139)),
+            _ => Some((51, 65, 85)),
+        }
+    };
+
+    let put_px = |buf: &mut [u8], x: i32, y: i32, (r, g, b): (u8, u8, u8)| {
+        if x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h {
+            let idx = ((y as u32 * w + x as u32) as usize) * 4;
+            buf[idx] = r;
+            buf[idx + 1] = g;
+            buf[idx + 2] = b;
+            buf[idx + 3] = 255;
+        }
+    };
+
+    let draw_line = |buf: &mut [u8], x0: f32, y0: f32, x1: f32, y1: f32, col: (u8, u8, u8)| {
+        let steps = ((x1 - x0).abs().max((y1 - y0).abs()).ceil() as i32).clamp(1, 4096);
+        for s in 0..=steps {
+            let t = s as f32 / steps as f32;
+            let px = (x0 + (x1 - x0) * t).round() as i32;
+            let py = (y0 + (y1 - y0) * t).round() as i32;
+            put_px(buf, px, py, col);
+        }
+    };
+
+    // Scan element tags in order and rasterize basic shapes (<rect>, <circle>, <line>).
+    let mut cursor = svg_end + 1;
+    while let Some(open) = text[cursor..].find('<') {
+        let start = cursor + open;
+        let Some(close) = text[start..].find('>') else {
+            break;
+        };
+        let tag = &text[start..=start + close];
+        cursor = start + close + 1;
+        if tag.starts_with("</") || tag.starts_with("<!") || tag.starts_with("<?") {
+            continue;
+        }
+        let tag_name = tag[1..]
+            .split(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let fill_col = parse_attr(tag, "fill")
+            .and_then(|v| parse_color(&v))
+            .unwrap_or((59, 130, 246));
+        let stroke_col = parse_attr(tag, "stroke").and_then(|v| parse_color(&v));
+
+        match tag_name.as_str() {
+            "rect" => {
+                let rx = parse_attr(tag, "x")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(0.0);
+                let ry = parse_attr(tag, "y")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(0.0);
+                let rw = parse_attr(tag, "width")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(w as f32 * 0.5);
+                let rh = parse_attr(tag, "height")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(h as f32 * 0.5);
+                let x0 = (rx.round() as i32).clamp(0, w as i32);
+                let y0 = (ry.round() as i32).clamp(0, h as i32);
+                let x1 = ((rx + rw).round() as i32).clamp(0, w as i32);
+                let y1 = ((ry + rh).round() as i32).clamp(0, h as i32);
+                for py in y0..y1 {
+                    for px in x0..x1 {
+                        put_px(&mut rgba, px, py, fill_col);
+                    }
+                }
+                if let Some(sc) = stroke_col {
+                    draw_line(&mut rgba, rx, ry, rx + rw, ry, sc);
+                    draw_line(&mut rgba, rx + rw, ry, rx + rw, ry + rh, sc);
+                    draw_line(&mut rgba, rx + rw, ry + rh, rx, ry + rh, sc);
+                    draw_line(&mut rgba, rx, ry + rh, rx, ry, sc);
+                }
+            }
+            "circle" => {
+                let cx = parse_attr(tag, "cx")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(w as f32 * 0.5);
+                let cy = parse_attr(tag, "cy")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(h as f32 * 0.5);
+                let r = parse_attr(tag, "r")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(16.0);
+                let r2 = r * r;
+                let x0 = ((cx - r).floor() as i32).max(0);
+                let x1 = ((cx + r).ceil() as i32).min(w as i32 - 1);
+                let y0 = ((cy - r).floor() as i32).max(0);
+                let y1 = ((cy + r).ceil() as i32).min(h as i32 - 1);
+                for py in y0..=y1 {
+                    for px in x0..=x1 {
+                        let dx = px as f32 - cx;
+                        let dy = py as f32 - cy;
+                        if dx * dx + dy * dy <= r2 {
+                            put_px(&mut rgba, px, py, fill_col);
+                        }
+                    }
+                }
+            }
+            "line" => {
+                let x1 = parse_attr(tag, "x1")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(0.0);
+                let y1 = parse_attr(tag, "y1")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(0.0);
+                let x2 = parse_attr(tag, "x2")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(w as f32);
+                let y2 = parse_attr(tag, "y2")
+                    .and_then(|v| parse_num(&v))
+                    .unwrap_or(h as f32);
+                draw_line(
+                    &mut rgba,
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    stroke_col.unwrap_or((30, 41, 59)),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    Some((rgba, w, h))
+}
+
+/// Places an embedded image (cover logo or attached figure, job 073, RPT-06):
+/// renders the decoded raster or static SVG image into the PDF page and prints
+/// its caption below. If `bytes` is not a valid image, falls back to the
+/// caption line alone.
+#[allow(clippy::cast_precision_loss)]
+fn image_block(p: &mut Pages, fonts: &mut Fonts, media_type: &str, alt: &str, bytes: &[u8]) {
     let look = Look {
         size: BODY,
         bold: false,
         ink: Ink::Grey,
     };
-    text_block(
-        p,
-        fonts,
-        &format!("Logo: {alt} ({} bytes)", bytes.len()),
-        look,
-        MARGIN,
-        CONTENT_W,
-    );
-    p.y += 4.0;
+    if let Some(image) = decode_pdf_image(media_type, bytes) {
+        let (px_w, px_h) = image.size();
+        let raw_w = (px_w.max(1) as f32).clamp(24.0, CONTENT_W);
+        let raw_h = (px_h.max(1) as f32).clamp(24.0, 240.0);
+        let max_w = CONTENT_W.min(360.0);
+        let max_h = 200.0;
+        let scale = (max_w / raw_w).min(max_h / raw_h).min(1.0);
+        let w = (raw_w * scale).max(24.0);
+        let h = (raw_h * scale).max(24.0);
+        if p.room() < h + leading(BODY) + 10.0 && p.y > MARGIN {
+            p.new_page();
+        }
+        p.push(Item::RasterImage {
+            x: MARGIN,
+            y: p.y,
+            w,
+            h,
+            image,
+        });
+        p.y += h + 4.0;
+        text_block(
+            p,
+            fonts,
+            &format!("Figure: {alt} ({} bytes)", bytes.len()),
+            look,
+            MARGIN,
+            CONTENT_W,
+        );
+        p.y += 4.0;
+    } else {
+        text_block(
+            p,
+            fonts,
+            &format!("Logo: {alt} ({} bytes)", bytes.len()),
+            look,
+            MARGIN,
+            CONTENT_W,
+        );
+        p.y += 4.0;
+    }
 }
 
 fn layout(doc: &ReportDoc, fonts: &mut Fonts) -> Pages {
@@ -576,7 +865,11 @@ fn layout(doc: &ReportDoc, fonts: &mut Fonts) -> Pages {
             Block::Table { headers, rows } => table_block(&mut p, fonts, headers, rows),
             Block::Preformatted(text) => preformatted(&mut p, fonts, text),
             Block::Figure(figure) => figure_block(&mut p, fonts, figure),
-            Block::Image { alt, bytes, .. } => image_block(&mut p, fonts, alt, bytes),
+            Block::Image {
+                media_type,
+                alt,
+                bytes,
+            } => image_block(&mut p, fonts, media_type, alt, bytes),
         }
     }
     if p.truncated {
@@ -909,6 +1202,13 @@ fn render(
                 }
                 Item::Diagram { x, y, w, h, list } => {
                     draw_diagram(&mut surface, fonts, (*x, *y, *w, *h), list);
+                }
+                Item::RasterImage { x, y, w, h, image } => {
+                    if let Some(img_size) = Size::from_wh(*w, *h) {
+                        surface.push_transform(&Transform::from_translate(*x, *y));
+                        surface.draw_image(image.clone(), img_size);
+                        surface.pop();
+                    }
                 }
                 Item::Text {
                     x,

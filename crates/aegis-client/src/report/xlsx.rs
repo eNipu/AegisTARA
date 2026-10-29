@@ -312,13 +312,42 @@ fn risk_register_sheet(ws: &Workspace) -> Sheet {
 /// (RPT-05). Time O(project size).
 #[must_use]
 pub fn report_workbook_xlsx(ws: &Workspace) -> Vec<u8> {
+    report_workbook_xlsx_with_figures(ws, &[])
+}
+
+/// A workbook with a risk-register sheet, one sheet per element type, and an
+/// optional `Figures` sheet when figure attachments are present (RPT-05,
+/// RPT-06, ARC-01, ARC-02).
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn report_workbook_xlsx_with_figures(
+    ws: &Workspace,
+    figures: &[super::profile::FigureAttachment],
+) -> Vec<u8> {
     let p = ws.project();
     let names = p.methodology().element_names();
     let vocab = pages::vocabulary(p.methodology());
     let mut sheets = Vec::new();
+    let has_item = p.component_count() > 0
+        || p.interface_count() > 0
+        || p.data_flow_count() > 0
+        || p.trust_boundary_count() > 0;
 
     // Overview: entity counts.
     let mut overview = vec![vec!["Element".to_owned(), "Count".to_owned()]];
+    if has_item {
+        for (label, count) in [
+            (names.component.plural.to_string(), p.component_count()),
+            (names.interface.plural.to_string(), p.interface_count()),
+            (names.data_flow.plural.to_string(), p.data_flow_count()),
+            (
+                names.trust_boundary.plural.to_string(),
+                p.trust_boundary_count(),
+            ),
+        ] {
+            overview.push(vec![label, count.to_string()]);
+        }
+    }
     for (label, count) in [
         (names.asset.plural.to_string(), p.asset_count()),
         (
@@ -351,6 +380,67 @@ pub fn report_workbook_xlsx(ws: &Workspace) -> Vec<u8> {
     });
 
     sheets.push(risk_register_sheet(ws));
+
+    if has_item {
+        let mut comps = vec![vec![
+            names.component.singular.to_string(),
+            "Parent".to_owned(),
+            names.interface.plural.to_string(),
+            names.asset.plural.to_string(),
+        ]];
+        for c in pages::component_rows(ws) {
+            comps.push(vec![
+                c.name,
+                c.parent,
+                c.interfaces.to_string(),
+                c.assets.to_string(),
+            ]);
+        }
+        sheets.push(Sheet {
+            name: sheet_name(&names.component.plural),
+            rows: comps,
+        });
+
+        let mut ifaces = vec![vec![
+            names.interface.singular.to_string(),
+            names.component.singular.to_string(),
+            "Kind".to_owned(),
+            names.data_flow.plural.to_string(),
+        ]];
+        for i in pages::interface_rows(ws) {
+            ifaces.push(vec![i.name, i.component, i.kind, i.flows.to_string()]);
+        }
+        sheets.push(Sheet {
+            name: sheet_name(&names.interface.plural),
+            rows: ifaces,
+        });
+
+        let mut flows = vec![vec![
+            names.data_flow.singular.to_string(),
+            "From component".to_owned(),
+            "To component".to_owned(),
+            names.interface.singular.to_string(),
+        ]];
+        for df in pages::data_flow_rows(ws) {
+            flows.push(vec![df.name, df.from, df.to, df.interface]);
+        }
+        sheets.push(Sheet {
+            name: sheet_name(&names.data_flow.plural),
+            rows: flows,
+        });
+
+        let mut bounds = vec![vec![
+            names.trust_boundary.singular.to_string(),
+            "Members".to_owned(),
+        ]];
+        for tb in pages::trust_boundary_rows(ws) {
+            bounds.push(vec![tb.name, tb.members.to_string()]);
+        }
+        sheets.push(Sheet {
+            name: sheet_name(&names.trust_boundary.plural),
+            rows: bounds,
+        });
+    }
 
     // Assets.
     let mut assets = vec![vec![names.asset.singular.to_string()]];
@@ -502,6 +592,37 @@ pub fn report_workbook_xlsx(ws: &Workspace) -> Vec<u8> {
         name: "Problems".to_owned(),
         rows: problems,
     });
+
+    if !figures.is_empty() {
+        let mut fig_rows = vec![vec![
+            "Figure ID".to_owned(),
+            "Caption".to_owned(),
+            "Target".to_owned(),
+            "Format".to_owned(),
+            "Dimensions".to_owned(),
+            "Size (bytes)".to_owned(),
+            "Updated by".to_owned(),
+        ]];
+        for f in figures {
+            fig_rows.push(vec![
+                f.figure_id.clone(),
+                f.caption.clone(),
+                if f.target.is_empty() {
+                    "project".to_owned()
+                } else {
+                    f.target.clone()
+                },
+                f.media_type.clone(),
+                format!("{}x{}", f.width_px, f.height_px),
+                f.size_bytes.to_string(),
+                f.updated_by.clone(),
+            ]);
+        }
+        sheets.push(Sheet {
+            name: "Figures".to_owned(),
+            rows: fig_rows,
+        });
+    }
 
     unique_names(&mut sheets);
     workbook_bytes(&sheets)

@@ -25,7 +25,8 @@ use uuid::Uuid;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 use super::{
-    BaselineMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
+    BaselineMeta, FigureMeta, LoadedProject, MAX_FIGURE_BYTES, ProjectMeta, ProjectStore,
+    StoreFault, StoredOp, StoredSnapshot,
 };
 use crate::ids::ProjectId;
 
@@ -34,6 +35,7 @@ const OPLOG: &str = "ops.jsonl";
 const SIDECAR: &str = "ops.meta";
 const LOCK: &str = ".aegis.lock";
 const SNAPSHOTS: &str = "snapshots";
+const FIGURES: &str = "figures";
 const FORMAT: &str = "aegis-folder-store";
 const VERSION: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
@@ -73,6 +75,8 @@ struct DiskProject {
     snapshot_id: String,
     snapshot_hash: String,
     baselines: Vec<DiskBaseline>,
+    #[serde(default)]
+    figures: Vec<DiskFigure>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -86,6 +90,22 @@ struct DiskBaseline {
     snapshot_bytes: u64,
     snapshot_id: String,
     snapshot_hash: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiskFigure {
+    id: String,
+    caption: String,
+    target: String,
+    media_type: String,
+    width: u32,
+    height: u32,
+    byte_len: u64,
+    sha256: String,
+    created_by: String,
+    created_ms: u64,
+    file_id: String,
 }
 
 #[derive(Serialize)]
@@ -312,6 +332,14 @@ fn validate_project(project: &DiskProject) -> Result<(), StoreFault> {
         Uuid::parse_str(&baseline.snapshot_id).map_err(corrupt)?;
         decode_hash(&baseline.snapshot_hash)?;
     }
+    let mut fig_ids = BTreeSet::new();
+    for figure in &project.figures {
+        if !fig_ids.insert(&figure.id) || Uuid::parse_str(&figure.id).is_err() {
+            return Err(corrupt("invalid or duplicate figure id"));
+        }
+        Uuid::parse_str(&figure.file_id).map_err(corrupt)?;
+        decode_hash(&figure.sha256)?;
+    }
     Ok(())
 }
 
@@ -354,6 +382,10 @@ fn snapshot_path(root: &Path, id: &str) -> PathBuf {
     root.join(SNAPSHOTS).join(format!("{id}.aegis"))
 }
 
+fn figure_path(root: &Path, id: &str) -> PathBuf {
+    root.join(FIGURES).join(format!("{id}.bin"))
+}
+
 fn read_snapshot(root: &Path, id: &str, expected_hash: &str) -> Result<Vec<u8>, StoreFault> {
     let bytes = read_capped(
         &snapshot_path(root, id),
@@ -361,6 +393,19 @@ fn read_snapshot(root: &Path, id: &str, expected_hash: &str) -> Result<Vec<u8>, 
     )?;
     if digest(&bytes) != expected_hash {
         return Err(corrupt("snapshot digest does not match the manifest"));
+    }
+    Ok(bytes)
+}
+
+fn read_figure(
+    root: &Path,
+    id: &str,
+    expected_hash: &str,
+    cap: u64,
+) -> Result<Vec<u8>, StoreFault> {
+    let bytes = read_capped(&figure_path(root, id), cap)?;
+    if digest(&bytes) != expected_hash {
+        return Err(corrupt("figure digest does not match the manifest"));
     }
     Ok(bytes)
 }
@@ -410,6 +455,11 @@ fn clean_project_files(root: &Path) -> Result<(), StoreFault> {
     remove_if_exists(&root.join(OPLOG))?;
     remove_if_exists(&root.join(SIDECAR))?;
     match std::fs::remove_dir_all(root.join(SNAPSHOTS)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(backend(error)),
+    }
+    match std::fs::remove_dir_all(root.join(FIGURES)) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(backend(error)),
@@ -632,6 +682,19 @@ fn recover(root: &Path, project: &DiskProject) -> Result<Tail, StoreFault> {
             remove_if_exists(&entry.path())?;
         }
     }
+    if root.join(FIGURES).is_dir() {
+        let named_figs: BTreeSet<String> = project
+            .figures
+            .iter()
+            .map(|f| format!("{}.bin", f.file_id))
+            .collect();
+        for entry in std::fs::read_dir(root.join(FIGURES)).map_err(backend)? {
+            let entry = entry.map_err(backend)?;
+            if !named_figs.contains(entry.file_name().to_string_lossy().as_ref()) {
+                remove_if_exists(&entry.path())?;
+            }
+        }
+    }
     for entry in std::fs::read_dir(root).map_err(backend)? {
         let entry = entry.map_err(backend)?;
         let name = entry.file_name();
@@ -725,6 +788,7 @@ impl ProjectStore for FolderStore {
                 snapshot_id,
                 snapshot_hash,
                 baselines: Vec::new(),
+                figures: Vec::new(),
             };
             let header = initial_log(&project)?;
             write_new(&inner.path(OPLOG), &header)?;
@@ -1012,6 +1076,146 @@ impl ProjectStore for FolderStore {
         })
         .await
     }
+
+    async fn put_figure(
+        &self,
+        meta: &FigureMeta,
+        data: &[u8],
+        max_count: usize,
+        max_total_bytes: u64,
+    ) -> Result<(), StoreFault> {
+        let meta = meta.clone();
+        let data = data.to_vec();
+        self.blocking(move |inner, _| {
+            let mut project = current(&inner.root, meta.project)?;
+            let wanted = meta.id.to_string();
+            if project.figures.iter().any(|f| f.id == wanted) {
+                return Err(StoreFault::Exists);
+            }
+            if project.figures.len() >= max_count {
+                return Err(StoreFault::QuotaExceeded(format!(
+                    "project already has {} figures (limit {max_count})",
+                    project.figures.len()
+                )));
+            }
+            let used_bytes: u64 = project.figures.iter().map(|f| f.byte_len).sum();
+            let new_total = used_bytes.saturating_add(meta.byte_len);
+            if new_total > max_total_bytes {
+                return Err(StoreFault::QuotaExceeded(format!(
+                    "project figure bytes ({new_total}) would exceed limit ({max_total_bytes})"
+                )));
+            }
+            std::fs::create_dir_all(inner.root.join(FIGURES)).map_err(backend)?;
+            let file_id = Uuid::new_v4().to_string();
+            write_new(&figure_path(&inner.root, &file_id), &data)?;
+            sync_dir(&inner.root.join(FIGURES))?;
+            project.figures.push(DiskFigure {
+                id: wanted,
+                caption: meta.caption,
+                target: meta.target,
+                media_type: meta.media_type,
+                width: meta.width,
+                height: meta.height,
+                byte_len: meta.byte_len,
+                sha256: hex(&meta.sha256),
+                created_by: meta.created_by,
+                created_ms: meta.created_ms,
+                file_id: file_id.clone(),
+            });
+            commit_state(&inner.root, Some(&project)).inspect_err(|_| {
+                let _ = remove_if_exists(&figure_path(&inner.root, &file_id));
+            })
+        })
+        .await
+    }
+
+    async fn list_figures(&self, project: ProjectId) -> Result<Vec<FigureMeta>, StoreFault> {
+        self.blocking(move |inner, _| {
+            let disk = current(&inner.root, project)?;
+            disk.figures
+                .iter()
+                .map(|f| figure_meta(project, f))
+                .collect()
+        })
+        .await
+    }
+
+    async fn load_figure(
+        &self,
+        project: ProjectId,
+        id: Uuid,
+    ) -> Result<Option<(FigureMeta, Vec<u8>)>, StoreFault> {
+        self.blocking(move |inner, _| {
+            let disk = match current(&inner.root, project) {
+                Ok(disk) => disk,
+                Err(StoreFault::Missing) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let wanted = id.to_string();
+            let Some(found) = disk.figures.iter().find(|f| f.id == wanted) else {
+                return Ok(None);
+            };
+            let cap = found.byte_len.max(MAX_FIGURE_BYTES as u64);
+            let bytes = read_figure(&inner.root, &found.file_id, &found.sha256, cap)?;
+            Ok(Some((figure_meta(project, found)?, bytes)))
+        })
+        .await
+    }
+
+    async fn update_figure(
+        &self,
+        project: ProjectId,
+        id: Uuid,
+        caption: &str,
+        target: &str,
+    ) -> Result<Option<FigureMeta>, StoreFault> {
+        let caption = caption.to_owned();
+        let target = target.to_owned();
+        self.blocking(move |inner, _| {
+            let mut disk = current(&inner.root, project)?;
+            let wanted = id.to_string();
+            let Some(found) = disk.figures.iter_mut().find(|f| f.id == wanted) else {
+                return Ok(None);
+            };
+            found.caption = caption;
+            found.target = target;
+            let updated = figure_meta(project, found)?;
+            commit_state(&inner.root, Some(&disk))?;
+            Ok(Some(updated))
+        })
+        .await
+    }
+
+    async fn delete_figure(&self, project: ProjectId, id: Uuid) -> Result<bool, StoreFault> {
+        self.blocking(move |inner, _| {
+            let mut disk = current(&inner.root, project)?;
+            let wanted = id.to_string();
+            let Some(idx) = disk.figures.iter().position(|f| f.id == wanted) else {
+                return Ok(false);
+            };
+            let removed = disk.figures.remove(idx);
+            commit_state(&inner.root, Some(&disk))?;
+            let _ = remove_if_exists(&figure_path(&inner.root, &removed.file_id));
+            Ok(true)
+        })
+        .await
+    }
+}
+
+fn figure_meta(project: ProjectId, f: &DiskFigure) -> Result<FigureMeta, StoreFault> {
+    Ok(FigureMeta {
+        id: Uuid::parse_str(&f.id).map_err(corrupt)?,
+        project,
+        caption: f.caption.clone(),
+        target: f.target.clone(),
+        media_type: f.media_type.clone(),
+        width: f.width,
+        height: f.height,
+        byte_len: f.byte_len,
+        sha256: decode_hash(&f.sha256)?,
+        created_by: f.created_by.clone(),
+        created_ms: f.created_ms,
+    })
 }
 
 fn baseline_meta(project: ProjectId, b: &DiskBaseline) -> Result<BaselineMeta, StoreFault> {

@@ -11,7 +11,9 @@
 
 use std::fmt;
 
-use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
+use crate::id::{
+    AssetId, ClaimId, ControlId, DamageId, DataFlowId, GoalId, NodeId, ThreatId, TreeId,
+};
 use crate::methodology::Property;
 
 /// Severity of a [`LintFinding`].
@@ -230,6 +232,19 @@ pub enum LintCode {
         /// The unlinked cybersecurity claim.
         claim: ClaimId,
     },
+    /// The project has components defined, but an asset is not bound to any
+    /// component.
+    AssetUnbound {
+        /// The unbound asset.
+        asset: AssetId,
+    },
+    /// A data flow crosses at least one trust boundary, but neither its source
+    /// nor its destination component has any bound asset with a threat
+    /// scenario.
+    BoundaryCrossingDataFlowWithoutThreat {
+        /// The boundary-crossing data flow without associated threat scenarios.
+        flow: DataFlowId,
+    },
 }
 
 impl LintCode {
@@ -269,6 +284,8 @@ impl LintCode {
             | Self::CybersecurityGoalWithoutControls { .. }
             | Self::CybersecurityGoalUnlinked { .. }
             | Self::CybersecurityClaimUnlinked { .. }
+            | Self::AssetUnbound { .. }
+            | Self::BoundaryCrossingDataFlowWithoutThreat { .. }
             | Self::LibraryRatingNotReviewed { .. } => LintSeverity::Warning,
             Self::ThreatWithoutFeasibility { .. }
             | Self::ReduceTreatmentWithoutControls { .. }
@@ -368,6 +385,13 @@ impl fmt::Display for LintCode {
             Self::CybersecurityClaimUnlinked { claim } => write!(
                 f,
                 "cybersecurity claim {claim} is not linked to any threat scenario"
+            ),
+            Self::AssetUnbound { asset } => {
+                write!(f, "asset {asset} is not bound to any component")
+            }
+            Self::BoundaryCrossingDataFlowWithoutThreat { flow } => write!(
+                f,
+                "boundary-crossing data flow {flow} has no threat scenario on its endpoint components"
             ),
         }
     }
@@ -496,6 +520,7 @@ mod tests {
         let control = crate::testkit::control_id(6);
         let goal = GoalId::new_v7();
         let claim = ClaimId::new_v7();
+        let flow = DataFlowId::new_v7();
 
         let warnings = [
             LintCode::AssetWithoutThreats { asset },
@@ -519,6 +544,8 @@ mod tests {
             LintCode::CybersecurityGoalWithoutControls { goal },
             LintCode::CybersecurityGoalUnlinked { goal },
             LintCode::CybersecurityClaimUnlinked { claim },
+            LintCode::AssetUnbound { asset },
+            LintCode::BoundaryCrossingDataFlowWithoutThreat { flow },
         ];
         for code in warnings {
             let f = LintFinding::new(code);

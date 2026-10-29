@@ -12,7 +12,10 @@ use super::wire::{
     StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, TargetView, Text,
 };
 use crate::error::StoreError;
-use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, ThreatId, TreeId};
+use crate::id::{
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ThreatId,
+    TreeId, TrustBoundaryId,
+};
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::project::Project;
@@ -35,6 +38,14 @@ struct SnapshotView<'a> {
     cybersecurity_goals: Goals<'a>,
     #[serde(skip_serializing_if = "Claims::is_empty")]
     cybersecurity_claims: Claims<'a>,
+    #[serde(skip_serializing_if = "Components::is_empty")]
+    components: Components<'a>,
+    #[serde(skip_serializing_if = "Interfaces::is_empty")]
+    interfaces: Interfaces<'a>,
+    #[serde(skip_serializing_if = "DataFlows::is_empty")]
+    data_flows: DataFlows<'a>,
+    #[serde(skip_serializing_if = "TrustBoundaries::is_empty")]
+    trust_boundaries: TrustBoundaries<'a>,
     #[serde(skip_serializing_if = "Descriptions::is_empty")]
     descriptions: Descriptions<'a>,
     #[serde(skip_serializing_if = "ReviewMarks::is_empty")]
@@ -56,6 +67,10 @@ struct Trees<'a>(Ctx<'a>);
 struct Controls<'a>(&'a Project);
 struct Goals<'a>(&'a Project);
 struct Claims<'a>(&'a Project);
+struct Components<'a>(&'a Project);
+struct Interfaces<'a>(Ctx<'a>);
+struct DataFlows<'a>(&'a Project);
+struct TrustBoundaries<'a>(&'a Project);
 struct Descriptions<'a>(&'a Project);
 struct ReviewMarks<'a>(&'a Project);
 
@@ -132,11 +147,37 @@ impl Claims<'_> {
     }
 }
 
+impl Components<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.component_count() == 0
+    }
+}
+
+impl Interfaces<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.p.interface_count() == 0
+    }
+}
+
+impl DataFlows<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.data_flow_count() == 0
+    }
+}
+
+impl TrustBoundaries<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.trust_boundary_count() == 0
+    }
+}
+
 #[derive(Serialize)]
 struct AssetView<'a> {
     id: Text<AssetId>,
     name: &'a str,
     properties: PropertyKeys<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component: Option<Required<Text<ComponentId>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -210,6 +251,47 @@ struct ClaimView<'a> {
     provenance: Option<ProvenanceView<'a>>,
 }
 
+#[derive(Serialize)]
+struct ComponentView<'a> {
+    id: Text<ComponentId>,
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<Required<Text<ComponentId>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+#[derive(Serialize)]
+struct InterfaceView<'a> {
+    id: Text<InterfaceId>,
+    name: &'a str,
+    component: Required<Text<ComponentId>>,
+    kind: Required<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+#[derive(Serialize)]
+struct DataFlowView<'a> {
+    id: Text<DataFlowId>,
+    name: &'a str,
+    from: Required<Text<ComponentId>>,
+    to: Required<Text<ComponentId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interface: Option<Required<Text<InterfaceId>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+#[derive(Serialize)]
+struct TrustBoundaryView<'a> {
+    id: Text<TrustBoundaryId>,
+    name: &'a str,
+    components: LinkedBoundaryComponents<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
 /// A threat's damage links as public IDs, in stored (ID) order.
 struct LinkedDamages<'a> {
     p: &'a Project,
@@ -220,6 +302,12 @@ struct LinkedDamages<'a> {
 struct LinkedControls<'a> {
     p: &'a Project,
     links: &'a [crate::id::ControlIdx],
+}
+
+/// A trust boundary's member components as public IDs, in stored (ID) order.
+struct LinkedBoundaryComponents<'a> {
+    p: &'a Project,
+    links: &'a [crate::id::ComponentIdx],
 }
 
 impl Serialize for Assets<'_> {
@@ -233,6 +321,7 @@ impl Serialize for Assets<'_> {
                 order,
                 set: a.properties(),
             },
+            component: a.component().map(|c| Required(p.component_id(c).map(Text))),
             provenance: ProvenanceView::of(a.provenance()),
         }))
     }
@@ -359,6 +448,68 @@ impl Serialize for Claims<'_> {
     }
 }
 
+impl Serialize for Components<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(p.components().map(|(_, id, c)| {
+            ComponentView {
+                id: Text(id),
+                name: c.name(),
+                parent: c
+                    .parent()
+                    .map(|par| Required(p.component_id(par).map(Text))),
+                provenance: ProvenanceView::of(c.provenance()),
+            }
+        }))
+    }
+}
+
+impl Serialize for Interfaces<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let Ctx { p, m, .. } = self.0;
+        s.collect_seq(p.interfaces().map(|(_, id, iface)| InterfaceView {
+            id: Text(id),
+            name: iface.name(),
+            component: Required(p.component_id(iface.component()).map(Text)),
+            kind: Required(m.interface_kind_key(iface.kind())),
+            provenance: ProvenanceView::of(iface.provenance()),
+        }))
+    }
+}
+
+impl Serialize for DataFlows<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(p.data_flows().map(|(_, id, df)| {
+            DataFlowView {
+                id: Text(id),
+                name: df.name(),
+                from: Required(p.component_id(df.from()).map(Text)),
+                to: Required(p.component_id(df.to()).map(Text)),
+                interface: df
+                    .interface()
+                    .map(|i| Required(p.interface_id(i).map(Text))),
+                provenance: ProvenanceView::of(df.provenance()),
+            }
+        }))
+    }
+}
+
+impl Serialize for TrustBoundaries<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(p.trust_boundaries().map(|(_, id, tb)| TrustBoundaryView {
+            id: Text(id),
+            name: tb.name(),
+            components: LinkedBoundaryComponents {
+                p,
+                links: tb.components(),
+            },
+            provenance: ProvenanceView::of(tb.provenance()),
+        }))
+    }
+}
+
 impl Serialize for LinkedDamages<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_seq(
@@ -375,6 +526,16 @@ impl Serialize for LinkedControls<'_> {
             self.links
                 .iter()
                 .map(|&c| Required(self.p.security_control_id(c).map(Text))),
+        )
+    }
+}
+
+impl Serialize for LinkedBoundaryComponents<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.links
+                .iter()
+                .map(|&c| Required(self.p.component_id(c).map(Text))),
         )
     }
 }
@@ -448,6 +609,10 @@ impl Project {
             security_controls: Controls(self),
             cybersecurity_goals: Goals(self),
             cybersecurity_claims: Claims(self),
+            components: Components(self),
+            interfaces: Interfaces(ctx),
+            data_flows: DataFlows(self),
+            trust_boundaries: TrustBoundaries(self),
             descriptions: Descriptions(self),
             review_marks: ReviewMarks(self),
         };
@@ -545,13 +710,73 @@ impl Project {
         }
         let snapshot = decoded?;
         let mut project = Project::new(methodology);
+        // Add components in two passes (roots first, then parent links) so
+        // parent-after-child ID ordering in snapshots never fails.
+        let mut pending_parents = Vec::new();
+        for c in snapshot.components {
+            let provenance = wire::unwrap_provenance(c.provenance);
+            let id = c.id.0;
+            project.apply(Op::AddComponent {
+                id,
+                name: c.name.0,
+                parent: None,
+                provenance: provenance.clone(),
+            })?;
+            if let Some(parent) = c.parent {
+                pending_parents.push((id, parent.0, provenance));
+            }
+        }
+        for (id, parent, provenance) in pending_parents {
+            project.apply(Op::SetComponentParent {
+                id,
+                parent: Some(parent),
+                provenance,
+            })?;
+        }
+        for iface in snapshot.interfaces {
+            project.apply(Op::AddInterface {
+                id: iface.id.0,
+                name: iface.name.0,
+                component: iface.component.0,
+                kind: iface.kind.0,
+                provenance: wire::unwrap_provenance(iface.provenance),
+            })?;
+        }
+        for df in snapshot.data_flows {
+            project.apply(Op::AddDataFlow {
+                id: df.id.0,
+                name: df.name.0,
+                from: df.from.0,
+                to: df.to.0,
+                interface: df.interface.map(|i| i.0),
+                provenance: wire::unwrap_provenance(df.provenance),
+            })?;
+        }
+        for tb in snapshot.trust_boundaries {
+            project.apply(Op::AddTrustBoundary {
+                id: tb.id.0,
+                name: tb.name.0,
+                components: tb.components.0.into_iter().map(|c| c.0).collect(),
+                provenance: wire::unwrap_provenance(tb.provenance),
+            })?;
+        }
         for a in snapshot.assets {
+            let provenance = wire::unwrap_provenance(a.provenance);
+            let id = a.id.0;
+            let component = a.component.map(|c| c.0);
             project.apply(Op::AddAsset {
-                id: a.id.0,
+                id,
                 name: a.name.0,
                 properties: a.properties.0,
-                provenance: wire::unwrap_provenance(a.provenance),
+                provenance: provenance.clone(),
             })?;
+            if let Some(comp) = component {
+                project.apply(Op::SetAssetComponent {
+                    asset: id,
+                    component: Some(comp),
+                    provenance,
+                })?;
+            }
         }
         for d in snapshot.damage_scenarios {
             project.apply(Op::AddDamageScenario {

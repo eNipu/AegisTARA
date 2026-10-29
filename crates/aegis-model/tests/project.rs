@@ -5708,3 +5708,248 @@ fn sensitivity_and_tipping_points_on_project() {
 fn neg_feas(m: &Methodology) -> aegis_model::FeasibilityLevel {
     feas(m, "very-low")
 }
+
+#[test]
+fn item_definition_lifecycle_lint_diff_and_store_round_trip() {
+    use aegis_model::{
+        ComponentId, DataFlowId, InterfaceId, MAX_COMPONENT_DEPTH, OpLogReader, OpLogWriter,
+        TrustBoundaryId,
+    };
+
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let baseline = p.clone();
+    let mut ops = Vec::new();
+
+    let c_vehicle = ComponentId::new_v7();
+    let c_gateway = ComponentId::new_v7();
+    let c_brake = ComponentId::new_v7();
+    let i_can = InterfaceId::new_v7();
+    let i_eth = InterfaceId::new_v7();
+    let df_cmd = DataFlowId::new_v7();
+    let tb_safety = TrustBoundaryId::new_v7();
+    let a_brake = asset_id(740);
+    let a_unbound = asset_id(741);
+    let d_crash = damage_id(750);
+    let t_spoof = threat_id(760);
+
+    let can_kind = m.interface_kind("can").expect("can interface kind");
+    let eth_kind = m
+        .interface_kind("ethernet")
+        .expect("ethernet interface kind");
+    let safety = cat(&m, "safety");
+
+    // Add assets before any components exist -> no AssetUnbound lint yet.
+    let op = Op::AddAsset {
+        id: a_brake,
+        name: name("Brake torque command"),
+        properties: m.all_properties(),
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    let op = Op::AddAsset {
+        id: a_unbound,
+        name: name("Unbound diagnostic key"),
+        properties: m.all_properties(),
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+    assert!(
+        !p.lint()
+            .iter()
+            .any(|f| matches!(f.code(), LintCode::AssetUnbound { .. })),
+        "AssetUnbound only fires when project defines at least one component"
+    );
+
+    // Add components (vehicle -> gateway, vehicle -> brake).
+    let op = Op::AddComponent {
+        id: c_vehicle,
+        name: name("Vehicle Item"),
+        parent: None,
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    let op = Op::AddComponent {
+        id: c_gateway,
+        name: name("Telematics Gateway"),
+        parent: Some(c_vehicle),
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    let op = Op::AddComponent {
+        id: c_brake,
+        name: name("Brake ECU"),
+        parent: Some(c_vehicle),
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    // Cycle detection on SetComponentParent.
+    rejects(
+        &mut p,
+        Op::SetComponentParent {
+            id: c_vehicle,
+            parent: Some(c_gateway),
+            provenance: Provenance::default(),
+        },
+        &ModelError::ComponentCycle {
+            component: c_vehicle,
+            parent: c_gateway,
+        },
+    );
+
+    // Bind a_brake to c_brake; leave a_unbound unbound -> AssetUnbound(a_unbound) fires.
+    let op = Op::SetAssetComponent {
+        asset: a_brake,
+        component: Some(c_brake),
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+    assert!(
+        p.lint()
+            .iter()
+            .any(|f| f.code() == LintCode::AssetUnbound { asset: a_unbound })
+    );
+    assert!(
+        !p.lint()
+            .iter()
+            .any(|f| f.code() == LintCode::AssetUnbound { asset: a_brake })
+    );
+
+    // Add interfaces on gateway and brake.
+    let op = Op::AddInterface {
+        id: i_can,
+        name: name("Chassis CAN-FD"),
+        component: c_brake,
+        kind: can_kind,
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    let op = Op::AddInterface {
+        id: i_eth,
+        name: name("Automotive Ethernet"),
+        component: c_vehicle,
+        kind: eth_kind,
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    // DataFlow cannot reference an interface that does not belong to from or to.
+    rejects(
+        &mut p,
+        Op::AddDataFlow {
+            id: df_cmd,
+            name: name("Brake frame"),
+            from: c_gateway,
+            to: c_brake,
+            interface: Some(i_eth),
+            provenance: Provenance::default(),
+        },
+        &ModelError::InterfaceNotOnEndpoint {
+            flow: df_cmd,
+            interface: i_eth,
+        },
+    );
+
+    // Valid DataFlow between c_gateway and c_brake over i_can.
+    let op = Op::AddDataFlow {
+        id: df_cmd,
+        name: name("Brake torque frame"),
+        from: c_gateway,
+        to: c_brake,
+        interface: Some(i_can),
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    // Add trust boundary containing only c_brake -> df_cmd crosses tb_safety without any threat!
+    let op = Op::AddTrustBoundary {
+        id: tb_safety,
+        name: name("Safety Domain"),
+        components: vec![c_brake],
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    assert!(
+        p.lint().iter().any(|f| {
+            f.code() == LintCode::BoundaryCrossingDataFlowWithoutThreat { flow: df_cmd }
+        })
+    );
+
+    // Referential integrity: cannot remove c_brake while referenced by asset, interface, flow, boundary.
+    assert!(p.validate(&Op::RemoveComponent { id: c_brake }).is_err());
+
+    // Add threat targeting a_brake (bound to c_brake) -> clears BoundaryCrossingDataFlowWithoutThreat!
+    let op = Op::AddDamageScenario {
+        id: d_crash,
+        name: name("Collision"),
+        impacts: vec![(safety, lvl(&m, safety, "severe"))],
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    let op = Op::AddThreatScenario {
+        id: t_spoof,
+        name: name("Spoof brake frame on CAN"),
+        asset: a_brake,
+        category: threat_cat(&m, "spoofing"),
+        catalog_refs: vec![],
+        damages: vec![d_crash],
+        provenance: Provenance::default(),
+    };
+    ok(&mut p, op.clone());
+    ops.push(op);
+
+    assert!(
+        !p.lint().iter().any(|f| {
+            f.code() == LintCode::BoundaryCrossingDataFlowWithoutThreat { flow: df_cmd }
+        })
+    );
+
+    // Diff against baseline reports added item-definition entities.
+    let diff = baseline.diff(&p).expect("diff");
+    assert_eq!(diff.components().added().len(), 3);
+    assert_eq!(diff.interfaces().added().len(), 2);
+    assert_eq!(diff.data_flows().added(), &[df_cmd]);
+    assert_eq!(diff.trust_boundaries().added(), &[tb_safety]);
+
+    // Snapshot round-trip.
+    let mut snap_bytes = Vec::new();
+    p.save(&mut snap_bytes).expect("save snapshot");
+    let loaded = Project::load(snap_bytes.as_slice(), Arc::clone(&m)).expect("load snapshot");
+    assert_eq!(loaded, p);
+
+    // Op-log round-trip.
+    let mut log_bytes = Vec::new();
+    {
+        let mut writer =
+            OpLogWriter::create(&mut log_bytes, Arc::clone(&m)).expect("create writer");
+        for op in &ops {
+            writer.append(op).expect("append op");
+        }
+    }
+    let mut replayed = Project::new(Arc::clone(&m));
+    let reader = OpLogReader::open(log_bytes.as_slice(), Arc::clone(&m)).expect("open reader");
+    for rec in reader {
+        let rec = rec.expect("read op record");
+        replayed.apply(rec.op).expect("replay op");
+    }
+    assert_eq!(replayed, p);
+    let _ = MAX_COMPONENT_DEPTH;
+}

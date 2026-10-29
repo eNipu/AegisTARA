@@ -231,6 +231,7 @@ mod diff;
 mod error;
 mod eval;
 mod id;
+mod item;
 pub mod library;
 mod lint;
 mod methodology;
@@ -272,17 +273,23 @@ pub use eval::{
     evaluate,
 };
 pub use id::{
-    AssetId, AssetIdx, ClaimId, ClaimIdx, ControlId, ControlIdx, DamageId, DamageIdx, GoalId,
-    GoalIdx, NodeId, NodeIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId, ControlIdx,
+    DamageId, DamageIdx, DataFlowId, DataFlowIdx, GoalId, GoalIdx, InterfaceId, InterfaceIdx,
+    NodeId, NodeIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
+    TrustBoundaryIdx,
+};
+pub use item::{
+    Component, DataFlow, Interface, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS, TrustBoundary,
 };
 pub use lint::{LintCode, LintFinding, LintSeverity};
 pub use methodology::{
     AttackPotential, AttackPotentialDef, CatalogRef, CatalogScheme, CatalogSchemeDef,
     CatalogSyntax, ElementNameDef, ElementNamesDef, FactorContribution, FactorDef, FactorLevel,
-    FactorLevelDef, FeasibilityFactor, FeasibilityLevel, ImpactCategory, ImpactCategoryDef, Level,
-    LevelDef, MAX_FACTOR_POINTS, MAX_FEASIBILITY_FACTORS, MIN_FEASIBILITY_FACTORS, Methodology,
-    MethodologyDef, PotentialBand, PotentialBandDef, Property, PropertyDef, RiskLevel, SegmentDef,
-    ThreatCategory, ThreatCategoryDef,
+    FactorLevelDef, FeasibilityFactor, FeasibilityLevel, ImpactCategory, ImpactCategoryDef,
+    InterfaceKind, Level, LevelDef, MAX_FACTOR_POINTS, MAX_FEASIBILITY_FACTORS,
+    MAX_INTERFACE_KINDS, MAX_PACK_TRANSLATIONS, MIN_FEASIBILITY_FACTORS, Methodology,
+    MethodologyDef, PackTranslationDef, PotentialBand, PotentialBandDef, Property, PropertyDef,
+    RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
 pub use paths::{AttackPath, AttackPaths, ChokePoint};

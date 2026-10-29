@@ -185,6 +185,27 @@ impl<S: ProjectStore> Registry<S> {
             store.create_baseline(&baseline, &snapshot).await?;
             baselines += 1;
         }
+        for figure in source.list_figures(meta.id).await.map_err(damaged)? {
+            let (figure, bytes) = source
+                .load_figure(meta.id, figure.id)
+                .await
+                .map_err(damaged)?
+                .ok_or_else(|| ImportError::Damaged("a figure vanished while reading".into()))?;
+            crate::store::validate_and_sanitize_figure(
+                &figure.media_type,
+                &bytes,
+                self.config().max_figure_bytes,
+            )
+            .map_err(|e| ImportError::Damaged(format!("invalid figure {}: {e}", figure.id)))?;
+            store
+                .put_figure(
+                    &figure,
+                    &bytes,
+                    self.config().max_figures_per_project,
+                    self.config().max_project_figures_bytes,
+                )
+                .await?;
+        }
 
         // Check what is stored against what the folder held.
         let chain = store.verify_chain(meta.id).await?;

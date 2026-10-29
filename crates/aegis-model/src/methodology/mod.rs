@@ -37,6 +37,10 @@ pub const MAX_PROPERTIES: usize = 64;
 pub const MAX_THREAT_CATEGORIES: usize = 64;
 /// Most catalog schemes a methodology may declare.
 pub const MAX_CATALOG_SCHEMES: usize = 16;
+/// Most interface kinds a methodology may declare for the item definition.
+pub const MAX_INTERFACE_KINDS: usize = 32;
+/// Most per-language translations a methodology pack may declare.
+pub const MAX_PACK_TRANSLATIONS: usize = 16;
 /// Fewest factors an `attack_potential` scheme may declare.
 pub const MIN_FEASIBILITY_FACTORS: usize = 1;
 /// Most factors an `attack_potential` scheme may declare.
@@ -169,8 +173,42 @@ impl ElementNameDef {
     }
 }
 
+/// Per-language localized label overrides for a [`MethodologyDef`] (L10N-07).
+///
+/// Keyed by language code (for example `"ja"`) inside
+/// [`ElementNamesDef::translations`]. Any omitted field or key falls back to
+/// the methodology's primary labels.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PackTranslationDef {
+    /// Localized display label for the methodology pack itself.
+    pub label: Option<Arc<str>>,
+    /// Localized display names for element types and the feasibility scale.
+    pub element_names: Option<ElementNamesDef>,
+    /// Localized impact category labels, keyed by category key.
+    pub impact_categories: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized impact level labels, keyed by level key (or `"category.level"`).
+    pub impact_levels: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized feasibility level labels, keyed by feasibility level key.
+    pub feasibility_levels: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized risk level labels, keyed by risk level key.
+    pub risk_levels: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized security property labels, keyed by property key.
+    pub properties: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized threat category labels, keyed by threat category key.
+    pub threat_categories: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized catalog scheme labels, keyed by catalog scheme key.
+    pub catalog_schemes: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized attack potential factor labels, keyed by factor key.
+    pub feasibility_factors: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized attack potential factor level labels, keyed by level key (or `"factor.level"`).
+    pub factor_levels: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized interface kind labels, keyed by interface kind key.
+    pub interface_kinds: BTreeMap<Arc<str>, Arc<str>>,
+}
+
 /// Pack-defined display names for the model's element types and the
-/// feasibility or likelihood scale (DOM-01, DOM-02, Decision D24).
+/// feasibility or likelihood scale (DOM-01, DOM-02, Decision D24, L10N-07,
+/// ARC-02).
 ///
 /// [`ElementNamesDef::default`] gives the ISO/SAE 21434 terminology so
 /// existing packs that omit `element_names` keep today's names unchanged.
@@ -185,6 +223,14 @@ impl ElementNameDef {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ElementNamesDef {
+    /// Display names for item definition components (default: `"Component"` / `"Components"`).
+    pub component: ElementNameDef,
+    /// Display names for item definition interfaces (default: `"Interface"` / `"Interfaces"`).
+    pub interface: ElementNameDef,
+    /// Display names for item definition data flows (default: `"Data flow"` / `"Data flows"`).
+    pub data_flow: ElementNameDef,
+    /// Display names for item definition trust boundaries (default: `"Trust boundary"` / `"Trust boundaries"`).
+    pub trust_boundary: ElementNameDef,
     /// Display names for assets (default: `"Asset"` / `"Assets"`).
     pub asset: ElementNameDef,
     /// Display names for damage scenarios (default: `"Damage scenario"` / `"Damage scenarios"`).
@@ -201,11 +247,52 @@ pub struct ElementNamesDef {
     pub cybersecurity_claim: ElementNameDef,
     /// Display label for the feasibility or likelihood scale (default: `"Attack feasibility"`).
     pub feasibility: Arc<str>,
+    /// Pack-defined interface kinds for the item definition, 0 to 32 (ARC-02, Decision D15).
+    pub interface_kinds: Vec<LevelDef>,
+    /// Optional per-language translations of pack labels and element names (L10N-07).
+    pub translations: BTreeMap<Arc<str>, PackTranslationDef>,
+}
+
+impl ElementNamesDef {
+    /// Returns `true` if any of the element type display names or the
+    /// feasibility scale label differ from the built-in English defaults.
+    #[must_use]
+    pub fn has_custom_names(&self) -> bool {
+        let def = Self::default();
+        self.component != def.component
+            || self.interface != def.interface
+            || self.data_flow != def.data_flow
+            || self.trust_boundary != def.trust_boundary
+            || self.asset != def.asset
+            || self.damage_scenario != def.damage_scenario
+            || self.threat_scenario != def.threat_scenario
+            || self.attack_tree != def.attack_tree
+            || self.security_control != def.security_control
+            || self.cybersecurity_goal != def.cybersecurity_goal
+            || self.cybersecurity_claim != def.cybersecurity_claim
+            || self.feasibility != def.feasibility
+    }
+
+    /// Returns `true` if any of the 4 item-definition element names
+    /// (`component`, `interface`, `data_flow`, `trust_boundary`) differ from
+    /// their defaults.
+    #[must_use]
+    pub fn has_custom_item_names(&self) -> bool {
+        let def = Self::default();
+        self.component != def.component
+            || self.interface != def.interface
+            || self.data_flow != def.data_flow
+            || self.trust_boundary != def.trust_boundary
+    }
 }
 
 impl Default for ElementNamesDef {
     fn default() -> Self {
         Self {
+            component: ElementNameDef::new("Component", "Components"),
+            interface: ElementNameDef::new("Interface", "Interfaces"),
+            data_flow: ElementNameDef::new("Data flow", "Data flows"),
+            trust_boundary: ElementNameDef::new("Trust boundary", "Trust boundaries"),
             asset: ElementNameDef::new("Asset", "Assets"),
             damage_scenario: ElementNameDef::new("Damage scenario", "Damage scenarios"),
             threat_scenario: ElementNameDef::new("Threat scenario", "Threat scenarios"),
@@ -214,6 +301,8 @@ impl Default for ElementNamesDef {
             cybersecurity_goal: ElementNameDef::new("Cybersecurity goal", "Cybersecurity goals"),
             cybersecurity_claim: ElementNameDef::new("Cybersecurity claim", "Cybersecurity claims"),
             feasibility: Arc::from("Attack feasibility"),
+            interface_kinds: Vec::new(),
+            translations: BTreeMap::new(),
         }
     }
 }
@@ -613,6 +702,21 @@ vocab_index! {
     FactorLevel
 }
 
+vocab_index! {
+    /// Index of an item definition interface kind in a [`Methodology`]. 1 byte.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.interface_kind("can").map(|k| k.index()), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    InterfaceKind
+}
+
 /// One validated score band in a [`Methodology`]'s attack potential scheme.
 ///
 /// ```
@@ -969,6 +1073,14 @@ impl FactorLevel {
     }
 }
 
+#[cfg(test)]
+impl InterfaceKind {
+    /// Wraps a raw position, for tests.
+    pub(crate) fn new(i: u8) -> Self {
+        InterfaceKind(i)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Validated methodology.
 // ---------------------------------------------------------------------------
@@ -1049,6 +1161,9 @@ pub struct Methodology {
     version: Arc<str>,
     label: Arc<str>,
     element_names: ElementNamesDef,
+    interface_kinds: Vec<Entry>,
+    interface_by_key: BTreeMap<Arc<str>, u8>,
+    translations: BTreeMap<Arc<str>, PackTranslationDef>,
     impact_categories: Vec<CategoryData>,
     impact_by_key: BTreeMap<Arc<str>, u8>,
     feasibility_levels: Vec<Entry>,
@@ -1232,12 +1347,18 @@ impl Methodology {
             ),
         };
         Self::check_element_names(&def.element_names)?;
+        let interface_kinds = Self::build_interface_kinds(&def.element_names.interface_kinds)?;
+        Self::check_translations(&def.element_names.translations)?;
+        let translations = def.element_names.translations.clone();
 
         Ok(Methodology {
             key: def.key,
             version: def.version,
             label: def.label,
             element_names: def.element_names,
+            interface_kinds: interface_kinds.items,
+            interface_by_key: interface_kinds.by_key,
+            translations,
             impact_categories: impacts.items,
             impact_by_key: impacts.by_key,
             feasibility_levels: feasibility.items,
@@ -1258,7 +1379,11 @@ impl Methodology {
     }
 
     fn check_element_names(names: &ElementNamesDef) -> Result<(), MethodologyError> {
-        let pairs: [(&str, &ElementNameDef); 7] = [
+        let pairs: [(&str, &ElementNameDef); 11] = [
+            ("component", &names.component),
+            ("interface", &names.interface),
+            ("data_flow", &names.data_flow),
+            ("trust_boundary", &names.trust_boundary),
             ("asset", &names.asset),
             ("damage_scenario", &names.damage_scenario),
             ("threat_scenario", &names.threat_scenario),
@@ -1274,6 +1399,63 @@ impl Methodology {
         }
         let feas_key: Arc<str> = Arc::from("feasibility");
         check_label(&feas_key, &names.feasibility)?;
+        Ok(())
+    }
+
+    fn build_interface_kinds(defs: &[LevelDef]) -> Result<Vocab<Entry>, MethodologyError> {
+        check_count(defs.len(), 0, MAX_INTERFACE_KINDS, || {
+            MethodologyError::TooManyInterfaceKinds {
+                max: MAX_INTERFACE_KINDS,
+            }
+        })?;
+        let mut by_key = BTreeMap::new();
+        let mut out = Vec::with_capacity(defs.len());
+        for (pos, l) in defs.iter().enumerate() {
+            out.push(add_entry(
+                &l.key,
+                &l.label,
+                pos,
+                &mut by_key,
+                MethodologyError::DuplicateInterfaceKind,
+            )?);
+        }
+        Ok(Vocab { items: out, by_key })
+    }
+
+    fn check_translations(
+        translations: &BTreeMap<Arc<str>, PackTranslationDef>,
+    ) -> Result<(), MethodologyError> {
+        check_count(translations.len(), 0, MAX_PACK_TRANSLATIONS, || {
+            MethodologyError::TooManyTranslations {
+                max: MAX_PACK_TRANSLATIONS,
+            }
+        })?;
+        for (lang, tr) in translations {
+            check_key(lang)?;
+            if let Some(lbl) = &tr.label {
+                check_label(lang, lbl)?;
+            }
+            if let Some(names) = &tr.element_names {
+                Self::check_element_names(names)?;
+            }
+            for maps in [
+                &tr.impact_categories,
+                &tr.impact_levels,
+                &tr.feasibility_levels,
+                &tr.risk_levels,
+                &tr.properties,
+                &tr.threat_categories,
+                &tr.catalog_schemes,
+                &tr.feasibility_factors,
+                &tr.factor_levels,
+                &tr.interface_kinds,
+            ] {
+                for (k, v) in maps {
+                    check_key(k)?;
+                    check_label(k, v)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2786,6 +2968,254 @@ impl Methodology {
             .map(PotentialBand::feasibility)
     }
 
+    // -- Interface kinds (ARC-02, Decision D15) -------------------------------
+
+    /// Iterates the item definition interface kinds in declaration order. Time
+    /// O(1) per item.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.interface_kinds().count() >= 4);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn interface_kinds(&self) -> impl ExactSizeIterator<Item = InterfaceKind> + use<> {
+        index_range(self.interface_kinds.len()).map(InterfaceKind)
+    }
+
+    /// Returns the number of declared interface kinds. Time O(1).
+    #[must_use]
+    pub fn interface_kind_count(&self) -> usize {
+        self.interface_kinds.len()
+    }
+
+    /// Resolves an interface kind key in O(log K), K <= 32.
+    #[must_use]
+    pub fn interface_kind(&self, key: &str) -> Option<InterfaceKind> {
+        self.interface_by_key.get(key).copied().map(InterfaceKind)
+    }
+
+    /// Returns an interface kind's key, or `None` if out of range. Time O(1).
+    #[must_use]
+    pub fn interface_kind_key(&self, kind: InterfaceKind) -> Option<&str> {
+        self.interface_kinds.get(kind.index()).map(|e| &*e.key)
+    }
+
+    /// Returns an interface kind's display label, or `None` if out of range. Time O(1).
+    #[must_use]
+    pub fn interface_kind_label(&self, kind: InterfaceKind) -> Option<&str> {
+        self.interface_kinds.get(kind.index()).map(|e| &*e.label)
+    }
+
+    // -- Translations (L10N-07) -----------------------------------------------
+
+    /// Returns all per-language translation tables declared by this pack. Time O(1).
+    #[must_use]
+    pub fn translations(&self) -> &BTreeMap<Arc<str>, PackTranslationDef> {
+        &self.translations
+    }
+
+    /// Returns the translation table for `lang` (for example `"ja"`), if declared.
+    #[must_use]
+    pub fn translation(&self, lang: &str) -> Option<&PackTranslationDef> {
+        self.translations.get(lang)
+    }
+
+    /// Returns the display label of the methodology for `lang`, falling back to
+    /// [`Self::label`].
+    #[must_use]
+    pub fn label_for_lang(&self, lang: &str) -> &str {
+        self.translation(lang)
+            .and_then(|tr| tr.label.as_deref())
+            .unwrap_or(&self.label)
+    }
+
+    /// Returns the pack-defined element display names for `lang`, falling back
+    /// to [`Self::element_names`].
+    #[must_use]
+    pub fn element_names_for_lang(&self, lang: &str) -> &ElementNamesDef {
+        self.translation(lang)
+            .and_then(|tr| tr.element_names.as_ref())
+            .unwrap_or(&self.element_names)
+    }
+
+    /// Returns the display label of the feasibility or likelihood scale for
+    /// `lang`, falling back to [`Self::feasibility_label`].
+    #[must_use]
+    pub fn feasibility_label_for_lang(&self, lang: &str) -> &str {
+        &self.element_names_for_lang(lang).feasibility
+    }
+
+    /// Returns an impact category's localized label for `lang`, falling back to
+    /// [`Self::impact_category_label`].
+    #[must_use]
+    pub fn impact_category_label_for_lang(&self, cat: ImpactCategory, lang: &str) -> Option<&str> {
+        let data = self.category_data(cat)?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.impact_categories.get(&data.entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&data.entry.label)
+    }
+
+    /// Returns an impact level's localized label for `lang`, falling back to
+    /// [`Self::level_label`].
+    #[must_use]
+    pub fn level_label_for_lang(
+        &self,
+        cat: ImpactCategory,
+        level: Level,
+        lang: &str,
+    ) -> Option<&str> {
+        let entry = self.level_entry(cat, level)?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.impact_levels.get(&entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&entry.label)
+    }
+
+    /// Returns a feasibility level's localized label for `lang`, falling back
+    /// to [`Self::feasibility_level_label`].
+    #[must_use]
+    pub fn feasibility_level_label_for_lang(
+        &self,
+        level: FeasibilityLevel,
+        lang: &str,
+    ) -> Option<&str> {
+        let entry = self.feasibility_levels.get(level.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.feasibility_levels.get(&entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&entry.label)
+    }
+
+    /// Returns a risk level's localized label for `lang`, falling back to
+    /// [`Self::risk_level_label`].
+    #[must_use]
+    pub fn risk_level_label_for_lang(&self, level: RiskLevel, lang: &str) -> Option<&str> {
+        let entry = self.risk_levels.get(level.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.risk_levels.get(&entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&entry.label)
+    }
+
+    /// Returns a security property's localized label for `lang`, falling back
+    /// to [`Self::property_label`].
+    #[must_use]
+    pub fn property_label_for_lang(&self, p: Property, lang: &str) -> Option<&str> {
+        let entry = self.properties.get(p.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.properties.get(&entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&entry.label)
+    }
+
+    /// Returns a threat category's localized label for `lang`, falling back to
+    /// [`Self::threat_category_label`].
+    #[must_use]
+    pub fn threat_category_label_for_lang(&self, t: ThreatCategory, lang: &str) -> Option<&str> {
+        let data = self.threat_categories.get(t.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.threat_categories.get(&data.entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&data.entry.label)
+    }
+
+    /// Returns a catalog scheme's localized label for `lang`, falling back to
+    /// [`Self::catalog_scheme_label`].
+    #[must_use]
+    pub fn catalog_scheme_label_for_lang(&self, s: CatalogScheme, lang: &str) -> Option<&str> {
+        let data = self.schemes.get(s.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.catalog_schemes.get(&data.entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&data.entry.label)
+    }
+
+    /// Returns an attack potential factor's localized label for `lang`, falling
+    /// back to [`Self::feasibility_factor_label`].
+    #[must_use]
+    pub fn feasibility_factor_label_for_lang(
+        &self,
+        factor: FeasibilityFactor,
+        lang: &str,
+    ) -> Option<&str> {
+        let data = self.factor_data(factor)?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.feasibility_factors.get(&data.entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&data.entry.label)
+    }
+
+    /// Returns an attack potential factor level's localized label for `lang`,
+    /// falling back to [`Self::factor_level_label`].
+    #[must_use]
+    pub fn factor_level_label_for_lang(
+        &self,
+        factor: FeasibilityFactor,
+        level: FactorLevel,
+        lang: &str,
+    ) -> Option<&str> {
+        let data = self.factor_level_data(factor, level)?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.factor_levels.get(&data.entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&data.entry.label)
+    }
+
+    /// Returns an interface kind's localized label for `lang`, falling back to
+    /// [`Self::interface_kind_label`].
+    #[must_use]
+    pub fn interface_kind_label_for_lang(&self, kind: InterfaceKind, lang: &str) -> Option<&str> {
+        let entry = self.interface_kinds.get(kind.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.interface_kinds.get(&entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&entry.label)
+    }
+
+    /// Checks that an interface kind is declared in this methodology. Time O(1).
+    pub(crate) fn check_interface_kind(&self, kind: InterfaceKind) -> Result<(), ModelError> {
+        if kind.index() < self.interface_kinds.len() {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownInterfaceKind(kind))
+        }
+    }
+
     // -- Checks used by the project -------------------------------------------
 
     /// Checks that a catalog ref names a declared scheme and satisfies its
@@ -4015,6 +4445,8 @@ mod tests {
         assert_eq!(size_of::<Property>(), 1);
         assert_eq!(size_of::<ThreatCategory>(), 1);
         assert_eq!(size_of::<CatalogScheme>(), 1);
+        assert_eq!(size_of::<InterfaceKind>(), 1);
+        assert_eq!(InterfaceKind::new(3).index(), 3);
         assert_eq!(size_of::<PropertySet>(), 8);
         assert!(size_of::<CatalogRef>() <= 12, "{}", size_of::<CatalogRef>());
     }

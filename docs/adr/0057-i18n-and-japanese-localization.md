@@ -65,13 +65,32 @@ named so two readers agree (P4). Numbers are integers in reports, so no
 decimal-separator work was needed beyond what Slint's bundled translations
 already carry.
 
-### 6. Report language comes from the Fluent catalog
+### 6. Report language comes from the Fluent catalog and pack translations (L10N-07)
 
 `report/doc.rs` builds the report once per selected language (English,
 Japanese, or both side by side for `ReportLanguage::Bilingual`); the PDF
 metadata carries the language tag. Missing catalog keys render as `[id]` so a
 gap is visible, and Fluent's bidi-isolation marks (U+2068/U+2069) are stripped
 from the final text so reports and captions compare byte-for-byte.
+
+### 7. Per-language labels in methodology packs (`L10N-07`)
+
+Methodology packs accept an optional `"translations"` map keyed by BCP-47
+language tag (`PackTranslationDef` in `crates/aegis-model/src/methodology/pack.rs`,
+capped at `MAX_PACK_LANGUAGES = 16`). Each entry can override the pack's
+top-level `label`, `element_names` (`ElementNamesDef`), `impact_categories` and
+their level labels, `feasibility_levels`, `risk_levels`, `properties`,
+`threat_categories`, `interface_kinds`, and `attack_potential_factors`. Packs
+without `"translations"` load unchanged, and missing keys within a translation
+fall back cleanly to the pack's default English label (`element_names_for_lang`,
+`property_label_for_lang`, `impact_category_label_for_lang`,
+`level_label_for_lang`, `feasibility_level_label_for_lang`,
+`risk_level_label_for_lang`, `threat_category_label_for_lang`,
+`interface_kind_label_for_lang`, `factor_label_for_lang`,
+`factor_level_label_for_lang`). The built-in `iso21434-r155.json` pack (and
+its fuzz seed) ships full Japanese (`"ja"`) labels, and `report/doc.rs` uses
+`element_names_for_lang(lang)` and the language-aware vocabulary helpers for
+all section headings and table cells.
 
 ## Consequences
 
@@ -80,9 +99,9 @@ from the final text so reports and captions compare byte-for-byte.
 - A test (`crates/aegis-shell/tests/i18n.rs`) fails when a shipped locale
   lacks a key, and the pseudo-locale catalogs let a screenshot test catch
   clipped text.
-- The built-in methodology pack labels per language (L10N-07) are the
-  remaining piece of job 068 and land with the pack format change; the report
-  element-type headings still read from the pack's single set of labels today.
+- Both UI/report Chrome (`main.ftl` + `.po`) and methodology pack vocabulary
+  and element-type headings (`L10N-07`) render in Japanese when `ja` is
+  selected, while existing v1 pack files continue to load without changes.
 
 ## Alternatives
 

@@ -552,6 +552,154 @@ impl<P: CredentialProvider> Connection<P> {
             .await?;
         Ok(())
     }
+
+    /// Uploads a PNG, JPEG, or sanitized static SVG figure to a project
+    /// (requires the edit lease; job 073, ARC-01, RPT-06).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn put_figure(
+        &self,
+        project: &str,
+        token: &str,
+        caption: &str,
+        target: &str,
+        data: Vec<u8>,
+    ) -> Result<pb::FigureInfo, ClientError> {
+        let media_type = sniff_media_type(&data).to_owned();
+        let chunks: Vec<Bytes> = data.chunks(64 * 1024).map(Bytes::copy_from_slice).collect();
+        Ok(self
+            .client
+            .clone()
+            .put_figure(pb::PutFigureRequest {
+                project_id: project.to_owned(),
+                lock_token: token.to_owned(),
+                caption: caption.to_owned(),
+                target: target.to_owned(),
+                media_type,
+                chunks,
+            })
+            .await?
+            .into_inner())
+    }
+
+    /// Lists metadata for all figures attached to a project.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn list_figures(&self, project: &str) -> Result<Vec<pb::FigureInfo>, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .list_figures(pb::ListFiguresRequest {
+                project_id: project.to_owned(),
+            })
+            .await?
+            .into_inner()
+            .figures)
+    }
+
+    /// Downloads a figure's metadata and raw bytes by streaming chunks. Stops
+    /// at 5 MiB (`MAX_FIGURE_BYTES`, R3).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Protocol`] if the stream breaks the contract or exceeds
+    /// 5 MiB.
+    pub async fn get_figure(
+        &self,
+        project: &str,
+        figure_id: &str,
+    ) -> Result<(pb::FigureInfo, Vec<u8>), ClientError> {
+        const MAX_FIGURE_BYTES: u64 = 5 * 1024 * 1024;
+        let mut stream = self
+            .client
+            .clone()
+            .get_figure(pb::GetFigureRequest {
+                project_id: project.to_owned(),
+                figure_id: figure_id.to_owned(),
+            })
+            .await?
+            .into_inner();
+        let mut info: Option<pb::FigureInfo> = None;
+        let mut data = Vec::new();
+        while let Some(chunk) = stream.message().await? {
+            if let Some(i) = chunk.info {
+                if info.is_some() {
+                    return Err(ClientError::Protocol("second figure header".into()));
+                }
+                let promised = usize::try_from(i.byte_len.min(MAX_FIGURE_BYTES)).unwrap_or(0);
+                data.reserve(promised);
+                info = Some(i);
+            } else if info.is_none() {
+                return Err(ClientError::Protocol("figure data before header".into()));
+            }
+            if (data.len() + chunk.data.len()) as u64 > MAX_FIGURE_BYTES {
+                return Err(ClientError::Protocol(
+                    "figure is larger than the allowed maximum".into(),
+                ));
+            }
+            data.extend_from_slice(&chunk.data);
+        }
+        let info = info.ok_or_else(|| ClientError::Protocol("empty figure stream".into()))?;
+        if data.len() as u64 != info.byte_len {
+            return Err(ClientError::Protocol(
+                "figure stream is shorter than announced".into(),
+            ));
+        }
+        Ok((info, data))
+    }
+
+    /// Updates a figure's caption and/or target (requires the edit lease).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn update_figure(
+        &self,
+        project: &str,
+        token: &str,
+        figure_id: &str,
+        caption: &str,
+        target: &str,
+    ) -> Result<pb::FigureInfo, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .update_figure(pb::UpdateFigureRequest {
+                project_id: project.to_owned(),
+                lock_token: token.to_owned(),
+                figure_id: figure_id.to_owned(),
+                caption: caption.to_owned(),
+                target: target.to_owned(),
+            })
+            .await?
+            .into_inner())
+    }
+
+    /// Deletes a figure from a project (requires the edit lease).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn delete_figure(
+        &self,
+        project: &str,
+        token: &str,
+        figure_id: &str,
+    ) -> Result<(), ClientError> {
+        self.client
+            .clone()
+            .delete_figure(pb::DeleteFigureRequest {
+                project_id: project.to_owned(),
+                lock_token: token.to_owned(),
+                figure_id: figure_id.to_owned(),
+            })
+            .await?;
+        Ok(())
+    }
 }
 
 /// Reassembles a chunked snapshot stream: the header, then the bytes.
@@ -589,6 +737,16 @@ async fn read_snapshot(
             ));
         }
         Ok((header, snapshot))
+    }
+}
+
+fn sniff_media_type(data: &[u8]) -> &'static str {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if data.starts_with(b"\xff\xd8") {
+        "image/jpeg"
+    } else {
+        "image/svg+xml"
     }
 }
 

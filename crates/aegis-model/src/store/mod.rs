@@ -52,10 +52,11 @@ use std::fmt;
 pub use op_log::{LoggedOp, OpCodec, OpLogReader, OpLogWriter};
 
 use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS};
+use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::{
-    MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_KEY_LEN,
-    MAX_LABEL_CHARS, MAX_LEVELS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS,
-    MAX_THREAT_CATEGORIES,
+    MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_INTERFACE_KINDS,
+    MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN,
+    MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
 };
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_ATTACK_TREE_NODES;
@@ -263,6 +264,12 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A trust boundary or op lists more than
+    /// [`MAX_TRUST_BOUNDARY_MEMBERS`](crate::MAX_TRUST_BOUNDARY_MEMBERS) components.
+    TrustBoundaryMembers {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A methodology pack is larger than [`MAX_PACK_FILE_BYTES`].
     PackFileBytes {
         /// The cap, in bytes.
@@ -309,6 +316,18 @@ pub enum Limit {
     /// factor map has more than
     /// [`MAX_FEASIBILITY_FACTORS`](crate::MAX_FEASIBILITY_FACTORS) factors.
     FeasibilityFactors {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A pack declares more than [`MAX_INTERFACE_KINDS`](crate::MAX_INTERFACE_KINDS)
+    /// interface kinds.
+    InterfaceKinds {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A pack declares more than [`MAX_PACK_TRANSLATIONS`](crate::MAX_PACK_TRANSLATIONS)
+    /// language translations.
+    PackTranslations {
         /// The cap, in items.
         max: usize,
     },
@@ -361,6 +380,9 @@ impl Limit {
     pub(crate) const GOAL_CONTROLS: Limit = Limit::GoalControls {
         max: MAX_GOAL_CONTROLS,
     };
+    pub(crate) const TRUST_BOUNDARY_MEMBERS: Limit = Limit::TrustBoundaryMembers {
+        max: MAX_TRUST_BOUNDARY_MEMBERS,
+    };
     pub(crate) const PACK_FILE: Limit = Limit::PackFileBytes {
         max: MAX_PACK_FILE_BYTES,
     };
@@ -383,6 +405,12 @@ impl Limit {
     pub(crate) const CATALOG_SEGMENTS: Limit = Limit::CatalogSegments { max: MAX_SEGMENTS };
     pub(crate) const FEASIBILITY_FACTORS: Limit = Limit::FeasibilityFactors {
         max: MAX_FEASIBILITY_FACTORS,
+    };
+    pub(crate) const INTERFACE_KINDS: Limit = Limit::InterfaceKinds {
+        max: MAX_INTERFACE_KINDS,
+    };
+    pub(crate) const PACK_TRANSLATIONS: Limit = Limit::PackTranslations {
+        max: MAX_PACK_TRANSLATIONS,
     };
 }
 
@@ -418,6 +446,9 @@ impl fmt::Display for Limit {
             Limit::GoalControls { max } => {
                 write!(f, "more than {max} goal controls")
             }
+            Limit::TrustBoundaryMembers { max } => {
+                write!(f, "more than {max} trust boundary members")
+            }
             Limit::PackFileBytes { max } => {
                 write!(f, "methodology pack is larger than {max} bytes")
             }
@@ -432,6 +463,12 @@ impl fmt::Display for Limit {
             Limit::CatalogSegments { max } => write!(f, "more than {max} catalog ID segments"),
             Limit::FeasibilityFactors { max } => {
                 write!(f, "more than {max} feasibility factors")
+            }
+            Limit::InterfaceKinds { max } => {
+                write!(f, "more than {max} interface kinds")
+            }
+            Limit::PackTranslations { max } => {
+                write!(f, "more than {max} pack translations")
             }
         }
     }
@@ -464,6 +501,8 @@ pub enum VocabKind {
     ThreatCategory,
     /// A catalog scheme.
     CatalogScheme,
+    /// An item definition interface kind.
+    InterfaceKind,
 }
 
 impl fmt::Display for VocabKind {
@@ -477,6 +516,7 @@ impl fmt::Display for VocabKind {
             VocabKind::Property => "property",
             VocabKind::ThreatCategory => "threat category",
             VocabKind::CatalogScheme => "catalog scheme",
+            VocabKind::InterfaceKind => "interface kind",
         })
     }
 }

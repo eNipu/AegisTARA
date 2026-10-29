@@ -14,7 +14,11 @@ use super::wire::{
 use super::{Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
-use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
+use crate::id::{
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
+    ThreatId, TreeId, TrustBoundaryId,
+};
+use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
 use crate::op::Op;
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
@@ -327,6 +331,109 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    AddComponent {
+        id: Text<ComponentId>,
+        name: &'a str,
+        parent: Option<Text<ComponentId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameComponent {
+        id: Text<ComponentId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetComponentParent {
+        id: Text<ComponentId>,
+        parent: Option<Text<ComponentId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveComponent {
+        id: Text<ComponentId>,
+    },
+    AddInterface {
+        id: Text<InterfaceId>,
+        name: &'a str,
+        component: Text<ComponentId>,
+        kind: Required<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameInterface {
+        id: Text<InterfaceId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetInterfaceKind {
+        id: Text<InterfaceId>,
+        kind: Required<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveInterface {
+        id: Text<InterfaceId>,
+    },
+    AddDataFlow {
+        id: Text<DataFlowId>,
+        name: &'a str,
+        from: Text<ComponentId>,
+        to: Text<ComponentId>,
+        interface: Option<Text<InterfaceId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameDataFlow {
+        id: Text<DataFlowId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetDataFlowInterface {
+        id: Text<DataFlowId>,
+        interface: Option<Text<InterfaceId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveDataFlow {
+        id: Text<DataFlowId>,
+    },
+    AddTrustBoundary {
+        id: Text<TrustBoundaryId>,
+        name: &'a str,
+        components: Ids<'a, ComponentId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameTrustBoundary {
+        id: Text<TrustBoundaryId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    AddBoundaryComponent {
+        boundary: Text<TrustBoundaryId>,
+        component: Text<ComponentId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveBoundaryComponent {
+        boundary: Text<TrustBoundaryId>,
+        component: Text<ComponentId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveTrustBoundary {
+        id: Text<TrustBoundaryId>,
+    },
+    SetAssetComponent {
+        asset: Text<AssetId>,
+        component: Option<Text<ComponentId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
 }
 
 /// Refuses a name, provenance actor, or list the reader would refuse, so
@@ -353,10 +460,20 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameSecurityControl { name, .. }
         | Op::RenameCybersecurityGoal { name, .. }
         | Op::AddCybersecurityClaim { name, .. }
-        | Op::RenameCybersecurityClaim { name, .. } => name_ok(name),
+        | Op::RenameCybersecurityClaim { name, .. }
+        | Op::AddComponent { name, .. }
+        | Op::RenameComponent { name, .. }
+        | Op::AddInterface { name, .. }
+        | Op::RenameInterface { name, .. }
+        | Op::AddDataFlow { name, .. }
+        | Op::RenameDataFlow { name, .. }
+        | Op::RenameTrustBoundary { name, .. } => name_ok(name),
         Op::AddCybersecurityGoal { name, controls, .. } => {
             name_ok(name) && controls.len() <= MAX_GOAL_CONTROLS
         }
+        Op::AddTrustBoundary {
+            name, components, ..
+        } => name_ok(name) && components.len() <= MAX_TRUST_BOUNDARY_MEMBERS,
         Op::AddThreatScenario {
             name,
             catalog_refs,
@@ -790,6 +907,150 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         } => OpView::SetThreatClaim {
             threat: Text(*threat),
             claim: claim.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::AddComponent {
+            id,
+            name,
+            parent,
+            provenance,
+        } => OpView::AddComponent {
+            id: Text(*id),
+            name,
+            parent: parent.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameComponent {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameComponent {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetComponentParent {
+            id,
+            parent,
+            provenance,
+        } => OpView::SetComponentParent {
+            id: Text(*id),
+            parent: parent.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveComponent { id } => OpView::RemoveComponent { id: Text(*id) },
+        Op::AddInterface {
+            id,
+            name,
+            component,
+            kind,
+            provenance,
+        } => OpView::AddInterface {
+            id: Text(*id),
+            name,
+            component: Text(*component),
+            kind: Required(m.interface_kind_key(*kind)),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameInterface {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameInterface {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetInterfaceKind {
+            id,
+            kind,
+            provenance,
+        } => OpView::SetInterfaceKind {
+            id: Text(*id),
+            kind: Required(m.interface_kind_key(*kind)),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveInterface { id } => OpView::RemoveInterface { id: Text(*id) },
+        Op::AddDataFlow {
+            id,
+            name,
+            from,
+            to,
+            interface,
+            provenance,
+        } => OpView::AddDataFlow {
+            id: Text(*id),
+            name,
+            from: Text(*from),
+            to: Text(*to),
+            interface: interface.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameDataFlow {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameDataFlow {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetDataFlowInterface {
+            id,
+            interface,
+            provenance,
+        } => OpView::SetDataFlowInterface {
+            id: Text(*id),
+            interface: interface.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveDataFlow { id } => OpView::RemoveDataFlow { id: Text(*id) },
+        Op::AddTrustBoundary {
+            id,
+            name,
+            components,
+            provenance,
+        } => OpView::AddTrustBoundary {
+            id: Text(*id),
+            name,
+            components: Ids(components),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameTrustBoundary {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameTrustBoundary {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::AddBoundaryComponent {
+            boundary,
+            component,
+            provenance,
+        } => OpView::AddBoundaryComponent {
+            boundary: Text(*boundary),
+            component: Text(*component),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveBoundaryComponent {
+            boundary,
+            component,
+            provenance,
+        } => OpView::RemoveBoundaryComponent {
+            boundary: Text(*boundary),
+            component: Text(*component),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveTrustBoundary { id } => OpView::RemoveTrustBoundary { id: Text(*id) },
+        Op::SetAssetComponent {
+            asset,
+            component,
+            provenance,
+        } => OpView::SetAssetComponent {
+            asset: Text(*asset),
+            component: component.map(Text),
             provenance: ProvenanceView::of(provenance),
         },
     }
@@ -1237,6 +1498,150 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::SetThreatClaim {
             threat: threat.0,
             claim: claim.map(|cl| cl.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::AddComponent {
+            id,
+            name,
+            parent,
+            provenance,
+        } => Op::AddComponent {
+            id: id.0,
+            name: name.0,
+            parent: parent.map(|p| p.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameComponent {
+            id,
+            name,
+            provenance,
+        } => Op::RenameComponent {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetComponentParent {
+            id,
+            parent,
+            provenance,
+        } => Op::SetComponentParent {
+            id: id.0,
+            parent: parent.map(|p| p.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveComponent { id } => Op::RemoveComponent { id: id.0 },
+        OpWire::AddInterface {
+            id,
+            name,
+            component,
+            kind,
+            provenance,
+        } => Op::AddInterface {
+            id: id.0,
+            name: name.0,
+            component: component.0,
+            kind: kind.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameInterface {
+            id,
+            name,
+            provenance,
+        } => Op::RenameInterface {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetInterfaceKind {
+            id,
+            kind,
+            provenance,
+        } => Op::SetInterfaceKind {
+            id: id.0,
+            kind: kind.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveInterface { id } => Op::RemoveInterface { id: id.0 },
+        OpWire::AddDataFlow {
+            id,
+            name,
+            from,
+            to,
+            interface,
+            provenance,
+        } => Op::AddDataFlow {
+            id: id.0,
+            name: name.0,
+            from: from.0,
+            to: to.0,
+            interface: interface.map(|i| i.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameDataFlow {
+            id,
+            name,
+            provenance,
+        } => Op::RenameDataFlow {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetDataFlowInterface {
+            id,
+            interface,
+            provenance,
+        } => Op::SetDataFlowInterface {
+            id: id.0,
+            interface: interface.map(|i| i.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveDataFlow { id } => Op::RemoveDataFlow { id: id.0 },
+        OpWire::AddTrustBoundary {
+            id,
+            name,
+            components,
+            provenance,
+        } => Op::AddTrustBoundary {
+            id: id.0,
+            name: name.0,
+            components: components.0.into_iter().map(|c| c.0).collect(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameTrustBoundary {
+            id,
+            name,
+            provenance,
+        } => Op::RenameTrustBoundary {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::AddBoundaryComponent {
+            boundary,
+            component,
+            provenance,
+        } => Op::AddBoundaryComponent {
+            boundary: boundary.0,
+            component: component.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveBoundaryComponent {
+            boundary,
+            component,
+            provenance,
+        } => Op::RemoveBoundaryComponent {
+            boundary: boundary.0,
+            component: component.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveTrustBoundary { id } => Op::RemoveTrustBoundary { id: id.0 },
+        OpWire::SetAssetComponent {
+            asset,
+            component,
+            provenance,
+        } => Op::SetAssetComponent {
+            asset: asset.0,
+            component: component.map(|c| c.0),
             provenance: wire::unwrap_provenance(provenance),
         },
     })

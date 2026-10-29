@@ -59,6 +59,8 @@ pub enum ServerCode {
     PasswordLoginOff,
     /// Password login cannot be turned off: the server has no company login.
     NoCompanyLogin,
+    /// A per-file or per-project quota (figures, bytes) was exceeded.
+    QuotaExceeded,
     /// Anything else, with the raw code.
     Other(String),
 }
@@ -173,6 +175,7 @@ impl From<tonic::Status> for ClientError {
             "last_admin" => ServerCode::LastAdmin,
             "password_login_off" => ServerCode::PasswordLoginOff,
             "no_company_login" => ServerCode::NoCompanyLogin,
+            "quota_exceeded" => ServerCode::QuotaExceeded,
             other => ServerCode::Other(other.to_owned()),
         };
         ClientError::Server {

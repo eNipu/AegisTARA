@@ -25,7 +25,7 @@ use crate::lease::Grant;
 use crate::license::LicenseGate;
 use crate::pb;
 use crate::registry::{Registry, missing};
-use crate::store::{BaselineMeta, ProjectMeta, ProjectStore};
+use crate::store::{BaselineMeta, FigureMeta, ProjectMeta, ProjectStore};
 
 /// Largest gRPC message the server accepts. A `SubmitOps` batch has at most
 /// 1024 ops (`max_batch_ops`); typical ops are a few hundred bytes, and this
@@ -190,6 +190,44 @@ fn baseline_info(b: &BaselineMeta) -> pb::BaselineInfo {
     }
 }
 
+fn figure_info(f: &FigureMeta) -> pb::FigureInfo {
+    pb::FigureInfo {
+        figure_id: f.id.to_string(),
+        project_id: f.project.to_string(),
+        caption: f.caption.clone(),
+        target: f.target.clone(),
+        media_type: f.media_type.clone(),
+        width: f.width,
+        height: f.height,
+        byte_len: f.byte_len,
+        sha256: Bytes::copy_from_slice(&f.sha256),
+        created_by: f.created_by.clone(),
+        created_ms: f.created_ms,
+    }
+}
+
+fn chunk_figure(
+    info: pb::FigureInfo,
+    data: &Bytes,
+    chunk_bytes: usize,
+) -> Vec<Result<pb::FigureChunk, Status>> {
+    let chunk_bytes = chunk_bytes.max(1);
+    let mut out = Vec::with_capacity(data.len() / chunk_bytes + 1);
+    let mut info = Some(info);
+    let mut offset = 0;
+    loop {
+        let end = (offset + chunk_bytes).min(data.len());
+        out.push(Ok(pb::FigureChunk {
+            info: info.take(),
+            data: data.slice(offset..end),
+        }));
+        offset = end;
+        if offset >= data.len() {
+            return out;
+        }
+    }
+}
+
 /// The op kind of canonical op bytes (`{"op":"add_asset",...}`), in
 /// `PascalCase` as the API reports it. Bounded by the op size (64 KiB).
 fn op_kind(bytes: &[u8]) -> String {
@@ -252,6 +290,7 @@ type BoxStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
     type OpenProjectStream = BoxStream<pb::OpenProjectChunk>;
     type GetBaselineStream = BoxStream<pb::OpenProjectChunk>;
+    type GetFigureStream = BoxStream<pb::FigureChunk>;
 
     async fn get_server_info(
         &self,
@@ -774,6 +813,122 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             self.registry.config().chunk_bytes,
         );
         Ok(Response::new(Box::pin(tokio_stream::iter(items))))
+    }
+
+    async fn put_figure(
+        &self,
+        request: Request<pb::PutFigureRequest>,
+    ) -> Result<Response<pb::FigureInfo>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.into_inner();
+        let id = project_id(&req.project_id)?;
+        let tok = token(&req.lock_token)?;
+        let max_bytes = self.registry.config().max_figure_bytes;
+        let mut total = 0usize;
+        for chunk in &req.chunks {
+            total = total.saturating_add(chunk.len());
+            if total > max_bytes {
+                return Err(ServerError::QuotaExceeded(format!(
+                    "figure exceeds maximum size of {max_bytes} bytes"
+                ))
+                .into());
+            }
+        }
+        let mut raw = Vec::with_capacity(total);
+        for chunk in &req.chunks {
+            raw.extend_from_slice(chunk);
+        }
+        let meta = self
+            .registry
+            .put_figure(
+                id,
+                who,
+                tok,
+                &req.caption,
+                &req.target,
+                &req.media_type,
+                &raw,
+            )
+            .await?;
+        Ok(Response::new(figure_info(&meta)))
+    }
+
+    async fn list_figures(
+        &self,
+        request: Request<pb::ListFiguresRequest>,
+    ) -> Result<Response<pb::ListFiguresResponse>, Status> {
+        Principal::of(&request)?;
+        let id = project_id(&request.get_ref().project_id)?;
+        let list = self
+            .registry
+            .store()
+            .list_figures(id)
+            .await
+            .map_err(|e| missing(e, id))?;
+        Ok(Response::new(pb::ListFiguresResponse {
+            figures: list.iter().map(figure_info).collect(),
+        }))
+    }
+
+    async fn get_figure(
+        &self,
+        request: Request<pb::GetFigureRequest>,
+    ) -> Result<Response<Self::GetFigureStream>, Status> {
+        Principal::of(&request)?;
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let figure_id: uuid::Uuid = req
+            .figure_id
+            .parse()
+            .map_err(|_| ServerError::InvalidRequest("figure id"))?;
+        let (meta, bytes) = self
+            .registry
+            .store()
+            .load_figure(id, figure_id)
+            .await
+            .map_err(|e| missing(e, id))?
+            .ok_or(ServerError::InvalidRequest("unknown figure"))?;
+        let items = chunk_figure(
+            figure_info(&meta),
+            &Bytes::from(bytes),
+            self.registry.config().chunk_bytes,
+        );
+        Ok(Response::new(Box::pin(tokio_stream::iter(items))))
+    }
+
+    async fn update_figure(
+        &self,
+        request: Request<pb::UpdateFigureRequest>,
+    ) -> Result<Response<pb::FigureInfo>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let tok = token(&req.lock_token)?;
+        let figure_id: uuid::Uuid = req
+            .figure_id
+            .parse()
+            .map_err(|_| ServerError::InvalidRequest("figure id"))?;
+        let meta = self
+            .registry
+            .update_figure(id, who, tok, figure_id, &req.caption, &req.target)
+            .await?;
+        Ok(Response::new(figure_info(&meta)))
+    }
+
+    async fn delete_figure(
+        &self,
+        request: Request<pb::DeleteFigureRequest>,
+    ) -> Result<Response<pb::DeleteFigureResponse>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        let tok = token(&req.lock_token)?;
+        let figure_id: uuid::Uuid = req
+            .figure_id
+            .parse()
+            .map_err(|_| ServerError::InvalidRequest("figure id"))?;
+        self.registry.delete_figure(id, who, tok, figure_id).await?;
+        Ok(Response::new(pb::DeleteFigureResponse {}))
     }
 
     async fn rename_project(

@@ -77,6 +77,9 @@ pub enum ServerError {
     /// The project's queue or the server's project table is full.
     #[error("server is busy")]
     Busy,
+    /// A per-project figure quota (count or total bytes) was reached.
+    #[error("project figure limit reached: {0}")]
+    QuotaExceeded(String),
     /// Storage failed or returned data the server cannot trust.
     #[error("storage failure")]
     Store(#[from] StoreFault),
@@ -108,6 +111,7 @@ impl ServerError {
             ServerError::LicenseExpired => "license_expired",
             ServerError::LicenseSeats => "license_seats",
             ServerError::Busy => "busy",
+            ServerError::QuotaExceeded(_) => "quota_exceeded",
             ServerError::Store(_) => "storage",
             ServerError::Unloaded => "unloaded",
             ServerError::Internal => "internal",
@@ -128,7 +132,9 @@ impl ServerError {
             | ServerError::LockInvalid
             | ServerError::StaleBase { .. }
             | ServerError::LicenseExpired => Code::FailedPrecondition,
-            ServerError::Busy | ServerError::LicenseSeats => Code::ResourceExhausted,
+            ServerError::Busy | ServerError::LicenseSeats | ServerError::QuotaExceeded(_) => {
+                Code::ResourceExhausted
+            }
             ServerError::Store(_) | ServerError::Unloaded => Code::Unavailable,
             ServerError::Internal => Code::Internal,
         }

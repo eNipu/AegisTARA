@@ -6,7 +6,8 @@ use std::sync::Mutex;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 use super::{
-    BaselineMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
+    BaselineMeta, FigureMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp,
+    StoredSnapshot,
 };
 use crate::ids::ProjectId;
 
@@ -21,6 +22,8 @@ struct Entry {
     head: Hash,
     /// Oldest first.
     baselines: Vec<(BaselineMeta, Vec<u8>)>,
+    /// Oldest first.
+    figures: Vec<(FigureMeta, Vec<u8>)>,
 }
 
 /// A store that keeps everything in process memory.
@@ -74,6 +77,7 @@ impl ProjectStore for MemoryStore {
                     links: Vec::new(),
                     head: genesis(meta.id),
                     baselines: Vec::new(),
+                    figures: Vec::new(),
                 },
             );
             Ok(())
@@ -217,6 +221,83 @@ impl ProjectStore for MemoryStore {
             m.get(&project)
                 .and_then(|e| e.baselines.iter().find(|(b, _)| b.id == id).cloned())
         }))
+    }
+
+    async fn put_figure(
+        &self,
+        meta: &FigureMeta,
+        data: &[u8],
+        max_count: usize,
+        max_total_bytes: u64,
+    ) -> Result<(), StoreFault> {
+        self.with(|m| {
+            if m.values()
+                .any(|e| e.figures.iter().any(|(f, _)| f.id == meta.id))
+            {
+                return Err(StoreFault::Exists);
+            }
+            let entry = m.get_mut(&meta.project).ok_or(StoreFault::Missing)?;
+            if entry.figures.len() >= max_count {
+                return Err(StoreFault::QuotaExceeded(format!(
+                    "project already has {} figures (limit {max_count})",
+                    entry.figures.len()
+                )));
+            }
+            let used_bytes: u64 = entry.figures.iter().map(|(f, _)| f.byte_len).sum();
+            let new_total = used_bytes.saturating_add(meta.byte_len);
+            if new_total > max_total_bytes {
+                return Err(StoreFault::QuotaExceeded(format!(
+                    "project figure bytes ({new_total}) would exceed limit ({max_total_bytes})"
+                )));
+            }
+            entry.figures.push((meta.clone(), data.to_vec()));
+            Ok(())
+        })
+    }
+
+    async fn list_figures(&self, project: ProjectId) -> Result<Vec<FigureMeta>, StoreFault> {
+        self.with(|m| {
+            let entry = m.get(&project).ok_or(StoreFault::Missing)?;
+            Ok(entry.figures.iter().map(|(f, _)| f.clone()).collect())
+        })
+    }
+
+    async fn load_figure(
+        &self,
+        project: ProjectId,
+        id: uuid::Uuid,
+    ) -> Result<Option<(FigureMeta, Vec<u8>)>, StoreFault> {
+        Ok(self.with(|m| {
+            m.get(&project)
+                .and_then(|e| e.figures.iter().find(|(f, _)| f.id == id).cloned())
+        }))
+    }
+
+    async fn update_figure(
+        &self,
+        project: ProjectId,
+        id: uuid::Uuid,
+        caption: &str,
+        target: &str,
+    ) -> Result<Option<FigureMeta>, StoreFault> {
+        self.with(|m| {
+            let entry = m.get_mut(&project).ok_or(StoreFault::Missing)?;
+            let Some((fig, _)) = entry.figures.iter_mut().find(|(f, _)| f.id == id) else {
+                return Ok(None);
+            };
+            fig.caption = caption.to_owned();
+            fig.target = target.to_owned();
+            Ok(Some(fig.clone()))
+        })
+    }
+
+    async fn delete_figure(&self, project: ProjectId, id: uuid::Uuid) -> Result<bool, StoreFault> {
+        self.with(|m| {
+            let entry = m.get_mut(&project).ok_or(StoreFault::Missing)?;
+            let before = entry.figures.len();
+            entry.figures.retain(|(f, _)| f.id != id);
+            Ok(entry.figures.len() != before)
+        })
     }
 }
 

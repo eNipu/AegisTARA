@@ -17,12 +17,16 @@ use aegis_model::Project;
 use tokio::sync::OnceCell;
 
 use crate::actor::{self, Loaded, ProjectHandle};
+use crate::auth::Principal;
 use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::ids::ProjectId;
 use crate::license::LicenseGate;
 use crate::methodologies::Methodologies;
-use crate::store::{ChainReport, ProjectMeta, ProjectStore, StoreFault};
+use crate::store::{
+    ChainReport, FigureError, FigureMeta, ProjectMeta, ProjectStore, StoreFault,
+    validate_and_sanitize_figure, validate_caption, validate_target,
+};
 
 type Cell = Arc<OnceCell<ProjectHandle>>;
 
@@ -204,6 +208,117 @@ impl<S: ProjectStore> Registry<S> {
         Ok(meta)
     }
 
+    /// Validates, sanitizes (when SVG), and stores a figure attachment for `id`
+    /// (`ARC-01`). Requires the edit lease.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidRequest`], [`ServerError::QuotaExceeded`], lease
+    /// errors, [`ServerError::UnknownProject`], or a storage failure.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn put_figure(
+        &self,
+        id: ProjectId,
+        who: Principal,
+        token: String,
+        caption: &str,
+        target: &str,
+        media_type: &str,
+        raw: &[u8],
+    ) -> Result<FigureMeta, ServerError> {
+        let caption = validate_caption(caption).map_err(figure_error)?;
+        let target = validate_target(target).map_err(figure_error)?;
+        let max_bytes = self.config.max_figure_bytes;
+        let media_owned = media_type.to_owned();
+        let raw_owned = raw.to_vec();
+        let validated = tokio::task::spawn_blocking(move || {
+            validate_and_sanitize_figure(&media_owned, &raw_owned, max_bytes)
+        })
+        .await
+        .map_err(|_| ServerError::Internal)?
+        .map_err(figure_error)?;
+
+        let who_sub = who.subject.to_string();
+        self.with(id, |h| {
+            let (who, token) = (who.clone(), token.clone());
+            async move { h.check_lease(who, token).await }
+        })
+        .await?;
+
+        let meta = FigureMeta {
+            id: uuid::Uuid::now_v7(),
+            project: id,
+            caption,
+            target,
+            media_type: validated.media.as_str().to_owned(),
+            width: validated.width,
+            height: validated.height,
+            byte_len: validated.bytes.len() as u64,
+            sha256: validated.sha256,
+            created_by: who_sub,
+            created_ms: (self.config.wall_clock)(),
+        };
+        self.store
+            .put_figure(
+                &meta,
+                &validated.bytes,
+                self.config.max_figures_per_project,
+                self.config.max_project_figures_bytes,
+            )
+            .await
+            .map_err(|e| missing(e, id))?;
+        Ok(meta)
+    }
+
+    /// Updates a figure's caption and optional element target (`ARC-01`).
+    /// Requires the edit lease.
+    pub async fn update_figure(
+        &self,
+        id: ProjectId,
+        who: Principal,
+        token: String,
+        figure_id: uuid::Uuid,
+        caption: &str,
+        target: &str,
+    ) -> Result<FigureMeta, ServerError> {
+        let caption = validate_caption(caption).map_err(figure_error)?;
+        let target = validate_target(target).map_err(figure_error)?;
+        self.with(id, |h| {
+            let (who, token) = (who.clone(), token.clone());
+            async move { h.check_lease(who, token).await }
+        })
+        .await?;
+        self.store
+            .update_figure(id, figure_id, &caption, &target)
+            .await
+            .map_err(|e| missing(e, id))?
+            .ok_or(ServerError::InvalidRequest("unknown figure"))
+    }
+
+    /// Deletes a figure attachment (`ARC-01`). Requires the edit lease.
+    pub async fn delete_figure(
+        &self,
+        id: ProjectId,
+        who: Principal,
+        token: String,
+        figure_id: uuid::Uuid,
+    ) -> Result<(), ServerError> {
+        self.with(id, |h| {
+            let (who, token) = (who.clone(), token.clone());
+            async move { h.check_lease(who, token).await }
+        })
+        .await?;
+        let removed = self
+            .store
+            .delete_figure(id, figure_id)
+            .await
+            .map_err(|e| missing(e, id))?;
+        if !removed {
+            return Err(ServerError::InvalidRequest("unknown figure"));
+        }
+        Ok(())
+    }
+
     /// Lists projects, oldest first, up to `max_projects`.
     ///
     /// # Errors
@@ -363,6 +478,26 @@ impl<S: ProjectStore> Registry<S> {
 pub(crate) fn missing(fault: StoreFault, id: ProjectId) -> ServerError {
     match fault {
         StoreFault::Missing => ServerError::UnknownProject(id),
+        StoreFault::QuotaExceeded(msg) => ServerError::QuotaExceeded(msg),
         other => ServerError::Store(other),
+    }
+}
+
+fn figure_error(err: FigureError) -> ServerError {
+    match err {
+        FigureError::Empty => ServerError::InvalidRequest("figure file is empty"),
+        FigureError::TooLarge { max } => {
+            ServerError::QuotaExceeded(format!("figure exceeds maximum size of {max} bytes"))
+        }
+        FigureError::UnsupportedMediaType => ServerError::InvalidRequest(
+            "figure media type must be image/png, image/jpeg, or image/svg+xml",
+        ),
+        FigureError::InvalidCaption(msg) => ServerError::InvalidRequest(msg),
+        FigureError::InvalidTarget(msg) => ServerError::InvalidRequest(msg),
+        FigureError::InvalidImage(msg) => ServerError::InvalidRequest(msg),
+        FigureError::InvalidDimensions { .. } => {
+            ServerError::InvalidRequest("figure dimensions are out of range")
+        }
+        FigureError::UnsafeSvg(msg) => ServerError::InvalidRequest(msg),
     }
 }

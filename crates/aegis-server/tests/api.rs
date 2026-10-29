@@ -738,3 +738,151 @@ async fn concurrent_requests_for_a_cold_project_share_one_load() {
     assert_eq!(server.registry.loaded_count(), 1);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn figures_lifecycle_chunked_streaming_sanitization_and_quotas() {
+    let config = ServerConfig {
+        chunk_bytes: 16,
+        max_figures_per_project: 2,
+        ..fast_config()
+    };
+    let server = TestServer::start(config).await;
+    let mut alice = server.client("alice").await;
+    let id = create_project(&mut alice, "p").await;
+
+    let svg = br##"<svg viewBox="0 0 320 200"><rect x="0" y="0" width="320" height="200" fill="#0f172a"/><text x="16" y="32" fill="#f8fafc">Gateway</text></svg>"##;
+    let chunks: Vec<bytes::Bytes> = svg.chunks(24).map(bytes::Bytes::copy_from_slice).collect();
+
+    // Without lock -> refused.
+    let err = alice
+        .put_figure(pb::PutFigureRequest {
+            project_id: id.clone(),
+            lock_token: "bad".into(),
+            caption: "Architecture".into(),
+            target: String::new(),
+            media_type: "image/svg+xml".into(),
+            chunks: chunks.clone(),
+        })
+        .await
+        .expect_err("no lease");
+    assert_eq!(err.code(), Code::FailedPrecondition);
+
+    let lease = lock(&mut alice, &id).await;
+
+    // Unsafe SVG -> refused.
+    let bad = alice
+        .put_figure(pb::PutFigureRequest {
+            project_id: id.clone(),
+            lock_token: lease.token.clone(),
+            caption: "Bad".into(),
+            target: String::new(),
+            media_type: "image/svg+xml".into(),
+            chunks: vec![bytes::Bytes::from_static(
+                b"<svg><script>alert(1)</script></svg>",
+            )],
+        })
+        .await
+        .expect_err("unsafe svg");
+    assert_eq!(bad.code(), Code::InvalidArgument);
+
+    // Valid SVG -> stored and sanitized.
+    let info = alice
+        .put_figure(pb::PutFigureRequest {
+            project_id: id.clone(),
+            lock_token: lease.token.clone(),
+            caption: "  System context  ".into(),
+            target: String::new(),
+            media_type: "image/svg+xml".into(),
+            chunks: chunks.clone(),
+        })
+        .await
+        .expect("put figure")
+        .into_inner();
+    assert_eq!(info.caption, "System context");
+    assert_eq!((info.width, info.height), (320, 200));
+
+    // Stream back in 16-byte chunks.
+    let mut stream = alice
+        .get_figure(pb::GetFigureRequest {
+            project_id: id.clone(),
+            figure_id: info.figure_id.clone(),
+        })
+        .await
+        .expect("get figure")
+        .into_inner();
+    let mut first_info = None;
+    let mut data = Vec::new();
+    let mut chunk_count = 0usize;
+    while let Some(chunk) = stream.message().await.expect("chunk") {
+        if chunk_count == 0 {
+            first_info = chunk.info;
+        } else {
+            assert!(chunk.info.is_none());
+        }
+        data.extend_from_slice(&chunk.data);
+        chunk_count += 1;
+    }
+    assert!(chunk_count > 1);
+    assert_eq!(first_info.expect("info").figure_id, info.figure_id);
+    assert_eq!(data.len() as u64, info.byte_len);
+
+    // Update caption and target.
+    let comp_id = aegis_model::ComponentId::new_v7();
+    let updated = alice
+        .update_figure(pb::UpdateFigureRequest {
+            project_id: id.clone(),
+            lock_token: lease.token.clone(),
+            figure_id: info.figure_id.clone(),
+            caption: "Gateway diagram".into(),
+            target: format!("component:{comp_id}"),
+        })
+        .await
+        .expect("update figure")
+        .into_inner();
+    assert_eq!(updated.caption, "Gateway diagram");
+    assert_eq!(updated.target, format!("component:{comp_id}"));
+
+    // Second figure succeeds; third hits max_figures_per_project = 2.
+    alice
+        .put_figure(pb::PutFigureRequest {
+            project_id: id.clone(),
+            lock_token: lease.token.clone(),
+            caption: "Second".into(),
+            target: String::new(),
+            media_type: "image/svg+xml".into(),
+            chunks: chunks.clone(),
+        })
+        .await
+        .expect("second figure");
+    let quota_err = alice
+        .put_figure(pb::PutFigureRequest {
+            project_id: id.clone(),
+            lock_token: lease.token.clone(),
+            caption: "Third".into(),
+            target: String::new(),
+            media_type: "image/svg+xml".into(),
+            chunks,
+        })
+        .await
+        .expect_err("quota exceeded");
+    assert_eq!(quota_err.code(), Code::ResourceExhausted);
+
+    // Delete first figure.
+    alice
+        .delete_figure(pb::DeleteFigureRequest {
+            project_id: id.clone(),
+            lock_token: lease.token.clone(),
+            figure_id: info.figure_id.clone(),
+        })
+        .await
+        .expect("delete figure");
+    let listed = alice
+        .list_figures(pb::ListFiguresRequest {
+            project_id: id.clone(),
+        })
+        .await
+        .expect("list")
+        .into_inner();
+    assert_eq!(listed.figures.len(), 1);
+    server.stop().await;
+}

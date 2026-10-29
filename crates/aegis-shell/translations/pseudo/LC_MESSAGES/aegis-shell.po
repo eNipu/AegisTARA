@@ -933,3 +933,139 @@ msgstr "⟦https://áégís.éxámplé.cóm␣␣⟧"
 msgid "user name"
 msgstr "⟦úsér námé␣␣⟧"
 
+msgid "Add component"
+msgstr "⟦Ádd cómpónént␣␣⟧"
+
+msgid "Add figure"
+msgstr "⟦Ádd fígúré␣␣⟧"
+
+msgid "Add trust boundary"
+msgstr "⟦Ádd trúst bóúndáry␣␣⟧"
+
+msgid "Apply import"
+msgstr "⟦Ápply ímpórt␣␣⟧"
+
+msgid "Caption"
+msgstr "⟦Cáptíón␣␣⟧"
+
+msgid "Component"
+msgstr "⟦Cómpónént␣␣⟧"
+
+msgid "Components"
+msgstr "⟦Cómpónénts␣␣⟧"
+
+msgid "Components, interfaces, data flows, and trust boundaries of the item."
+msgstr "⟦Cómpónénts, íntérfácés, dátá flóws, ánd trúst bóúndáríés óf thé ítém.␣␣⟧"
+
+msgid "Crosses trust boundary"
+msgstr "⟦Cróssés trúst bóúndáry␣␣⟧"
+
+msgid "Data flow"
+msgstr "⟦Dátá flów␣␣⟧"
+
+msgid "Data flow name"
+msgstr "⟦Dátá flów námé␣␣⟧"
+
+msgid "Data flows"
+msgstr "⟦Dátá flóws␣␣⟧"
+
+msgid "Excel import"
+msgstr "⟦Éxcél ímpórt␣␣⟧"
+
+msgid "Figure caption"
+msgstr "⟦Fígúré cáptíón␣␣⟧"
+
+msgid "Figure file path"
+msgstr "⟦Fígúré fílé páth␣␣⟧"
+
+msgid "Figures"
+msgstr "⟦Fígúrés␣␣⟧"
+
+msgid "Format"
+msgstr "⟦Fórmát␣␣⟧"
+
+msgid "From"
+msgstr "⟦Fróm␣␣⟧"
+
+msgid "From component"
+msgstr "⟦Fróm cómpónént␣␣⟧"
+
+msgid "Image file path (PNG, JPEG, or SVG)"
+msgstr "⟦Ímágé fílé páth (PNG, JPÉG, ór SVG)␣␣⟧"
+
+msgid "Interface"
+msgstr "⟦Íntérfácé␣␣⟧"
+
+msgid "Interface name"
+msgstr "⟦Íntérfácé námé␣␣⟧"
+
+msgid "Interfaces"
+msgstr "⟦Íntérfácés␣␣⟧"
+
+msgid "Item definition"
+msgstr "⟦Ítém défínítíón␣␣⟧"
+
+msgid "Members"
+msgstr "⟦Mémbérs␣␣⟧"
+
+msgid "New data flow name"
+msgstr "⟦Néw dátá flów námé␣␣⟧"
+
+msgid "New interface name"
+msgstr "⟦Néw íntérfácé námé␣␣⟧"
+
+msgid "Parent"
+msgstr "⟦Párént␣␣⟧"
+
+msgid "Preview import"
+msgstr "⟦Prévíéw ímpórt␣␣⟧"
+
+msgid "Reason"
+msgstr "⟦Réásón␣␣⟧"
+
+msgid "Remove component"
+msgstr "⟦Rémóvé cómpónént␣␣⟧"
+
+msgid "Remove data flow"
+msgstr "⟦Rémóvé dátá flów␣␣⟧"
+
+msgid "Remove interface"
+msgstr "⟦Rémóvé íntérfácé␣␣⟧"
+
+msgid "Remove trust boundary"
+msgstr "⟦Rémóvé trúst bóúndáry␣␣⟧"
+
+msgid "Row"
+msgstr "⟦Rów␣␣⟧"
+
+msgid "TARA workbook (XLSX)"
+msgstr "⟦TÁRÁ wórkbóók (XLSX)␣␣⟧"
+
+msgid "Target"
+msgstr "⟦Tárgét␣␣⟧"
+
+msgid "To"
+msgstr "⟦Tó␣␣⟧"
+
+msgid "To component"
+msgstr "⟦Tó cómpónént␣␣⟧"
+
+msgid "Trust boundaries"
+msgstr "⟦Trúst bóúndáríés␣␣⟧"
+
+msgid "Trust boundary"
+msgstr "⟦Trúst bóúndáry␣␣⟧"
+
+msgid "Unmapped rows"
+msgstr "⟦Únmáppéd róws␣␣⟧"
+
+msgid "Update"
+msgstr "⟦Úpdáté␣␣⟧"
+
+msgid "Workbook path"
+msgstr "⟦Wórkbóók páth␣␣⟧"
+
+msgid "Workbook path (.xlsx)"
+msgstr "⟦Wórkbóók páth (.xlsx)␣␣⟧"
+
+

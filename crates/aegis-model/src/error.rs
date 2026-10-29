@@ -4,10 +4,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::control::RiskTreatment;
-use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, NodeIdx, ThreatId, TreeId};
+use crate::id::{
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
+    NodeIdx, ThreatId, TreeId, TrustBoundaryId,
+};
 use crate::methodology::{
     CatalogRef, CatalogScheme, CatalogSyntax, FactorLevel, FeasibilityFactor, FeasibilityLevel,
-    ImpactCategory, Level, Property, RiskLevel, ThreatCategory,
+    ImpactCategory, InterfaceKind, Level, Property, RiskLevel, ThreatCategory,
 };
 use crate::store::{Limit, VocabKind};
 
@@ -27,6 +30,14 @@ use crate::store::{Limit, VocabKind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum EntityKind {
+    /// An item definition component ([`Component`](crate::Component)).
+    Component,
+    /// An item definition interface ([`Interface`](crate::Interface)).
+    Interface,
+    /// An item definition data flow ([`DataFlow`](crate::DataFlow)).
+    DataFlow,
+    /// An item definition trust boundary ([`TrustBoundary`](crate::TrustBoundary)).
+    TrustBoundary,
     /// An asset ([`Asset`](crate::Asset)).
     Asset,
     /// A damage scenario ([`DamageScenario`](crate::DamageScenario)).
@@ -60,6 +71,10 @@ impl EntityKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Component => "component",
+            Self::Interface => "interface",
+            Self::DataFlow => "data flow",
+            Self::TrustBoundary => "trust boundary",
             Self::Asset => "asset",
             Self::DamageScenario => "damage scenario",
             Self::ThreatScenario => "threat scenario",
@@ -264,6 +279,18 @@ pub enum ModelError {
     /// A cybersecurity claim with this ID already exists in the project.
     #[error("cybersecurity claim {0} already exists in the project")]
     DuplicateCybersecurityClaim(ClaimId),
+    /// A component with this ID already exists in the project.
+    #[error("component {0} already exists in the project")]
+    DuplicateComponent(ComponentId),
+    /// An interface with this ID already exists in the project.
+    #[error("interface {0} already exists in the project")]
+    DuplicateInterface(InterfaceId),
+    /// A data flow with this ID already exists in the project.
+    #[error("data flow {0} already exists in the project")]
+    DuplicateDataFlow(DataFlowId),
+    /// A trust boundary with this ID already exists in the project.
+    #[error("trust boundary {0} already exists in the project")]
+    DuplicateTrustBoundary(TrustBoundaryId),
     /// No asset with this ID is in the project.
     #[error("asset {0} is not in the project")]
     UnknownAsset(AssetId),
@@ -285,6 +312,18 @@ pub enum ModelError {
     /// No cybersecurity claim with this ID is in the project.
     #[error("cybersecurity claim {0} is not in the project")]
     UnknownCybersecurityClaim(ClaimId),
+    /// No component with this ID is in the project.
+    #[error("component {0} is not in the project")]
+    UnknownComponent(ComponentId),
+    /// No interface with this ID is in the project.
+    #[error("interface {0} is not in the project")]
+    UnknownInterface(InterfaceId),
+    /// No data flow with this ID is in the project.
+    #[error("data flow {0} is not in the project")]
+    UnknownDataFlow(DataFlowId),
+    /// No trust boundary with this ID is in the project.
+    #[error("trust boundary {0} is not in the project")]
+    UnknownTrustBoundary(TrustBoundaryId),
     /// No node with this ID is in the attack tree.
     #[error("node {node} is not in attack tree {tree}")]
     UnknownTreeNode {
@@ -453,6 +492,115 @@ pub enum ModelError {
     /// The catalog scheme index is not in the project's methodology.
     #[error("catalog scheme index {} is not in the methodology", .0.index())]
     UnknownCatalogScheme(CatalogScheme),
+    /// The interface kind index is not in the project's methodology.
+    #[error("interface kind index {} is not in the methodology", .0.index())]
+    UnknownInterfaceKind(InterfaceKind),
+    /// Setting `parent` on `component` would create a cycle in the component hierarchy.
+    #[error("setting component {parent} as parent of {component} would create a cycle")]
+    ComponentCycle {
+        /// The component being reparented.
+        component: ComponentId,
+        /// The proposed parent component.
+        parent: ComponentId,
+    },
+    /// Setting `parent` on `component` would exceed the maximum component nesting depth.
+    #[error("component {component} would exceed maximum hierarchy depth {max}")]
+    ComponentDepthExceeded {
+        /// The component exceeding the limit.
+        component: ComponentId,
+        /// Maximum allowed depth.
+        max: usize,
+    },
+    /// The component cannot be removed while child components still reference it.
+    #[error("component {component} has {children} child component(s)")]
+    ComponentHasChildren {
+        /// The component.
+        component: ComponentId,
+        /// How many child components reference it.
+        children: u32,
+    },
+    /// The component cannot be removed while interfaces still belong to it.
+    #[error("component {component} has {interfaces} interface(s)")]
+    ComponentHasInterfaces {
+        /// The component.
+        component: ComponentId,
+        /// How many interfaces belong to it.
+        interfaces: u32,
+    },
+    /// The component cannot be removed while data flows still reference it.
+    #[error("component {component} is referenced by {flows} data flow(s)")]
+    ComponentInDataFlow {
+        /// The component.
+        component: ComponentId,
+        /// How many data flows reference it.
+        flows: u32,
+    },
+    /// The component cannot be removed while trust boundaries still contain it.
+    #[error("component {component} is in {boundaries} trust boundary(ies)")]
+    ComponentInTrustBoundary {
+        /// The component.
+        component: ComponentId,
+        /// How many trust boundaries contain it.
+        boundaries: u32,
+    },
+    /// The component cannot be removed while assets are still bound to it.
+    #[error("component {component} is bound to {assets} asset(s)")]
+    ComponentHasAssets {
+        /// The component.
+        component: ComponentId,
+        /// How many assets are bound to it.
+        assets: u32,
+    },
+    /// The asset cannot be removed while it is still bound to a component; unbind it first.
+    #[error("asset {asset} is still bound to component {component}")]
+    AssetHasComponent {
+        /// The asset.
+        asset: AssetId,
+        /// The bound component.
+        component: ComponentId,
+    },
+    /// The interface cannot be removed while data flows still reference it.
+    #[error("interface {interface} is referenced by {flows} data flow(s)")]
+    InterfaceInUse {
+        /// The interface.
+        interface: InterfaceId,
+        /// How many data flows reference it.
+        flows: u32,
+    },
+    /// The interface of a data flow does not belong to either its source or destination component.
+    #[error(
+        "interface {interface} of data flow {flow} does not belong to its source or destination component"
+    )]
+    InterfaceNotOnEndpoint {
+        /// The data flow.
+        flow: DataFlowId,
+        /// The interface.
+        interface: InterfaceId,
+    },
+    /// The trust boundary already contains this component, or an op lists it twice.
+    #[error("trust boundary {boundary} already contains component {component}")]
+    DuplicateBoundaryComponent {
+        /// The trust boundary.
+        boundary: TrustBoundaryId,
+        /// The component.
+        component: ComponentId,
+    },
+    /// The trust boundary does not contain this component.
+    #[error("trust boundary {boundary} does not contain component {component}")]
+    BoundaryComponentNotLinked {
+        /// The trust boundary.
+        boundary: TrustBoundaryId,
+        /// The component.
+        component: ComponentId,
+    },
+    /// A trust boundary may contain at most `max` components.
+    #[error("trust boundary {boundary} would contain more than {max} components")]
+    TooManyBoundaryMembers {
+        /// The trust boundary.
+        boundary: TrustBoundaryId,
+        /// The limit.
+        max: usize,
+    },
     /// The catalog ID does not match its scheme's syntax.
     #[error(
         "catalog ID does not match syntax {syntax} of scheme index {}",
@@ -1117,6 +1265,21 @@ pub enum MethodologyError {
         /// The unknown feasibility level key, at most 64 bytes of it (cut like
         /// [`InvalidKey`](Self::InvalidKey)'s).
         feasibility: Arc<str>,
+    },
+    /// More than `max` interface kinds are declared.
+    #[error("more than {max} interface kinds")]
+    TooManyInterfaceKinds {
+        /// The limit.
+        max: usize,
+    },
+    /// Two interface kinds share a key.
+    #[error("interface kind key {0:?} is declared twice")]
+    DuplicateInterfaceKind(Arc<str>),
+    /// More than `max` language translations are declared in a pack.
+    #[error("more than {max} pack translations")]
+    TooManyTranslations {
+        /// The limit.
+        max: usize,
     },
 }
 
