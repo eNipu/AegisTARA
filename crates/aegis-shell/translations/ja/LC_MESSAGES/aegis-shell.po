@@ -933,3 +933,139 @@ msgstr "https://aegis.example.com"
 msgid "user name"
 msgstr "ユーザー名"
 
+msgid "Add component"
+msgstr "コンポーネントを追加"
+
+msgid "Add figure"
+msgstr "図を追加"
+
+msgid "Add trust boundary"
+msgstr "信頼境界を追加"
+
+msgid "Apply import"
+msgstr "インポートを適用"
+
+msgid "Caption"
+msgstr "キャプション"
+
+msgid "Component"
+msgstr "コンポーネント"
+
+msgid "Components"
+msgstr "コンポーネント"
+
+msgid "Components, interfaces, data flows, and trust boundaries of the item."
+msgstr "アイテムのコンポーネント、インターフェース、データフロー、および信頼境界。"
+
+msgid "Crosses trust boundary"
+msgstr "信頼境界をまたぐ"
+
+msgid "Data flow"
+msgstr "データフロー"
+
+msgid "Data flow name"
+msgstr "データフロー名"
+
+msgid "Data flows"
+msgstr "データフロー"
+
+msgid "Excel import"
+msgstr "Excel インポート"
+
+msgid "Figure caption"
+msgstr "図のキャプション"
+
+msgid "Figure file path"
+msgstr "図のファイルパス"
+
+msgid "Figures"
+msgstr "図"
+
+msgid "Format"
+msgstr "形式"
+
+msgid "From"
+msgstr "送信元"
+
+msgid "From component"
+msgstr "送信元コンポーネント"
+
+msgid "Image file path (PNG, JPEG, or SVG)"
+msgstr "画像ファイルパス（PNG、JPEG、または SVG）"
+
+msgid "Interface"
+msgstr "インターフェース"
+
+msgid "Interface name"
+msgstr "インターフェース名"
+
+msgid "Interfaces"
+msgstr "インターフェース"
+
+msgid "Item definition"
+msgstr "アイテム定義"
+
+msgid "Members"
+msgstr "メンバー"
+
+msgid "New data flow name"
+msgstr "新しいデータフロー名"
+
+msgid "New interface name"
+msgstr "新しいインターフェース名"
+
+msgid "Parent"
+msgstr "親コンポーネント"
+
+msgid "Preview import"
+msgstr "インポートをプレビュー"
+
+msgid "Reason"
+msgstr "理由"
+
+msgid "Remove component"
+msgstr "コンポーネントを削除"
+
+msgid "Remove data flow"
+msgstr "データフローを削除"
+
+msgid "Remove interface"
+msgstr "インターフェースを削除"
+
+msgid "Remove trust boundary"
+msgstr "信頼境界を削除"
+
+msgid "Row"
+msgstr "行"
+
+msgid "TARA workbook (XLSX)"
+msgstr "TARA ワークブック (XLSX)"
+
+msgid "Target"
+msgstr "対象"
+
+msgid "To"
+msgstr "送信先"
+
+msgid "To component"
+msgstr "送信先コンポーネント"
+
+msgid "Trust boundaries"
+msgstr "信頼境界"
+
+msgid "Trust boundary"
+msgstr "信頼境界"
+
+msgid "Unmapped rows"
+msgstr "未マッピング行"
+
+msgid "Update"
+msgstr "更新"
+
+msgid "Workbook path"
+msgstr "ワークブックのパス"
+
+msgid "Workbook path (.xlsx)"
+msgstr "ワークブックのパス (.xlsx)"
+
+

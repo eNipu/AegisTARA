@@ -107,6 +107,11 @@ enum Cmd {
         name: String,
         reply: Reply<ProjectMeta>,
     },
+    CheckLease {
+        who: Principal,
+        token: String,
+        reply: Reply<()>,
+    },
     Delete(Reply<()>),
     Shutdown(Reply<()>),
 }
@@ -249,6 +254,16 @@ impl ProjectHandle {
             reply,
         })
         .await
+    }
+
+    /// Verifies that `who` holds the edit lease with `token`.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::NotLocked`] or [`ServerError::LockInvalid`].
+    pub async fn check_lease(&self, who: Principal, token: String) -> Result<(), ServerError> {
+        self.call(|reply| Cmd::CheckLease { who, token, reply })
+            .await
     }
 
     /// Deletes the project from storage and stops the actor. Refused while
@@ -520,6 +535,9 @@ impl<S: ProjectStore> Actor<S> {
                     Err(e) => Err(e),
                 };
                 let _ = reply.send(r);
+            }
+            Cmd::CheckLease { who, token, reply } => {
+                let _ = reply.send(self.lease.require(Instant::now(), &who, &token));
             }
             Cmd::Delete(reply) => {
                 if let Some(holder) = self.lease.holder(Instant::now()) {

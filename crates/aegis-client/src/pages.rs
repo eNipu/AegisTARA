@@ -14,8 +14,8 @@
 
 use aegis_canvas::Tone;
 use aegis_model::{
-    AssetId, ClaimId, ControlId, DamageId, GoalId, LintCode, LintSeverity, Methodology, Project,
-    Provenance, ThreatId, TreeId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, LintCode,
+    LintSeverity, Methodology, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 use crate::commands::TREATMENTS;
@@ -39,6 +39,8 @@ pub struct Vocabulary {
     pub risk_levels: Vec<String>,
     /// Catalog schemes (UN R155 Annex 5 in the built-in pack).
     pub catalog_schemes: Vec<String>,
+    /// Interface kinds for item definition (job 074).
+    pub interface_kinds: Vec<String>,
     /// Treatment decisions, as [`TREATMENTS`] orders them.
     pub treatments: Vec<String>,
     /// Methodology-defined singular/plural labels for the core element types
@@ -61,42 +63,77 @@ pub struct ImpactCategoryView {
 /// The vocabulary of a methodology. Time O(vocabulary size).
 #[must_use]
 pub fn vocabulary(m: &Methodology) -> Vocabulary {
+    vocabulary_for_lang(m, "en")
+}
+
+/// The vocabulary of a methodology localized for `lang` (`"en"`, `"ja"`, etc.;
+/// L10N-07). Falls back to the pack's default labels when `lang` has no pack
+/// translation.
+#[must_use]
+pub fn vocabulary_for_lang(m: &Methodology, lang: &str) -> Vocabulary {
     Vocabulary {
         properties: m
             .properties()
-            .map(|p| m.property_label(p).unwrap_or("?").to_owned())
+            .map(|p| m.property_label_for_lang(p, lang).unwrap_or("?").to_owned())
             .collect(),
         impact_categories: m
             .impact_categories()
             .map(|c| ImpactCategoryView {
-                label: m.impact_category_label(c).unwrap_or("?").to_owned(),
+                label: m
+                    .impact_category_label_for_lang(c, lang)
+                    .unwrap_or("?")
+                    .to_owned(),
                 levels: m
                     .levels(c)
-                    .map(|l| m.level_label(c, l).unwrap_or("?").to_owned())
+                    .map(|l| m.level_label_for_lang(c, l, lang).unwrap_or("?").to_owned())
                     .collect(),
             })
             .collect(),
         threat_categories: m
             .threat_categories()
-            .map(|t| m.threat_category_label(t).unwrap_or("?").to_owned())
+            .map(|t| {
+                m.threat_category_label_for_lang(t, lang)
+                    .unwrap_or("?")
+                    .to_owned()
+            })
             .collect(),
         feasibility: m
             .feasibility_levels()
-            .map(|(_, _, label)| label.to_owned())
+            .map(|(l, _, label)| {
+                m.feasibility_level_label_for_lang(l, lang)
+                    .unwrap_or(label)
+                    .to_owned()
+            })
             .collect(),
         risk_levels: m
             .risk_levels()
-            .map(|(_, _, label)| label.to_owned())
+            .map(|(l, _, label)| {
+                m.risk_level_label_for_lang(l, lang)
+                    .unwrap_or(label)
+                    .to_owned()
+            })
             .collect(),
         catalog_schemes: m
             .catalog_schemes()
-            .map(|s| m.catalog_scheme_label(s).unwrap_or("?").to_owned())
+            .map(|s| {
+                m.catalog_scheme_label_for_lang(s, lang)
+                    .unwrap_or("?")
+                    .to_owned()
+            })
+            .collect(),
+        interface_kinds: m
+            .interface_kinds()
+            .map(|k| {
+                m.interface_kind_label_for_lang(k, lang)
+                    .unwrap_or("?")
+                    .to_owned()
+            })
             .collect(),
         treatments: TREATMENTS
             .iter()
             .map(|t| treatment_label(*t).to_owned())
             .collect(),
-        element_names: m.element_names().clone(),
+        element_names: m.element_names_for_lang(lang).clone(),
         has_attack_potential: m.has_attack_potential(),
     }
 }
@@ -192,6 +229,8 @@ pub struct AssetRow {
     pub id: AssetId,
     /// Name.
     pub name: String,
+    /// Name of the component it is bound to, or empty if unbound.
+    pub component: String,
     /// One flag per methodology property.
     pub properties: Vec<bool>,
     /// Threats that target it.
@@ -207,6 +246,12 @@ pub struct AssetDetail {
     pub id: AssetId,
     /// Name.
     pub name: String,
+    /// Bound component, if any.
+    pub component: Option<ComponentId>,
+    /// Bound component's name, or empty if unbound.
+    pub component_name: String,
+    /// All components in the project that can be bound.
+    pub components: Vec<Choice<ComponentId>>,
     /// One flag per methodology property.
     pub properties: Vec<bool>,
     /// The threats that target it.
@@ -241,6 +286,10 @@ pub fn asset_rows(ws: &Workspace) -> Vec<AssetRow> {
             AssetRow {
                 id,
                 name: a.name().to_owned(),
+                component: a
+                    .component()
+                    .and_then(|c| project.component(c))
+                    .map_or_else(String::new, |c| c.name().to_owned()),
                 properties: m.properties().map(|p| a.properties().contains(p)).collect(),
                 threats,
                 worst,
@@ -259,6 +308,18 @@ pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
     Some(AssetDetail {
         id,
         name: a.name().to_owned(),
+        component: a.component().and_then(|c| project.component_id(c)),
+        component_name: a
+            .component()
+            .and_then(|c| project.component(c))
+            .map_or_else(String::new, |c| c.name().to_owned()),
+        components: project
+            .components()
+            .map(|(_, cid, c)| Choice {
+                id: cid,
+                name: c.name().to_owned(),
+            })
+            .collect(),
         properties: m.properties().map(|p| a.properties().contains(p)).collect(),
         threats: project
             .threat_scenarios()
@@ -272,6 +333,384 @@ pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
             })
             .collect(),
         changed: changed_text(a.provenance()),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Item definition (job 074).
+// ---------------------------------------------------------------------------
+
+/// One component in the item definition table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComponentRow {
+    /// ID.
+    pub id: ComponentId,
+    /// Name.
+    pub name: String,
+    /// Parent component name, or empty if top-level.
+    pub parent: String,
+    /// Number of interfaces on this component.
+    pub interfaces: usize,
+    /// Number of assets bound to this component.
+    pub assets: usize,
+}
+
+/// The selected component.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComponentDetail {
+    /// ID.
+    pub id: ComponentId,
+    /// Name.
+    pub name: String,
+    /// Parent component, if any.
+    pub parent: Option<ComponentId>,
+    /// Candidate parent components (excludes self and descendants).
+    pub parents: Vec<Choice<ComponentId>>,
+    /// Interfaces on this component.
+    pub interfaces: Vec<LinkRow>,
+    /// Assets bound to this component.
+    pub assets: Vec<LinkRow>,
+    /// Provenance text.
+    pub changed: String,
+}
+
+/// One interface in the item definition table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InterfaceRow {
+    /// ID.
+    pub id: InterfaceId,
+    /// Name.
+    pub name: String,
+    /// Owning component name.
+    pub component: String,
+    /// Interface kind label from the methodology.
+    pub kind: String,
+    /// Number of data flows using this interface.
+    pub flows: usize,
+}
+
+/// The selected interface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InterfaceDetail {
+    /// ID.
+    pub id: InterfaceId,
+    /// Name.
+    pub name: String,
+    /// Owning component ID.
+    pub component: ComponentId,
+    /// Owning component name.
+    pub component_name: String,
+    /// Position in the methodology's interface kinds.
+    pub kind: usize,
+    /// Data flows using this interface.
+    pub flows: Vec<LinkRow>,
+    /// Provenance text.
+    pub changed: String,
+}
+
+/// One data flow in the item definition table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataFlowRow {
+    /// ID.
+    pub id: DataFlowId,
+    /// Name.
+    pub name: String,
+    /// Source component name.
+    pub from: String,
+    /// Destination component name.
+    pub to: String,
+    /// Interface over which this flow travels, or empty.
+    pub interface: String,
+    /// Whether this flow crosses at least one trust boundary.
+    pub crosses_boundary: bool,
+}
+
+/// The selected data flow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataFlowDetail {
+    /// ID.
+    pub id: DataFlowId,
+    /// Name.
+    pub name: String,
+    /// Source component ID.
+    pub from: ComponentId,
+    /// Source component label.
+    pub from_label: String,
+    /// Destination component ID.
+    pub to: ComponentId,
+    /// Destination component label.
+    pub to_label: String,
+    /// Interface ID over which the flow travels, if any.
+    pub interface: Option<InterfaceId>,
+    /// Candidate interfaces on `from` or `to`.
+    pub interfaces: Vec<Choice<InterfaceId>>,
+    /// Whether this flow crosses at least one trust boundary.
+    pub crosses_boundary: bool,
+    /// Provenance text.
+    pub changed: String,
+}
+
+/// One trust boundary in the item definition table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrustBoundaryRow {
+    /// ID.
+    pub id: TrustBoundaryId,
+    /// Name.
+    pub name: String,
+    /// Number of member components.
+    pub members: usize,
+}
+
+/// A component as seen from a trust boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrustBoundaryMember {
+    /// Component ID.
+    pub id: ComponentId,
+    /// Component name.
+    pub name: String,
+    /// Whether the component is inside this trust boundary.
+    pub member: bool,
+}
+
+/// The selected trust boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrustBoundaryDetail {
+    /// ID.
+    pub id: TrustBoundaryId,
+    /// Name.
+    pub name: String,
+    /// Every component and whether it is a member.
+    pub members: Vec<TrustBoundaryMember>,
+    /// Provenance text.
+    pub changed: String,
+}
+
+fn flow_crosses_boundary(project: &Project, df: &aegis_model::DataFlow) -> bool {
+    let (from_c, to_c) = (df.from(), df.to());
+    project
+        .trust_boundaries()
+        .any(|(_, _, tb)| tb.contains(from_c) != tb.contains(to_c))
+}
+
+/// Every component in arena order.
+#[must_use]
+pub fn component_rows(ws: &Workspace) -> Vec<ComponentRow> {
+    let project = ws.project();
+    project
+        .components()
+        .map(|(idx, id, c)| ComponentRow {
+            id,
+            name: c.name().to_owned(),
+            parent: c
+                .parent()
+                .and_then(|p| project.component(p))
+                .map_or_else(String::new, |p| p.name().to_owned()),
+            interfaces: project
+                .interfaces()
+                .filter(|(_, _, i)| i.component() == idx)
+                .count(),
+            assets: project
+                .assets()
+                .filter(|(_, _, a)| a.component() == Some(idx))
+                .count(),
+        })
+        .collect()
+}
+
+/// The selected component's details.
+#[must_use]
+pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDetail> {
+    let project = ws.project();
+    let m = project.methodology();
+    let idx = project.component_idx(&id)?;
+    let c = project.component(idx)?;
+    let is_descendant_or_self = |mut cand: aegis_model::ComponentIdx| -> bool {
+        for _ in 0..=aegis_model::MAX_COMPONENT_DEPTH {
+            if cand == idx {
+                return true;
+            }
+            let Some(p) = project.component(cand).and_then(|x| x.parent()) else {
+                return false;
+            };
+            cand = p;
+        }
+        true
+    };
+    Some(ComponentDetail {
+        id,
+        name: c.name().to_owned(),
+        parent: c.parent().and_then(|p| project.component_id(p)),
+        parents: project
+            .components()
+            .filter(|(c_idx, _, _)| !is_descendant_or_self(*c_idx))
+            .map(|(_, cid, comp)| Choice {
+                id: cid,
+                name: comp.name().to_owned(),
+            })
+            .collect(),
+        interfaces: project
+            .interfaces()
+            .filter(|(_, _, i)| i.component() == idx)
+            .map(|(_, iid, i)| LinkRow {
+                label: i.name().to_owned(),
+                detail: m.interface_kind_label(i.kind()).unwrap_or("?").to_owned(),
+                target: Selection::Interface(iid),
+            })
+            .collect(),
+        assets: project
+            .assets()
+            .filter(|(_, _, a)| a.component() == Some(idx))
+            .map(|(_, aid, a)| LinkRow {
+                label: a.name().to_owned(),
+                detail: String::new(),
+                target: Selection::Asset(aid),
+            })
+            .collect(),
+        changed: changed_text(c.provenance()),
+    })
+}
+
+/// Every interface in arena order.
+#[must_use]
+pub fn interface_rows(ws: &Workspace) -> Vec<InterfaceRow> {
+    let project = ws.project();
+    let m = project.methodology();
+    project
+        .interfaces()
+        .map(|(idx, id, i)| InterfaceRow {
+            id,
+            name: i.name().to_owned(),
+            component: project
+                .component(i.component())
+                .map_or_else(String::new, |c| c.name().to_owned()),
+            kind: m.interface_kind_label(i.kind()).unwrap_or("?").to_owned(),
+            flows: project
+                .data_flows()
+                .filter(|(_, _, df)| df.interface() == Some(idx))
+                .count(),
+        })
+        .collect()
+}
+
+/// The selected interface's details.
+#[must_use]
+pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDetail> {
+    let project = ws.project();
+    let m = project.methodology();
+    let idx = project.interface_idx(&id)?;
+    let i = project.interface(idx)?;
+    Some(InterfaceDetail {
+        id,
+        name: i.name().to_owned(),
+        component: project.component_id(i.component())?,
+        component_name: project
+            .component(i.component())
+            .map_or_else(String::new, |c| c.name().to_owned()),
+        kind: m.interface_kinds().position(|k| k == i.kind()).unwrap_or(0),
+        flows: project
+            .data_flows()
+            .filter(|(_, _, df)| df.interface() == Some(idx))
+            .map(|(_, df_id, df)| LinkRow {
+                label: df.name().to_owned(),
+                detail: format!(
+                    "{} -> {}",
+                    project.component(df.from()).map_or("?", |c| c.name()),
+                    project.component(df.to()).map_or("?", |c| c.name())
+                ),
+                target: Selection::DataFlow(df_id),
+            })
+            .collect(),
+        changed: changed_text(i.provenance()),
+    })
+}
+
+/// Every data flow in arena order.
+#[must_use]
+pub fn data_flow_rows(ws: &Workspace) -> Vec<DataFlowRow> {
+    let project = ws.project();
+    project
+        .data_flows()
+        .map(|(_, id, df)| DataFlowRow {
+            id,
+            name: df.name().to_owned(),
+            from: project
+                .component(df.from())
+                .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+            to: project
+                .component(df.to())
+                .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+            interface: df
+                .interface()
+                .and_then(|i| project.interface(i))
+                .map_or_else(String::new, |i| i.name().to_owned()),
+            crosses_boundary: flow_crosses_boundary(project, df),
+        })
+        .collect()
+}
+
+/// The selected data flow's details.
+#[must_use]
+pub fn data_flow_detail(ws: &Workspace, id: DataFlowId) -> Option<DataFlowDetail> {
+    let project = ws.project();
+    let idx = project.data_flow_idx(&id)?;
+    let df = project.data_flow(idx)?;
+    Some(DataFlowDetail {
+        id,
+        name: df.name().to_owned(),
+        from: project.component_id(df.from())?,
+        from_label: project
+            .component(df.from())
+            .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+        to: project.component_id(df.to())?,
+        to_label: project
+            .component(df.to())
+            .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+        interface: df.interface().and_then(|i| project.interface_id(i)),
+        interfaces: project
+            .interfaces()
+            .filter(|(_, _, i)| i.component() == df.from() || i.component() == df.to())
+            .map(|(_, iid, i)| Choice {
+                id: iid,
+                name: i.name().to_owned(),
+            })
+            .collect(),
+        crosses_boundary: flow_crosses_boundary(project, df),
+        changed: changed_text(df.provenance()),
+    })
+}
+
+/// Every trust boundary in arena order.
+#[must_use]
+pub fn trust_boundary_rows(ws: &Workspace) -> Vec<TrustBoundaryRow> {
+    let project = ws.project();
+    project
+        .trust_boundaries()
+        .map(|(_, id, tb)| TrustBoundaryRow {
+            id,
+            name: tb.name().to_owned(),
+            members: tb.components().len(),
+        })
+        .collect()
+}
+
+/// The selected trust boundary's details.
+#[must_use]
+pub fn trust_boundary_detail(ws: &Workspace, id: TrustBoundaryId) -> Option<TrustBoundaryDetail> {
+    let project = ws.project();
+    let idx = project.trust_boundary_idx(&id)?;
+    let tb = project.trust_boundary(idx)?;
+    Some(TrustBoundaryDetail {
+        id,
+        name: tb.name().to_owned(),
+        members: project
+            .components()
+            .map(|(c_idx, cid, c)| TrustBoundaryMember {
+                id: cid,
+                name: c.name().to_owned(),
+                member: tb.contains(c_idx),
+            })
+            .collect(),
+        changed: changed_text(tb.provenance()),
     })
 }
 
@@ -1003,6 +1442,22 @@ pub struct ProblemRow {
 
 fn named(project: &Project, s: Selection) -> &str {
     match s {
+        Selection::Component(id) => project
+            .component_idx(&id)
+            .and_then(|i| project.component(i))
+            .map(aegis_model::Component::name),
+        Selection::Interface(id) => project
+            .interface_idx(&id)
+            .and_then(|i| project.interface(i))
+            .map(aegis_model::Interface::name),
+        Selection::DataFlow(id) => project
+            .data_flow_idx(&id)
+            .and_then(|i| project.data_flow(i))
+            .map(aegis_model::DataFlow::name),
+        Selection::TrustBoundary(id) => project
+            .trust_boundary_idx(&id)
+            .and_then(|i| project.trust_boundary(i))
+            .map(aegis_model::TrustBoundary::name),
         Selection::Asset(id) => project
             .asset_idx(&id)
             .and_then(|i| project.asset(i))
@@ -1320,6 +1775,31 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::AssetUnbound { asset } => {
+            let s = Selection::Asset(asset);
+            (
+                format!(
+                    "{} {} is not bound to any {}.",
+                    m.element_names().asset.singular,
+                    q(s),
+                    m.element_names().component.singular.to_lowercase()
+                ),
+                s,
+            )
+        }
+        L::BoundaryCrossingDataFlowWithoutThreat { flow } => {
+            let s = Selection::DataFlow(flow);
+            (
+                format!(
+                    "{} {} crosses a {} but has no {}.",
+                    m.element_names().data_flow.singular,
+                    q(s),
+                    m.element_names().trust_boundary.singular.to_lowercase(),
+                    m.element_names().threat_scenario.singular.to_lowercase()
+                ),
+                s,
+            )
+        }
     };
     ProblemRow {
         error: code.severity() == LintSeverity::Error,
@@ -1430,22 +1910,33 @@ pub fn overview(ws: &Workspace) -> Overview {
         .count();
     let mut top = risk_rows(ws);
     top.truncate(5);
+    let mut counts = vec![
+        c(&names.asset.plural, p.asset_count()),
+        c(&names.damage_scenario.plural, p.damage_scenario_count()),
+        c(&names.threat_scenario.plural, p.threat_scenario_count()),
+        c(&names.attack_tree.plural, p.attack_tree_count()),
+        c(&names.security_control.plural, p.security_control_count()),
+        c(
+            &names.cybersecurity_goal.plural,
+            p.cybersecurity_goal_count(),
+        ),
+        c(
+            &names.cybersecurity_claim.plural,
+            p.cybersecurity_claim_count(),
+        ),
+    ];
+    if p.component_count() > 0
+        || p.interface_count() > 0
+        || p.data_flow_count() > 0
+        || p.trust_boundary_count() > 0
+    {
+        counts.push(c(&names.component.plural, p.component_count()));
+        counts.push(c(&names.interface.plural, p.interface_count()));
+        counts.push(c(&names.data_flow.plural, p.data_flow_count()));
+        counts.push(c(&names.trust_boundary.plural, p.trust_boundary_count()));
+    }
     Overview {
-        counts: vec![
-            c(&names.asset.plural, p.asset_count()),
-            c(&names.damage_scenario.plural, p.damage_scenario_count()),
-            c(&names.threat_scenario.plural, p.threat_scenario_count()),
-            c(&names.attack_tree.plural, p.attack_tree_count()),
-            c(&names.security_control.plural, p.security_control_count()),
-            c(
-                &names.cybersecurity_goal.plural,
-                p.cybersecurity_goal_count(),
-            ),
-            c(
-                &names.cybersecurity_claim.plural,
-                p.cybersecurity_claim_count(),
-            ),
-        ],
+        counts,
         inherent: distribution(ws, false),
         residual: distribution(ws, true),
         errors,
@@ -1459,6 +1950,10 @@ pub fn overview(ws: &Workspace) -> Overview {
 pub fn page_of(s: Selection) -> crate::view::Page {
     use crate::view::Page;
     match s {
+        Selection::Component(_)
+        | Selection::Interface(_)
+        | Selection::DataFlow(_)
+        | Selection::TrustBoundary(_) => Page::Item,
         Selection::Asset(_) => Page::Assets,
         Selection::Damage(_) => Page::Damage,
         Selection::Threat(_) => Page::Threats,
@@ -1471,6 +1966,10 @@ pub fn page_of(s: Selection) -> crate::view::Page {
 /// Applies a selection to the UI state.
 pub fn select(ui: &mut UiState, s: Selection) {
     match s {
+        Selection::Component(id) => ui.selected_component = Some(id),
+        Selection::Interface(id) => ui.selected_interface = Some(id),
+        Selection::DataFlow(id) => ui.selected_data_flow = Some(id),
+        Selection::TrustBoundary(id) => ui.selected_trust_boundary = Some(id),
         Selection::Asset(id) => ui.selected_asset = Some(id),
         Selection::Damage(id) => ui.selected_damage = Some(id),
         Selection::Threat(id) => {
@@ -1560,6 +2059,26 @@ pub fn comparison(
             }
         }};
     }
+    entity!("Component", diff.components(), |p: &Project, id| named(
+        p,
+        Selection::Component(id)
+    )
+    .to_owned());
+    entity!("Interface", diff.interfaces(), |p: &Project, id| named(
+        p,
+        Selection::Interface(id)
+    )
+    .to_owned());
+    entity!("Data flow", diff.data_flows(), |p: &Project, id| named(
+        p,
+        Selection::DataFlow(id)
+    )
+    .to_owned());
+    entity!(
+        "Trust boundary",
+        diff.trust_boundaries(),
+        |p: &Project, id| named(p, Selection::TrustBoundary(id)).to_owned()
+    );
     entity!("Asset", diff.assets(), |p: &Project, id| named(
         p,
         Selection::Asset(id)

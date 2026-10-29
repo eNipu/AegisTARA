@@ -52,8 +52,9 @@ use crate::connection::{Connection, ServerInfo};
 use crate::error::{ClientError, ServerCode};
 use crate::pages;
 use crate::report::{
-    ExportKind, ReportContext, ReportOptions, ReportProfile, report_html_with_options,
-    report_pdf_with_options, report_workbook_xlsx, risk_register_csv, tree_svg,
+    ExportKind, FigureAttachment, ReportContext, ReportOptions, ReportProfile,
+    report_html_with_options, report_pdf_with_options, report_workbook_xlsx_with_figures,
+    risk_register_csv, tree_svg,
 };
 use crate::sample::sample_ops;
 use crate::state::{
@@ -306,6 +307,10 @@ struct Open {
     /// Cached problem count for the sidebar badge, invalidated on workspace
     /// edits/undo/redo.
     cached_lint_count: Option<usize>,
+    /// Figures attached to the project or its elements (job 073).
+    figures: Vec<FigureAttachment>,
+    /// Current dry-run preview of an Excel TARA import (job 080).
+    excel_preview: Option<crate::excel::ExcelPreview>,
 }
 
 /// The result of loading a project: everything the actor needs to start.
@@ -369,6 +374,19 @@ enum Internal<P> {
     History {
         epoch: u64,
         result: Result<Vec<pb::HistoryEntry>, ClientError>,
+    },
+    Figures {
+        epoch: u64,
+        result: Result<Vec<FigureAttachment>, ClientError>,
+    },
+    FigureSaved {
+        epoch: u64,
+        result: Result<FigureAttachment, ClientError>,
+    },
+    FigureDeleted {
+        epoch: u64,
+        figure_id: String,
+        result: Result<(), ClientError>,
     },
     Exported {
         epoch: u64,
@@ -735,6 +753,65 @@ impl<P: CredentialProvider> Actor<P> {
                 Ok(_) => {}
                 Err(e) => self.on_failure("Could not load the history", &e),
             },
+            Internal::Figures { epoch, result } => match result {
+                Ok(figs) if current(&self.open, epoch) => {
+                    if let Some(open) = self.open.as_mut() {
+                        open.figures = figs;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::debug!(error = %e, "could not load figures"),
+            },
+            Internal::FigureSaved { epoch, result } => match result {
+                Ok(fig) => {
+                    self.notice(
+                        Severity::Info,
+                        format!(
+                            "Saved figure \"{}\".",
+                            if fig.caption.is_empty() {
+                                &fig.figure_id
+                            } else {
+                                &fig.caption
+                            }
+                        ),
+                    );
+                    if current(&self.open, epoch)
+                        && let Some(open) = self.open.as_mut()
+                    {
+                        if let Some(existing) = open
+                            .figures
+                            .iter_mut()
+                            .find(|f| f.figure_id == fig.figure_id)
+                        {
+                            existing.caption = fig.caption;
+                            existing.target = fig.target;
+                            existing.updated_by = fig.updated_by;
+                            existing.updated_at_ms = fig.updated_at_ms;
+                            if !fig.data.is_empty() {
+                                existing.data = fig.data;
+                            }
+                        } else {
+                            open.figures.push(fig);
+                        }
+                    }
+                }
+                Err(e) => self.on_failure("Could not save the figure", &e),
+            },
+            Internal::FigureDeleted {
+                epoch,
+                figure_id,
+                result,
+            } => match result {
+                Ok(()) => {
+                    self.notice(Severity::Info, "The figure was deleted.");
+                    if current(&self.open, epoch)
+                        && let Some(open) = self.open.as_mut()
+                    {
+                        open.figures.retain(|f| f.figure_id != figure_id);
+                    }
+                }
+                Err(e) => self.on_failure("Could not delete the figure", &e),
+            },
             Internal::Exported { epoch, result } => match result {
                 Ok(path) => {
                     self.notice(Severity::Info, format!("Saved {path}"));
@@ -980,6 +1057,29 @@ impl<P: CredentialProvider> Actor<P> {
         });
     }
 
+    fn load_figures(&self) {
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let (epoch, id) = (open.epoch, open.id.clone());
+        self.spawn(move |conn| async move {
+            let result = async {
+                let infos = conn.list_figures(&id).await?;
+                let mut out = Vec::with_capacity(infos.len());
+                for info in infos {
+                    let data = match conn.get_figure(&id, &info.figure_id).await {
+                        Ok((_, bytes)) => bytes,
+                        Err(_) => Vec::new(),
+                    };
+                    out.push(figure_from_pb(info, data));
+                }
+                Ok(out)
+            }
+            .await;
+            Internal::Figures { epoch, result }
+        });
+    }
+
     fn load_users(&self) {
         if self
             .me
@@ -1156,10 +1256,13 @@ impl<P: CredentialProvider> Actor<P> {
     /// Builds the export on the blocking pool from a copy of the project
     /// (O(project size), R5), writes it, and records it on the server with
     /// the report profile in the audit event (RPT-03).
-    fn export(&mut self, kind: ExportKind, path: std::path::PathBuf, profile: ReportProfile) {
+    fn export(&mut self, kind: ExportKind, path: std::path::PathBuf, mut profile: ReportProfile) {
         let Some(open) = self.open.as_ref() else {
             return;
         };
+        if profile.figures.is_empty() {
+            profile.figures = open.figures.clone();
+        }
         let ctx = ReportContext {
             project: open.entry.name.clone(),
             user: self
@@ -1197,7 +1300,10 @@ impl<P: CredentialProvider> Actor<P> {
                     ExportKind::ReportPdf => {
                         Some(report_pdf_with_options(&ws, &ctx, &opts).map_err(|e| e.to_string())?)
                     }
-                    ExportKind::ReportXlsx => Some(report_workbook_xlsx(&ws)),
+                    ExportKind::ReportXlsx => Some(report_workbook_xlsx_with_figures(
+                        &ws,
+                        &opts.profile.figures,
+                    )),
                     ExportKind::RiskRegister => Some(risk_register_csv(&ws, &ctx).into_bytes()),
                     ExportKind::TreeSvg => tree
                         .and_then(|t| tree_svg(&ws, t, residual))
@@ -1334,6 +1440,8 @@ impl<P: CredentialProvider> Actor<P> {
                     risks_again: false,
                     cached_scene: None,
                     cached_lint_count: None,
+                    figures: Vec::new(),
+                    excel_preview: None,
                 });
             }
         }
@@ -1342,6 +1450,7 @@ impl<P: CredentialProvider> Actor<P> {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         self.check = Some(interval);
         self.request_risks();
+        self.load_figures();
     }
 
     fn close_project(&mut self, release: bool) {
@@ -1975,6 +2084,76 @@ impl<P: CredentialProvider> Actor<P> {
             }
             Command::CompareWith(Some(baseline)) => self.compare_with(baseline),
             Command::LoadHistory => self.load_history(),
+            Command::LoadFigures => self.load_figures(),
+            Command::PutFigure {
+                caption,
+                target,
+                data,
+            } => {
+                let Some(open) = self.open.as_ref() else {
+                    return;
+                };
+                let Some(lease) = open.lease.as_ref() else {
+                    self.notice(Severity::Info, "Press Edit to take the edit lock first.");
+                    return;
+                };
+                let (epoch, id, token) = (open.epoch, open.id.clone(), lease.token.clone());
+                self.spawn(move |conn| async move {
+                    let result = conn
+                        .put_figure(&id, &token, &caption, &target, data.clone())
+                        .await
+                        .map(|info| figure_from_pb(info, data));
+                    Internal::FigureSaved { epoch, result }
+                });
+            }
+            Command::UpdateFigure {
+                figure_id,
+                caption,
+                target,
+            } => {
+                let Some(open) = self.open.as_ref() else {
+                    return;
+                };
+                let Some(lease) = open.lease.as_ref() else {
+                    self.notice(Severity::Info, "Press Edit to take the edit lock first.");
+                    return;
+                };
+                let (epoch, id, token) = (open.epoch, open.id.clone(), lease.token.clone());
+                self.spawn(move |conn| async move {
+                    let result = conn
+                        .update_figure(&id, &token, &figure_id, &caption, &target)
+                        .await
+                        .map(|info| figure_from_pb(info, Vec::new()));
+                    Internal::FigureSaved { epoch, result }
+                });
+            }
+            Command::DeleteFigure { figure_id } => {
+                let Some(open) = self.open.as_ref() else {
+                    return;
+                };
+                let Some(lease) = open.lease.as_ref() else {
+                    self.notice(Severity::Info, "Press Edit to take the edit lock first.");
+                    return;
+                };
+                let (epoch, id, token) = (open.epoch, open.id.clone(), lease.token.clone());
+                self.spawn(move |conn| async move {
+                    let result = conn.delete_figure(&id, &token, &figure_id).await;
+                    Internal::FigureDeleted {
+                        epoch,
+                        figure_id,
+                        result,
+                    }
+                });
+            }
+            Command::PreviewExcelImport { bytes, mapping } => {
+                self.preview_excel_import(&bytes, &mapping);
+            }
+            Command::ApplyExcelImport => self.apply_excel_import(),
+            Command::ClearExcelPreview => {
+                if let Some(open) = self.open.as_mut() {
+                    open.excel_preview = None;
+                }
+            }
             Command::Export {
                 kind,
                 path,
@@ -2188,6 +2367,73 @@ impl<P: CredentialProvider> Actor<P> {
         };
         if open.ws.reject_all_suggestions() > 0 {
             open.cached_scene = None;
+        }
+    }
+
+    fn preview_excel_import(&mut self, bytes: &[u8], mapping: &crate::excel::ExcelMapping) {
+        let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        let wb = match crate::excel::read_workbook(bytes) {
+            Ok(wb) => wb,
+            Err(e) => {
+                self.notice(
+                    Severity::Warning,
+                    format!("Could not read the Excel workbook: {e}."),
+                );
+                return;
+            }
+        };
+        match crate::excel::preview_import(open.ws.project(), &wb, mapping, &user, now) {
+            Ok(preview) => {
+                let summary = format!(
+                    "Excel dry-run preview ({}): {}",
+                    preview.active_sheet,
+                    preview.summary(),
+                );
+                open.excel_preview = Some(preview);
+                self.notice(Severity::Info, summary);
+            }
+            Err(e) => {
+                self.notice(
+                    Severity::Warning,
+                    format!("Excel import preview failed: {e}."),
+                );
+            }
+        }
+    }
+
+    fn apply_excel_import(&mut self) {
+        if !self.can_edit() {
+            return;
+        }
+        let ops = {
+            let Some(open) = self.open.as_mut() else {
+                return;
+            };
+            let Some(preview) = open.excel_preview.take() else {
+                self.notice(
+                    Severity::Info,
+                    "Preview an Excel workbook first before applying the import.",
+                );
+                return;
+            };
+            preview.ops
+        };
+        if ops.is_empty() {
+            self.notice(
+                Severity::Info,
+                "The Excel preview has no new elements to import.",
+            );
+            return;
+        }
+        let count = ops.len();
+        if self.apply_edit(|_| Ok(ops), Origin::Edit) {
+            self.notice(
+                Severity::Info,
+                format!("Imported {count} change(s) from the Excel workbook."),
+            );
         }
     }
 
@@ -2431,6 +2677,8 @@ impl<P: CredentialProvider> Actor<P> {
                 nav_counts: nav_counts(open),
                 suggestions,
                 selected_suggestion,
+                figures: open.figures.clone(),
+                excel_preview: open.excel_preview.clone(),
                 entry: open.entry.clone(),
                 mode: open.mode,
                 lock_holder: open.lock_holder.clone(),
@@ -2491,6 +2739,24 @@ fn page_data(open: &Open) -> PageData {
     let mut d = PageData::default();
     match ui.page {
         Page::Overview => d.overview = Some(pages::overview(ws)),
+        Page::Item => {
+            d.components = pages::component_rows(ws);
+            d.component = ui
+                .selected_component
+                .and_then(|id| pages::component_detail(ws, id));
+            d.interfaces = pages::interface_rows(ws);
+            d.interface = ui
+                .selected_interface
+                .and_then(|id| pages::interface_detail(ws, id));
+            d.data_flows = pages::data_flow_rows(ws);
+            d.data_flow = ui
+                .selected_data_flow
+                .and_then(|id| pages::data_flow_detail(ws, id));
+            d.trust_boundaries = pages::trust_boundary_rows(ws);
+            d.trust_boundary = ui
+                .selected_trust_boundary
+                .and_then(|id| pages::trust_boundary_detail(ws, id));
+        }
         Page::Assets => {
             d.assets = pages::asset_rows(ws);
             d.asset = ui.selected_asset.and_then(|id| pages::asset_detail(ws, id));
@@ -2544,6 +2810,13 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
     Page::ALL
         .iter()
         .map(|page| match page {
+            Page::Item => Some(
+                p.component_count()
+                    + p.interface_count()
+                    + p.data_flow_count()
+                    + p.trust_boundary_count(),
+            )
+            .filter(|n| *n > 0),
             Page::Assets => Some(p.asset_count()),
             Page::Damage => Some(p.damage_scenario_count()),
             Page::Threats | Page::Risks => Some(p.threat_scenario_count()),
@@ -2555,6 +2828,21 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
             _ => None,
         })
         .collect()
+}
+
+fn figure_from_pb(info: pb::FigureInfo, data: Vec<u8>) -> FigureAttachment {
+    FigureAttachment {
+        figure_id: info.figure_id,
+        media_type: info.media_type,
+        caption: info.caption,
+        target: info.target,
+        width_px: info.width,
+        height_px: info.height,
+        size_bytes: info.byte_len,
+        data,
+        updated_by: info.created_by,
+        updated_at_ms: i64::try_from(info.created_ms).unwrap_or(0),
+    }
 }
 
 /// `AddAsset` as "Add asset".

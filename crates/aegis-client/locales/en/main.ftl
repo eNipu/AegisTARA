@@ -10,6 +10,8 @@ descriptions = Descriptions
 
 # Section headings (sections 2-5 and 7-8 use pack-defined element names).
 section-executive-summary = 1. Executive summary
+section-item-definition = Item definition
+section-figures = Figures
 section-risks = 6. Risk register and treatment
 section-problems = 9. Open problems
 section-comparison = Comparison with baseline
@@ -66,6 +68,21 @@ tree-omitted = { $count } more detail panels are not drawn. The outline below li
 sheet-overview = Overview
 sheet-risk-register = Risk register
 sheet-problems = Problems
+sheet-figures = Figures
+
+# Item definition and figures.
+component = Component
+parent = Parent
+kind = Kind
+from-interface = From interface
+to-interface = To interface
+members = Members
+figures = Figures
+caption = Caption
+target = Target
+format = Format
+dimensions = Dimensions
+size-bytes = Size (bytes)
 
 # Report builder (profile) wording.
 report-language-en = English

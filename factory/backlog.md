@@ -73,9 +73,9 @@ The id at the end of each line is the planned job id; `docs/requirements.md` nam
 - [x] One report document model: move the HTML report onto `ReportDoc` so HTML and PDF cannot drift, with table of contents and anchors in HTML (RPT-01; `brainstorm-logs-and-reports.md` section 3) (070-report-doc-model)
 - [x] Report builder: pick sections and filters (risk level, asset, component, baseline), language, logo, document ID, revision history, approvers and a classification mark on every page; save the choice as a profile per project or company; record the profile in the export audit event (RPT-02 to RPT-04) (071-report-builder)
 - [x] XLSX export with a permissive writer after a D5 check: a risk register sheet and a full workbook with one sheet per element type, formula injection guarded as for CSV (RPT-05) (072-xlsx-export)
-- [ ] Figures: attach PNG, JPEG and sanitized static SVG images with captions to the project or an element, stored by the server (in the project folder in standalone mode) with per-file and per-project caps, streamed in chunks, shown in the app and placed in reports (ARC-01, RPT-06) (073-figures)
-- [ ] Item definition model (D15): components, interfaces, data flows and trust boundaries with pack-defined kinds, assets bound to components, ops, store, diff, lint rules (unbound asset, boundary-crossing flow with no threat), an Item definition page and a report section (ARC-02) (074-item-definition)
-- [ ] Excel TARA import: read an XLSX workbook, map columns to elements in a step with a dry-run preview and a list of rows that did not map, apply as one batch with provenance `Import` (INT-02) (080-excel-import)
+- [x] Figures: attach PNG, JPEG and sanitized static SVG images with captions to the project or an element, stored by the server (in the project folder in standalone mode) with per-file and per-project caps, streamed in chunks, shown in the app and placed in reports (ARC-01, RPT-06) (073-figures)
+- [x] Item definition model (D15): components, interfaces, data flows and trust boundaries with pack-defined kinds, assets bound to components, ops, store, diff, lint rules (unbound asset, boundary-crossing flow with no threat), an Item definition page and a report section (ARC-02) (074-item-definition)
+- [x] Excel TARA import: read an XLSX workbook, map columns to elements in a step with a dry-run preview and a list of rows that did not map, apply as one batch with provenance `Import` (INT-02) (080-excel-import)
 
 ### Phase 5: client deployments
 

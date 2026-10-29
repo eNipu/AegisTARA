@@ -5,10 +5,13 @@ use std::sync::Arc;
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
 use crate::description::ElementRef;
-use crate::id::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
+use crate::id::{
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
+    ThreatId, TreeId, TrustBoundaryId,
+};
 use crate::methodology::{
-    CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory, Level,
-    ThreatCategory,
+    CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory, InterfaceKind,
+    Level, ThreatCategory,
 };
 use crate::provenance::Provenance;
 use crate::tree::{AttackTree, GateKind, Node};
@@ -569,6 +572,168 @@ pub enum Op {
         /// Provenance of linking or unlinking the cybersecurity claim.
         provenance: Provenance,
     },
+    /// Adds a component to the item definition.
+    AddComponent {
+        /// Unused component ID.
+        id: ComponentId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Optional parent component for hierarchical decomposition.
+        parent: Option<ComponentId>,
+        /// Provenance of the component creation.
+        provenance: Provenance,
+    },
+    /// Renames a component.
+    RenameComponent {
+        /// Existing component.
+        id: ComponentId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Sets, replaces, or clears (`None`) a component's parent.
+    SetComponentParent {
+        /// Existing component.
+        id: ComponentId,
+        /// Existing parent component, or `None` for top-level.
+        parent: Option<ComponentId>,
+        /// Provenance of the parent change.
+        provenance: Provenance,
+    },
+    /// Removes a component that has no child components, no interfaces, no
+    /// data flows, no trust boundary membership, and no bound assets.
+    RemoveComponent {
+        /// Existing component.
+        id: ComponentId,
+    },
+    /// Adds an interface on a component.
+    AddInterface {
+        /// Unused interface ID.
+        id: InterfaceId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Existing component that exposes this interface.
+        component: ComponentId,
+        /// Methodology-defined interface kind.
+        kind: InterfaceKind,
+        /// Provenance of the interface creation.
+        provenance: Provenance,
+    },
+    /// Renames an interface.
+    RenameInterface {
+        /// Existing interface.
+        id: InterfaceId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Changes an interface's methodology-defined kind.
+    SetInterfaceKind {
+        /// Existing interface.
+        id: InterfaceId,
+        /// New interface kind.
+        kind: InterfaceKind,
+        /// Provenance of the kind change.
+        provenance: Provenance,
+    },
+    /// Removes an interface that no data flow references.
+    RemoveInterface {
+        /// Existing interface.
+        id: InterfaceId,
+    },
+    /// Adds a directed data flow between two components.
+    AddDataFlow {
+        /// Unused data flow ID.
+        id: DataFlowId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Source component.
+        from: ComponentId,
+        /// Destination component.
+        to: ComponentId,
+        /// Optional interface on `from` or `to` over which the flow travels.
+        interface: Option<InterfaceId>,
+        /// Provenance of the data flow creation.
+        provenance: Provenance,
+    },
+    /// Renames a data flow.
+    RenameDataFlow {
+        /// Existing data flow.
+        id: DataFlowId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Sets, replaces, or clears (`None`) the interface of a data flow.
+    SetDataFlowInterface {
+        /// Existing data flow.
+        id: DataFlowId,
+        /// Existing interface on `from` or `to`, or `None` to clear.
+        interface: Option<InterfaceId>,
+        /// Provenance of the interface change.
+        provenance: Provenance,
+    },
+    /// Removes a data flow (must have no linked interface).
+    RemoveDataFlow {
+        /// Existing data flow.
+        id: DataFlowId,
+    },
+    /// Adds a trust boundary grouping a set of components.
+    AddTrustBoundary {
+        /// Unused trust boundary ID.
+        id: TrustBoundaryId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Member components, unique, at most 64 (stored sorted by ID).
+        components: Vec<ComponentId>,
+        /// Provenance of the trust boundary creation.
+        provenance: Provenance,
+    },
+    /// Renames a trust boundary.
+    RenameTrustBoundary {
+        /// Existing trust boundary.
+        id: TrustBoundaryId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Adds a component to a trust boundary.
+    AddBoundaryComponent {
+        /// Existing trust boundary.
+        boundary: TrustBoundaryId,
+        /// Existing component not yet in `boundary`.
+        component: ComponentId,
+        /// Provenance of adding the member component.
+        provenance: Provenance,
+    },
+    /// Removes a component from a trust boundary.
+    RemoveBoundaryComponent {
+        /// Existing trust boundary.
+        boundary: TrustBoundaryId,
+        /// A component currently in `boundary`.
+        component: ComponentId,
+        /// Provenance of removing the member component.
+        provenance: Provenance,
+    },
+    /// Removes a trust boundary.
+    RemoveTrustBoundary {
+        /// Existing trust boundary.
+        id: TrustBoundaryId,
+    },
+    /// Binds an asset to a component, replaces its bound component, or
+    /// unbinds it (`None`).
+    SetAssetComponent {
+        /// Existing asset.
+        asset: AssetId,
+        /// Existing component, or `None` to unbind.
+        component: Option<ComponentId>,
+        /// Provenance of binding or unbinding the component.
+        provenance: Provenance,
+    },
 }
 
 impl Op {
@@ -631,14 +796,32 @@ impl Op {
             | Self::AddCybersecurityClaim { provenance, .. }
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
-            | Self::SetThreatClaim { provenance, .. } => Some(provenance),
+            | Self::SetThreatClaim { provenance, .. }
+            | Self::AddComponent { provenance, .. }
+            | Self::RenameComponent { provenance, .. }
+            | Self::SetComponentParent { provenance, .. }
+            | Self::AddInterface { provenance, .. }
+            | Self::RenameInterface { provenance, .. }
+            | Self::SetInterfaceKind { provenance, .. }
+            | Self::AddDataFlow { provenance, .. }
+            | Self::RenameDataFlow { provenance, .. }
+            | Self::SetDataFlowInterface { provenance, .. }
+            | Self::AddTrustBoundary { provenance, .. }
+            | Self::RenameTrustBoundary { provenance, .. }
+            | Self::AddBoundaryComponent { provenance, .. }
+            | Self::RemoveBoundaryComponent { provenance, .. }
+            | Self::SetAssetComponent { provenance, .. } => Some(provenance),
             Self::RemoveAsset { .. }
             | Self::RemoveDamageScenario { .. }
             | Self::RemoveThreatScenario { .. }
             | Self::RemoveAttackTree { .. }
             | Self::RemoveSecurityControl { .. }
             | Self::RemoveCybersecurityGoal { .. }
-            | Self::RemoveCybersecurityClaim { .. } => None,
+            | Self::RemoveCybersecurityClaim { .. }
+            | Self::RemoveComponent { .. }
+            | Self::RemoveInterface { .. }
+            | Self::RemoveDataFlow { .. }
+            | Self::RemoveTrustBoundary { .. } => None,
         }
     }
 
@@ -701,7 +884,21 @@ impl Op {
             | Self::AddCybersecurityClaim { provenance, .. }
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
-            | Self::SetThreatClaim { provenance, .. } => {
+            | Self::SetThreatClaim { provenance, .. }
+            | Self::AddComponent { provenance, .. }
+            | Self::RenameComponent { provenance, .. }
+            | Self::SetComponentParent { provenance, .. }
+            | Self::AddInterface { provenance, .. }
+            | Self::RenameInterface { provenance, .. }
+            | Self::SetInterfaceKind { provenance, .. }
+            | Self::AddDataFlow { provenance, .. }
+            | Self::RenameDataFlow { provenance, .. }
+            | Self::SetDataFlowInterface { provenance, .. }
+            | Self::AddTrustBoundary { provenance, .. }
+            | Self::RenameTrustBoundary { provenance, .. }
+            | Self::AddBoundaryComponent { provenance, .. }
+            | Self::RemoveBoundaryComponent { provenance, .. }
+            | Self::SetAssetComponent { provenance, .. } => {
                 *provenance = new_provenance;
             }
             Self::RemoveAsset { .. }
@@ -710,7 +907,11 @@ impl Op {
             | Self::RemoveAttackTree { .. }
             | Self::RemoveSecurityControl { .. }
             | Self::RemoveCybersecurityGoal { .. }
-            | Self::RemoveCybersecurityClaim { .. } => {}
+            | Self::RemoveCybersecurityClaim { .. }
+            | Self::RemoveComponent { .. }
+            | Self::RemoveInterface { .. }
+            | Self::RemoveDataFlow { .. }
+            | Self::RemoveTrustBoundary { .. } => {}
         }
         self
     }

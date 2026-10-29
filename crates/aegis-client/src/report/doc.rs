@@ -25,7 +25,7 @@ use crate::view::tree_scene;
 use crate::workspace::Workspace;
 
 use super::ReportContext;
-use super::profile::{Classification, ReportFilters, ReportOptions};
+use super::profile::{Classification, FigureAttachment, ReportFilters, ReportOptions};
 
 /// How a paragraph looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,6 +219,7 @@ pub fn risk_text(r: Option<&crate::view::RiskView>) -> String {
 /// A report section whose elements may carry descriptions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Described {
+    Item,
     Assets,
     Damage,
     Controls,
@@ -237,6 +238,16 @@ pub(crate) fn section_descriptions(ws: &Workspace, section: Described) -> Vec<(S
         }
     };
     match section {
+        Described::Item => {
+            p.components()
+                .for_each(|(_, id, x)| add(x.name(), ElementRef::Component(id)));
+            p.interfaces()
+                .for_each(|(_, id, x)| add(x.name(), ElementRef::Interface(id)));
+            p.data_flows()
+                .for_each(|(_, id, x)| add(x.name(), ElementRef::DataFlow(id)));
+            p.trust_boundaries()
+                .for_each(|(_, id, x)| add(x.name(), ElementRef::TrustBoundary(id)));
+        }
         Described::Assets => p
             .assets()
             .for_each(|(_, id, x)| add(x.name(), ElementRef::Asset(id))),
@@ -261,11 +272,19 @@ pub(crate) fn description_of(ws: &Workspace, target: ElementRef) -> Option<Strin
     ws.project().description(target).map(str::to_owned)
 }
 
-pub(crate) fn section_8_heading(names: &aegis_model::ElementNamesDef) -> String {
+pub(crate) fn section_8_heading_lang(
+    names: &aegis_model::ElementNamesDef,
+    lang: Language,
+) -> String {
     if names.cybersecurity_goal.plural.as_ref() == "Cybersecurity goals"
         && names.cybersecurity_claim.plural.as_ref() == "Cybersecurity claims"
     {
         "8. Cybersecurity goals and claims".to_owned()
+    } else if lang == Language::Ja {
+        format!(
+            "8. {}と{}",
+            names.cybersecurity_goal.plural, names.cybersecurity_claim.plural
+        )
     } else {
         format!(
             "8. {} and {}",
@@ -275,9 +294,36 @@ pub(crate) fn section_8_heading(names: &aegis_model::ElementNamesDef) -> String 
     }
 }
 
-pub(crate) fn methodology_line(project: &Project) -> String {
+pub(crate) fn methodology_line_lang(project: &Project, lang: &str) -> String {
     let m = project.methodology();
-    format!("{} (pack {} {})", m.label(), m.key(), m.version())
+    format!(
+        "{} (pack {} {})",
+        m.label_for_lang(lang),
+        m.key(),
+        m.version()
+    )
+}
+
+fn push_target_figures(b: &mut Vec<Block>, figures: &[FigureAttachment], target: ElementRef) {
+    for f in figures {
+        if f.data.is_empty() {
+            continue;
+        }
+        let Some(t) = crate::view::target_to_element_ref(&f.target) else {
+            continue;
+        };
+        if t == target {
+            b.push(Block::Image {
+                media_type: f.media_type.clone(),
+                bytes: f.data.clone(),
+                alt: if f.caption.is_empty() {
+                    f.figure_id.clone()
+                } else {
+                    f.caption.clone()
+                },
+            });
+        }
+    }
 }
 
 /// The per-page footer: the classification mark (if any) and the exporter.
@@ -302,7 +348,30 @@ pub fn report_watermark(
 
 // ---- filtering ------------------------------------------------------------
 
-fn row_matches(r: &RiskRow, filters: &ReportFilters) -> bool {
+fn component_assets(ws: &Workspace, filters: &ReportFilters) -> Option<BTreeSet<String>> {
+    let comp = filters.component.as_deref()?.trim();
+    if comp.is_empty() {
+        return None;
+    }
+    Some(
+        pages::asset_rows(ws)
+            .into_iter()
+            .filter(|a| a.component == comp)
+            .map(|a| a.name)
+            .collect(),
+    )
+}
+
+fn row_matches(
+    r: &RiskRow,
+    filters: &ReportFilters,
+    comp_assets: Option<&BTreeSet<String>>,
+) -> bool {
+    if let Some(allowed) = comp_assets
+        && !allowed.contains(&r.asset)
+    {
+        return false;
+    }
     if !filters.assets.is_empty() && !filters.assets.iter().any(|a| a == &r.asset) {
         return false;
     }
@@ -320,16 +389,25 @@ fn row_matches(r: &RiskRow, filters: &ReportFilters) -> bool {
 
 /// The threats kept by the filters, or empty when no filter is active (the
 /// empty set also means "everything", so callers check [`has_filter`]).
-fn matching_threats(ws: &Workspace, filters: &ReportFilters) -> BTreeSet<ThreatId> {
+fn matching_threats(
+    ws: &Workspace,
+    filters: &ReportFilters,
+    comp_assets: Option<&BTreeSet<String>>,
+) -> BTreeSet<ThreatId> {
     pages::risk_rows(ws)
         .iter()
-        .filter(|r| row_matches(r, filters))
+        .filter(|r| row_matches(r, filters, comp_assets))
         .map(|r| r.id)
         .collect()
 }
 
 fn has_filter(filters: &ReportFilters) -> bool {
-    !filters.risk_levels.is_empty() || !filters.assets.is_empty()
+    !filters.risk_levels.is_empty()
+        || !filters.assets.is_empty()
+        || filters
+            .component
+            .as_ref()
+            .is_some_and(|c| !c.trim().is_empty())
 }
 
 // ---- the builder ----------------------------------------------------------
@@ -345,8 +423,9 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     let sections = profile.sections;
     let project = ws.project();
     let m = project.methodology();
-    let names = m.element_names();
-    let vocab = pages::vocabulary(m);
+    let names = m.element_names_for_lang(lang.code());
+    let vocab = pages::vocabulary_for_lang(m, lang.code());
+    let meth_line = methodology_line_lang(project, lang.code());
     let mut b: Vec<Block> = Vec::new();
 
     // ---- cover (RPT-04) ----
@@ -359,7 +438,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             catalog.tr_with(
                 "report-subtitle",
                 &[
-                    ("methodology", &methodology_line(project)),
+                    ("methodology", &meth_line),
                     ("seq", &ctx.seq.to_string()),
                     ("engine", aegis_model::ENGINE_VERSION),
                 ],
@@ -386,7 +465,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                     branding.classification.label(&catalog),
                 ],
                 vec![catalog.tr("date"), format_ms_lang(ctx.now_ms, lang)],
-                vec![catalog.tr("methodology"), methodology_line(project)],
+                vec![catalog.tr("methodology"), meth_line],
             ],
         ));
         if !branding.approvers.is_empty() {
@@ -424,7 +503,41 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         desc_blocks(&mut b, &notes);
     }
 
-    let filtered = matching_threats(ws, &profile.filters);
+    if sections.figures && !profile.figures.is_empty() {
+        b.push(Heading(2, catalog.tr("section-figures")));
+        b.push(table(
+            &[
+                catalog.tr("caption"),
+                catalog.tr("target"),
+                catalog.tr("format"),
+                catalog.tr("dimensions"),
+            ],
+            profile
+                .figures
+                .iter()
+                .map(|f| {
+                    vec![
+                        if f.caption.is_empty() {
+                            f.figure_id.clone()
+                        } else {
+                            f.caption.clone()
+                        },
+                        if f.target.is_empty() {
+                            "project".to_owned()
+                        } else {
+                            f.target.clone()
+                        },
+                        f.media_type.clone(),
+                        format!("{}x{}", f.width_px, f.height_px),
+                    ]
+                })
+                .collect(),
+        ));
+        push_target_figures(&mut b, &profile.figures, ElementRef::Project);
+    }
+
+    let comp_assets = component_assets(ws, &profile.filters);
+    let filtered = matching_threats(ws, &profile.filters, comp_assets.as_ref());
     let filter_on = has_filter(&profile.filters);
 
     // ---- executive summary ----
@@ -473,9 +586,110 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         let top: Vec<RiskRow> = ov
             .top
             .into_iter()
-            .filter(|r| !filter_on || row_matches(r, &profile.filters))
+            .filter(|r| !filter_on || row_matches(r, &profile.filters, comp_assets.as_ref()))
             .collect();
         b.push(risk_rows_block(&catalog, &top));
+    }
+
+    // ---- item definition (ARC-02, job 074) ----
+    if sections.item_definition
+        && (project.component_count() > 0
+            || project.interface_count() > 0
+            || project.data_flow_count() > 0
+            || project.trust_boundary_count() > 0)
+    {
+        b.push(Heading(2, catalog.tr("section-item-definition")));
+        b.push(Heading(3, names.component.plural.to_string()));
+        let comp_rows = pages::component_rows(ws);
+        b.push(table(
+            &[
+                names.component.singular.to_string(),
+                catalog.tr("parent"),
+                names.interface.plural.to_string(),
+                names.asset.plural.to_string(),
+            ],
+            comp_rows
+                .iter()
+                .map(|c| {
+                    vec![
+                        c.name.clone(),
+                        c.parent.clone(),
+                        c.interfaces.to_string(),
+                        c.assets.to_string(),
+                    ]
+                })
+                .collect(),
+        ));
+        for c in &comp_rows {
+            push_target_figures(&mut b, &profile.figures, ElementRef::Component(c.id));
+        }
+
+        b.push(Heading(3, names.interface.plural.to_string()));
+        let iface_rows = pages::interface_rows(ws);
+        b.push(table(
+            &[
+                names.interface.singular.to_string(),
+                names.component.singular.to_string(),
+                catalog.tr("kind"),
+                names.data_flow.plural.to_string(),
+            ],
+            iface_rows
+                .iter()
+                .map(|i| {
+                    vec![
+                        i.name.clone(),
+                        i.component.clone(),
+                        i.kind.clone(),
+                        i.flows.to_string(),
+                    ]
+                })
+                .collect(),
+        ));
+        for i in &iface_rows {
+            push_target_figures(&mut b, &profile.figures, ElementRef::Interface(i.id));
+        }
+
+        b.push(Heading(3, names.data_flow.plural.to_string()));
+        let df_rows = pages::data_flow_rows(ws);
+        b.push(table(
+            &[
+                names.data_flow.singular.to_string(),
+                catalog.tr("from-interface"),
+                catalog.tr("to-interface"),
+                names.interface.singular.to_string(),
+            ],
+            df_rows
+                .iter()
+                .map(|df| {
+                    vec![
+                        df.name.clone(),
+                        df.from.clone(),
+                        df.to.clone(),
+                        df.interface.clone(),
+                    ]
+                })
+                .collect(),
+        ));
+        for df in &df_rows {
+            push_target_figures(&mut b, &profile.figures, ElementRef::DataFlow(df.id));
+        }
+
+        b.push(Heading(3, names.trust_boundary.plural.to_string()));
+        let tb_rows = pages::trust_boundary_rows(ws);
+        b.push(table(
+            &[
+                names.trust_boundary.singular.to_string(),
+                catalog.tr("members"),
+            ],
+            tb_rows
+                .iter()
+                .map(|tb| vec![tb.name.clone(), tb.members.to_string()])
+                .collect(),
+        ));
+        for tb in &tb_rows {
+            push_target_figures(&mut b, &profile.figures, ElementRef::TrustBoundary(tb.id));
+        }
+        desc_list(&mut b, &section_descriptions(ws, Described::Item), &catalog);
     }
 
     // ---- assets ----
@@ -484,16 +698,23 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         let mut headers: Vec<String> = vec![names.asset.singular.to_string()];
         headers.extend(vocab.properties.iter().cloned());
         headers.push(catalog.tr("threats"));
+        let asset_rows: Vec<_> = pages::asset_rows(ws)
+            .into_iter()
+            .filter(|a| {
+                let comp_ok = comp_assets
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.contains(&a.name));
+                let asset_ok = profile.filters.assets.is_empty()
+                    || profile.filters.assets.iter().any(|x| x == &a.name);
+                comp_ok && asset_ok
+            })
+            .collect();
         b.push(table(
             &headers,
-            pages::asset_rows(ws)
-                .into_iter()
-                .filter(|a| {
-                    profile.filters.assets.is_empty()
-                        || profile.filters.assets.iter().any(|x| x == &a.name)
-                })
+            asset_rows
+                .iter()
                 .map(|a| {
-                    let mut row = vec![a.name];
+                    let mut row = vec![a.name.clone()];
                     row.extend(
                         a.properties
                             .iter()
@@ -504,6 +725,9 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 })
                 .collect(),
         ));
+        for a in &asset_rows {
+            push_target_figures(&mut b, &profile.figures, ElementRef::Asset(a.id));
+        }
         desc_list(
             &mut b,
             &section_descriptions(ws, Described::Assets),
@@ -605,6 +829,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             for line in &t.why {
                 b.push(Paragraph(line.clone(), Style::Muted));
             }
+            push_target_figures(&mut b, &profile.figures, ElementRef::Threat(id));
         }
     }
 
@@ -647,6 +872,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             {
                 b.push(Block::Preformatted(to_outline(tree)));
             }
+            push_target_figures(&mut b, &profile.figures, ElementRef::Tree(row.id));
         }
     }
 
@@ -655,7 +881,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         b.push(Heading(2, catalog.tr("section-risks")));
         let rows: Vec<RiskRow> = pages::risk_rows(ws)
             .into_iter()
-            .filter(|r| !filter_on || row_matches(r, &profile.filters))
+            .filter(|r| !filter_on || row_matches(r, &profile.filters, comp_assets.as_ref()))
             .collect();
         b.push(risk_rows_block(&catalog, &rows));
     }
@@ -683,7 +909,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
 
     // ---- goals and claims ----
     if sections.goals_claims {
-        b.push(Heading(2, section_8_heading(names)));
+        b.push(Heading(2, section_8_heading_lang(names, lang)));
         b.push(Heading(3, catalog.tr("goals")));
         b.push(table(
             &[

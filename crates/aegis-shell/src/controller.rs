@@ -29,7 +29,10 @@ use aegis_client::state::{
 };
 use aegis_client::view::{AdminAction, Page, RiskView, Selection};
 use aegis_model::library::LibraryPack;
-use aegis_model::{AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, ThreatId, TreeId};
+use aegis_model::{
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
+    ThreatId, TreeId, TrustBoundaryId,
+};
 use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
 
 use crate::adapter::{bucket, draw_items, draw_layers};
@@ -60,6 +63,8 @@ struct State {
     event_group: Option<EventGroup>,
     /// The session row chosen on the administration page (job 055).
     session: Option<usize>,
+    /// The figure row chosen on the reports page (job 073).
+    figure: Option<usize>,
 }
 
 /// A password login request: user, password, keep the login.
@@ -203,6 +208,7 @@ impl Controller {
                 user: None,
                 event_group: None,
                 session: None,
+                figure: None,
             }),
             library: RefCell::new(LibraryView::new(Arc::new(LibraryPack::builtin_demo()))),
             hooks,
@@ -455,6 +461,170 @@ impl Controller {
             }
         });
 
+        // ---- item definition (job 074) ----
+        on!(on_pick_component, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.components.get(pos(i)?).map(|x| x.id)) {
+                c.select(Selection::Component(id), false);
+            }
+        });
+        on!(on_add_component, |c, name| c.edit(Edit::AddComponent {
+            id: ComponentId::new_v7(),
+            name: name.to_string(),
+            parent: None,
+        }));
+        on!(on_rename_component, |c, name| {
+            if let Some(component) = c.selected_component() {
+                c.edit(Edit::RenameComponent {
+                    component,
+                    name: name.to_string(),
+                });
+            }
+        });
+        on!(on_set_component_parent, |c, i| {
+            let parent = c.with_project(|p| {
+                let d = p.data.component.as_ref()?;
+                Some(
+                    after_none(i)
+                        .and_then(|idx| d.parents.get(idx))
+                        .map(|x| x.id),
+                )
+            });
+            if let (Some(component), Some(parent)) = (c.selected_component(), parent) {
+                c.edit(Edit::SetComponentParent { component, parent });
+            }
+        });
+        on!(on_remove_component, |c| {
+            if let Some(component) = c.selected_component() {
+                c.edit(Edit::RemoveComponent { component });
+            }
+        });
+        on!(on_pick_interface, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.interfaces.get(pos(i)?).map(|x| x.id)) {
+                c.select(Selection::Interface(id), false);
+            }
+        });
+        on!(on_add_interface, |c, name, comp, kind| {
+            let component = c.with_project(|p| p.data.components.get(pos(comp)?).map(|x| x.id));
+            if let (Some(component), Some(kind)) = (component, pos(kind)) {
+                c.edit(Edit::AddInterface {
+                    id: InterfaceId::new_v7(),
+                    component,
+                    name: name.to_string(),
+                    kind,
+                });
+            }
+        });
+        on!(on_rename_interface, |c, name| {
+            if let Some(interface) = c.selected_interface() {
+                c.edit(Edit::RenameInterface {
+                    interface,
+                    name: name.to_string(),
+                });
+            }
+        });
+        on!(on_set_interface_kind, |c, i| {
+            if let (Some(interface), Some(kind)) = (c.selected_interface(), pos(i)) {
+                c.edit(Edit::SetInterfaceKind { interface, kind });
+            }
+        });
+        on!(on_remove_interface, |c| {
+            if let Some(interface) = c.selected_interface() {
+                c.edit(Edit::RemoveInterface { interface });
+            }
+        });
+        on!(on_pick_data_flow, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.data_flows.get(pos(i)?).map(|x| x.id)) {
+                c.select(Selection::DataFlow(id), false);
+            }
+        });
+        on!(on_add_data_flow, |c, name, from, to| {
+            let pair = c.with_project(|p| {
+                let from_id = p.data.components.get(pos(from)?)?.id;
+                let to_id = p.data.components.get(pos(to)?)?.id;
+                Some((from_id, to_id))
+            });
+            if let Some((from, to)) = pair {
+                c.edit(Edit::AddDataFlow {
+                    id: DataFlowId::new_v7(),
+                    name: name.to_string(),
+                    from,
+                    to,
+                    interface: None,
+                });
+            }
+        });
+        on!(on_rename_data_flow, |c, name| {
+            if let Some(data_flow) = c.selected_data_flow() {
+                c.edit(Edit::RenameDataFlow {
+                    data_flow,
+                    name: name.to_string(),
+                });
+            }
+        });
+        on!(on_set_data_flow_interface, |c, i| {
+            let interface = c.with_project(|p| {
+                let d = p.data.data_flow.as_ref()?;
+                Some(
+                    after_none(i)
+                        .and_then(|idx| d.interfaces.get(idx))
+                        .map(|x| x.id),
+                )
+            });
+            if let (Some(data_flow), Some(interface)) = (c.selected_data_flow(), interface) {
+                c.edit(Edit::SetDataFlowInterface {
+                    data_flow,
+                    interface,
+                });
+            }
+        });
+        on!(on_remove_data_flow, |c| {
+            if let Some(data_flow) = c.selected_data_flow() {
+                c.edit(Edit::RemoveDataFlow { data_flow });
+            }
+        });
+        on!(on_pick_trust_boundary, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.trust_boundaries.get(pos(i)?).map(|x| x.id))
+            {
+                c.select(Selection::TrustBoundary(id), false);
+            }
+        });
+        on!(on_add_trust_boundary, |c, name| c.edit(
+            Edit::AddTrustBoundary {
+                id: TrustBoundaryId::new_v7(),
+                name: name.to_string(),
+            }
+        ));
+        on!(on_rename_trust_boundary, |c, name| {
+            if let Some(boundary) = c.selected_trust_boundary() {
+                c.edit(Edit::RenameTrustBoundary {
+                    boundary,
+                    name: name.to_string(),
+                });
+            }
+        });
+        on!(on_toggle_trust_boundary_member, |c, i, member| {
+            let component = c.with_project(|p| {
+                p.data
+                    .trust_boundary
+                    .as_ref()?
+                    .members
+                    .get(pos(i)?)
+                    .map(|m| m.id)
+            });
+            if let (Some(boundary), Some(component)) = (c.selected_trust_boundary(), component) {
+                c.edit(Edit::SetTrustBoundaryMember {
+                    boundary,
+                    component,
+                    member,
+                });
+            }
+        });
+        on!(on_remove_trust_boundary, |c| {
+            if let Some(boundary) = c.selected_trust_boundary() {
+                c.edit(Edit::RemoveTrustBoundary { boundary });
+            }
+        });
+
         // ---- assets ----
         on!(on_pick_asset, |c, i| {
             if let Some(id) = c.with_project(|p| p.data.assets.get(pos(i)?).map(|a| a.id)) {
@@ -489,6 +659,19 @@ impl Controller {
                     asset,
                     name: name.to_string(),
                 });
+            }
+        });
+        on!(on_set_asset_component, |c, i| {
+            let component = c.with_project(|p| {
+                let d = p.data.asset.as_ref()?;
+                Some(
+                    after_none(i)
+                        .and_then(|idx| d.components.get(idx))
+                        .map(|x| x.id),
+                )
+            });
+            if let (Some(asset), Some(component)) = (c.selected_asset(), component) {
+                c.edit(Edit::SetAssetComponent { asset, component });
             }
         });
         on!(on_toggle_asset_property, |c, i, on| {
@@ -1067,8 +1250,57 @@ impl Controller {
         on!(on_refresh_history, |c| c.send(Command::LoadHistory));
         on!(on_export_report, |c| c.export(ExportKind::Report));
         on!(on_export_pdf, |c| c.export(ExportKind::ReportPdf));
+        on!(on_export_xlsx, |c| c.export(ExportKind::ReportXlsx));
         on!(on_export_csv, |c| c.export(ExportKind::RiskRegister));
         on!(on_export_svg, |c| c.export(ExportKind::TreeSvg));
+        on!(on_pick_figure, |c, i| {
+            c.state.borrow_mut().figure = pos(i);
+            if let Some(w) = c.window.upgrade() {
+                w.set_figure_selected(i);
+            }
+        });
+        on!(on_add_figure, |c, path, caption| {
+            if let Ok(data) = std::fs::read(path.as_str().trim()) {
+                c.send(Command::PutFigure {
+                    caption: caption.to_string(),
+                    target: "project".to_owned(),
+                    data,
+                });
+            }
+        });
+        on!(on_update_figure, |c, caption| {
+            let chosen = c.state.borrow().figure;
+            let figure = c.with_project(|p| {
+                let f = p.figures.get(chosen?)?;
+                Some((f.figure_id.clone(), f.target.clone()))
+            });
+            if let Some((figure_id, target)) = figure {
+                c.send(Command::UpdateFigure {
+                    figure_id,
+                    caption: caption.to_string(),
+                    target,
+                });
+            }
+        });
+        on!(on_delete_figure, |c| {
+            let chosen = c.state.borrow().figure;
+            let id = c.with_project(|p| p.figures.get(chosen?).map(|f| f.figure_id.clone()));
+            if let Some(figure_id) = id {
+                c.state.borrow_mut().figure = None;
+                c.send(Command::DeleteFigure { figure_id });
+            }
+        });
+        on!(on_preview_excel_import, |c, path| {
+            if let Ok(bytes) = std::fs::read(path.as_str().trim()) {
+                c.send(Command::PreviewExcelImport {
+                    bytes,
+                    mapping: Box::default(),
+                });
+            }
+        });
+        on!(on_apply_excel_import, |c| c.send(Command::ApplyExcelImport));
+        on!(on_clear_excel_preview, |c| c
+            .send(Command::ClearExcelPreview));
 
         // ---- administration ----
         on!(on_pick_user, |c, i| {
@@ -1231,6 +1463,22 @@ impl Controller {
             },
         });
         self.send(Command::ShowPage(Page::Trees));
+    }
+
+    fn selected_component(&self) -> Option<ComponentId> {
+        self.with_project(|p| p.data.component.as_ref().map(|c| c.id))
+    }
+
+    fn selected_interface(&self) -> Option<InterfaceId> {
+        self.with_project(|p| p.data.interface.as_ref().map(|i| i.id))
+    }
+
+    fn selected_data_flow(&self) -> Option<DataFlowId> {
+        self.with_project(|p| p.data.data_flow.as_ref().map(|d| d.id))
+    }
+
+    fn selected_trust_boundary(&self) -> Option<TrustBoundaryId> {
+        self.with_project(|p| p.data.trust_boundary.as_ref().map(|t| t.id))
     }
 
     fn selected_asset(&self) -> Option<AssetId> {
@@ -1690,6 +1938,8 @@ impl Controller {
                 || old.comparison != project.comparison
                 || old.history != project.history
                 || old.last_export != project.last_export
+                || old.figures != project.figures
+                || old.excel_preview != project.excel_preview
                 || old.tree.as_ref().map(|t| t.tree) != project.tree.as_ref().map(|t| t.tree)
         }) {
             self.apply_pages(&w, project);
@@ -1711,6 +1961,7 @@ impl Controller {
         w.set_feasibility_levels(model(v.feasibility.iter().map(|x| s(x)).collect()));
         w.set_treatment_options(with_none("Not decided", v.treatments.iter().cloned()));
         w.set_catalog_schemes(model(v.catalog_schemes.iter().map(|x| s(x)).collect()));
+        w.set_interface_kinds(model(v.interface_kinds.iter().map(|x| s(x)).collect()));
     }
 
     fn apply_threats(&self, w: &AppWindow, p: &ProjectView) {
@@ -1836,6 +2087,124 @@ impl Controller {
             ));
         }
 
+        // Item definition (job 074).
+        let plus_one = |x: Option<usize>| x.map_or(0, |i| i32::try_from(i + 1).unwrap_or(0));
+        w.set_component_names(model(d.components.iter().map(|c| s(&c.name)).collect()));
+        w.set_component_rows(rows(
+            d.components
+                .iter()
+                .map(|c| {
+                    vec![
+                        c.name.clone(),
+                        c.parent.clone(),
+                        c.interfaces.to_string(),
+                        c.assets.to_string(),
+                    ]
+                })
+                .collect(),
+        ));
+        w.set_component_selected(index_of(
+            d.components.iter().map(|c| c.id),
+            d.component.as_ref().map(|c| c.id),
+        ));
+        w.set_has_component(d.component.is_some());
+        if let Some(c) = &d.component {
+            w.set_component_name(s(&c.name));
+            w.set_component_parent_options(with_none(
+                "None",
+                c.parents.iter().map(|x| x.name.clone()),
+            ));
+            w.set_component_parent(plus_one(
+                c.parent
+                    .and_then(|pid| c.parents.iter().position(|x| x.id == pid)),
+            ));
+            w.set_component_interfaces(links(&c.interfaces));
+            w.set_component_assets(links(&c.assets));
+            w.set_component_changed(s(&c.changed));
+        }
+        w.set_interface_rows(rows(
+            d.interfaces
+                .iter()
+                .map(|i| {
+                    vec![
+                        i.name.clone(),
+                        i.component.clone(),
+                        i.kind.clone(),
+                        i.flows.to_string(),
+                    ]
+                })
+                .collect(),
+        ));
+        w.set_interface_selected(index_of(
+            d.interfaces.iter().map(|i| i.id),
+            d.interface.as_ref().map(|i| i.id),
+        ));
+        w.set_has_interface(d.interface.is_some());
+        if let Some(i) = &d.interface {
+            w.set_interface_name(s(&i.name));
+            w.set_interface_component(s(&i.component_name));
+            w.set_interface_kind(i32::try_from(i.kind).unwrap_or(0));
+            w.set_interface_flows(links(&i.flows));
+            w.set_interface_changed(s(&i.changed));
+        }
+        w.set_data_flow_rows(rows(
+            d.data_flows
+                .iter()
+                .map(|df| {
+                    vec![
+                        df.name.clone(),
+                        df.from.clone(),
+                        df.to.clone(),
+                        df.interface.clone(),
+                    ]
+                })
+                .collect(),
+        ));
+        w.set_data_flow_selected(index_of(
+            d.data_flows.iter().map(|df| df.id),
+            d.data_flow.as_ref().map(|df| df.id),
+        ));
+        w.set_has_data_flow(d.data_flow.is_some());
+        if let Some(df) = &d.data_flow {
+            w.set_data_flow_name(s(&df.name));
+            w.set_data_flow_from(s(&df.from_label));
+            w.set_data_flow_to(s(&df.to_label));
+            w.set_data_flow_interface_options(with_none(
+                "None",
+                df.interfaces.iter().map(|x| x.name.clone()),
+            ));
+            w.set_data_flow_interface(plus_one(
+                df.interface
+                    .and_then(|iid| df.interfaces.iter().position(|x| x.id == iid)),
+            ));
+            w.set_data_flow_crosses_boundary(df.crosses_boundary);
+            w.set_data_flow_changed(s(&df.changed));
+        }
+        w.set_trust_boundary_rows(rows(
+            d.trust_boundaries
+                .iter()
+                .map(|tb| vec![tb.name.clone(), tb.members.to_string()])
+                .collect(),
+        ));
+        w.set_trust_boundary_selected(index_of(
+            d.trust_boundaries.iter().map(|tb| tb.id),
+            d.trust_boundary.as_ref().map(|tb| tb.id),
+        ));
+        w.set_has_trust_boundary(d.trust_boundary.is_some());
+        if let Some(tb) = &d.trust_boundary {
+            w.set_trust_boundary_name(s(&tb.name));
+            w.set_trust_boundary_members(model(
+                tb.members
+                    .iter()
+                    .map(|m| CheckItem {
+                        label: s(&m.name),
+                        checked: m.member,
+                    })
+                    .collect(),
+            ));
+            w.set_trust_boundary_changed(s(&tb.changed));
+        }
+
         // Assets (also the asset choices of the threats page).
         w.set_asset_names(model(d.assets.iter().map(|a| s(&a.name)).collect()));
         w.set_asset_rows(rows(
@@ -1867,6 +2236,14 @@ impl Controller {
         w.set_has_asset(d.asset.is_some());
         if let Some(a) = &d.asset {
             w.set_asset_name(s(&a.name));
+            w.set_asset_component_options(with_none(
+                "None",
+                a.components.iter().map(|c| c.name.clone()),
+            ));
+            w.set_asset_component(plus_one(
+                a.component
+                    .and_then(|cid| a.components.iter().position(|c| c.id == cid)),
+            ));
             w.set_asset_properties(model(
                 a.properties
                     .iter()
@@ -2091,6 +2468,33 @@ impl Controller {
                 .collect(),
         ));
         w.set_last_export(s(p.last_export.as_deref().unwrap_or("")));
+        w.set_figure_rows(rows(
+            p.figures
+                .iter()
+                .map(|f| vec![f.caption.clone(), f.target.clone(), f.media_type.clone()])
+                .collect(),
+        ));
+        {
+            let mut st = self.state.borrow_mut();
+            if st.figure.is_some_and(|i| i >= p.figures.len()) {
+                st.figure = None;
+            }
+            w.set_figure_selected(st.figure.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1));
+        }
+        w.set_has_excel_preview(p.excel_preview.is_some());
+        if let Some(preview) = &p.excel_preview {
+            w.set_excel_summary(s(&preview.summary()));
+            w.set_excel_unmapped_rows(rows(
+                preview
+                    .unmapped_rows
+                    .iter()
+                    .map(|u| vec![u.row_number.to_string(), u.reason.clone()])
+                    .collect(),
+            ));
+        } else {
+            w.set_excel_summary(SharedString::new());
+            w.set_excel_unmapped_rows(rows(Vec::new()));
+        }
     }
 
     fn apply_sessions(&self) {

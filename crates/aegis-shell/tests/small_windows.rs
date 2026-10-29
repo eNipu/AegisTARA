@@ -11,8 +11,9 @@ use aegis_client::state::{Mode, SyncView};
 use aegis_client::view::Page;
 use common::{App, TestServer, save};
 
-const PAGES: [(Page, &str); 8] = [
+const PAGES: [(Page, &str); 9] = [
     (Page::Overview, "overview"),
+    (Page::Item, "item"),
     (Page::Assets, "assets"),
     (Page::Threats, "threats"),
     (Page::Trees, "trees"),

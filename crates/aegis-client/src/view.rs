@@ -16,8 +16,9 @@ use std::sync::Arc;
 
 use aegis_canvas::{LayoutConfig, NodeKind, NodeStyle, Scene, Tone};
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ControlId, DamageId, FeasibilityLevel, GateKind, GoalId,
-    Methodology, NodeId, NodeIdx, SuggestionId, ThreatId, TreeId,
+    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementRef,
+    FeasibilityLevel, GateKind, GoalId, InterfaceId, Methodology, NodeId, NodeIdx, SuggestionId,
+    ThreatId, TreeId, TrustBoundaryId,
 };
 
 use aegis_proto as pb;
@@ -94,11 +95,13 @@ pub enum Page {
     Reports,
     /// Users, project tools, license (admins).
     Admin,
+    /// Item definition: components, interfaces, data flows and trust boundaries (job 074).
+    Item,
 }
 
 impl Page {
     /// Every page, in menu and sidebar order.
-    pub const ALL: [Page; 13] = [
+    pub const ALL: [Page; 14] = [
         Page::Overview,
         Page::Assets,
         Page::Damage,
@@ -112,6 +115,7 @@ impl Page {
         Page::History,
         Page::Reports,
         Page::Admin,
+        Page::Item,
     ];
 
     /// Position in [`Page::ALL`].
@@ -143,6 +147,7 @@ impl Page {
             Page::History => "History",
             Page::Reports => "Reports",
             Page::Admin => "Administration",
+            Page::Item => "Item definition",
         }
     }
 }
@@ -150,6 +155,14 @@ impl Page {
 /// One selected entity, by stable ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Selection {
+    /// A component in the item definition.
+    Component(ComponentId),
+    /// An interface on a component.
+    Interface(InterfaceId),
+    /// A data flow between two interfaces.
+    DataFlow(DataFlowId),
+    /// A trust boundary over components.
+    TrustBoundary(TrustBoundaryId),
     /// An asset.
     Asset(AssetId),
     /// A damage scenario.
@@ -246,6 +259,59 @@ pub struct UiState {
     pub selected_goal: Option<GoalId>,
     /// The selected claim.
     pub selected_claim: Option<ClaimId>,
+    /// The selected component on the Item definition page.
+    pub selected_component: Option<ComponentId>,
+    /// The selected interface on the Item definition page.
+    pub selected_interface: Option<InterfaceId>,
+    /// The selected data flow on the Item definition page.
+    pub selected_data_flow: Option<DataFlowId>,
+    /// The selected trust boundary on the Item definition page.
+    pub selected_trust_boundary: Option<TrustBoundaryId>,
+}
+
+/// Converts an [`ElementRef`] to the wire target string used by figure
+/// attachments (`"project"` or `<kind>:<uuidv7>`).
+#[must_use]
+pub fn element_ref_to_target(target: ElementRef) -> String {
+    match target {
+        ElementRef::Project => "project".to_owned(),
+        ElementRef::Component(id) => format!("component:{id}"),
+        ElementRef::Interface(id) => format!("interface:{id}"),
+        ElementRef::DataFlow(id) => format!("data_flow:{id}"),
+        ElementRef::TrustBoundary(id) => format!("trust_boundary:{id}"),
+        ElementRef::Asset(id) => format!("asset:{id}"),
+        ElementRef::Damage(id) => format!("damage:{id}"),
+        ElementRef::Threat(id) => format!("threat:{id}"),
+        ElementRef::Tree(id) => format!("tree:{id}"),
+        ElementRef::Control(id) => format!("control:{id}"),
+        ElementRef::Goal(id) => format!("goal:{id}"),
+        ElementRef::Claim(id) => format!("claim:{id}"),
+    }
+}
+
+/// Parses a wire target string (`""`, `"project"`, or `<kind>:<uuidv7>`) back
+/// into an [`ElementRef`].
+#[must_use]
+pub fn target_to_element_ref(target: &str) -> Option<ElementRef> {
+    let trimmed = target.trim();
+    if trimmed.is_empty() || trimmed == "project" {
+        return Some(ElementRef::Project);
+    }
+    let (kind, uuid_str) = trimmed.split_once(':')?;
+    match kind {
+        "component" => Some(ElementRef::Component(uuid_str.parse().ok()?)),
+        "interface" => Some(ElementRef::Interface(uuid_str.parse().ok()?)),
+        "data_flow" => Some(ElementRef::DataFlow(uuid_str.parse().ok()?)),
+        "trust_boundary" => Some(ElementRef::TrustBoundary(uuid_str.parse().ok()?)),
+        "asset" => Some(ElementRef::Asset(uuid_str.parse().ok()?)),
+        "damage" => Some(ElementRef::Damage(uuid_str.parse().ok()?)),
+        "threat" => Some(ElementRef::Threat(uuid_str.parse().ok()?)),
+        "tree" => Some(ElementRef::Tree(uuid_str.parse().ok()?)),
+        "control" => Some(ElementRef::Control(uuid_str.parse().ok()?)),
+        "goal" => Some(ElementRef::Goal(uuid_str.parse().ok()?)),
+        "claim" => Some(ElementRef::Claim(uuid_str.parse().ok()?)),
+        _ => None,
+    }
 }
 
 /// The tree the canvas shows: the chosen tree, else the selected threat's.
@@ -343,6 +409,36 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
                     "claim",
                     project.cybersecurity_claim_idx(&id).is_some(),
                     E::Claim(id),
+                );
+            }
+        }
+        Page::Item => {
+            if let Some(id) = ui.selected_component {
+                push(
+                    "component",
+                    project.component_idx(&id).is_some(),
+                    E::Component(id),
+                );
+            }
+            if let Some(id) = ui.selected_interface {
+                push(
+                    "interface",
+                    project.interface_idx(&id).is_some(),
+                    E::Interface(id),
+                );
+            }
+            if let Some(id) = ui.selected_data_flow {
+                push(
+                    "data-flow",
+                    project.data_flow_idx(&id).is_some(),
+                    E::DataFlow(id),
+                );
+            }
+            if let Some(id) = ui.selected_trust_boundary {
+                push(
+                    "trust-boundary",
+                    project.trust_boundary_idx(&id).is_some(),
+                    E::TrustBoundary(id),
                 );
             }
         }

@@ -86,6 +86,33 @@ pub struct RevisionEntry {
     pub description: String,
 }
 
+/// One attached figure (PNG, JPEG, or sanitized static SVG) on the project or
+/// an element (job 073, ARC-01, RPT-06).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct FigureAttachment {
+    /// Stable UUIDv7 figure identifier.
+    pub figure_id: String,
+    /// Media type (`image/png`, `image/jpeg`, or `image/svg+xml`).
+    pub media_type: String,
+    /// Caption text.
+    pub caption: String,
+    /// Target string (`""` / `"project"` or `<kind>:<uuidv7>`).
+    pub target: String,
+    /// Width in pixels.
+    pub width_px: u32,
+    /// Height in pixels.
+    pub height_px: u32,
+    /// Size in bytes.
+    pub size_bytes: u64,
+    /// Raw image bytes (empty when only metadata was listed).
+    pub data: Vec<u8>,
+    /// Author of the last change.
+    pub updated_by: String,
+    /// Timestamp of the last change (ms since epoch).
+    pub updated_at_ms: i64,
+}
+
 /// Which sections the report has, in fixed order (RPT-02).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -96,6 +123,10 @@ pub struct ReportSections {
     pub notes: bool,
     /// Executive summary.
     pub executive_summary: bool,
+    /// Item definition: components, interfaces, data flows, trust boundaries (job 074).
+    pub item_definition: bool,
+    /// Attached figures (job 073).
+    pub figures: bool,
     /// Assets.
     pub assets: bool,
     /// Damage scenarios.
@@ -120,6 +151,8 @@ impl Default for ReportSections {
             cover: true,
             notes: true,
             executive_summary: true,
+            item_definition: true,
+            figures: true,
             assets: true,
             damage: true,
             threats: true,
@@ -180,6 +213,10 @@ pub struct ReportProfile {
     pub filters: ReportFilters,
     /// Branding.
     pub branding: ReportBranding,
+    /// Project and element figures attached to the project when exporting
+    /// (job 073, RPT-06).
+    #[serde(skip)]
+    pub figures: Vec<FigureAttachment>,
 }
 
 impl Default for ReportProfile {
@@ -190,6 +227,7 @@ impl Default for ReportProfile {
             sections: ReportSections::default(),
             filters: ReportFilters::default(),
             branding: ReportBranding::default(),
+            figures: Vec::new(),
         }
     }
 }
@@ -226,6 +264,14 @@ impl ReportProfile {
         }
         if !self.filters.assets.is_empty() {
             parts.push_str(" asset=1");
+        }
+        if self
+            .filters
+            .component
+            .as_ref()
+            .is_some_and(|c| !c.trim().is_empty())
+        {
+            parts.push_str(" component=1");
         }
         if let Some(baseline) = &self.filters.baseline {
             parts.push_str(" baseline=1");

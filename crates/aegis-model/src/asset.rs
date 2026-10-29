@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::id::ComponentIdx;
 use crate::methodology::Property;
 use crate::provenance::Provenance;
 
@@ -202,6 +203,7 @@ impl FromIterator<Property> for PropertySet {
 pub struct Asset {
     pub(crate) name: Arc<str>,
     pub(crate) properties: PropertySet,
+    pub(crate) component: Option<ComponentIdx>,
     pub(crate) provenance: Provenance,
 }
 
@@ -256,6 +258,43 @@ impl Asset {
     #[must_use]
     pub fn properties(&self) -> PropertySet {
         self.properties
+    }
+
+    /// Returns the arena index of the [`Component`](crate::Component) this
+    /// asset is bound to, if any (ARC-02). Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{AssetId, ComponentId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let comp = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: comp, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let id = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id,
+    ///     name: "Routing table".into(),
+    ///     properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetAssetComponent {
+    ///     asset: id,
+    ///     component: Some(comp),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let comp_idx = project.component_idx(&comp);
+    /// let (_, _, asset) = project.assets().next().ok_or("missing")?;
+    /// assert_eq!(asset.component(), comp_idx);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn component(&self) -> Option<ComponentIdx> {
+        self.component
     }
 
     /// Returns the provenance of the last creation or modification of this

@@ -9,12 +9,13 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
-    ImpactCategoryDef, LevelDef, Methodology, MethodologyDef, ModelError, PotentialBandDef,
-    PropertyDef, SegmentDef, ThreatCategoryDef,
+    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ElementNameDef, ElementNamesDef,
+    FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, Methodology, MethodologyDef,
+    ModelError, PackTranslationDef, PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
 };
 
 /// The shipped pack bytes.
@@ -93,13 +94,177 @@ fn s(text: &str) -> Arc<str> {
     Arc::from(text)
 }
 
-/// The old hand-written definition (job 009), unchanged.
+fn ja_translation() -> PackTranslationDef {
+    PackTranslationDef {
+        label: Some(s("ISO/SAE 21434 + UN R155")),
+        element_names: Some(ElementNamesDef {
+            component: ElementNameDef {
+                singular: s("コンポーネント"),
+                plural: s("コンポーネント"),
+            },
+            interface: ElementNameDef {
+                singular: s("インターフェース"),
+                plural: s("インターフェース"),
+            },
+            data_flow: ElementNameDef {
+                singular: s("データフロー"),
+                plural: s("データフロー"),
+            },
+            trust_boundary: ElementNameDef {
+                singular: s("信頼境界"),
+                plural: s("信頼境界"),
+            },
+            asset: ElementNameDef {
+                singular: s("資産"),
+                plural: s("資産"),
+            },
+            damage_scenario: ElementNameDef {
+                singular: s("ダメージシナリオ"),
+                plural: s("ダメージシナリオ"),
+            },
+            threat_scenario: ElementNameDef {
+                singular: s("脅威シナリオ"),
+                plural: s("脅威シナリオ"),
+            },
+            attack_tree: ElementNameDef {
+                singular: s("アタックツリー"),
+                plural: s("アタックツリー"),
+            },
+            security_control: ElementNameDef {
+                singular: s("セキュリティ対策"),
+                plural: s("セキュリティ対策"),
+            },
+            cybersecurity_goal: ElementNameDef {
+                singular: s("サイバーセキュリティ目標"),
+                plural: s("サイバーセキュリティ目標"),
+            },
+            cybersecurity_claim: ElementNameDef {
+                singular: s("サイバーセキュリティ主張"),
+                plural: s("サイバーセキュリティ主張"),
+            },
+            feasibility: s("攻撃実現可能性"),
+            interface_kinds: Vec::new(),
+            translations: BTreeMap::new(),
+        }),
+        impact_categories: BTreeMap::from([
+            (s("safety"), s("安全性")),
+            (s("financial"), s("財務")),
+            (s("operational"), s("運用")),
+            (s("privacy"), s("プライバシー")),
+        ]),
+        impact_levels: BTreeMap::from([
+            (s("negligible"), s("無視可能")),
+            (s("moderate"), s("中程度")),
+            (s("major"), s("重大")),
+            (s("severe"), s("深刻")),
+        ]),
+        feasibility_levels: BTreeMap::from([
+            (s("very-low"), s("極めて低い")),
+            (s("low"), s("低い")),
+            (s("medium"), s("中")),
+            (s("high"), s("高い")),
+        ]),
+        risk_levels: BTreeMap::from([
+            (s("r1"), s("リスク 1")),
+            (s("r2"), s("リスク 2")),
+            (s("r3"), s("リスク 3")),
+            (s("r4"), s("リスク 4")),
+            (s("r5"), s("リスク 5")),
+        ]),
+        properties: BTreeMap::from([
+            (s("confidentiality"), s("機密性")),
+            (s("integrity"), s("完全性")),
+            (s("availability"), s("可用性")),
+            (s("authenticity"), s("真正性")),
+            (s("authorization"), s("認可")),
+            (s("non-repudiation"), s("否認防止")),
+        ]),
+        threat_categories: BTreeMap::from([
+            (s("spoofing"), s("なりすまし")),
+            (s("tampering"), s("改ざん")),
+            (s("repudiation"), s("否認")),
+            (s("information-disclosure"), s("情報漏洩")),
+            (s("denial-of-service"), s("サービス拒否")),
+            (s("elevation-of-privilege"), s("権限昇格")),
+        ]),
+        catalog_schemes: BTreeMap::from([(s("r155-annex5"), s("UN R155 附属書 5"))]),
+        feasibility_factors: BTreeMap::from([
+            (s("elapsed-time"), s("経過時間")),
+            (s("expertise"), s("専門知識")),
+            (s("knowledge"), s("対象に関する知識")),
+            (s("window-of-opportunity"), s("攻撃機会")),
+            (s("equipment"), s("機材")),
+        ]),
+        factor_levels: BTreeMap::from([
+            (s("le-1d"), s("1日以下")),
+            (s("le-1w"), s("1週間以下")),
+            (s("le-1m"), s("1か月以下")),
+            (s("le-6m"), s("6か月以下")),
+            (s("gt-6m"), s("6か月超")),
+            (s("layman"), s("一般人")),
+            (s("proficient"), s("熟練者")),
+            (s("expert"), s("専門家")),
+            (s("multiple-experts"), s("複数の専門家")),
+            (s("public"), s("公開情報")),
+            (s("restricted"), s("制限情報")),
+            (s("confidential"), s("機密情報")),
+            (s("strictly-confidential"), s("極秘情報")),
+            (s("unlimited"), s("無制限")),
+            (s("easy"), s("容易")),
+            (s("moderate"), s("中程度")),
+            (s("difficult"), s("困難")),
+            (s("standard"), s("標準")),
+            (s("specialized"), s("専門的")),
+            (s("bespoke"), s("特注")),
+            (s("multiple-bespoke"), s("複数の特注")),
+        ]),
+        interface_kinds: BTreeMap::from([
+            (s("can"), s("CAN")),
+            (s("ethernet"), s("Ethernet")),
+            (s("wireless"), s("無線")),
+            (s("debug"), s("デバッグ")),
+            (s("cellular"), s("セルラー")),
+            (s("usb"), s("USB")),
+        ]),
+    }
+}
+
+/// The hand-written definition matching the shipped pack.
 fn expected() -> MethodologyDef {
     MethodologyDef {
         key: s("iso21434-r155"),
         version: s("0.1.0"),
         label: s("ISO/SAE 21434 + UN R155"),
-        element_names: aegis_model::ElementNamesDef::default(),
+        element_names: ElementNamesDef {
+            interface_kinds: vec![
+                LevelDef {
+                    key: s("can"),
+                    label: s("CAN"),
+                },
+                LevelDef {
+                    key: s("ethernet"),
+                    label: s("Ethernet"),
+                },
+                LevelDef {
+                    key: s("wireless"),
+                    label: s("Wireless"),
+                },
+                LevelDef {
+                    key: s("debug"),
+                    label: s("Debug"),
+                },
+                LevelDef {
+                    key: s("cellular"),
+                    label: s("Cellular"),
+                },
+                LevelDef {
+                    key: s("usb"),
+                    label: s("USB"),
+                },
+            ],
+            translations: BTreeMap::from([(s("ja"), ja_translation())]),
+            ..ElementNamesDef::default()
+        },
         impact_categories: IMPACT_CATEGORIES
             .iter()
             .map(|&(key, label)| ImpactCategoryDef {
@@ -648,4 +813,60 @@ fn eu_cra_pack_is_canonical_and_evaluates_plain_likelihood() {
         .parse_catalog_ref(scheme, "CRA-1.2")
         .expect("parse CRA-1.2");
     assert_eq!(m.display_catalog_ref(&parsed).to_string(), "CRA-1.2");
+}
+
+#[test]
+fn iso21434_interface_kinds_and_japanese_translations() {
+    let m = m();
+    let ik_keys: Vec<_> = m
+        .interface_kinds()
+        .filter_map(|k| m.interface_kind_key(k))
+        .collect();
+    assert_eq!(
+        ik_keys,
+        ["can", "ethernet", "wireless", "debug", "cellular", "usb"]
+    );
+    let wireless = m.interface_kind("wireless").expect("wireless");
+    assert_eq!(m.interface_kind_label(wireless), Some("Wireless"));
+    assert_eq!(
+        m.interface_kind_label_for_lang(wireless, "ja"),
+        Some("無線")
+    );
+    assert_eq!(
+        m.interface_kind_label_for_lang(wireless, "en"),
+        Some("Wireless")
+    );
+
+    let safety = m.impact_category("safety").expect("safety");
+    let severe = m.level(safety, "severe").expect("severe");
+    assert_eq!(
+        m.impact_category_label_for_lang(safety, "ja"),
+        Some("安全性")
+    );
+    assert_eq!(m.level_label_for_lang(safety, severe, "ja"), Some("深刻"));
+
+    let high = m.feasibility_level("high").expect("high");
+    assert_eq!(m.feasibility_level_label_for_lang(high, "ja"), Some("高い"));
+
+    let r5 = m.risk_level("r5").expect("r5");
+    assert_eq!(m.risk_level_label_for_lang(r5, "ja"), Some("リスク 5"));
+
+    let integrity = m.property("integrity").expect("integrity");
+    assert_eq!(m.property_label_for_lang(integrity, "ja"), Some("完全性"));
+
+    let tampering = m.threat_category("tampering").expect("tampering");
+    assert_eq!(
+        m.threat_category_label_for_lang(tampering, "ja"),
+        Some("改ざん")
+    );
+
+    let ja_names = m.element_names_for_lang("ja");
+    assert_eq!(&*ja_names.asset.singular, "資産");
+    assert_eq!(&*ja_names.damage_scenario.singular, "ダメージシナリオ");
+    assert_eq!(&*ja_names.threat_scenario.singular, "脅威シナリオ");
+    assert_eq!(&*ja_names.component.singular, "コンポーネント");
+    assert_eq!(&*ja_names.interface.singular, "インターフェース");
+    assert_eq!(&*ja_names.data_flow.singular, "データフロー");
+    assert_eq!(&*ja_names.trust_boundary.singular, "信頼境界");
+    assert_eq!(m.feasibility_label_for_lang("ja"), "攻撃実現可能性");
 }

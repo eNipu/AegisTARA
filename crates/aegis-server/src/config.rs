@@ -30,6 +30,12 @@ pub struct ServerConfig {
     pub max_project_name_chars: usize,
     /// Most baselines per project.
     pub max_baselines: usize,
+    /// Largest single figure attachment in bytes (`ARC-01`).
+    pub max_figure_bytes: usize,
+    /// Most figures attached to a single project (`ARC-01`).
+    pub max_figures_per_project: usize,
+    /// Largest combined byte size of all figures in a single project (`ARC-01`).
+    pub max_project_figures_bytes: u64,
     /// Most entries one `ListHistory` call returns.
     pub max_history: usize,
     /// Wall clock in milliseconds since the Unix epoch, for audit
@@ -59,6 +65,9 @@ impl Default for ServerConfig {
             max_projects: 10_000,
             max_project_name_chars: 256,
             max_baselines: 1000,
+            max_figure_bytes: crate::store::MAX_FIGURE_BYTES,
+            max_figures_per_project: crate::store::MAX_FIGURES_PER_PROJECT,
+            max_project_figures_bytes: crate::store::MAX_PROJECT_FIGURES_BYTES,
             max_history: 500,
             wall_clock: system_clock_ms,
         }

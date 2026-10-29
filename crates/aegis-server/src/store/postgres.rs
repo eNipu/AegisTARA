@@ -41,7 +41,8 @@ use uuid::Uuid;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 use super::{
-    BaselineMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
+    BaselineMeta, FigureMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp,
+    StoredSnapshot,
 };
 use crate::config::system_clock_ms;
 use crate::ids::ProjectId;
@@ -59,6 +60,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     ),
     (3, include_str!("../../migrations/003_settings.sql")),
     (4, include_str!("../../migrations/004_event_chain.sql")),
+    (5, include_str!("../../migrations/005_figures.sql")),
 ];
 
 /// How the server talks to PostgreSQL.
@@ -607,6 +609,7 @@ impl ProjectStore for PostgresStore {
             return Err(StoreFault::Missing);
         }
         for sql in [
+            "DELETE FROM aegis_figure WHERE project_id = $1",
             "DELETE FROM aegis_baseline WHERE project_id = $1",
             "DELETE FROM aegis_project_op WHERE project_id = $1",
             "DELETE FROM aegis_project WHERE project_id = $1",
@@ -751,6 +754,201 @@ impl ProjectStore for PostgresStore {
         row.map(|row| Ok((baseline_of(&row)?, row.try_get(7).map_err(backend)?)))
             .transpose()
     }
+
+    async fn put_figure(
+        &self,
+        meta: &FigureMeta,
+        data: &[u8],
+        max_count: usize,
+        max_total_bytes: u64,
+    ) -> Result<(), StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(backend)?;
+        let exists = tx
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2 FOR UPDATE",
+                &[&meta.project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        let stats = tx
+            .query_one(
+                "SELECT count(*)::bigint, coalesce(sum(byte_len), 0)::bigint
+                 FROM aegis_figure WHERE project_id = $1",
+                &[&meta.project.as_uuid()],
+            )
+            .await
+            .map_err(backend)?;
+        let count = to_u64(stats.try_get(0).map_err(backend)?)? as usize;
+        let used_bytes = to_u64(stats.try_get(1).map_err(backend)?)?;
+        if count >= max_count {
+            return Err(StoreFault::QuotaExceeded(format!(
+                "project already has {count} figures (limit {max_count})"
+            )));
+        }
+        let new_total = used_bytes.saturating_add(meta.byte_len);
+        if new_total > max_total_bytes {
+            return Err(StoreFault::QuotaExceeded(format!(
+                "project figure bytes ({new_total}) would exceed limit ({max_total_bytes})"
+            )));
+        }
+        let width_i32 = i32::try_from(meta.width).map_err(backend)?;
+        let height_i32 = i32::try_from(meta.height).map_err(backend)?;
+        let sha256_slice: &[u8] = &meta.sha256;
+        let n = tx
+            .execute(
+                "INSERT INTO aegis_figure
+                     (figure_id, project_id, caption, target, media_type, width, height,
+                      byte_len, sha256, created_by, created_ms, data)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 ON CONFLICT (figure_id) DO NOTHING",
+                &[
+                    &meta.id,
+                    &meta.project.as_uuid(),
+                    &meta.caption,
+                    &meta.target,
+                    &meta.media_type,
+                    &width_i32,
+                    &height_i32,
+                    &to_i64(meta.byte_len)?,
+                    &sha256_slice,
+                    &meta.created_by,
+                    &to_i64(meta.created_ms)?,
+                    &data,
+                ],
+            )
+            .await
+            .map_err(backend)?;
+        if n != 1 {
+            return Err(StoreFault::Exists);
+        }
+        tx.commit().await.map_err(backend)
+    }
+
+    async fn list_figures(&self, project: ProjectId) -> Result<Vec<FigureMeta>, StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        client
+            .query(
+                "SELECT figure_id, project_id, caption, target, media_type, width, height,
+                        byte_len, sha256, created_by, created_ms
+                 FROM aegis_figure WHERE project_id = $1 ORDER BY figure_id",
+                &[&project.as_uuid()],
+            )
+            .await
+            .map_err(backend)?
+            .iter()
+            .map(figure_of)
+            .collect()
+    }
+
+    async fn load_figure(
+        &self,
+        project: ProjectId,
+        id: Uuid,
+    ) -> Result<Option<(FigureMeta, Vec<u8>)>, StoreFault> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT f.figure_id, f.project_id, f.caption, f.target, f.media_type,
+                        f.width, f.height, f.byte_len, f.sha256, f.created_by, f.created_ms, f.data
+                 FROM aegis_figure f JOIN aegis_project p ON p.project_id = f.project_id
+                 WHERE f.project_id = $1 AND f.figure_id = $2 AND p.org_id = $3",
+                &[&project.as_uuid(), &id, &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        row.map(|row| Ok((figure_of(&row)?, row.try_get(11).map_err(backend)?)))
+            .transpose()
+    }
+
+    async fn update_figure(
+        &self,
+        project: ProjectId,
+        id: Uuid,
+        caption: &str,
+        target: &str,
+    ) -> Result<Option<FigureMeta>, StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        let row = client
+            .query_opt(
+                "UPDATE aegis_figure SET caption = $3, target = $4
+                 WHERE project_id = $1 AND figure_id = $2
+                 RETURNING figure_id, project_id, caption, target, media_type, width, height,
+                           byte_len, sha256, created_by, created_ms",
+                &[&project.as_uuid(), &id, &caption, &target],
+            )
+            .await
+            .map_err(backend)?;
+        row.map(|r| figure_of(&r)).transpose()
+    }
+
+    async fn delete_figure(&self, project: ProjectId, id: Uuid) -> Result<bool, StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        let n = client
+            .execute(
+                "DELETE FROM aegis_figure WHERE project_id = $1 AND figure_id = $2",
+                &[&project.as_uuid(), &id],
+            )
+            .await
+            .map_err(backend)?;
+        Ok(n == 1)
+    }
+}
+
+fn figure_of(row: &Row) -> Result<FigureMeta, StoreFault> {
+    let project: Uuid = row.try_get(1).map_err(backend)?;
+    let width_i32: i32 = row.try_get(5).map_err(backend)?;
+    let height_i32: i32 = row.try_get(6).map_err(backend)?;
+    let sha_bytes: Vec<u8> = row.try_get(8).map_err(backend)?;
+    let sha256: Hash = sha_bytes
+        .try_into()
+        .map_err(|_| StoreFault::Corrupt("figure sha256 is not 32 bytes".to_owned()))?;
+    Ok(FigureMeta {
+        id: row.try_get(0).map_err(backend)?,
+        project: ProjectId::from_uuid(project),
+        caption: row.try_get(2).map_err(backend)?,
+        target: row.try_get(3).map_err(backend)?,
+        media_type: row.try_get(4).map_err(backend)?,
+        width: u32::try_from(width_i32).map_err(backend)?,
+        height: u32::try_from(height_i32).map_err(backend)?,
+        byte_len: to_u64(row.try_get(7).map_err(backend)?)?,
+        sha256,
+        created_by: row.try_get(9).map_err(backend)?,
+        created_ms: to_u64(row.try_get(10).map_err(backend)?)?,
+    })
 }
 
 fn baseline_of(row: &Row) -> Result<BaselineMeta, StoreFault> {

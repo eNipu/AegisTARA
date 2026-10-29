@@ -53,12 +53,13 @@ use crate::asset::PropertySet;
 use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment, StepMitigation};
 use crate::error::{PackError, StoreError};
 use crate::id::{
-    AssetId, ClaimId, ControlId, DamageId, GoalId, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
+    NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
 };
 use crate::methodology::{
     CatalogRef, CatalogScheme, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
-    Level, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_PROPERTIES, Methodology, Property,
-    ThreatCategory,
+    InterfaceKind, Level, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_PROPERTIES,
+    Methodology, Property, ThreatCategory,
 };
 use crate::provenance::{Provenance, ProvenanceSource};
 use crate::tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, WireNodeParts};
@@ -321,6 +322,7 @@ caps! {
     LinksCap = crate::threat::MAX_DAMAGE_LINKS, Limit::DAMAGE_LINKS;
     AttackTreeNodesCap = crate::tree::MAX_ATTACK_TREE_NODES, Limit::ATTACK_TREE_NODES;
     GoalControlsCap = MAX_GOAL_CONTROLS, Limit::GOAL_CONTROLS;
+    BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
 }
 
 /// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
@@ -371,6 +373,45 @@ impl<'de, T: Deserialize<'de>, C: Cap> Deserialize<'de> for BoundedVec<T, C> {
             }
         }
         d.deserialize_seq(V(PhantomData))
+    }
+}
+
+/// A map from [`Key`] to `T` of at most `C::MAX` entries, rejecting repeated
+/// keys.
+pub(crate) struct BoundedKeyMap<T, C>(
+    pub(crate) std::collections::BTreeMap<Arc<str>, T>,
+    PhantomData<C>,
+);
+
+impl<T, C> Default for BoundedKeyMap<T, C> {
+    fn default() -> Self {
+        BoundedKeyMap(std::collections::BTreeMap::new(), PhantomData)
+    }
+}
+
+impl<'de, T: Deserialize<'de>, C: Cap> Deserialize<'de> for BoundedKeyMap<T, C> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V<T, C>(PhantomData<(T, C)>);
+        impl<'de, T: Deserialize<'de>, C: Cap> Visitor<'de> for V<T, C> {
+            type Value = BoundedKeyMap<T, C>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut items = std::collections::BTreeMap::new();
+                while let Some(key) = map.next_key::<Key>()? {
+                    if items.len() >= C::MAX {
+                        return Err(raise(Fault::Limit(C::LIMIT)));
+                    }
+                    let val = map.next_value::<T>()?;
+                    if items.insert(key.0, val).is_some() {
+                        return Err(de::Error::custom("duplicate key"));
+                    }
+                }
+                Ok(BoundedKeyMap(items, PhantomData))
+            }
+        }
+        d.deserialize_map(V(PhantomData))
     }
 }
 
@@ -515,6 +556,22 @@ impl<'de> Deserialize<'de> for CatalogSchemeKey {
                 .catalog_scheme(s)
                 .map(CatalogSchemeKey)
                 .ok_or_else(|| unknown_key(VocabKind::CatalogScheme, s))
+        })
+        .deserialize(d)
+    }
+}
+
+/// An interface kind key, resolved as it is read.
+pub(super) struct InterfaceKindKey(pub(super) InterfaceKind);
+
+impl<'de> Deserialize<'de> for InterfaceKindKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .interface_kind(s)
+                .map(InterfaceKindKey)
+                .ok_or_else(|| unknown_key(VocabKind::InterfaceKind, s))
         })
         .deserialize(d)
     }
@@ -1266,6 +1323,14 @@ pub(super) struct SnapshotWire {
     #[serde(default)]
     pub(super) cybersecurity_claims: Vec<ClaimWire>,
     #[serde(default)]
+    pub(super) components: Vec<ComponentWire>,
+    #[serde(default)]
+    pub(super) interfaces: Vec<InterfaceWire>,
+    #[serde(default)]
+    pub(super) data_flows: Vec<DataFlowWire>,
+    #[serde(default)]
+    pub(super) trust_boundaries: Vec<TrustBoundaryWire>,
+    #[serde(default)]
     pub(super) descriptions: Vec<DescriptionWire>,
     #[serde(default)]
     pub(super) review_marks: Vec<ReviewMarkWire>,
@@ -1292,6 +1357,10 @@ pub(super) enum TargetWire {
     Control { id: WireId<ControlId> },
     Goal { id: WireId<GoalId> },
     Claim { id: WireId<ClaimId> },
+    Component { id: WireId<ComponentId> },
+    Interface { id: WireId<InterfaceId> },
+    DataFlow { id: WireId<DataFlowId> },
+    TrustBoundary { id: WireId<TrustBoundaryId> },
 }
 
 impl TargetWire {
@@ -1306,6 +1375,10 @@ impl TargetWire {
             Self::Control { id } => E::Control(id.0),
             Self::Goal { id } => E::Goal(id.0),
             Self::Claim { id } => E::Claim(id.0),
+            Self::Component { id } => E::Component(id.0),
+            Self::Interface { id } => E::Interface(id.0),
+            Self::DataFlow { id } => E::DataFlow(id.0),
+            Self::TrustBoundary { id } => E::TrustBoundary(id.0),
         }
     }
 }
@@ -1322,6 +1395,10 @@ pub(super) enum TargetView {
     Control { id: Text<ControlId> },
     Goal { id: Text<GoalId> },
     Claim { id: Text<ClaimId> },
+    Component { id: Text<ComponentId> },
+    Interface { id: Text<InterfaceId> },
+    DataFlow { id: Text<DataFlowId> },
+    TrustBoundary { id: Text<TrustBoundaryId> },
 }
 
 impl From<crate::description::ElementRef> for TargetView {
@@ -1336,6 +1413,10 @@ impl From<crate::description::ElementRef> for TargetView {
             E::Control(id) => Self::Control { id: Text(id) },
             E::Goal(id) => Self::Goal { id: Text(id) },
             E::Claim(id) => Self::Claim { id: Text(id) },
+            E::Component(id) => Self::Component { id: Text(id) },
+            E::Interface(id) => Self::Interface { id: Text(id) },
+            E::DataFlow(id) => Self::DataFlow { id: Text(id) },
+            E::TrustBoundary(id) => Self::TrustBoundary { id: Text(id) },
         }
     }
 }
@@ -1357,6 +1438,8 @@ pub(super) struct AssetWire {
     pub(super) id: WireId<AssetId>,
     pub(super) name: Name,
     pub(super) properties: PropertySetKeys,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) component: Option<WireId<ComponentId>>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -1438,6 +1521,55 @@ pub(super) struct GoalWire {
 pub(super) struct ClaimWire {
     pub(super) id: WireId<ClaimId>,
     pub(super) name: Name,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot item-definition component.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ComponentWire {
+    pub(super) id: WireId<ComponentId>,
+    pub(super) name: Name,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) parent: Option<WireId<ComponentId>>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot item-definition interface.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InterfaceWire {
+    pub(super) id: WireId<InterfaceId>,
+    pub(super) name: Name,
+    pub(super) component: WireId<ComponentId>,
+    pub(super) kind: InterfaceKindKey,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot item-definition data flow.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DataFlowWire {
+    pub(super) id: WireId<DataFlowId>,
+    pub(super) name: Name,
+    pub(super) from: WireId<ComponentId>,
+    pub(super) to: WireId<ComponentId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) interface: Option<WireId<InterfaceId>>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot item-definition trust boundary.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TrustBoundaryWire {
+    pub(super) id: WireId<TrustBoundaryId>,
+    pub(super) name: Name,
+    pub(super) components: BoundedVec<WireId<ComponentId>, BoundaryMembersCap>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -1752,6 +1884,114 @@ pub(super) enum OpWire {
         threat: WireId<ThreatId>,
         #[serde(deserialize_with = "Option::deserialize")]
         claim: Option<WireId<ClaimId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    AddComponent {
+        id: WireId<ComponentId>,
+        name: Name,
+        #[serde(deserialize_with = "Option::deserialize")]
+        parent: Option<WireId<ComponentId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameComponent {
+        id: WireId<ComponentId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetComponentParent {
+        id: WireId<ComponentId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        parent: Option<WireId<ComponentId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveComponent {
+        id: WireId<ComponentId>,
+    },
+    AddInterface {
+        id: WireId<InterfaceId>,
+        name: Name,
+        component: WireId<ComponentId>,
+        kind: InterfaceKindKey,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameInterface {
+        id: WireId<InterfaceId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetInterfaceKind {
+        id: WireId<InterfaceId>,
+        kind: InterfaceKindKey,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveInterface {
+        id: WireId<InterfaceId>,
+    },
+    AddDataFlow {
+        id: WireId<DataFlowId>,
+        name: Name,
+        from: WireId<ComponentId>,
+        to: WireId<ComponentId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        interface: Option<WireId<InterfaceId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameDataFlow {
+        id: WireId<DataFlowId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetDataFlowInterface {
+        id: WireId<DataFlowId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        interface: Option<WireId<InterfaceId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveDataFlow {
+        id: WireId<DataFlowId>,
+    },
+    AddTrustBoundary {
+        id: WireId<TrustBoundaryId>,
+        name: Name,
+        components: BoundedVec<WireId<ComponentId>, BoundaryMembersCap>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameTrustBoundary {
+        id: WireId<TrustBoundaryId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    AddBoundaryComponent {
+        boundary: WireId<TrustBoundaryId>,
+        component: WireId<ComponentId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveBoundaryComponent {
+        boundary: WireId<TrustBoundaryId>,
+        component: WireId<ComponentId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveTrustBoundary {
+        id: WireId<TrustBoundaryId>,
+    },
+    SetAssetComponent {
+        asset: WireId<AssetId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        component: Option<WireId<ComponentId>>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

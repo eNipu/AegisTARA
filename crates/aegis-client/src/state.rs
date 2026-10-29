@@ -6,9 +6,10 @@ use aegis_canvas::Scene;
 use aegis_model::NodeIdx;
 
 use crate::pages::{
-    AssetDetail, AssetRow, ClaimRow, Comparison, ControlDetail, ControlRow, DamageDetail,
-    DamageRow, GoalDetail, GoalRowOf, Overview, ProblemRow, RiskRow, ThreatDetail, TreeRow,
-    Vocabulary,
+    AssetDetail, AssetRow, ClaimRow, Comparison, ComponentDetail, ComponentRow, ControlDetail,
+    ControlRow, DamageDetail, DamageRow, DataFlowDetail, DataFlowRow, GoalDetail, GoalRowOf,
+    InterfaceDetail, InterfaceRow, Overview, ProblemRow, RiskRow, ThreatDetail, TreeRow,
+    TrustBoundaryDetail, TrustBoundaryRow, Vocabulary,
 };
 use crate::time::format_ms;
 use crate::view::{Inspector, Page, SuggestionRow, ThreatRow, TreeView};
@@ -214,6 +215,22 @@ pub struct Notice {
 pub struct PageData {
     /// Overview page.
     pub overview: Option<Overview>,
+    /// Item definition page: components (job 074).
+    pub components: Vec<ComponentRow>,
+    /// The selected component.
+    pub component: Option<ComponentDetail>,
+    /// Item definition page: interfaces (job 074).
+    pub interfaces: Vec<InterfaceRow>,
+    /// The selected interface.
+    pub interface: Option<InterfaceDetail>,
+    /// Item definition page: data flows (job 074).
+    pub data_flows: Vec<DataFlowRow>,
+    /// The selected data flow.
+    pub data_flow: Option<DataFlowDetail>,
+    /// Item definition page: trust boundaries (job 074).
+    pub trust_boundaries: Vec<TrustBoundaryRow>,
+    /// The selected trust boundary.
+    pub trust_boundary: Option<TrustBoundaryDetail>,
     /// Assets page (and the asset choices of the threats page).
     pub assets: Vec<AssetRow>,
     /// The selected asset.
@@ -394,6 +411,11 @@ pub struct ProjectView {
     /// Position of the selected suggestion in `suggestions` when a ghost node
     /// is selected on the canvas.
     pub selected_suggestion: Option<usize>,
+    /// Attached figures (PNG, JPEG, or sanitized static SVG) on the project or
+    /// elements (job 073, ARC-01, RPT-06).
+    pub figures: Vec<crate::report::FigureAttachment>,
+    /// Current dry-run preview of an Excel TARA import, if any (job 080, INT-02).
+    pub excel_preview: Option<crate::excel::ExcelPreview>,
 }
 
 impl ProjectView {

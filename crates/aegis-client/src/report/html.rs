@@ -89,7 +89,8 @@ fn image_html(media_type: &str, bytes: &[u8], alt: &str) -> String {
     use base64::Engine as _;
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     format!(
-        "<img class=\"logo\" src=\"data:{media_type};base64,{b64}\" alt=\"{}\">\n",
+        "<figure class=\"img\"><img class=\"logo\" src=\"data:{media_type};base64,{b64}\" alt=\"{}\"><figcaption class=\"muted\">{}</figcaption></figure>\n",
+        esc(alt),
         esc(alt)
     )
 }

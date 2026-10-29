@@ -488,6 +488,166 @@
           ]
         }
       }
-    ]
+    ],
+    "interface_kinds": [
+      {
+        "key": "can",
+        "label": "CAN"
+      },
+      {
+        "key": "ethernet",
+        "label": "Ethernet"
+      },
+      {
+        "key": "wireless",
+        "label": "Wireless"
+      },
+      {
+        "key": "debug",
+        "label": "Debug"
+      },
+      {
+        "key": "cellular",
+        "label": "Cellular"
+      },
+      {
+        "key": "usb",
+        "label": "USB"
+      }
+    ],
+    "translations": {
+      "ja": {
+        "label": "ISO/SAE 21434 + UN R155",
+        "element_names": {
+          "component": {
+            "singular": "コンポーネント",
+            "plural": "コンポーネント"
+          },
+          "interface": {
+            "singular": "インターフェース",
+            "plural": "インターフェース"
+          },
+          "data_flow": {
+            "singular": "データフロー",
+            "plural": "データフロー"
+          },
+          "trust_boundary": {
+            "singular": "信頼境界",
+            "plural": "信頼境界"
+          },
+          "asset": {
+            "singular": "資産",
+            "plural": "資産"
+          },
+          "damage_scenario": {
+            "singular": "ダメージシナリオ",
+            "plural": "ダメージシナリオ"
+          },
+          "threat_scenario": {
+            "singular": "脅威シナリオ",
+            "plural": "脅威シナリオ"
+          },
+          "attack_tree": {
+            "singular": "アタックツリー",
+            "plural": "アタックツリー"
+          },
+          "security_control": {
+            "singular": "セキュリティ対策",
+            "plural": "セキュリティ対策"
+          },
+          "cybersecurity_goal": {
+            "singular": "サイバーセキュリティ目標",
+            "plural": "サイバーセキュリティ目標"
+          },
+          "cybersecurity_claim": {
+            "singular": "サイバーセキュリティ主張",
+            "plural": "サイバーセキュリティ主張"
+          },
+          "feasibility": "攻撃実現可能性"
+        },
+        "impact_categories": {
+          "financial": "財務",
+          "operational": "運用",
+          "privacy": "プライバシー",
+          "safety": "安全性"
+        },
+        "impact_levels": {
+          "major": "重大",
+          "moderate": "中程度",
+          "negligible": "無視可能",
+          "severe": "深刻"
+        },
+        "feasibility_levels": {
+          "high": "高い",
+          "low": "低い",
+          "medium": "中",
+          "very-low": "極めて低い"
+        },
+        "risk_levels": {
+          "r1": "リスク 1",
+          "r2": "リスク 2",
+          "r3": "リスク 3",
+          "r4": "リスク 4",
+          "r5": "リスク 5"
+        },
+        "properties": {
+          "authenticity": "真正性",
+          "authorization": "認可",
+          "availability": "可用性",
+          "confidentiality": "機密性",
+          "integrity": "完全性",
+          "non-repudiation": "否認防止"
+        },
+        "threat_categories": {
+          "denial-of-service": "サービス拒否",
+          "elevation-of-privilege": "権限昇格",
+          "information-disclosure": "情報漏洩",
+          "repudiation": "否認",
+          "spoofing": "なりすまし",
+          "tampering": "改ざん"
+        },
+        "catalog_schemes": {
+          "r155-annex5": "UN R155 附属書 5"
+        },
+        "feasibility_factors": {
+          "elapsed-time": "経過時間",
+          "equipment": "機材",
+          "expertise": "専門知識",
+          "knowledge": "対象に関する知識",
+          "window-of-opportunity": "攻撃機会"
+        },
+        "factor_levels": {
+          "bespoke": "特注",
+          "confidential": "機密情報",
+          "difficult": "困難",
+          "easy": "容易",
+          "expert": "専門家",
+          "gt-6m": "6か月超",
+          "layman": "一般人",
+          "le-1d": "1日以下",
+          "le-1m": "1か月以下",
+          "le-1w": "1週間以下",
+          "le-6m": "6か月以下",
+          "moderate": "中程度",
+          "multiple-bespoke": "複数の特注",
+          "multiple-experts": "複数の専門家",
+          "proficient": "熟練者",
+          "public": "公開情報",
+          "restricted": "制限情報",
+          "specialized": "専門的",
+          "standard": "標準",
+          "strictly-confidential": "極秘情報",
+          "unlimited": "無制限"
+        },
+        "interface_kinds": {
+          "can": "CAN",
+          "cellular": "セルラー",
+          "debug": "デバッグ",
+          "ethernet": "Ethernet",
+          "usb": "USB",
+          "wireless": "無線"
+        }
+      }
+    }
   }
 }

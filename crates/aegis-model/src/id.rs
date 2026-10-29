@@ -641,6 +641,202 @@ entity_ids! {
     pub struct ClaimId;
 }
 
+entity_ids! {
+    /// Internal index of a system component in a [`Project`](crate::Project)
+    /// arena (ARC-02).
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::ComponentIdx>(), 4);
+    /// ```
+    pub struct ComponentIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{ComponentId, Methodology, Op, Project, Provenance};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = ComponentId::new_v7();
+        /// project.apply(Op::AddComponent {
+        ///     id,
+        ///     name: "Telematics Control Unit".into(),
+        ///     parent: None,
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.component_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a system component: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::ComponentId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = ComponentId::new_v7();
+    /// assert_eq!(id.to_string().parse::<ComponentId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct ComponentId;
+}
+
+entity_ids! {
+    /// Internal index of a component interface in a [`Project`](crate::Project)
+    /// arena (ARC-02).
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::InterfaceIdx>(), 4);
+    /// ```
+    pub struct InterfaceIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{ComponentId, InterfaceId, Methodology, Op, Project, Provenance};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let m = Arc::new(Methodology::iso21434_r155()?);
+        /// let mut project = Project::new(Arc::clone(&m));
+        /// let comp = ComponentId::new_v7();
+        /// project.apply(Op::AddComponent {
+        ///     id: comp,
+        ///     name: "Gateway".into(),
+        ///     parent: None,
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// let kind = m.interface_kinds().next().ok_or("no interface kind")?;
+        /// let id = InterfaceId::new_v7();
+        /// project.apply(Op::AddInterface {
+        ///     id,
+        ///     name: "CAN-FD Powertrain".into(),
+        ///     component: comp,
+        ///     kind,
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.interface_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a component interface: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::InterfaceId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = InterfaceId::new_v7();
+    /// assert_eq!(id.to_string().parse::<InterfaceId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct InterfaceId;
+}
+
+entity_ids! {
+    /// Internal index of a data flow in a [`Project`](crate::Project) arena
+    /// (ARC-02).
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::DataFlowIdx>(), 4);
+    /// ```
+    pub struct DataFlowIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{ComponentId, DataFlowId, Methodology, Op, Project, Provenance};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let c1 = ComponentId::new_v7();
+        /// let c2 = ComponentId::new_v7();
+        /// project.apply(Op::AddComponent {
+        ///     id: c1, name: "TCU".into(), parent: None, provenance: Provenance::default(),
+        /// })?;
+        /// project.apply(Op::AddComponent {
+        ///     id: c2, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+        /// })?;
+        /// let id = DataFlowId::new_v7();
+        /// project.apply(Op::AddDataFlow {
+        ///     id,
+        ///     name: "OTA package stream".into(),
+        ///     from: c1,
+        ///     to: c2,
+        ///     interface: None,
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.data_flow_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a data flow: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::DataFlowId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = DataFlowId::new_v7();
+    /// assert_eq!(id.to_string().parse::<DataFlowId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct DataFlowId;
+}
+
+entity_ids! {
+    /// Internal index of a trust boundary in a [`Project`](crate::Project)
+    /// arena (ARC-02).
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::TrustBoundaryIdx>(), 4);
+    /// ```
+    pub struct TrustBoundaryIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{Methodology, Op, Project, Provenance, TrustBoundaryId};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = TrustBoundaryId::new_v7();
+        /// project.apply(Op::AddTrustBoundary {
+        ///     id,
+        ///     name: "Safety CAN domain".into(),
+        ///     components: vec![],
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.trust_boundary_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a trust boundary: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::TrustBoundaryId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = TrustBoundaryId::new_v7();
+    /// assert_eq!(id.to_string().parse::<TrustBoundaryId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct TrustBoundaryId;
+}
+
 /// Stable public ID of a suggestion branch or suggestion item: an RFC 9562
 /// version 7 UUID.
 ///
@@ -893,6 +1089,18 @@ mod entity_ids {
     #[test]
     fn ids_claim_accepts_only_v7_and_round_trips() {
         id_checks!(ClaimId);
+    }
+
+    #[test]
+    fn ids_item_definition_accept_only_v7_and_round_trip() {
+        id_checks!(ComponentId);
+        id_checks!(InterfaceId);
+        id_checks!(DataFlowId);
+        id_checks!(TrustBoundaryId);
+        assert_eq!(ComponentIdx::from_u32(5).index(), 5);
+        assert_eq!(InterfaceIdx::from_u32(6).index(), 6);
+        assert_eq!(DataFlowIdx::from_u32(7).index(), 7);
+        assert_eq!(TrustBoundaryIdx::from_u32(8).index(), 8);
     }
 
     #[test]

@@ -314,6 +314,30 @@ fn derive_preview(title: &Arc<str>, ops: &[Op]) -> GhostPreview {
                     name: Arc::clone(name),
                 };
             }
+            Op::AddComponent { name, .. } => {
+                return GhostPreview::Entity {
+                    kind: EntityKind::Component,
+                    name: Arc::clone(name),
+                };
+            }
+            Op::AddInterface { name, .. } => {
+                return GhostPreview::Entity {
+                    kind: EntityKind::Interface,
+                    name: Arc::clone(name),
+                };
+            }
+            Op::AddDataFlow { name, .. } => {
+                return GhostPreview::Entity {
+                    kind: EntityKind::DataFlow,
+                    name: Arc::clone(name),
+                };
+            }
+            Op::AddTrustBoundary { name, .. } => {
+                return GhostPreview::Entity {
+                    kind: EntityKind::TrustBoundary,
+                    name: Arc::clone(name),
+                };
+            }
             _ => {}
         }
     }

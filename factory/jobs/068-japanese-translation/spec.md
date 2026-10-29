@@ -8,7 +8,7 @@ Japanese translation (L10N-06, L10N-07)
 - Affected crates/paths: crates/aegis-shell/translations/ja/LC_MESSAGES/aegis-shell.po, crates/aegis-client/locales/ja/main.ftl, crates/aegis-client/src/report/doc.rs (language-aware builder)
 
 ## Problem & Goal
-Full Japanese translation of the UI and reports. Per-language labels in methodology packs (format change) and Japanese labels for the built-in pack are the remaining piece of L10N-07 and land with the pack format change.
+Full Japanese translation of the UI and reports, plus per-language labels in methodology packs (backward-compatible format extension) and Japanese labels for the built-in `iso21434-r155` pack wired to the language-aware report builder (`L10N-06`, `L10N-07`).
 
 ## Acceptance Criteria
-1. ja catalogs for UI and reports; 2. reports render Japanese headings/dates; 3. per-language pack labels (L10N-07) remain open and are noted in the ADR and architecture.
+1. ja catalogs for UI and reports; 2. reports render Japanese headings/dates; 3. per-language pack labels (`L10N-07`) in `Methodology` and `iso21434-r155.json` render localized element-type headings and vocabulary labels in Japanese and Bilingual reports while older packs load unchanged.

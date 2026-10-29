@@ -8,6 +8,8 @@ project-notes = プロジェクトのメモ
 descriptions = 説明
 
 section-executive-summary = 1. エグゼクティブサマリー
+section-item-definition = アイテム定義
+section-figures = 図表
 section-risks = 6. リスクレジスタと対応
 section-problems = 9. 未解決の問題
 section-comparison = ベースラインとの比較
@@ -59,6 +61,20 @@ tree-omitted = あと { $count } 枚の詳細パネルは描画されていま�
 sheet-overview = 概要
 sheet-risk-register = リスクレジスタ
 sheet-problems = 問題
+sheet-figures = 図表
+
+component = コンポーネント
+parent = 親コンポーネント
+kind = 種別
+from-interface = 送信元インターフェース
+to-interface = 送信先インターフェース
+members = メンバー
+figures = 図表
+caption = キャプション
+target = 対象
+format = 形式
+dimensions = サイズ
+size-bytes = バイト数
 
 report-language-en = 英語
 report-language-ja = 日本語

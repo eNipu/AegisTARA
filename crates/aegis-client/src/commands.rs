@@ -13,8 +13,9 @@
 //! the user decides what happens to those threats.
 
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ControlId, DamageId, GateKind, GoalId, NodeId, Op, Project,
-    PropertySet, Provenance, RiskTreatment, ThreatId, TreeId,
+    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GateKind, GoalId,
+    InterfaceId, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, parse_outline};
@@ -103,10 +104,138 @@ pub enum Edit {
         /// On or off.
         on: bool,
     },
+    /// Binds an asset to a component in the item definition, or unbinds it.
+    SetAssetComponent {
+        /// The asset.
+        asset: AssetId,
+        /// The component, or `None`.
+        component: Option<ComponentId>,
+    },
     /// Removes an asset that no threat targets.
     RemoveAsset {
         /// The asset.
         asset: AssetId,
+    },
+
+    // ---- item definition (job 074) ----
+    /// Adds a component to the item definition.
+    AddComponent {
+        /// New ID.
+        id: ComponentId,
+        /// Name.
+        name: String,
+        /// Optional parent component.
+        parent: Option<ComponentId>,
+    },
+    /// Renames a component.
+    RenameComponent {
+        /// The component.
+        component: ComponentId,
+        /// New name.
+        name: String,
+    },
+    /// Sets or clears the parent component of a component.
+    SetComponentParent {
+        /// The component.
+        component: ComponentId,
+        /// Parent component, or `None`.
+        parent: Option<ComponentId>,
+    },
+    /// Removes a component, unbinding children, assets, trust boundaries,
+    /// interfaces, and their data flows first.
+    RemoveComponent {
+        /// The component.
+        component: ComponentId,
+    },
+    /// Adds an interface on a component.
+    AddInterface {
+        /// New ID.
+        id: InterfaceId,
+        /// Name.
+        name: String,
+        /// Owning component.
+        component: ComponentId,
+        /// Position in the methodology's interface kinds.
+        kind: usize,
+    },
+    /// Renames an interface.
+    RenameInterface {
+        /// The interface.
+        interface: InterfaceId,
+        /// New name.
+        name: String,
+    },
+    /// Changes an interface's kind.
+    SetInterfaceKind {
+        /// The interface.
+        interface: InterfaceId,
+        /// Position in the methodology's interface kinds.
+        kind: usize,
+    },
+    /// Removes an interface, removing its data flows first.
+    RemoveInterface {
+        /// The interface.
+        interface: InterfaceId,
+    },
+    /// Adds a data flow between two components.
+    AddDataFlow {
+        /// New ID.
+        id: DataFlowId,
+        /// Name.
+        name: String,
+        /// Source component.
+        from: ComponentId,
+        /// Destination component.
+        to: ComponentId,
+        /// Optional interface on `from` or `to` over which the flow travels.
+        interface: Option<InterfaceId>,
+    },
+    /// Renames a data flow.
+    RenameDataFlow {
+        /// The data flow.
+        data_flow: DataFlowId,
+        /// New name.
+        name: String,
+    },
+    /// Sets or clears the interface over which a data flow travels.
+    SetDataFlowInterface {
+        /// The data flow.
+        data_flow: DataFlowId,
+        /// The interface on `from` or `to`, or `None`.
+        interface: Option<InterfaceId>,
+    },
+    /// Removes a data flow.
+    RemoveDataFlow {
+        /// The data flow.
+        data_flow: DataFlowId,
+    },
+    /// Adds a trust boundary.
+    AddTrustBoundary {
+        /// New ID.
+        id: TrustBoundaryId,
+        /// Name.
+        name: String,
+    },
+    /// Renames a trust boundary.
+    RenameTrustBoundary {
+        /// The trust boundary.
+        boundary: TrustBoundaryId,
+        /// New name.
+        name: String,
+    },
+    /// Adds or removes a component as a member of a trust boundary.
+    SetTrustBoundaryMember {
+        /// The trust boundary.
+        boundary: TrustBoundaryId,
+        /// The component.
+        component: ComponentId,
+        /// Member or not.
+        member: bool,
+    },
+    /// Removes a trust boundary.
+    RemoveTrustBoundary {
+        /// The trust boundary.
+        boundary: TrustBoundaryId,
     },
 
     // ---- damage scenarios ----
@@ -502,6 +631,10 @@ fn clear_descriptions_before_removal(
     let mut out = Vec::with_capacity(ops.len());
     for op in ops {
         let target = match &op {
+            Op::RemoveComponent { id } => Some(E::Component(*id)),
+            Op::RemoveInterface { id } => Some(E::Interface(*id)),
+            Op::RemoveDataFlow { id } => Some(E::DataFlow(*id)),
+            Op::RemoveTrustBoundary { id } => Some(E::TrustBoundary(*id)),
             Op::RemoveAsset { id } => Some(E::Asset(*id)),
             Op::RemoveDamageScenario { id } => Some(E::Damage(*id)),
             Op::RemoveThreatScenario { id } => Some(E::Threat(*id)),
@@ -691,8 +824,14 @@ impl Edit {
                     provenance: p,
                 }]
             }
+            Edit::SetAssetComponent { asset, component } => vec![Op::SetAssetComponent {
+                asset: *asset,
+                component: *component,
+                provenance: p,
+            }],
             Edit::RemoveAsset { asset } => {
                 let idx = project.asset_idx(asset).ok_or(EditError::Missing)?;
+                let a = project.asset(idx).ok_or(EditError::Missing)?;
                 let threats = project
                     .threat_scenarios()
                     .filter(|(_, _, t)| t.asset() == idx)
@@ -700,7 +839,201 @@ impl Edit {
                 if threats > 0 {
                     return Err(EditError::AssetInUse(threats));
                 }
-                vec![Op::RemoveAsset { id: *asset }]
+                let mut ops = Vec::new();
+                if a.component().is_some() {
+                    ops.push(Op::SetAssetComponent {
+                        asset: *asset,
+                        component: None,
+                        provenance: p.clone(),
+                    });
+                }
+                ops.push(Op::RemoveAsset { id: *asset });
+                ops
+            }
+
+            Edit::AddComponent {
+                id,
+                name: n,
+                parent,
+            } => vec![Op::AddComponent {
+                id: *id,
+                name: name(n)?,
+                parent: *parent,
+                provenance: p,
+            }],
+            Edit::RenameComponent { component, name: n } => vec![Op::RenameComponent {
+                id: *component,
+                name: name(n)?,
+                provenance: p,
+            }],
+            Edit::SetComponentParent { component, parent } => vec![Op::SetComponentParent {
+                id: *component,
+                parent: *parent,
+                provenance: p,
+            }],
+            Edit::RemoveComponent { component } => {
+                let c_idx = project.component_idx(component).ok_or(EditError::Missing)?;
+                let mut ops = Vec::new();
+                for (_, child_id, child) in project.components() {
+                    if child.parent() == Some(c_idx) {
+                        ops.push(Op::SetComponentParent {
+                            id: child_id,
+                            parent: None,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                for (_, asset_id, asset) in project.assets() {
+                    if asset.component() == Some(c_idx) {
+                        ops.push(Op::SetAssetComponent {
+                            asset: asset_id,
+                            component: None,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                let iface_indices: Vec<_> = project
+                    .interfaces()
+                    .filter(|(_, _, i)| i.component() == c_idx)
+                    .map(|(idx, id, _)| (idx, id))
+                    .collect();
+                for (_, df_id, df) in project.data_flows() {
+                    if df.from() == c_idx || df.to() == c_idx {
+                        ops.push(Op::RemoveDataFlow { id: df_id });
+                    } else if df
+                        .interface()
+                        .is_some_and(|i_idx| iface_indices.iter().any(|(idx, _)| *idx == i_idx))
+                    {
+                        ops.push(Op::SetDataFlowInterface {
+                            id: df_id,
+                            interface: None,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                for (_, iface_id) in iface_indices {
+                    ops.push(Op::RemoveInterface { id: iface_id });
+                }
+                for (_, tb_id, tb) in project.trust_boundaries() {
+                    if tb.contains(c_idx) {
+                        ops.push(Op::RemoveBoundaryComponent {
+                            boundary: tb_id,
+                            component: *component,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                ops.push(Op::RemoveComponent { id: *component });
+                ops
+            }
+            Edit::AddInterface {
+                id,
+                name: n,
+                component,
+                kind,
+            } => vec![Op::AddInterface {
+                id: *id,
+                name: name(n)?,
+                component: *component,
+                kind: m
+                    .interface_kinds()
+                    .nth(*kind)
+                    .ok_or(EditError::UnknownChoice)?,
+                provenance: p,
+            }],
+            Edit::RenameInterface { interface, name: n } => vec![Op::RenameInterface {
+                id: *interface,
+                name: name(n)?,
+                provenance: p,
+            }],
+            Edit::SetInterfaceKind { interface, kind } => vec![Op::SetInterfaceKind {
+                id: *interface,
+                kind: m
+                    .interface_kinds()
+                    .nth(*kind)
+                    .ok_or(EditError::UnknownChoice)?,
+                provenance: p,
+            }],
+            Edit::RemoveInterface { interface } => {
+                let i_idx = project.interface_idx(interface).ok_or(EditError::Missing)?;
+                let mut ops: Vec<Op> = project
+                    .data_flows()
+                    .filter(|(_, _, df)| df.interface() == Some(i_idx))
+                    .map(|(_, df_id, _)| Op::SetDataFlowInterface {
+                        id: df_id,
+                        interface: None,
+                        provenance: p.clone(),
+                    })
+                    .collect();
+                ops.push(Op::RemoveInterface { id: *interface });
+                ops
+            }
+            Edit::AddDataFlow {
+                id,
+                name: n,
+                from,
+                to,
+                interface,
+            } => vec![Op::AddDataFlow {
+                id: *id,
+                name: name(n)?,
+                from: *from,
+                to: *to,
+                interface: *interface,
+                provenance: p,
+            }],
+            Edit::RenameDataFlow { data_flow, name: n } => vec![Op::RenameDataFlow {
+                id: *data_flow,
+                name: name(n)?,
+                provenance: p,
+            }],
+            Edit::SetDataFlowInterface {
+                data_flow,
+                interface,
+            } => vec![Op::SetDataFlowInterface {
+                id: *data_flow,
+                interface: *interface,
+                provenance: p,
+            }],
+            Edit::RemoveDataFlow { data_flow } => {
+                if project.data_flow_idx(data_flow).is_none() {
+                    return Err(EditError::Missing);
+                }
+                vec![Op::RemoveDataFlow { id: *data_flow }]
+            }
+            Edit::AddTrustBoundary { id, name: n } => vec![Op::AddTrustBoundary {
+                id: *id,
+                name: name(n)?,
+                components: Vec::new(),
+                provenance: p,
+            }],
+            Edit::RenameTrustBoundary { boundary, name: n } => vec![Op::RenameTrustBoundary {
+                id: *boundary,
+                name: name(n)?,
+                provenance: p,
+            }],
+            Edit::SetTrustBoundaryMember {
+                boundary,
+                component,
+                member,
+            } => vec![if *member {
+                Op::AddBoundaryComponent {
+                    boundary: *boundary,
+                    component: *component,
+                    provenance: p,
+                }
+            } else {
+                Op::RemoveBoundaryComponent {
+                    boundary: *boundary,
+                    component: *component,
+                    provenance: p,
+                }
+            }],
+            Edit::RemoveTrustBoundary { boundary } => {
+                if project.trust_boundary_idx(boundary).is_none() {
+                    return Err(EditError::Missing);
+                }
+                vec![Op::RemoveTrustBoundary { id: *boundary }]
             }
 
             Edit::AddDamage { id, name: n } => vec![Op::AddDamageScenario {
@@ -1247,6 +1580,10 @@ impl Edit {
     pub fn created(&self) -> Option<crate::view::Selection> {
         use crate::view::Selection;
         match self {
+            Edit::AddComponent { id, .. } => Some(Selection::Component(*id)),
+            Edit::AddInterface { id, .. } => Some(Selection::Interface(*id)),
+            Edit::AddDataFlow { id, .. } => Some(Selection::DataFlow(*id)),
+            Edit::AddTrustBoundary { id, .. } => Some(Selection::TrustBoundary(*id)),
             Edit::AddAsset { id, .. } => Some(Selection::Asset(*id)),
             Edit::AddDamage { id, .. } => Some(Selection::Damage(*id)),
             Edit::AddThreat { id, .. } => Some(Selection::Threat(*id)),
@@ -1384,6 +1721,43 @@ pub enum Command {
     RejectSuggestion(usize),
     /// Rejects all pending suggestions in the active branch.
     RejectAllSuggestions,
+    /// Loads figure attachments of the open project (job 073).
+    LoadFigures,
+    /// Uploads a figure attachment on the open project (job 073).
+    PutFigure {
+        /// Caption text.
+        caption: String,
+        /// Target string (`""` or `"project"` or `<kind>:<uuidv7>`).
+        target: String,
+        /// Raw image bytes (PNG, JPEG, or SVG).
+        data: Vec<u8>,
+    },
+    /// Updates the caption and target of an existing figure attachment (job 073).
+    UpdateFigure {
+        /// Stable UUIDv7 figure identifier.
+        figure_id: String,
+        /// Updated caption text.
+        caption: String,
+        /// Updated target string.
+        target: String,
+    },
+    /// Deletes a figure attachment from the open project (job 073).
+    DeleteFigure {
+        /// Stable UUIDv7 figure identifier.
+        figure_id: String,
+    },
+    /// Runs a dry-run preview of an Excel `.xlsx` TARA import (job 080).
+    PreviewExcelImport {
+        /// Raw `.xlsx` workbook bytes.
+        bytes: Vec<u8>,
+        /// Column-to-element mapping.
+        mapping: Box<crate::excel::ExcelMapping>,
+    },
+    /// Applies the last dry-run Excel import preview as one atomic batch with
+    /// `Provenance::import` (job 080).
+    ApplyExcelImport,
+    /// Clears the current Excel import preview.
+    ClearExcelPreview,
     /// Stop the session.
     Shutdown,
 }

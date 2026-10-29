@@ -20,6 +20,7 @@
 //!   and `verify_chain` recomputes it.
 
 pub(crate) mod audit;
+pub mod blob;
 mod folder;
 mod memory;
 mod postgres;
@@ -28,6 +29,12 @@ use std::future::Future;
 
 pub use audit::{
     ChainReport, ChainVerifier, EventChainVerifier, Hash, event_genesis, event_link, genesis, link,
+};
+pub use blob::{
+    FigureError, FigureMedia, FigureMeta, MAX_FIGURE_BYTES, MAX_FIGURE_CAPTION_CHARS,
+    MAX_FIGURE_TARGET_BYTES, MAX_FIGURES_PER_PROJECT, MAX_IMAGE_DIMENSION,
+    MAX_PROJECT_FIGURES_BYTES, ValidatedFigure, sanitize_svg, validate_and_sanitize_figure,
+    validate_caption, validate_target,
 };
 pub use folder::FolderStore;
 pub use memory::MemoryStore;
@@ -121,6 +128,9 @@ pub enum StoreFault {
     /// The project is not in the store.
     #[error("project not found")]
     Missing,
+    /// A per-project figure count or byte quota was exceeded.
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
     /// Stored data is not what the server wrote (for example a gap).
     #[error("stored data is corrupt: {0}")]
     Corrupt(String),
@@ -244,4 +254,51 @@ pub trait ProjectStore: Send + Sync + 'static {
         project: ProjectId,
         id: uuid::Uuid,
     ) -> impl Future<Output = Result<Option<(BaselineMeta, Vec<u8>)>, StoreFault>> + Send;
+
+    /// Stores a figure attachment while enforcing `max_count` and
+    /// `max_total_bytes` across the project's figures (`ARC-01`).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault::Missing`] if the project does not exist,
+    /// [`StoreFault::Exists`] if the figure ID is taken, or
+    /// [`StoreFault::QuotaExceeded`] if adding the figure would exceed
+    /// `max_count` or `max_total_bytes`.
+    fn put_figure(
+        &self,
+        meta: &FigureMeta,
+        data: &[u8],
+        max_count: usize,
+        max_total_bytes: u64,
+    ) -> impl Future<Output = Result<(), StoreFault>> + Send;
+
+    /// A project's attached figures, oldest first.
+    fn list_figures(
+        &self,
+        project: ProjectId,
+    ) -> impl Future<Output = Result<Vec<FigureMeta>, StoreFault>> + Send;
+
+    /// One figure with its raw bytes, or `None`.
+    fn load_figure(
+        &self,
+        project: ProjectId,
+        id: uuid::Uuid,
+    ) -> impl Future<Output = Result<Option<(FigureMeta, Vec<u8>)>, StoreFault>> + Send;
+
+    /// Updates a figure's caption and target element reference, returning the
+    /// updated metadata or `None` if the figure does not exist.
+    fn update_figure(
+        &self,
+        project: ProjectId,
+        id: uuid::Uuid,
+        caption: &str,
+        target: &str,
+    ) -> impl Future<Output = Result<Option<FigureMeta>, StoreFault>> + Send;
+
+    /// Deletes a figure attachment. Returns `true` if a figure was removed.
+    fn delete_figure(
+        &self,
+        project: ProjectId,
+        id: uuid::Uuid,
+    ) -> impl Future<Output = Result<bool, StoreFault>> + Send;
 }

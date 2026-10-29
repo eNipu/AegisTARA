@@ -15,13 +15,18 @@ use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDe
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
 use crate::id::{
-    ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ControlId, ControlIdx, DamageId, DamageIdx,
-    GoalId, GoalIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId,
+    ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, GoalId, GoalIdx, InterfaceId,
+    InterfaceIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
+    TrustBoundaryIdx,
+};
+use crate::item::{
+    Component, DataFlow, Interface, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS, TrustBoundary,
 };
 use crate::lint::{LintCode, LintFinding};
 use crate::methodology::{
     AttackPotential, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
-    Level, Methodology, Property, RiskLevel, ThreatCategory,
+    InterfaceKind, Level, Methodology, Property, RiskLevel, ThreatCategory,
 };
 use crate::op::Op;
 use crate::paths::{AttackPath, ChokePoint};
@@ -226,6 +231,18 @@ struct RefCounts {
     goals: Vec<u32>,
     /// Per cybersecurity claim slot: how many live threats reference it.
     claims: Vec<u32>,
+    /// Per component slot: how many live child components reference it as `parent`.
+    component_children: Vec<u32>,
+    /// Per component slot: how many live interfaces belong to it.
+    component_interfaces: Vec<u32>,
+    /// Per component slot: how many live data flows reference it as `from` or `to`.
+    component_flows: Vec<u32>,
+    /// Per component slot: how many live trust boundaries contain it.
+    component_boundaries: Vec<u32>,
+    /// Per component slot: how many live assets are bound to it.
+    component_assets: Vec<u32>,
+    /// Per interface slot: how many live data flows reference it.
+    interfaces: Vec<u32>,
 }
 
 /// Adds 1 to (or, with `up == false`, takes 1 from) `v[i]` if it exists.
@@ -457,6 +474,10 @@ pub struct Project {
     controls: Arena<ControlId, ControlIdx, SecurityControl>,
     goals: Arena<GoalId, GoalIdx, CybersecurityGoal>,
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
+    components: Arena<ComponentId, ComponentIdx, Component>,
+    interfaces: Arena<InterfaceId, InterfaceIdx, Interface>,
+    data_flows: Arena<DataFlowId, DataFlowIdx, DataFlow>,
+    trust_boundaries: Arena<TrustBoundaryId, TrustBoundaryIdx, TrustBoundary>,
     /// Derived data, rebuilt from `threats`, `trees`, and `goals` (D10).
     refs: RefCounts,
     /// Descriptions and the project's notes, in ID order (job 064).
@@ -572,6 +593,10 @@ impl Project {
             controls: Arena::new(),
             goals: Arena::new(),
             claims: Arena::new(),
+            components: Arena::new(),
+            interfaces: Arena::new(),
+            data_flows: Arena::new(),
+            trust_boundaries: Arena::new(),
             refs: RefCounts::default(),
             descriptions: BTreeMap::new(),
             description_bytes: 0,
@@ -1657,6 +1682,424 @@ impl Project {
         &self,
     ) -> impl Iterator<Item = (ClaimIdx, ClaimId, &CybersecurityClaim)> {
         self.claims.iter()
+    }
+
+    // -- Components (ARC-02) -----------------------------------------------------
+
+    /// Returns a live component in O(1), or `None` if `idx` is out of range or
+    /// tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id,
+    ///     name: "Central Gateway".into(),
+    ///     parent: None,
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.component_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.component(idx).map(|c| c.name()), Some("Central Gateway"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn component(&self, idx: ComponentIdx) -> Option<&Component> {
+        self.components.get(idx)
+    }
+
+    /// Resolves a component's public ID to its arena index in O(log n).
+    /// Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.component_idx(&ComponentId::new_v7()), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn component_idx(&self, id: &ComponentId) -> Option<ComponentIdx> {
+        self.components.idx(id)
+    }
+
+    /// Returns a live component's public ID in O(1), or `None` if `idx` is out
+    /// of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.component_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.component_id(idx), Some(id));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn component_id(&self, idx: ComponentIdx) -> Option<ComponentId> {
+        self.components.id(idx)
+    }
+
+    /// Returns the number of live components in O(1). Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.component_count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn component_count(&self) -> usize {
+        self.components.len()
+    }
+
+    /// Iterates live components in deterministic `ComponentId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let (a, b) = (ComponentId::new_v7(), ComponentId::new_v7());
+    /// for id in [b, a] {
+    ///     project.apply(Op::AddComponent {
+    ///         id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let ids: Vec<_> = project.components().map(|(_, id, _)| id).collect();
+    /// assert_eq!(ids, [a.min(b), a.max(b)]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn components(&self) -> impl Iterator<Item = (ComponentIdx, ComponentId, &Component)> {
+        self.components.iter()
+    }
+
+    // -- Interfaces (ARC-02) -----------------------------------------------------
+
+    /// Returns a live interface in O(1), or `None` if `idx` is out of range or
+    /// tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, InterfaceId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let comp = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: comp, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let kind = m.interface_kinds().next().ok_or("no kind")?;
+    /// let id = InterfaceId::new_v7();
+    /// project.apply(Op::AddInterface {
+    ///     id, name: "CAN0".into(), component: comp, kind, provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.interface_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.interface(idx).map(|i| i.name()), Some("CAN0"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn interface(&self, idx: InterfaceIdx) -> Option<&Interface> {
+        self.interfaces.get(idx)
+    }
+
+    /// Resolves an interface's public ID to its arena index in O(log n).
+    /// Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{InterfaceId, Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.interface_idx(&InterfaceId::new_v7()), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn interface_idx(&self, id: &InterfaceId) -> Option<InterfaceIdx> {
+        self.interfaces.idx(id)
+    }
+
+    /// Returns a live interface's public ID in O(1), or `None` if `idx` is out
+    /// of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, InterfaceId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let comp = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: comp, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let kind = m.interface_kinds().next().ok_or("no kind")?;
+    /// let id = InterfaceId::new_v7();
+    /// project.apply(Op::AddInterface {
+    ///     id, name: "CAN0".into(), component: comp, kind, provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.interface_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.interface_id(idx), Some(id));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn interface_id(&self, idx: InterfaceIdx) -> Option<InterfaceId> {
+        self.interfaces.id(idx)
+    }
+
+    /// Returns the number of live interfaces in O(1). Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.interface_count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn interface_count(&self) -> usize {
+        self.interfaces.len()
+    }
+
+    /// Iterates live interfaces in deterministic `InterfaceId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.interfaces().count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn interfaces(&self) -> impl Iterator<Item = (InterfaceIdx, InterfaceId, &Interface)> {
+        self.interfaces.iter()
+    }
+
+    // -- Data flows (ARC-02) -----------------------------------------------------
+
+    /// Returns a live data flow in O(1), or `None` if `idx` is out of range or
+    /// tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, DataFlowId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let (c1, c2) = (ComponentId::new_v7(), ComponentId::new_v7());
+    /// for id in [c1, c2] {
+    ///     project.apply(Op::AddComponent {
+    ///         id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let id = DataFlowId::new_v7();
+    /// project.apply(Op::AddDataFlow {
+    ///     id, name: "CAN frame".into(), from: c1, to: c2, interface: None,
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.data_flow_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.data_flow(idx).map(|f| f.name()), Some("CAN frame"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn data_flow(&self, idx: DataFlowIdx) -> Option<&DataFlow> {
+        self.data_flows.get(idx)
+    }
+
+    /// Resolves a data flow's public ID to its arena index in O(log n).
+    /// Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{DataFlowId, Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.data_flow_idx(&DataFlowId::new_v7()), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn data_flow_idx(&self, id: &DataFlowId) -> Option<DataFlowIdx> {
+        self.data_flows.idx(id)
+    }
+
+    /// Returns a live data flow's public ID in O(1), or `None` if `idx` is out
+    /// of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, DataFlowId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let (c1, c2) = (ComponentId::new_v7(), ComponentId::new_v7());
+    /// for id in [c1, c2] {
+    ///     project.apply(Op::AddComponent {
+    ///         id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let id = DataFlowId::new_v7();
+    /// project.apply(Op::AddDataFlow {
+    ///     id, name: "CAN frame".into(), from: c1, to: c2, interface: None,
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.data_flow_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.data_flow_id(idx), Some(id));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn data_flow_id(&self, idx: DataFlowIdx) -> Option<DataFlowId> {
+        self.data_flows.id(idx)
+    }
+
+    /// Returns the number of live data flows in O(1). Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.data_flow_count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn data_flow_count(&self) -> usize {
+        self.data_flows.len()
+    }
+
+    /// Iterates live data flows in deterministic `DataFlowId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.data_flows().count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn data_flows(&self) -> impl Iterator<Item = (DataFlowIdx, DataFlowId, &DataFlow)> {
+        self.data_flows.iter()
+    }
+
+    // -- Trust boundaries (ARC-02) -----------------------------------------------
+
+    /// Returns a live trust boundary in O(1), or `None` if `idx` is out of
+    /// range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Op, Project, Provenance, TrustBoundaryId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TrustBoundaryId::new_v7();
+    /// project.apply(Op::AddTrustBoundary {
+    ///     id, name: "Zone A".into(), components: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.trust_boundary_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.trust_boundary(idx).map(|b| b.name()), Some("Zone A"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn trust_boundary(&self, idx: TrustBoundaryIdx) -> Option<&TrustBoundary> {
+        self.trust_boundaries.get(idx)
+    }
+
+    /// Resolves a trust boundary's public ID to its arena index in O(log n).
+    /// Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project, TrustBoundaryId};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.trust_boundary_idx(&TrustBoundaryId::new_v7()), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn trust_boundary_idx(&self, id: &TrustBoundaryId) -> Option<TrustBoundaryIdx> {
+        self.trust_boundaries.idx(id)
+    }
+
+    /// Returns a live trust boundary's public ID in O(1), or `None` if `idx` is
+    /// out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Op, Project, Provenance, TrustBoundaryId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TrustBoundaryId::new_v7();
+    /// project.apply(Op::AddTrustBoundary {
+    ///     id, name: "Zone A".into(), components: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.trust_boundary_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.trust_boundary_id(idx), Some(id));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn trust_boundary_id(&self, idx: TrustBoundaryIdx) -> Option<TrustBoundaryId> {
+        self.trust_boundaries.id(idx)
+    }
+
+    /// Returns the number of live trust boundaries in O(1). Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.trust_boundary_count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn trust_boundary_count(&self) -> usize {
+        self.trust_boundaries.len()
+    }
+
+    /// Iterates live trust boundaries in deterministic `TrustBoundaryId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.trust_boundaries().count(), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn trust_boundaries(
+        &self,
+    ) -> impl Iterator<Item = (TrustBoundaryIdx, TrustBoundaryId, &TrustBoundary)> {
+        self.trust_boundaries.iter()
     }
 
     /// Returns the [`StepMitigation`]s attached to `node` in `tree` in
@@ -3690,12 +4133,17 @@ impl Project {
         self.lint_controls(&mut findings);
         self.lint_goals(&mut findings);
         self.lint_claims(&mut findings);
+        self.lint_data_flows(&mut findings);
         findings.sort_unstable();
         findings
     }
 
     fn lint_assets(&self, findings: &mut Vec<LintFinding>) {
+        let has_components = self.components.len() > 0;
         for (idx, id, asset) in self.assets.iter() {
+            if has_components && asset.component().is_none() {
+                findings.push(LintFinding::new(LintCode::AssetUnbound { asset: id }));
+            }
             let threats = self.refs.assets.get(idx.index()).copied().unwrap_or(0);
             if threats == 0 {
                 findings.push(LintFinding::new(LintCode::AssetWithoutThreats {
@@ -3911,6 +4359,42 @@ impl Project {
         }
     }
 
+    fn lint_data_flows(&self, findings: &mut Vec<LintFinding>) {
+        if self.trust_boundaries.len() == 0 || self.data_flows.len() == 0 {
+            return;
+        }
+        let mut comp_has_threat = vec![false; self.components.slot_count()];
+        for (a_idx, _id, asset) in self.assets.iter() {
+            if let Some(comp_idx) = asset.component()
+                && self.refs.assets.get(a_idx.index()).copied().unwrap_or(0) > 0
+                && let Some(slot) = comp_has_threat.get_mut(comp_idx.index())
+            {
+                *slot = true;
+            }
+        }
+        for (_idx, id, flow) in self.data_flows.iter() {
+            let crosses_boundary = self
+                .trust_boundaries
+                .iter()
+                .any(|(_, _, tb)| tb.contains(flow.from()) != tb.contains(flow.to()));
+            if crosses_boundary {
+                let from_threat = comp_has_threat
+                    .get(flow.from().index())
+                    .copied()
+                    .unwrap_or(false);
+                let to_threat = comp_has_threat
+                    .get(flow.to().index())
+                    .copied()
+                    .unwrap_or(false);
+                if !from_threat && !to_threat {
+                    findings.push(LintFinding::new(
+                        LintCode::BoundaryCrossingDataFlowWithoutThreat { flow: id },
+                    ));
+                }
+            }
+        }
+    }
+
     // -- Diff and impact analysis (rule A7) ---------------------------------------------
 
     /// Computes a deterministic structural diff and change impact report
@@ -3993,13 +4477,28 @@ impl Project {
                 found_version: other.methodology.version().into(),
             });
         }
-        let assets = diff_arena(&self.assets, &other.assets, |x, y| x == y);
+        let assets = diff_arena(&self.assets, &other.assets, |x, y| {
+            self.same_asset(x, other, y)
+        });
         let damage_scenarios = diff_arena(&self.damages, &other.damages, |x, y| x == y);
         let security_controls = diff_arena(&self.controls, &other.controls, |x, y| x == y);
         let cybersecurity_goals = diff_arena(&self.goals, &other.goals, |x, y| {
             self.same_goal(x, other, y)
         });
         let cybersecurity_claims = diff_arena(&self.claims, &other.claims, |x, y| x == y);
+        let components = diff_arena(&self.components, &other.components, |x, y| {
+            self.same_component(x, other, y)
+        });
+        let interfaces = diff_arena(&self.interfaces, &other.interfaces, |x, y| {
+            self.same_interface(x, other, y)
+        });
+        let data_flows = diff_arena(&self.data_flows, &other.data_flows, |x, y| {
+            self.same_data_flow(x, other, y)
+        });
+        let trust_boundaries =
+            diff_arena(&self.trust_boundaries, &other.trust_boundaries, |x, y| {
+                self.same_trust_boundary(x, other, y)
+            });
         let attack_trees = diff_arena(&self.trees, &other.trees, |x, y| {
             self.same_tree(x, other, y)
         });
@@ -4026,6 +4525,10 @@ impl Project {
             security_controls,
             cybersecurity_goals,
             cybersecurity_claims,
+            components,
+            interfaces,
+            data_flows,
+            trust_boundaries,
             risk_deltas,
             notes_changed: false,
         };
@@ -4047,6 +4550,8 @@ impl Project {
         let (mut assets, mut damages, mut threats, mut trees) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let (mut controls, mut goals, mut claims) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut components, mut interfaces, mut data_flows, mut trust_boundaries) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for target in changed {
             match target {
                 ElementRef::Project => diff.notes_changed = true,
@@ -4057,6 +4562,10 @@ impl Project {
                 ElementRef::Control(id) => controls.push(id),
                 ElementRef::Goal(id) => goals.push(id),
                 ElementRef::Claim(id) => claims.push(id),
+                ElementRef::Component(id) => components.push(id),
+                ElementRef::Interface(id) => interfaces.push(id),
+                ElementRef::DataFlow(id) => data_flows.push(id),
+                ElementRef::TrustBoundary(id) => trust_boundaries.push(id),
             }
         }
         merge_modified(&mut diff.assets, assets);
@@ -4066,6 +4575,10 @@ impl Project {
         merge_modified(&mut diff.security_controls, controls);
         merge_modified(&mut diff.cybersecurity_goals, goals);
         merge_modified(&mut diff.cybersecurity_claims, claims);
+        merge_modified(&mut diff.components, components);
+        merge_modified(&mut diff.interfaces, interfaces);
+        merge_modified(&mut diff.data_flows, data_flows);
+        merge_modified(&mut diff.trust_boundaries, trust_boundaries);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4558,6 +5071,84 @@ impl Project {
             Op::SetThreatClaim { threat, claim, .. } => {
                 self.check_set_threat_claim(*threat, *claim)?;
             }
+            Op::AddComponent {
+                id,
+                name,
+                parent,
+                provenance,
+            } => return self.check_add_component(*id, name, *parent, provenance),
+            Op::RenameComponent { id, name, .. } => {
+                self.live_component(*id)?;
+                check_name(EntityKind::Component, name)?;
+            }
+            Op::SetComponentParent { id, parent, .. } => {
+                self.check_set_component_parent(*id, *parent)?;
+            }
+            Op::RemoveComponent { id } => return self.check_remove_component(*id),
+            Op::AddInterface {
+                id,
+                name,
+                component,
+                kind,
+                provenance,
+            } => return self.check_add_interface(*id, name, *component, *kind, provenance),
+            Op::RenameInterface { id, name, .. } => {
+                self.live_interface(*id)?;
+                check_name(EntityKind::Interface, name)?;
+            }
+            Op::SetInterfaceKind { id, kind, .. } => {
+                self.live_interface(*id)?;
+                self.methodology.check_interface_kind(*kind)?;
+            }
+            Op::RemoveInterface { id } => return self.check_remove_interface(*id),
+            Op::AddDataFlow {
+                id,
+                name,
+                from,
+                to,
+                interface,
+                provenance,
+            } => {
+                return self.check_add_data_flow(*id, name, *from, *to, *interface, provenance);
+            }
+            Op::RenameDataFlow { id, name, .. } => {
+                self.live_data_flow(*id)?;
+                check_name(EntityKind::DataFlow, name)?;
+            }
+            Op::SetDataFlowInterface { id, interface, .. } => {
+                self.check_set_data_flow_interface(*id, *interface)?;
+            }
+            Op::RemoveDataFlow { id } => return self.check_remove_data_flow(*id),
+            Op::AddTrustBoundary {
+                id,
+                name,
+                components,
+                provenance,
+            } => return self.check_add_trust_boundary(*id, name, components, provenance),
+            Op::RenameTrustBoundary { id, name, .. } => {
+                self.live_trust_boundary(*id)?;
+                check_name(EntityKind::TrustBoundary, name)?;
+            }
+            Op::AddBoundaryComponent {
+                boundary,
+                component,
+                ..
+            } => {
+                self.check_boundary_component(*boundary, *component, true)?;
+            }
+            Op::RemoveBoundaryComponent {
+                boundary,
+                component,
+                ..
+            } => {
+                self.check_boundary_component(*boundary, *component, false)?;
+            }
+            Op::RemoveTrustBoundary { id } => return self.check_remove_trust_boundary(*id),
+            Op::SetAssetComponent {
+                asset, component, ..
+            } => {
+                self.check_set_asset_component(*asset, *component)?;
+            }
         }
         op.provenance().map_or(Ok(()), check_provenance)
     }
@@ -4889,6 +5480,87 @@ impl Project {
                 claim,
                 provenance,
             } => self.commit_set_threat_claim(threat, claim, provenance),
+            Op::AddComponent {
+                id,
+                name,
+                parent,
+                provenance,
+            } => self.commit_add_component(id, name, parent, provenance),
+            Op::RenameComponent {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_component(id, name, provenance),
+            Op::SetComponentParent {
+                id,
+                parent,
+                provenance,
+            } => self.commit_set_component_parent(id, parent, provenance),
+            Op::RemoveComponent { id } => self.commit_remove_component(id),
+            Op::AddInterface {
+                id,
+                name,
+                component,
+                kind,
+                provenance,
+            } => self.commit_add_interface(id, name, component, kind, provenance),
+            Op::RenameInterface {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_interface(id, name, provenance),
+            Op::SetInterfaceKind {
+                id,
+                kind,
+                provenance,
+            } => self.commit_set_interface_kind(id, kind, provenance),
+            Op::RemoveInterface { id } => self.commit_remove_interface(id),
+            Op::AddDataFlow {
+                id,
+                name,
+                from,
+                to,
+                interface,
+                provenance,
+            } => self.commit_add_data_flow(id, name, from, to, interface, provenance),
+            Op::RenameDataFlow {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_data_flow(id, name, provenance),
+            Op::SetDataFlowInterface {
+                id,
+                interface,
+                provenance,
+            } => self.commit_set_data_flow_interface(id, interface, provenance),
+            Op::RemoveDataFlow { id } => self.commit_remove_data_flow(id),
+            Op::AddTrustBoundary {
+                id,
+                name,
+                components,
+                provenance,
+            } => self.commit_add_trust_boundary(id, name, components, provenance),
+            Op::RenameTrustBoundary {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_trust_boundary(id, name, provenance),
+            Op::AddBoundaryComponent {
+                boundary,
+                component,
+                provenance,
+            } => self.commit_boundary_component(boundary, component, provenance, true),
+            Op::RemoveBoundaryComponent {
+                boundary,
+                component,
+                provenance,
+            } => self.commit_boundary_component(boundary, component, provenance, false),
+            Op::RemoveTrustBoundary { id } => self.commit_remove_trust_boundary(id),
+            Op::SetAssetComponent {
+                asset,
+                component,
+                provenance,
+            } => self.commit_set_asset_component(asset, component, provenance),
         }
     }
 
@@ -4939,6 +5611,37 @@ impl Project {
             .ok_or(ModelError::UnknownCybersecurityClaim(id))
     }
 
+    fn component_mut(&mut self, id: ComponentId) -> Result<&mut Component, ModelError> {
+        let idx = self.component_index(id)?;
+        self.components
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownComponent(id))
+    }
+
+    fn interface_mut(&mut self, id: InterfaceId) -> Result<&mut Interface, ModelError> {
+        let idx = self.interface_index(id)?;
+        self.interfaces
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownInterface(id))
+    }
+
+    fn data_flow_mut(&mut self, id: DataFlowId) -> Result<&mut DataFlow, ModelError> {
+        let idx = self.data_flow_index(id)?;
+        self.data_flows
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownDataFlow(id))
+    }
+
+    fn trust_boundary_mut(
+        &mut self,
+        id: TrustBoundaryId,
+    ) -> Result<&mut TrustBoundary, ModelError> {
+        let idx = self.trust_boundary_index(id)?;
+        self.trust_boundaries
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownTrustBoundary(id))
+    }
+
     // -- Lookups shared by checks and commits ----------------------------------
 
     fn asset_index(&self, id: AssetId) -> Result<AssetIdx, ModelError> {
@@ -4977,6 +5680,30 @@ impl Project {
         self.claims
             .idx(&id)
             .ok_or(ModelError::UnknownCybersecurityClaim(id))
+    }
+
+    fn component_index(&self, id: ComponentId) -> Result<ComponentIdx, ModelError> {
+        self.components
+            .idx(&id)
+            .ok_or(ModelError::UnknownComponent(id))
+    }
+
+    fn interface_index(&self, id: InterfaceId) -> Result<InterfaceIdx, ModelError> {
+        self.interfaces
+            .idx(&id)
+            .ok_or(ModelError::UnknownInterface(id))
+    }
+
+    fn data_flow_index(&self, id: DataFlowId) -> Result<DataFlowIdx, ModelError> {
+        self.data_flows
+            .idx(&id)
+            .ok_or(ModelError::UnknownDataFlow(id))
+    }
+
+    fn trust_boundary_index(&self, id: TrustBoundaryId) -> Result<TrustBoundaryIdx, ModelError> {
+        self.trust_boundaries
+            .idx(&id)
+            .ok_or(ModelError::UnknownTrustBoundary(id))
     }
 
     fn live_asset(&self, id: AssetId) -> Result<(AssetIdx, &Asset), ModelError> {
@@ -5035,6 +5762,45 @@ impl Project {
             .ok_or(ModelError::UnknownCybersecurityClaim(id))
     }
 
+    fn live_component(&self, id: ComponentId) -> Result<(ComponentIdx, &Component), ModelError> {
+        let idx = self.component_index(id)?;
+        let c = self
+            .components
+            .get(idx)
+            .ok_or(ModelError::UnknownComponent(id))?;
+        Ok((idx, c))
+    }
+
+    fn live_interface(&self, id: InterfaceId) -> Result<(InterfaceIdx, &Interface), ModelError> {
+        let idx = self.interface_index(id)?;
+        let i = self
+            .interfaces
+            .get(idx)
+            .ok_or(ModelError::UnknownInterface(id))?;
+        Ok((idx, i))
+    }
+
+    fn live_data_flow(&self, id: DataFlowId) -> Result<(DataFlowIdx, &DataFlow), ModelError> {
+        let idx = self.data_flow_index(id)?;
+        let df = self
+            .data_flows
+            .get(idx)
+            .ok_or(ModelError::UnknownDataFlow(id))?;
+        Ok((idx, df))
+    }
+
+    fn live_trust_boundary(
+        &self,
+        id: TrustBoundaryId,
+    ) -> Result<(TrustBoundaryIdx, &TrustBoundary), ModelError> {
+        let idx = self.trust_boundary_index(id)?;
+        let tb = self
+            .trust_boundaries
+            .get(idx)
+            .ok_or(ModelError::UnknownTrustBoundary(id))?;
+        Ok((idx, tb))
+    }
+
     /// The live asset a live threat targets. A threat's asset is always
     /// live (removal is rejected while referenced).
     fn threat_asset(
@@ -5081,6 +5847,32 @@ impl Project {
     /// The public ID of a linked cybersecurity claim, if any.
     fn claim_key(&self, idx: Option<ClaimIdx>) -> Option<ClaimId> {
         idx.and_then(|i| self.claims.id(i))
+    }
+
+    /// The public ID of a referenced component.
+    fn component_key(&self, idx: ComponentIdx) -> Option<ComponentId> {
+        self.components.id(idx)
+    }
+
+    /// The public ID of an optional referenced component.
+    fn component_opt_key(&self, idx: Option<ComponentIdx>) -> Option<ComponentId> {
+        idx.and_then(|i| self.components.id(i))
+    }
+
+    /// The public ID of an optional referenced interface.
+    fn interface_opt_key(&self, idx: Option<InterfaceIdx>) -> Option<InterfaceId> {
+        idx.and_then(|i| self.interfaces.id(i))
+    }
+
+    /// Finds `component` in a trust boundary's sorted components: `Ok(pos)` if
+    /// present, `Err(pos)` for the insertion point. O(log m).
+    fn find_boundary_component(
+        &self,
+        tb: &TrustBoundary,
+        component: ComponentId,
+    ) -> Result<usize, usize> {
+        tb.components
+            .binary_search_by(|&c| self.component_key(c).cmp(&Some(component)))
     }
 
     /// Finds `control` in a step's sorted mitigations: `Ok(pos)` if attached,
@@ -5387,6 +6179,18 @@ impl Project {
             ElementRef::Claim(id) => {
                 self.live_claim(id)?;
             }
+            ElementRef::Component(id) => {
+                self.live_component(id)?;
+            }
+            ElementRef::Interface(id) => {
+                self.live_interface(id)?;
+            }
+            ElementRef::DataFlow(id) => {
+                self.live_data_flow(id)?;
+            }
+            ElementRef::TrustBoundary(id) => {
+                self.live_trust_boundary(id)?;
+            }
         }
         check_text(text, target.max_chars())?;
         check_provenance(provenance)?;
@@ -5496,7 +6300,17 @@ impl Project {
 
     fn check_remove_asset(&self, id: AssetId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Asset(id), EntityKind::Asset)?;
-        let (idx, _) = self.live_asset(id)?;
+        let (idx, asset) = self.live_asset(id)?;
+        if let Some(comp_idx) = asset.component {
+            let component = self
+                .components
+                .id(comp_idx)
+                .ok_or(ModelError::UnknownAsset(id))?;
+            return Err(ModelError::AssetHasComponent {
+                asset: id,
+                component,
+            });
+        }
         let threats = self.refs.assets.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::AssetInUse { asset: id, threats });
@@ -6079,6 +6893,353 @@ impl Project {
         Ok(())
     }
 
+    /// Checks whether setting `parent` on `id` (with `child_idx: Some(idx)` for
+    /// an existing component or `None` for a new component) is cycle-free and
+    /// keeps the containment tree within [`MAX_COMPONENT_DEPTH`].
+    fn check_component_parent_chain(
+        &self,
+        id: ComponentId,
+        child_idx: Option<ComponentIdx>,
+        parent: Option<ComponentId>,
+    ) -> Result<(), ModelError> {
+        let Some(parent_id) = parent else {
+            return Ok(());
+        };
+        let (parent_idx, _) = self.live_component(parent_id)?;
+        if child_idx == Some(parent_idx) {
+            return Err(ModelError::ComponentCycle {
+                component: id,
+                parent: parent_id,
+            });
+        }
+        let mut ancestor_hops = 1usize;
+        let mut cur = Some(parent_idx);
+        while let Some(c_idx) = cur {
+            if child_idx == Some(c_idx) {
+                return Err(ModelError::ComponentCycle {
+                    component: id,
+                    parent: parent_id,
+                });
+            }
+            let Some(c) = self.components.get(c_idx) else {
+                break;
+            };
+            cur = c.parent;
+            if cur.is_some() {
+                ancestor_hops += 1;
+            }
+            if ancestor_hops > MAX_COMPONENT_DEPTH {
+                return Err(ModelError::ComponentDepthExceeded {
+                    component: id,
+                    max: MAX_COMPONENT_DEPTH,
+                });
+            }
+        }
+        if let Some(c_idx) = child_idx {
+            let sub_hops = self.max_descendant_hops(c_idx);
+            if ancestor_hops + sub_hops > MAX_COMPONENT_DEPTH {
+                return Err(ModelError::ComponentDepthExceeded {
+                    component: id,
+                    max: MAX_COMPONENT_DEPTH,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Maximum parent-chain hops below `root_idx`. Time O(C) when `root_idx`
+    /// has children, O(1) when it has none.
+    fn max_descendant_hops(&self, root_idx: ComponentIdx) -> usize {
+        if self
+            .refs
+            .component_children
+            .get(root_idx.index())
+            .copied()
+            .unwrap_or(0)
+            == 0
+        {
+            return 0;
+        }
+        let mut max_hops = 0usize;
+        for (idx, _, _) in self.components.iter() {
+            let mut hops = 0usize;
+            let mut cur = self.components.get(idx).and_then(|c| c.parent);
+            while let Some(p_idx) = cur {
+                hops += 1;
+                if p_idx == root_idx {
+                    max_hops = max_hops.max(hops);
+                    break;
+                }
+                if hops > MAX_COMPONENT_DEPTH {
+                    break;
+                }
+                cur = self.components.get(p_idx).and_then(|c| c.parent);
+            }
+        }
+        max_hops
+    }
+
+    fn check_add_component(
+        &self,
+        id: ComponentId,
+        name: &str,
+        parent: Option<ComponentId>,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.components.idx(&id).is_some() {
+            return Err(ModelError::DuplicateComponent(id));
+        }
+        check_name(EntityKind::Component, name)?;
+        self.check_component_parent_chain(id, None, parent)?;
+        check_provenance(provenance)?;
+        if self.components.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Component,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_set_component_parent(
+        &self,
+        id: ComponentId,
+        parent: Option<ComponentId>,
+    ) -> Result<(), ModelError> {
+        let (idx, _) = self.live_component(id)?;
+        self.check_component_parent_chain(id, Some(idx), parent)
+    }
+
+    fn check_remove_component(&self, id: ComponentId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Component(id), EntityKind::Component)?;
+        let (idx, _) = self.live_component(id)?;
+        let pos = idx.index();
+        let children = self.refs.component_children.get(pos).copied().unwrap_or(0);
+        if children > 0 {
+            return Err(ModelError::ComponentHasChildren {
+                component: id,
+                children,
+            });
+        }
+        let interfaces = self
+            .refs
+            .component_interfaces
+            .get(pos)
+            .copied()
+            .unwrap_or(0);
+        if interfaces > 0 {
+            return Err(ModelError::ComponentHasInterfaces {
+                component: id,
+                interfaces,
+            });
+        }
+        let flows = self.refs.component_flows.get(pos).copied().unwrap_or(0);
+        if flows > 0 {
+            return Err(ModelError::ComponentInDataFlow {
+                component: id,
+                flows,
+            });
+        }
+        let boundaries = self
+            .refs
+            .component_boundaries
+            .get(pos)
+            .copied()
+            .unwrap_or(0);
+        if boundaries > 0 {
+            return Err(ModelError::ComponentInTrustBoundary {
+                component: id,
+                boundaries,
+            });
+        }
+        let assets = self.refs.component_assets.get(pos).copied().unwrap_or(0);
+        if assets > 0 {
+            return Err(ModelError::ComponentHasAssets {
+                component: id,
+                assets,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_add_interface(
+        &self,
+        id: InterfaceId,
+        name: &str,
+        component: ComponentId,
+        kind: InterfaceKind,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.interfaces.idx(&id).is_some() {
+            return Err(ModelError::DuplicateInterface(id));
+        }
+        check_name(EntityKind::Interface, name)?;
+        self.live_component(component)?;
+        self.methodology.check_interface_kind(kind)?;
+        check_provenance(provenance)?;
+        if self.interfaces.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Interface,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_remove_interface(&self, id: InterfaceId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::Interface(id), EntityKind::Interface)?;
+        let (idx, _) = self.live_interface(id)?;
+        let flows = self.refs.interfaces.get(idx.index()).copied().unwrap_or(0);
+        if flows > 0 {
+            return Err(ModelError::InterfaceInUse {
+                interface: id,
+                flows,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_add_data_flow(
+        &self,
+        id: DataFlowId,
+        name: &str,
+        from: ComponentId,
+        to: ComponentId,
+        interface: Option<InterfaceId>,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.data_flows.idx(&id).is_some() {
+            return Err(ModelError::DuplicateDataFlow(id));
+        }
+        check_name(EntityKind::DataFlow, name)?;
+        let (from_idx, _) = self.live_component(from)?;
+        let (to_idx, _) = self.live_component(to)?;
+        if let Some(iface_id) = interface {
+            let (_, iface) = self.live_interface(iface_id)?;
+            if iface.component != from_idx && iface.component != to_idx {
+                return Err(ModelError::InterfaceNotOnEndpoint {
+                    flow: id,
+                    interface: iface_id,
+                });
+            }
+        }
+        check_provenance(provenance)?;
+        if self.data_flows.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::DataFlow,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_set_data_flow_interface(
+        &self,
+        id: DataFlowId,
+        interface: Option<InterfaceId>,
+    ) -> Result<(), ModelError> {
+        let (_, df) = self.live_data_flow(id)?;
+        if let Some(iface_id) = interface {
+            let (_, iface) = self.live_interface(iface_id)?;
+            if iface.component != df.from && iface.component != df.to {
+                return Err(ModelError::InterfaceNotOnEndpoint {
+                    flow: id,
+                    interface: iface_id,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn check_remove_data_flow(&self, id: DataFlowId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::DataFlow(id), EntityKind::DataFlow)?;
+        self.live_data_flow(id)?;
+        Ok(())
+    }
+
+    fn check_add_trust_boundary(
+        &self,
+        id: TrustBoundaryId,
+        name: &str,
+        components: &[ComponentId],
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.trust_boundaries.idx(&id).is_some() {
+            return Err(ModelError::DuplicateTrustBoundary(id));
+        }
+        check_name(EntityKind::TrustBoundary, name)?;
+        if components.len() > MAX_TRUST_BOUNDARY_MEMBERS {
+            return Err(ModelError::TooManyBoundaryMembers {
+                boundary: id,
+                max: MAX_TRUST_BOUNDARY_MEMBERS,
+            });
+        }
+        for &c in components {
+            self.live_component(c)?;
+        }
+        let mut ids = components.to_vec();
+        ids.sort_unstable();
+        if let Some(&component) = ids
+            .windows(2)
+            .find(|w| w.first() == w.get(1))
+            .and_then(|w| w.first())
+        {
+            return Err(ModelError::DuplicateBoundaryComponent {
+                boundary: id,
+                component,
+            });
+        }
+        check_provenance(provenance)?;
+        if self.trust_boundaries.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::TrustBoundary,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_boundary_component(
+        &self,
+        boundary: TrustBoundaryId,
+        component: ComponentId,
+        link: bool,
+    ) -> Result<(), ModelError> {
+        let (_, tb) = self.live_trust_boundary(boundary)?;
+        self.live_component(component)?;
+        match (link, self.find_boundary_component(tb, component).is_ok()) {
+            (true, true) => Err(ModelError::DuplicateBoundaryComponent {
+                boundary,
+                component,
+            }),
+            (true, false) if tb.components.len() >= MAX_TRUST_BOUNDARY_MEMBERS => {
+                Err(ModelError::TooManyBoundaryMembers {
+                    boundary,
+                    max: MAX_TRUST_BOUNDARY_MEMBERS,
+                })
+            }
+            (false, false) => Err(ModelError::BoundaryComponentNotLinked {
+                boundary,
+                component,
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    fn check_remove_trust_boundary(&self, id: TrustBoundaryId) -> Result<(), ModelError> {
+        self.require_no_description(ElementRef::TrustBoundary(id), EntityKind::TrustBoundary)?;
+        self.live_trust_boundary(id)?;
+        Ok(())
+    }
+
+    fn check_set_asset_component(
+        &self,
+        asset: AssetId,
+        component: Option<ComponentId>,
+    ) -> Result<(), ModelError> {
+        self.live_asset(asset)?;
+        if let Some(component) = component {
+            self.live_component(component)?;
+        }
+        Ok(())
+    }
+
     fn check_set_step_mitigation(
         &self,
         tree: TreeId,
@@ -6124,6 +7285,7 @@ impl Project {
         let asset = Asset {
             name,
             properties,
+            component: None,
             provenance,
         };
         self.assets.push(id, asset, self.slot_limit).ok_or(
@@ -7013,6 +8175,484 @@ impl Project {
             provenance,
         })
     }
+
+    fn commit_add_component(
+        &mut self,
+        id: ComponentId,
+        name: Arc<str>,
+        parent: Option<ComponentId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let parent_idx = parent.map(|p| self.component_index(p)).transpose()?;
+        let comp = Component {
+            name,
+            parent: parent_idx,
+            provenance,
+        };
+        self.components.push(id, comp, self.slot_limit).ok_or(
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Component,
+            },
+        )?;
+        self.refs.component_children.push(0);
+        self.refs.component_interfaces.push(0);
+        self.refs.component_flows.push(0);
+        self.refs.component_boundaries.push(0);
+        self.refs.component_assets.push(0);
+        if let Some(p_idx) = parent_idx {
+            bump(&mut self.refs.component_children, Some(p_idx.index()), true);
+        }
+        Ok(Op::RemoveComponent { id })
+    }
+
+    fn commit_rename_component(
+        &mut self,
+        id: ComponentId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let c = self.component_mut(id)?;
+        let name = std::mem::replace(&mut c.name, name);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::RenameComponent {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_component_parent(
+        &mut self,
+        id: ComponentId,
+        parent: Option<ComponentId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.component_index(id)?;
+        let new_idx = parent.map(|p| self.component_index(p)).transpose()?;
+        let old_idx = self
+            .components
+            .get(idx)
+            .ok_or(ModelError::UnknownComponent(id))?
+            .parent;
+        let old_parent = old_idx
+            .map(|i| {
+                self.components
+                    .id(i)
+                    .ok_or(ModelError::UnknownComponent(id))
+            })
+            .transpose()?;
+        let c = self
+            .components
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownComponent(id))?;
+        c.parent = new_idx;
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        if let Some(old) = old_idx {
+            bump(&mut self.refs.component_children, Some(old.index()), false);
+        }
+        if let Some(new) = new_idx {
+            bump(&mut self.refs.component_children, Some(new.index()), true);
+        }
+        Ok(Op::SetComponentParent {
+            id,
+            parent: old_parent,
+            provenance,
+        })
+    }
+
+    fn commit_remove_component(&mut self, id: ComponentId) -> Result<Op, ModelError> {
+        let idx = self.component_index(id)?;
+        let (_, c) = self.live_component(id)?;
+        let parent = c
+            .parent
+            .map(|p| {
+                self.components
+                    .id(p)
+                    .ok_or(ModelError::UnknownComponent(id))
+            })
+            .transpose()?;
+        let c = self
+            .components
+            .remove(idx)
+            .ok_or(ModelError::UnknownComponent(id))?;
+        if let Some(p_idx) = c.parent {
+            bump(
+                &mut self.refs.component_children,
+                Some(p_idx.index()),
+                false,
+            );
+        }
+        Ok(Op::AddComponent {
+            id,
+            name: c.name,
+            parent,
+            provenance: c.provenance,
+        })
+    }
+
+    fn commit_add_interface(
+        &mut self,
+        id: InterfaceId,
+        name: Arc<str>,
+        component: ComponentId,
+        kind: InterfaceKind,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let comp_idx = self.component_index(component)?;
+        let iface = Interface {
+            name,
+            component: comp_idx,
+            kind,
+            provenance,
+        };
+        self.interfaces.push(id, iface, self.slot_limit).ok_or(
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Interface,
+            },
+        )?;
+        self.refs.interfaces.push(0);
+        bump(
+            &mut self.refs.component_interfaces,
+            Some(comp_idx.index()),
+            true,
+        );
+        Ok(Op::RemoveInterface { id })
+    }
+
+    fn commit_rename_interface(
+        &mut self,
+        id: InterfaceId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let i = self.interface_mut(id)?;
+        let name = std::mem::replace(&mut i.name, name);
+        let provenance = std::mem::replace(&mut i.provenance, provenance);
+        Ok(Op::RenameInterface {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_interface_kind(
+        &mut self,
+        id: InterfaceId,
+        kind: InterfaceKind,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let i = self.interface_mut(id)?;
+        let kind = std::mem::replace(&mut i.kind, kind);
+        let provenance = std::mem::replace(&mut i.provenance, provenance);
+        Ok(Op::SetInterfaceKind {
+            id,
+            kind,
+            provenance,
+        })
+    }
+
+    fn commit_remove_interface(&mut self, id: InterfaceId) -> Result<Op, ModelError> {
+        let idx = self.interface_index(id)?;
+        let (_, iface) = self.live_interface(id)?;
+        let component = self
+            .components
+            .id(iface.component)
+            .ok_or(ModelError::UnknownInterface(id))?;
+        let iface = self
+            .interfaces
+            .remove(idx)
+            .ok_or(ModelError::UnknownInterface(id))?;
+        bump(
+            &mut self.refs.component_interfaces,
+            Some(iface.component.index()),
+            false,
+        );
+        Ok(Op::AddInterface {
+            id,
+            name: iface.name,
+            component,
+            kind: iface.kind,
+            provenance: iface.provenance,
+        })
+    }
+
+    fn commit_add_data_flow(
+        &mut self,
+        id: DataFlowId,
+        name: Arc<str>,
+        from: ComponentId,
+        to: ComponentId,
+        interface: Option<InterfaceId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let from_idx = self.component_index(from)?;
+        let to_idx = self.component_index(to)?;
+        let iface_idx = interface.map(|i| self.interface_index(i)).transpose()?;
+        let df = DataFlow {
+            name,
+            from: from_idx,
+            to: to_idx,
+            interface: iface_idx,
+            provenance,
+        };
+        self.data_flows.push(id, df, self.slot_limit).ok_or(
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::DataFlow,
+            },
+        )?;
+        bump(&mut self.refs.component_flows, Some(from_idx.index()), true);
+        if to_idx != from_idx {
+            bump(&mut self.refs.component_flows, Some(to_idx.index()), true);
+        }
+        if let Some(i_idx) = iface_idx {
+            bump(&mut self.refs.interfaces, Some(i_idx.index()), true);
+        }
+        Ok(Op::RemoveDataFlow { id })
+    }
+
+    fn commit_rename_data_flow(
+        &mut self,
+        id: DataFlowId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let df = self.data_flow_mut(id)?;
+        let name = std::mem::replace(&mut df.name, name);
+        let provenance = std::mem::replace(&mut df.provenance, provenance);
+        Ok(Op::RenameDataFlow {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_data_flow_interface(
+        &mut self,
+        id: DataFlowId,
+        interface: Option<InterfaceId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.data_flow_index(id)?;
+        let new_idx = interface.map(|i| self.interface_index(i)).transpose()?;
+        let old_idx = self
+            .data_flows
+            .get(idx)
+            .ok_or(ModelError::UnknownDataFlow(id))?
+            .interface;
+        let old_interface = old_idx
+            .map(|i| self.interfaces.id(i).ok_or(ModelError::UnknownDataFlow(id)))
+            .transpose()?;
+        let df = self
+            .data_flows
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownDataFlow(id))?;
+        df.interface = new_idx;
+        let provenance = std::mem::replace(&mut df.provenance, provenance);
+        if let Some(old) = old_idx {
+            bump(&mut self.refs.interfaces, Some(old.index()), false);
+        }
+        if let Some(new) = new_idx {
+            bump(&mut self.refs.interfaces, Some(new.index()), true);
+        }
+        Ok(Op::SetDataFlowInterface {
+            id,
+            interface: old_interface,
+            provenance,
+        })
+    }
+
+    fn commit_remove_data_flow(&mut self, id: DataFlowId) -> Result<Op, ModelError> {
+        let idx = self.data_flow_index(id)?;
+        let (_, df) = self.live_data_flow(id)?;
+        let from = self
+            .components
+            .id(df.from)
+            .ok_or(ModelError::UnknownDataFlow(id))?;
+        let to = self
+            .components
+            .id(df.to)
+            .ok_or(ModelError::UnknownDataFlow(id))?;
+        let interface = df
+            .interface
+            .map(|i| self.interfaces.id(i).ok_or(ModelError::UnknownDataFlow(id)))
+            .transpose()?;
+        let df = self
+            .data_flows
+            .remove(idx)
+            .ok_or(ModelError::UnknownDataFlow(id))?;
+        bump(&mut self.refs.component_flows, Some(df.from.index()), false);
+        if df.to != df.from {
+            bump(&mut self.refs.component_flows, Some(df.to.index()), false);
+        }
+        if let Some(i_idx) = df.interface {
+            bump(&mut self.refs.interfaces, Some(i_idx.index()), false);
+        }
+        Ok(Op::AddDataFlow {
+            id,
+            name: df.name,
+            from,
+            to,
+            interface,
+            provenance: df.provenance,
+        })
+    }
+
+    fn commit_add_trust_boundary(
+        &mut self,
+        id: TrustBoundaryId,
+        name: Arc<str>,
+        mut components: Vec<ComponentId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        components.sort_unstable();
+        let components = components
+            .into_iter()
+            .map(|c| self.component_index(c))
+            .collect::<Result<Vec<_>, _>>()?;
+        let tb = TrustBoundary {
+            name,
+            components,
+            provenance,
+        };
+        let idx = self.trust_boundaries.push(id, tb, self.slot_limit).ok_or(
+            ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::TrustBoundary,
+            },
+        )?;
+        if let Some(tb) = self.trust_boundaries.get(idx) {
+            for &c in &tb.components {
+                bump(&mut self.refs.component_boundaries, Some(c.index()), true);
+            }
+        }
+        Ok(Op::RemoveTrustBoundary { id })
+    }
+
+    fn commit_rename_trust_boundary(
+        &mut self,
+        id: TrustBoundaryId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let tb = self.trust_boundary_mut(id)?;
+        let name = std::mem::replace(&mut tb.name, name);
+        let provenance = std::mem::replace(&mut tb.provenance, provenance);
+        Ok(Op::RenameTrustBoundary {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_boundary_component(
+        &mut self,
+        boundary: TrustBoundaryId,
+        component: ComponentId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let idx = self.trust_boundary_index(boundary)?;
+        let c = self.component_index(component)?;
+        let tb = self
+            .trust_boundaries
+            .get(idx)
+            .ok_or(ModelError::UnknownTrustBoundary(boundary))?;
+        let found = self.find_boundary_component(tb, component);
+        let tb = self
+            .trust_boundaries
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownTrustBoundary(boundary))?;
+        match (link, found) {
+            (true, Err(pos)) => {
+                tb.components.insert(pos, c);
+                let provenance = std::mem::replace(&mut tb.provenance, provenance);
+                bump(&mut self.refs.component_boundaries, Some(c.index()), true);
+                Ok(Op::RemoveBoundaryComponent {
+                    boundary,
+                    component,
+                    provenance,
+                })
+            }
+            (false, Ok(pos)) => {
+                tb.components.remove(pos);
+                let provenance = std::mem::replace(&mut tb.provenance, provenance);
+                bump(&mut self.refs.component_boundaries, Some(c.index()), false);
+                Ok(Op::AddBoundaryComponent {
+                    boundary,
+                    component,
+                    provenance,
+                })
+            }
+            (true, Ok(_)) => Err(ModelError::DuplicateBoundaryComponent {
+                boundary,
+                component,
+            }),
+            (false, Err(_)) => Err(ModelError::BoundaryComponentNotLinked {
+                boundary,
+                component,
+            }),
+        }
+    }
+
+    fn commit_remove_trust_boundary(&mut self, id: TrustBoundaryId) -> Result<Op, ModelError> {
+        let idx = self.trust_boundary_index(id)?;
+        let (_, tb) = self.live_trust_boundary(id)?;
+        let components = tb
+            .components
+            .iter()
+            .map(|&c| {
+                self.component_key(c)
+                    .ok_or(ModelError::UnknownTrustBoundary(id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let tb = self
+            .trust_boundaries
+            .remove(idx)
+            .ok_or(ModelError::UnknownTrustBoundary(id))?;
+        for &c in &tb.components {
+            bump(&mut self.refs.component_boundaries, Some(c.index()), false);
+        }
+        Ok(Op::AddTrustBoundary {
+            id,
+            name: tb.name,
+            components,
+            provenance: tb.provenance,
+        })
+    }
+
+    fn commit_set_asset_component(
+        &mut self,
+        asset: AssetId,
+        component: Option<ComponentId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.asset_index(asset)?;
+        let new_idx = component.map(|c| self.component_index(c)).transpose()?;
+        let old_idx = self
+            .assets
+            .get(idx)
+            .ok_or(ModelError::UnknownAsset(asset))?
+            .component;
+        let old_component = old_idx
+            .map(|i| self.components.id(i).ok_or(ModelError::UnknownAsset(asset)))
+            .transpose()?;
+        let a = self
+            .assets
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownAsset(asset))?;
+        a.component = new_idx;
+        let provenance = std::mem::replace(&mut a.provenance, provenance);
+        if let Some(old) = old_idx {
+            bump(&mut self.refs.component_assets, Some(old.index()), false);
+        }
+        if let Some(new) = new_idx {
+            bump(&mut self.refs.component_assets, Some(new.index()), true);
+        }
+        Ok(Op::SetAssetComponent {
+            asset,
+            component: old_component,
+            provenance,
+        })
+    }
 }
 
 impl PartialEq for Project {
@@ -7035,10 +8675,14 @@ impl PartialEq for Project {
             && self.controls.len() == other.controls.len()
             && self.goals.len() == other.goals.len()
             && self.claims.len() == other.claims.len()
+            && self.components.len() == other.components.len()
+            && self.interfaces.len() == other.interfaces.len()
+            && self.data_flows.len() == other.data_flows.len()
+            && self.trust_boundaries.len() == other.trust_boundaries.len()
             && self
                 .assets()
                 .zip(other.assets())
-                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_asset(x, other, y))
             && self
                 .damage_scenarios()
                 .zip(other.damage_scenarios())
@@ -7055,6 +8699,22 @@ impl PartialEq for Project {
                 .cybersecurity_goals()
                 .zip(other.cybersecurity_goals())
                 .all(|((_, a, x), (_, b, y))| a == b && self.same_goal(x, other, y))
+            && self
+                .components()
+                .zip(other.components())
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_component(x, other, y))
+            && self
+                .interfaces()
+                .zip(other.interfaces())
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_interface(x, other, y))
+            && self
+                .data_flows()
+                .zip(other.data_flows())
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_data_flow(x, other, y))
+            && self
+                .trust_boundaries()
+                .zip(other.trust_boundaries())
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_trust_boundary(x, other, y))
             && self
                 .trees
                 .iter()
@@ -7088,6 +8748,54 @@ impl Project {
                                 && a.feasibility == b.feasibility
                         })
                 })
+    }
+
+    /// Compares two assets from two projects by content, with optional
+    /// component bindings resolved to public IDs. O(1).
+    fn same_asset(&self, x: &Asset, other: &Project, y: &Asset) -> bool {
+        x.name == y.name
+            && x.properties == y.properties
+            && x.provenance == y.provenance
+            && self.component_opt_key(x.component) == other.component_opt_key(y.component)
+    }
+
+    /// Compares two components from two projects by content, with optional
+    /// parent references resolved to public IDs. O(1).
+    fn same_component(&self, x: &Component, other: &Project, y: &Component) -> bool {
+        x.name == y.name
+            && x.provenance == y.provenance
+            && self.component_opt_key(x.parent) == other.component_opt_key(y.parent)
+    }
+
+    /// Compares two interfaces from two projects by content, with component
+    /// references resolved to public IDs. O(1).
+    fn same_interface(&self, x: &Interface, other: &Project, y: &Interface) -> bool {
+        x.name == y.name
+            && x.kind == y.kind
+            && x.provenance == y.provenance
+            && self.component_key(x.component) == other.component_key(y.component)
+    }
+
+    /// Compares two data flows from two projects by content, with component
+    /// and interface references resolved to public IDs. O(1).
+    fn same_data_flow(&self, x: &DataFlow, other: &Project, y: &DataFlow) -> bool {
+        x.name == y.name
+            && x.provenance == y.provenance
+            && self.component_key(x.from) == other.component_key(y.from)
+            && self.component_key(x.to) == other.component_key(y.to)
+            && self.interface_opt_key(x.interface) == other.interface_opt_key(y.interface)
+    }
+
+    /// Compares two trust boundaries from two projects by content, with member
+    /// component references resolved to public IDs. O(m).
+    fn same_trust_boundary(&self, x: &TrustBoundary, other: &Project, y: &TrustBoundary) -> bool {
+        x.name == y.name
+            && x.provenance == y.provenance
+            && x.components.len() == y.components.len()
+            && x.components
+                .iter()
+                .zip(&y.components)
+                .all(|(&a, &b)| self.component_key(a) == other.component_key(b))
     }
 
     /// Compares two goals from two projects by content, with control
@@ -7126,7 +8834,6 @@ impl Project {
     /// first one broken. Time O(n log n + L + m).
     #[cfg(test)]
     pub(crate) fn check_invariants(&self) -> Result<(), String> {
-        let m = &*self.methodology;
         arena_invariants("asset", &self.assets)?;
         arena_invariants("damage", &self.damages)?;
         arena_invariants("threat", &self.threats)?;
@@ -7134,16 +8841,60 @@ impl Project {
         arena_invariants("control", &self.controls)?;
         arena_invariants("goal", &self.goals)?;
         arena_invariants("claim", &self.claims)?;
-        let control_goals = self.entity_invariants()?;
+        arena_invariants("component", &self.components)?;
+        arena_invariants("interface", &self.interfaces)?;
+        arena_invariants("data_flow", &self.data_flows)?;
+        arena_invariants("trust_boundary", &self.trust_boundaries)?;
+        let (control_goals, component_assets) = self.entity_invariants()?;
+        let (
+            component_children,
+            component_interfaces,
+            component_flows,
+            component_boundaries,
+            interfaces,
+        ) = self.item_invariants()?;
         let controls = self.tree_invariants()?;
+        let (asset_properties, assets, damages, trees, goals, claims) = self.threat_invariants()?;
+        let want = RefCounts {
+            asset_properties,
+            assets,
+            damages,
+            trees,
+            controls,
+            control_goals,
+            goals,
+            claims,
+            component_children,
+            component_interfaces,
+            component_flows,
+            component_boundaries,
+            component_assets,
+            interfaces,
+        };
+        self.refs_invariants(&want)
+    }
 
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    fn threat_invariants(
+        &self,
+    ) -> Result<
+        (
+            Vec<Box<[PropertyCount]>>,
+            Vec<u32>,
+            Vec<u32>,
+            Vec<u32>,
+            Vec<u32>,
+            Vec<u32>,
+        ),
+        String,
+    > {
+        let m = &*self.methodology;
         let mut assets = vec![0u32; self.assets.slot_count()];
         let mut damages = vec![0u32; self.damages.slot_count()];
         let mut trees = vec![0u32; self.trees.slot_count()];
         let mut goals = vec![0u32; self.goals.slot_count()];
         let mut claims = vec![0u32; self.claims.slot_count()];
-        // Recounted independently of `count_row`: (asset slot, property)
-        // -> threats, in ascending order.
         let mut pairs: BTreeMap<(usize, Property), u32> = BTreeMap::new();
         for (_, id, t) in self.threat_scenarios() {
             check_name(EntityKind::ThreatScenario, &t.name)
@@ -7158,11 +8909,8 @@ impl Project {
             if !m.violates(t.category).is_subset(asset.properties) {
                 return Err(format!("threat {id}: asset lacks a targeted property"));
             }
-            if t.catalog_refs.len() > MAX_CATALOG_REFS {
-                return Err(format!("threat {id} has too many catalog refs"));
-            }
-            if t.damages.len() > MAX_DAMAGE_LINKS {
-                return Err(format!("threat {id} has too many damage links"));
+            if t.catalog_refs.len() > MAX_CATALOG_REFS || t.damages.len() > MAX_DAMAGE_LINKS {
+                return Err(format!("threat {id} exceeds link cap"));
             }
             if !t.catalog_refs.windows(2).all(|w| w[0] < w[1]) {
                 return Err(format!("threat {id} catalog refs not sorted and unique"));
@@ -7172,32 +8920,29 @@ impl Project {
                     .map_err(|e| format!("threat {id}: {e}"))?;
             }
             let keys: Vec<_> = t.damages.iter().map(|&d| self.damage_key(d)).collect();
-            if keys.iter().any(Option::is_none) {
-                return Err(format!("threat {id} links a dead damage slot"));
-            }
-            if !keys.windows(2).all(|w| w[0] < w[1]) {
-                return Err(format!("threat {id} damages not sorted and unique"));
+            if keys.iter().any(Option::is_none) || !keys.windows(2).all(|w| w[0] < w[1]) {
+                return Err(format!("threat {id} damages invalid or not sorted"));
             }
             if let Some(level) = t.direct_feasibility {
                 m.check_feasibility_level(level)
                     .map_err(|e| format!("threat {id}: {e}"))?;
             }
             if let Some(tree) = t.attack_tree {
-                if self.trees.get(tree).is_none() {
-                    return Err(format!("threat {id} links a dead tree slot"));
-                }
+                self.trees
+                    .get(tree)
+                    .ok_or_else(|| format!("threat {id} links a dead tree slot"))?;
                 bump(&mut trees, Some(tree.index()), true);
             }
             if let Some(goal) = t.goal {
-                if self.goals.get(goal).is_none() {
-                    return Err(format!("threat {id} links a dead goal slot"));
-                }
+                self.goals
+                    .get(goal)
+                    .ok_or_else(|| format!("threat {id} links a dead goal slot"))?;
                 bump(&mut goals, Some(goal.index()), true);
             }
             if let Some(claim) = t.claim {
-                if self.claims.get(claim).is_none() {
-                    return Err(format!("threat {id} links a dead claim slot"));
-                }
+                self.claims
+                    .get(claim)
+                    .ok_or_else(|| format!("threat {id} links a dead claim slot"))?;
                 bump(&mut claims, Some(claim.index()), true);
             }
             bump(&mut assets, Some(t.asset.index()), true);
@@ -7214,22 +8959,21 @@ impl Project {
                 .ok_or(format!("a threat targets asset slot {a}, beyond the arena"))?
                 .push(PropertyCount { property, threats });
         }
-        let want = RefCounts {
-            asset_properties: rows.into_iter().map(Vec::into_boxed_slice).collect(),
+        Ok((
+            rows.into_iter().map(Vec::into_boxed_slice).collect(),
             assets,
             damages,
             trees,
-            controls,
-            control_goals,
             goals,
             claims,
-        };
-        self.refs_invariants(&want)
+        ))
     }
 
     #[cfg(test)]
-    fn entity_invariants(&self) -> Result<Vec<u32>, String> {
+    fn entity_invariants(&self) -> Result<(Vec<u32>, Vec<u32>), String> {
         let m = &*self.methodology;
+        let mut component_assets = vec![0u32; self.components.slot_count()];
+
         for (_, id, a) in self.assets() {
             check_name(EntityKind::Asset, &a.name).map_err(|e| format!("asset {id}: {e}"))?;
             check_provenance(&a.provenance).map_err(|e| format!("asset {id}: {e}"))?;
@@ -7238,6 +8982,12 @@ impl Project {
             }
             m.check_properties(a.properties)
                 .map_err(|e| format!("asset {id}: {e}"))?;
+            if let Some(comp) = a.component {
+                if self.components.get(comp).is_none() {
+                    return Err(format!("asset {id} binds to a dead component slot"));
+                }
+                bump(&mut component_assets, Some(comp.index()), true);
+            }
         }
         for (_, id, d) in self.damage_scenarios() {
             check_name(EntityKind::DamageScenario, &d.name)
@@ -7282,7 +9032,104 @@ impl Project {
                 .map_err(|e| format!("claim {id}: {e}"))?;
             check_provenance(&c.provenance).map_err(|e| format!("claim {id}: {e}"))?;
         }
-        Ok(control_goals)
+        Ok((control_goals, component_assets))
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    fn item_invariants(
+        &self,
+    ) -> Result<(Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>), String> {
+        let m = &*self.methodology;
+        let mut component_children = vec![0u32; self.components.slot_count()];
+        let mut component_interfaces = vec![0u32; self.components.slot_count()];
+        let mut component_flows = vec![0u32; self.components.slot_count()];
+        let mut component_boundaries = vec![0u32; self.components.slot_count()];
+        let mut interfaces = vec![0u32; self.interfaces.slot_count()];
+
+        for (idx, id, c) in self.components() {
+            check_name(EntityKind::Component, &c.name)
+                .map_err(|e| format!("component {id}: {e}"))?;
+            check_provenance(&c.provenance).map_err(|e| format!("component {id}: {e}"))?;
+            if let Some(p_idx) = c.parent {
+                let p_id = self
+                    .components
+                    .id(p_idx)
+                    .ok_or_else(|| format!("component {id} has a dead parent slot"))?;
+                self.check_component_parent_chain(id, Some(idx), Some(p_id))
+                    .map_err(|e| format!("component {id}: {e}"))?;
+                bump(&mut component_children, Some(p_idx.index()), true);
+            }
+        }
+        for (_, id, iface) in self.interfaces() {
+            check_name(EntityKind::Interface, &iface.name)
+                .map_err(|e| format!("interface {id}: {e}"))?;
+            check_provenance(&iface.provenance).map_err(|e| format!("interface {id}: {e}"))?;
+            m.check_interface_kind(iface.kind)
+                .map_err(|e| format!("interface {id}: {e}"))?;
+            if self.components.get(iface.component).is_none() {
+                return Err(format!("interface {id} belongs to a dead component slot"));
+            }
+            bump(
+                &mut component_interfaces,
+                Some(iface.component.index()),
+                true,
+            );
+        }
+        for (_, id, df) in self.data_flows() {
+            check_name(EntityKind::DataFlow, &df.name)
+                .map_err(|e| format!("data flow {id}: {e}"))?;
+            check_provenance(&df.provenance).map_err(|e| format!("data flow {id}: {e}"))?;
+            if self.components.get(df.from).is_none() || self.components.get(df.to).is_none() {
+                return Err(format!("data flow {id} endpoints a dead component slot"));
+            }
+            bump(&mut component_flows, Some(df.from.index()), true);
+            if df.to != df.from {
+                bump(&mut component_flows, Some(df.to.index()), true);
+            }
+            if let Some(i_idx) = df.interface {
+                let Some(iface) = self.interfaces.get(i_idx) else {
+                    return Err(format!("data flow {id} references a dead interface slot"));
+                };
+                if iface.component != df.from && iface.component != df.to {
+                    return Err(format!(
+                        "data flow {id} interface does not belong to either endpoint"
+                    ));
+                }
+                bump(&mut interfaces, Some(i_idx.index()), true);
+            }
+        }
+        for (_, id, tb) in self.trust_boundaries() {
+            check_name(EntityKind::TrustBoundary, &tb.name)
+                .map_err(|e| format!("trust boundary {id}: {e}"))?;
+            check_provenance(&tb.provenance).map_err(|e| format!("trust boundary {id}: {e}"))?;
+            if tb.components.len() > MAX_TRUST_BOUNDARY_MEMBERS {
+                return Err(format!("trust boundary {id} has too many members"));
+            }
+            let keys: Vec<_> = tb
+                .components
+                .iter()
+                .map(|&c| self.component_key(c))
+                .collect();
+            if keys.iter().any(Option::is_none) {
+                return Err(format!("trust boundary {id} links a dead component slot"));
+            }
+            if !keys.windows(2).all(|w| w[0] < w[1]) {
+                return Err(format!(
+                    "trust boundary {id} components not sorted and unique"
+                ));
+            }
+            for &c in &tb.components {
+                bump(&mut component_boundaries, Some(c.index()), true);
+            }
+        }
+        Ok((
+            component_children,
+            component_interfaces,
+            component_flows,
+            component_boundaries,
+            interfaces,
+        ))
     }
 
     #[cfg(test)]
@@ -7809,7 +9656,25 @@ impl ProjectEvalCache {
             | Op::RemoveCybersecurityGoal { .. }
             | Op::AddCybersecurityClaim { .. }
             | Op::RenameCybersecurityClaim { .. }
-            | Op::RemoveCybersecurityClaim { .. } => {}
+            | Op::RemoveCybersecurityClaim { .. }
+            | Op::AddComponent { .. }
+            | Op::RenameComponent { .. }
+            | Op::SetComponentParent { .. }
+            | Op::RemoveComponent { .. }
+            | Op::AddInterface { .. }
+            | Op::RenameInterface { .. }
+            | Op::SetInterfaceKind { .. }
+            | Op::RemoveInterface { .. }
+            | Op::AddDataFlow { .. }
+            | Op::RenameDataFlow { .. }
+            | Op::SetDataFlowInterface { .. }
+            | Op::RemoveDataFlow { .. }
+            | Op::AddTrustBoundary { .. }
+            | Op::RenameTrustBoundary { .. }
+            | Op::AddBoundaryComponent { .. }
+            | Op::RemoveBoundaryComponent { .. }
+            | Op::RemoveTrustBoundary { .. }
+            | Op::SetAssetComponent { .. } => {}
 
             Op::AddDamageScenario { .. } | Op::RemoveDamageScenario { .. } => {
                 self.damage_threats

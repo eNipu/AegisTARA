@@ -31,6 +31,7 @@ global Pages {
     out property <int> history: 10;
     out property <int> reports: 11;
     out property <int> admin: 12;
+    out property <int> item: 13;
 }
 
 // A row with a label above a field.
@@ -84,6 +85,20 @@ component DescriptionFor inherits VerticalLayout {
         by: root.items[1].by;
         editable: root.editable;
         edit-requested => { root.edit-requested(1, root.label, root.items[1].text); }
+    }
+    if root.items.length > 2 && root.items[2].kind == root.kind: DescriptionBox {
+        label: root.label;
+        text: root.items[2].text;
+        by: root.items[2].by;
+        editable: root.editable;
+        edit-requested => { root.edit-requested(2, root.label, root.items[2].text); }
+    }
+    if root.items.length > 3 && root.items[3].kind == root.kind: DescriptionBox {
+        label: root.label;
+        text: root.items[3].text;
+        by: root.items[3].by;
+        editable: root.editable;
+        edit-requested => { root.edit-requested(3, root.label, root.items[3].text); }
     }
 }
 
@@ -182,6 +197,7 @@ export component AppWindow inherits Window {
     // "Not decided" first.
     in property <[string]> treatment-options;
     in property <[string]> catalog-schemes;
+    in property <[string]> interface-kinds;
 
     // ---- overview ----
     in property <[CountItem]> ov-counts;
@@ -192,11 +208,56 @@ export component AppWindow inherits Window {
     in property <int> ov-warnings;
     in property <[LinkItem]> ov-top;
 
+    // ---- item definition (job 074) ----
+    in-out property <int> item-tab: 0;
+    in property <[string]> component-names;
+    in property <[[StandardListViewItem]]> component-rows;
+    in property <int> component-selected: -1;
+    in property <bool> has-component;
+    in property <string> component-name;
+    in property <[string]> component-parent-options;
+    in property <int> component-parent: 0;
+    in property <[LinkItem]> component-interfaces;
+    in property <[LinkItem]> component-assets;
+    in property <string> component-changed;
+    in property <[[StandardListViewItem]]> interface-rows;
+    in property <int> interface-selected: -1;
+    in property <bool> has-interface;
+    in property <string> interface-name;
+    in property <string> interface-component;
+    in property <int> interface-kind: 0;
+    in property <[LinkItem]> interface-flows;
+    in property <string> interface-changed;
+    in-out property <string> new-interface-name;
+    in-out property <int> new-interface-component: 0;
+    in-out property <int> new-interface-kind: 0;
+    in property <[[StandardListViewItem]]> data-flow-rows;
+    in property <int> data-flow-selected: -1;
+    in property <bool> has-data-flow;
+    in property <string> data-flow-name;
+    in property <string> data-flow-from;
+    in property <string> data-flow-to;
+    in property <[string]> data-flow-interface-options;
+    in property <int> data-flow-interface: 0;
+    in property <bool> data-flow-crosses-boundary;
+    in property <string> data-flow-changed;
+    in-out property <string> new-flow-name;
+    in-out property <int> new-flow-from: 0;
+    in-out property <int> new-flow-to: 0;
+    in property <[[StandardListViewItem]]> trust-boundary-rows;
+    in property <int> trust-boundary-selected: -1;
+    in property <bool> has-trust-boundary;
+    in property <string> trust-boundary-name;
+    in property <[CheckItem]> trust-boundary-members;
+    in property <string> trust-boundary-changed;
+
     // ---- assets ----
     in property <[[StandardListViewItem]]> asset-rows;
     in property <int> asset-selected: -1;
     in property <bool> has-asset;
     in property <string> asset-name;
+    in property <[string]> asset-component-options;
+    in property <int> asset-component: 0;
     in property <[CheckItem]> asset-properties;
     in property <[LinkItem]> asset-threats;
     in property <string> asset-changed;
@@ -319,6 +380,14 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> history-rows;
     in-out property <string> export-dir;
     in property <string> last-export;
+    in property <[[StandardListViewItem]]> figure-rows;
+    in property <int> figure-selected: -1;
+    in-out property <string> new-figure-path;
+    in-out property <string> new-figure-caption;
+    in-out property <string> excel-path;
+    in property <bool> has-excel-preview;
+    in property <string> excel-summary;
+    in property <[[StandardListViewItem]]> excel-unmapped-rows;
 
     // ---- administration ----
     in property <[[StandardListViewItem]]> user-rows;
@@ -412,9 +481,30 @@ export component AppWindow inherits Window {
     callback ov-top-clicked(int);
 
     // ---- callbacks: pages ----
+    callback pick-component(int);
+    callback add-component(string);
+    callback rename-component(string);
+    callback set-component-parent(int);
+    callback remove-component();
+    callback pick-interface(int);
+    callback add-interface(string, int, int);
+    callback rename-interface(string);
+    callback set-interface-kind(int);
+    callback remove-interface();
+    callback pick-data-flow(int);
+    callback add-data-flow(string, int, int);
+    callback rename-data-flow(string);
+    callback set-data-flow-interface(int);
+    callback remove-data-flow();
+    callback pick-trust-boundary(int);
+    callback add-trust-boundary(string);
+    callback rename-trust-boundary(string);
+    callback toggle-trust-boundary-member(int, bool);
+    callback remove-trust-boundary();
     callback pick-asset(int);
     callback add-asset(string);
     callback rename-asset(string);
+    callback set-asset-component(int);
     callback toggle-asset-property(int, bool);
     callback remove-asset();
     callback asset-threat-clicked(int);
@@ -503,8 +593,16 @@ export component AppWindow inherits Window {
     callback refresh-history();
     callback export-report();
     callback export-pdf();
+    callback export-xlsx();
     callback export-csv();
     callback export-svg();
+    callback pick-figure(int);
+    callback add-figure(string, string);
+    callback update-figure(string);
+    callback delete-figure();
+    callback preview-excel-import(string);
+    callback apply-excel-import();
+    callback clear-excel-preview();
     callback pick-user(int);
     callback create-user(string, string, string, bool);
     callback toggle-user-admin();
@@ -542,6 +640,8 @@ export component AppWindow inherits Window {
         if (text == "") { return; }
         if (kind == "new-project") { root.create-project(text); }
         if (kind == "rename-project") { root.rename-project(text); }
+        if (kind == "add-component") { root.add-component(text); }
+        if (kind == "add-trust-boundary") { root.add-trust-boundary(text); }
         if (kind == "add-asset") { root.add-asset(text); }
         if (kind == "add-damage") { root.add-damage(text); }
         if (kind == "new-tree") { root.new-tree(text); }
@@ -554,6 +654,10 @@ export component AppWindow inherits Window {
 
     function confirm-done(kind: string) {
         root.confirm-open = false;
+        if (kind == "remove-component") { root.remove-component(); }
+        if (kind == "remove-interface") { root.remove-interface(); }
+        if (kind == "remove-data-flow") { root.remove-data-flow(); }
+        if (kind == "remove-trust-boundary") { root.remove-trust-boundary(); }
         if (kind == "remove-asset") { root.remove-asset(); }
         if (kind == "remove-damage") { root.remove-damage(); }
         if (kind == "remove-threat") { root.remove-threat(); }
@@ -606,6 +710,7 @@ export component AppWindow inherits Window {
         Menu {
             title: @tr("View");
             MenuItem { title: @tr("Overview"); icon: @image-url("icons/layout-dashboard.svg"); shortcut: @keys(Control + "1"); enabled: root.in-project; activated => { root.show-page(Pages.overview); } }
+            MenuItem { title: @tr("Item definition"); icon: @image-url("icons/network.svg"); enabled: root.in-project; activated => { root.show-page(Pages.item); } }
             MenuItem { title: @tr("Assets"); icon: @image-url("icons/box.svg"); shortcut: @keys(Control + "2"); enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
             MenuItem { title: @tr("Damage scenarios"); icon: @image-url("icons/triangle-alert.svg"); shortcut: @keys(Control + "3"); enabled: root.in-project; activated => { root.show-page(Pages.damage); } }
             MenuItem { title: @tr("Threat scenarios"); icon: @image-url("icons/swords.svg"); shortcut: @keys(Control + "4"); enabled: root.in-project; activated => { root.show-page(Pages.threats); } }
@@ -1084,6 +1189,7 @@ export component AppWindow inherits Window {
                             { label: @tr("History"), icon: @image-url("icons/history.svg") },
                             { label: @tr("Reports"), icon: @image-url("icons/file-chart-column.svg") },
                             { label: @tr("Administration"), icon: @image-url("icons/user-cog.svg") },
+                            { label: @tr("Item definition"), icon: @image-url("icons/network.svg") },
                         ]: Rectangle {
                             visible: i != Pages.admin || root.is-admin;
                             height: self.visible ? 36px : 0px;
@@ -1195,6 +1301,16 @@ export component AppWindow inherits Window {
                         SectionTitle { text: @tr("Asset"); }
                         NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
                         DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        Field {
+                            label: @tr("Component");
+                            ComboBox {
+                                model: root.asset-component-options;
+                                current-index: root.asset-component;
+                                enabled: root.editing;
+                                accessible-label: @tr("Component");
+                                selected(v) => { root.set-asset-component(self.current-index); }
+                            }
+                        }
                         SectionTitle { text: @tr("Security properties"); }
                         CheckList { items: root.asset-properties; editable: root.editing; toggled(i, on) => { root.toggle-asset-property(i, on); } }
                         SectionTitle { text: @tr("Threat scenarios on this asset"); }
@@ -1956,32 +2072,249 @@ export component AppWindow inherits Window {
                 }
 
                 // Reports
-                if root.page == Pages.reports: VerticalLayout {
+                if root.page == Pages.reports: ScrollView {
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 12px;
+                        PageTitle { title: @tr("Reports"); subtitle: @tr("Exports carry your name and the time, and the server records each one."); icon: @image-url("icons/file-chart-column.svg"); }
+                        Panel {
+                            Field {
+                                label: @tr("Save files in this folder");
+                                LineEdit { text <=> root.export-dir; accessible-label: @tr("Export folder"); }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Button { text: @tr("TARA report (PDF)"); icon: @image-url("icons/file-down.svg"); primary: true; clicked => { root.export-pdf(); } }
+                                Button { text: @tr("TARA report (HTML)"); icon: @image-url("icons/file-text.svg"); clicked => { root.export-report(); } }
+                                Button { text: @tr("TARA workbook (XLSX)"); icon: @image-url("icons/sheet.svg"); clicked => { root.export-xlsx(); } }
+                                Button { text: @tr("Risk register (CSV)"); icon: @image-url("icons/sheet.svg"); clicked => { root.export-csv(); } }
+                                Button { text: @tr("Attack tree on the canvas (SVG)"); icon: @image-url("icons/image.svg"); enabled: root.has-tree; clicked => { root.export-svg(); } }
+                            }
+                            if root.last-export != "": Text { text: @tr("Last saved: ") + root.last-export; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                        }
+                        Panel {
+                            SectionTitle { text: @tr("Figures"); }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit { horizontal-stretch: 2; placeholder-text: @tr("Image file path (PNG, JPEG, or SVG)"); text <=> root.new-figure-path; accessible-label: @tr("Figure file path"); enabled: root.editing; }
+                                LineEdit { horizontal-stretch: 2; placeholder-text: @tr("Caption"); text <=> root.new-figure-caption; accessible-label: @tr("Figure caption"); enabled: root.editing; }
+                                Button {
+                                    text: @tr("Add figure");
+                                    icon: @image-url("icons/plus.svg");
+                                    enabled: root.editing && root.new-figure-path != "";
+                                    clicked => { root.add-figure(root.new-figure-path, root.new-figure-caption); root.new-figure-path = ""; root.new-figure-caption = ""; }
+                                }
+                                Button {
+                                    text: @tr("Delete");
+                                    icon: @image-url("icons/trash-2.svg");
+                                    enabled: root.editing && root.figure-selected >= 0;
+                                    clicked => { root.delete-figure(); }
+                                }
+                            }
+                            if root.figure-rows.length > 0: Table {
+                                label: @tr("Figures");
+                                columns: [{ title: @tr("Caption"), horizontal-stretch: 3 }, { title: @tr("Target"), horizontal-stretch: 2 }, { title: @tr("Format"), horizontal-stretch: 1 }];
+                                rows: root.figure-rows;
+                                selected: root.figure-selected;
+                                picked(i) => { root.pick-figure(i); }
+                            }
+                        }
+                        Panel {
+                            SectionTitle { text: @tr("Excel import"); }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit { horizontal-stretch: 1; placeholder-text: @tr("Workbook path (.xlsx)"); text <=> root.excel-path; accessible-label: @tr("Workbook path"); enabled: root.editing; }
+                                Button {
+                                    text: @tr("Preview import");
+                                    icon: @image-url("icons/file-text.svg");
+                                    enabled: root.editing && root.excel-path != "";
+                                    clicked => { root.preview-excel-import(root.excel-path); }
+                                }
+                                Button {
+                                    text: @tr("Apply import");
+                                    icon: @image-url("icons/plus.svg");
+                                    primary: root.has-excel-preview;
+                                    enabled: root.editing && root.has-excel-preview;
+                                    clicked => { root.apply-excel-import(); }
+                                }
+                                Button {
+                                    text: @tr("Clear");
+                                    enabled: root.has-excel-preview;
+                                    clicked => { root.clear-excel-preview(); }
+                                }
+                            }
+                            if root.excel-summary != "": Text { text: root.excel-summary; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                            if root.excel-unmapped-rows.length > 0: Table {
+                                label: @tr("Unmapped rows");
+                                columns: [{ title: @tr("Row"), width: 70px, min-width: 70px }, { title: @tr("Reason"), horizontal-stretch: 3 }];
+                                rows: root.excel-unmapped-rows;
+                            }
+                        }
+                        Text {
+                            text: @tr("The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. The PDF has the watermark and page numbers on every page. The HTML version opens in a browser, where you can also print it.");
+                            color: Theme.graphite;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                // Item definition (job 074)
+                if root.page == Pages.item: HorizontalLayout {
                     padding: 20px;
-                    spacing: 12px;
-                    PageTitle { title: @tr("Reports"); subtitle: @tr("Exports carry your name and the time, and the server records each one."); icon: @image-url("icons/file-chart-column.svg"); }
-                    Panel {
-                        Field {
-                            label: @tr("Save files in this folder");
-                            LineEdit { text <=> root.export-dir; accessible-label: @tr("Export folder"); }
+                    spacing: 16px;
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: 10px;
+                        PageTitle {
+                            title: @tr("Item definition");
+                            subtitle: @tr("Components, interfaces, data flows, and trust boundaries of the item.");
+                            icon: @image-url("icons/network.svg");
+                            Button { text: @tr("Add component"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.item-tab = 0; root.ask("add-component", "Add component", "Component name", ""); } }
+                            Button { text: @tr("Add trust boundary"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.item-tab = 3; root.ask("add-trust-boundary", "Add trust boundary", "Trust boundary name", ""); } }
                         }
                         HorizontalLayout {
-                            spacing: 8px;
-                            alignment: start;
-                            Button { text: @tr("TARA report (PDF)"); icon: @image-url("icons/file-down.svg"); primary: true; clicked => { root.export-pdf(); } }
-                            Button { text: @tr("TARA report (HTML)"); icon: @image-url("icons/file-text.svg"); clicked => { root.export-report(); } }
-                            Button { text: @tr("Risk register (CSV)"); icon: @image-url("icons/sheet.svg"); clicked => { root.export-csv(); } }
-                            Button { text: @tr("Attack tree on the canvas (SVG)"); icon: @image-url("icons/image.svg"); enabled: root.has-tree; clicked => { root.export-svg(); } }
+                            spacing: 6px;
+                            vertical-stretch: 0;
+                            max-height: 40px;
+                            Button { text: @tr("Components"); primary: root.item-tab == 0; clicked => { root.item-tab = 0; } }
+                            Button { text: @tr("Interfaces"); primary: root.item-tab == 1; clicked => { root.item-tab = 1; } }
+                            Button { text: @tr("Data flows"); primary: root.item-tab == 2; clicked => { root.item-tab = 2; } }
+                            Button { text: @tr("Trust boundaries"); primary: root.item-tab == 3; clicked => { root.item-tab = 3; } }
                         }
-                        if root.last-export != "": Text { text: @tr("Last saved: ") + root.last-export; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                        if root.item-tab == 0: Table {
+                            label: @tr("Components");
+                            columns: [{ title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Parent"), horizontal-stretch: 2 }, { title: @tr("Interfaces"), horizontal-stretch: 1 }, { title: @tr("Assets"), horizontal-stretch: 1 }];
+                            rows: root.component-rows;
+                            selected: root.component-selected;
+                            picked(i) => { root.pick-component(i); }
+                        }
+                        if root.item-tab == 1: VerticalLayout {
+                            spacing: 8px;
+                            if root.editing && root.component-names.length > 0: HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit { horizontal-stretch: 2; placeholder-text: @tr("Interface name"); text <=> root.new-interface-name; accessible-label: @tr("New interface name"); }
+                                ComboBox { horizontal-stretch: 1; model: root.component-names; current-index <=> root.new-interface-component; accessible-label: @tr("Component"); }
+                                ComboBox { horizontal-stretch: 1; model: root.interface-kinds; current-index <=> root.new-interface-kind; accessible-label: @tr("Kind"); }
+                                Button {
+                                    text: @tr("Add");
+                                    icon: @image-url("icons/plus.svg");
+                                    enabled: root.new-interface-name != "";
+                                    clicked => { root.add-interface(root.new-interface-name, root.new-interface-component, root.new-interface-kind); root.new-interface-name = ""; }
+                                }
+                            }
+                            Table {
+                                label: @tr("Interfaces");
+                                columns: [{ title: @tr("Interface"), horizontal-stretch: 2 }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Kind"), horizontal-stretch: 2 }, { title: @tr("Data flows"), horizontal-stretch: 1 }];
+                                rows: root.interface-rows;
+                                selected: root.interface-selected;
+                                picked(i) => { root.pick-interface(i); }
+                            }
+                        }
+                        if root.item-tab == 2: VerticalLayout {
+                            spacing: 8px;
+                            if root.editing && root.component-names.length >= 2: HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit { horizontal-stretch: 2; placeholder-text: @tr("Data flow name"); text <=> root.new-flow-name; accessible-label: @tr("New data flow name"); }
+                                ComboBox { horizontal-stretch: 1; model: root.component-names; current-index <=> root.new-flow-from; accessible-label: @tr("From component"); }
+                                ComboBox { horizontal-stretch: 1; model: root.component-names; current-index <=> root.new-flow-to; accessible-label: @tr("To component"); }
+                                Button {
+                                    text: @tr("Add");
+                                    icon: @image-url("icons/plus.svg");
+                                    enabled: root.new-flow-name != "" && root.new-flow-from != root.new-flow-to;
+                                    clicked => { root.add-data-flow(root.new-flow-name, root.new-flow-from, root.new-flow-to); root.new-flow-name = ""; }
+                                }
+                            }
+                            Table {
+                                label: @tr("Data flows");
+                                columns: [{ title: @tr("Data flow"), horizontal-stretch: 2 }, { title: @tr("From"), horizontal-stretch: 1 }, { title: @tr("To"), horizontal-stretch: 1 }, { title: @tr("Interface"), horizontal-stretch: 1 }];
+                                rows: root.data-flow-rows;
+                                selected: root.data-flow-selected;
+                                picked(i) => { root.pick-data-flow(i); }
+                            }
+                        }
+                        if root.item-tab == 3: Table {
+                            label: @tr("Trust boundaries");
+                            columns: [{ title: @tr("Trust boundary"), horizontal-stretch: 3 }, { title: @tr("Components"), horizontal-stretch: 1 }];
+                            rows: root.trust-boundary-rows;
+                            selected: root.trust-boundary-selected;
+                            picked(i) => { root.pick-trust-boundary(i); }
+                        }
                     }
-                    Text {
-                        text: @tr("The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. The PDF has the watermark and page numbers on every page. The HTML version opens in a browser, where you can also print it.");
-                        color: Theme.graphite;
-                        font-size: 13px;
-                        wrap: word-wrap;
+                    if root.item-tab == 0 && root.has-component: Panel {
+                        width: root.side-width;
+                        SectionTitle { text: @tr("Component"); }
+                        NameEditor { name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        Field {
+                            label: @tr("Parent");
+                            ComboBox {
+                                model: root.component-parent-options;
+                                current-index: root.component-parent;
+                                enabled: root.editing;
+                                accessible-label: @tr("Parent");
+                                selected(v) => { root.set-component-parent(self.current-index); }
+                            }
+                        }
+                        SectionTitle { text: @tr("Interfaces"); }
+                        LinkList { items: root.component-interfaces; clicked(i) => { root.item-tab = 1; } }
+                        SectionTitle { text: @tr("Assets"); }
+                        LinkList { items: root.component-assets; clicked(i) => { root.show-page(Pages.assets); } }
+                        Text { text: root.component-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-component", "Remove component \"" + root.component-name + "\"?"); } }
                     }
-                    Rectangle { vertical-stretch: 1; }
+                    if root.item-tab == 1 && root.has-interface: Panel {
+                        width: root.side-width;
+                        SectionTitle { text: @tr("Interface"); }
+                        NameEditor { name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        Field {
+                            label: @tr("Kind");
+                            ComboBox {
+                                model: root.interface-kinds;
+                                current-index: root.interface-kind;
+                                enabled: root.editing;
+                                accessible-label: @tr("Kind");
+                                selected(v) => { root.set-interface-kind(self.current-index); }
+                            }
+                        }
+                        Text { text: root.interface-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: @tr("Remove interface"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-interface", "Remove interface \"" + root.interface-name + "\"?"); } }
+                    }
+                    if root.item-tab == 2 && root.has-data-flow: Panel {
+                        width: root.side-width;
+                        SectionTitle { text: @tr("Data flow"); }
+                        NameEditor { name: root.data-flow-name; editable: root.editing; renamed(t) => { root.rename-data-flow(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "data-flow"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        Field {
+                            label: @tr("Interface");
+                            ComboBox {
+                                model: root.data-flow-interface-options;
+                                current-index: root.data-flow-interface;
+                                enabled: root.editing;
+                                accessible-label: @tr("Interface");
+                                selected(v) => { root.set-data-flow-interface(self.current-index); }
+                            }
+                        }
+                        Text { text: root.data-flow-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: @tr("Remove data flow"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-data-flow", "Remove data flow \"" + root.data-flow-name + "\"?"); } }
+                    }
+                    if root.item-tab == 3 && root.has-trust-boundary: Panel {
+                        width: root.side-width;
+                        SectionTitle { text: @tr("Trust boundary"); }
+                        NameEditor { name: root.trust-boundary-name; editable: root.editing; renamed(t) => { root.rename-trust-boundary(t); } }
+                        DescriptionFor { items: root.descriptions; kind: "trust-boundary"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        SectionTitle { text: @tr("Components"); }
+                        CheckList { items: root.trust-boundary-members; editable: root.editing; toggled(i, on) => { root.toggle-trust-boundary-member(i, on); } }
+                        Text { text: root.trust-boundary-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                        Button { text: @tr("Remove trust boundary"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-trust-boundary", "Remove trust boundary \"" + root.trust-boundary-name + "\"?"); } }
+                    }
                 }
 
                 // Administration

@@ -1,7 +1,7 @@
 # Review requirements
 
 This page lists what must be reviewed before the work on this branch is
-accepted. The owner asked for the build first and the review after. All completed jobs (`027`–`041`, `045`–`057`, `060`–`065`, `089`, `107`–`111`) have now been reviewed; see `factory/jobs/<job-id>/` and `docs/security-and-architecture-review.md` for full architectural and security findings.
+accepted. The owner asked for the build first and the review after. All completed jobs (`027`–`041`, `045`–`057`, `060`–`068`, `070`–`074`, `080`, `089`, `107`–`111`) have now been reviewed; see `factory/jobs/<job-id>/` and `docs/security-and-architecture-review.md` for full architectural and security findings.
 
 ## Pending reviews
 
@@ -56,6 +56,9 @@ Add a row for every new job.
 | 070 report document model (`070-report-doc-model`) | PASS | PASS | PASS | PASS |
 | 071 report builder (`071-report-builder`) | PASS | PASS | PASS | PASS |
 | 072 XLSX export (`072-xlsx-export`) | PASS | PASS | PASS | PASS |
+| 073 figures (`073-figures`) | PASS | PASS | PASS | PASS |
+| 074 item definition (`074-item-definition`) | PASS | PASS | PASS | PASS |
+| 080 Excel TARA import (`080-excel-import`) | PASS | PASS | PASS | PASS |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)

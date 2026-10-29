@@ -102,6 +102,21 @@ service Aegis {
   // same way OpenProject does.
   rpc GetBaseline(GetBaselineRequest) returns (stream OpenProjectChunk);
 
+  // ---- figures (job 073, ARC-01) ----
+
+  // Uploads a PNG, JPEG or sanitized static SVG figure with a caption and
+  // optional element target. Payload chunks are reassembled and checked
+  // against per-file and per-project caps. Needs the edit lease.
+  rpc PutFigure(PutFigureRequest) returns (FigureInfo);
+  // Lists a project's attached figures, oldest first.
+  rpc ListFigures(ListFiguresRequest) returns (ListFiguresResponse);
+  // Streams a figure's bytes in chunks; the first chunk carries FigureInfo.
+  rpc GetFigure(GetFigureRequest) returns (stream FigureChunk);
+  // Updates a figure's caption or target element reference. Needs the edit lease.
+  rpc UpdateFigure(UpdateFigureRequest) returns (FigureInfo);
+  // Deletes a figure from the project. Needs the edit lease.
+  rpc DeleteFigure(DeleteFigureRequest) returns (DeleteFigureResponse);
+
   // ---- project administration ----
 
   // Renames a project. Needs the edit lease, like any change.
@@ -255,6 +270,66 @@ message GetBaselineRequest {
   string project_id = 1;
   string baseline_id = 2;
 }
+
+message FigureInfo {
+  string figure_id = 1;
+  string project_id = 2;
+  string caption = 3;
+  // Empty for a project-level figure, or "<kind>:<uuid>" for an element.
+  string target = 4;
+  // "image/png", "image/jpeg" or "image/svg+xml".
+  string media_type = 5;
+  uint32 width = 6;
+  uint32 height = 7;
+  uint64 byte_len = 8;
+  bytes sha256 = 9;
+  string created_by = 10;
+  uint64 created_ms = 11;
+}
+
+message PutFigureRequest {
+  string project_id = 1;
+  string lock_token = 2;
+  string caption = 3;
+  string target = 4;
+  string media_type = 5;
+  repeated bytes chunks = 6;
+}
+
+message ListFiguresRequest {
+  string project_id = 1;
+}
+
+message ListFiguresResponse {
+  repeated FigureInfo figures = 1;
+}
+
+message GetFigureRequest {
+  string project_id = 1;
+  string figure_id = 2;
+}
+
+message FigureChunk {
+  // Set on the first chunk only.
+  FigureInfo info = 1;
+  bytes data = 2;
+}
+
+message UpdateFigureRequest {
+  string project_id = 1;
+  string lock_token = 2;
+  string figure_id = 3;
+  string caption = 4;
+  string target = 5;
+}
+
+message DeleteFigureRequest {
+  string project_id = 1;
+  string lock_token = 2;
+  string figure_id = 3;
+}
+
+message DeleteFigureResponse {}
 
 message RenameProjectRequest {
   string project_id = 1;

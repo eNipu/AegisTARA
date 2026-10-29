@@ -19,9 +19,9 @@
 ```mermaid
 flowchart TB
     subgraph L1["1. Foundation: IDs, Provenance & Methodology (id.rs, provenance.rs, methodology/)"]
-        ID["Typed IDs & Arena Indices\n(NodeIdx/Id, AssetIdx/Id, DamageIdx/Id,\nThreatIdx/Id, TreeIdx/Id, ControlIdx/Id,\nGoalIdx/Id, ClaimIdx/Id)"]
+        ID["Typed IDs & Arena Indices\n(NodeIdx/Id, ComponentIdx/Id, InterfaceIdx/Id,\nDataFlowIdx/Id, TrustBoundaryIdx/Id, AssetIdx/Id,\nDamageIdx/Id, ThreatIdx/Id, TreeIdx/Id,\nControlIdx/Id, GoalIdx/Id, ClaimIdx/Id)"]
         PROV["Provenance\n(actor, timestamp_ms, source)"]
-        METH["Methodology & Pack Loader\n(ImpactCategory, Level, FeasibilityLevel,\nRiskLevel, Property, ThreatCategory,\nCatalogScheme, AttackPotential)"]
+        METH["Methodology & Pack Loader\n(ImpactCategory, Level, FeasibilityLevel,\nRiskLevel, Property, ThreatCategory,\nInterfaceKind, CatalogScheme, AttackPotential,\nPackTranslationDef)"]
     end
 
     subgraph L2["2. Attack Tree DAG & Pluggable Evaluator (tree.rs, eval.rs)"]
@@ -30,9 +30,9 @@ flowchart TB
         TCACHE["TreeEvalCache<V>\n(eval, rank, edge_count,\nrecompute_steps)"]
     end
 
-    subgraph L3["3. Project Aggregate & Typed Operations (project.rs, op.rs, asset.rs, damage.rs, threat.rs, control.rs)"]
-        PROJ["Project\n(7 Arenas + RefCounts +\nArc<Methodology>)"]
-        OP["Op (37 variants)\nvalidate(&op) / apply(op) -> inv_op"]
+    subgraph L3["3. Project Aggregate & Typed Operations (project.rs, op.rs, item.rs, asset.rs, damage.rs, threat.rs, control.rs)"]
+        PROJ["Project\n(11 Arenas + RefCounts +\nArc<Methodology>)"]
+        OP["Op (63 variants)\nvalidate(&op) / apply(op) -> inv_op"]
     end
 
     subgraph L4["4. Risk & Incremental Project Cache (threat.rs, project.rs)"]
@@ -75,24 +75,25 @@ flowchart TB
 
 | Module | Primary Types | Responsibility |
 |---|---|---|
-| `id.rs` | `NodeIdx`..`ClaimIdx` (`u32`), `NodeId`..`ClaimId`, `SuggestionId` (`Uuid` v7) | 4-byte arena indices for $O(1)$ slice access and 16-byte time-ordered UUIDv7 external identifiers. |
+| `id.rs` | `NodeIdx`..`ClaimIdx`, `ComponentIdx`..`TrustBoundaryIdx` (`u32`), `NodeId`..`ClaimId`, `ComponentId`..`TrustBoundaryId`, `SuggestionId` (`Uuid` v7) | 4-byte arena indices for $O(1)$ slice access and 16-byte time-ordered UUIDv7 external identifiers. |
 | `provenance.rs` | `Provenance`, `ProvenanceSource` | Tracks `actor`, `timestamp_ms`, and `source` (`Human`, `Import`, `Catalog`, `Ai`) on every entity and mutation. |
-| `methodology/` | `Methodology`, `MethodologyDef`, `ElementNamesDef`, `ElementNameDef`, `AttackPotential`, `PotentialBand`, `CatalogRef`, `PropertySet`, scale `u8` newtypes | Validates and compiles methodology packs (built-in ISO/SAE 21434 + UN R155 Annex 5, medical-device demo, and EU CRA Annex I `eu-cra`), pack-defined element type names (`DOM-01`), plain likelihood (`DOM-02`) alongside CEM multi-factor attack potential scoring, 2D risk matrices, and catalog syntax (ADR 0053). |
+| `methodology/` | `Methodology`, `MethodologyDef`, `ElementNamesDef`, `ElementNameDef`, `PackTranslationDef`, `InterfaceKind`, `AttackPotential`, `PotentialBand`, `CatalogRef`, `PropertySet`, scale `u8` newtypes | Validates and compiles methodology packs (built-in ISO/SAE 21434 + UN R155 Annex 5 with Japanese `"ja"` translation, medical-device demo, and EU CRA Annex I `eu-cra`), pack-defined element type names (`DOM-01`), per-language pack translations (`L10N-07`), interface kinds (`ARC-02`), plain likelihood (`DOM-02`) alongside CEM multi-factor attack potential scoring, 2D risk matrices, and catalog syntax (ADR 0053, ADR 0057, ADR 0059). |
 | `tree.rs` | `AttackTree`, `Node`, `GateKind`, `RemovedNode`, `MAX_ATTACK_TREE_NODES` (4,096), `MAX_TREE_OP_NODES` (32) | Arena-allocated rooted DAG with `And`, `Or`, and `SeqAnd` gates, $O(1)$ end-of-arena append fast path and sliced index shifting on structural edits, eager DFS cycle prevention on `link()`, and iterative Kahn's `topological_order()`. |
 | `eval.rs` | `AttributeDomain`, `MaxMin<T>`, `MinTime`, `Evaluation<V>`, `Derivation`, `Explanation`, `TreeEvalCache<V>` | Single-pass bottom-up DAG evaluator, step-by-step explain-why traces, and rank-ordered incremental tree evaluation cache with value-change early cutoff. |
-| `asset.rs` | `Asset` | Item asset holding a `PropertySet` bitset of security properties and `Provenance`. |
+| `item.rs` | `Component`, `Interface`, `DataFlow`, `TrustBoundary`, `MAX_COMPONENT_DEPTH` (16), `MAX_TRUST_BOUNDARY_MEMBERS` (64) | Item definition entities: hierarchical components, pack-typed interfaces (`InterfaceKind`), directed data flows between components (optionally via an interface), and trust boundaries grouping components (`ARC-02`, ADR 0059). |
+| `asset.rs` | `Asset` | Item asset holding a `PropertySet` bitset of security properties, optional `ComponentIdx` binding (`ARC-02`), and `Provenance`. |
 | `damage.rs` | `DamageScenario` | Adverse consequence rated across methodology impact categories (`Box<[Option<Level>]>`). |
 | `threat.rs` | `ThreatScenario`, `ImpactRisk`, `ThreatRisk` | Threat targeting an `Asset`, violating `PropertySet`, linked to `CatalogRef`s, `DamageScenario`s, optional `AttackTree` / `direct_feasibility`, `RiskTreatment`, `CybersecurityGoal`, and `CybersecurityClaim`. |
 | `control.rs` | `SecurityControl`, `StepMitigation`, `RiskTreatment`, `CybersecurityGoal`, `CybersecurityClaim` | Security controls, per-step feasibility mitigations, treatment decisions (`Avoid`, `Reduce`, `Share`, `Retain`), goals, and claims. |
-| `description.rs` | `ElementRef`, `MAX_DESCRIPTION_CHARS`, `MAX_NOTES_CHARS`, `MAX_DESCRIPTION_TOTAL_BYTES` | Plain description text on the seven entity kinds and the project's notes (`ElementRef::Project`), kept in one ordered map on `Project`, set by `Op::SetDescription` (ADR 0051). |
+| `description.rs` | `ElementRef`, `MAX_DESCRIPTION_CHARS`, `MAX_NOTES_CHARS`, `MAX_DESCRIPTION_TOTAL_BYTES` | Plain description text on the eleven entity kinds (`Component`, `Interface`, `DataFlow`, `TrustBoundary`, `Asset`, `Damage`, `Threat`, `Tree`, `Control`, `Goal`, `Claim`) and the project's notes (`ElementRef::Project`), kept in one ordered map on `Project`, set by `Op::SetDescription` (ADR 0051, ADR 0059). |
 | `library.rs` | `LibraryPack`, `LibraryItem`, `ItemNode`, `Facet`, `LibraryIndex`, `LibraryError`, `MAX_LIBRARY_*` | Attack tree library packs (versioned JSON, license, SHA-256 hash, decode caps), the built-in demo pack in `packs/`, and an inverted n-gram posting index (`postings: HashMap<String, Vec<(u32, u8)>>`) with precomputed facet counts that works for English and Japanese (ADR 0052). |
 | `suggest.rs` | `SuggestionBranch`, `SuggestionItem`, `GhostPreview`, `GhostTreeNode`, `Citation`, `SuggestionError`, `MAX_SUGGESTIONS_PER_BRANCH`, `MAX_OPS_PER_SUGGESTION`, `MAX_CITATIONS_PER_ITEM` | Holds proposed AI operations apart from `Project`, overlays ghost nodes on a cloned `AttackTree` (`preview_tree`), and rebases/stamps accepted items with `ProvenanceSource::Ai` (`FND-05`, ADR 0055). |
-| `op.rs` | `Op` (45 variants) | Complete set of validated, single-op-invertible project mutations. |
-| `project.rs` | `Project`, `Arena<Id, Idx, T>`, `TreeEntry`, `RefCounts`, `ProjectEvalCache` | Aggregate root owning the 7 entity arenas, sparse reference counts (`RefCounts`), and incremental project evaluation cache (`ProjectEvalCache`). |
+| `op.rs` | `Op` (63 variants) | Complete set of validated, single-op-invertible project mutations (including 18 item-definition variants). |
+| `project.rs` | `Project`, `Arena<Id, Idx, T>`, `TreeEntry`, `RefCounts`, `ProjectEvalCache` | Aggregate root owning the 11 entity arenas, sparse reference counts (`RefCounts`), and incremental project evaluation cache (`ProjectEvalCache`). |
 | `paths.rs` | `AttackPath<V>`, `AttackPaths<V>`, `ChokePoint<V>` | Lazy best-first minimal cut-set enumeration (`BinaryHeap<SearchState<V>>`), choke-point ranking, and greedy top-$k$ hitting sets. |
 | `sensitivity.rs` | `StepTippingPoint`, `FeasibilityTippingPoint`, `ImpactTippingPoint`, `ThreatSensitivity` | Single-parameter $\pm 1$ tipping-point sensitivity analysis for attack trees and threat scenarios. |
-| `lint.rs` | `LintSeverity`, `LintCode` (23 variants: 4 `Error`, 19 `Warning`), `LintFinding` | Deterministic completeness and consistency linter over `Project` (zero entity names in output, rule R6). |
-| `diff.rs` | `EntityDiff<Id>`, `RiskSnapshot`, `RiskChange`, `RiskDelta`, `ThreatRiskDelta`, `ProjectDiff` | Deterministic structural and inherent/residual risk delta comparison between two `Project` versions. |
+| `lint.rs` | `LintSeverity`, `LintCode` (25 variants: 4 `Error`, 21 `Warning`), `LintFinding` | Deterministic completeness and consistency linter over `Project` (including `AssetUnbound` and `BoundaryCrossingDataFlowWithoutThreat`; zero entity names in output, rule R6). |
+| `diff.rs` | `EntityDiff<Id>`, `RiskSnapshot`, `RiskChange`, `RiskDelta`, `ThreatRiskDelta`, `ProjectDiff` | Deterministic structural (across all 11 arenas) and inherent/residual risk delta comparison between two `Project` versions. |
 | `store/` | `OpLogWriter<W>`, `OpLogReader<R>`, `StoreError` | Key-based JSON snapshot (`aegis-project`) and JSON Lines append-only operation log (`aegis-oplog`) with decode-time size caps (rule R3). |
 | `error.rs` | `ModelError` | Structured error enum for all domain, graph, capacity, and validation failures. |
 
@@ -1275,6 +1276,7 @@ without credentials.
 | Looking | `GetProjectStatus` (newest sequence number and lock holder; no lease needed) |
 | Results | `GetRisks`, `VerifyAudit` (admin) |
 | Versions | `CreateBaseline`, `ListBaselines`, `GetBaseline` (stream of chunks) |
+| Figures | `PutFigure`, `ListFigures`, `GetFigure` (stream of chunks), `UpdateFigure`, `DeleteFigure` |
 | History | `ListHistory` (newest ops, capped by `max_history`) |
 | Exports | `RecordExport` (writes an audit event; the file is made on the client) |
 | Me | `WhoAmI`, `LogOut`, `ChangePassword` |
@@ -1342,20 +1344,23 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `license.rs` | `LicenseGate`, `LoadError`, `ClockSecs` | License check and seat ledger, `restore()` from recent editors. |
 | `methodologies.rs` | `Methodologies`, `HostedMethodology`, `PackLoadError` | Built-in packs plus `AEGIS_PACKS_DIR`. |
 | `config.rs` | `ServerConfig` | Every limit in one place, see II.4.4. |
-| `store/mod.rs` | trait `ProjectStore`, `ProjectMeta`, `StoredOp`, `StoredSnapshot`, `LoadedProject`, `BaselineMeta`, `StoreFault` | Storage interface. |
+| `store/mod.rs` | trait `ProjectStore`, `ProjectMeta`, `StoredOp`, `StoredSnapshot`, `LoadedProject`, `BaselineMeta`, `FigureMeta`, `FigureRecord`, `StoreFault` | Storage interface. |
+| `store/blob.rs` | `SanitizedFigure`, `validate_and_sanitize_figure()`, `validate_caption()`, `validate_target()`, `MAX_FIGURE_BYTES` (5 MiB), `MAX_FIGURES_PER_PROJECT` (64), `MAX_PROJECT_FIGURES_BYTES` (50 MiB), `MAX_FIGURE_CAPTION_CHARS` (512), `MAX_IMAGE_DIMENSION` (16,384) | Validates PNG/JPEG headers and dimensions, sanitizes static SVGs (strict tag/attribute allowlist, no scripts/foreignObject/external URLs), and computes SHA-256 digests (`ARC-01`, ADR 0058). |
 | `store/memory.rs` | `MemoryStore` | Tests and development. |
 | `store/postgres.rs` | `PostgresStore`, `PostgresOptions`, `DbTls { Off, Encrypt, Verify }` | Both `Encrypt` and `Verify` verify the server certificate and hostname against OS roots or `PostgresOptions.ca_file` (`AEGIS_DB_CA_FILE`, capped at 1 MiB, `SEC-05`, ADR 0054). |
 | `store/audit.rs` | `Hash`, `ChainVerifier`, `ChainReport`, `EventChainVerifier`, `event_genesis`, `event_link` | SHA-256 hash chain over stored ops (`aegis-audit-v1`) and server audit events (`aegis-event-v1`, `SEC-06`, ADR 0054). |
-| `store/folder.rs` | `FolderStore`, `STREAM_BATCH_OPS`, `STREAM_BATCH_BYTES` | `ProjectStore` over one project folder, for standalone mode (II.4.7). |
-| `import.rs` | `ImportReport`, `ImportError`, `Registry::import_folder` | Copies a standalone folder into the server's store with its history intact (II.4.7). |
+| `store/folder.rs` | `FolderStore`, `STREAM_BATCH_OPS`, `STREAM_BATCH_BYTES` | `ProjectStore` over one project folder (including `figures/<id>.bin` and `figures/<id>.json`), for standalone mode (II.4.7). |
+| `import.rs` | `ImportReport`, `ImportError`, `Registry::import_folder` | Copies a standalone folder into the server's store with its history, baselines, and figures intact (II.4.7). |
 | `ids.rs` | `ProjectId`, `BadProjectId` | |
 | `error.rs` | `ServerError` | |
 
 `ProjectStore` methods: `create`, `list`, `count`, `load`, `append`,
 `verify_chain`, `save_snapshot`, `rename`, `delete`, `recent_ops`,
-`active_editors`, `create_baseline`, `list_baselines`, `load_baseline`.
+`active_editors`, `create_baseline`, `list_baselines`, `load_baseline`,
+`put_figure`, `list_figures`, `load_figure`, `update_figure`, `delete_figure`.
 
 `BaselineMeta { id, project, name, seq, created_by, created_ms, snapshot_bytes }`.
+`FigureMeta { id, project, media_type, caption, target, width, height, byte_len, sha256, created_by, created_ms }`.
 
 ### II.4.3 Accounts
 
@@ -1482,6 +1487,7 @@ table and the code ever differ.)
 erDiagram
     aegis_project ||--o{ aegis_project_op : "ops 1..last_seq"
     aegis_project ||--o{ aegis_baseline : "frozen versions"
+    aegis_project ||--o{ aegis_figure : "ON DELETE CASCADE"
     aegis_user ||--o{ aegis_session : "ON DELETE CASCADE"
     aegis_project {
         uuid project_id PK
@@ -1512,6 +1518,20 @@ erDiagram
         text created_by
         bigint created_ms
         bytea snapshot
+    }
+    aegis_figure {
+        uuid figure_id PK
+        uuid project_id FK
+        text media_type
+        text caption
+        text target
+        integer width
+        integer height
+        bigint byte_len
+        bytea sha256
+        text created_by
+        bigint created_ms
+        bytea data
     }
     aegis_user {
         uuid org_id PK
@@ -1554,8 +1574,8 @@ Migrations: `001_init.sql` (projects and ops), `002_accounts_baselines.sql`
 (`aegis_setting`: key and value per organization; today only
 `password_login` = `on` or `off`, no row means on), `004_event_chain.sql`
 (adds `prev_hash` and `event_hash` to `server_events` for `SEC-06` hash-chain
-verification). Deleting a project deletes its baselines and ops in one
-transaction.
+verification), `005_figures.sql` (`aegis_figure` attachment table, `ARC-01`).
+Deleting a project deletes its baselines, figures, and ops in one transaction.
 
 ### II.4.6 Seat restore
 
@@ -1645,10 +1665,11 @@ a seat after the next start (II.4.6).
 | `library.rs` | `InsertMode`, `InsertOptions`, `insert_ops()`, `matching_labels()`, `LibraryView` | Copies a library item into the project as one batch (new tree, under a gate, in place of a step; origin note; ratings marked for review; no silent merging of names) and holds the Library panel's search, facet and pick state (ADR 0052). |
 | `suggest.rs` | `Gear1Predictor`, `SuggestionRow`, `suggest_tree_nodes()`, `suggestion_rows()`, `MAX_MODEL_ARTIFACT_BYTES` | Runs Aegis-Core Gear 1 multi-head attack-tree inference (`tools/aegis-ai/artifacts/gear1_model.json` or built-in compact weights), verifies candidate steps against a cloned `Project`, and builds a `SuggestionBranch` for canvas ghost nodes and the inspector panel (ADR 0055). |
 | `tree_diff.rs` | `replace_tree_ops()`, `clear_step_ops()`, `add_child_ops()`, `branch_step_ops()`, `insert_parent_gate_ops()`, `add_sibling_ops()`, `move_node_ops()`, `remove_node_ops()` | Reconciles outline edits and interactive node-level tree expansions (leaf/end and intermediate insertions, branching, sibling reordering, and subtree removal with shared-descendant reparenting) into minimal valid node ops using a Fenwick-tree Maximum-Weight Increasing Subsequence (`mwis_mask`) and `transfer_step_ops()` to preserve ratings, factors, controls, and review marks in one undo step (ADR 0014, job 065). |
-| `pages.rs` | `Vocabulary`, `Overview`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
-| `view.rs` | `Page` (13 pages), `Selection` (incl. `TreeNode(TreeId, NodeId)`), `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice`, `tree_view_cached()` | What the window shows for the current page and selection, including interactive node expansion metadata (`is_root`, `gate_index`, `can_move_up`, `can_move_down`) in `Inspector`. |
-| `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` (`ViewModel` also has `events`, `events_error`; `LicenseView` has dates, features and `lines()`) | The whole UI state, published on a `watch` channel. |
-| `report/mod.rs` + `report/{doc,html,pdf,csv,xlsx,profile}.rs` | `ReportDoc`, `Block`, `Style`, `Figure`, `Panel`, `report_doc`, `report_doc_with_options`, `report_html`, `report_html_with_options`, `report_pdf`, `report_pdf_with_options`, `report_workbook_xlsx`, `risk_register_xlsx`, `risk_register_csv`, `tree_svg`, `ReportProfile`, `ReportOptions`, `ReportContext`, `ExportKind { Report, ReportPdf, ReportXlsx, RiskRegister, TreeSvg }`, `PdfError`, `MAX_PAGES` | One document model for HTML, PDF and XLSX (RPT-01, ADR 0056); section/filter/language/branding profiles (RPT-02 to RPT-04); the XLSX writer is a dependency-free ZIP of stored XML with the CSV formula guard (RPT-05). `krilla` writes the PDF with Inter plus a Noto Sans JP fallback (OFL). |
+| `excel.rs` | `ExcelWorkbook`, `ExcelSheet`, `ExcelMapping`, `ExcelColumn`, `ExcelPreview`, `UnmappedRow`, `ExcelError`, `read_workbook()`, `preview_import()`, `MAX_XLSX_*` | Dependency-free `.xlsx` reader (ZIP central directory + `flate2` Deflate + XML shared-strings/worksheet parser), bilingual header auto-detection (`auto_detect`), dry-run preview with unmapped rows, and single-batch import stamped with `ProvenanceSource::Import` (`INT-02`, ADR 0060). |
+| `pages.rs` | `Vocabulary`, `Overview`, `ComponentRow`, `ComponentDetail`, `InterfaceRow`, `InterfaceDetail`, `DataFlowRow`, `DataFlowDetail`, `TrustBoundaryRow`, `TrustBoundaryDetail`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
+| `view.rs` | `Page` (14 pages, incl. `Page::Item`), `Selection` (incl. `Component`, `Interface`, `DataFlow`, `TrustBoundary`, `TreeNode(TreeId, NodeId)`), `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice`, `tree_view_cached()` | What the window shows for the current page and selection, including item-definition inspectors, figure attachment filtering, Excel import preview state, and interactive node expansion metadata (`is_root`, `gate_index`, `can_move_up`, `can_move_down`) in `Inspector`. |
+| `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `FigureRow`, `ExcelPreviewView`, `ExcelUnmappedRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` (`ViewModel` also has `events`, `events_error`; `LicenseView` has dates, features and `lines()`) | The whole UI state, published on a `watch` channel. |
+| `report/mod.rs` + `report/{doc,html,pdf,csv,xlsx,profile}.rs` | `ReportDoc`, `Block`, `Style`, `Figure`, `FigureAttachment`, `Panel`, `report_doc`, `report_doc_with_options`, `report_html`, `report_html_with_options`, `report_pdf`, `report_pdf_with_options`, `report_workbook_xlsx`, `risk_register_xlsx`, `risk_register_csv`, `tree_svg`, `ReportProfile`, `ReportOptions`, `ReportContext`, `ExportKind { Report, ReportPdf, ReportXlsx, RiskRegister, TreeSvg }`, `PdfError`, `MAX_PAGES` | One document model for HTML, PDF and XLSX (RPT-01, ADR 0056); section/filter/language/branding profiles (RPT-02 to RPT-04, including Item Definition section and component filter); the XLSX writer is a dependency-free ZIP of stored XML with the CSV formula guard (RPT-05). `krilla` writes the PDF with Inter plus a Noto Sans JP fallback (OFL) and renders `Block::Image` figures via `krilla::image::Image` (`from_png`, `from_jpeg`, and deterministic static-SVG `from_rgba8`, `RPT-06`, ADR 0058). |
 | `i18n.rs` + `locales/{en,ja,pseudo}/main.ftl` | `Language`, `Catalog`, `Language::from_os()` | Fluent catalogs for pages, errors and reports; the report builder picks one per `ReportLanguage`. Missing keys render `[id]`; bidi marks are stripped (ADR 0057). |
 | `settings.rs` | `Settings { server_url, transport, username, export_dir, update_url, standalone_folder, standalone_license, report_profiles, report_profile_name, language }`, `export_file_name()`, `write_private_file()`, `language()`, `report_profile()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic private write (`create_new`, `0600` on Unix, symlink check, `SEC-09`). Never a password or token. |
 | `time.rs` | `date_ms()`, `date_time_ms()`, `format_ms_lang()` | UTC dates without a time crate; Japanese dates via `format_ms_lang` (L10N-05). |
@@ -1737,18 +1758,21 @@ flowchart TB
     PAGES --> REP["Report language:\nen, ja, bilingual"]
 ```
 
-Per-language labels on methodology packs (L10N-07) are not built yet; the
-report element-type headings still read the pack's single set of labels.
+Per-language labels on methodology packs (`L10N-07`, `PackTranslationDef` in
+`crates/aegis-model/src/methodology/pack.rs`) supply localized element-type
+names and scale/vocabulary labels (`element_names_for_lang`,
+`*_label_for_lang`) for `report/doc.rs`, with automatic fallback to the pack's
+default English labels when a key is absent.
 
-### II.5.6 Report pipeline (built 2026-10-26, jobs 070 to 072)
+### II.5.6 Report pipeline (built 2026-10-26, jobs 070 to 073)
 
 ```mermaid
 flowchart LR
     PRJ["Project or baseline"] --> DOC
     PROF["Report profile\n(sections, filters,\nlanguage, branding, marks)"] --> DOC
-    FIG["Figures (display list)"] --> DOC
-    DOC["ReportDoc\n(one model)"] --> HTML["HTML (TOC, anchors)"]
-    DOC --> PDF["PDF (krilla,\nInter + Noto Sans JP)"]
+    FIG["Figures (display list +\nPNG/JPEG/SVG attachments)"] --> DOC
+    DOC["ReportDoc\n(one model)"] --> HTML["HTML (TOC, anchors,\ndata-URI figures)"]
+    DOC --> PDF["PDF (krilla, Inter +\nNoto Sans JP, PdfImage)"]
     DOC --> XLSX["XLSX"]
     DOC --> AUD["Export audit event\n(profile, kind)"]
 ```
@@ -1886,26 +1910,26 @@ appears (the trigger is named in the table).
 | Crate | New modules | Holds | Split trigger |
 |---|---|---|---|
 | `aegis-model` | `text.rs` | `Text { value, lang, translations }`: a language tag and translations on top of the description text of job 064 (FND-04) | |
-| | `item.rs` | `Component`, `Interface`, `DataFlow`, `TrustBoundary`, asset binding (ARC-02) | |
 | | `trace.rs` | `Requirement`, `Verification`, `TraceLink`, `ExternalRef`, suspect state (TRC-01 to TRC-03) | |
 | `aegis-canvas` | `diagram.rs` | Data-flow diagram layout and drawing into the same display list (ARC-03) | |
-| `aegis-proto` | new RPC groups | Access, attachments (chunked streams), library, report profiles, AI (suggest stream, accept, reject), connectors | |
+| `aegis-proto` | new RPC groups | Access, library, report profiles, AI (suggest stream, accept, reject), connectors | |
 | `aegis-server` | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
-| | `store/blob.rs` | Attachments in PostgreSQL with size caps (ARC-01) | |
 | | `library.rs` | Company library: states, publish permission, usage counts (LIB-05, LIB-06) | |
 | | `secrets.rs` | Encrypted credentials, key from the environment or the cloud key service | |
 | | `ai/` | Gateway: `Provider` enum over two adapters (rule D11 enum dispatch), policy table, context builder, schema and citation check, AI audit (AI-01 to AI-05) | `aegis-ai` crate when the MCP server (AI-10) needs it outside the server |
 | | `connect/` | Connector worker: one adapter per ALM tool, field mapping, push and status pull (INT-03 to INT-06) | |
-| `aegis-client` | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
+| `aegis-client` | `reqif.rs` | ReqIF exchange (INT-01) | |
 | `aegis-shell` | `ui/` (panel slots, command palette, history panel) | UI-01 to UI-04 | |
 | `aegis-model` | `methodology/` (extended) | Catalog packs with text (DOM-04) | |
 
 Repository additions: `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
-where licenses allow). The i18n and report additions named in an earlier
-version of this table are built (`crates/aegis-client/locales/`,
+where licenses allow). The i18n, report, figure attachment, item definition, and
+Excel import additions named in an earlier version of this table are built
+(`crates/aegis-model/src/item.rs`, `crates/aegis-server/src/store/blob.rs`,
+`crates/aegis-client/src/excel.rs`, `crates/aegis-client/locales/`,
 `crates/aegis-client/src/report/`, `crates/aegis-shell/translations/`,
-`crates/aegis-client/assets/fonts/NotoSansJP-Variable.ttf`); see II.5.1,
-II.5.5 and II.5.6.
+`crates/aegis-client/assets/fonts/NotoSansJP-Variable.ttf`); see Part I and
+II.4.2, II.5.1, II.5.5 and II.5.6.
 
 ## III.3 Target domain model (additions only)
 
@@ -1916,27 +1940,6 @@ classDiagram
         value: String
         lang: LangTag
         translations: BTreeMap~LangTag_String~
-    }
-    class Component {
-        id: ComponentId
-        name: String
-        description: Text
-        parent: Option~ComponentId~
-    }
-    class Interface {
-        id: InterfaceId
-        name: String
-        kind: InterfaceKind
-    }
-    class DataFlow {
-        id: DataFlowId
-        from: ComponentId
-        to: ComponentId
-        via: Option~InterfaceId~
-    }
-    class TrustBoundary {
-        id: TrustBoundaryId
-        members: Vec~ComponentId~
     }
     class Requirement {
         id: RequirementId
@@ -1960,10 +1963,6 @@ classDiagram
         url: Option~String~
         synced_ms: Option~u64~
     }
-    Component "1" o-- "*" Asset : binds
-    DataFlow --> Component
-    DataFlow --> Interface
-    TrustBoundary o-- Component
     CybersecurityGoal "1" <-- "*" Requirement : refines
     Requirement "1" <-- "*" Verification : verifies
     SecurityControl ..> Requirement : implements
@@ -1973,7 +1972,7 @@ A link is suspect when its `from` element changed after `confirmed_seq`
 (the op sequence number at confirmation). Suspect state is derived (D10),
 never stored.
 
-`InterfaceKind`, `VerificationMethod`, `VerificationResult` and `TraceKind`
+`VerificationMethod`, `VerificationResult` and `TraceKind`
 are string keys from the methodology pack (D1: vocabulary is data).
 `ExternalSystem` is Jira, Polarion, JAMA, ReqIF or a plain URL.
 
@@ -2029,7 +2028,6 @@ element; the user retries.
 | Table | Holds | Caps |
 |---|---|---|
 | `aegis_role_member` | user or SSO group, project (or all), role | rows per project capped |
-| `aegis_attachment` | project, id, media type, bytes, sha256, caption | per file and per project size caps |
 | `aegis_library_item` | id, version, state (draft, approved, deprecated), pack JSON, hash, author, usage count | item size cap as for packs |
 | `aegis_secret` | name, encrypted value, key id | admin only, never returned in clear |
 | `aegis_ai_audit` | user, project, feature, provider, model, refs, response, accepted, cost | retention by age and count, as for the event log |

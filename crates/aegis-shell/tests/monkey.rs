@@ -183,6 +183,66 @@ fn actions() -> Vec<fn(&AppWindow, &mut Rng)> {
             w.invoke_ov_top_clicked(r.int());
         },
         |w, r| {
+            w.invoke_pick_component(r.int());
+        },
+        |w, r| {
+            w.invoke_add_component(r.text().into());
+        },
+        |w, r| {
+            w.invoke_rename_component(r.text().into());
+        },
+        |w, r| {
+            w.invoke_set_component_parent(r.int());
+        },
+        |w, _r| {
+            w.invoke_remove_component();
+        },
+        |w, r| {
+            w.invoke_pick_interface(r.int());
+        },
+        |w, r| {
+            w.invoke_add_interface(r.text().into(), r.int(), r.int());
+        },
+        |w, r| {
+            w.invoke_rename_interface(r.text().into());
+        },
+        |w, r| {
+            w.invoke_set_interface_kind(r.int());
+        },
+        |w, _r| {
+            w.invoke_remove_interface();
+        },
+        |w, r| {
+            w.invoke_pick_data_flow(r.int());
+        },
+        |w, r| {
+            w.invoke_add_data_flow(r.text().into(), r.int(), r.int());
+        },
+        |w, r| {
+            w.invoke_rename_data_flow(r.text().into());
+        },
+        |w, r| {
+            w.invoke_set_data_flow_interface(r.int());
+        },
+        |w, _r| {
+            w.invoke_remove_data_flow();
+        },
+        |w, r| {
+            w.invoke_pick_trust_boundary(r.int());
+        },
+        |w, r| {
+            w.invoke_add_trust_boundary(r.text().into());
+        },
+        |w, r| {
+            w.invoke_rename_trust_boundary(r.text().into());
+        },
+        |w, r| {
+            w.invoke_toggle_trust_boundary_member(r.int(), r.flag());
+        },
+        |w, _r| {
+            w.invoke_remove_trust_boundary();
+        },
+        |w, r| {
             w.invoke_pick_asset(r.int());
         },
         |w, r| {
@@ -190,6 +250,9 @@ fn actions() -> Vec<fn(&AppWindow, &mut Rng)> {
         },
         |w, r| {
             w.invoke_rename_asset(r.text().into());
+        },
+        |w, r| {
+            w.invoke_set_asset_component(r.int());
         },
         |w, r| {
             w.invoke_toggle_asset_property(r.int(), r.flag());

@@ -9,6 +9,8 @@ project-notes = ⟦Prôjéct nôtés␣⟧
 descriptions = ⟦Déscrîptîôns␣⟧
 
 section-executive-summary = ⟦1. Éxécûtîvé sûmmârý␣⟧
+section-item-definition = ⟦Îtém défînîtîôn␣⟧
+section-figures = ⟦Fîgûrés␣⟧
 section-risks = ⟦6. Rîsk régîstér ând tréâtmént␣⟧
 section-problems = ⟦9. Ôpén prôbléms␣⟧
 section-comparison = ⟦Cômpârîsôn wîth bâsélîné␣⟧
@@ -60,6 +62,20 @@ tree-omitted = ⟦{ $count } môré détâîl pânéls âré nôt drâwn. Thé �
 sheet-overview = ⟦Ôvérvîéw␣⟧
 sheet-risk-register = ⟦Rîsk régîstér␣⟧
 sheet-problems = ⟦Prôbléms␣⟧
+sheet-figures = ⟦Fîgûrés␣⟧
+
+component = ⟦Cômpônént␣⟧
+parent = ⟦Pârént␣⟧
+kind = ⟦Kînd␣⟧
+from-interface = ⟦Frôm întérfâcé␣⟧
+to-interface = ⟦Tô întérfâcé␣⟧
+members = ⟦Mémbérs␣⟧
+figures = ⟦Fîgûrés␣⟧
+caption = ⟦Câptîôn␣⟧
+target = ⟦Târgét␣⟧
+format = ⟦Fôrmât␣⟧
+dimensions = ⟦Dîménsîôns␣⟧
+size-bytes = ⟦Sîzé (býtés)␣⟧
 
 report-language-en = ⟦Énglîsh␣⟧
 report-language-ja = ⟦Jâpânésé␣⟧

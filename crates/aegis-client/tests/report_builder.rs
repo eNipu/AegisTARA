@@ -278,3 +278,282 @@ fn the_pseudo_locale_is_available_for_clipping_tests() {
     assert!(c.tr("risk-level").len() > en.tr("risk-level").len());
     assert!(c.tr("risk-level").contains('⟦'), "visible markers");
 }
+
+#[test]
+fn a_japanese_report_uses_pack_translated_element_headings_and_vocabulary_labels() {
+    let ws = workspace();
+    let ctx = context();
+    let profile = ReportProfile {
+        language: ReportLanguage::Japanese,
+        ..ReportProfile::default()
+    };
+    let doc = report_doc_with_options(
+        &ws,
+        &ctx,
+        &ReportOptions {
+            profile,
+            baseline_project: None,
+        },
+    );
+    let hs = headings(&doc);
+    // Element-type headings come from the methodology pack's "ja" translation (L10N-07).
+    for expected in [
+        "資産",
+        "ダメージシナリオ",
+        "脅威シナリオ",
+        "アタックツリー",
+        "セキュリティ対策",
+        "サイバーセキュリティ目標",
+        "サイバーセキュリティ主張",
+    ] {
+        assert!(
+            hs.iter().any(|h| h.contains(expected)),
+            "missing pack-translated Japanese heading {expected:?} in {hs:?}"
+        );
+    }
+    let html = report_html_with_options(
+        &ws,
+        &ctx,
+        &ReportOptions {
+            profile: ReportProfile {
+                language: ReportLanguage::Japanese,
+                ..ReportProfile::default()
+            },
+            baseline_project: None,
+        },
+    );
+    // Pack vocabulary labels (security properties, threat categories, treatments) are translated.
+    assert!(html.contains("完全性") || html.contains("機密性"));
+    assert!(html.contains("なりすまし") || html.contains("改ざん"));
+}
+
+#[test]
+fn figures_render_as_real_images_in_pdf_html_and_xlsx() {
+    let ws = workspace();
+    let ctx = context();
+    let asset_id = ws
+        .project()
+        .assets()
+        .next()
+        .map(|(_, id, _)| id)
+        .expect("asset");
+
+    // 1x1 valid PNG.
+    let png_bytes: Vec<u8> = vec![
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H', b'D',
+        b'R', 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, b'I', b'D', b'A', b'T', 0x08, 0xD7, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00,
+        0x00, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let svg_bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 60"><rect x="4" y="4" width="112" height="52" fill="#2563eb" stroke="#1e293b" stroke-width="2"/><circle cx="60" cy="30" r="16" fill="#f8fafc"/></svg>"##.to_vec();
+
+    let figures = vec![
+        aegis_client::report::FigureAttachment {
+            figure_id: "0196ed00-0000-7000-8000-000000000001".into(),
+            caption: "System context PNG".into(),
+            target: String::new(),
+            media_type: "image/png".into(),
+            width_px: 1,
+            height_px: 1,
+            size_bytes: png_bytes.len() as u64,
+            updated_by: "mira".into(),
+            updated_at_ms: 1_792_956_600_000,
+            data: png_bytes,
+        },
+        aegis_client::report::FigureAttachment {
+            figure_id: "0196ed00-0000-7000-8000-000000000002".into(),
+            caption: "CAN topology SVG".into(),
+            target: format!("asset:{asset_id}"),
+            media_type: "image/svg+xml".into(),
+            width_px: 120,
+            height_px: 60,
+            size_bytes: svg_bytes.len() as u64,
+            updated_by: "mira".into(),
+            updated_at_ms: 1_792_956_600_000,
+            data: svg_bytes,
+        },
+    ];
+
+    let pdf_without = aegis_client::report::report_pdf(&ws, &ctx).expect("baseline pdf");
+    let opts = ReportOptions {
+        profile: ReportProfile {
+            figures: figures.clone(),
+            ..ReportProfile::default()
+        },
+        baseline_project: None,
+    };
+    let doc = report_doc_with_options(&ws, &ctx, &opts);
+    let image_blocks = doc
+        .blocks
+        .iter()
+        .filter(|b| matches!(b, Block::Image { .. }))
+        .count();
+    assert_eq!(
+        image_blocks, 2,
+        "both project and asset figures appear in ReportDoc"
+    );
+
+    let html = report_html_with_options(&ws, &ctx, &opts);
+    assert!(html.contains("data:image/png;base64,"));
+    assert!(html.contains("data:image/svg+xml;base64,"));
+    assert!(html.contains("System context PNG"));
+    assert!(html.contains("CAN topology SVG"));
+
+    let pdf_with =
+        aegis_client::report::report_pdf_with_options(&ws, &ctx, &opts).expect("pdf with figures");
+    assert!(pdf_with.starts_with(b"%PDF-"));
+    let pdf_str = String::from_utf8_lossy(&pdf_with);
+    assert!(
+        pdf_str.contains("/Image") || pdf_str.contains("/XObject"),
+        "PDF embeds real krilla Image XObjects for Block::Image"
+    );
+    assert!(pdf_with.len() > pdf_without.len() + 200);
+
+    let xlsx = aegis_client::report::report_workbook_xlsx_with_figures(&ws, &figures);
+    let wb = aegis_client::excel::read_workbook(&xlsx).expect("read xlsx");
+    assert!(
+        wb.sheets.iter().any(|s| s.name == "Figures"),
+        "XLSX workbook includes the Figures sheet"
+    );
+}
+
+#[test]
+fn item_definition_section_and_component_filter_in_reports() {
+    use aegis_client::commands::Edit;
+    use aegis_model::{ComponentId, DataFlowId, InterfaceId, TrustBoundaryId};
+
+    let mut ws = workspace();
+    let ecu = ComponentId::new_v7();
+    let gw = ComponentId::new_v7();
+    let iface = InterfaceId::new_v7();
+    let flow = DataFlowId::new_v7();
+    let boundary = TrustBoundaryId::new_v7();
+    let first_asset = ws
+        .project()
+        .assets()
+        .next()
+        .map(|(_, id, _)| id)
+        .expect("asset");
+
+    for edit in [
+        Edit::AddComponent {
+            id: ecu,
+            name: "Brake ECU".into(),
+            parent: None,
+        },
+        Edit::AddComponent {
+            id: gw,
+            name: "Telematics Gateway".into(),
+            parent: None,
+        },
+        Edit::AddInterface {
+            id: iface,
+            component: ecu,
+            name: "CAN-2 transceiver".into(),
+            kind: 0,
+        },
+        Edit::AddDataFlow {
+            id: flow,
+            name: "Brake torque request".into(),
+            from: gw,
+            to: ecu,
+            interface: Some(iface),
+        },
+        Edit::AddTrustBoundary {
+            id: boundary,
+            name: "Chassis domain".into(),
+        },
+        Edit::SetTrustBoundaryMember {
+            boundary,
+            component: ecu,
+            member: true,
+        },
+        Edit::SetAssetComponent {
+            asset: first_asset,
+            component: Some(ecu),
+        },
+    ] {
+        let ops = edit
+            .to_ops(ws.project(), "mira", 1_792_956_600_000)
+            .expect("ops");
+        ws.apply(ops, Origin::Edit).expect("apply");
+    }
+
+    let ctx = context();
+    let doc = report_doc(&ws, &ctx);
+    let hs = headings(&doc);
+    assert!(
+        hs.iter().any(|h| h.contains("Item definition")),
+        "Item definition section present in {hs:?}"
+    );
+
+    // Filter report by component "Brake ECU".
+    let filtered_doc = report_doc_with_options(
+        &ws,
+        &ctx,
+        &ReportOptions {
+            profile: ReportProfile {
+                filters: ReportFilters {
+                    component: Some("Brake ECU".into()),
+                    ..ReportFilters::default()
+                },
+                ..ReportProfile::default()
+            },
+            baseline_project: None,
+        },
+    );
+    let assets_table = filtered_doc
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Table { headers, rows } if headers.first().is_some_and(|h| h == "Asset") => {
+                Some(rows)
+            }
+            _ => None,
+        })
+        .expect("assets table");
+    assert_eq!(
+        assets_table.len(),
+        1,
+        "only the asset bound to Brake ECU remains"
+    );
+}
+
+#[test]
+fn excel_import_round_trips_workbook_previews_unmapped_rows_and_applies_with_import_provenance() {
+    use aegis_client::excel::{ExcelMapping, preview_import, read_workbook};
+    use aegis_model::ProvenanceSource;
+
+    let ws = workspace();
+    let xlsx_bytes = report_workbook_xlsx(&ws);
+    let wb = read_workbook(&xlsx_bytes).expect("read exported workbook");
+    assert!(!wb.sheets.is_empty());
+
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let empty_ws = Workspace::empty(Arc::clone(&m));
+    let preview = preview_import(
+        empty_ws.project(),
+        &wb,
+        &ExcelMapping::default(),
+        "mira",
+        1_792_956_600_000,
+    )
+    .expect("preview import");
+    assert!(preview.mapped_rows > 0);
+    assert!(preview.threats_to_add > 0);
+    assert!(!preview.ops.is_empty());
+    assert!(
+        preview.ops.iter().all(|op| op
+            .provenance()
+            .is_some_and(|p| p.source() == ProvenanceSource::Import)),
+        "all imported ops carry ProvenanceSource::Import"
+    );
+
+    let mut imported_ws = Workspace::empty(Arc::clone(&m));
+    imported_ws
+        .apply(preview.ops.clone(), Origin::Edit)
+        .expect("batch applies cleanly");
+    assert!(imported_ws.project().assets().count() >= preview.assets_to_add);
+    assert!(imported_ws.project().threat_scenarios().count() >= preview.threats_to_add);
+}
