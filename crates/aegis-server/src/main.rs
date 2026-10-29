@@ -387,9 +387,11 @@ async fn connect_postgres(url: &str) -> Result<PostgresStore, String> {
         Some(v) => v.parse().map_err(|e| format!("AEGIS_DB_TLS: {e}"))?,
         None => DbTls::Off,
     };
+    let ca_file = var("AEGIS_DB_CA_FILE").map(PathBuf::from);
     let options = PostgresOptions {
         pool_size,
         tls,
+        ca_file,
         ..PostgresOptions::default()
     };
     let store = PostgresStore::connect(url, &options)

@@ -14,6 +14,7 @@ fn styled(tree: &aegis_model::AttackTree) -> Scene {
         score: Some(format!("{} · Medium", 10 + i.index())),
         tone: Tone::from_level(i.index() % 5, 5),
         critical: false,
+        ghost: false,
     })
 }
 
@@ -293,4 +294,45 @@ fn snapshot_of_the_display_list_of_a_zoomed_out_frame() {
         },
     );
     insta::assert_snapshot!("sample_tree_dark_zoomed_out", svg);
+}
+
+#[test]
+fn ghost_nodes_render_with_dashed_accent_edges_and_boxes() {
+    let tree = common::sample();
+    let scene = Scene::from_tree(&tree, LayoutConfig::default(), |i| NodeStyle {
+        score: Some("AI · High".into()),
+        tone: Tone::High,
+        critical: false,
+        ghost: i.index() == 3,
+    });
+    let view = Viewport::new(Size::new(1600.0, 700.0));
+    let list = render(&scene, &view, &RenderOptions::default());
+
+    let ghost_rect = list.items.iter().find(|it| {
+        matches!(
+            it,
+            Item::Rect {
+                node: Some(3),
+                fill: Some(Paint::AccentWash),
+                stroke: Some(s),
+                ..
+            } if s.dashed && s.paint == Paint::Accent
+        )
+    });
+    assert!(
+        ghost_rect.is_some(),
+        "ghost node must use AccentWash fill and dashed Accent border"
+    );
+
+    let ghost_kind = list.items.iter().any(|it| {
+        matches!(
+            it,
+            Item::Text { text, paint: Paint::Accent, bold: true, .. }
+            if text == "ghost · step"
+        )
+    });
+    assert!(ghost_kind, "ghost node must display 'ghost · step' label");
+
+    let svg = scene_to_svg(&scene, &SvgOptions::light(), &RenderOptions::default());
+    assert!(svg.contains("ghost · step"));
 }

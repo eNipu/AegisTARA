@@ -822,3 +822,143 @@ async fn the_inspector_expands_tree_nodes_at_leaf_and_intermediate_points() {
     drop(app);
     server.stop().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn creating_an_eu_cra_project_uses_cra_terminology_and_plain_likelihood() {
+    let server = TestServer::start().await;
+    let app = App::new(server.session("alice"), 1360, 860);
+    app.online().await;
+
+    app.window.set_new_project_methodology(1);
+    app.window.invoke_create_project("CRA Gateway".into());
+    app.until("opened", |vm| vm.project.is_some()).await;
+    app.controller.apply_latest();
+
+    assert!(!app.window.get_has_attack_potential());
+    assert_eq!(app.window.get_feasibility_label().as_str(), "Likelihood");
+    assert_eq!(app.window.get_damage_singular().as_str(), "Harm");
+    assert_eq!(app.window.get_damage_plural().as_str(), "Harms");
+    assert_eq!(
+        app.window.get_goal_singular().as_str(),
+        "Security requirement"
+    );
+    assert_eq!(
+        app.window.get_goal_plural().as_str(),
+        "Security requirements"
+    );
+
+    drop(app);
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn suggesting_tree_steps_renders_ghost_nodes_on_canvas_and_accepts_them() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server, "alice").await;
+
+    let initial_len = app
+        .session
+        .view()
+        .project
+        .as_ref()
+        .expect("project")
+        .scene()
+        .expect("scene")
+        .len();
+
+    // Synthesize ghost steps with Aegis-Core Gear 1.
+    app.window.invoke_suggest_tree_nodes();
+    app.until("ghost suggestions staged", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.suggestions.len() >= 2)
+    })
+    .await;
+    app.controller.apply_latest();
+
+    let count = app.window.get_suggestion_rows().row_count();
+    assert!(count >= 2, "expected >= 2 ghost suggestions, got {count}");
+
+    let scene = app
+        .session
+        .view()
+        .project
+        .as_ref()
+        .expect("project")
+        .scene()
+        .expect("scene")
+        .clone();
+    assert_eq!(scene.len(), initial_len + count);
+    let ghost_count = (0..scene.len())
+        .filter(|&i| scene.style(i as u32).is_some_and(|st| st.ghost))
+        .count();
+    assert_eq!(ghost_count, count);
+
+    // Clicking the first ghost node on the canvas highlights its suggestion row.
+    let first_label = app
+        .window
+        .get_suggestion_rows()
+        .row_data(0)
+        .expect("row 0")
+        .label
+        .to_string();
+    let (gx, gy) = node_position(&app, &first_label);
+    app.headless.click(gx, gy);
+    app.until("ghost node selected", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.selected_suggestion == Some(0))
+    })
+    .await;
+    app.controller.apply_latest();
+    assert!(
+        app.window
+            .get_suggestion_rows()
+            .row_data(0)
+            .expect("row 0")
+            .selected
+    );
+
+    // Dismissing one suggestion removes its ghost node without editing the project.
+    app.window.invoke_reject_suggestion(1);
+    app.until("one suggestion dismissed", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.suggestions.len() == count - 1)
+    })
+    .await;
+    app.controller.apply_latest();
+
+    // Accepting the remaining suggestions commits them as real nodes and syncs.
+    let accepted_count = count - 1;
+    app.window.invoke_accept_all_suggestions();
+    app.until("suggestions accepted and synced", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.suggestions.is_empty()
+                && p.sync == SyncView::Synced
+                && p.scene()
+                    .is_some_and(|s| s.len() == initial_len + accepted_count)
+        })
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(app.window.get_suggestion_rows().row_count(), 0);
+
+    let committed_scene = app
+        .session
+        .view()
+        .project
+        .as_ref()
+        .expect("project")
+        .scene()
+        .expect("scene")
+        .clone();
+    assert_eq!(committed_scene.len(), initial_len + accepted_count);
+    assert!(
+        (0..committed_scene.len())
+            .all(|i| !committed_scene.style(i as u32).is_some_and(|st| st.ghost))
+    );
+
+    drop(app);
+    server.stop().await;
+}

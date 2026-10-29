@@ -17,12 +17,25 @@ use std::sync::Arc;
 use aegis_canvas::{LayoutConfig, NodeKind, NodeStyle, Scene, Tone};
 use aegis_model::{
     AssetId, AttackTree, ClaimId, ControlId, DamageId, FeasibilityLevel, GateKind, GoalId,
-    Methodology, NodeId, NodeIdx, ThreatId, TreeId,
+    Methodology, NodeId, NodeIdx, SuggestionId, ThreatId, TreeId,
 };
 
 use aegis_proto as pb;
 
 use crate::workspace::Workspace;
+
+/// One pending AI or catalog suggestion item shown in the UI (job 089).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuggestionRow {
+    /// Stable suggestion ID.
+    pub id: SuggestionId,
+    /// Proposed step or entity label.
+    pub label: String,
+    /// Grounded citation and predicted rating summary.
+    pub detail: String,
+    /// Kind badge (`Step`, `OR gate`, ...).
+    pub kind: String,
+}
 
 /// A rating shown as text with its color.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -572,7 +585,24 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
         ws.cache().evaluate_tree(project, tree_id)
     }
     .ok();
+    let ghost_overlay = ws
+        .suggestions()
+        .and_then(|branch| branch.preview_tree(project, tree_id));
     let style = |idx: NodeIdx| -> NodeStyle {
+        if let Some((ref preview_tree, ref ghosts)) = ghost_overlay
+            && let Some(nid) = preview_tree.id_of(idx)
+            && let Some(g) = ghosts.iter().find(|g| g.node_id == nid)
+        {
+            return NodeStyle {
+                score: Some(
+                    g.feasibility
+                        .map_or_else(|| "proposed".to_owned(), |l| level_label(m, l)),
+                ),
+                tone: g.feasibility.map_or(Tone::Unrated, |l| level_tone(m, l)),
+                critical: false,
+                ghost: true,
+            };
+        }
         let value = evaluation.and_then(|e| e.get(idx).copied());
         let is_step = tree.get(idx).is_some_and(|n| n.gate_kind().is_none());
         let score = if is_step {
@@ -589,9 +619,11 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
             score,
             tone: value.map_or(Tone::Unrated, |v| level_tone(m, v)),
             critical: false,
+            ghost: false,
         }
     };
-    let mut scene = Scene::from_tree(tree, LayoutConfig::default(), style);
+    let layout_tree = ghost_overlay.as_ref().map_or(tree, |(pt, _)| pt);
+    let mut scene = Scene::from_tree(layout_tree, LayoutConfig::default(), style);
     if let Some(e) = evaluation {
         let path: Vec<NodeIdx> = e.why_path(tree.root()).collect();
         scene.set_critical_path(&path);
@@ -642,7 +674,13 @@ pub fn tree_view_cached(
         }
         _ => Arc::new(tree_scene(ws, tree_id, ui.show_residual)?),
     };
-    let selected = ui.selected_node.and_then(|n| tree.idx_of(&n));
+    let selected = ui.selected_node.and_then(|n| {
+        tree.idx_of(&n).or_else(|| {
+            ws.suggestions()
+                .and_then(|b| b.preview_tree(project, tree_id))
+                .and_then(|(pt, _)| pt.idx_of(&n))
+        })
+    });
     Some(TreeView {
         threat: threat_id,
         tree: tree_id,

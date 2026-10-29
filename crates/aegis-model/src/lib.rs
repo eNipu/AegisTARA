@@ -240,6 +240,7 @@ mod project;
 mod provenance;
 mod sensitivity;
 mod store;
+mod suggest;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod testkit;
@@ -272,16 +273,16 @@ pub use eval::{
 };
 pub use id::{
     AssetId, AssetIdx, ClaimId, ClaimIdx, ControlId, ControlIdx, DamageId, DamageIdx, GoalId,
-    GoalIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    GoalIdx, NodeId, NodeIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx,
 };
 pub use lint::{LintCode, LintFinding, LintSeverity};
 pub use methodology::{
     AttackPotential, AttackPotentialDef, CatalogRef, CatalogScheme, CatalogSchemeDef,
-    CatalogSyntax, FactorContribution, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor,
-    FeasibilityLevel, ImpactCategory, ImpactCategoryDef, Level, LevelDef, MAX_FACTOR_POINTS,
-    MAX_FEASIBILITY_FACTORS, MIN_FEASIBILITY_FACTORS, Methodology, MethodologyDef, PotentialBand,
-    PotentialBandDef, Property, PropertyDef, RiskLevel, SegmentDef, ThreatCategory,
-    ThreatCategoryDef,
+    CatalogSyntax, ElementNameDef, ElementNamesDef, FactorContribution, FactorDef, FactorLevel,
+    FactorLevelDef, FeasibilityFactor, FeasibilityLevel, ImpactCategory, ImpactCategoryDef, Level,
+    LevelDef, MAX_FACTOR_POINTS, MAX_FEASIBILITY_FACTORS, MIN_FEASIBILITY_FACTORS, Methodology,
+    MethodologyDef, PotentialBand, PotentialBandDef, Property, PropertyDef, RiskLevel, SegmentDef,
+    ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
 pub use paths::{AttackPath, AttackPaths, ChokePoint};
@@ -294,6 +295,10 @@ pub use store::{
     Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES,
     MAX_LABEL_BYTES, MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES,
     MAX_PACK_FILE_BYTES, MAX_PROJECT_FILE_BYTES, OpCodec, OpLogReader, OpLogWriter, VocabKind,
+};
+pub use suggest::{
+    Citation, GhostPreview, GhostTreeNode, MAX_CITATIONS_PER_ITEM, MAX_OPS_PER_SUGGESTION,
+    MAX_SUGGESTIONS_PER_BRANCH, SuggestionBranch, SuggestionError, SuggestionItem,
 };
 pub use threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
 pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Node, RemovedNode};

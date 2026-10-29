@@ -1194,11 +1194,7 @@ impl<P: CredentialProvider> Actor<P> {
                         .map(String::into_bytes),
                 }
                 .ok_or_else(|| "there is nothing to export".to_owned())?;
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir)
-                        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-                }
-                std::fs::write(&path, bytes)
+                crate::settings::write_private_file(&path, &bytes)
                     .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 Ok::<_, String>(path.display().to_string())
             })
@@ -1233,11 +1229,13 @@ impl<P: CredentialProvider> Actor<P> {
                 let downloaded = conn.open_project(&id).await?;
                 let key = downloaded.summary.methodology_key.clone();
                 let version = downloaded.summary.methodology_version.clone();
-                let methodology = match Methodology::iso21434_r155() {
-                    Ok(builtin) if builtin.key() == key && builtin.version() == version => {
-                        Arc::new(builtin)
-                    }
-                    _ => conn.methodology(&key).await?,
+                let methodology = match [Methodology::iso21434_r155(), Methodology::eu_cra()]
+                    .into_iter()
+                    .flatten()
+                    .find(|m| m.key() == key && m.version() == version)
+                {
+                    Some(builtin) => Arc::new(builtin),
+                    None => conn.methodology(&key).await?,
                 };
                 let m = Arc::clone(&methodology);
                 let snapshot = downloaded.snapshot;
@@ -1900,6 +1898,11 @@ impl<P: CredentialProvider> Actor<P> {
                     pages::select(&mut open.ui, selection);
                 }
             }
+            Command::SuggestTreeNodes => self.suggest_tree_nodes(),
+            Command::AcceptSuggestion(index) => self.accept_suggestion(index),
+            Command::AcceptAllSuggestions => self.accept_all_suggestions(),
+            Command::RejectSuggestion(index) => self.reject_suggestion(index),
+            Command::RejectAllSuggestions => self.reject_all_suggestions(),
             Command::ShowPage(page) => self.show_page(page),
             Command::Select {
                 selection,
@@ -2058,8 +2061,120 @@ impl<P: CredentialProvider> Actor<P> {
         let node = project
             .attack_tree_idx(&view.tree)
             .and_then(|t| project.attack_tree(t))
-            .and_then(|t| t.id_of(idx));
+            .and_then(|t| t.id_of(idx))
+            .or_else(|| {
+                open.ws
+                    .suggestions()
+                    .and_then(|b| b.preview_tree(project, view.tree))
+                    .and_then(|(pt, _)| pt.id_of(idx))
+            });
         open.ui.selected_node = node;
+    }
+
+    fn suggest_tree_nodes(&mut self) {
+        if !self.can_edit() {
+            return;
+        }
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        let branch = match crate::suggest::suggest_tree_nodes(&open.ws, &open.ui) {
+            Ok(branch) => branch,
+            Err(e) => {
+                self.notice(
+                    Severity::Warning,
+                    format!("Could not synthesize ghost steps: {e}."),
+                );
+                return;
+            }
+        };
+        let count = branch.len();
+        if let Err(e) = open.ws.set_suggestions(Some(branch)) {
+            self.notice(
+                Severity::Warning,
+                format!("Could not stage suggestions: {e}."),
+            );
+            return;
+        }
+        open.cached_scene = None;
+        self.notice(
+            Severity::Info,
+            format!("Proposed {count} ghost step(s) with Aegis-Core Gear 1."),
+        );
+    }
+
+    fn accept_suggestion(&mut self, index: usize) {
+        if !self.can_edit() {
+            return;
+        }
+        let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        let Some(id) = crate::suggest::suggestion_rows(&open.ws)
+            .get(index)
+            .map(|r| r.id)
+        else {
+            return;
+        };
+        match open.ws.accept_suggestion(id, &user, now) {
+            Ok(()) => {
+                open.cached_scene = None;
+                open.cached_lint_count = None;
+                self.pump();
+            }
+            Err(e) => {
+                self.notice(
+                    Severity::Warning,
+                    format!("That suggestion was refused: {e}."),
+                );
+            }
+        }
+    }
+
+    fn accept_all_suggestions(&mut self) {
+        if !self.can_edit() {
+            return;
+        }
+        let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        match open.ws.accept_all_suggestions(&user, now) {
+            Ok(count) if count > 0 => {
+                open.cached_scene = None;
+                open.cached_lint_count = None;
+                self.pump();
+            }
+            Ok(_) => {}
+            Err(e) => {
+                self.notice(Severity::Warning, format!("Suggestions were refused: {e}."));
+            }
+        }
+    }
+
+    fn reject_suggestion(&mut self, index: usize) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        let Some(id) = crate::suggest::suggestion_rows(&open.ws)
+            .get(index)
+            .map(|r| r.id)
+        else {
+            return;
+        };
+        if open.ws.reject_suggestion(id).is_ok() {
+            open.cached_scene = None;
+        }
+    }
+
+    fn reject_all_suggestions(&mut self) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        if open.ws.reject_all_suggestions() > 0 {
+            open.cached_scene = None;
+        }
     }
 
     /// Whether edits are allowed right now; tells the user why not.
@@ -2275,6 +2390,14 @@ impl<P: CredentialProvider> Actor<P> {
                 open.cached_lint_count = Some(open.ws.project().lint().len());
             }
             let selected_node = tree.as_ref().and_then(|t| t.selected);
+            let suggestions = crate::suggest::suggestion_rows(&open.ws);
+            let selected_suggestion = open.ui.selected_node.and_then(|nid| {
+                let branch = open.ws.suggestions()?;
+                let t = shown_tree(&open.ws, &open.ui)?;
+                let (_, ghosts) = branch.preview_tree(open.ws.project(), t)?;
+                let sid = ghosts.iter().find(|g| g.node_id == nid)?.suggestion_id;
+                suggestions.iter().position(|r| r.id == sid)
+            });
             let data = page_data(open);
             let comparison = (open.ui.page == Page::Versions)
                 .then(|| {
@@ -2292,6 +2415,8 @@ impl<P: CredentialProvider> Actor<P> {
                 history: open.history.clone(),
                 last_export: open.last_export.clone(),
                 nav_counts: nav_counts(open),
+                suggestions,
+                selected_suggestion,
                 entry: open.entry.clone(),
                 mode: open.mode,
                 lock_holder: open.lock_holder.clone(),

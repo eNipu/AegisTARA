@@ -930,3 +930,80 @@ fn a_tree_that_has_no_nodes_left_has_no_figure_and_does_not_break_the_report() {
     assert!(figures(&doc).is_empty());
     report_pdf(&t.ws, &context(false)).expect("pdf");
 }
+
+#[test]
+fn eu_cra_pages_and_exports_use_methodology_names_and_plain_likelihood() {
+    let m = Arc::new(Methodology::eu_cra().expect("eu-cra"));
+    let vocab = pages::vocabulary(&m);
+    assert!(!vocab.has_attack_potential);
+    assert_eq!(
+        vocab.element_names.damage_scenario.singular.as_ref(),
+        "Harm"
+    );
+    assert_eq!(vocab.element_names.damage_scenario.plural.as_ref(), "Harms");
+    assert_eq!(
+        vocab.element_names.cybersecurity_goal.singular.as_ref(),
+        "Security requirement"
+    );
+    assert_eq!(
+        vocab.element_names.cybersecurity_goal.plural.as_ref(),
+        "Security requirements"
+    );
+    assert_eq!(vocab.element_names.feasibility.as_ref(), "Likelihood");
+
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let ops = aegis_client::sample::sample_ops(&m, "mira", 1_792_956_600_000).expect("sample");
+    ws.apply(ops, Origin::Edit).expect("applies");
+
+    let ov = pages::overview(&ws);
+    assert_eq!(ov.counts[1].label, "Harms");
+    assert_eq!(ov.counts[5].label, "Security requirements");
+
+    let (_, tree_id, tree) = ws.project().attack_trees().next().expect("tree");
+    let (_, step_id, _) = tree
+        .iter()
+        .find(|(_, _, n)| n.gate_kind().is_none())
+        .expect("step");
+    let ui = UiState {
+        selected_tree: Some(tree_id),
+        selected_node: Some(step_id),
+        ..UiState::default()
+    };
+    let ins = inspector(&ws, &ui).expect("inspector");
+    assert!(
+        ins.factors.is_empty(),
+        "plain likelihood has no attack potential factors"
+    );
+    assert!(ins.potential.is_none());
+
+    let ctx = context(false);
+    let html = report_html(&ws, &ctx);
+    assert!(html.contains("<h2>3. Harms</h2>"), "{html}");
+    assert!(
+        html.contains("<h2>8. Security requirements and cybersecurity claims</h2>"),
+        "{html}"
+    );
+    let doc = report_doc(&ws, &ctx);
+    let from_html: Vec<String> = html
+        .split("<h2>")
+        .skip(1)
+        .map(|s| s.split("</h2>").next().unwrap_or_default().to_owned())
+        .collect();
+    let from_doc: Vec<String> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading(2, text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(from_doc, from_html);
+
+    let csv = risk_register_csv(&ws, &ctx);
+    assert!(
+        csv.starts_with(
+            "# Confidential. Exported by Mira Chen on 25 Oct 2026 19:30 UTC.\nThreat scenario,Asset,Deciding harm,Impact,Likelihood,"
+        ),
+        "{csv}"
+    );
+}

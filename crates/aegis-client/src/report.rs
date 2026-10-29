@@ -200,10 +200,16 @@ fn desc_list_html(out: &mut String, items: &[(String, String)]) {
 /// The risk register as CSV. Time O(threats log threats).
 #[must_use]
 pub fn risk_register_csv(ws: &Workspace, ctx: &ReportContext) -> String {
+    let names = ws.project().methodology().element_names();
     let mut out = String::new();
     let _ = writeln!(out, "# {}", csv_field(&ctx.watermark()));
-    out.push_str(
-        "Threat scenario,Asset,Deciding damage scenario,Impact,Attack feasibility,Risk before controls,Risk after controls,Treatment,Goal or claim\r\n",
+    let _ = write!(
+        out,
+        "{},{},Deciding {},Impact,{},Risk before controls,Risk after controls,Treatment,Goal or claim\r\n",
+        names.threat_scenario.singular,
+        names.asset.singular,
+        names.damage_scenario.singular.to_lowercase(),
+        names.feasibility,
     );
     for r in pages::risk_rows(ws) {
         let fields = [
@@ -330,6 +336,20 @@ fn risk_table(out: &mut String, rows: &[RiskRow]) {
     );
 }
 
+pub(crate) fn section_8_heading(names: &aegis_model::ElementNamesDef) -> String {
+    if names.cybersecurity_goal.plural.as_ref() == "Cybersecurity goals"
+        && names.cybersecurity_claim.plural.as_ref() == "Cybersecurity claims"
+    {
+        "8. Cybersecurity goals and claims".to_owned()
+    } else {
+        format!(
+            "8. {} and {}",
+            names.cybersecurity_goal.plural,
+            names.cybersecurity_claim.plural.to_lowercase()
+        )
+    }
+}
+
 pub(crate) fn methodology_line(project: &Project) -> String {
     let m = project.methodology();
     format!("{} (pack {} {})", m.label(), m.key(), m.version())
@@ -341,6 +361,7 @@ pub(crate) fn methodology_line(project: &Project) -> String {
 pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     let project = ws.project();
     let m = project.methodology();
+    let names = m.element_names();
     let vocab = pages::vocabulary(m);
     let mut out = String::with_capacity(64 * 1024);
     let _ = write!(
@@ -371,10 +392,13 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     let above: usize = ov.residual.iter().take(2).map(|c| c.count).sum();
     let _ = writeln!(
         out,
-        "<p>The project has {} threat scenarios on {} assets. After the planned and verified controls, {} threat scenario(s) remain in the two highest risk levels. {} blocking problem(s) and {} warning(s) are open.</p>",
+        "<p>The project has {} {} on {} {}. After the planned and verified controls, {} {}(s) remain in the two highest risk levels. {} blocking problem(s) and {} warning(s) are open.</p>",
         project.threat_scenario_count(),
+        esc(&names.threat_scenario.plural.to_lowercase()),
         project.asset_count(),
+        esc(&names.asset.plural.to_lowercase()),
         above,
+        esc(&names.threat_scenario.singular.to_lowercase()),
         ov.errors,
         ov.warnings
     );
@@ -398,8 +422,8 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     risk_table(&mut out, &ov.top);
 
     // ---- assets ----
-    out.push_str("<h2>2. Assets</h2>\n");
-    let mut headers: Vec<&str> = vec!["Asset"];
+    let _ = writeln!(out, "<h2>2. {}</h2>", esc(&names.asset.plural));
+    let mut headers: Vec<&str> = vec![&names.asset.singular];
     headers.extend(vocab.properties.iter().map(String::as_str));
     headers.push("Threats");
     table(
@@ -419,8 +443,8 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     desc_list_html(&mut out, &section_descriptions(ws, Described::Assets));
 
     // ---- damage ----
-    out.push_str("<h2>3. Damage scenarios</h2>\n");
-    let mut headers: Vec<&str> = vec!["Damage scenario"];
+    let _ = writeln!(out, "<h2>3. {}</h2>", esc(&names.damage_scenario.plural));
+    let mut headers: Vec<&str> = vec![&names.damage_scenario.singular];
     headers.extend(vocab.impact_categories.iter().map(|c| c.label.as_str()));
     headers.push("Threats");
     table(
@@ -443,7 +467,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     desc_list_html(&mut out, &section_descriptions(ws, Described::Damage));
 
     // ---- threats ----
-    out.push_str("<h2>4. Threat scenarios</h2>\n");
+    let _ = writeln!(out, "<h2>4. {}</h2>", esc(&names.threat_scenario.plural));
     for (_, id, _) in project.threat_scenarios() {
         let Some(t) = pages::threat_detail(ws, id) else {
             continue;
@@ -462,7 +486,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
             &mut out,
             &["Field", "Value"],
             [
-                vec!["Asset".into(), t.asset_name.clone()],
+                vec![names.asset.singular.to_string(), t.asset_name.clone()],
                 vec![
                     "Category".into(),
                     vocab
@@ -472,9 +496,9 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
                         .unwrap_or_default(),
                 ],
                 vec!["Catalog references".into(), t.catalog_refs.join(", ")],
-                vec!["Damage scenarios".into(), damages.join(", ")],
+                vec![names.damage_scenario.plural.to_string(), damages.join(", ")],
                 vec![
-                    "Attack feasibility".into(),
+                    names.feasibility.to_string(),
                     t.feasibility.clone().unwrap_or_else(|| "not rated".into()),
                 ],
                 vec![
@@ -497,7 +521,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     }
 
     // ---- attack trees ----
-    out.push_str("<h2>5. Attack trees</h2>\n");
+    let _ = writeln!(out, "<h2>5. {}</h2>", esc(&names.attack_tree.plural));
     let trees = pages::tree_rows(ws);
     if trees.is_empty() {
         out.push_str("<p class=\"muted\">None.</p>\n");
@@ -505,10 +529,11 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     for row in trees {
         let _ = writeln!(
             out,
-            "<h3>{}</h3><p class=\"muted\">{} nodes. Feasibility at the root: {}. Threat scenarios: {}.</p>",
+            "<h3>{}</h3><p class=\"muted\">{} nodes. Feasibility at the root: {}. {}: {}.</p>",
             esc(&row.title),
             row.nodes,
             esc(&row.feasibility),
+            esc(&names.threat_scenario.plural),
             esc(if row.threats.is_empty() {
                 "none"
             } else {
@@ -535,7 +560,7 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     risk_table(&mut out, &pages::risk_rows(ws));
 
     // ---- controls ----
-    out.push_str("<h2>7. Security controls</h2>\n");
+    let _ = writeln!(out, "<h2>7. {}</h2>", esc(&names.security_control.plural));
     table(
         &mut out,
         &["Control", "Attack steps", "Goals"],
@@ -546,10 +571,18 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     desc_list_html(&mut out, &section_descriptions(ws, Described::Controls));
 
     // ---- goals and claims ----
-    out.push_str("<h2>8. Cybersecurity goals and claims</h2>\n<h3>Goals</h3>\n");
+    let _ = write!(
+        out,
+        "<h2>{}</h2>\n<h3>Goals</h3>\n",
+        esc(&section_8_heading(names))
+    );
     table(
         &mut out,
-        &["Goal", "Controls", "Threat scenarios"],
+        &[
+            &names.cybersecurity_goal.singular,
+            "Controls",
+            &names.threat_scenario.plural,
+        ],
         pages::goal_rows(ws)
             .into_iter()
             .map(|g| vec![g.name, g.controls.to_string(), g.threats.to_string()]),
@@ -558,7 +591,10 @@ pub fn report_html(ws: &Workspace, ctx: &ReportContext) -> String {
     out.push_str("<h3>Claims</h3>\n");
     table(
         &mut out,
-        &["Claim", "Threat scenarios"],
+        &[
+            &names.cybersecurity_claim.singular,
+            &names.threat_scenario.plural,
+        ],
         pages::claim_rows(ws)
             .into_iter()
             .map(|c| vec![c.name, c.threats.to_string()]),

@@ -11,9 +11,31 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Most requests in flight on one connection.
 pub const MAX_CONCURRENT_PER_CONNECTION: usize = 64;
 
+/// Most concurrent HTTP/2 streams on one connection (SEC-10).
+pub const MAX_CONCURRENT_STREAMS: u32 = 128;
+
+/// Initial HTTP/2 stream flow-control window in bytes: 1 MiB (SEC-10).
+pub const INITIAL_STREAM_WINDOW_SIZE: u32 = 1024 * 1024;
+
+/// Initial HTTP/2 connection flow-control window in bytes: 2 MiB (SEC-10).
+pub const INITIAL_CONNECTION_WINDOW_SIZE: u32 = 2 * 1024 * 1024;
+
+/// Largest HTTP/2 frame payload accepted in bytes: 64 KiB (SEC-10).
+pub const MAX_FRAME_SIZE: u32 = 64 * 1024;
+
+/// Interval between HTTP/2 keep-alive PING frames (SEC-10).
+pub const HTTP2_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Time to wait for an HTTP/2 keep-alive PING acknowledgement (SEC-10).
+pub const HTTP2_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// OS TCP keep-alive idle interval (SEC-10).
+pub const TCP_KEEPALIVE: Duration = Duration::from_secs(60);
+
 /// A tonic server builder with the standard limits: call timeout,
-/// per-connection concurrency, HTTP/2 keep-alive pings that detect dead
-/// clients (so a vanished client's `OpenProject` stream ends), and `TCP_NODELAY`.
+/// per-connection concurrency, explicit HTTP/2 stream/window/frame limits
+/// (SEC-10), HTTP/2 keep-alive pings that detect dead clients (so a vanished
+/// client's `OpenProject` stream ends), and `TCP_NODELAY`.
 ///
 /// HTTP/1.1 is accepted next to HTTP/2, so gRPC-Web (`tonic_web::GrpcWebLayer`)
 /// works through proxies that only forward HTTP/1.1, such as Railway's edge
@@ -28,8 +50,13 @@ pub fn builder() -> Server {
         .accept_http1(true)
         .timeout(CALL_TIMEOUT)
         .concurrency_limit_per_connection(MAX_CONCURRENT_PER_CONNECTION)
-        .http2_keepalive_interval(Some(Duration::from_secs(30)))
-        .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+        .max_concurrent_streams(Some(MAX_CONCURRENT_STREAMS))
+        .initial_stream_window_size(Some(INITIAL_STREAM_WINDOW_SIZE))
+        .initial_connection_window_size(Some(INITIAL_CONNECTION_WINDOW_SIZE))
+        .max_frame_size(Some(MAX_FRAME_SIZE))
+        .http2_keepalive_interval(Some(HTTP2_KEEPALIVE_INTERVAL))
+        .http2_keepalive_timeout(Some(HTTP2_KEEPALIVE_TIMEOUT))
+        .tcp_keepalive(Some(TCP_KEEPALIVE))
         .tcp_nodelay(true)
 }
 

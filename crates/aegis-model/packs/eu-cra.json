@@ -1,0 +1,360 @@
+{
+  "format": "aegis-methodology-pack",
+  "version": 1,
+  "methodology": {
+    "key": "eu-cra",
+    "version": "0.1.0",
+    "label": "EU Cyber Resilience Act (Annex I)",
+    "element_names": {
+      "asset": {
+        "singular": "Asset",
+        "plural": "Assets"
+      },
+      "damage_scenario": {
+        "singular": "Harm",
+        "plural": "Harms"
+      },
+      "threat_scenario": {
+        "singular": "Threat scenario",
+        "plural": "Threat scenarios"
+      },
+      "attack_tree": {
+        "singular": "Attack tree",
+        "plural": "Attack trees"
+      },
+      "security_control": {
+        "singular": "Security control",
+        "plural": "Security controls"
+      },
+      "cybersecurity_goal": {
+        "singular": "Security requirement",
+        "plural": "Security requirements"
+      },
+      "cybersecurity_claim": {
+        "singular": "Cybersecurity claim",
+        "plural": "Cybersecurity claims"
+      },
+      "feasibility": "Likelihood"
+    },
+    "impact_categories": [
+      {
+        "key": "safety-health",
+        "label": "Health and safety",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ],
+        "risk_matrix": [
+          [
+            "low",
+            "low",
+            "low",
+            "medium"
+          ],
+          [
+            "low",
+            "low",
+            "medium",
+            "high"
+          ],
+          [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          [
+            "medium",
+            "high",
+            "critical",
+            "critical"
+          ]
+        ]
+      },
+      {
+        "key": "data-privacy",
+        "label": "Data and privacy",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ],
+        "risk_matrix": [
+          [
+            "low",
+            "low",
+            "low",
+            "medium"
+          ],
+          [
+            "low",
+            "low",
+            "medium",
+            "high"
+          ],
+          [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          [
+            "medium",
+            "high",
+            "critical",
+            "critical"
+          ]
+        ]
+      },
+      {
+        "key": "availability-continuity",
+        "label": "Availability and essential functions",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ],
+        "risk_matrix": [
+          [
+            "low",
+            "low",
+            "low",
+            "medium"
+          ],
+          [
+            "low",
+            "low",
+            "medium",
+            "high"
+          ],
+          [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          [
+            "medium",
+            "high",
+            "critical",
+            "critical"
+          ]
+        ]
+      },
+      {
+        "key": "financial-material",
+        "label": "Financial and material",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ],
+        "risk_matrix": [
+          [
+            "low",
+            "low",
+            "low",
+            "medium"
+          ],
+          [
+            "low",
+            "low",
+            "medium",
+            "high"
+          ],
+          [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          [
+            "medium",
+            "high",
+            "critical",
+            "critical"
+          ]
+        ]
+      }
+    ],
+    "feasibility_levels": [
+      {
+        "key": "very-low",
+        "label": "Very low"
+      },
+      {
+        "key": "low",
+        "label": "Low"
+      },
+      {
+        "key": "medium",
+        "label": "Medium"
+      },
+      {
+        "key": "high",
+        "label": "High"
+      }
+    ],
+    "risk_levels": [
+      {
+        "key": "low",
+        "label": "Low"
+      },
+      {
+        "key": "medium",
+        "label": "Medium"
+      },
+      {
+        "key": "high",
+        "label": "High"
+      },
+      {
+        "key": "critical",
+        "label": "Critical"
+      }
+    ],
+    "properties": [
+      {
+        "key": "confidentiality",
+        "label": "Confidentiality"
+      },
+      {
+        "key": "integrity",
+        "label": "Integrity"
+      },
+      {
+        "key": "availability",
+        "label": "Availability"
+      },
+      {
+        "key": "authenticity",
+        "label": "Authenticity"
+      },
+      {
+        "key": "authorization",
+        "label": "Authorization"
+      },
+      {
+        "key": "non-repudiation",
+        "label": "Non-repudiation"
+      }
+    ],
+    "threat_categories": [
+      {
+        "key": "spoofing",
+        "label": "Spoofing",
+        "violates": [
+          "authenticity"
+        ]
+      },
+      {
+        "key": "tampering",
+        "label": "Tampering",
+        "violates": [
+          "integrity"
+        ]
+      },
+      {
+        "key": "repudiation",
+        "label": "Repudiation",
+        "violates": [
+          "non-repudiation"
+        ]
+      },
+      {
+        "key": "information-disclosure",
+        "label": "Information disclosure",
+        "violates": [
+          "confidentiality"
+        ]
+      },
+      {
+        "key": "denial-of-service",
+        "label": "Denial of service",
+        "violates": [
+          "availability"
+        ]
+      },
+      {
+        "key": "elevation-of-privilege",
+        "label": "Elevation of privilege",
+        "violates": [
+          "authorization"
+        ]
+      }
+    ],
+    "catalog_schemes": [
+      {
+        "key": "cra-annex1",
+        "label": "EU CRA Annex I",
+        "syntax": {
+          "prefix": "CRA-",
+          "required": 2,
+          "segments": [
+            {
+              "min": 1,
+              "max": 2
+            },
+            {
+              "min": 1,
+              "max": 25
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

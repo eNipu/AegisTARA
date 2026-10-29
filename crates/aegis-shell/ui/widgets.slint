@@ -79,6 +79,13 @@ export struct ProblemItem {
     text: string,
 }
 
+export struct SuggestionItem {
+    label: string,
+    detail: string,
+    kind: string,
+    selected: bool,
+}
+
 // A drop-down whose shown choice always follows the view model. A plain
 // ComboBox loses its binding once the user picks something, so a later change
 // from the engine (an undo, another editor) would not show.

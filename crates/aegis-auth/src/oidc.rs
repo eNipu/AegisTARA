@@ -183,6 +183,15 @@ impl std::fmt::Debug for TokenSet {
     }
 }
 
+impl Drop for TokenSet {
+    fn drop(&mut self) {
+        crate::pkce::zeroize_string(&mut self.access_token);
+        if let Some(refresh) = &mut self.refresh_token {
+            crate::pkce::zeroize_string(refresh);
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -193,6 +202,18 @@ struct TokenResponse {
     refresh_token: Option<String>,
     #[serde(default)]
     id_token: Option<String>,
+}
+
+impl Drop for TokenResponse {
+    fn drop(&mut self) {
+        crate::pkce::zeroize_string(&mut self.access_token);
+        if let Some(refresh) = &mut self.refresh_token {
+            crate::pkce::zeroize_string(refresh);
+        }
+        if let Some(id) = &mut self.id_token {
+            crate::pkce::zeroize_string(id);
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -373,15 +394,15 @@ impl<H: HttpClient> OidcClient<H> {
     }
 }
 
-fn token_set(r: TokenResponse, now: u64) -> TokenSet {
+fn token_set(mut r: TokenResponse, now: u64) -> TokenSet {
     TokenSet {
-        access_token: r.access_token,
+        access_token: std::mem::take(&mut r.access_token),
         token_type: if r.token_type.eq_ignore_ascii_case("dpop") {
             "DPoP".to_owned()
         } else {
             "Bearer".to_owned()
         },
-        refresh_token: r.refresh_token,
+        refresh_token: r.refresh_token.take(),
         expires_at: now.saturating_add(r.expires_in.unwrap_or(DEFAULT_LIFETIME_SECS)),
     }
 }
@@ -393,5 +414,7 @@ fn random_token() -> Result<String, AuthError> {
     SystemRandom::new()
         .fill(&mut raw)
         .map_err(|_| AuthError::Protocol)?;
-    Ok(b64::encode(raw))
+    let encoded = b64::encode(raw);
+    crate::pkce::zeroize_bytes(&mut raw);
+    Ok(encoded)
 }

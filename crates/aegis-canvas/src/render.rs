@@ -64,10 +64,15 @@ pub fn render(scene: &Scene, view: &Viewport, options: &RenderOptions) -> Displa
             let (a, b) = scene.edge_ends(edge);
             let (a, b) = (view.to_screen(a), view.to_screen(b));
             let dx = (b.x - a.x) / 2.0;
-            let stroke = match (highlighted, edge.link) {
-                (true, _) => Stroke::solid(Paint::Ink, width(3.5)),
-                (false, true) => Stroke::dashed(Paint::Graphite, width(1.25)),
-                (false, false) => Stroke::solid(Paint::Graphite, width(1.25)),
+            let ghost_target = scene.style(edge.to).is_some_and(|s| s.ghost);
+            let stroke = if ghost_target {
+                Stroke::dashed(Paint::Accent, width(1.5))
+            } else {
+                match (highlighted, edge.link) {
+                    (true, _) => Stroke::solid(Paint::Ink, width(3.5)),
+                    (false, true) => Stroke::dashed(Paint::Graphite, width(1.25)),
+                    (false, false) => Stroke::solid(Paint::Graphite, width(1.25)),
+                }
             };
             items.push(Item::Curve {
                 from: a,
@@ -101,12 +106,17 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
     let rect = Rect::new(top_left.x, top_left.y, world.size.w * z, world.size.h * z);
     let style = scene.style(v);
     let critical = style.is_some_and(|s| s.critical);
+    let ghost = style.is_some_and(|s| s.ghost);
     let tone = tone_of(scene, v);
 
     if z < DETAIL_ZOOM {
         items.push(Item::Rect {
             rect,
-            fill: Some(Paint::Tone(tone)),
+            fill: Some(if ghost {
+                Paint::AccentWash
+            } else {
+                Paint::Tone(tone)
+            }),
             stroke: None,
             radius: 0.0,
             node: Some(v),
@@ -114,7 +124,9 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
         return;
     }
 
-    let outline = if selected {
+    let outline = if ghost {
+        Stroke::dashed(Paint::Accent, if selected { 2.25 } else { 1.5 })
+    } else if selected {
         Stroke::solid(Paint::Accent, 2.0)
     } else if critical {
         Stroke::solid(Paint::Ink, 2.5 * z.min(1.0))
@@ -123,14 +135,22 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
     };
     items.push(Item::Rect {
         rect,
-        fill: Some(Paint::Panel),
+        fill: Some(if ghost {
+            Paint::AccentWash
+        } else {
+            Paint::Panel
+        }),
         stroke: Some(outline),
         radius: 2.0 * z,
         node: Some(v),
     });
     items.push(Item::Rect {
         rect: Rect::new(rect.origin.x, rect.origin.y, 6.0 * z, rect.size.h),
-        fill: Some(Paint::Tone(tone)),
+        fill: Some(if ghost {
+            Paint::Accent
+        } else {
+            Paint::Tone(tone)
+        }),
         stroke: None,
         radius: 0.0,
         node: None,
@@ -147,7 +167,7 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
             text: line,
             size: FONT * z,
             bold: false,
-            paint: Paint::Ink,
+            paint: if ghost { Paint::Accent } else { Paint::Ink },
             align: Align::Start,
         });
     }
@@ -158,16 +178,24 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
             text: score.to_owned(),
             size: FONT * z,
             bold: true,
-            paint: Paint::Ink,
+            paint: if ghost { Paint::Accent } else { Paint::Ink },
             align: Align::Start,
         });
     }
     items.push(Item::Text {
         at: Point::new(rect.right() - 10.0 * z, base),
-        text: kind_label(scene.kind(v)).to_owned(),
+        text: if ghost {
+            format!("ghost · {}", kind_label(scene.kind(v)))
+        } else {
+            kind_label(scene.kind(v)).to_owned()
+        },
         size: FONT_SMALL * z,
-        bold: false,
-        paint: Paint::Graphite,
+        bold: ghost,
+        paint: if ghost {
+            Paint::Accent
+        } else {
+            Paint::Graphite
+        },
         align: Align::End,
     });
 }

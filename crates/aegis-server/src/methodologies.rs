@@ -54,15 +54,17 @@ pub struct Methodologies {
 }
 
 impl Methodologies {
-    /// Only the built-in ISO/SAE 21434 + UN R155 pack.
+    /// The built-in methodology packs (`"iso21434-r155"` and `"eu-cra"`).
     ///
     /// # Errors
     ///
-    /// [`PackLoadError::Invalid`] if the embedded pack is broken (a bug).
+    /// [`PackLoadError::Invalid`] if an embedded pack is broken (a bug).
     pub fn builtin() -> Result<Self, PackLoadError> {
         let mut me = Methodologies::default();
         let pack = Methodology::iso21434_r155_pack().as_bytes();
-        me.add_bytes("built-in", pack)?;
+        me.add_bytes("built-in:iso21434-r155", pack)?;
+        let cra_pack = Methodology::eu_cra_pack();
+        me.add_bytes("built-in:eu-cra", cra_pack)?;
         Ok(me)
     }
 
@@ -145,6 +147,10 @@ mod tests {
         assert_eq!(hosted.methodology.key(), "iso21434-r155");
         let again = Methodology::read_pack(&*hosted.pack).expect("pack");
         assert_eq!(&again, &*hosted.methodology);
+        let cra = me.get("eu-cra").expect("eu-cra hosted");
+        assert_eq!(cra.methodology.key(), "eu-cra");
+        let cra_again = Methodology::read_pack(&*cra.pack).expect("cra pack");
+        assert_eq!(&cra_again, &*cra.methodology);
         assert!(me.get("nope").is_none());
     }
 
@@ -155,6 +161,6 @@ mod tests {
         assert!(matches!(dup, Err(PackLoadError::Duplicate(k)) if k == "iso21434-r155"));
         let bad = me.add_bytes("junk", b"{}");
         assert!(matches!(bad, Err(PackLoadError::Invalid { .. })));
-        assert_eq!(me.iter().count(), 1);
+        assert_eq!(me.iter().count(), 2);
     }
 }

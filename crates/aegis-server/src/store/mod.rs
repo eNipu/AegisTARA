@@ -19,14 +19,16 @@
 //! - Every stored op is linked into a per-project hash chain (`audit.rs`),
 //!   and `verify_chain` recomputes it.
 
-mod audit;
+pub(crate) mod audit;
 mod folder;
 mod memory;
 mod postgres;
 
 use std::future::Future;
 
-pub use audit::{ChainReport, ChainVerifier, Hash, genesis, link};
+pub use audit::{
+    ChainReport, ChainVerifier, EventChainVerifier, Hash, event_genesis, event_link, genesis, link,
+};
 pub use folder::FolderStore;
 pub use memory::MemoryStore;
 pub use postgres::{DbTls, PostgresOptions, PostgresStore};

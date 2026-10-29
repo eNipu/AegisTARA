@@ -51,6 +51,12 @@ impl std::fmt::Debug for DeviceKey {
     }
 }
 
+impl Drop for DeviceKey {
+    fn drop(&mut self) {
+        crate::pkce::zeroize_bytes(&mut self.pkcs8);
+    }
+}
+
 impl DeviceKey {
     /// Generates a new key with the OS random generator.
     ///
@@ -274,8 +280,22 @@ impl ReplayCache {
             return Err(AuthError::Replay);
         }
         if inner.seen.len() >= self.max_entries {
+            let ReplayInner { seen, order } = &mut *inner;
+            order.retain(|&(k, exp)| {
+                if exp <= now {
+                    if seen.get(&k) == Some(&exp) {
+                        seen.remove(&k);
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if inner.seen.len() >= self.max_entries {
             return Err(AuthError::Dpop("replay cache is full"));
         }
+        let expires = expires.max(inner.order.back().map_or(0, |&(_, exp)| exp));
         inner.seen.insert(key, expires);
         inner.order.push_back((key, expires));
         Ok(())
@@ -412,9 +432,11 @@ impl DpopVerifier {
         if claims.jti.is_empty() || claims.jti.len() > MAX_JTI_BYTES {
             return Err(AuthError::Dpop("bad proof id"));
         }
-        // Last: only a fully valid proof is remembered.
-        self.replay
-            .insert(&claims.jti, claims.iat.saturating_add(self.window), now)?;
+        // Last: only a fully valid proof is remembered. Expiry is monotonic
+        // in server arrival time (`now + window + skew`, SEC-03) so an early
+        // future-skewed proof never blocks FIFO eviction of later proofs.
+        let expires = now.saturating_add(self.window.saturating_add(self.skew));
+        self.replay.insert(&claims.jti, expires, now)?;
         Ok(jkt)
     }
 }
@@ -601,5 +623,29 @@ mod tests {
         cache
             .insert("a", 300, 111)
             .expect("expired entries are gone");
+    }
+
+    #[test]
+    fn a_future_skewed_proof_does_not_block_eviction_of_later_proofs() {
+        // SEC-03 regression test: a proof with `iat = now + skew` at t = NOW
+        // must not sit at the head of the FIFO queue with a later expiry than
+        // proofs verified at t = NOW with `iat = now - window`, and all proofs
+        // verified at t = NOW must evict cleanly in arrival order.
+        let key = DeviceKey::generate().expect("key");
+        let v = DpopVerifier::new(60, 5, 2);
+
+        let future_skewed = key.proof("POST", URL, None, None, NOW + 5).expect("p1");
+        let old_valid = key.proof("POST", URL, None, None, NOW - 59).expect("p2");
+        v.verify(&future_skewed, "POST", URL, None, None, NOW)
+            .expect("first ok");
+        v.verify(&old_valid, "POST", URL, None, None, NOW + 1)
+            .expect("second ok");
+
+        // At NOW + 65, the first proof (inserted at NOW with ttl 65) has expired,
+        // so a third proof at NOW + 65 must succeed even though the second was
+        // inserted at NOW + 1.
+        let third = key.proof("POST", URL, None, None, NOW + 65).expect("p3");
+        v.verify(&third, "POST", URL, None, None, NOW + 65)
+            .expect("evicted in monotonic arrival order");
     }
 }

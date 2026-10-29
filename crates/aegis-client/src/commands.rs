@@ -1367,6 +1367,19 @@ pub enum Command {
     /// its size and SHA-256 against the signed manifest, and say where it is
     /// (the answer is a notice). Nothing is run.
     DownloadUpdate,
+    /// Synthesizes predictive ghost attack-tree steps for the shown tree (or
+    /// selected node) using the local Aegis-Core Gear 1 engine (job 089).
+    SuggestTreeNodes,
+    /// Accepts one pending suggestion by its position in
+    /// [`crate::state::ProjectView::suggestions`].
+    AcceptSuggestion(usize),
+    /// Accepts all remaining pending suggestions in the active branch.
+    AcceptAllSuggestions,
+    /// Rejects one pending suggestion by its position in
+    /// [`crate::state::ProjectView::suggestions`].
+    RejectSuggestion(usize),
+    /// Rejects all pending suggestions in the active branch.
+    RejectAllSuggestions,
     /// Stop the session.
     Shutdown,
 }

@@ -9,14 +9,19 @@
 //! retention and anything beyond a row cap, so a flood of failed logins
 //! cannot fill the disk. See `docs/adr/0046-event-log-everywhere.md`.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::{AccountBackend, AuditEvent, AuditKind, bounded};
 use crate::store::StoreFault;
+use crate::store::audit::ChainReport;
 
 /// Longest text kept in the actor, target and detail columns, in characters.
 const MAX_TEXT_CHARS: usize = 256;
+
+/// Most events buffered in memory while the database is unreachable (R4, SEC-06).
+const MAX_PENDING_EVENTS: usize = 4096;
 
 /// Default retention: one year.
 pub const DEFAULT_RETENTION: Duration = Duration::from_secs(365 * 24 * 3600);
@@ -42,18 +47,30 @@ impl Default for Retention {
     }
 }
 
-/// The append-only event log. Cheap to clone: it shares the backend.
+/// The append-only event log. Cheap to clone: it shares the backend and
+/// retry buffer.
 #[derive(Clone)]
 pub struct EventLog {
     backend: Arc<AccountBackend>,
     clock_ms: fn() -> u64,
+    pending: Arc<Mutex<VecDeque<AuditEvent>>>,
+}
+
+fn lock_pending(
+    m: &Mutex<VecDeque<AuditEvent>>,
+) -> std::sync::MutexGuard<'_, VecDeque<AuditEvent>> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl EventLog {
     /// A log over `backend`, which may also serve [`Accounts`](super::Accounts).
     #[must_use]
     pub fn new(backend: Arc<AccountBackend>, clock_ms: fn() -> u64) -> Self {
-        EventLog { backend, clock_ms }
+        EventLog {
+            backend,
+            clock_ms,
+            pending: Arc::new(Mutex::new(VecDeque::new())),
+        }
     }
 
     /// A log that owns its backend and uses the system clock.
@@ -68,10 +85,55 @@ impl EventLog {
         (self.clock_ms)()
     }
 
-    /// Writes an event. A failure is logged and does not fail the caller's
-    /// action, which has already been stored. Control characters are
-    /// removed and each text is cut to 256 characters.
-    pub async fn record(&self, actor: &str, kind: AuditKind, target: &str, detail: &str) {
+    fn enqueue_back(&self, event: AuditEvent) {
+        let mut q = lock_pending(&self.pending);
+        if q.len() >= MAX_PENDING_EVENTS {
+            q.pop_front();
+        }
+        q.push_back(event);
+    }
+
+    fn enqueue_front(&self, event: AuditEvent) {
+        let mut q = lock_pending(&self.pending);
+        if q.len() >= MAX_PENDING_EVENTS {
+            q.pop_back();
+        }
+        q.push_front(event);
+    }
+
+    /// Flushes any events retained after a transient backend error (SEC-06).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] if the backend is still failing; the remaining events
+    /// stay queued for the next attempt.
+    pub async fn flush(&self) -> Result<(), StoreFault> {
+        loop {
+            let next = lock_pending(&self.pending).pop_front();
+            let Some(event) = next else {
+                return Ok(());
+            };
+            if let Err(fault) = self.backend.record(&event).await {
+                self.enqueue_front(event);
+                return Err(fault);
+            }
+        }
+    }
+
+    /// Writes an event, returning any backend error while retaining the
+    /// event in the bounded retry queue so it is never silently dropped
+    /// (SEC-06).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn try_record(
+        &self,
+        actor: &str,
+        kind: AuditKind,
+        target: &str,
+        detail: &str,
+    ) -> Result<(), StoreFault> {
         let event = AuditEvent {
             at_ms: self.now_ms(),
             actor: bounded(actor, MAX_TEXT_CHARS),
@@ -79,9 +141,32 @@ impl EventLog {
             target: bounded(target, MAX_TEXT_CHARS),
             detail: bounded(detail, MAX_TEXT_CHARS),
         };
-        if let Err(fault) = self.backend.record(&event).await {
-            tracing::error!(%fault, kind = kind.as_str(), "could not write an audit event");
+        if let Err(fault) = self.flush().await {
+            tracing::error!(
+                %fault,
+                kind = kind.as_str(),
+                "could not flush queued audit events; queuing new event for retry"
+            );
+            self.enqueue_back(event);
+            return Err(fault);
         }
+        if let Err(fault) = self.backend.record(&event).await {
+            tracing::error!(
+                %fault,
+                kind = kind.as_str(),
+                "could not write an audit event; queued for retry"
+            );
+            self.enqueue_back(event);
+            return Err(fault);
+        }
+        Ok(())
+    }
+
+    /// Writes an event. If the database fails transiently, the error is
+    /// logged and the event is retained in memory to be flushed on the next
+    /// operation so it is never silently dropped (SEC-06).
+    pub async fn record(&self, actor: &str, kind: AuditKind, target: &str, detail: &str) {
+        let _ = self.try_record(actor, kind, target, detail).await;
     }
 
     /// The newest events, newest first, at most `limit` (and never more than
@@ -91,20 +176,36 @@ impl EventLog {
     ///
     /// [`StoreFault`] from the backend.
     pub async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, StoreFault> {
+        self.flush().await?;
         self.backend.recent_events(limit.min(MAX_READ)).await
     }
 
-    /// Drops events beyond `retention`. Returns how many were removed.
+    /// Drops events beyond `retention` and records an
+    /// [`AuditKind::EventsTrimmed`] event in the hash chain when any rows
+    /// are removed (SEC-06). Returns how many were removed.
     ///
     /// # Errors
     ///
     /// [`StoreFault`] from the backend.
     pub async fn trim(&self, retention: Retention) -> Result<u64, StoreFault> {
+        self.flush().await?;
+        let now = self.now_ms();
         let age_ms = u64::try_from(retention.max_age.as_millis()).unwrap_or(u64::MAX);
-        let cutoff = self.now_ms().saturating_sub(age_ms);
+        let cutoff = now.saturating_sub(age_ms);
         self.backend
-            .trim_events(cutoff, retention.max_events.max(1))
+            .trim_events(cutoff, retention.max_events.max(1), now)
             .await
+    }
+
+    /// Verifies the SHA-256 hash chain over all surviving audit events from
+    /// the tail anchor to the current head (SEC-06).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreFault`] from the backend.
+    pub async fn verify_chain(&self) -> Result<ChainReport, StoreFault> {
+        self.flush().await?;
+        self.backend.verify_events().await
     }
 }
 
@@ -214,8 +315,13 @@ mod tests {
             .expect("trim");
         assert_eq!(removed, 5);
         let left = log.recent(100).await.expect("recent");
-        assert_eq!(left.len(), 4);
-        assert!(left.iter().all(|e| e.at_ms == 10 * day));
+        assert_eq!(left.len(), 5);
+        assert_eq!(left[0].kind, AuditKind::EventsTrimmed);
+        assert_eq!(left[0].detail, "removed=5");
+        assert!(left[1..].iter().all(|e| e.at_ms == 10 * day));
+        let report = log.verify_chain().await.expect("verify");
+        assert_eq!(report.first_bad, None);
+        assert_eq!(report.verified, 5);
         // Nothing more to do on a second pass.
         let again = log
             .trim(Retention {
@@ -240,10 +346,14 @@ mod tests {
             .expect("trim");
         assert_eq!(removed, 7);
         let left = log.recent(100).await.expect("recent");
-        assert_eq!(left.len(), 3);
-        // The newest three: p100-9, p100-8, p100-7.
-        assert_eq!(left[0].target, "p100-9");
-        assert_eq!(left[2].target, "p100-7");
+        assert_eq!(left.len(), 4);
+        assert_eq!(left[0].kind, AuditKind::EventsTrimmed);
+        // The newest three non-trim events: p100-9, p100-8, p100-7.
+        assert_eq!(left[1].target, "p100-9");
+        assert_eq!(left[3].target, "p100-7");
+        let report = log.verify_chain().await.expect("verify");
+        assert_eq!(report.first_bad, None);
+        assert_eq!(report.verified, 4);
     }
 
     #[tokio::test]
@@ -268,7 +378,24 @@ mod tests {
             Duration::from_secs(60),
         );
         tokio::time::sleep(Duration::from_secs(1)).await;
-        assert_eq!(log.recent(100).await.expect("recent").len(), 2);
+        let recent = log.recent(100).await.expect("recent");
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].kind, AuditKind::EventsTrimmed);
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn event_chain_detects_tampering_and_deletion() {
+        let log = log();
+        write(&log, 10, 3).await;
+        let ok = log.verify_chain().await.expect("verify");
+        assert_eq!(ok.first_bad, None);
+        assert_eq!(ok.verified, 3);
+
+        if let AccountBackend::Memory(mem) = log.backend.as_ref() {
+            mem.tamper_event_detail(1, "mallory");
+        }
+        let bad = log.verify_chain().await.expect("verify tampered");
+        assert_eq!(bad.first_bad, Some(2));
     }
 }

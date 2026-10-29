@@ -75,9 +75,9 @@ flowchart TB
 
 | Module | Primary Types | Responsibility |
 |---|---|---|
-| `id.rs` | `NodeIdx`..`ClaimIdx` (`u32`), `NodeId`..`ClaimId` (`Uuid` v7) | 4-byte arena indices for $O(1)$ slice access and 16-byte time-ordered UUIDv7 external identifiers. |
+| `id.rs` | `NodeIdx`..`ClaimIdx` (`u32`), `NodeId`..`ClaimId`, `SuggestionId` (`Uuid` v7) | 4-byte arena indices for $O(1)$ slice access and 16-byte time-ordered UUIDv7 external identifiers. |
 | `provenance.rs` | `Provenance`, `ProvenanceSource` | Tracks `actor`, `timestamp_ms`, and `source` (`Human`, `Import`, `Catalog`, `Ai`) on every entity and mutation. |
-| `methodology/` | `Methodology`, `MethodologyDef`, `AttackPotential`, `PotentialBand`, `CatalogRef`, `PropertySet`, scale `u8` newtypes | Validates and compiles methodology packs (including built-in ISO/SAE 21434 + UN R155 Annex 5), 2D risk matrices, catalog syntax, and CEM multi-factor attack potential scoring. |
+| `methodology/` | `Methodology`, `MethodologyDef`, `ElementNamesDef`, `ElementNameDef`, `AttackPotential`, `PotentialBand`, `CatalogRef`, `PropertySet`, scale `u8` newtypes | Validates and compiles methodology packs (built-in ISO/SAE 21434 + UN R155 Annex 5, medical-device demo, and EU CRA Annex I `eu-cra`), pack-defined element type names (`DOM-01`), plain likelihood (`DOM-02`) alongside CEM multi-factor attack potential scoring, 2D risk matrices, and catalog syntax (ADR 0053). |
 | `tree.rs` | `AttackTree`, `Node`, `GateKind`, `RemovedNode`, `MAX_ATTACK_TREE_NODES` (4,096), `MAX_TREE_OP_NODES` (32) | Arena-allocated rooted DAG with `And`, `Or`, and `SeqAnd` gates, $O(1)$ end-of-arena append fast path and sliced index shifting on structural edits, eager DFS cycle prevention on `link()`, and iterative Kahn's `topological_order()`. |
 | `eval.rs` | `AttributeDomain`, `MaxMin<T>`, `MinTime`, `Evaluation<V>`, `Derivation`, `Explanation`, `TreeEvalCache<V>` | Single-pass bottom-up DAG evaluator, step-by-step explain-why traces, and rank-ordered incremental tree evaluation cache with value-change early cutoff. |
 | `asset.rs` | `Asset` | Item asset holding a `PropertySet` bitset of security properties and `Provenance`. |
@@ -86,6 +86,7 @@ flowchart TB
 | `control.rs` | `SecurityControl`, `StepMitigation`, `RiskTreatment`, `CybersecurityGoal`, `CybersecurityClaim` | Security controls, per-step feasibility mitigations, treatment decisions (`Avoid`, `Reduce`, `Share`, `Retain`), goals, and claims. |
 | `description.rs` | `ElementRef`, `MAX_DESCRIPTION_CHARS`, `MAX_NOTES_CHARS`, `MAX_DESCRIPTION_TOTAL_BYTES` | Plain description text on the seven entity kinds and the project's notes (`ElementRef::Project`), kept in one ordered map on `Project`, set by `Op::SetDescription` (ADR 0051). |
 | `library.rs` | `LibraryPack`, `LibraryItem`, `ItemNode`, `Facet`, `LibraryIndex`, `LibraryError`, `MAX_LIBRARY_*` | Attack tree library packs (versioned JSON, license, SHA-256 hash, decode caps), the built-in demo pack in `packs/`, and an inverted n-gram posting index (`postings: HashMap<String, Vec<(u32, u8)>>`) with precomputed facet counts that works for English and Japanese (ADR 0052). |
+| `suggest.rs` | `SuggestionBranch`, `SuggestionItem`, `GhostPreview`, `GhostTreeNode`, `Citation`, `SuggestionError`, `MAX_SUGGESTIONS_PER_BRANCH`, `MAX_OPS_PER_SUGGESTION`, `MAX_CITATIONS_PER_ITEM` | Holds proposed AI operations apart from `Project`, overlays ghost nodes on a cloned `AttackTree` (`preview_tree`), and rebases/stamps accepted items with `ProvenanceSource::Ai` (`FND-05`, ADR 0055). |
 | `op.rs` | `Op` (45 variants) | Complete set of validated, single-op-invertible project mutations. |
 | `project.rs` | `Project`, `Arena<Id, Idx, T>`, `TreeEntry`, `RefCounts`, `ProjectEvalCache` | Aggregate root owning the 7 entity arenas, sparse reference counts (`RefCounts`), and incremental project evaluation cache (`ProjectEvalCache`). |
 | `paths.rs` | `AttackPath<V>`, `AttackPaths<V>`, `ChokePoint<V>` | Lazy best-first minimal cut-set enumeration (`BinaryHeap<SearchState<V>>`), choke-point ranking, and greedy top-$k$ hitting sets. |
@@ -1343,8 +1344,8 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `config.rs` | `ServerConfig` | Every limit in one place, see II.4.4. |
 | `store/mod.rs` | trait `ProjectStore`, `ProjectMeta`, `StoredOp`, `StoredSnapshot`, `LoadedProject`, `BaselineMeta`, `StoreFault` | Storage interface. |
 | `store/memory.rs` | `MemoryStore` | Tests and development. |
-| `store/postgres.rs` | `PostgresStore`, `PostgresOptions`, `DbTls { Off, Encrypt, Verify }` | `Encrypt` accepts any certificate (libpq `require`); `Verify` checks it against the OS roots (libpq `verify-full`). |
-| `store/audit.rs` | `Hash`, `ChainVerifier`, `ChainReport` | SHA-256 hash chain over stored ops. |
+| `store/postgres.rs` | `PostgresStore`, `PostgresOptions`, `DbTls { Off, Encrypt, Verify }` | Both `Encrypt` and `Verify` verify the server certificate and hostname against OS roots or `PostgresOptions.ca_file` (`AEGIS_DB_CA_FILE`, capped at 1 MiB, `SEC-05`, ADR 0054). |
+| `store/audit.rs` | `Hash`, `ChainVerifier`, `ChainReport`, `EventChainVerifier`, `event_genesis`, `event_link` | SHA-256 hash chain over stored ops (`aegis-audit-v1`) and server audit events (`aegis-event-v1`, `SEC-06`, ADR 0054). |
 | `store/folder.rs` | `FolderStore`, `STREAM_BATCH_OPS`, `STREAM_BATCH_BYTES` | `ProjectStore` over one project folder, for standalone mode (II.4.7). |
 | `import.rs` | `ImportReport`, `ImportError`, `Registry::import_folder` | Copies a standalone folder into the server's store with its history intact (II.4.7). |
 | `ids.rs` | `ProjectId`, `BadProjectId` | |
@@ -1422,19 +1423,26 @@ Rules the code follows:
   SHA-256 (`SessionKey`) is stored. Sessions end at an absolute time (no
   sliding). `spawn_purger` removes expired sessions.
 - **Passwords.** Argon2id hashing runs on `spawn_blocking` (R5), behind a
-  semaphore of `hashing_permits` with a `hashing_wait` timeout (R4, R6). An
-  unknown user name is checked against a decoy hash, so timing does not tell
-  whether a user exists.
+  semaphore of `hashing_permits` with a `hashing_wait` timeout (R4, R6), with a
+  per-address admission gate (`AddrThrottle`, `SEC-04`) in front of `LogIn` and
+  a separate `auth_hashing` pool for authenticated operations. An unknown user
+  name is checked against a decoy hash, so timing does not tell whether a user
+  exists.
 - **Throttle.** Per user name: after `free_failures` failures the wait
-  doubles from 1 s up to `max_backoff`. The map is capped (R3).
+  doubles from 1 s up to `max_backoff`. The map is capped (R3) and evicts a
+  single entry (preferring unknown and unblocked names, never clearing all,
+  `SEC-01`) when full.
 - **Locks.** The state mutex is never held across an `.await` (C2). The
   in-memory state is a cache of the backend and is rebuilt at start (D10).
+  Multi-table account/session mutations run in one database transaction with
+  in-memory rollback on error (`SEC-07`).
 - **Safety.** The last enabled admin cannot be removed, disabled or demoted.
   Disabling a user or changing a password ends that user's sessions.
 - **Audit.** `AuditKind`: `login_ok`, `login_failed`, `logout`,
   `password_changed`, `user_created`, `user_updated`, `user_deleted`,
   `export`, `project_deleted`, `baseline_created`,
-  `password_login_changed`. Never a password or token.
+  `password_login_changed`, `events_trimmed`. Hash-chained in `server_events`
+  and verified by `VerifyAudit` (`SEC-06`). Never a password or token.
 - **Login switch (job 045, ADR 0039).** `AEGIS_AUTH=both` runs the company
   login (OIDC) and password login side by side: `HybridAuthn` sends a bearer
   token with the `ats_` prefix to `PasswordAuthn` and everything else to
@@ -1536,14 +1544,18 @@ erDiagram
         text kind
         text target
         text detail
+        bytea prev_hash
+        bytea event_hash
     }
 ```
 
 Migrations: `001_init.sql` (projects and ops), `002_accounts_baselines.sql`
 (users, sessions, events, baselines, op time index), `003_settings.sql`
 (`aegis_setting`: key and value per organization; today only
-`password_login` = `on` or `off`, no row means on). Deleting a project
-deletes its baselines and ops in one transaction.
+`password_login` = `on` or `off`, no row means on), `004_event_chain.sql`
+(adds `prev_hash` and `event_hash` to `server_events` for `SEC-06` hash-chain
+verification). Deleting a project deletes its baselines and ops in one
+transaction.
 
 ### II.4.6 Seat restore
 
@@ -1631,12 +1643,13 @@ a seat after the next start (II.4.6).
 | `commands.rs` | `Edit`, `EditError`, `Command`, `GATES` | `Edit` is a user intent (add asset, rate a step, link a control, interactive tree node rename/gate change/add child/branch leaf step to gate/insert parent gate/add sibling/reorder/delete, ...). It expands to model `Op`s, including safe cascades (deleting an asset first unlinks what uses it). `Command` is everything the UI can ask of the session. |
 | `outline.rs` | `OutlineError`, `parse()`, `render()` | Text outline editor for attack trees (indent = child, `OR`/`AND`/`SEQ` gates, `- ` steps; lines with the same text are one shared node). The first line is always the tree's root. |
 | `library.rs` | `InsertMode`, `InsertOptions`, `insert_ops()`, `matching_labels()`, `LibraryView` | Copies a library item into the project as one batch (new tree, under a gate, in place of a step; origin note; ratings marked for review; no silent merging of names) and holds the Library panel's search, facet and pick state (ADR 0052). |
+| `suggest.rs` | `Gear1Predictor`, `SuggestionRow`, `suggest_tree_nodes()`, `suggestion_rows()`, `MAX_MODEL_ARTIFACT_BYTES` | Runs Aegis-Core Gear 1 multi-head attack-tree inference (`tools/aegis-ai/artifacts/gear1_model.json` or built-in compact weights), verifies candidate steps against a cloned `Project`, and builds a `SuggestionBranch` for canvas ghost nodes and the inspector panel (ADR 0055). |
 | `tree_diff.rs` | `replace_tree_ops()`, `clear_step_ops()`, `add_child_ops()`, `branch_step_ops()`, `insert_parent_gate_ops()`, `add_sibling_ops()`, `move_node_ops()`, `remove_node_ops()` | Reconciles outline edits and interactive node-level tree expansions (leaf/end and intermediate insertions, branching, sibling reordering, and subtree removal with shared-descendant reparenting) into minimal valid node ops using a Fenwick-tree Maximum-Weight Increasing Subsequence (`mwis_mask`) and `transfer_step_ops()` to preserve ratings, factors, controls, and review marks in one undo step (ADR 0014, job 065). |
 | `pages.rs` | `Vocabulary`, `Overview`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
 | `view.rs` | `Page` (13 pages), `Selection` (incl. `TreeNode(TreeId, NodeId)`), `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice`, `tree_view_cached()` | What the window shows for the current page and selection, including interactive node expansion metadata (`is_root`, `gate_index`, `can_move_up`, `can_move_down`) in `Inspector`. |
 | `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` (`ViewModel` also has `events`, `events_error`; `LicenseView` has dates, features and `lines()`) | The whole UI state, published on a `watch` channel. |
 | `report.rs` | `ExportKind { Report, RiskRegister, TreeSvg }`, `ReportContext` | Builds export files on the client. Text is escaped for HTML and CSV (formula injection guarded). |
-| `settings.rs` | `Settings { server_url, transport, username, export_dir, update_url }`, `export_file_name()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic write. Never a password or token. |
+| `settings.rs` | `Settings { server_url, transport, username, export_dir, update_url }`, `export_file_name()`, `write_private_file()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic private write (`create_new`, `0600` on Unix, symlink check, `SEC-09`). Never a password or token. |
 | `time.rs` | `date_ms()`, `date_time_ms()` | UTC dates without a time crate. |
 | `pdf.rs` | `ReportDoc`, `Block`, `Style`, `report_doc`, `report_pdf`, `PdfError`, `MAX_PAGES` | The report as a PDF (job 050): blocks, A4 layout with real glyph widths, tables that continue with their header row, footer with watermark and page numbers. `krilla` writes the file, Inter (OFL) is embedded. |
 | `audit.rs` | `EventRow`, `EventGroup { Logins, Exports, AdminActions, Other }`, `event_row`, `filter` | Event log entries in plain words, for the administration page (job 049). |
@@ -1843,11 +1856,8 @@ appears (the trigger is named in the table).
 | Crate | New modules | Holds | Split trigger |
 |---|---|---|---|
 | `aegis-model` | `text.rs` | `Text { value, lang, translations }`: a language tag and translations on top of the description text of job 064 (FND-04) | |
-| | `tree.rs` (extended), `op.rs` | Node-level tree ops and the raised per-tree cap (FND-02, FND-03) | |
 | | `item.rs` | `Component`, `Interface`, `DataFlow`, `TrustBoundary`, asset binding (ARC-02) | |
 | | `trace.rs` | `Requirement`, `Verification`, `TraceLink`, `ExternalRef`, suspect state (TRC-01 to TRC-03) | |
-| | `suggest.rs` | `SuggestionBranch`: proposed ops kept apart until accepted (FND-05) | |
-| | `library/` | Library pack format (like methodology packs: versioned JSON, caps, hash), n-gram index, facet filter, insert batch builder with origin note (LIB-01 to LIB-04) | |
 | `aegis-canvas` | `diagram.rs` | Data-flow diagram layout and drawing into the same display list (ARC-03) | |
 | `aegis-proto` | new RPC groups | Access, attachments (chunked streams), library, report profiles, AI (suggest stream, accept, reject), connectors | |
 | `aegis-server` | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
@@ -1860,10 +1870,9 @@ appears (the trigger is named in the table).
 | | `report/` | `report.rs` and `pdf.rs` move here; one `ReportDoc` feeds `html.rs`, `pdf.rs`, `xlsx.rs`; `profile.rs` holds section and filter choices (RPT-01 to RPT-05) | `aegis-report` crate when the command line tool (RPT-07) must run without the client |
 | | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
 | `aegis-shell` | `ui/` with `@tr()`, `translations/ja/aegis-shell.po` | Bundled UI catalogs (L10N-01); panel slots, command palette, history panel (UI-01 to UI-04) | |
-| `aegis-model` | `methodology/` (extended) | Element type names per pack, a plain likelihood method, catalog packs with text (DOM-01, DOM-02, DOM-04) | |
+| `aegis-model` | `methodology/` (extended) | Catalog packs with text (DOM-04) | |
 
-Repository additions: `packs/library/` (the built-in demo library pack),
-`packs/cra/` (the EU CRA pack), `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
+Repository additions: `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
 where licenses allow),
 `crates/aegis-client/locales/`, `crates/aegis-shell/translations/`,
 `crates/aegis-client/assets/fonts/NotoSansJP-*` (subset at export time by
@@ -1922,17 +1931,6 @@ classDiagram
         url: Option~String~
         synced_ms: Option~u64~
     }
-    class Origin {
-        library_item: LibraryItemId
-        version: u32
-        nodes: Vec~NodeMapping~
-    }
-    class SuggestionBranch {
-        id: SuggestionId
-        source: Provenance
-        ops: Vec~Op~
-        citations: Vec~Citation~
-    }
     Component "1" o-- "*" Asset : binds
     DataFlow --> Component
     DataFlow --> Interface
@@ -1940,7 +1938,6 @@ classDiagram
     CybersecurityGoal "1" <-- "*" Requirement : refines
     Requirement "1" <-- "*" Verification : verifies
     SecurityControl ..> Requirement : implements
-    AttackTree ..> Origin : copied from library
 ```
 
 A link is suspect when its `from` element changed after `confirmed_seq`

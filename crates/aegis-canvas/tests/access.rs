@@ -15,6 +15,7 @@ fn scene() -> Scene {
         score: (i.index() >= 3).then(|| format!("{} · Medium", 10 + i.index())),
         tone: Tone::Medium,
         critical: i.index() == 4,
+        ghost: false,
     })
 }
 

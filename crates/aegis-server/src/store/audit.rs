@@ -21,6 +21,8 @@ pub type Hash = [u8; 32];
 
 const GENESIS_DOMAIN: &[u8] = b"aegis-audit-genesis-v1\0";
 const LINK_DOMAIN: &[u8] = b"aegis-audit-link-v1\0";
+const EVENT_GENESIS_DOMAIN: &[u8] = b"aegis-event-genesis-v1\0";
+const EVENT_LINK_DOMAIN: &[u8] = b"aegis-event-link-v1\0";
 
 /// The `prev` of the first op of a project.
 #[must_use]
@@ -28,6 +30,35 @@ pub fn genesis(project: ProjectId) -> Hash {
     let mut h = Sha256::new();
     h.update(GENESIS_DOMAIN);
     h.update(project.as_uuid().as_bytes());
+    h.finalize().into()
+}
+
+/// The initial `prev_hash` (and initial `tail_hash`/`head_hash`) for an
+/// organization's server event log before any event is recorded (SEC-06).
+#[must_use]
+pub fn event_genesis(org: uuid::Uuid) -> Hash {
+    let mut h = Sha256::new();
+    h.update(EVENT_GENESIS_DOMAIN);
+    h.update(org.as_bytes());
+    h.finalize().into()
+}
+
+/// The hash of an audit event chained after `prev` (SEC-06).
+#[must_use]
+pub fn event_link(prev: &Hash, event: &crate::accounts::AuditEvent) -> Hash {
+    let mut h = Sha256::new();
+    h.update(EVENT_LINK_DOMAIN);
+    h.update(prev);
+    h.update(event.at_ms.to_be_bytes());
+    for field in [
+        event.actor.as_str(),
+        event.kind.as_str(),
+        event.target.as_str(),
+        event.detail.as_str(),
+    ] {
+        h.update((field.len() as u64).to_be_bytes());
+        h.update(field.as_bytes());
+    }
     h.finalize().into()
 }
 
@@ -109,6 +140,62 @@ impl ChainVerifier {
     pub fn finish(mut self, claimed_head: &Hash) -> ChainReport {
         if self.first_bad.is_none() && self.prev != *claimed_head {
             self.first_bad = Some(self.next_seq);
+        }
+        ChainReport {
+            verified: self.verified,
+            first_bad: self.first_bad,
+            head: self.prev,
+        }
+    }
+}
+
+/// Walks an organization's surviving event log from its `tail_hash` anchor
+/// and checks every link up to `claimed_head` (SEC-06).
+pub struct EventChainVerifier {
+    prev: Hash,
+    next_pos: u64,
+    verified: u64,
+    first_bad: Option<u64>,
+}
+
+impl EventChainVerifier {
+    /// Starts at `tail_hash` (either [`event_genesis`] or the hash of the
+    /// last event removed by a retention trim).
+    #[must_use]
+    pub fn new(tail_hash: Hash) -> Self {
+        EventChainVerifier {
+            prev: tail_hash,
+            next_pos: 1,
+            verified: 0,
+            first_bad: None,
+        }
+    }
+
+    /// Checks the next stored event against its stored `prev_hash` and `hash`.
+    pub fn push(
+        &mut self,
+        event: &crate::accounts::AuditEvent,
+        stored_prev: &Hash,
+        stored_hash: &Hash,
+    ) {
+        if self.first_bad.is_some() {
+            return;
+        }
+        let expected = event_link(&self.prev, event);
+        if *stored_prev != self.prev || *stored_hash != expected {
+            self.first_bad = Some(self.next_pos);
+            return;
+        }
+        self.prev = expected;
+        self.next_pos += 1;
+        self.verified += 1;
+    }
+
+    /// Finishes with `claimed_head` (the latest head hash of the event chain).
+    #[must_use]
+    pub fn finish(mut self, claimed_head: &Hash) -> ChainReport {
+        if self.first_bad.is_none() && self.prev != *claimed_head {
+            self.first_bad = Some(self.next_pos);
         }
         ChainReport {
             verified: self.verified,

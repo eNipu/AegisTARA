@@ -113,6 +113,14 @@ pub fn event_row(e: &pb::EventInfo) -> EventRow {
                 format!("Ended a session ({d})")
             },
         ),
+        "events_trimmed" => (
+            EventGroup::AdminActions,
+            if d.is_empty() {
+                "Trimmed old audit events".to_owned()
+            } else {
+                format!("Trimmed old audit events ({d})")
+            },
+        ),
         other => (EventGroup::Other, other.to_owned()),
     };
     EventRow {
@@ -178,6 +186,7 @@ mod tests {
             ("baseline_created", EventGroup::AdminActions),
             ("password_login_changed", EventGroup::AdminActions),
             ("session_revoked", EventGroup::AdminActions),
+            ("events_trimmed", EventGroup::AdminActions),
         ];
         for (kind, group) in cases {
             let row = event_row(&event(kind, "alice", "x", ""));

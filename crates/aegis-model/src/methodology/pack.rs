@@ -24,11 +24,11 @@ use serde::de::{Deserialize, Deserializer, Visitor};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 use super::{
-    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
-    ImpactCategoryDef, LevelDef, MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS,
-    MAX_IMPACT_CATEGORIES, MAX_LEVELS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS,
-    MAX_THREAT_CATEGORIES, Methodology, MethodologyDef, PotentialBandDef, PropertyDef, SegmentDef,
-    ThreatCategoryDef,
+    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ElementNameDef, ElementNamesDef,
+    FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, MAX_CATALOG_SCHEMES,
+    MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_LEVELS, MAX_PREFIX_LEN, MAX_PROPERTIES,
+    MAX_SEGMENTS, MAX_THREAT_CATEGORIES, Methodology, MethodologyDef, PotentialBandDef,
+    PropertyDef, SegmentDef, ThreatCategoryDef,
 };
 use crate::error::PackError;
 use crate::store::wire::{
@@ -138,6 +138,8 @@ struct DefWire {
     key: Key,
     version: VersionText,
     label: Label,
+    #[serde(default)]
+    element_names: Option<Object<ElementNamesWire>>,
     impact_categories: BoundedVec<Object<ImpactCategoryWire>, ImpactCategoriesCap>,
     feasibility_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
     risk_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
@@ -146,6 +148,34 @@ struct DefWire {
     properties: BoundedVec<Object<EntryWire>, PropertiesCap>,
     threat_categories: BoundedVec<Object<ThreatCategoryWire>, ThreatCategoriesCap>,
     catalog_schemes: BoundedVec<Object<CatalogSchemeWire>, CatalogSchemesCap>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ElementNameWire {
+    singular: Label,
+    plural: Label,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ElementNamesWire {
+    #[serde(default)]
+    asset: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    damage_scenario: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    threat_scenario: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    attack_tree: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    security_control: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    cybersecurity_goal: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    cybersecurity_claim: Option<Object<ElementNameWire>>,
+    #[serde(default)]
+    feasibility: Option<Label>,
 }
 
 /// A level or a property: a key and a label.
@@ -269,6 +299,41 @@ impl From<AttackPotentialWire> for AttackPotentialDef {
     }
 }
 
+impl From<ElementNameWire> for ElementNameDef {
+    fn from(w: ElementNameWire) -> Self {
+        ElementNameDef {
+            singular: w.singular.0,
+            plural: w.plural.0,
+        }
+    }
+}
+
+impl From<ElementNamesWire> for ElementNamesDef {
+    fn from(w: ElementNamesWire) -> Self {
+        let def = ElementNamesDef::default();
+        ElementNamesDef {
+            asset: w.asset.map_or(def.asset, |Object(n)| n.into()),
+            damage_scenario: w
+                .damage_scenario
+                .map_or(def.damage_scenario, |Object(n)| n.into()),
+            threat_scenario: w
+                .threat_scenario
+                .map_or(def.threat_scenario, |Object(n)| n.into()),
+            attack_tree: w.attack_tree.map_or(def.attack_tree, |Object(n)| n.into()),
+            security_control: w
+                .security_control
+                .map_or(def.security_control, |Object(n)| n.into()),
+            cybersecurity_goal: w
+                .cybersecurity_goal
+                .map_or(def.cybersecurity_goal, |Object(n)| n.into()),
+            cybersecurity_claim: w
+                .cybersecurity_claim
+                .map_or(def.cybersecurity_claim, |Object(n)| n.into()),
+            feasibility: w.feasibility.map_or(def.feasibility, |l| l.0),
+        }
+    }
+}
+
 /// Moves the decoded values into a definition: no string is copied, only
 /// the `Arc<str>` handles move. Time O(m), m = vocabulary entries.
 impl From<DefWire> for MethodologyDef {
@@ -278,6 +343,9 @@ impl From<DefWire> for MethodologyDef {
             key: w.key.0,
             version: w.version.0,
             label: w.label.0,
+            element_names: w
+                .element_names
+                .map_or_else(ElementNamesDef::default, |Object(names)| names.into()),
             impact_categories: w
                 .impact_categories
                 .0
@@ -400,10 +468,15 @@ impl Serialize for View<'_, Vec<Arc<str>>> {
 impl Serialize for View<'_, MethodologyDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("methodology", 10)?;
+        let mut st = s.serialize_struct("methodology", 11)?;
         st.serialize_field("key", &*d.key)?;
         st.serialize_field("version", &*d.version)?;
         st.serialize_field("label", &*d.label)?;
+        if d.element_names == ElementNamesDef::default() {
+            st.skip_field("element_names")?;
+        } else {
+            st.serialize_field("element_names", &View(&d.element_names))?;
+        }
         st.serialize_field("impact_categories", &View(d.impact_categories.as_slice()))?;
         st.serialize_field("feasibility_levels", &View(d.feasibility_levels.as_slice()))?;
         st.serialize_field("risk_levels", &View(d.risk_levels.as_slice()))?;
@@ -414,6 +487,32 @@ impl Serialize for View<'_, MethodologyDef> {
         st.serialize_field("properties", &View(d.properties.as_slice()))?;
         st.serialize_field("threat_categories", &View(d.threat_categories.as_slice()))?;
         st.serialize_field("catalog_schemes", &View(d.catalog_schemes.as_slice()))?;
+        st.end()
+    }
+}
+
+impl Serialize for View<'_, ElementNameDef> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let n = self.0;
+        let mut st = s.serialize_struct("element_name", 2)?;
+        st.serialize_field("singular", &*n.singular)?;
+        st.serialize_field("plural", &*n.plural)?;
+        st.end()
+    }
+}
+
+impl Serialize for View<'_, ElementNamesDef> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let n = self.0;
+        let mut st = s.serialize_struct("element_names", 8)?;
+        st.serialize_field("asset", &View(&n.asset))?;
+        st.serialize_field("damage_scenario", &View(&n.damage_scenario))?;
+        st.serialize_field("threat_scenario", &View(&n.threat_scenario))?;
+        st.serialize_field("attack_tree", &View(&n.attack_tree))?;
+        st.serialize_field("security_control", &View(&n.security_control))?;
+        st.serialize_field("cybersecurity_goal", &View(&n.cybersecurity_goal))?;
+        st.serialize_field("cybersecurity_claim", &View(&n.cybersecurity_claim))?;
+        st.serialize_field("feasibility", &*n.feasibility)?;
         st.end()
     }
 }

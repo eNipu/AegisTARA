@@ -448,12 +448,35 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         if !Principal::of(&request)?.admin {
             return Err(ServerError::NotAdmin.into());
         }
-        let id = project_id(&request.get_ref().project_id)?;
+        let raw_id = request.get_ref().project_id.trim();
+        if raw_id.is_empty()
+            && let Some(events) = &self.events
+        {
+            let report = events.verify_chain().await.map_err(ServerError::from)?;
+            return Ok(Response::new(pb::VerifyAuditResponse {
+                intact: report.is_intact(),
+                verified_ops: report.verified,
+                first_bad_seq: report.first_bad.unwrap_or(0),
+                head_hash: Bytes::copy_from_slice(&report.head),
+            }));
+        }
+        let id = project_id(raw_id)?;
         let report = self.registry.verify_audit(id).await?;
+        let mut intact = report.is_intact();
+        let mut first_bad_seq = report.first_bad.unwrap_or(0);
+        if let Some(events) = &self.events {
+            let event_report = events.verify_chain().await.map_err(ServerError::from)?;
+            if let Some(bad) = event_report.first_bad {
+                intact = false;
+                if first_bad_seq == 0 {
+                    first_bad_seq = bad;
+                }
+            }
+        }
         Ok(Response::new(pb::VerifyAuditResponse {
-            intact: report.is_intact(),
+            intact,
             verified_ops: report.verified,
-            first_bad_seq: report.first_bad.unwrap_or(0),
+            first_bad_seq,
             head_hash: Bytes::copy_from_slice(&report.head),
         }))
     }

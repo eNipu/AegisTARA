@@ -821,12 +821,13 @@ pub enum ModelError {
 /// most 64 bytes of it, so an error built from hostile input stays small.
 ///
 /// ```
-/// use aegis_model::{Methodology, MethodologyDef, MethodologyError};
+/// use aegis_model::{ElementNamesDef, Methodology, MethodologyDef, MethodologyError};
 ///
 /// let def = MethodologyDef {
 ///     key: "empty".into(),
 ///     version: "1".into(),
 ///     label: "Empty".into(),
+///     element_names: ElementNamesDef::default(),
 ///     impact_categories: vec![],
 ///     feasibility_levels: vec![],
 ///     risk_levels: vec![],
@@ -848,12 +849,13 @@ pub enum MethodologyError {
     /// looks like a valid key).
     ///
     /// ```
-    /// use aegis_model::{Methodology, MethodologyDef, MethodologyError};
+    /// use aegis_model::{ElementNamesDef, Methodology, MethodologyDef, MethodologyError};
     ///
     /// let def = MethodologyDef {
     ///     key: "K".repeat(100_000).into(),
     ///     version: "1".into(),
     ///     label: "Huge".into(),
+    ///     element_names: ElementNamesDef::default(),
     ///     impact_categories: vec![],
     ///     feasibility_levels: vec![],
     ///     risk_levels: vec![],

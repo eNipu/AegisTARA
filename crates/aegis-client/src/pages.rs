@@ -41,6 +41,12 @@ pub struct Vocabulary {
     pub catalog_schemes: Vec<String>,
     /// Treatment decisions, as [`TREATMENTS`] orders them.
     pub treatments: Vec<String>,
+    /// Methodology-defined singular/plural labels for the core element types
+    /// and the feasibility/likelihood scale (`109`).
+    pub element_names: aegis_model::ElementNamesDef,
+    /// Whether this methodology uses multi-factor attack potential (`true`
+    /// for ISO/SAE 21434) or a plain likelihood scale (`false`, e.g. EU CRA).
+    pub has_attack_potential: bool,
 }
 
 /// One impact category and its levels.
@@ -90,6 +96,8 @@ pub fn vocabulary(m: &Methodology) -> Vocabulary {
             .iter()
             .map(|t| treatment_label(*t).to_owned())
             .collect(),
+        element_names: m.element_names().clone(),
+        has_attack_potential: m.has_attack_potential(),
     }
 }
 
@@ -1065,12 +1073,24 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
         }
         L::DamageScenarioWithoutImpacts { damage } => {
             let s = Selection::Damage(damage);
-            (format!("Damage scenario {} has no impact rating.", q(s)), s)
+            (
+                format!(
+                    "{} {} has no impact rating.",
+                    m.element_names().damage_scenario.singular,
+                    q(s)
+                ),
+                s,
+            )
         }
         L::DamageScenarioUnlinked { damage } => {
             let s = Selection::Damage(damage);
             (
-                format!("No threat scenario leads to damage scenario {}.", q(s)),
+                format!(
+                    "No {} leads to {} {}.",
+                    m.element_names().threat_scenario.singular.to_lowercase(),
+                    m.element_names().damage_scenario.singular.to_lowercase(),
+                    q(s)
+                ),
                 s,
             )
         }
@@ -1078,8 +1098,10 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} links no damage scenario, so it has no risk.",
-                    q(s)
+                    "{} {} links no {}, so it has no risk.",
+                    m.element_names().threat_scenario.singular,
+                    q(s),
+                    m.element_names().damage_scenario.singular.to_lowercase()
                 ),
                 s,
             )
@@ -1088,8 +1110,10 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} has no attack tree and no direct feasibility rating.",
-                    q(s)
+                    "{} {} has no {} and no direct feasibility rating.",
+                    m.element_names().threat_scenario.singular,
+                    q(s),
+                    m.element_names().attack_tree.singular.to_lowercase()
                 ),
                 s,
             )
@@ -1098,8 +1122,10 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} has a direct rating that its attack tree overrides.",
-                    q(s)
+                    "{} {} has a direct rating that its {} overrides.",
+                    m.element_names().threat_scenario.singular,
+                    q(s),
+                    m.element_names().attack_tree.singular.to_lowercase()
                 ),
                 s,
             )
@@ -1107,7 +1133,11 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
         L::ThreatWithoutTreatment { threat } => {
             let s = Selection::Threat(threat);
             (
-                format!("Threat scenario {} has no treatment decision.", q(s)),
+                format!(
+                    "{} {} has no treatment decision.",
+                    m.element_names().threat_scenario.singular,
+                    q(s)
+                ),
                 s,
             )
         }
@@ -1115,7 +1145,8 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} is reduced, but no control mitigates any of its attack steps.",
+                    "{} {} is reduced, but no control mitigates any of its attack steps.",
+                    m.element_names().threat_scenario.singular,
                     q(s)
                 ),
                 s,
@@ -1125,8 +1156,10 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} is reduced but has no cybersecurity goal.",
-                    q(s)
+                    "{} {} is reduced but has no {}.",
+                    m.element_names().threat_scenario.singular,
+                    q(s),
+                    m.element_names().cybersecurity_goal.singular.to_lowercase()
                 ),
                 s,
             )
@@ -1135,8 +1168,13 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} is retained or shared but has no cybersecurity claim.",
-                    q(s)
+                    "{} {} is retained or shared but has no {}.",
+                    m.element_names().threat_scenario.singular,
+                    q(s),
+                    m.element_names()
+                        .cybersecurity_claim
+                        .singular
+                        .to_lowercase()
                 ),
                 s,
             )
@@ -1145,7 +1183,8 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} has goal {} but its treatment is not Reduce.",
+                    "{} {} has goal {} but its treatment is not Reduce.",
+                    m.element_names().threat_scenario.singular,
                     q(s),
                     q(Selection::Goal(goal))
                 ),
@@ -1156,7 +1195,8 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Threat(threat);
             (
                 format!(
-                    "Threat scenario {} has claim {} but its treatment is not Retain or Share.",
+                    "{} {} has claim {} but its treatment is not Retain or Share.",
+                    m.element_names().threat_scenario.singular,
                     q(s),
                     q(Selection::Claim(claim))
                 ),
@@ -1166,7 +1206,12 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
         L::AttackTreeUnlinked { tree } => {
             let s = Selection::Tree(tree);
             (
-                format!("Attack tree {} is not linked to a threat scenario.", q(s)),
+                format!(
+                    "{} {} is not linked to a {}.",
+                    m.element_names().attack_tree.singular,
+                    q(s),
+                    m.element_names().threat_scenario.singular.to_lowercase()
+                ),
                 s,
             )
         }
@@ -1174,8 +1219,9 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Tree(tree);
             (
                 format!(
-                    "Gate \"{}\" in attack tree {} has no children.",
+                    "Gate \"{}\" in {} {} has no children.",
                     node_label(project, tree, node),
+                    m.element_names().attack_tree.singular.to_lowercase(),
                     q(s)
                 ),
                 s,
@@ -1185,8 +1231,9 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Tree(tree);
             (
                 format!(
-                    "Step \"{}\" in attack tree {} has a rating copied from the library that nobody has reviewed.",
+                    "Step \"{}\" in {} {} has a rating copied from the library that nobody has reviewed.",
                     node_label(project, tree, node),
+                    m.element_names().attack_tree.singular.to_lowercase(),
                     q(s)
                 ),
                 s,
@@ -1196,8 +1243,9 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Tree(tree);
             (
                 format!(
-                    "Step \"{}\" in attack tree {} is not rated.",
+                    "Step \"{}\" in {} {} is not rated.",
                     node_label(project, tree, node),
+                    m.element_names().attack_tree.singular.to_lowercase(),
                     q(s)
                 ),
                 s,
@@ -1207,8 +1255,9 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Tree(tree);
             (
                 format!(
-                    "Step \"{}\" in attack tree {} has some attack potential factors but not all.",
+                    "Step \"{}\" in {} {} has some attack potential factors but not all.",
                     node_label(project, tree, node),
+                    m.element_names().attack_tree.singular.to_lowercase(),
                     q(s)
                 ),
                 s,
@@ -1218,8 +1267,9 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             let s = Selection::Tree(tree);
             (
                 format!(
-                    "Step \"{}\" in attack tree {} has a direct rating that its attack potential overrides.",
+                    "Step \"{}\" in {} {} has a direct rating that its attack potential overrides.",
                     node_label(project, tree, node),
+                    m.element_names().attack_tree.singular.to_lowercase(),
                     q(s)
                 ),
                 s,
@@ -1234,19 +1284,39 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
         }
         L::CybersecurityGoalWithoutControls { goal } => {
             let s = Selection::Goal(goal);
-            (format!("Cybersecurity goal {} has no controls.", q(s)), s)
+            (
+                format!(
+                    "{} {} has no controls.",
+                    m.element_names().cybersecurity_goal.singular,
+                    q(s)
+                ),
+                s,
+            )
         }
         L::CybersecurityGoalUnlinked { goal } => {
             let s = Selection::Goal(goal);
             (
-                format!("No threat scenario uses cybersecurity goal {}.", q(s)),
+                format!(
+                    "No {} uses {} {}.",
+                    m.element_names().threat_scenario.singular.to_lowercase(),
+                    m.element_names().cybersecurity_goal.singular.to_lowercase(),
+                    q(s)
+                ),
                 s,
             )
         }
         L::CybersecurityClaimUnlinked { claim } => {
             let s = Selection::Claim(claim);
             (
-                format!("No threat scenario uses cybersecurity claim {}.", q(s)),
+                format!(
+                    "No {} uses {} {}.",
+                    m.element_names().threat_scenario.singular.to_lowercase(),
+                    m.element_names()
+                        .cybersecurity_claim
+                        .singular
+                        .to_lowercase(),
+                    q(s)
+                ),
                 s,
             )
         }
@@ -1347,6 +1417,7 @@ fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
 #[must_use]
 pub fn overview(ws: &Workspace) -> Overview {
     let p = ws.project();
+    let names = p.methodology().element_names();
     let c = |label: &str, count| Count {
         label: label.to_owned(),
         count,
@@ -1361,13 +1432,19 @@ pub fn overview(ws: &Workspace) -> Overview {
     top.truncate(5);
     Overview {
         counts: vec![
-            c("Assets", p.asset_count()),
-            c("Damage scenarios", p.damage_scenario_count()),
-            c("Threat scenarios", p.threat_scenario_count()),
-            c("Attack trees", p.attack_tree_count()),
-            c("Security controls", p.security_control_count()),
-            c("Cybersecurity goals", p.cybersecurity_goal_count()),
-            c("Cybersecurity claims", p.cybersecurity_claim_count()),
+            c(&names.asset.plural, p.asset_count()),
+            c(&names.damage_scenario.plural, p.damage_scenario_count()),
+            c(&names.threat_scenario.plural, p.threat_scenario_count()),
+            c(&names.attack_tree.plural, p.attack_tree_count()),
+            c(&names.security_control.plural, p.security_control_count()),
+            c(
+                &names.cybersecurity_goal.plural,
+                p.cybersecurity_goal_count(),
+            ),
+            c(
+                &names.cybersecurity_claim.plural,
+                p.cybersecurity_claim_count(),
+            ),
         ],
         inherent: distribution(ws, false),
         residual: distribution(ws, true),

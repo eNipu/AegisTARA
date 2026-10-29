@@ -524,24 +524,38 @@ async fn tls_encrypt_is_refused_by_a_server_without_tls() {
 /// Needs a database with TLS on and a self-signed certificate, at
 /// `AEGIS_TEST_TLS_DATABASE_URL`; skipped without it.
 #[tokio::test]
-async fn tls_encrypt_works_and_verify_refuses_a_self_signed_certificate() {
+async fn tls_encrypt_and_verify_refuse_an_untrusted_certificate_unless_ca_file_is_set() {
     let Ok(url) = std::env::var("AEGIS_TEST_TLS_DATABASE_URL") else {
         eprintln!("AEGIS_TEST_TLS_DATABASE_URL is not set: skipping");
         return;
     };
-    let options = |tls| PostgresOptions {
+    let options = |tls, ca_file| PostgresOptions {
         tls,
+        ca_file,
         ..PostgresOptions::default()
     };
-    let store = PostgresStore::connect(&url, &options(aegis_server::store::DbTls::Encrypt))
+    for tls in [
+        aegis_server::store::DbTls::Encrypt,
+        aegis_server::store::DbTls::Verify,
+    ] {
+        let refused = PostgresStore::connect(&url, &options(tls, None))
+            .await
+            .err()
+            .expect("the certificate is not trusted without a CA file");
+        assert!(matches!(refused, StoreFault::Backend(_)));
+    }
+    if let Ok(ca) = std::env::var("AEGIS_TEST_TLS_CA_FILE") {
+        let store = PostgresStore::connect(
+            &url,
+            &options(
+                aegis_server::store::DbTls::Encrypt,
+                Some(std::path::PathBuf::from(ca)),
+            ),
+        )
         .await
-        .expect("encrypted connection");
-    assert!(store.count().await.is_ok());
-    let refused = PostgresStore::connect(&url, &options(aegis_server::store::DbTls::Verify))
-        .await
-        .err()
-        .expect("the certificate is not trusted");
-    assert!(matches!(refused, StoreFault::Backend(_)));
+        .expect("encrypted connection with configured CA file");
+        assert!(store.count().await.is_ok());
+    }
 }
 
 #[tokio::test]
@@ -620,7 +634,9 @@ async fn the_event_log_is_trimmed_by_age_and_by_row_cap_in_postgres() {
         .await
         .expect("trim by age");
     assert_eq!(removed, 12_000);
-    assert_eq!(log.recent(1000).await.expect("recent").len(), 50);
+    // 50 young events + 1 EventsTrimmed checkpoint event.
+    assert_eq!(log.recent(1000).await.expect("recent").len(), 51);
+    assert_eq!(log.verify_chain().await.expect("chain").first_bad, None);
 
     // Nothing old: a second pass removes nothing.
     let again = log
@@ -632,7 +648,7 @@ async fn the_event_log_is_trimmed_by_age_and_by_row_cap_in_postgres() {
         .expect("again");
     assert_eq!(again, 0);
 
-    // The row cap keeps the newest ten.
+    // The row cap keeps the newest ten non-trim events plus the trim event.
     let removed = log
         .trim(Retention {
             max_age: Duration::from_secs(365 * 86_400),
@@ -640,11 +656,13 @@ async fn the_event_log_is_trimmed_by_age_and_by_row_cap_in_postgres() {
         })
         .await
         .expect("trim by cap");
-    assert_eq!(removed, 40);
+    assert_eq!(removed, 41);
     let left = log.recent(1000).await.expect("recent");
-    assert_eq!(left.len(), 10);
-    assert_eq!(left[0].target, "p49");
-    assert_eq!(left[9].target, "p40");
+    assert_eq!(left.len(), 11);
+    assert_eq!(left[0].kind, AuditKind::EventsTrimmed);
+    assert_eq!(left[1].target, "p49");
+    assert_eq!(left[10].target, "p40");
+    assert_eq!(log.verify_chain().await.expect("chain").first_bad, None);
 
     // A cap above the row count removes nothing.
     let none = log
@@ -753,7 +771,11 @@ async fn stress_many_writers_and_a_trimmer_keep_the_event_log_bounded() {
         .await
         .expect("count")
         .get(0);
-    assert_eq!(count as usize, cap, "the row cap holds");
+    assert!(
+        (count as usize) <= cap + 1,
+        "the row cap holds (with at most one trailing trim checkpoint event)"
+    );
+    assert_eq!(log.verify_chain().await.expect("chain").first_bad, None);
     // The newest events survive.
     let newest = log.recent(1).await.expect("recent");
     assert_eq!(newest.len(), 1);

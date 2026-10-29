@@ -99,6 +99,7 @@ fn expected() -> MethodologyDef {
         key: s("iso21434-r155"),
         version: s("0.1.0"),
         label: s("ISO/SAE 21434 + UN R155"),
+        element_names: aegis_model::ElementNamesDef::default(),
         impact_categories: IMPACT_CATEGORIES
             .iter()
             .map(|&(key, label)| ImpactCategoryDef {
@@ -591,4 +592,60 @@ fn iso21434_vocabulary_attack_potential() {
         m.feasibility_level_key(ap_max.feasibility()),
         Some("very-low")
     );
+}
+
+#[test]
+fn eu_cra_pack_is_canonical_and_evaluates_plain_likelihood() {
+    let raw = Methodology::eu_cra_pack();
+    let def = MethodologyDef::read_pack(raw).expect("read eu-cra pack");
+    let mut canonical = Vec::new();
+    def.write_pack(&mut canonical).expect("write eu-cra pack");
+    assert_eq!(
+        canonical.as_slice(),
+        raw,
+        "packs/eu-cra.json must match write_pack output byte-for-byte"
+    );
+
+    let m = Methodology::eu_cra().expect("eu-cra methodology");
+    assert_eq!(m.key(), "eu-cra");
+    assert_eq!(m.version(), "0.1.0");
+    assert_eq!(m.label(), "EU Cyber Resilience Act (Annex I)");
+    assert!(!m.has_attack_potential());
+    assert_eq!(m.feasibility_factor_count(), 0);
+    assert_eq!(m.feasibility_label(), "Likelihood");
+    assert_eq!(&*m.element_names().damage_scenario.singular, "Harm");
+    assert_eq!(&*m.element_names().damage_scenario.plural, "Harms");
+    assert_eq!(
+        &*m.element_names().cybersecurity_goal.singular,
+        "Security requirement"
+    );
+    assert_eq!(
+        &*m.element_names().cybersecurity_goal.plural,
+        "Security requirements"
+    );
+    assert_eq!(&*m.element_names().asset.singular, "Asset");
+
+    let cats: Vec<_> = m
+        .impact_categories()
+        .filter_map(|c| m.impact_category_key(c))
+        .collect();
+    assert_eq!(
+        cats,
+        [
+            "safety-health",
+            "data-privacy",
+            "availability-continuity",
+            "financial-material",
+        ]
+    );
+    let feas: Vec<_> = m.feasibility_levels().map(|(_, k, _)| k).collect();
+    assert_eq!(feas, ["very-low", "low", "medium", "high"]);
+    let risks: Vec<_> = m.risk_levels().map(|(_, k, _)| k).collect();
+    assert_eq!(risks, ["low", "medium", "high", "critical"]);
+
+    let scheme = m.catalog_scheme("cra-annex1").expect("cra-annex1 scheme");
+    let parsed = m
+        .parse_catalog_ref(scheme, "CRA-1.2")
+        .expect("parse CRA-1.2");
+    assert_eq!(m.display_catalog_ref(&parsed).to_string(), "CRA-1.2");
 }

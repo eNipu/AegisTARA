@@ -558,6 +558,7 @@ fn maxed() -> Arc<Methodology> {
         key: key64("maxed", 0),
         version: "\u{1d11e}".repeat(64).into(),
         label: "Maxed".into(),
+        element_names: aegis_model::ElementNamesDef::default(),
         impact_categories: (0..32)
             .map(|i| {
                 let key = key64("c", i);

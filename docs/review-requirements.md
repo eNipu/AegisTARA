@@ -1,7 +1,7 @@
 # Review requirements
 
 This page lists what must be reviewed before the work on this branch is
-accepted. The owner asked for the build first and the review after. All completed jobs (`027`–`041`, `045`–`057`, `064`–`065`, `107`–`108`, and `110`) have now been reviewed; see `factory/jobs/<job-id>/` and `docs/security-and-architecture-review.md` for full architectural and security findings.
+accepted. The owner asked for the build first and the review after. All completed jobs (`027`–`041`, `045`–`057`, `060`–`065`, `089`, `107`–`111`) have now been reviewed; see `factory/jobs/<job-id>/` and `docs/security-and-architecture-review.md` for full architectural and security findings.
 
 ## Pending reviews
 
@@ -43,6 +43,13 @@ Add a row for every new job.
 | 064 element descriptions (`064-element-descriptions`) | PASS | PASS | PASS | PASS |
 | 065 tree node ops (`065-tree-node-ops`) | PASS | PASS | PASS | PASS |
 | 057 attack tree library (`057-attack-tree-library`) | PASS | PASS | PASS | PASS |
+| 109 pack names and likelihood (`109-pack-names-and-likelihood`) | PASS | PASS | PASS | PASS |
+| 111 EU CRA pack (`111-cra-pack`) | PASS | PASS | PASS | PASS |
+| 060 login hardening (`060-login-hardening`) | PASS | PASS | PASS | N/A (PASS) |
+| 061 database hardening (`061-database-hardening`) | PASS | PASS | PASS | N/A (PASS) |
+| 062 event log integrity (`062-event-log-integrity`) | PASS | PASS | PASS | N/A (PASS) |
+| 063 small hardening (`063-small-hardening`) | PASS | PASS | PASS | N/A (PASS) |
+| 089 suggestion branches (`089-suggestion-branches`) | PASS | PASS | PASS | PASS |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)
