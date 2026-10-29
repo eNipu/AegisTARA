@@ -20,6 +20,8 @@ pub const MAX_XLSX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_XLSX_ENTRIES: usize = 64;
 /// Maximum uncompressed size of any single XML entry (16 MiB).
 pub const MAX_XLSX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum total uncompressed XML retained from a workbook (32 MiB).
+pub const MAX_XLSX_TOTAL_XML_BYTES: usize = 32 * 1024 * 1024;
 /// Maximum number of shared strings in `xl/sharedStrings.xml`.
 pub const MAX_SHARED_STRINGS: usize = 65_536;
 /// Maximum number of rows per worksheet.
@@ -42,6 +44,15 @@ pub enum ExcelError {
     /// The requested worksheet name does not exist in the workbook.
     #[error("worksheet \"{0}\" was not found in the workbook")]
     SheetNotFound(String),
+    /// A workbook exceeds a supported row, column, or shared-string count.
+    #[error("the workbook exceeds a supported worksheet limit ({0})")]
+    WorksheetLimit(&'static str),
+    /// A row could not be rolled back while building the dry-run preview.
+    #[error("could not restore the dry-run project after a rejected row")]
+    SimulationRollback,
+    /// The import would exceed the one-edit operation limit.
+    #[error("the import produces more than {0} changes and cannot be applied as one step")]
+    TooManyOperations(usize),
 }
 
 /// One parsed worksheet from an `.xlsx` file.
@@ -233,6 +244,8 @@ pub struct ExcelPreview {
     pub goals_to_add: usize,
     /// Number of new cybersecurity claims in the batch.
     pub claims_to_add: usize,
+    /// Number of additional operations that link or update project entities.
+    pub updates_and_links: usize,
     /// Rows that could not be mapped, with their row number and reason.
     pub unmapped_rows: Vec<UnmappedRow>,
     /// Validated operations ready to be applied as a single batch with
@@ -245,7 +258,7 @@ impl ExcelPreview {
     #[must_use]
     pub fn summary(&self) -> String {
         format!(
-            "{} row(s) mapped ({} component(s), {} asset(s), {} damage(s), {} threat(s), {} control(s), {} goal(s), {} claim(s)); {} unmapped row(s).",
+            "{} row(s) mapped ({} component(s), {} asset(s), {} damage(s), {} threat(s), {} control(s), {} goal(s), {} claim(s), {} link/update operation(s)); {} unmapped row(s).",
             self.mapped_rows,
             self.components_to_add,
             self.assets_to_add,
@@ -254,6 +267,7 @@ impl ExcelPreview {
             self.controls_to_add,
             self.goals_to_add,
             self.claims_to_add,
+            self.updates_and_links,
             self.unmapped_rows.len()
         )
     }
@@ -309,6 +323,7 @@ fn read_zip_entries(archive: &[u8]) -> Result<HashMap<String, String>, ExcelErro
         ))?;
 
     let mut entries = HashMap::with_capacity(total_entries);
+    let mut total_xml_bytes = 0usize;
     let mut pos = cd_offset;
     for _ in 0..total_entries {
         if pos + 46 > cd_end || &archive[pos..pos + 4] != b"PK\x01\x02" {
@@ -339,13 +354,17 @@ fn read_zip_entries(archive: &[u8]) -> Result<HashMap<String, String>, ExcelErro
             .filter(|&n| n <= cd_end)
             .ok_or(ExcelError::InvalidArchive("central directory overflow"))?;
 
-        // Only decode XML entries we care about.
+        // Only decode XML and relationship entries we care about.
         if !std::path::Path::new(&name)
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("xml") || ext.eq_ignore_ascii_case("rels"))
         {
             continue;
         }
+        total_xml_bytes = total_xml_bytes
+            .checked_add(uncomp_size)
+            .filter(|&size| size <= MAX_XLSX_TOTAL_XML_BYTES)
+            .ok_or(ExcelError::TooLarge("total XML > 32 MiB"))?;
         if local_offset + 30 > archive.len()
             || &archive[local_offset..local_offset + 4] != b"PK\x03\x04"
         {
@@ -380,9 +399,14 @@ fn read_zip_entries(archive: &[u8]) -> Result<HashMap<String, String>, ExcelErro
             }
             _ => return Err(ExcelError::InvalidArchive("unsupported ZIP compression")),
         };
-        if let Ok(xml) = String::from_utf8(raw) {
-            entries.insert(name, xml);
+        if raw.len() != uncomp_size {
+            return Err(ExcelError::InvalidArchive(
+                "ZIP entry size does not match its directory",
+            ));
         }
+        let xml = String::from_utf8(raw)
+            .map_err(|_| ExcelError::InvalidArchive("XML entry is not UTF-8"))?;
+        entries.insert(name, xml);
     }
     Ok(entries)
 }
@@ -427,16 +451,6 @@ fn xml_unescape(raw: &str) -> String {
         }
     }
     out.push_str(rest);
-    // Strip the formula-injection leading apostrophe added by `xlsx.rs` when
-    // exporting values that start with `=`, `+`, `-`, `@`, `\t`, `\r`, `\n`.
-    if let Some(stripped) = out.strip_prefix('\'')
-        && matches!(
-            stripped.as_bytes().first(),
-            Some(b'=' | b'+' | b'-' | b'@' | b'\t' | b'\r' | b'\n')
-        )
-    {
-        return stripped.to_owned();
-    }
     out
 }
 
@@ -476,36 +490,138 @@ fn extract_t_texts(fragment: &str) -> String {
     out
 }
 
-fn parse_shared_strings(xml: &str) -> Vec<String> {
+fn strip_xml_comments(xml: &str) -> Result<String, ExcelError> {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 4..];
+        let end = after
+            .find("-->")
+            .ok_or(ExcelError::InvalidArchive("unterminated XML comment"))?;
+        rest = &after[end + 3..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn parse_shared_strings(xml: &str) -> Result<Vec<String>, ExcelError> {
     let mut strings = Vec::new();
     let mut rest = xml;
     while let Some(si_start) = rest.find("<si") {
         let after = &rest[si_start..];
-        let Some(si_end) = after.find("</si>") else {
-            break;
-        };
-        if strings.len() >= MAX_SHARED_STRINGS {
-            break;
+        if !after[3..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == '>' || c.is_ascii_whitespace())
+        {
+            rest = &after[3..];
+            continue;
         }
+        if strings.len() >= MAX_SHARED_STRINGS {
+            return Err(ExcelError::WorksheetLimit("too many shared strings"));
+        }
+        let Some(si_end) = after.find("</si>") else {
+            return Err(ExcelError::InvalidArchive("unterminated shared string"));
+        };
         strings.push(extract_t_texts(&after[..si_end]));
         rest = &after[si_end + 5..];
     }
-    strings
+    Ok(strings)
 }
 
-fn parse_workbook_sheet_names(xml: &str) -> Vec<String> {
-    let mut names = Vec::new();
+fn parse_workbook_sheets(xml: &str) -> Result<Vec<(String, String)>, ExcelError> {
+    let mut sheets = Vec::new();
     let mut rest = xml;
-    while let Some(pos) = rest.find("<sheet ") {
+    while let Some(pos) = rest.find("<sheet") {
         let after = &rest[pos..];
-        let Some(end) = after.find('>') else { break };
+        if !after[6..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == '>' || c.is_ascii_whitespace())
+        {
+            rest = &after[6..];
+            continue;
+        }
+        let Some(end) = after.find('>') else {
+            return Err(ExcelError::InvalidArchive(
+                "unterminated worksheet declaration",
+            ));
+        };
         let tag = &after[..end];
-        if let Some(name) = attr_value(tag, "name") {
-            names.push(xml_unescape(name));
+        let name =
+            attr_value(tag, "name").ok_or(ExcelError::InvalidArchive("worksheet has no name"))?;
+        let rel_id = attr_value(tag, "r:id").ok_or(ExcelError::InvalidArchive(
+            "worksheet has no relationship ID",
+        ))?;
+        sheets.push((xml_unescape(name), xml_unescape(rel_id)));
+        rest = &after[end + 1..];
+    }
+    Ok(sheets)
+}
+
+fn normalize_worksheet_target(target: &str) -> Result<String, ExcelError> {
+    let path = target.trim_start_matches('/');
+    let path = if path.starts_with("xl/") {
+        path.to_owned()
+    } else {
+        format!("xl/{path}")
+    };
+    if !path.starts_with("xl/worksheets/")
+        || !path.ends_with(".xml")
+        || path.split('/').any(|part| part == "." || part == "..")
+    {
+        return Err(ExcelError::InvalidArchive(
+            "invalid worksheet relationship target",
+        ));
+    }
+    Ok(path)
+}
+
+fn parse_worksheet_relationships(xml: &str) -> Result<HashMap<String, String>, ExcelError> {
+    let mut relationships = HashMap::new();
+    let mut rest = xml;
+    while let Some(pos) = rest.find("<Relationship") {
+        let after = &rest[pos..];
+        if !after[13..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == '>' || c.is_ascii_whitespace() || c == '/')
+        {
+            rest = &after[13..];
+            continue;
+        }
+        let Some(end) = after.find('>') else {
+            return Err(ExcelError::InvalidArchive(
+                "unterminated worksheet relationship",
+            ));
+        };
+        let tag = &after[..end];
+        let kind = attr_value(tag, "Type").unwrap_or("");
+        if !kind.contains("/worksheet") {
+            rest = &after[end + 1..];
+            continue;
+        }
+        let id = attr_value(tag, "Id").ok_or(ExcelError::InvalidArchive(
+            "worksheet relationship has no ID",
+        ))?;
+        let target = attr_value(tag, "Target").ok_or(ExcelError::InvalidArchive(
+            "worksheet relationship has no target",
+        ))?;
+        if attr_value(tag, "TargetMode") == Some("External") {
+            return Err(ExcelError::InvalidArchive(
+                "external worksheet relationship",
+            ));
+        }
+        let path = normalize_worksheet_target(target)?;
+        if relationships.insert(xml_unescape(id), path).is_some() {
+            return Err(ExcelError::InvalidArchive(
+                "duplicate worksheet relationship ID",
+            ));
         }
         rest = &after[end + 1..];
     }
-    names
+    Ok(relationships)
 }
 
 /// Converts an Excel cell reference like `"C12"` or `"AA5"` to a 0-based
@@ -523,16 +639,17 @@ fn col_index_from_ref(cell_ref: &str) -> Option<usize> {
         }
     }
     if has_letters && col > 0 {
-        Some((col - 1).min(MAX_XLSX_COLS - 1))
+        Some(col - 1)
     } else {
         None
     }
 }
 
-fn parse_sheet(name: String, xml: &str, shared: &[String]) -> SheetData {
+fn parse_sheet(name: String, xml: &str, shared: &[String]) -> Result<SheetData, ExcelError> {
+    let cleaned_xml = strip_xml_comments(xml)?;
     let mut headers: Vec<String> = Vec::new();
     let mut rows: Vec<(usize, Vec<String>)> = Vec::new();
-    let mut rest = xml;
+    let mut rest = cleaned_xml.as_str();
     let mut row_counter = 0usize;
 
     while let Some(row_start) = rest.find("<row") {
@@ -574,9 +691,11 @@ fn parse_sheet(name: String, xml: &str, shared: &[String]) -> SheetData {
             let c_tag = &after_c[..c_gt];
             let col_idx = attr_value(c_tag, "r")
                 .and_then(col_index_from_ref)
-                .unwrap_or(next_col)
-                .min(MAX_XLSX_COLS - 1);
-            next_col = (col_idx + 1).min(MAX_XLSX_COLS - 1);
+                .unwrap_or(next_col);
+            if col_idx >= MAX_XLSX_COLS {
+                return Err(ExcelError::WorksheetLimit("too many columns"));
+            }
+            next_col = col_idx + 1;
             let cell_type = attr_value(c_tag, "t").unwrap_or("");
 
             let value = if c_tag.ends_with('/') {
@@ -622,16 +741,19 @@ fn parse_sheet(name: String, xml: &str, shared: &[String]) -> SheetData {
         }
         if headers.is_empty() {
             headers = cells;
-        } else if rows.len() < MAX_XLSX_ROWS {
+        } else {
+            if rows.len() >= MAX_XLSX_ROWS {
+                return Err(ExcelError::WorksheetLimit("too many rows"));
+            }
             rows.push((excel_row_num, cells));
         }
     }
 
-    SheetData {
+    Ok(SheetData {
         name,
         headers,
         rows,
-    }
+    })
 }
 
 /// Reads and parses all worksheets from an `.xlsx` byte slice.
@@ -642,30 +764,33 @@ fn parse_sheet(name: String, xml: &str, shared: &[String]) -> SheetData {
 /// worksheets.
 pub fn read_workbook(bytes: &[u8]) -> Result<WorkbookData, ExcelError> {
     let entries = read_zip_entries(bytes)?;
-    let shared = entries
-        .get("xl/sharedStrings.xml")
-        .map_or_else(Vec::new, |xml| parse_shared_strings(xml));
-    let names = entries
+    let shared = match entries.get("xl/sharedStrings.xml") {
+        Some(xml) => parse_shared_strings(&strip_xml_comments(xml)?)?,
+        None => Vec::new(),
+    };
+    let workbook = entries
         .get("xl/workbook.xml")
-        .map_or_else(Vec::new, |xml| parse_workbook_sheet_names(xml));
-
-    let mut sheets = Vec::new();
-    for idx in 1..=MAX_XLSX_ENTRIES {
-        let key = format!("xl/worksheets/sheet{idx}.xml");
-        let Some(xml) = entries.get(&key) else {
-            if idx > names.len() {
-                break;
-            }
-            continue;
-        };
-        let sheet_name = names
-            .get(idx - 1)
-            .cloned()
-            .unwrap_or_else(|| format!("Sheet{idx}"));
-        sheets.push(parse_sheet(sheet_name, xml, &shared));
-    }
-    if sheets.is_empty() {
+        .ok_or(ExcelError::InvalidArchive("missing workbook.xml"))?;
+    let declarations = parse_workbook_sheets(&strip_xml_comments(workbook)?)?;
+    if declarations.is_empty() {
         return Err(ExcelError::NoSheets);
+    }
+    let rels = entries
+        .get("xl/_rels/workbook.xml.rels")
+        .ok_or(ExcelError::InvalidArchive("missing workbook relationships"))?;
+    let relationships = parse_worksheet_relationships(&strip_xml_comments(rels)?)?;
+
+    let mut sheets = Vec::with_capacity(declarations.len());
+    for (sheet_name, relationship_id) in declarations {
+        let key = relationships
+            .get(&relationship_id)
+            .ok_or(ExcelError::InvalidArchive(
+                "worksheet relationship is missing",
+            ))?;
+        let xml = entries
+            .get(key)
+            .ok_or(ExcelError::InvalidArchive("worksheet XML is missing"))?;
+        sheets.push(parse_sheet(sheet_name, xml, &shared)?);
     }
     Ok(WorkbookData { sheets })
 }
@@ -676,6 +801,18 @@ pub fn read_workbook(bytes: &[u8]) -> Result<WorkbookData, ExcelError> {
 
 fn cell_at(row: &[String], col: Option<usize>) -> &str {
     col.and_then(|i| row.get(i)).map_or("", |s| s.trim())
+}
+
+fn properties_are_known(m: &Methodology, text: &str) -> bool {
+    text.split([',', ';', '/']).all(|part| {
+        let token = part.trim();
+        token.is_empty()
+            || m.properties().any(|property| {
+                let en = m.property_label(property).unwrap_or("");
+                let ja = m.property_label_for_lang(property, "ja").unwrap_or("");
+                en.eq_ignore_ascii_case(token) || ja == token
+            })
+    })
 }
 
 fn parse_properties(
@@ -703,11 +840,6 @@ fn parse_properties(
         for prop in m.violates(cat).iter() {
             set = set.with(prop);
         }
-    }
-    if set.is_empty()
-        && let Some(first) = m.properties().next()
-    {
-        set = set.with(first);
     }
     set
 }
@@ -750,16 +882,21 @@ fn parse_impact(
 
 fn parse_threat_category(m: &Methodology, text: &str) -> Option<aegis_model::ThreatCategory> {
     let t = text.trim();
-    if !t.is_empty() {
-        for cat in m.threat_categories() {
-            let en = m.threat_category_label(cat).unwrap_or("");
-            let ja = m.threat_category_label_for_lang(cat, "ja").unwrap_or("");
-            if en.eq_ignore_ascii_case(t) || ja == t {
-                return Some(cat);
-            }
+    for cat in m.threat_categories() {
+        let en = m.threat_category_label(cat).unwrap_or("");
+        let ja = m.threat_category_label_for_lang(cat, "ja").unwrap_or("");
+        if en.eq_ignore_ascii_case(t) || ja == t {
+            return Some(cat);
         }
     }
-    m.threat_categories().next()
+    // A blank category column falls back to the methodology's first category,
+    // as the risk-register export has no category column. A non-blank value
+    // that did not match is reported as unmapped by the caller.
+    if t.is_empty() {
+        m.threat_categories().next()
+    } else {
+        None
+    }
 }
 
 fn parse_feasibility(m: &Methodology, text: &str) -> Option<aegis_model::FeasibilityLevel> {
@@ -910,6 +1047,11 @@ pub fn preview_import(
             && control_name.is_empty()
             && goal_name.is_empty()
             && claim_name.is_empty()
+            && props_text.is_empty()
+            && impact_text.is_empty()
+            && cat_text.is_empty()
+            && feas_text.is_empty()
+            && treat_text.is_empty()
         {
             preview.unmapped_rows.push(UnmappedRow {
                 sheet: sheet.name.clone(),
@@ -964,6 +1106,47 @@ pub fn preview_import(
         } else {
             None
         };
+        let parsed_impact = (!impact_text.is_empty())
+            .then(|| parse_impact(m, impact_text))
+            .flatten();
+        let parsed_feasibility = (!feas_text.is_empty())
+            .then(|| parse_feasibility(m, feas_text))
+            .flatten();
+        let parsed_treatment = (!treat_text.is_empty())
+            .then(|| parse_treatment(treat_text))
+            .flatten();
+        let invalid_value = if !threat_name.is_empty() && row_threat_cat.is_none() {
+            Some("threat category is missing or not recognized")
+        } else if !impact_text.is_empty() && damage_name.is_empty() {
+            Some("impact rating requires a damage scenario")
+        } else if (!cat_text.is_empty() || !feas_text.is_empty() || !treat_text.is_empty())
+            && threat_name.is_empty()
+        {
+            Some("threat category, feasibility, and treatment require a threat scenario")
+        } else if !impact_text.is_empty() && parsed_impact.is_none() {
+            Some("impact rating is not recognized")
+        } else if !feas_text.is_empty()
+            && parsed_feasibility.is_none()
+            && !feas_text.eq_ignore_ascii_case("not rated")
+            && feas_text != "未評価"
+        {
+            Some("feasibility rating is not recognized")
+        } else if !treat_text.is_empty() && parsed_treatment.is_none() {
+            Some("risk treatment is not recognized")
+        } else if !props_text.is_empty() && !properties_are_known(m, props_text) {
+            Some("one or more security properties are not recognized")
+        } else {
+            None
+        };
+        if let Some(reason) = invalid_value {
+            preview.unmapped_rows.push(UnmappedRow {
+                sheet: sheet.name.clone(),
+                row_number: *row_num,
+                reason: reason.to_owned(),
+                values: row.clone(),
+            });
+            continue;
+        }
 
         let asset_id = if !asset_name.is_empty() {
             let id = if let Some(&existing) = assets.get(&asset_name.to_lowercase()) {
@@ -1016,7 +1199,7 @@ pub fn preview_import(
                 existing
             } else {
                 let id = DamageId::new_v7();
-                let impacts = parse_impact(m, impact_text).into_iter().collect();
+                let impacts = parsed_impact.into_iter().collect();
                 row_ops.push(Op::AddDamageScenario {
                     id,
                     name: damage_name.into(),
@@ -1026,6 +1209,18 @@ pub fn preview_import(
                 damage_added += 1;
                 id
             };
+            if damages
+                .get(&damage_name.to_lowercase())
+                .is_some_and(|existing| *existing == id)
+                && let Some((category, level)) = parsed_impact
+            {
+                row_ops.push(Op::SetImpact {
+                    id,
+                    category,
+                    level: Some(level),
+                    provenance: prov.clone(),
+                });
+            }
             Some(id)
         } else {
             None
@@ -1127,14 +1322,14 @@ pub fn preview_import(
                 continue;
             };
 
-            if let Some(lvl) = parse_feasibility(m, feas_text) {
+            if let Some(lvl) = parsed_feasibility {
                 row_ops.push(Op::SetThreatFeasibility {
                     threat: tid,
                     level: Some(lvl),
                     provenance: prov.clone(),
                 });
             }
-            if let Some(tr) = parse_treatment(treat_text) {
+            if let Some(tr) = parsed_treatment {
                 row_ops.push(Op::SetRiskTreatment {
                     threat: tid,
                     treatment: Some(tr),
@@ -1157,17 +1352,30 @@ pub fn preview_import(
             }
         }
 
-        // Validate every op of this row on the simulated project before
-        // committing it to the batch.
-        let mut trial = sim.clone();
+        // Apply against one simulation project; inverses roll back a rejected
+        // row without cloning the entire project for every worksheet row.
+        if preview.ops.len().saturating_add(row_ops.len()) > crate::workspace::MAX_SUBMIT_OPS {
+            return Err(ExcelError::TooManyOperations(
+                crate::workspace::MAX_SUBMIT_OPS,
+            ));
+        }
+        let mut inverses = Vec::with_capacity(row_ops.len());
         let mut failed = None;
         for op in &row_ops {
-            if let Err(e) = trial.apply(op.clone()) {
-                failed = Some(e.to_string());
-                break;
+            match sim.apply(op.clone()) {
+                Ok(inverse) => inverses.push(inverse),
+                Err(error) => {
+                    failed = Some(error.to_string());
+                    break;
+                }
             }
         }
         if let Some(err) = failed {
+            for inverse in inverses.into_iter().rev() {
+                if sim.apply(inverse).is_err() {
+                    return Err(ExcelError::SimulationRollback);
+                }
+            }
             preview.unmapped_rows.push(UnmappedRow {
                 sheet: sheet.name.clone(),
                 row_number: *row_num,
@@ -1176,8 +1384,6 @@ pub fn preview_import(
             });
             continue;
         }
-
-        sim = trial;
         if let Some(cid) = comp_id {
             components.insert(comp_name.to_lowercase(), cid);
         }
@@ -1214,8 +1420,109 @@ pub fn preview_import(
         preview.controls_to_add += control_added;
         preview.goals_to_add += goal_added;
         preview.claims_to_add += claim_added;
+        preview.updates_and_links += row_ops
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op,
+                    Op::SetAssetProperties { .. }
+                        | Op::SetAssetComponent { .. }
+                        | Op::SetImpact { .. }
+                        | Op::LinkDamage { .. }
+                        | Op::SetThreatFeasibility { .. }
+                        | Op::SetRiskTreatment { .. }
+                        | Op::LinkGoalControl { .. }
+                        | Op::SetThreatGoal { .. }
+                        | Op::SetThreatClaim { .. }
+                )
+            })
+            .count();
         preview.ops.extend(row_ops);
     }
 
     Ok(preview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_comments_are_stripped_not_parsed_as_rows() {
+        let xml = "<worksheet><sheetData><!--<row r=\"9\"><c><v>fake</v></c></row>-->\
+                    <row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>real</t></is></c></row></sheetData></worksheet>";
+        let sheet = parse_sheet("s".into(), xml, &[]).expect("parses");
+        assert_eq!(sheet.headers, vec!["real"]);
+        assert!(sheet.rows.is_empty());
+    }
+
+    #[test]
+    fn too_many_columns_or_rows_are_rejected_not_truncated() {
+        let mut cols = String::new();
+        for i in 0..MAX_XLSX_COLS {
+            cols.push_str(&format!("<c r=\"{}{}\"/>", col_ref(i), 1));
+        }
+        let overflow = "<c r=\"AAAA1\"/>";
+        let xml = format!(
+            "<worksheet><sheetData><row r=\"1\">{cols}{overflow}</row></sheetData></worksheet>"
+        );
+        assert!(matches!(
+            parse_sheet("s".into(), &xml, &[]),
+            Err(ExcelError::WorksheetLimit("too many columns"))
+        ));
+    }
+
+    #[test]
+    fn the_formula_guard_apostrophe_round_trips_without_losing_text() {
+        // The importer must preserve a literal cell that starts with an
+        // apostrophe before a formula marker; the exporter's own guard is
+        // written as inlineStr and does not need stripping here.
+        let value = xml_unescape("'=text");
+        assert_eq!(value, "'=text");
+        let value = xml_unescape("=SUM(A1)");
+        assert_eq!(value, "=SUM(A1)");
+    }
+
+    #[test]
+    fn worksheet_relationships_resolve_reordered_targets() {
+        let rels = "<Relationships><Relationship Id=\"rId2\" \
+                    Type=\".../worksheet\" Target=\"worksheets/sheet2.xml\"/>\
+                    <Relationship Id=\"rId1\" Type=\".../worksheet\" Target=\"worksheets/sheet1.xml\"/>\
+                    </Relationships>";
+        let parsed = parse_worksheet_relationships(rels).expect("parses");
+        assert_eq!(
+            parsed.get("rId1").map(String::as_str),
+            Some("xl/worksheets/sheet1.xml")
+        );
+        assert_eq!(
+            parsed.get("rId2").map(String::as_str),
+            Some("xl/worksheets/sheet2.xml")
+        );
+    }
+
+    #[test]
+    fn worksheet_relationships_reject_external_or_escaping_targets() {
+        assert!(parse_worksheet_relationships(
+            "<Relationships><Relationship Id=\"rId1\" Type=\".../worksheet\" Target=\"https://evil/x.xml\"/></Relationships>"
+        )
+        .is_err());
+        assert!(
+            parse_worksheet_relationships(
+                "<Relationships><Relationship Id=\"rId1\" Type=\".../worksheet\" Target=\"../x.xml\"/></Relationships>"
+            )
+            .is_err()
+        );
+    }
+
+    fn col_ref(mut n: usize) -> String {
+        let mut s = String::new();
+        loop {
+            s.push(char::from(b'A' + u8::try_from(n % 26).unwrap_or(0)));
+            if n < 26 {
+                break;
+            }
+            n = n / 26 - 1;
+        }
+        s.chars().rev().collect()
+    }
 }

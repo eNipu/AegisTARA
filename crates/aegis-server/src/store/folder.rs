@@ -25,8 +25,8 @@ use uuid::Uuid;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 use super::{
-    BaselineMeta, FigureMeta, LoadedProject, MAX_FIGURE_BYTES, ProjectMeta, ProjectStore,
-    StoreFault, StoredOp, StoredSnapshot,
+    BaselineMeta, FigureMeta, LoadedProject, MAX_FIGURE_BYTES, MAX_PROJECT_MEMBERSHIPS,
+    ProjectMembership, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
 };
 use crate::ids::ProjectId;
 
@@ -77,6 +77,8 @@ struct DiskProject {
     baselines: Vec<DiskBaseline>,
     #[serde(default)]
     figures: Vec<DiskFigure>,
+    #[serde(default)]
+    memberships: Vec<DiskMembership>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -90,6 +92,13 @@ struct DiskBaseline {
     snapshot_bytes: u64,
     snapshot_id: String,
     snapshot_hash: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiskMembership {
+    member: String,
+    role: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -331,6 +340,20 @@ fn validate_project(project: &DiskProject) -> Result<(), StoreFault> {
         }
         Uuid::parse_str(&baseline.snapshot_id).map_err(corrupt)?;
         decode_hash(&baseline.snapshot_hash)?;
+    }
+    if project.memberships.len() > MAX_PROJECT_MEMBERSHIPS {
+        return Err(corrupt("too many project memberships"));
+    }
+    let mut member_ids = BTreeSet::new();
+    for member in &project.memberships {
+        if member.member.is_empty()
+            || member.member.len() > 512
+            || member.role.is_empty()
+            || member.role.len() > 64
+            || !member_ids.insert(&member.member)
+        {
+            return Err(corrupt("invalid or duplicate project membership"));
+        }
     }
     let mut fig_ids = BTreeSet::new();
     for figure in &project.figures {
@@ -789,6 +812,7 @@ impl ProjectStore for FolderStore {
                 snapshot_hash,
                 baselines: Vec::new(),
                 figures: Vec::new(),
+                memberships: Vec::new(),
             };
             let header = initial_log(&project)?;
             write_new(&inner.path(OPLOG), &header)?;
@@ -1073,6 +1097,119 @@ impl ProjectStore for FolderStore {
             };
             let bytes = read_snapshot(&inner.root, &found.snapshot_id, &found.snapshot_hash)?;
             Ok(Some((baseline_meta(project, found)?, bytes)))
+        })
+        .await
+    }
+
+    async fn all_memberships(&self) -> Result<Vec<ProjectMembership>, StoreFault> {
+        self.blocking(move |inner, _| {
+            let Some(disk) = read_state(&inner.root)? else {
+                return Ok(Vec::new());
+            };
+            let project = ProjectId::from_str(&disk.id).map_err(corrupt)?;
+            Ok(disk
+                .memberships
+                .into_iter()
+                .map(|row| ProjectMembership {
+                    project,
+                    member: row.member,
+                    role: row.role,
+                })
+                .collect())
+        })
+        .await
+    }
+
+    async fn project_memberships(
+        &self,
+        project: ProjectId,
+    ) -> Result<Vec<ProjectMembership>, StoreFault> {
+        self.blocking(move |inner, _| {
+            let disk = current(&inner.root, project)?;
+            Ok(disk
+                .memberships
+                .into_iter()
+                .map(|row| ProjectMembership {
+                    project,
+                    member: row.member,
+                    role: row.role,
+                })
+                .collect())
+        })
+        .await
+    }
+
+    async fn memberships_for(
+        &self,
+        members: &[String],
+    ) -> Result<Vec<ProjectMembership>, StoreFault> {
+        let members = members.to_vec();
+        self.blocking(move |inner, _| {
+            let Some(disk) = read_state(&inner.root)? else {
+                return Ok(Vec::new());
+            };
+            let project = ProjectId::from_str(&disk.id).map_err(corrupt)?;
+            Ok(disk
+                .memberships
+                .into_iter()
+                .filter(|row| members.binary_search(&row.member).is_ok())
+                .map(|row| ProjectMembership {
+                    project,
+                    member: row.member,
+                    role: row.role,
+                })
+                .collect())
+        })
+        .await
+    }
+
+    async fn set_membership(&self, membership: &ProjectMembership) -> Result<(), StoreFault> {
+        let membership = membership.clone();
+        self.blocking(move |inner, _| {
+            let mut disk = current(&inner.root, membership.project)?;
+            if !disk
+                .memberships
+                .iter()
+                .any(|row| row.member == membership.member)
+                && disk.memberships.len() >= MAX_PROJECT_MEMBERSHIPS
+            {
+                return Err(StoreFault::QuotaExceeded(
+                    "project membership limit reached".into(),
+                ));
+            }
+            if let Some(row) = disk
+                .memberships
+                .iter_mut()
+                .find(|row| row.member == membership.member)
+            {
+                row.role = membership.role;
+            } else {
+                disk.memberships.push(DiskMembership {
+                    member: membership.member,
+                    role: membership.role,
+                });
+            }
+            disk.memberships.sort_by(|a, b| a.member.cmp(&b.member));
+            commit_state(&inner.root, Some(&disk))
+        })
+        .await
+    }
+
+    async fn remove_membership(
+        &self,
+        project: ProjectId,
+        member: &str,
+    ) -> Result<bool, StoreFault> {
+        let member = member.to_owned();
+        self.blocking(move |inner, _| {
+            let mut disk = current(&inner.root, project)?;
+            let old_len = disk.memberships.len();
+            disk.memberships.retain(|row| row.member != member);
+            let removed = old_len != disk.memberships.len();
+            if removed {
+                commit_state(&inner.root, Some(&disk))?;
+            }
+            Ok(removed)
         })
         .await
     }

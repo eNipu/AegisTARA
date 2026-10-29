@@ -13,6 +13,7 @@ mod catalog;
 mod cra;
 mod iso21434;
 mod pack;
+mod stride;
 
 use std::collections::BTreeMap;
 use std::fmt;

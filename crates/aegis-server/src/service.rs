@@ -16,6 +16,7 @@ use crate::accounts::service::{no_event_log, password_login_off, user_info};
 
 /// Events returned when the request names no limit.
 const DEFAULT_EVENTS: usize = 200;
+use crate::access::{Access, Member, Permission, check_role};
 use crate::accounts::{Accounts, AuditKind, EventLog, UserUpdate, bearer};
 use crate::actor::{OpenData, RiskReport};
 use crate::auth::{AuthMethod, Principal};
@@ -25,7 +26,7 @@ use crate::lease::Grant;
 use crate::license::LicenseGate;
 use crate::pb;
 use crate::registry::{Registry, missing};
-use crate::store::{BaselineMeta, FigureMeta, ProjectMeta, ProjectStore};
+use crate::store::{BaselineMeta, FigureMeta, ProjectMembership, ProjectMeta, ProjectStore};
 
 /// Largest gRPC message the server accepts. A `SubmitOps` batch has at most
 /// 1024 ops (`max_batch_ops`); typical ops are a few hundred bytes, and this
@@ -49,6 +50,9 @@ pub struct AegisService<S> {
     /// The event log. Present with password accounts and, for company login
     /// or development servers, through [`with_event_log`](Self::with_event_log).
     events: Option<EventLog>,
+    /// The role and membership table, rebuilt from the store before serving
+    /// and kept current by the membership RPCs (`ACC-01`).
+    access: Access,
 }
 
 impl<S: ProjectStore> AegisService<S> {
@@ -59,6 +63,7 @@ impl<S: ProjectStore> AegisService<S> {
             registry,
             accounts: None,
             events: None,
+            access: Access::new(),
         }
     }
 
@@ -84,6 +89,41 @@ impl<S: ProjectStore> AegisService<S> {
     #[must_use]
     pub fn event_log(&self) -> Option<&EventLog> {
         self.events.as_ref()
+    }
+
+    /// Loads every stored membership into the in-memory access table. Called
+    /// once before serving, then the membership RPCs keep the table current.
+    ///
+    /// # Errors
+    ///
+    /// A storage failure.
+    pub async fn load_access_cache(&mut self) -> Result<(), ServerError> {
+        let rows = self.registry.store().all_memberships().await?;
+        self.access.replace(rows);
+        Ok(())
+    }
+
+    /// Whether `who` may `permission` on `project`. Development login is
+    /// trusted (the server never runs it in a customer build), which keeps
+    /// the dev servers and tests working without a membership table.
+    fn access_allows(&self, project: ProjectId, who: &Principal, permission: Permission) -> bool {
+        if who.method == AuthMethod::Development {
+            return true;
+        }
+        self.access.allows(project, who, permission)
+    }
+
+    fn require_access<T>(
+        &self,
+        request: &Request<T>,
+        project: ProjectId,
+        permission: Permission,
+    ) -> Result<Principal, Status> {
+        let who = Principal::of(request)?.clone();
+        if !self.access_allows(project, &who, permission) {
+            return Err(ServerError::NotAuthorized.into());
+        }
+        Ok(who)
     }
 
     fn accounts(&self) -> Result<&Accounts, Status> {
@@ -338,12 +378,22 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::CreateProjectRequest>,
     ) -> Result<Response<pb::CreateProjectResponse>, Status> {
-        Principal::of(&request)?;
+        let who = Principal::of(&request)?.clone();
         let req = request.get_ref();
         let meta = self
             .registry
             .create(&req.name, &req.methodology_key)
             .await?;
+        let membership = ProjectMembership {
+            project: meta.id,
+            member: format!("user:{}", who.subject),
+            role: "project_owner".to_owned(),
+        };
+        if let Err(error) = self.registry.store().set_membership(&membership).await {
+            let _ = self.registry.delete(meta.id).await;
+            return Err(ServerError::Store(error).into());
+        }
+        self.access.set(&membership);
         Ok(Response::new(pb::CreateProjectResponse {
             project: Some(summary(&meta)),
         }))
@@ -353,8 +403,14 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::ListProjectsRequest>,
     ) -> Result<Response<pb::ListProjectsResponse>, Status> {
-        Principal::of(&request)?;
-        let projects = self.registry.list().await?;
+        let who = Principal::of(&request)?.clone();
+        let projects = self
+            .registry
+            .list()
+            .await?
+            .into_iter()
+            .filter(|meta| self.access_allows(meta.id, &who, Permission::Read))
+            .collect::<Vec<_>>();
         Ok(Response::new(pb::ListProjectsResponse {
             projects: projects.iter().map(summary).collect(),
         }))
@@ -364,8 +420,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::OpenProjectRequest>,
     ) -> Result<Response<Self::OpenProjectStream>, Status> {
-        Principal::of(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let data = self
             .registry
             .with(id, |h| async move { h.open().await })
@@ -378,8 +434,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::LockRequest>,
     ) -> Result<Response<pb::Lease>, Status> {
-        let who = Principal::of(&request)?.clone();
         let id = project_id(&request.get_ref().project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         // Taking the lease is what uses a seat. Reading is never gated.
         if let Some(gate) = self.registry.license() {
             gate.admit_editor(&who.subject)?;
@@ -398,8 +454,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::RenewLockRequest>,
     ) -> Result<Response<pb::Lease>, Status> {
-        let who = Principal::of(&request)?.clone();
         let id = project_id(&request.get_ref().project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let tok = token(&request.get_ref().token)?;
         let grant = self
             .registry
@@ -415,8 +471,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::ReleaseLockRequest>,
     ) -> Result<Response<pb::ReleaseLockResponse>, Status> {
-        let who = Principal::of(&request)?.clone();
         let id = project_id(&request.get_ref().project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let tok = token(&request.get_ref().token)?;
         self.registry
             .with(id, |h| {
@@ -449,9 +505,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::SubmitOpsRequest>,
     ) -> Result<Response<pb::SubmitOpsResponse>, Status> {
-        let who = Principal::of(&request)?.clone();
+        let id = project_id(&request.get_ref().project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let req = request.into_inner();
-        let id = project_id(&req.project_id)?;
         let tok = token(&req.lock_token)?;
         let (base_seq, ops) = (req.base_seq, req.ops);
         let last_seq = self
@@ -468,8 +524,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::GetProjectStatusRequest>,
     ) -> Result<Response<pb::ProjectStatus>, Status> {
-        Principal::of(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let status = self
             .registry
             .with(id, |h| async move { h.status().await })
@@ -527,8 +583,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::GetRisksRequest>,
     ) -> Result<Response<pb::GetRisksResponse>, Status> {
-        Principal::of(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let report = self
             .registry
             .with(id, |h| async move { h.risks().await })
@@ -749,9 +805,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::CreateBaselineRequest>,
     ) -> Result<Response<pb::BaselineInfo>, Status> {
-        let who = Principal::of(&request)?.clone();
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let meta = self
             .registry
             .create_baseline(id, &req.name, &who.subject)
@@ -770,8 +826,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::ListBaselinesRequest>,
     ) -> Result<Response<pb::ListBaselinesResponse>, Status> {
-        Principal::of(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let list = self
             .registry
             .store()
@@ -787,9 +843,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::GetBaselineRequest>,
     ) -> Result<Response<Self::GetBaselineStream>, Status> {
-        Principal::of(&request)?;
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let baseline: uuid::Uuid = req
             .baseline_id
             .parse()
@@ -819,9 +875,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::PutFigureRequest>,
     ) -> Result<Response<pb::FigureInfo>, Status> {
-        let who = Principal::of(&request)?.clone();
+        let id = project_id(&request.get_ref().project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let req = request.into_inner();
-        let id = project_id(&req.project_id)?;
         let tok = token(&req.lock_token)?;
         let max_bytes = self.registry.config().max_figure_bytes;
         let mut total = 0usize;
@@ -857,8 +913,8 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::ListFiguresRequest>,
     ) -> Result<Response<pb::ListFiguresResponse>, Status> {
-        Principal::of(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let list = self
             .registry
             .store()
@@ -874,9 +930,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::GetFigureRequest>,
     ) -> Result<Response<Self::GetFigureStream>, Status> {
-        Principal::of(&request)?;
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let figure_id: uuid::Uuid = req
             .figure_id
             .parse()
@@ -900,9 +956,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::UpdateFigureRequest>,
     ) -> Result<Response<pb::FigureInfo>, Status> {
-        let who = Principal::of(&request)?.clone();
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let tok = token(&req.lock_token)?;
         let figure_id: uuid::Uuid = req
             .figure_id
@@ -919,9 +975,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::DeleteFigureRequest>,
     ) -> Result<Response<pb::DeleteFigureResponse>, Status> {
-        let who = Principal::of(&request)?.clone();
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let tok = token(&req.lock_token)?;
         let figure_id: uuid::Uuid = req
             .figure_id
@@ -935,9 +991,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::RenameProjectRequest>,
     ) -> Result<Response<pb::ProjectSummary>, Status> {
-        let who = Principal::of(&request)?.clone();
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        let who = self.require_access(&request, id, Permission::Write)?;
         let tok = token(&req.lock_token)?;
         let name = self.registry.check_name(&req.name)?.to_owned();
         let meta = self
@@ -969,9 +1025,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::ListHistoryRequest>,
     ) -> Result<Response<pb::ListHistoryResponse>, Status> {
-        Principal::of(&request)?;
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
         let max = self.registry.config().max_history;
         let limit = match req.limit {
             0 => max,
@@ -1000,9 +1056,9 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::RecordExportRequest>,
     ) -> Result<Response<pb::RecordExportResponse>, Status> {
-        let who = Principal::of(&request)?.clone();
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
+        let who = self.require_access(&request, id, Permission::Read)?;
         let kind = req.kind.as_str();
         if kind.is_empty()
             || kind.len() > MAX_EXPORT_KIND_BYTES
@@ -1025,6 +1081,122 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         self.audit(&who, AuditKind::Export, &id.to_string(), &recorded)
             .await;
         Ok(Response::new(pb::RecordExportResponse {}))
+    }
+
+    async fn list_memberships(
+        &self,
+        request: Request<pb::ListMembershipsRequest>,
+    ) -> Result<Response<pb::ListMembershipsResponse>, Status> {
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        self.require_access(&request, id, Permission::Read)?;
+        let rows = self
+            .registry
+            .store()
+            .project_memberships(id)
+            .await
+            .map_err(ServerError::from)?;
+        Ok(Response::new(pb::ListMembershipsResponse {
+            memberships: rows
+                .iter()
+                .map(|row| pb::MembershipInfo {
+                    member: row.member.clone(),
+                    role: row.role.clone(),
+                })
+                .collect(),
+        }))
+    }
+
+    async fn set_membership(
+        &self,
+        request: Request<pb::SetMembershipRequest>,
+    ) -> Result<Response<pb::MembershipInfo>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        if !self.access_allows(id, &who, Permission::Manage) {
+            return Err(ServerError::NotAuthorized.into());
+        }
+        let member = Member::parse(&req.member).ok_or(ServerError::InvalidRequest("member"))?;
+        if !check_role(&req.role) {
+            return Err(ServerError::InvalidRequest("role").into());
+        }
+        // Assigning the admin or methodology-owner role is a server-admin
+        // act, so a project owner cannot escalate a member to it.
+        if (req.role == "admin" || req.role == "methodology_owner") && !who.admin {
+            return Err(ServerError::NotAuthorized.into());
+        }
+        let membership = ProjectMembership {
+            project: id,
+            member: member.as_str().to_owned(),
+            role: req.role.clone(),
+        };
+        self.registry
+            .store()
+            .set_membership(&membership)
+            .await
+            .map_err(ServerError::from)?;
+        self.access.set(&membership);
+        self.audit(
+            &who,
+            AuditKind::MembershipChanged,
+            &id.to_string(),
+            &format!("{}:{}", membership.member, membership.role),
+        )
+        .await;
+        Ok(Response::new(pb::MembershipInfo {
+            member: membership.member,
+            role: membership.role,
+        }))
+    }
+
+    async fn remove_membership(
+        &self,
+        request: Request<pb::RemoveMembershipRequest>,
+    ) -> Result<Response<pb::RemoveMembershipResponse>, Status> {
+        let who = Principal::of(&request)?.clone();
+        let req = request.get_ref();
+        let id = project_id(&req.project_id)?;
+        if !self.access_allows(id, &who, Permission::Manage) {
+            return Err(ServerError::NotAuthorized.into());
+        }
+        let member = Member::parse(&req.member).ok_or(ServerError::InvalidRequest("member"))?;
+        let existing = self
+            .registry
+            .store()
+            .project_memberships(id)
+            .await
+            .map_err(ServerError::from)?;
+        let is_owner_row = existing.iter().any(|row| {
+            row.member == member.as_str() && matches!(row.role.as_str(), "admin" | "project_owner")
+        });
+        if is_owner_row {
+            let other_owners = existing.iter().filter(|row| {
+                row.member != member.as_str()
+                    && matches!(row.role.as_str(), "admin" | "project_owner")
+            });
+            if other_owners.count() == 0 {
+                return Err(ServerError::InvalidRequest("last owner cannot be removed").into());
+            }
+        }
+        let removed = self
+            .registry
+            .store()
+            .remove_membership(id, member.as_str())
+            .await
+            .map_err(ServerError::from)?;
+        if !removed {
+            return Err(ServerError::InvalidRequest("unknown member").into());
+        }
+        self.access.remove(id, member.as_str());
+        self.audit(
+            &who,
+            AuditKind::MembershipRemoved,
+            &id.to_string(),
+            member.as_str(),
+        )
+        .await;
+        Ok(Response::new(pb::RemoveMembershipResponse {}))
     }
 }
 

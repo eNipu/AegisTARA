@@ -76,6 +76,7 @@ impl<H: HttpClient> Authn for OidcAuthn<H> {
             subject: claims.subject.into(),
             admin: claims.admin,
             method: AuthMethod::Oidc,
+            groups: Vec::new(),
         })
     }
 }
@@ -131,6 +132,7 @@ impl Authn for DevAuthn {
             subject: user.into(),
             admin: request.header(DEV_ADMIN_HEADER) == Some("1"),
             method: AuthMethod::Development,
+            groups: Vec::new(),
         })
     }
 }

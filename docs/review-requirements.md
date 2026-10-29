@@ -59,6 +59,10 @@ Add a row for every new job.
 | 073 figures (`073-figures`) | PASS | PASS | PASS | PASS |
 | 074 item definition (`074-item-definition`) | PASS | PASS | PASS | PASS |
 | 080 Excel TARA import (`080-excel-import`) | PASS | PASS | PASS | PASS |
+| 058 project access (`058-project-access`) | PASS | PASS | pending | pending |
+| 112 catalog packs (`112-catalog-packs`) | PASS | PASS | N/A (pending) | N/A (pending) |
+| 069 content language (`069-content-language`) | pending | pending | pending | pending |
+| 081 command palette (`081-command-palette`) | pending | pending | pending | pending |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)

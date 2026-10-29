@@ -6,8 +6,8 @@ use std::sync::Mutex;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 use super::{
-    BaselineMeta, FigureMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp,
-    StoredSnapshot,
+    BaselineMeta, FigureMeta, LoadedProject, MAX_PROJECT_MEMBERSHIPS, ProjectMembership,
+    ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
 };
 use crate::ids::ProjectId;
 
@@ -24,6 +24,8 @@ struct Entry {
     baselines: Vec<(BaselineMeta, Vec<u8>)>,
     /// Oldest first.
     figures: Vec<(FigureMeta, Vec<u8>)>,
+    /// Ordered by stable member key.
+    memberships: BTreeMap<String, ProjectMembership>,
 }
 
 /// A store that keeps everything in process memory.
@@ -78,6 +80,7 @@ impl ProjectStore for MemoryStore {
                     head: genesis(meta.id),
                     baselines: Vec::new(),
                     figures: Vec::new(),
+                    memberships: BTreeMap::new(),
                 },
             );
             Ok(())
@@ -221,6 +224,70 @@ impl ProjectStore for MemoryStore {
             m.get(&project)
                 .and_then(|e| e.baselines.iter().find(|(b, _)| b.id == id).cloned())
         }))
+    }
+
+    async fn all_memberships(&self) -> Result<Vec<ProjectMembership>, StoreFault> {
+        Ok(self.with(|projects| {
+            projects
+                .values()
+                .flat_map(|entry| entry.memberships.values())
+                .cloned()
+                .collect()
+        }))
+    }
+
+    async fn project_memberships(
+        &self,
+        project: ProjectId,
+    ) -> Result<Vec<ProjectMembership>, StoreFault> {
+        self.with(|m| {
+            let entry = m.get(&project).ok_or(StoreFault::Missing)?;
+            Ok(entry.memberships.values().cloned().collect())
+        })
+    }
+
+    async fn memberships_for(
+        &self,
+        members: &[String],
+    ) -> Result<Vec<ProjectMembership>, StoreFault> {
+        Ok(self.with(|projects| {
+            projects
+                .values()
+                .flat_map(|entry| entry.memberships.values())
+                .filter(|row| members.binary_search(&row.member).is_ok())
+                .cloned()
+                .collect()
+        }))
+    }
+
+    async fn set_membership(&self, membership: &ProjectMembership) -> Result<(), StoreFault> {
+        self.with(|projects| {
+            let entry = projects
+                .get_mut(&membership.project)
+                .ok_or(StoreFault::Missing)?;
+            if !entry.memberships.contains_key(&membership.member)
+                && entry.memberships.len() >= MAX_PROJECT_MEMBERSHIPS
+            {
+                return Err(StoreFault::QuotaExceeded(
+                    "project membership limit reached".into(),
+                ));
+            }
+            entry
+                .memberships
+                .insert(membership.member.clone(), membership.clone());
+            Ok(())
+        })
+    }
+
+    async fn remove_membership(
+        &self,
+        project: ProjectId,
+        member: &str,
+    ) -> Result<bool, StoreFault> {
+        self.with(|projects| {
+            let entry = projects.get_mut(&project).ok_or(StoreFault::Missing)?;
+            Ok(entry.memberships.remove(member).is_some())
+        })
     }
 
     async fn put_figure(

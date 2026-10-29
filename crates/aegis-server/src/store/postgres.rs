@@ -41,8 +41,8 @@ use uuid::Uuid;
 
 use super::audit::{ChainReport, ChainVerifier, Hash, genesis, link};
 use super::{
-    BaselineMeta, FigureMeta, LoadedProject, ProjectMeta, ProjectStore, StoreFault, StoredOp,
-    StoredSnapshot,
+    BaselineMeta, FigureMeta, LoadedProject, MAX_PROJECT_MEMBERSHIPS, ProjectMembership,
+    ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
 };
 use crate::config::system_clock_ms;
 use crate::ids::ProjectId;
@@ -61,6 +61,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (3, include_str!("../../migrations/003_settings.sql")),
     (4, include_str!("../../migrations/004_event_chain.sql")),
     (5, include_str!("../../migrations/005_figures.sql")),
+    (6, include_str!("../../migrations/006_project_access.sql")),
 ];
 
 /// How the server talks to PostgreSQL.
@@ -753,6 +754,168 @@ impl ProjectStore for PostgresStore {
             .map_err(backend)?;
         row.map(|row| Ok((baseline_of(&row)?, row.try_get(7).map_err(backend)?)))
             .transpose()
+    }
+
+    async fn all_memberships(&self) -> Result<Vec<ProjectMembership>, StoreFault> {
+        let client = self.client().await?;
+        client
+            .query(
+                "SELECT m.project_id, m.member_key, m.role
+                 FROM aegis_project_member m JOIN aegis_project p ON p.project_id = m.project_id
+                 WHERE p.org_id = $1
+                 ORDER BY m.project_id, m.member_key",
+                &[&self.org],
+            )
+            .await
+            .map_err(backend)?
+            .iter()
+            .map(|row| {
+                Ok(ProjectMembership {
+                    project: ProjectId::from_uuid(row.try_get(0).map_err(backend)?),
+                    member: row.try_get(1).map_err(backend)?,
+                    role: row.try_get(2).map_err(backend)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn project_memberships(
+        &self,
+        project: ProjectId,
+    ) -> Result<Vec<ProjectMembership>, StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        client
+            .query(
+                "SELECT project_id, member_key, role FROM aegis_project_member
+                 WHERE project_id = $1 ORDER BY member_key",
+                &[&project.as_uuid()],
+            )
+            .await
+            .map_err(backend)?
+            .iter()
+            .map(|row| {
+                Ok(ProjectMembership {
+                    project,
+                    member: row.try_get(1).map_err(backend)?,
+                    role: row.try_get(2).map_err(backend)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn memberships_for(
+        &self,
+        members: &[String],
+    ) -> Result<Vec<ProjectMembership>, StoreFault> {
+        if members.is_empty() {
+            return Ok(Vec::new());
+        }
+        let client = self.client().await?;
+        let lookup: Vec<String> = members.to_vec();
+        let rows = client
+            .query(
+                "SELECT m.project_id, m.member_key, m.role
+                 FROM aegis_project_member m JOIN aegis_project p ON p.project_id = m.project_id
+                 WHERE m.member_key = ANY($1) AND p.org_id = $2
+                 ORDER BY m.member_key, m.project_id",
+                &[&lookup, &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        rows.iter()
+            .map(|row| {
+                Ok(ProjectMembership {
+                    project: ProjectId::from_uuid(row.try_get(0).map_err(backend)?),
+                    member: row.try_get(1).map_err(backend)?,
+                    role: row.try_get(2).map_err(backend)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn set_membership(&self, membership: &ProjectMembership) -> Result<(), StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(backend)?;
+        let exists = tx
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2 FOR UPDATE",
+                &[&membership.project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        let count: i64 = tx
+            .query_one(
+                "SELECT count(*)::bigint FROM aegis_project_member WHERE project_id = $1",
+                &[&membership.project.as_uuid()],
+            )
+            .await
+            .map_err(backend)?
+            .get(0);
+        let is_new = tx
+            .query_opt(
+                "SELECT 1 FROM aegis_project_member WHERE project_id = $1 AND member_key = $2",
+                &[&membership.project.as_uuid(), &membership.member],
+            )
+            .await
+            .map_err(backend)?
+            .is_none();
+        if is_new && usize::try_from(count).map_err(backend)? >= MAX_PROJECT_MEMBERSHIPS {
+            return Err(StoreFault::QuotaExceeded(
+                "project membership limit reached".into(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO aegis_project_member (project_id, member_key, role)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (project_id, member_key) DO UPDATE SET role = EXCLUDED.role",
+            &[
+                &membership.project.as_uuid(),
+                &membership.member,
+                &membership.role,
+            ],
+        )
+        .await
+        .map_err(backend)?;
+        tx.commit().await.map_err(backend)
+    }
+
+    async fn remove_membership(
+        &self,
+        project: ProjectId,
+        member: &str,
+    ) -> Result<bool, StoreFault> {
+        let client = self.client().await?;
+        let exists = client
+            .query_opt(
+                "SELECT 1 FROM aegis_project WHERE project_id = $1 AND org_id = $2",
+                &[&project.as_uuid(), &self.org],
+            )
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreFault::Missing);
+        }
+        let n = client
+            .execute(
+                "DELETE FROM aegis_project_member WHERE project_id = $1 AND member_key = $2",
+                &[&project.as_uuid(), &member],
+            )
+            .await
+            .map_err(backend)?;
+        Ok(n == 1)
     }
 
     async fn put_figure(

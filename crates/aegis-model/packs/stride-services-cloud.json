@@ -1,0 +1,263 @@
+{
+  "format": "aegis-methodology-pack",
+  "version": 1,
+  "methodology": {
+    "key": "stride-services-cloud",
+    "version": "0.1.0",
+    "label": "STRIDE for Services and Cloud",
+    "element_names": {
+      "component": {
+        "singular": "Service component",
+        "plural": "Service components"
+      },
+      "interface": {
+        "singular": "Interface",
+        "plural": "Interfaces"
+      },
+      "data_flow": {
+        "singular": "Data flow",
+        "plural": "Data flows"
+      },
+      "trust_boundary": {
+        "singular": "Trust boundary",
+        "plural": "Trust boundaries"
+      },
+      "asset": {
+        "singular": "Service asset",
+        "plural": "Service assets"
+      },
+      "damage_scenario": {
+        "singular": "Service impact",
+        "plural": "Service impacts"
+      },
+      "threat_scenario": {
+        "singular": "Threat scenario",
+        "plural": "Threat scenarios"
+      },
+      "attack_tree": {
+        "singular": "Attack tree",
+        "plural": "Attack trees"
+      },
+      "security_control": {
+        "singular": "Security control",
+        "plural": "Security controls"
+      },
+      "cybersecurity_goal": {
+        "singular": "Cybersecurity goal",
+        "plural": "Cybersecurity goals"
+      },
+      "cybersecurity_claim": {
+        "singular": "Cybersecurity claim",
+        "plural": "Cybersecurity claims"
+      },
+      "feasibility": "Likelihood"
+    },
+    "impact_categories": [
+      {
+        "key": "service-impact",
+        "label": "Service impact",
+        "levels": [
+          {
+            "key": "negligible",
+            "label": "Negligible"
+          },
+          {
+            "key": "moderate",
+            "label": "Moderate"
+          },
+          {
+            "key": "major",
+            "label": "Major"
+          },
+          {
+            "key": "severe",
+            "label": "Severe"
+          }
+        ],
+        "risk_matrix": [
+          [
+            "low",
+            "low",
+            "low",
+            "moderate"
+          ],
+          [
+            "low",
+            "low",
+            "moderate",
+            "high"
+          ],
+          [
+            "low",
+            "moderate",
+            "high",
+            "critical"
+          ],
+          [
+            "moderate",
+            "high",
+            "critical",
+            "critical"
+          ]
+        ]
+      }
+    ],
+    "feasibility_levels": [
+      {
+        "key": "very-low",
+        "label": "Very low"
+      },
+      {
+        "key": "low",
+        "label": "Low"
+      },
+      {
+        "key": "medium",
+        "label": "Medium"
+      },
+      {
+        "key": "high",
+        "label": "High"
+      }
+    ],
+    "risk_levels": [
+      {
+        "key": "low",
+        "label": "Low"
+      },
+      {
+        "key": "moderate",
+        "label": "Moderate"
+      },
+      {
+        "key": "high",
+        "label": "High"
+      },
+      {
+        "key": "critical",
+        "label": "Critical"
+      }
+    ],
+    "properties": [
+      {
+        "key": "confidentiality",
+        "label": "Confidentiality"
+      },
+      {
+        "key": "integrity",
+        "label": "Integrity"
+      },
+      {
+        "key": "availability",
+        "label": "Availability"
+      },
+      {
+        "key": "authenticity",
+        "label": "Authenticity"
+      },
+      {
+        "key": "authorization",
+        "label": "Authorization"
+      },
+      {
+        "key": "non-repudiation",
+        "label": "Non-repudiation"
+      }
+    ],
+    "threat_categories": [
+      {
+        "key": "spoofing",
+        "label": "Spoofing",
+        "violates": [
+          "authenticity"
+        ]
+      },
+      {
+        "key": "tampering",
+        "label": "Tampering",
+        "violates": [
+          "integrity"
+        ]
+      },
+      {
+        "key": "repudiation",
+        "label": "Repudiation",
+        "violates": [
+          "non-repudiation"
+        ]
+      },
+      {
+        "key": "information-disclosure",
+        "label": "Information disclosure",
+        "violates": [
+          "confidentiality"
+        ]
+      },
+      {
+        "key": "denial-of-service",
+        "label": "Denial of service",
+        "violates": [
+          "availability"
+        ]
+      },
+      {
+        "key": "elevation-of-privilege",
+        "label": "Elevation of privilege",
+        "violates": [
+          "authorization"
+        ]
+      }
+    ],
+    "catalog_schemes": [
+      {
+        "key": "capec",
+        "label": "CAPEC™",
+        "syntax": {
+          "prefix": "CAPEC-",
+          "required": 1,
+          "segments": [
+            {
+              "min": 1,
+              "max": 9999
+            }
+          ]
+        }
+      },
+      {
+        "key": "mitre-attack-enterprise",
+        "label": "MITRE ATT&CK® Enterprise",
+        "syntax": {
+          "prefix": "T",
+          "required": 1,
+          "segments": [
+            {
+              "min": 1000,
+              "max": 9999,
+              "digits": 4
+            },
+            {
+              "min": 1,
+              "max": 999,
+              "digits": 3
+            }
+          ]
+        }
+      },
+      {
+        "key": "emb3d-threat",
+        "label": "MITRE EMB3D™ threat",
+        "syntax": {
+          "prefix": "TID-",
+          "required": 1,
+          "segments": [
+            {
+              "min": 100,
+              "max": 999,
+              "digits": 3
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
