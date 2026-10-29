@@ -1336,6 +1336,10 @@ pub enum Command {
         kind: crate::report::ExportKind,
         /// Where.
         path: std::path::PathBuf,
+        /// The report profile: sections, filters, language and branding
+        /// (RPT-02 to RPT-04). Boxed so the command stays small on the
+        /// channel.
+        profile: Box<crate::report::ReportProfile>,
     },
     /// Admin: load the users.
     LoadUsers,

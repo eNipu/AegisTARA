@@ -161,6 +161,12 @@ impl Launcher {
             window.set_transport_index(transport_position(&s.transport));
             window.set_login_user(s.username.as_str().into());
             window.set_export_dir(s.export_dir().display().to_string().into());
+            let language = s.language().code().to_owned();
+            // The bundled gettext catalogs are selected after the first
+            // component exists (the window is created before this runs).
+            if let Err(e) = slint::select_bundled_translation(&language) {
+                tracing::warn!(%language, error = %e, "the UI language was not found");
+            }
         }
         launcher
     }

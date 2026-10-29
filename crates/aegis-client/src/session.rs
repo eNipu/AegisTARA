@@ -51,7 +51,10 @@ use crate::commands::Command;
 use crate::connection::{Connection, ServerInfo};
 use crate::error::{ClientError, ServerCode};
 use crate::pages;
-use crate::report::{ExportKind, ReportContext};
+use crate::report::{
+    ExportKind, ReportContext, ReportOptions, ReportProfile, report_html_with_options,
+    report_pdf_with_options, report_workbook_xlsx, risk_register_csv, tree_svg,
+};
 use crate::sample::sample_ops;
 use crate::state::{
     BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, Mode, Notice, NumbersCheck, PageData,
@@ -1151,8 +1154,9 @@ impl<P: CredentialProvider> Actor<P> {
     }
 
     /// Builds the export on the blocking pool from a copy of the project
-    /// (O(project size), R5), writes it, and records it on the server.
-    fn export(&mut self, kind: ExportKind, path: std::path::PathBuf) {
+    /// (O(project size), R5), writes it, and records it on the server with
+    /// the report profile in the audit event (RPT-03).
+    fn export(&mut self, kind: ExportKind, path: std::path::PathBuf, profile: ReportProfile) {
         let Some(open) = self.open.as_ref() else {
             return;
         };
@@ -1177,20 +1181,26 @@ impl<P: CredentialProvider> Actor<P> {
         let (epoch, id) = (open.epoch, open.id.clone());
         let conn = self.conn.clone();
         let events = self.events.clone();
+        let detail = profile.audit_summary();
         tokio::spawn(async move {
             // Building and writing are both blocking work (R5).
             let written = tokio::task::spawn_blocking(move || {
                 let ws = Workspace::new(project, seq);
+                let opts = ReportOptions {
+                    profile,
+                    baseline_project: None,
+                };
                 let bytes: Vec<u8> = match kind {
-                    ExportKind::Report => Some(crate::report::report_html(&ws, &ctx).into_bytes()),
+                    ExportKind::Report => {
+                        Some(report_html_with_options(&ws, &ctx, &opts).into_bytes())
+                    }
                     ExportKind::ReportPdf => {
-                        Some(crate::pdf::report_pdf(&ws, &ctx).map_err(|e| e.to_string())?)
+                        Some(report_pdf_with_options(&ws, &ctx, &opts).map_err(|e| e.to_string())?)
                     }
-                    ExportKind::RiskRegister => {
-                        Some(crate::report::risk_register_csv(&ws, &ctx).into_bytes())
-                    }
+                    ExportKind::ReportXlsx => Some(report_workbook_xlsx(&ws)),
+                    ExportKind::RiskRegister => Some(risk_register_csv(&ws, &ctx).into_bytes()),
                     ExportKind::TreeSvg => tree
-                        .and_then(|t| crate::report::tree_svg(&ws, t, residual))
+                        .and_then(|t| tree_svg(&ws, t, residual))
                         .map(String::into_bytes),
                 }
                 .ok_or_else(|| "there is nothing to export".to_owned())?;
@@ -1202,7 +1212,7 @@ impl<P: CredentialProvider> Actor<P> {
             .unwrap_or_else(|_| Err("the export was interrupted".to_owned()));
             if written.is_ok()
                 && let Some(conn) = conn
-                && let Err(e) = conn.record_export(&id, kind.audit_name()).await
+                && let Err(e) = conn.record_export(&id, kind.audit_name(), &detail).await
             {
                 // The file is written either way; a failed audit call is
                 // logged, not shown.
@@ -1965,7 +1975,11 @@ impl<P: CredentialProvider> Actor<P> {
             }
             Command::CompareWith(Some(baseline)) => self.compare_with(baseline),
             Command::LoadHistory => self.load_history(),
-            Command::Export { kind, path } => self.export(kind, path),
+            Command::Export {
+                kind,
+                path,
+                profile,
+            } => self.export(kind, path, *profile),
             Command::CheckForUpdates => self.check_for_updates(),
             Command::DownloadUpdate => self.download_update(),
             Command::LoadEvents => self.load_events(),

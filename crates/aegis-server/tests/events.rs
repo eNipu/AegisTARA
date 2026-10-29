@@ -232,6 +232,7 @@ async fn a_server_without_password_accounts_can_keep_an_event_log() {
         .record_export(pb::RecordExportRequest {
             project_id: project.clone(),
             kind: "report-pdf".into(),
+            detail: "profile=Default lang=en".into(),
         })
         .await
         .expect("export");
@@ -244,7 +245,7 @@ async fn a_server_without_password_accounts_can_keep_an_event_log() {
     assert_eq!(kinds(&events), ["export"]);
     assert_eq!(events[0].actor, "root@example.com");
     assert_eq!(events[0].target, project);
-    assert_eq!(events[0].detail, "report-pdf");
+    assert_eq!(events[0].detail, "report-pdf (profile=Default lang=en)");
 
     // Still admin only.
     let mut bob = server.client("bob@example.com").await;

@@ -288,6 +288,7 @@ impl Controller {
         let what = match kind {
             ExportKind::Report => "tara-report",
             ExportKind::ReportPdf => "tara-report",
+            ExportKind::ReportXlsx => "tara-workbook",
             ExportKind::RiskRegister => "risk-register",
             ExportKind::TreeSvg => "attack-tree",
         };
@@ -295,9 +296,14 @@ impl Controller {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
         let file = aegis_client::settings::export_file_name(&name, what, now, kind.extension());
+        // The report profile is edited on the Reports page; the settings
+        // store holds the active profile and the session records it in the
+        // export audit event (RPT-02 to RPT-04).
+        let profile = aegis_client::report::ReportProfile::default();
         self.send(Command::Export {
             kind,
             path: dir.join(file),
+            profile: Box::new(profile),
         });
     }
 

@@ -323,17 +323,24 @@ impl<P: CredentialProvider> Connection<P> {
             .entries)
     }
 
-    /// Records an export in the server's event log.
+    /// Records an export in the server's event log, with an optional
+    /// machine-readable profile summary (RPT-03).
     ///
     /// # Errors
     ///
     /// Any [`ClientError`].
-    pub async fn record_export(&self, project: &str, kind: &str) -> Result<(), ClientError> {
+    pub async fn record_export(
+        &self,
+        project: &str,
+        kind: &str,
+        detail: &str,
+    ) -> Result<(), ClientError> {
         self.client
             .clone()
             .record_export(pb::RecordExportRequest {
                 project_id: project.to_owned(),
                 kind: kind.to_owned(),
+                detail: detail.to_owned(),
             })
             .await?;
         Ok(())

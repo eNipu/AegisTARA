@@ -178,8 +178,8 @@ export component PageTitle inherits HorizontalLayout {
 // #E04F26 -> #C83E1B tungsten crimson-amber reticle bar, #8C99A6 tactical
 // slate datum telemetry, and the wide AegisTARA splash header graphic).
 export component SplashHeader inherits Rectangle {
-    in property <string> badge-text: "ISO/SAE 21434 · UN R155";
-    in property <string> status-text: "";
+    in property <string> badge-text: @tr("ISO/SAE 21434 · UN R155");
+    in property <string> status-text: @tr("");
     in property <color> status-color: Theme.crimson-bright;
     in property <length> banner-height: 136px;
 
@@ -271,7 +271,7 @@ export component SplashHeader inherits Rectangle {
 // text. It is edited in a window of its own: a text box on the page would
 // keep the Tab key for itself and trap a keyboard user.
 export component DescriptionBox inherits VerticalLayout {
-    in property <string> label: "Description";
+    in property <string> label: @tr("Description");
     in property <string> text;
     in property <string> by;
     in property <bool> editable;
@@ -326,7 +326,7 @@ export component Swatch inherits Rectangle {
 // A vertical list of related entities; a click reports the position.
 export component LinkList inherits VerticalLayout {
     in property <[LinkItem]> items;
-    in property <string> empty-text: "None.";
+    in property <string> empty-text: @tr("None.");
     callback clicked(int);
     spacing: 2px;
     if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: Theme.font-label; }
@@ -353,7 +353,7 @@ export component LinkList inherits VerticalLayout {
 export component CheckList inherits VerticalLayout {
     in property <[CheckItem]> items;
     in property <bool> editable: true;
-    in property <string> empty-text: "None.";
+    in property <string> empty-text: @tr("None.");
     callback toggled(int, bool);
     spacing: 2px;
     if root.items.length == 0: Text { text: root.empty-text; color: Theme.graphite; font-size: Theme.font-label; }

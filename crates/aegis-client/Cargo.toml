@@ -29,6 +29,9 @@ tonic.workspace = true
 tonic-web.workspace = true
 tower = { workspace = true, features = ["timeout", "util"] }
 tracing.workspace = true
+fluent-bundle.workspace = true
+unic-langid.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true

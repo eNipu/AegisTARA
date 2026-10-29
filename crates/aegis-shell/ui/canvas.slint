@@ -116,7 +116,7 @@ export component Canvas inherits Rectangle {
     focus := FocusScope {
         accessible-role: list;
         accessible-label: root.accessible-summary;
-        accessible-description: "Use the arrow keys to move between nodes, and Escape to select nothing.";
+        accessible-description: @tr("Use the arrow keys to move between nodes, and Escape to select nothing.");
         for n in root.access-nodes: Rectangle {
             x: n.x;
             y: n.y;

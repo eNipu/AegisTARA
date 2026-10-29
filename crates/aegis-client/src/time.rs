@@ -57,6 +57,28 @@ pub fn date_ms(ms: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// A date and time in the language's style (L10N-05): Japanese writes
+/// `2026年10月25日 19:30 UTC`, every other language the English form. The
+/// UTC zone stays named so two readers in different places agree (P4).
+#[must_use]
+pub fn format_ms_lang(ms: u64, lang: crate::i18n::Language) -> String {
+    use crate::i18n::Language;
+    if lang != Language::Ja {
+        return format_ms(ms);
+    }
+    if ms == 0 {
+        return String::new();
+    }
+    let secs = i64::try_from(ms / 1000).unwrap_or(i64::MAX);
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    let in_day = secs.rem_euclid(86_400);
+    format!(
+        "{y}年{m}月{d}日 {:02}:{:02} UTC",
+        in_day / 3600,
+        (in_day % 3600) / 60
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

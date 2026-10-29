@@ -12,11 +12,13 @@ A learning project: a Threat Analysis and Risk Assessment (TARA) tool, written f
 
 The deterministic core, the server, password and OIDC login, the canvas
 engine, the client core, a desktop app with every TARA page, offline
-licensing, live observers, baselines, reports and release scaffolding are
-built and tested end to end. A test server runs on Railway
-([docs/railway.md](docs/railway.md)). The reviews are still open
-([docs/review-requirements.md](docs/review-requirements.md)). Roadmap and
-open items: [docs/status-and-roadmap.md](docs/status-and-roadmap.md).
+licensing, baselines, reports and release scaffolding are built and tested
+end to end. Reports share one document model (HTML, PDF and XLSX) with
+selectable sections, filters, branding and a per-export audit record, and the
+UI and reports are translated into English and Japanese (with a pseudo-locale
+for layout tests). A test server runs on Railway
+([docs/railway.md](docs/railway.md)). Roadmap and open items:
+[docs/status-and-roadmap.md](docs/status-and-roadmap.md).
 Running the server: [docs/deployment.md](docs/deployment.md).
 
 | Crate | Role |

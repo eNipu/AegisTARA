@@ -1648,10 +1648,10 @@ a seat after the next start (II.4.6).
 | `pages.rs` | `Vocabulary`, `Overview`, `AssetRow`, `AssetDetail`, `DamageRow`, `DamageDetail`, `ThreatDetail`, `RiskRow`, `TreeRow`, `ControlRow`, `ControlDetail`, `GoalRow`, `ClaimRow`, `GoalDetail<Id>`, `ProblemRow`, `Comparison`, `DiffLine`, `Count`, `Choice<Id>`, `LinkRow` | Pure functions from a `Project` to rows and details, one per TARA page. Sorted with `BTreeMap` where order reaches the screen (D7, P4). |
 | `view.rs` | `Page` (13 pages), `Selection` (incl. `TreeNode(TreeId, NodeId)`), `AdminAction` (incl. `SetPasswordLogin`), `UiState`, `Inspector`, `TreeView`, `RiskView`, `ThreatRow`, `MitigationView`, `FactorView`, `Choice`, `tree_view_cached()` | What the window shows for the current page and selection, including interactive node expansion metadata (`is_root`, `gate_index`, `can_move_up`, `can_move_down`) in `Inspector`. |
 | `state.rs` | `ViewModel`, `ProjectView`, `PageData`, `ConnectionView`, `SyncView`, `Mode`, `LicenseView`, `LicenseKind`, `Notice`, `Severity`, `ProjectEntry`, `BaselineRow`, `HistoryRow`, `Me`, `UserRow`, `ServerSettingsView`, `NumbersCheck` (`ViewModel` also has `events`, `events_error`; `LicenseView` has dates, features and `lines()`) | The whole UI state, published on a `watch` channel. |
-| `report.rs` | `ExportKind { Report, RiskRegister, TreeSvg }`, `ReportContext` | Builds export files on the client. Text is escaped for HTML and CSV (formula injection guarded). |
-| `settings.rs` | `Settings { server_url, transport, username, export_dir, update_url }`, `export_file_name()`, `write_private_file()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic private write (`create_new`, `0600` on Unix, symlink check, `SEC-09`). Never a password or token. |
-| `time.rs` | `date_ms()`, `date_time_ms()` | UTC dates without a time crate. |
-| `pdf.rs` | `ReportDoc`, `Block`, `Style`, `report_doc`, `report_pdf`, `PdfError`, `MAX_PAGES` | The report as a PDF (job 050): blocks, A4 layout with real glyph widths, tables that continue with their header row, footer with watermark and page numbers. `krilla` writes the file, Inter (OFL) is embedded. |
+| `report/mod.rs` + `report/{doc,html,pdf,csv,xlsx,profile}.rs` | `ReportDoc`, `Block`, `Style`, `Figure`, `Panel`, `report_doc`, `report_doc_with_options`, `report_html`, `report_html_with_options`, `report_pdf`, `report_pdf_with_options`, `report_workbook_xlsx`, `risk_register_xlsx`, `risk_register_csv`, `tree_svg`, `ReportProfile`, `ReportOptions`, `ReportContext`, `ExportKind { Report, ReportPdf, ReportXlsx, RiskRegister, TreeSvg }`, `PdfError`, `MAX_PAGES` | One document model for HTML, PDF and XLSX (RPT-01, ADR 0056); section/filter/language/branding profiles (RPT-02 to RPT-04); the XLSX writer is a dependency-free ZIP of stored XML with the CSV formula guard (RPT-05). `krilla` writes the PDF with Inter plus a Noto Sans JP fallback (OFL). |
+| `i18n.rs` + `locales/{en,ja,pseudo}/main.ftl` | `Language`, `Catalog`, `Language::from_os()` | Fluent catalogs for pages, errors and reports; the report builder picks one per `ReportLanguage`. Missing keys render `[id]`; bidi marks are stripped (ADR 0057). |
+| `settings.rs` | `Settings { server_url, transport, username, export_dir, update_url, standalone_folder, standalone_license, report_profiles, report_profile_name, language }`, `export_file_name()`, `write_private_file()`, `language()`, `report_profile()` | JSON in the OS config folder. Read capped at 64 KiB (R3). Atomic private write (`create_new`, `0600` on Unix, symlink check, `SEC-09`). Never a password or token. |
+| `time.rs` | `date_ms()`, `date_time_ms()`, `format_ms_lang()` | UTC dates without a time crate; Japanese dates via `format_ms_lang` (L10N-05). |
 | `audit.rs` | `EventRow`, `EventGroup { Logins, Exports, AdminActions, Other }`, `event_row`, `filter` | Event log entries in plain words, for the administration page (job 049). |
 | `updates.rs` | `UpdateChecker`, `UpdateOffer`, `UpdateStatus`, `UpdateError`, `fetch_manifest` | Signed update manifest check. `fetch_manifest` GETs it over HTTPS with the `aegis-auth` client (no redirects, 10 s, 1 MiB; manifest at most 32 KiB; `https://` or loopback `http://` only). `Command::CheckForUpdates` runs it in the background and answers with a notice. The address is `Settings.update_url`, or `AEGIS_UPDATE_URL`; empty means none (air gapped). |
 | `examples/smoke.rs` | | Smoke test of a running server: login options, password login, `WhoAmI`, `ListProjects`, logout (`docs/railway.md`). |
@@ -1721,7 +1721,37 @@ the `ProjectDiff` into `DiffLine`s for the Versions page.
 
 The client writes the file into the export folder with a safe name
 (`export_file_name`: no path separators, so it cannot leave the folder) and
-then calls `RecordExport`, so the server's event log shows who exported what.
+then calls `RecordExport` with the export kind and the profile summary
+(`RecordExportRequest.detail`), so the server's event log shows who exported
+what, with which profile.
+
+### II.5.5 Language layers (built 2026-10-26, jobs 066 to 068)
+
+```mermaid
+flowchart TB
+    OS["OS locale"] --> PICK["User setting:\nUI language, report language"]
+    PICK --> SLINT["Slint @tr catalogs\n(bundled .po, en/ja/pseudo)"]
+    PICK --> FLUENT["aegis-client Fluent catalogs\n(pages, errors, reports)"]
+    PACK["Methodology pack\nlabels"] --> PAGES["Pages and reports"]
+    FLUENT --> PAGES
+    PAGES --> REP["Report language:\nen, ja, bilingual"]
+```
+
+Per-language labels on methodology packs (L10N-07) are not built yet; the
+report element-type headings still read the pack's single set of labels.
+
+### II.5.6 Report pipeline (built 2026-10-26, jobs 070 to 072)
+
+```mermaid
+flowchart LR
+    PRJ["Project or baseline"] --> DOC
+    PROF["Report profile\n(sections, filters,\nlanguage, branding, marks)"] --> DOC
+    FIG["Figures (display list)"] --> DOC
+    DOC["ReportDoc\n(one model)"] --> HTML["HTML (TOC, anchors)"]
+    DOC --> PDF["PDF (krilla,\nInter + Noto Sans JP)"]
+    DOC --> XLSX["XLSX"]
+    DOC --> AUD["Export audit event\n(profile, kind)"]
+```
 
 ## II.6 Desktop app (`crates/aegis-shell`)
 
@@ -1866,17 +1896,16 @@ appears (the trigger is named in the table).
 | | `secrets.rs` | Encrypted credentials, key from the environment or the cloud key service | |
 | | `ai/` | Gateway: `Provider` enum over two adapters (rule D11 enum dispatch), policy table, context builder, schema and citation check, AI audit (AI-01 to AI-05) | `aegis-ai` crate when the MCP server (AI-10) needs it outside the server |
 | | `connect/` | Connector worker: one adapter per ALM tool, field mapping, push and status pull (INT-03 to INT-06) | |
-| `aegis-client` | `i18n.rs` + `locales/{en,ja}/*.ftl` | Fluent catalogs, locale choice, date and number formats (L10N-01, L10N-05) | |
-| | `report/` | `report.rs` and `pdf.rs` move here; one `ReportDoc` feeds `html.rs`, `pdf.rs`, `xlsx.rs`; `profile.rs` holds section and filter choices (RPT-01 to RPT-05) | `aegis-report` crate when the command line tool (RPT-07) must run without the client |
-| | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
-| `aegis-shell` | `ui/` with `@tr()`, `translations/ja/aegis-shell.po` | Bundled UI catalogs (L10N-01); panel slots, command palette, history panel (UI-01 to UI-04) | |
+| `aegis-client` | `reqif.rs`, `import/excel.rs` | ReqIF exchange, Excel import with mapping (INT-01, INT-02) | |
+| `aegis-shell` | `ui/` (panel slots, command palette, history panel) | UI-01 to UI-04 | |
 | `aegis-model` | `methodology/` (extended) | Catalog packs with text (DOM-04) | |
 
 Repository additions: `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
-where licenses allow),
-`crates/aegis-client/locales/`, `crates/aegis-shell/translations/`,
-`crates/aegis-client/assets/fonts/NotoSansJP-*` (subset at export time by
-krilla).
+where licenses allow). The i18n and report additions named in an earlier
+version of this table are built (`crates/aegis-client/locales/`,
+`crates/aegis-client/src/report/`, `crates/aegis-shell/translations/`,
+`crates/aegis-client/assets/fonts/NotoSansJP-Variable.ttf`); see II.5.1,
+II.5.5 and II.5.6.
 
 ## III.3 Target domain model (additions only)
 
@@ -1994,33 +2023,6 @@ sequenceDiagram
 
 A failed push leaves the project unchanged and shows the error on the
 element; the user retries.
-
-## III.6 Language layers
-
-```mermaid
-flowchart TB
-    OS["OS locale"] --> PICK["User setting:\nUI language, date style"]
-    PICK --> SLINT["Slint @tr catalogs\n(bundled .po)"]
-    PICK --> FLUENT["aegis-client Fluent catalogs\n(pages, errors, reports)"]
-    PACK["Methodology pack\nlabels per language"] --> PAGES["Pages and reports"]
-    FLUENT --> PAGES
-    TEXT["Project text\n(lang tag + translations)"] --> PAGES
-    GWT["AI gateway or customer MT\n(opt-in)"] -. "fills translations" .-> TEXT
-    PAGES --> REP["Report language:\nen, ja, bilingual"]
-```
-
-## III.7 Report pipeline
-
-```mermaid
-flowchart LR
-    PRJ["Project or baseline"] --> DOC
-    PROF["Report profile\n(sections, filters,\nlanguage, branding, marks)"] --> DOC
-    FIG["Figures + diagram\n(display list)"] --> DOC
-    DOC["ReportDoc\n(one model)"] --> HTML["HTML"]
-    DOC --> PDF["PDF (krilla,\nInter + Noto Sans JP)"]
-    DOC --> XLSX["XLSX"]
-    DOC --> AUD["Export audit event\n(profile, baseline, app version)"]
-```
 
 ## III.8 Planned database additions
 

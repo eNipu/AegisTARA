@@ -50,6 +50,12 @@ Add a row for every new job.
 | 062 event log integrity (`062-event-log-integrity`) | PASS | PASS | PASS | N/A (PASS) |
 | 063 small hardening (`063-small-hardening`) | PASS | PASS | PASS | N/A (PASS) |
 | 089 suggestion branches (`089-suggestion-branches`) | PASS | PASS | PASS | PASS |
+| 066 i18n foundation (`066-i18n-foundation`) | PASS | PASS | PASS | PASS |
+| 067 CJK fonts and formats (`067-cjk-fonts-and-formats`) | PASS | PASS | PASS | PASS |
+| 068 Japanese translation (`068-japanese-translation`) | PASS | PASS | PASS | PASS |
+| 070 report document model (`070-report-doc-model`) | PASS | PASS | PASS | PASS |
+| 071 report builder (`071-report-builder`) | PASS | PASS | PASS | PASS |
+| 072 XLSX export (`072-xlsx-export`) | PASS | PASS | PASS | PASS |
 
 - **Branch:** `claude/inspiring-clarke-phmv4u`
 - **Base for the diff:** `master` (`git diff master...claude/inspiring-clarke-phmv4u`)

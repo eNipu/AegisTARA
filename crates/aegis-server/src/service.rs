@@ -38,6 +38,9 @@ const MAX_TOKEN_BYTES: usize = 64;
 /// Longest export kind recorded, in bytes.
 const MAX_EXPORT_KIND_BYTES: usize = 64;
 
+/// Longest export profile summary recorded, in bytes (RPT-03).
+const MAX_EXPORT_DETAIL_BYTES: usize = 256;
+
 /// The tonic service over a [`Registry`].
 pub struct AegisService<S> {
     registry: Arc<Registry<S>>,
@@ -852,7 +855,19 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         {
             return Err(ServerError::InvalidRequest("export kind").into());
         }
-        self.audit(&who, AuditKind::Export, &id.to_string(), kind)
+        let detail = req.detail.as_str();
+        if !detail.is_empty()
+            && (detail.len() > MAX_EXPORT_DETAIL_BYTES
+                || !detail.bytes().all(|b| b.is_ascii_graphic() || b == b' '))
+        {
+            return Err(ServerError::InvalidRequest("export detail").into());
+        }
+        let recorded = if detail.is_empty() {
+            kind.to_owned()
+        } else {
+            format!("{kind} ({detail})")
+        };
+        self.audit(&who, AuditKind::Export, &id.to_string(), &recorded)
             .await;
         Ok(Response::new(pb::RecordExportResponse {}))
     }
