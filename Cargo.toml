@@ -72,6 +72,8 @@ rstar = "0.12"
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-path", "accessibility"] }
 slint-build = "=1.18.1"
 insta = "1"
+fluent-bundle = "0.15"
+unic-langid = "0.9"
 
 # Shipped binaries (standards R10). Tests and benches use the dev profile.
 [profile.release]

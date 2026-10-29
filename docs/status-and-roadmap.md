@@ -27,7 +27,8 @@
 | Release scaffolding | **Built and deployed (036, 040, 046, 048)** | Release profile, Dockerfile, Compose files, signed update manifest, now fetched over HTTPS (Help > Check for updates, 048). CI builds the image and starts it (046; its docker lines first run in CI) |
 | TLS to PostgreSQL, `https://` clients, seat restore | **Complete (037, 038, 039)** | `AEGIS_DB_TLS`, rustls with ring and OS roots, seats rebuilt from the op log |
 | Transport through proxies | **Complete (040)** | gRPC-Web next to gRPC, `/healthz`, `PORT`, `Watch` heartbeats and a client silence watchdog |
-| Reports and admin views | **Complete (047, 049, 050, 051, 052, 053)** | PDF report (krilla, Inter font) with attack tree pictures (overview plus readable detail panels for big trees), "numbers checked" mark that follows the confirmed change, admin event log on every server with retention, license page, a screen reader path for the attack tree canvas |
+| Reports and admin views | **Complete (047, 049, 050, 051, 052, 053, 070, 071, 072)** | One `ReportDoc` feeds the HTML (with a table of contents and anchors), the PDF (krilla, Inter + Noto Sans JP, attack tree pictures) and the XLSX workbook (a risk-register sheet plus one sheet per element type, formula injection guarded); report profiles pick sections, filters (risk level, asset, baseline), language and branding (document ID, classification, approvers, revisions, logo) and are recorded in the export audit event |
+| Localization (`@tr` + Fluent) | **Complete (066, 067, 068)** | Slint `@tr` with bundled gettext catalogs (en/ja/pseudo) and a Fluent catalog in `aegis-client`; the UI language defaults to the OS and the report language is a profile choice (en, ja, bilingual); a missing-key test and a pseudo-locale catch gaps and clipped text; Japanese renders in the PDF via the embedded Noto Sans JP fallback |
 | AI features | **Planned (Phase 7)** | `docs/ai-backlog.md`, decision D12; suggestion branches and language tags still missing |
 
 ### Factory jobs
@@ -67,8 +68,18 @@
 | 064 | Element descriptions and project notes | 0051 |
 | 065 | Node-level attack tree ops (4,096 nodes) and interactive node expansion | 0014 |
 | 057 | Attack tree pattern library Phase 0 (`library-demo.json`, n-gram search, review marks) | 0052 |
+| 109 | Pack-defined element names and a plain likelihood scale | 0053 |
+| 111 | EU CRA product-security pack | 0053 |
+| 060–063 | Login/database/event-log/small hardening (SEC-01 to SEC-10) | 0054 |
+| 089 | Suggestion branches and Gear 1 ghost nodes | 0055 |
+| 066 | i18n foundation: `@tr` + bundled catalogs, Fluent in `aegis-client`, language setting, missing-key test, pseudo-locale | 0057 |
+| 067 | CJK fonts and formats: Noto Sans JP in the PDF, locale dates | 0057 |
+| 068 | Japanese translation: ja catalogs for the UI and reports, translator glossary | 0057 |
+| 070 | One report document model: HTML on `ReportDoc`, TOC and anchors | 0056 |
+| 071 | Report builder: sections, filters, language, branding, saved profiles, audit record | 0056 |
+| 072 | XLSX export: risk-register sheet and a full workbook, formula injection guarded | 0056 |
 
-All completed jobs (`001`–`041`, `045`–`057`, `064`–`065`, `107`–`108`, and `110`) have completed the four factory review stages (`code`, `security`, `ux`, `ui`). See `docs/review-requirements.md` and `factory/jobs/<id>/`.
+All completed jobs (`001`–`041`, `045`–`057`, `060`–`072`, `107`–`108`, `109`, `110`, `111`, and `089`) have completed the four factory review stages (`code`, `security`, `ux`, `ui`). See `docs/review-requirements.md` and `factory/jobs/<id>/`.
 
 ---
 
@@ -199,7 +210,7 @@ Everything else in the backlog is ticked. Open items, in order:
 1. Run the four reviews on jobs 027 to 051 (G8, `docs/review-requirements.md`).
 2. Watch the first CI run of the `server image` job and run the release checklist once (G12).
 3. ~~Event store for company-login-only servers~~ done (052, ADR 0046).
-4. ~~Attack tree picture inside the PDF~~ done (053, ADR 0047). Still open: make the HTML report use the same document model (see `brainstorm-logs-and-reports.md`).
+4. ~~Attack tree picture inside the PDF~~ done (053, ADR 0047). ~~Make the HTML report use the same document model~~ done (070, ADR 0056). Still open: figures and the architecture diagram in reports (073, 075).
 5. ~~Installer download and hash check~~ done (054, ADR 0048). Still open: running the installer from the app (a per platform decision).
 6. ~~Admin: groups, roles and project access~~ decided: a built-in role table (D19), job 058 is ready. Sessions list and end: done (055, ADR 0049).
 7. Phases 4 to 7 above, in the order of `factory/backlog.md` (jobs 060 onward). Gaps G20 to G41 and the requirements are in [requirements.md](requirements.md).

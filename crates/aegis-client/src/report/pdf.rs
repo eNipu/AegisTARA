@@ -1,29 +1,29 @@
-//! The TARA report as a PDF (job 050, ADR 0044).
+//! The TARA report laid out on A4 pages and written as a PDF (job 050,
+//! ADR 0044). Since ADR 0056 the document model is shared with the HTML and
+//! XLSX writers: this module only lays out and renders a [`ReportDoc`].
 //!
 //! Three steps, each small and testable:
 //!
-//! 1. [`report_doc`] turns the analysis into a [`ReportDoc`]: headings,
-//!    paragraphs, tables and the attack tree outlines, with the same
-//!    sections as the HTML report.
+//! 1. [`super::doc::report_doc`] turns the analysis into blocks.
 //! 2. `layout` places the blocks on A4 pages: greedy line wrapping with the
 //!    real glyph widths of the embedded font, long words broken at the
 //!    column edge, tables that continue on the next page with their header
 //!    row repeated, and a row that is taller than a page split line by line.
 //! 3. `render` writes the pages with `krilla`, adds the footer (the
-//!    watermark and "Page n of N") and embeds the subsets of the font.
+//!    classification mark, the exporter and "Page n of N") and embeds the
+//!    subsets of the font.
 //!
-//! The output is a function of the analysis and the [`ReportContext`] only
-//! (the creation date is the export time in the context), so the same input
-//! gives the same bytes (rule P4).
+//! The output is a function of the analysis and the [`ReportContext`] only,
+//! so the same input gives the same bytes (rule P4).
 //!
 //! Text is placed left to right, glyph by glyph, with no kerning, ligatures
-//! or right to left support. That fits the report (Latin script, names and
-//! numbers) and avoids the text shaper that `krilla` can bring along, which
-//! is unmaintained (advisory RUSTSEC-2026-0206). Characters the font does
-//! not have are printed as `?`.
+//! or right to left support. That fits the report (Latin and Japanese
+//! scripts, names and numbers) and avoids the text shaper that `krilla` can
+//! bring along, which is unmaintained (advisory RUSTSEC-2026-0206). A
+//! character the fonts do not have is printed as `?`.
 //!
-//! Time and memory: O(project size). Rule R3 does not apply (no input is
-//! parsed); R6: the page count is capped by [`MAX_PAGES`].
+//! Time and memory: O(project size). R6: the page count is capped by
+//! [`MAX_PAGES`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,480 +39,22 @@ use krilla::text::{Font, GlyphId, KrillaGlyph};
 use skrifa::instance::{LocationRef, Size as FontSize};
 use skrifa::{FontRef, MetadataProvider};
 
-use aegis_canvas::{
-    Align, DisplayList, Item as CanvasItem, Paint, RenderOptions, Size as CanvasSize, SvgTheme,
-    TileLimits, plan_tiles, render as render_view,
-};
+use aegis_canvas::{Align, DisplayList, Item as CanvasItem, Paint, SvgTheme};
 
-use crate::commands::TREATMENTS;
-use crate::outline::to_outline;
-use crate::pages::{self, treatment_label};
-use crate::report::{ReportContext, methodology_line, risk_text};
+use super::ReportContext;
+use super::doc::{Block, Figure, ReportDoc, Style};
+use super::profile::ReportOptions;
 use crate::workspace::Workspace;
 
-const REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.otf");
-const BOLD: &[u8] = include_bytes!("../assets/fonts/Inter-Bold.otf");
+const REGULAR: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.otf");
+const BOLD: &[u8] = include_bytes!("../../assets/fonts/Inter-Bold.otf");
+/// Noto Sans JP (OFL-1.1), the fallback for characters Inter does not carry
+/// (Japanese and other CJK). Only the used glyphs are embedded in each PDF.
+const CJK: &[u8] = include_bytes!("../../assets/fonts/NotoSansJP-Variable.ttf");
 
 /// Most pages a report may have. A project that needs more is cut off with a
 /// sentence on the last page (R6).
 pub const MAX_PAGES: usize = 2000;
-
-// ---- the document ---------------------------------------------------------
-
-/// How a paragraph looks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Style {
-    /// Body text.
-    Normal,
-    /// Grey, for notes.
-    Muted,
-    /// Bold, for the draft warning.
-    Draft,
-}
-
-/// One block of the report.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Block {
-    /// A heading of level 1 (title), 2 (section) or 3.
-    Heading(u8, String),
-    /// A paragraph.
-    Paragraph(String, Style),
-    /// A table. No rows means "None.".
-    Table {
-        /// Column titles.
-        headers: Vec<String>,
-        /// Rows of cells.
-        rows: Vec<Vec<String>>,
-    },
-    /// Lines whose indentation matters (an attack tree outline).
-    Preformatted(String),
-    /// A drawing: an attack tree as one or more panels.
-    Figure(Figure),
-}
-
-/// A drawing made of panels, each a canvas display list on its own frame.
-///
-/// A tree that fits a page readably is one panel. A big tree is an overview
-/// panel (the whole tree, boxes only) followed by detail panels in reading
-/// order; see `aegis_canvas::tiles` for the rules.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Figure {
-    /// The panels, in reading order.
-    pub panels: Vec<Panel>,
-    /// Detail panels left out because the figure has a limit.
-    pub omitted: usize,
-}
-
-/// One framed drawing.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Panel {
-    /// Printed above the frame.
-    pub caption: String,
-    /// Frame width and height in points.
-    pub size: (f32, f32),
-    /// What to draw, in frame coordinates (origin at the top-left corner).
-    pub list: Arc<DisplayList>,
-}
-
-/// Panel area on a page: the full text width and this height in points.
-const FIGURE_H: f32 = 540.0;
-
-/// The report before it is laid out.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReportDoc {
-    /// Document title for the PDF properties.
-    pub title: String,
-    /// Printed at the foot of every page.
-    pub watermark: String,
-    /// The content.
-    pub blocks: Vec<Block>,
-}
-
-/// The panels for one attack tree (the inherent view, as the HTML report
-/// shows it). `None` if the tree is gone or has no nodes.
-///
-/// Cost: the layout is linear in the nodes; the plan is O(n log n) and draws
-/// at most [`TileLimits::max_panels`] + 1 panels, whatever the tree's size.
-fn tree_figure(ws: &Workspace, tree: aegis_model::TreeId) -> Option<Figure> {
-    let scene = crate::view::tree_scene(ws, tree, false)?;
-    if scene.is_empty() {
-        return None;
-    }
-    let area = CanvasSize::new(CONTENT_W, FIGURE_H);
-    let plan = plan_tiles(&scene, area, &TileLimits::default());
-    let options = RenderOptions::default();
-    let panel = |caption: String, view: &aegis_canvas::Viewport| Panel {
-        caption,
-        size: (view.size.w, view.size.h),
-        list: Arc::new(render_view(&scene, view, &options)),
-    };
-    let mut panels = Vec::new();
-    let caption = if plan.needs_detail {
-        "Overview of the whole tree. Detail panels follow."
-    } else {
-        "Attack tree"
-    };
-    panels.push(panel(caption.to_owned(), &plan.overview));
-    for tile in &plan.detail {
-        panels.push(panel(
-            format!(
-                "Detail: row {} of {}, column {} of {}",
-                tile.row + 1,
-                plan.rows,
-                tile.col + 1,
-                plan.cols
-            ),
-            &tile.view,
-        ));
-    }
-    Some(Figure {
-        panels,
-        omitted: plan.omitted,
-    })
-}
-
-/// Description text as paragraphs, one per line, so line breaks survive.
-fn desc_blocks(b: &mut Vec<Block>, text: &str) {
-    for line in text.lines() {
-        b.push(Block::Paragraph(line.to_owned(), Style::Normal));
-    }
-}
-
-/// The descriptions of a section, if any element has one.
-fn desc_list(b: &mut Vec<Block>, items: &[(String, String)]) {
-    if items.is_empty() {
-        return;
-    }
-    b.push(Block::Heading(3, "Descriptions".to_owned()));
-    for (name, text) in items {
-        b.push(Block::Paragraph(name.clone(), Style::Muted));
-        desc_blocks(b, text);
-    }
-}
-
-fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Block {
-    Block::Table {
-        headers: headers.iter().map(|h| (*h).to_owned()).collect(),
-        rows,
-    }
-}
-
-fn risk_rows(rows: &[pages::RiskRow]) -> Block {
-    table(
-        &[
-            "Threat scenario",
-            "Asset",
-            "Deciding damage",
-            "Impact",
-            "Feasibility",
-            "Risk before",
-            "Risk after",
-            "Treatment",
-            "Goal or claim",
-        ],
-        rows.iter()
-            .map(|r| {
-                vec![
-                    r.threat.clone(),
-                    r.asset.clone(),
-                    r.damage.clone(),
-                    r.impact.clone(),
-                    r.feasibility.clone(),
-                    risk_text(r.inherent.as_ref()),
-                    risk_text(r.residual.as_ref()),
-                    r.treatment.clone(),
-                    r.backing.clone(),
-                ]
-            })
-            .collect(),
-    )
-}
-
-/// The report as blocks. The sections and their order are those of
-/// [`report_html`](crate::report::report_html); a test keeps them equal.
-/// Time O(project size).
-#[must_use]
-#[allow(clippy::too_many_lines)]
-pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
-    use Block::{Heading, Paragraph};
-    let project = ws.project();
-    let m = project.methodology();
-    let names = m.element_names();
-    let vocab = pages::vocabulary(m);
-    let mut b: Vec<Block> = Vec::new();
-
-    b.push(Heading(1, ctx.project.clone()));
-    b.push(Paragraph(
-        format!(
-            "Threat analysis and risk assessment. Methodology: {}. State of the server at change {}. Engine {}.",
-            methodology_line(project),
-            ctx.seq,
-            aegis_model::ENGINE_VERSION
-        ),
-        Style::Muted,
-    ));
-    if ctx.unsaved {
-        b.push(Paragraph(
-            "Draft: this report includes changes that are not saved on the server yet.".to_owned(),
-            Style::Draft,
-        ));
-    }
-
-    if let Some(notes) = crate::report::description_of(ws, aegis_model::ElementRef::Project) {
-        b.push(Heading(2, "Project notes".to_owned()));
-        desc_blocks(&mut b, &notes);
-    }
-
-    // ---- executive summary ----
-    let ov = pages::overview(ws);
-    b.push(Heading(2, "1. Executive summary".to_owned()));
-    let above: usize = ov.residual.iter().take(2).map(|c| c.count).sum();
-    b.push(Paragraph(
-        format!(
-            "The project has {} {} on {} {}. After the planned and verified controls, {} {}(s) remain in the two highest risk levels. {} blocking problem(s) and {} warning(s) are open.",
-            project.threat_scenario_count(),
-            names.threat_scenario.plural.to_lowercase(),
-            project.asset_count(),
-            names.asset.plural.to_lowercase(),
-            above,
-            names.threat_scenario.singular.to_lowercase(),
-            ov.errors,
-            ov.warnings
-        ),
-        Style::Normal,
-    ));
-    b.push(Heading(3, "Risks by level".to_owned()));
-    b.push(table(
-        &["Risk level", "Before controls", "After controls"],
-        ov.inherent
-            .iter()
-            .zip(&ov.residual)
-            .map(|(a, c)| vec![a.label.clone(), a.count.to_string(), c.count.to_string()])
-            .collect(),
-    ));
-    b.push(Heading(3, "Highest risks".to_owned()));
-    b.push(risk_rows(&ov.top));
-
-    // ---- assets ----
-    b.push(Heading(2, format!("2. {}", names.asset.plural)));
-    let mut headers: Vec<&str> = vec![&names.asset.singular];
-    headers.extend(vocab.properties.iter().map(String::as_str));
-    headers.push("Threats");
-    b.push(table(
-        &headers,
-        pages::asset_rows(ws)
-            .into_iter()
-            .map(|a| {
-                let mut row = vec![a.name];
-                row.extend(
-                    a.properties
-                        .iter()
-                        .map(|p| if *p { "yes" } else { "" }.to_owned()),
-                );
-                row.push(a.threats.to_string());
-                row
-            })
-            .collect(),
-    ));
-    desc_list(
-        &mut b,
-        &crate::report::section_descriptions(ws, crate::report::Described::Assets),
-    );
-
-    // ---- damage ----
-    b.push(Heading(2, format!("3. {}", names.damage_scenario.plural)));
-    let mut headers: Vec<&str> = vec![&names.damage_scenario.singular];
-    headers.extend(vocab.impact_categories.iter().map(|c| c.label.as_str()));
-    headers.push("Threats");
-    b.push(table(
-        &headers,
-        pages::damage_rows(ws)
-            .into_iter()
-            .map(|d| {
-                let mut row = vec![d.name];
-                for (i, level) in d.impacts.iter().enumerate() {
-                    row.push(
-                        level
-                            .and_then(|l| {
-                                vocab.impact_categories.get(i).and_then(|c| c.levels.get(l))
-                            })
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
-                }
-                row.push(d.threats.to_string());
-                row
-            })
-            .collect(),
-    ));
-    desc_list(
-        &mut b,
-        &crate::report::section_descriptions(ws, crate::report::Described::Damage),
-    );
-
-    // ---- threats ----
-    b.push(Heading(2, format!("4. {}", names.threat_scenario.plural)));
-    for (_, id, _) in project.threat_scenarios() {
-        let Some(t) = pages::threat_detail(ws, id) else {
-            continue;
-        };
-        b.push(Heading(3, t.name.clone()));
-        if let Some(text) = crate::report::description_of(ws, aegis_model::ElementRef::Threat(id)) {
-            desc_blocks(&mut b, &text);
-        }
-        let damages: Vec<&str> = t
-            .damages
-            .iter()
-            .filter(|d| d.linked)
-            .map(|d| d.name.as_str())
-            .collect();
-        b.push(table(
-            &["Field", "Value"],
-            vec![
-                vec![names.asset.singular.to_string(), t.asset_name.clone()],
-                vec![
-                    "Category".into(),
-                    vocab
-                        .threat_categories
-                        .get(t.category)
-                        .cloned()
-                        .unwrap_or_default(),
-                ],
-                vec!["Catalog references".into(), t.catalog_refs.join(", ")],
-                vec![names.damage_scenario.plural.to_string(), damages.join(", ")],
-                vec![
-                    names.feasibility.to_string(),
-                    t.feasibility.clone().unwrap_or_else(|| "not rated".into()),
-                ],
-                vec![
-                    "Risk before controls".into(),
-                    risk_text(t.inherent.as_ref()),
-                ],
-                vec!["Risk after controls".into(), risk_text(t.residual.as_ref())],
-                vec![
-                    "Treatment".into(),
-                    t.treatment
-                        .and_then(|i| TREATMENTS.get(i))
-                        .map(|x| treatment_label(*x).to_owned())
-                        .unwrap_or_default(),
-                ],
-            ],
-        ));
-        for line in &t.why {
-            b.push(Paragraph(line.clone(), Style::Muted));
-        }
-    }
-
-    // ---- attack trees ----
-    b.push(Heading(2, format!("5. {}", names.attack_tree.plural)));
-    let trees = pages::tree_rows(ws);
-    if trees.is_empty() {
-        b.push(Paragraph("None.".to_owned(), Style::Muted));
-    }
-    for row in trees {
-        b.push(Heading(3, row.title.clone()));
-        if let Some(text) = crate::report::description_of(ws, aegis_model::ElementRef::Tree(row.id))
-        {
-            desc_blocks(&mut b, &text);
-        }
-        b.push(Paragraph(
-            format!(
-                "{} nodes. Feasibility at the root: {}. {}: {}.",
-                row.nodes,
-                row.feasibility,
-                names.threat_scenario.plural,
-                if row.threats.is_empty() {
-                    "none"
-                } else {
-                    &row.threats
-                }
-            ),
-            Style::Muted,
-        ));
-        if let Some(figure) = tree_figure(ws, row.id) {
-            b.push(Block::Figure(figure));
-        }
-        if let Some(tree) = project
-            .attack_tree_idx(&row.id)
-            .and_then(|i| project.attack_tree(i))
-        {
-            b.push(Block::Preformatted(to_outline(tree)));
-        }
-    }
-
-    // ---- risks ----
-    b.push(Heading(2, "6. Risk register and treatment".to_owned()));
-    b.push(risk_rows(&pages::risk_rows(ws)));
-
-    // ---- controls ----
-    b.push(Heading(2, format!("7. {}", names.security_control.plural)));
-    b.push(table(
-        &["Control", "Attack steps", "Goals"],
-        pages::control_rows(ws)
-            .into_iter()
-            .map(|c| vec![c.name, c.steps.to_string(), c.goals.to_string()])
-            .collect(),
-    ));
-    desc_list(
-        &mut b,
-        &crate::report::section_descriptions(ws, crate::report::Described::Controls),
-    );
-
-    // ---- goals and claims ----
-    b.push(Heading(2, crate::report::section_8_heading(names)));
-    b.push(Heading(3, "Goals".to_owned()));
-    b.push(table(
-        &[
-            &names.cybersecurity_goal.singular,
-            "Controls",
-            &names.threat_scenario.plural,
-        ],
-        pages::goal_rows(ws)
-            .into_iter()
-            .map(|g| vec![g.name, g.controls.to_string(), g.threats.to_string()])
-            .collect(),
-    ));
-    desc_list(
-        &mut b,
-        &crate::report::section_descriptions(ws, crate::report::Described::Goals),
-    );
-    b.push(Heading(3, "Claims".to_owned()));
-    b.push(table(
-        &[
-            &names.cybersecurity_claim.singular,
-            &names.threat_scenario.plural,
-        ],
-        pages::claim_rows(ws)
-            .into_iter()
-            .map(|c| vec![c.name, c.threats.to_string()])
-            .collect(),
-    ));
-    desc_list(
-        &mut b,
-        &crate::report::section_descriptions(ws, crate::report::Described::Claims),
-    );
-
-    // ---- problems ----
-    b.push(Heading(2, "9. Open problems".to_owned()));
-    b.push(table(
-        &["Severity", "Problem"],
-        pages::problems(ws)
-            .into_iter()
-            .map(|p| {
-                vec![
-                    if p.error { "Blocking" } else { "Warning" }.to_owned(),
-                    p.text,
-                ]
-            })
-            .collect(),
-    ));
-
-    ReportDoc {
-        title: format!("{} - TARA report", ctx.project),
-        watermark: ctx.watermark(),
-        blocks: b,
-    }
-}
 
 // ---- fonts and measuring --------------------------------------------------
 
@@ -521,8 +63,9 @@ struct Face {
     font: Font,
     parsed: FontRef<'static>,
     units_per_em: f32,
-    /// char -> (glyph, advance in em). Lookup only, never iterated (P4).
-    cache: HashMap<char, (u32, f32)>,
+    /// char -> glyph and advance in em, or `None` when the face lacks the
+    /// character. Lookup only, never iterated (P4).
+    cache: HashMap<char, Option<(u32, f32)>>,
 }
 
 impl Face {
@@ -542,8 +85,9 @@ impl Face {
         })
     }
 
-    /// The glyph and advance (in em) of `c`; `?` if the font lacks it.
-    fn glyph(&mut self, c: char) -> (u32, f32) {
+    /// The glyph and advance (in em) of `c`, or `None` when this face does
+    /// not have the character.
+    fn glyph(&mut self, c: char) -> Option<(u32, f32)> {
         if let Some(g) = self.cache.get(&c) {
             return *g;
         }
@@ -552,28 +96,23 @@ impl Face {
             .charmap()
             .map(c)
             .filter(|g| g.to_u32() != 0)
-            .or_else(|| self.parsed.charmap().map('?'));
-        let entry = found.map_or((0, 0.5), |gid| {
-            let advance = self
-                .parsed
-                .glyph_metrics(FontSize::unscaled(), LocationRef::default())
-                .advance_width(gid)
-                .unwrap_or(0.0);
-            (gid.to_u32(), advance / self.units_per_em)
-        });
-        self.cache.insert(c, entry);
-        entry
-    }
-
-    /// Width of `text` at `size` points.
-    fn width(&mut self, text: &str, size: f32) -> f32 {
-        text.chars().map(|c| self.glyph(c).1).sum::<f32>() * size
+            .map(|gid| {
+                let advance = self
+                    .parsed
+                    .glyph_metrics(FontSize::unscaled(), LocationRef::default())
+                    .advance_width(gid)
+                    .unwrap_or(0.0);
+                (gid.to_u32(), advance / self.units_per_em)
+            });
+        self.cache.insert(c, found);
+        found
     }
 }
 
 struct Fonts {
     regular: Face,
     bold: Face,
+    cjk: Face,
 }
 
 impl Fonts {
@@ -581,15 +120,32 @@ impl Fonts {
         Ok(Fonts {
             regular: Face::new(REGULAR)?,
             bold: Face::new(BOLD)?,
+            cjk: Face::new(CJK)?,
         })
     }
 
-    fn face(&mut self, bold: bool) -> &mut Face {
-        if bold {
+    /// The glyph and advance (in em) of `c`, with the CJK fallback, then `?`
+    /// in the primary face. The bool says whether the glyph comes from the
+    /// CJK face, so a run can be split by font.
+    fn glyph(&mut self, bold: bool, c: char) -> (bool, u32, f32) {
+        let primary = if bold {
             &mut self.bold
         } else {
             &mut self.regular
+        };
+        if let Some(g) = primary.glyph(c) {
+            return (false, g.0, g.1);
         }
+        if let Some(g) = self.cjk.glyph(c) {
+            return (true, g.0, g.1);
+        }
+        let q = primary.glyph('?').unwrap_or((0, 0.5));
+        (false, q.0, q.1)
+    }
+
+    /// Width of `text` at `size` points, with the CJK fallback.
+    fn width(&mut self, bold: bool, text: &str, size: f32) -> f32 {
+        text.chars().map(|c| self.glyph(bold, c).2).sum::<f32>() * size
     }
 }
 
@@ -599,7 +155,7 @@ const PAGE_W: f32 = 595.28;
 const PAGE_H: f32 = 841.89;
 const MARGIN: f32 = 48.0;
 const FOOTER_H: f32 = 30.0;
-const CONTENT_W: f32 = PAGE_W - 2.0 * MARGIN;
+pub(crate) const CONTENT_W: f32 = PAGE_W - 2.0 * MARGIN;
 const BOTTOM: f32 = PAGE_H - MARGIN - FOOTER_H;
 const BODY: f32 = 9.5;
 const TABLE: f32 = 7.5;
@@ -682,14 +238,14 @@ impl Pages {
 
 /// Splits `text` into lines no wider than `width`. Words are kept whole and
 /// a word wider than the line is broken at the edge. O(chars).
-fn wrap(face: &mut Face, text: &str, size: f32, width: f32) -> Vec<String> {
+fn wrap(fonts: &mut Fonts, bold: bool, text: &str, size: f32, width: f32) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
         let mut line = String::new();
         let mut used = 0.0;
-        let space = face.width(" ", size);
+        let space = fonts.width(bold, " ", size);
         for word in paragraph.split_whitespace() {
-            let w = face.width(word, size);
+            let w = fonts.width(bold, word, size);
             if w > width {
                 // Flush the line, then cut the word where it no longer fits.
                 if !line.is_empty() {
@@ -698,7 +254,7 @@ fn wrap(face: &mut Face, text: &str, size: f32, width: f32) -> Vec<String> {
                 let mut piece = String::new();
                 let mut piece_w = 0.0;
                 for c in word.chars() {
-                    let cw = face.glyph(c).1 * size;
+                    let cw = fonts.glyph(bold, c).2 * size;
                     if piece_w + cw > width && !piece.is_empty() {
                         lines.push(std::mem::take(&mut piece));
                         piece_w = 0.0;
@@ -734,7 +290,7 @@ fn leading(size: f32) -> f32 {
 
 fn text_block(p: &mut Pages, fonts: &mut Fonts, text: &str, look: Look, x: f32, width: f32) {
     let Look { size, bold, ink } = look;
-    for line in wrap(fonts.face(bold), text, size, width) {
+    for line in wrap(fonts, bold, text, size, width) {
         if p.room() < leading(size) {
             p.new_page();
         }
@@ -784,13 +340,13 @@ fn column_widths(fonts: &mut Fonts, headers: &[String], rows: &[Vec<String>]) ->
     for (i, header) in headers.iter().enumerate() {
         let head_word = header
             .split_whitespace()
-            .map(|w| fonts.bold.width(w, TABLE))
+            .map(|w| fonts.width(true, w, TABLE))
             .fold(0.0_f32, f32::max);
         let body_word = rows
             .iter()
             .filter_map(|r| r.get(i))
             .flat_map(|c| c.split_whitespace())
-            .map(|w| fonts.regular.width(w, TABLE))
+            .map(|w| fonts.width(false, w, TABLE))
             .fold(0.0_f32, f32::max)
             .min(60.0);
         min.push(head_word.max(body_word) + 2.0 * CELL_PAD + 1.0);
@@ -820,7 +376,7 @@ fn table_header(p: &mut Pages, fonts: &mut Fonts, headers: &[String], widths: &[
     let lines: Vec<Vec<String>> = headers
         .iter()
         .zip(widths)
-        .map(|(h, w)| wrap(&mut fonts.bold, h, TABLE, w - 2.0 * CELL_PAD))
+        .map(|(h, w)| wrap(fonts, true, h, TABLE, w - 2.0 * CELL_PAD))
         .collect();
     let rows = lines.iter().map(Vec::len).max().unwrap_or(1);
     #[allow(clippy::cast_precision_loss)]
@@ -872,7 +428,7 @@ fn table_block(p: &mut Pages, fonts: &mut Fonts, headers: &[String], rows: &[Vec
             .enumerate()
             .map(|(i, w)| {
                 let text = row.get(i).map_or("", String::as_str);
-                wrap(&mut fonts.regular, text, TABLE, w - 2.0 * CELL_PAD).into_iter()
+                wrap(fonts, false, text, TABLE, w - 2.0 * CELL_PAD).into_iter()
             })
             .collect();
         loop {
@@ -975,6 +531,26 @@ fn figure_block(p: &mut Pages, fonts: &mut Fonts, figure: &Figure) {
     }
 }
 
+/// A logo image: the PDF renderer prints a caption with its alternative text
+/// (embedding raster images in krilla is out of scope; the HTML report
+/// embeds the logo itself).
+fn image_block(p: &mut Pages, fonts: &mut Fonts, alt: &str, bytes: &[u8]) {
+    let look = Look {
+        size: BODY,
+        bold: false,
+        ink: Ink::Grey,
+    };
+    text_block(
+        p,
+        fonts,
+        &format!("Logo: {alt} ({} bytes)", bytes.len()),
+        look,
+        MARGIN,
+        CONTENT_W,
+    );
+    p.y += 4.0;
+}
+
 fn layout(doc: &ReportDoc, fonts: &mut Fonts) -> Pages {
     let mut p = Pages::new();
     for block in &doc.blocks {
@@ -1000,6 +576,7 @@ fn layout(doc: &ReportDoc, fonts: &mut Fonts) -> Pages {
             Block::Table { headers, rows } => table_block(&mut p, fonts, headers, rows),
             Block::Preformatted(text) => preformatted(&mut p, fonts, text),
             Block::Figure(figure) => figure_block(&mut p, fonts, figure),
+            Block::Image { alt, bytes, .. } => image_block(&mut p, fonts, alt, bytes),
         }
     }
     if p.truncated {
@@ -1047,39 +624,63 @@ fn fill(color: rgb::Color) -> Fill {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_text(
     surface: &mut krilla::surface::Surface<'_>,
-    face: &mut Face,
+    fonts: &mut Fonts,
+    bold: bool,
     x: f32,
     y: f32,
     size: f32,
     color: rgb::Color,
     text: &str,
 ) {
-    let glyphs: Vec<KrillaGlyph> = text
-        .char_indices()
-        .map(|(at, c)| {
-            let (gid, advance) = face.glyph(c);
-            KrillaGlyph::new(
-                GlyphId::new(gid),
-                advance,
-                0.0,
-                0.0,
-                0.0,
-                at..at + c.len_utf8(),
-                None,
-            )
-        })
-        .collect();
+    // Split the run into consecutive glyphs of the same face (Inter or the
+    // CJK fallback) and draw each segment with its own font, advancing x by
+    // the real widths. Japanese and Latin can share one line.
+    struct Run {
+        cjk: bool,
+        glyphs: Vec<KrillaGlyph>,
+        width: f32,
+    }
+    let mut runs: Vec<Run> = Vec::new();
+    for (at, c) in text.char_indices() {
+        let (cjk, gid, advance) = fonts.glyph(bold, c);
+        let glyph = KrillaGlyph::new(
+            GlyphId::new(gid),
+            advance,
+            0.0,
+            0.0,
+            0.0,
+            at..at + c.len_utf8(),
+            None,
+        );
+        if let Some(last) = runs.last_mut()
+            && last.cjk == cjk
+        {
+            last.glyphs.push(glyph);
+            last.width += advance * size;
+        } else {
+            runs.push(Run {
+                cjk,
+                glyphs: vec![glyph],
+                width: advance * size,
+            });
+        }
+    }
     surface.set_fill(Some(fill(color)));
-    surface.draw_glyphs(
-        Point::from_xy(x, y),
-        &glyphs,
-        face.font.clone(),
-        text,
-        size,
-        false,
-    );
+    let mut cx = x;
+    for run in &runs {
+        let font = if run.cjk {
+            fonts.cjk.font.clone()
+        } else if bold {
+            fonts.bold.font.clone()
+        } else {
+            fonts.regular.font.clone()
+        };
+        surface.draw_glyphs(Point::from_xy(cx, y), &run.glyphs, font, text, size, false);
+        cx += run.width;
+    }
 }
 
 fn rectangle(
@@ -1237,14 +838,14 @@ fn draw_diagram(
                 align,
             } => {
                 surface.set_stroke(None);
-                let face = fonts.face(*bold);
                 let left = match align {
                     Align::Start => at.x,
-                    Align::End => at.x - face.width(text, *size),
+                    Align::End => at.x - fonts.width(*bold, text, *size),
                 };
                 draw_text(
                     surface,
-                    face,
+                    fonts,
+                    *bold,
                     x + left,
                     y + at.y,
                     *size,
@@ -1274,7 +875,7 @@ fn metadata(doc: &ReportDoc, ctx: &ReportContext) -> Metadata {
         .creator("AegisTARA".to_owned())
         .producer("AegisTARA".to_owned())
         .authors(vec![ctx.user.clone()])
-        .language("en".to_owned())
+        .language(doc.language.clone())
         .creation_date(date)
 }
 
@@ -1317,15 +918,7 @@ fn render(
                     ink: i,
                     text,
                 } => {
-                    draw_text(
-                        &mut surface,
-                        fonts.face(*bold),
-                        *x,
-                        *y,
-                        *size,
-                        ink(*i),
-                        text,
-                    );
+                    draw_text(&mut surface, fonts, *bold, *x, *y, *size, ink(*i), text);
                 }
             }
         }
@@ -1341,7 +934,8 @@ fn render(
         );
         draw_text(
             &mut surface,
-            &mut fonts.regular,
+            fonts,
+            false,
             MARGIN,
             foot_y,
             7.5,
@@ -1349,10 +943,11 @@ fn render(
             &doc.watermark,
         );
         let label = format!("Page {} of {total}", n + 1);
-        let w = fonts.regular.width(&label, 7.5);
+        let w = fonts.width(false, &label, 7.5);
         draw_text(
             &mut surface,
-            &mut fonts.regular,
+            fonts,
+            false,
             PAGE_W - MARGIN - w,
             foot_y,
             7.5,
@@ -1367,15 +962,55 @@ fn render(
         .map_err(|e| PdfError::Write(format!("{e:?}")))
 }
 
-/// The report as PDF bytes. Time and memory O(project size).
+/// The report as PDF bytes with every section and no filters. Time and
+/// memory O(project size).
 ///
 /// # Errors
 ///
 /// [`PdfError`] if the font or the PDF library fails (neither depends on the
 /// project).
 pub fn report_pdf(ws: &Workspace, ctx: &ReportContext) -> Result<Vec<u8>, PdfError> {
-    let doc = report_doc(ws, ctx);
+    report_pdf_with_options(ws, ctx, &ReportOptions::default())
+}
+
+/// The report as PDF bytes for a profile (sections, filters, language,
+/// branding). Time and memory O(project size).
+///
+/// # Errors
+///
+/// [`PdfError`] if the font or the PDF library fails.
+pub fn report_pdf_with_options(
+    ws: &Workspace,
+    ctx: &ReportContext,
+    opts: &ReportOptions,
+) -> Result<Vec<u8>, PdfError> {
+    let doc = super::doc::report_doc_with_options(ws, ctx, opts);
     let mut fonts = Fonts::new()?;
     let pages = layout(&doc, &mut fonts);
     render(&doc, ctx, &pages, &mut fonts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cjk_fallback_maps_japanese_without_a_question_mark() {
+        let mut fonts = Fonts::new().expect("fonts load");
+        // Japanese glyphs come from the CJK face, not a `?` (L10N-04).
+        for c in ['日', '本', '語', 'レ', 'ポ', 'ー', 'ト'] {
+            let (cjk, gid, _) = fonts.glyph(false, c);
+            assert!(cjk, "{c} should use the CJK face");
+            assert_ne!(gid, 0, "{c} should map to a real glyph");
+        }
+        // Latin still comes from Inter.
+        let (cjk, gid, _) = fonts.glyph(false, 'A');
+        assert!(!cjk);
+        assert_ne!(gid, 0);
+        // The width of a mixed run is the sum of both faces.
+        let mixed = fonts.width(false, "A日", 10.0);
+        let a = fonts.width(false, "A", 10.0);
+        let hi = fonts.width(false, "日", 10.0);
+        assert!((mixed - (a + hi)).abs() < 0.001, "{mixed} vs {a}+{hi}");
+    }
 }

@@ -215,7 +215,7 @@ async fn project_round_trip(server: &TestServer, kind: TransportKind) {
         .expect("get baseline");
     assert_eq!((seq, bytes.len() as u64), (0, baseline.snapshot_bytes));
     assert!(conn.history(&id, 10).await.expect("history").is_empty());
-    conn.record_export(&id, "html-report")
+    conn.record_export(&id, "html-report", "profile=Default lang=en")
         .await
         .expect("export");
     let events = server.accounts.recent_events(5).await.expect("events");

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use aegis_client::commands::{Edit, EditError};
 use aegis_client::outline::to_outline;
 use aegis_client::pages::{self, comparison};
-use aegis_client::pdf::{Block, Figure, report_doc, report_pdf};
+use aegis_client::report::{Block, Figure, report_doc, report_pdf};
 use aegis_client::report::{ReportContext, report_html, risk_register_csv, tree_svg};
 use aegis_client::view::{Selection, UiState, inspector, shown_tree};
 use aegis_client::workspace::{Origin, Workspace};
@@ -782,7 +782,7 @@ fn the_pdf_and_the_html_report_have_the_same_sections() {
     assert_eq!(from_doc, from_html);
 }
 
-fn figures(doc: &aegis_client::pdf::ReportDoc) -> Vec<&Figure> {
+fn figures(doc: &aegis_client::report::ReportDoc) -> Vec<&Figure> {
     doc.blocks
         .iter()
         .filter_map(|b| match b {
@@ -866,7 +866,7 @@ fn a_tall_tree_gets_an_overview_and_detail_panels_in_the_pdf() {
     assert!(f.panels[0].caption.starts_with("Overview"));
     assert!(f.panels[1].caption.starts_with("Detail: row 1 of"));
     // The overview draws no text (too small to read); a detail panel does.
-    let has_text = |p: &aegis_client::pdf::Panel| {
+    let has_text = |p: &aegis_client::report::Panel| {
         p.list
             .items
             .iter()

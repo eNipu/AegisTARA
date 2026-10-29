@@ -1,0 +1,935 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "/path/to/license.aegis"
+msgstr "/path/to/license.aegis"
+
+msgid "/path/to/project-folder"
+msgstr "/path/to/project-folder"
+
+msgid "100%"
+msgstr "100%"
+
+msgid "4.1"
+msgstr "4.1"
+
+msgid "AI suggestions (Gear 1)"
+msgstr "AI suggestions (Gear 1)"
+
+msgid "AND"
+msgstr "AND"
+
+msgid "About"
+msgstr "このアプリについて"
+
+msgid "About AegisTARA"
+msgstr "AegisTARA について"
+
+msgid "Accept"
+msgstr "承認"
+
+msgid "Accept all"
+msgstr "すべて承認"
+
+msgid "Add"
+msgstr "追加"
+
+msgid "Add "
+msgstr "Add "
+
+msgid "Add a damage scenario first."
+msgstr "先に損害シナリオを追加してください。"
+
+msgid "Add a threat scenario"
+msgstr "脅威シナリオを追加"
+
+msgid "Add a user"
+msgstr "ユーザーを追加"
+
+msgid "Add an asset first."
+msgstr "先に資産を追加してください。"
+
+msgid "Add asset"
+msgstr "資産を追加"
+
+msgid "Add claim"
+msgstr "主張を追加"
+
+msgid "Add control"
+msgstr "対策を追加"
+
+msgid "Add controls on the Security controls page to attach them here."
+msgstr "Add controls on the Security controls page to attach them here."
+
+msgid "Add goal"
+msgstr "目標を追加"
+
+msgid "Add sample TARA"
+msgstr "サンプルTARAを追加"
+
+msgid "Add security controls first."
+msgstr "先にセキュリティ対策を追加してください。"
+
+msgid "Add sibling"
+msgstr "兄弟を追加"
+
+msgid "Add the sample TARA"
+msgstr "Add the sample TARA"
+
+msgid "Add user"
+msgstr "ユーザーを追加"
+
+msgid "Admin"
+msgstr "管理者"
+
+msgid "Admin actions"
+msgstr "管理者の操作"
+
+msgid "Administration"
+msgstr "管理"
+
+msgid "Administrator"
+msgstr "管理者"
+
+msgid "AegisTARA"
+msgstr "AegisTARA"
+
+msgid "After"
+msgstr "対策後"
+
+msgid "After controls: "
+msgstr "対策後: "
+
+msgid "After: "
+msgstr "対策後: "
+
+msgid "All"
+msgstr "すべて"
+
+msgid "Apply"
+msgstr "適用"
+
+msgid "Asset"
+msgstr "資産"
+
+msgid "Assets"
+msgstr "資産"
+
+msgid "Attach"
+msgstr "添付"
+
+msgid "Attach a control"
+msgstr "対策を添付"
+
+msgid "Attached to"
+msgstr "添付先"
+
+msgid "Attack feasibility"
+msgstr "攻撃可能性"
+
+msgid "Attack potential"
+msgstr "攻撃ポテンシャル"
+
+msgid "Attack steps"
+msgstr "攻撃ステップ"
+
+msgid "Attack tree"
+msgstr "攻撃ツリー"
+
+msgid "Attack tree library"
+msgstr "攻撃ツリーライブラリ"
+
+msgid "Attack tree on the canvas (SVG)"
+msgstr "キャンバス上の攻撃ツリー (SVG)"
+
+msgid "Attack trees"
+msgstr "攻撃ツリー"
+
+msgid "Baseline"
+msgstr "ベースライン"
+
+msgid "Baselines"
+msgstr "ベースライン"
+
+msgid "Baselines freeze the saved state under a name. Compare the current state with one to see what changed and which risks moved."
+msgstr "ベースラインは保存状態を名前付きで固定します。現在の状態と比較して、何が変わりどのリスクが動いたかを確認できます。"
+
+msgid "Before"
+msgstr "対策前"
+
+msgid "Before controls: "
+msgstr "対策前: "
+
+msgid "Break the edit lock"
+msgstr "編集ロックを解除"
+
+msgid "By"
+msgstr "作成者"
+
+msgid "CPU renderer"
+msgstr "CPUレンダラー"
+
+msgid "CYBERSECURITY TARA"
+msgstr "サイバーセキュリティ TARA"
+
+msgid "Cancel"
+msgstr "キャンセル"
+
+msgid "Cap"
+msgstr "上限"
+
+msgid "Catalog"
+msgstr "カタログ"
+
+msgid "Catalog references"
+msgstr "カタログ参照"
+
+msgid "Category"
+msgstr "カテゴリ"
+
+msgid "Change"
+msgstr "変更"
+
+msgid "Change password"
+msgstr "パスワードを変更"
+
+msgid "Change password…"
+msgstr "パスワードを変更…"
+
+msgid "Change server"
+msgstr "サーバーを変更"
+
+msgid "Change server…"
+msgstr "サーバーを変更…"
+
+msgid "Change your password"
+msgstr "パスワードを変更"
+
+msgid "Check for updates"
+msgstr "更新を確認"
+
+msgid "Check the audit chain"
+msgstr "監査チェーンを確認"
+
+msgid "Claim"
+msgstr "主張"
+
+msgid "Clear"
+msgstr "クリア"
+
+msgid "Close"
+msgstr "閉じる"
+
+msgid "Close project"
+msgstr "プロジェクトを閉じる"
+
+msgid "Compare with the current state"
+msgstr "現在の状態と比較"
+
+msgid "Comparison"
+msgstr "比較"
+
+msgid "Completeness and consistency checks. Blocking problems stop a risk from being computed or a treatment from being complete."
+msgstr "完全性と一貫性のチェックです。ブロックする問題は、リスク計算や対応の完了を妨げます。"
+
+msgid "Confirm this rating after checking it"
+msgstr "確認後この評価を確定"
+
+msgid "Connect"
+msgstr "接続"
+
+msgid "Connection"
+msgstr "接続"
+
+msgid "Continue"
+msgstr "続行"
+
+msgid "Control"
+msgstr "対策"
+
+msgid "Controls"
+msgstr "対策"
+
+msgid "Controls that realize it"
+msgstr "それを実現する対策"
+
+msgid "Create"
+msgstr "作成"
+
+msgid "Create baseline"
+msgstr "ベースラインを作成"
+
+msgid "Create baseline…"
+msgstr "ベースラインを作成…"
+
+msgid "Created"
+msgstr "作成日時"
+
+msgid "Current password"
+msgstr "現在のパスワード"
+
+msgid "Cybersecurity claim"
+msgstr "サイバーセキュリティ主張"
+
+msgid "Cybersecurity claim (for Retain and Share)"
+msgstr "サイバーセキュリティ主張（保有・共有用）"
+
+msgid "Cybersecurity claims"
+msgstr "サイバーセキュリティ主張"
+
+msgid "Cybersecurity goal (for Reduce)"
+msgstr "サイバーセキュリティ目標（低減用）"
+
+msgid "Damage scenarios"
+msgstr "損害シナリオ"
+
+msgid "Damage scenarios it leads to"
+msgstr "そこから生じる損害シナリオ"
+
+msgid "Dark theme"
+msgstr "ダークテーマ"
+
+msgid "Deciding damage"
+msgstr "決定する損害"
+
+msgid "Delete"
+msgstr "削除"
+
+msgid "Delete project"
+msgstr "プロジェクトを削除"
+
+msgid "Delete project…"
+msgstr "プロジェクトを削除…"
+
+msgid "Description"
+msgstr "説明"
+
+msgid "Detach"
+msgstr "切り離し"
+
+msgid "Development server: no password is checked."
+msgstr "開発サーバー: パスワードは確認されません。"
+
+msgid "Device"
+msgstr "デバイス"
+
+msgid "Direct feasibility"
+msgstr "直接の攻撃可能性"
+
+msgid "Direct feasibility rating (concept phase; an attack tree overrides it)"
+msgstr "直接の攻撃可能性評価（概念段階。攻撃ツリーが上書きします）"
+
+msgid "Dismiss"
+msgstr "閉じる"
+
+msgid "Dismiss all"
+msgstr "すべて閉じる"
+
+msgid "Download update"
+msgstr "更新をダウンロード"
+
+msgid "Edit"
+msgstr "編集"
+
+msgid "Edit outline"
+msgstr "アウトラインを編集"
+
+msgid "Edit the attack tree"
+msgstr "攻撃ツリーを編集"
+
+msgid "End this session"
+msgstr "このセッションを終了"
+
+msgid "Ends (UTC)"
+msgstr "終了 (UTC)"
+
+msgid "Event log"
+msgstr "イベントログ"
+
+msgid "Every threat scenario, worst risk first, with the decision on what to do about it."
+msgstr "すべての脅威シナリオを最悪リスク順に、対応方針とともに表示します。"
+
+msgid "Export SVG"
+msgstr "SVGをエクスポート"
+
+msgid "Export TARA report (HTML)"
+msgstr "TARAレポートをエクスポート (HTML)"
+
+msgid "Export TARA report (PDF)"
+msgstr "TARAレポートをエクスポート (PDF)"
+
+msgid "Export attack tree (SVG)"
+msgstr "攻撃ツリーをエクスポート (SVG)"
+
+msgid "Export folder"
+msgstr "エクスポート先フォルダー"
+
+msgid "Export risk register (CSV)"
+msgstr "リスクレジスタをエクスポート (CSV)"
+
+msgid "Exports"
+msgstr "エクスポート"
+
+msgid "Exports carry your name and the time, and the server records each one."
+msgstr "エクスポートにはあなたの名前と時刻が入り、サーバーがそれぞれを記録します。"
+
+msgid "Feasibility"
+msgstr "攻撃可能性"
+
+msgid "Feasibility the engine uses: "
+msgstr "エンジンが使用する攻撃可能性: "
+
+msgid "File"
+msgstr "ファイル"
+
+msgid "First password"
+msgstr "最初のパスワード"
+
+msgid "First password (10+ characters)"
+msgstr "最初のパスワード（10文字以上）"
+
+msgid "Fit"
+msgstr "全体表示"
+
+msgid "Fit the tree"
+msgstr "ツリーを全体表示"
+
+msgid "Full name"
+msgstr "表示名"
+
+msgid "Gate logic"
+msgstr "ゲート論理"
+
+msgid "Go to"
+msgstr "移動"
+
+msgid "Goal"
+msgstr "目標"
+
+msgid "Goals"
+msgstr "目標"
+
+msgid "Goals and claims"
+msgstr "目標と主張"
+
+msgid "Goals back a Reduce decision with controls; claims back Retain and Share."
+msgstr "目標は対策を伴う「低減」を裏付け、主張は「保有」と「共有」を裏付けます。"
+
+msgid "Help"
+msgstr "ヘルプ"
+
+msgid "Highest risks"
+msgstr "最も高いリスク"
+
+msgid "History"
+msgstr "履歴"
+
+msgid "How an attacker could harm an asset, with STRIDE and UN R155 Annex 5."
+msgstr "STRIDE と UN R155 Annex 5 に基づき、攻撃者がどのように資産に害を及ぼすかです。"
+
+msgid "ISO/SAE 21434 · UN R155"
+msgstr "ISO/SAE 21434 · UN R155"
+
+msgid "Impact"
+msgstr "影響"
+
+msgid "Impact rating"
+msgstr "影響評価"
+
+msgid "Insert"
+msgstr "挿入"
+
+msgid "Insert gate above:"
+msgstr "上にゲートを挿入:"
+
+msgid "Item"
+msgstr "項目"
+
+msgid "Keep me logged in on this computer"
+msgstr "このコンピューターでログイン状態を保持"
+
+msgid "Keyboard shortcuts"
+msgstr "キーボードショートカット"
+
+msgid "Kind"
+msgstr "種類"
+
+msgid "Last login"
+msgstr "最終ログイン"
+
+msgid "Last saved: "
+msgstr "最終保存: "
+
+msgid "Library"
+msgstr "ライブラリ"
+
+msgid "Library items"
+msgstr "ライブラリ項目"
+
+msgid "License"
+msgstr "ライセンス"
+
+msgid "Log in"
+msgstr "ログイン"
+
+msgid "Log out"
+msgstr "ログアウト"
+
+msgid "Login"
+msgstr "ログイン"
+
+msgid "Logins"
+msgstr "ログイン"
+
+msgid "Measures that make attack steps harder. Attach them to steps on the Attack trees page."
+msgstr "攻撃ステップを難しくする対策です。「攻撃ツリー」ページでステップに添付します。"
+
+msgid "Methodology"
+msgstr "手法"
+
+msgid "Move down"
+msgstr "下へ移動"
+
+msgid "Move up"
+msgstr "上へ移動"
+
+msgid "Name"
+msgstr "名前"
+
+msgid "Narrow by"
+msgstr "絞り込み"
+
+msgid "Narrowed by "
+msgstr "絞り込み: "
+
+msgid "New"
+msgstr "新規"
+
+msgid "New folder"
+msgstr "新しいフォルダー"
+
+msgid "New node kind"
+msgstr "新しいノード種別"
+
+msgid "New node label"
+msgstr "新しいノードラベル"
+
+msgid "New password"
+msgstr "新しいパスワード"
+
+msgid "New password (at least 10 characters)"
+msgstr "新しいパスワード（10文字以上）"
+
+msgid "New password again"
+msgstr "新しいパスワード（確認）"
+
+msgid "New project folder…"
+msgstr "新しいプロジェクトフォルダー…"
+
+msgid "New project name"
+msgstr "新しいプロジェクト名"
+
+msgid "New project…"
+msgstr "新しいプロジェクト…"
+
+msgid "New threat scenario"
+msgstr "新しい脅威シナリオ"
+
+msgid "New tree"
+msgstr "新しいツリー"
+
+msgid "New user name"
+msgstr "新しいユーザー名"
+
+msgid "No attack step yet."
+msgstr "まだ攻撃ステップがありません。"
+
+msgid "No problems. The analysis is complete and consistent."
+msgstr "問題はありません。分析は完全で一貫しています。"
+
+msgid "No threat scenario yet."
+msgstr "まだ脅威シナリオがありません。"
+
+msgid "None."
+msgstr "なし。"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "OR"
+msgstr "OR"
+
+msgid "On asset "
+msgstr "On asset "
+
+msgid "One node per line; indent a child under its parent. Start a gate with OR, AND or SEQ (sequential AND); a step with - or nothing. Lines with the same text are the same node, which is how a step is shared. Nodes that keep their text keep their ratings and controls."
+msgstr "1行に1ノード。子は親の下に字下げします。ゲートは OR、AND、SEQ（順次AND）で始め、ステップは - または何も付けずに始めます。同じテキストの行は同じノードになり、ステップが共有されます。テキストを保ったノードは評価と対策を保ちます。"
+
+msgid "Open"
+msgstr "開く"
+
+msgid "Open folder"
+msgstr "フォルダーを開く"
+
+msgid "Open password sessions, newest first. Ending one logs that device out at its next request."
+msgstr "パスワードセッションを新しい順に表示します。終了すると、そのデバイスは次の要求でログアウトします。"
+
+msgid "Open project "
+msgstr "プロジェクトを開く: "
+
+msgid "Open project folder…"
+msgstr "プロジェクトフォルダーを開く…"
+
+msgid "Open threat scenario"
+msgstr "脅威シナリオを開く"
+
+msgid "Or work without a server"
+msgstr "またはサーバーなしで作業"
+
+msgid "Overview"
+msgstr "概要"
+
+msgid "Part of goals"
+msgstr "目標の一部"
+
+msgid "Password"
+msgstr "パスワード"
+
+msgid "Plain text. Ctrl+Enter saves, Escape cancels."
+msgstr "プレーンテキスト。Ctrl+Enter で保存、Escape でキャンセル。"
+
+msgid "Preview"
+msgstr "プレビュー"
+
+msgid "Problems"
+msgstr "問題"
+
+msgid "Project"
+msgstr "プロジェクト"
+
+msgid "Project folder"
+msgstr "プロジェクトフォルダー"
+
+msgid "Project notes"
+msgstr "プロジェクトメモ"
+
+msgid "Projects"
+msgstr "プロジェクト"
+
+msgid "Properties"
+msgstr "プロパティ"
+
+msgid "Rate all five factors to calculate it. Until then the rating above is used."
+msgstr "5つの要素すべてを評価すると計算されます。それまでは上の評価が使われます。"
+
+msgid "Rating"
+msgstr "評価"
+
+msgid "Redo"
+msgstr "やり直し"
+
+msgid "Reference"
+msgstr "参照"
+
+msgid "Refresh"
+msgstr "更新"
+
+msgid "Release edit lock"
+msgstr "編集ロックを解放"
+
+msgid "Release the edit lock"
+msgstr "編集ロックを解放"
+
+msgid "Reload"
+msgstr "再読み込み"
+
+msgid "Reload newer version"
+msgstr "新しいバージョンを再読み込み"
+
+msgid "Reload the newer version"
+msgstr "Reload the newer version"
+
+msgid "Remove"
+msgstr "削除"
+
+msgid "Remove asset"
+msgstr "資産を削除"
+
+msgid "Remove claim"
+msgstr "主張を削除"
+
+msgid "Remove control"
+msgstr "対策を削除"
+
+msgid "Remove damage scenario"
+msgstr "損害シナリオを削除"
+
+msgid "Remove goal"
+msgstr "目標を削除"
+
+msgid "Remove threat scenario"
+msgstr "脅威シナリオを削除"
+
+msgid "Rename"
+msgstr "名前を変更"
+
+msgid "Rename project…"
+msgstr "プロジェクト名を変更…"
+
+msgid "Reports"
+msgstr "レポート"
+
+msgid "Reviewed"
+msgstr "確認済み"
+
+msgid "Risk after controls"
+msgstr "対策後リスク"
+
+msgid "Risk register"
+msgstr "リスクレジスタ"
+
+msgid "Risk register (CSV)"
+msgstr "リスクレジスタ (CSV)"
+
+msgid "Risks and treatment"
+msgstr "リスクと対応"
+
+msgid "SEQ"
+msgstr "SEQ"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Save files in this folder"
+msgstr "このフォルダーにファイルを保存"
+
+msgid "Search (English or Japanese)"
+msgstr "検索（英語または日本語）"
+
+msgid "Search the attack tree library and copy an item into the project"
+msgstr "攻撃ツリーライブラリを検索して項目をプロジェクトにコピーします"
+
+msgid "Search the library"
+msgstr "ライブラリを検索"
+
+msgid "Security control"
+msgstr "セキュリティ対策"
+
+msgid "Security controls"
+msgstr "セキュリティ対策"
+
+msgid "Security controls on this step"
+msgstr "このステップのセキュリティ対策"
+
+msgid "Security properties"
+msgstr "セキュリティプロパティ"
+
+msgid "Select a node on the canvas to inspect its feasibility or expand the attack tree."
+msgstr "キャンバス上のノードを選択すると、その攻撃可能性を確認したり攻撃ツリーを展開できます。"
+
+msgid "Server"
+msgstr "サーバー"
+
+msgid "Server address"
+msgstr "サーバーアドレス"
+
+msgid "Sessions"
+msgstr "セッション"
+
+msgid "Sessions are managed by the company identity provider."
+msgstr "セッションは会社のIDプロバイダーが管理します。"
+
+msgid "Set password"
+msgstr "パスワードを設定"
+
+msgid "Share steps the tree already has"
+msgstr "ツリーが既に持つステップを共有"
+
+msgid "Show problems"
+msgstr "問題を表示"
+
+msgid "Signed license file"
+msgstr "署名済みライセンスファイル"
+
+msgid "Standalone license file"
+msgstr "スタンドアロンライセンスファイル"
+
+msgid "Standalone project folder"
+msgstr "スタンドアロンプロジェクトフォルダー"
+
+msgid "Started (UTC)"
+msgstr "開始 (UTC)"
+
+msgid "Status"
+msgstr "状態"
+
+msgid "Stop comparing"
+msgstr "比較を停止"
+
+msgid "Suggest steps"
+msgstr "ステップを提案"
+
+msgid "Synthesize ghost attack-tree steps with Aegis-Core Gear 1"
+msgstr "Aegis-Core Gear 1 でゴーストの攻撃ツリーステップを合成します"
+
+msgid "TARA report (HTML)"
+msgstr "TARAレポート (HTML)"
+
+msgid "TARA report (PDF)"
+msgstr "TARAレポート (PDF)"
+
+msgid "Take the edit lock"
+msgstr "編集ロックを取得"
+
+msgid "The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. The PDF has the watermark and page numbers on every page. The HTML version opens in a browser, where you can also print it."
+msgstr "TARAレポートには、エグゼクティブサマリーと成果物全体（資産、損害シナリオ、脅威シナリオ、図としての攻撃ツリー、対応付きリスクレジスタ、対策、目標と主張、未解決の問題）が含まれます。PDFには各ページに透かしとページ番号があります。HTML版はブラウザーで開き、印刷もできます。"
+
+msgid "The engine uses: "
+msgstr "The engine uses: "
+
+msgid "The latest accepted changes on the server, newest first. Every change is in the hash-chained audit log."
+msgstr "サーバーで受理された最新の変更を新しい順に表示します。すべての変更はハッシュ連鎖の監査ログに記録されます。"
+
+msgid "The project at a glance: what is analysed, how risky it is, and what is still open."
+msgstr "プロジェクトの概要: 分析対象、リスクの程度、未解決の項目です。"
+
+msgid "The two new passwords differ."
+msgstr "新しいパスワードが一致しません。"
+
+msgid "There are no projects yet. Create the first one below."
+msgstr "まだプロジェクトがありません。下から最初のプロジェクトを作成してください。"
+
+msgid "This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Icons by Lucide (ISC license). Third-party licenses are listed in the release notices."
+msgstr "このアプリケーションは Slint Royalty-free License 2.0 の下で Slint ツールキットを使用しています。アイコンは Lucide（ISCライセンス）です。サードパーティライセンスはリリース通知に記載されています。"
+
+msgid "This project"
+msgstr "This project"
+
+msgid "This rating was copied from the library and has not been reviewed."
+msgstr "この評価はライブラリからコピーされ、まだ確認されていません。"
+
+msgid "This server has no company login, so password login cannot be turned off."
+msgstr "このサーバーには会社ログインがないため、パスワードログインを無効にできません。"
+
+msgid "Threat analysis and risk assessment for vehicle cybersecurity."
+msgstr "車両サイバーセキュリティのための脅威分析とリスク評価。"
+
+msgid "Threat scenario"
+msgstr "脅威シナリオ"
+
+msgid "Threat scenarios"
+msgstr "脅威シナリオ"
+
+msgid "Threat scenarios by risk after controls"
+msgstr "対策後リスク別の脅威シナリオ"
+
+msgid "Threat scenarios by risk before controls"
+msgstr "対策前リスク別の脅威シナリオ"
+
+msgid "Threat scenarios leading here"
+msgstr "ここにつながる脅威シナリオ"
+
+msgid "Threat scenarios on this asset"
+msgstr "この資産への脅威シナリオ"
+
+msgid "Threats"
+msgstr "脅威"
+
+msgid "Treatment"
+msgstr "対応"
+
+msgid "Treatment decision"
+msgstr "対応方針"
+
+msgid "Tree"
+msgstr "ツリー"
+
+msgid "Try again"
+msgstr "再試行"
+
+msgid "Undo"
+msgstr "元に戻す"
+
+msgid "Use a user name and password"
+msgstr "ユーザー名とパスワードでログイン"
+
+msgid "Use company login"
+msgstr "会社ログインを使用"
+
+msgid "Use the arrow keys to move between nodes, and Escape to select nothing."
+msgstr "矢印キーでノード間を移動し、Escape で選択を解除します。"
+
+msgid "User"
+msgstr "ユーザー"
+
+msgid "User name"
+msgstr "ユーザー名"
+
+msgid "Users"
+msgstr "ユーザー"
+
+msgid "Users and login"
+msgstr "ユーザーとログイン"
+
+msgid "Users and project tools"
+msgstr "ユーザーとプロジェクトツール"
+
+msgid "Users come from the company identity provider. Manage them there."
+msgstr "ユーザーは会社のIDプロバイダーから取得します。そこで管理してください。"
+
+msgid "Users of this server (password login), and tools for the open project."
+msgstr "このサーバーのユーザー（パスワードログイン）と、開いているプロジェクトのツールです。"
+
+msgid "Versions"
+msgstr "バージョン"
+
+msgid "Versions and comparison"
+msgstr "バージョンと比較"
+
+msgid "View"
+msgstr "表示"
+
+msgid "What"
+msgstr "対象"
+
+msgid "What could go wrong, rated per impact category."
+msgstr "何が起こりうるかを影響カテゴリごとに評価します。"
+
+msgid "What must be protected, and which security properties matter."
+msgstr "何を保護すべきか、どのセキュリティプロパティが重要かです。"
+
+msgid "When"
+msgstr "時期"
+
+msgid "Where to put it"
+msgstr "配置先"
+
+msgid "Who"
+msgstr "誰"
+
+msgid "Why?"
+msgstr "理由"
+
+msgid "With the suggested ratings (marked for review)"
+msgstr "提案された評価（確認待ちの印付き）"
+
+msgid "Worst risk"
+msgstr "最悪リスク"
+
+msgid "Yes"
+msgstr "はい"
+
+msgid "Zoom to 100%"
+msgstr "100%にズーム"
+
+msgid "caps at"
+msgstr "上限"
+
+msgid "https://aegis.example.com"
+msgstr "https://aegis.example.com"
+
+msgid "user name"
+msgstr "ユーザー名"
+

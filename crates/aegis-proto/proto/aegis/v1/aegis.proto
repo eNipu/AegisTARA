@@ -290,6 +290,9 @@ message RecordExportRequest {
   string project_id = 1;
   // For example "html-report" or "csv-risk-register".
   string kind = 2;
+  // Optional machine-readable profile summary, for example
+  // "profile=Submission lang=ja". Recorded in the export audit event (RPT-03).
+  string detail = 3;
 }
 
 message RecordExportResponse {}

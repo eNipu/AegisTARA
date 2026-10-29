@@ -19,6 +19,9 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::i18n::Language;
+use crate::report::ReportProfile;
+
 static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Writes `bytes` to `path` via a new owner-only (`0600` on Unix) temporary
@@ -98,6 +101,13 @@ pub struct Settings {
     pub standalone_folder: String,
     /// Signed license used for standalone mode; never a password or token.
     pub standalone_license: String,
+    /// Saved report profiles (RPT-03), one per project or company.
+    pub report_profiles: Vec<ReportProfile>,
+    /// The name of the active report profile; empty means the default.
+    pub report_profile_name: String,
+    /// The UI language: `en`, `ja` or `pseudo`; empty follows the OS
+    /// (L10N-02).
+    pub language: String,
 }
 
 /// The configuration folder of this app, if the OS tells us one.
@@ -170,6 +180,26 @@ impl Settings {
         write_private_file(path, text.as_bytes())
     }
 
+    /// The active report profile, or the default when none is chosen.
+    #[must_use]
+    pub fn report_profile(&self) -> ReportProfile {
+        self.report_profiles
+            .iter()
+            .find(|p| p.name == self.report_profile_name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The UI language, defaulting to the OS locale when none is chosen.
+    #[must_use]
+    pub fn language(&self) -> Language {
+        if self.language.trim().is_empty() {
+            Language::from_os()
+        } else {
+            Language::from_code(self.language.trim())
+        }
+    }
+
     /// The export folder to use.
     #[must_use]
     pub fn export_dir(&self) -> PathBuf {
@@ -222,6 +252,12 @@ mod tests {
             export_dir: String::new(),
             standalone_folder: "/work/brake.aegis".into(),
             standalone_license: "/work/vendor.aegis".into(),
+            report_profiles: vec![ReportProfile {
+                name: "Submission".into(),
+                ..ReportProfile::default()
+            }],
+            report_profile_name: "Submission".into(),
+            language: "ja".into(),
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);

@@ -1,0 +1,935 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "/path/to/license.aegis"
+msgstr "⟦/páth/tó/lícénsé.áégís␣␣⟧"
+
+msgid "/path/to/project-folder"
+msgstr "⟦/páth/tó/prójéct-fóldér␣␣⟧"
+
+msgid "100%"
+msgstr "⟦100%␣␣⟧"
+
+msgid "4.1"
+msgstr "⟦4.1␣␣⟧"
+
+msgid "AI suggestions (Gear 1)"
+msgstr "⟦ÁÍ súggéstíóns (Géár 1)␣␣⟧"
+
+msgid "AND"
+msgstr "⟦ÁND␣␣⟧"
+
+msgid "About"
+msgstr "⟦Ábóút␣␣⟧"
+
+msgid "About AegisTARA"
+msgstr "⟦Ábóút ÁégísTÁRÁ␣␣⟧"
+
+msgid "Accept"
+msgstr "⟦Áccépt␣␣⟧"
+
+msgid "Accept all"
+msgstr "⟦Áccépt áll␣␣⟧"
+
+msgid "Add"
+msgstr "⟦Ádd␣␣⟧"
+
+msgid "Add "
+msgstr "⟦Ádd ␣␣⟧"
+
+msgid "Add a damage scenario first."
+msgstr "⟦Ádd á dámágé scénáríó fírst.␣␣⟧"
+
+msgid "Add a threat scenario"
+msgstr "⟦Ádd á thréát scénáríó␣␣⟧"
+
+msgid "Add a user"
+msgstr "⟦Ádd á úsér␣␣⟧"
+
+msgid "Add an asset first."
+msgstr "⟦Ádd án ássét fírst.␣␣⟧"
+
+msgid "Add asset"
+msgstr "⟦Ádd ássét␣␣⟧"
+
+msgid "Add claim"
+msgstr "⟦Ádd cláím␣␣⟧"
+
+msgid "Add control"
+msgstr "⟦Ádd cóntról␣␣⟧"
+
+msgid "Add controls on the Security controls page to attach them here."
+msgstr "⟦Ádd cóntróls ón thé Sécúríty cóntróls págé tó áttách thém héré.␣␣⟧"
+
+msgid "Add goal"
+msgstr "⟦Ádd góál␣␣⟧"
+
+msgid "Add sample TARA"
+msgstr "⟦Ádd sámplé TÁRÁ␣␣⟧"
+
+msgid "Add security controls first."
+msgstr "⟦Ádd sécúríty cóntróls fírst.␣␣⟧"
+
+msgid "Add sibling"
+msgstr "⟦Ádd síblíng␣␣⟧"
+
+msgid "Add the sample TARA"
+msgstr "⟦Ádd thé sámplé TÁRÁ␣␣⟧"
+
+msgid "Add user"
+msgstr "⟦Ádd úsér␣␣⟧"
+
+msgid "Admin"
+msgstr "⟦Ádmín␣␣⟧"
+
+msgid "Admin actions"
+msgstr "⟦Ádmín áctíóns␣␣⟧"
+
+msgid "Administration"
+msgstr "⟦Ádmínístrátíón␣␣⟧"
+
+msgid "Administrator"
+msgstr "⟦Ádmínístrátór␣␣⟧"
+
+msgid "AegisTARA"
+msgstr "⟦ÁégísTÁRÁ␣␣⟧"
+
+msgid "After"
+msgstr "⟦Áftér␣␣⟧"
+
+msgid "After controls: "
+msgstr "⟦Áftér cóntróls: ␣␣⟧"
+
+msgid "After: "
+msgstr "⟦Áftér: ␣␣⟧"
+
+msgid "All"
+msgstr "⟦Áll␣␣⟧"
+
+msgid "Apply"
+msgstr "⟦Ápply␣␣⟧"
+
+msgid "Asset"
+msgstr "⟦Ássét␣␣⟧"
+
+msgid "Assets"
+msgstr "⟦Ásséts␣␣⟧"
+
+msgid "Attach"
+msgstr "⟦Áttách␣␣⟧"
+
+msgid "Attach a control"
+msgstr "⟦Áttách á cóntról␣␣⟧"
+
+msgid "Attached to"
+msgstr "⟦Áttáchéd tó␣␣⟧"
+
+msgid "Attack feasibility"
+msgstr "⟦Áttáck féásíbílíty␣␣⟧"
+
+msgid "Attack potential"
+msgstr "⟦Áttáck póténtíál␣␣⟧"
+
+msgid "Attack steps"
+msgstr "⟦Áttáck stéps␣␣⟧"
+
+msgid "Attack tree"
+msgstr "⟦Áttáck tréé␣␣⟧"
+
+msgid "Attack tree library"
+msgstr "⟦Áttáck tréé líbráry␣␣⟧"
+
+msgid "Attack tree on the canvas (SVG)"
+msgstr "⟦Áttáck tréé ón thé cánvás (SVG)␣␣⟧"
+
+msgid "Attack trees"
+msgstr "⟦Áttáck tréés␣␣⟧"
+
+msgid "Baseline"
+msgstr "⟦Básélíné␣␣⟧"
+
+msgid "Baselines"
+msgstr "⟦Básélínés␣␣⟧"
+
+msgid "Baselines freeze the saved state under a name. Compare the current state with one to see what changed and which risks moved."
+msgstr "⟦Básélínés fréézé thé sávéd státé úndér á námé. Cómpáré thé cúrrént státé wíth óné tó séé whát chángéd ánd whích rísks móvéd.␣␣⟧"
+
+msgid "Before"
+msgstr "⟦Béfóré␣␣⟧"
+
+msgid "Before controls: "
+msgstr "⟦Béfóré cóntróls: ␣␣⟧"
+
+msgid "Break the edit lock"
+msgstr "⟦Bréák thé édít lóck␣␣⟧"
+
+msgid "By"
+msgstr "⟦By␣␣⟧"
+
+msgid "CPU renderer"
+msgstr "⟦CPÚ réndérér␣␣⟧"
+
+msgid "CYBERSECURITY TARA"
+msgstr "⟦CYBÉRSÉCÚRÍTY TÁRÁ␣␣⟧"
+
+msgid "Cancel"
+msgstr "⟦Cáncél␣␣⟧"
+
+msgid "Cap"
+msgstr "⟦Cáp␣␣⟧"
+
+msgid "Catalog"
+msgstr "⟦Cátálóg␣␣⟧"
+
+msgid "Catalog references"
+msgstr "⟦Cátálóg référéncés␣␣⟧"
+
+msgid "Category"
+msgstr "⟦Cátégóry␣␣⟧"
+
+msgid "Change"
+msgstr "⟦Chángé␣␣⟧"
+
+msgid "Change password"
+msgstr "⟦Chángé pásswórd␣␣⟧"
+
+msgid "Change password…"
+msgstr "⟦Chángé pásswórd…␣␣⟧"
+
+msgid "Change server"
+msgstr "⟦Chángé sérvér␣␣⟧"
+
+msgid "Change server…"
+msgstr "⟦Chángé sérvér…␣␣⟧"
+
+msgid "Change your password"
+msgstr "⟦Chángé yóúr pásswórd␣␣⟧"
+
+msgid "Check for updates"
+msgstr "⟦Chéck fór úpdátés␣␣⟧"
+
+msgid "Check the audit chain"
+msgstr "⟦Chéck thé áúdít cháín␣␣⟧"
+
+msgid "Claim"
+msgstr "⟦Cláím␣␣⟧"
+
+msgid "Clear"
+msgstr "⟦Cléár␣␣⟧"
+
+msgid "Close"
+msgstr "⟦Clósé␣␣⟧"
+
+msgid "Close project"
+msgstr "⟦Clósé prójéct␣␣⟧"
+
+msgid "Compare with the current state"
+msgstr "⟦Cómpáré wíth thé cúrrént státé␣␣⟧"
+
+msgid "Comparison"
+msgstr "⟦Cómpárísón␣␣⟧"
+
+msgid "Completeness and consistency checks. Blocking problems stop a risk from being computed or a treatment from being complete."
+msgstr "⟦Cómpléténéss ánd cónsísténcy chécks. Blóckíng próbléms stóp á rísk fróm béíng cómpútéd ór á tréátmént fróm béíng cómplété.␣␣⟧"
+
+msgid "Confirm this rating after checking it"
+msgstr "⟦Cónfírm thís rátíng áftér chéckíng ít␣␣⟧"
+
+msgid "Connect"
+msgstr "⟦Cónnéct␣␣⟧"
+
+msgid "Connection"
+msgstr "⟦Cónnéctíón␣␣⟧"
+
+msgid "Continue"
+msgstr "⟦Cóntínúé␣␣⟧"
+
+msgid "Control"
+msgstr "⟦Cóntról␣␣⟧"
+
+msgid "Controls"
+msgstr "⟦Cóntróls␣␣⟧"
+
+msgid "Controls that realize it"
+msgstr "⟦Cóntróls thát réálízé ít␣␣⟧"
+
+msgid "Create"
+msgstr "⟦Créáté␣␣⟧"
+
+msgid "Create baseline"
+msgstr "⟦Créáté básélíné␣␣⟧"
+
+msgid "Create baseline…"
+msgstr "⟦Créáté básélíné…␣␣⟧"
+
+msgid "Created"
+msgstr "⟦Créátéd␣␣⟧"
+
+msgid "Current password"
+msgstr "⟦Cúrrént pásswórd␣␣⟧"
+
+msgid "Cybersecurity claim"
+msgstr "⟦Cybérsécúríty cláím␣␣⟧"
+
+msgid "Cybersecurity claim (for Retain and Share)"
+msgstr "⟦Cybérsécúríty cláím (fór Rétáín ánd Sháré)␣␣⟧"
+
+msgid "Cybersecurity claims"
+msgstr "⟦Cybérsécúríty cláíms␣␣⟧"
+
+msgid "Cybersecurity goal (for Reduce)"
+msgstr "⟦Cybérsécúríty góál (fór Rédúcé)␣␣⟧"
+
+msgid "Damage scenarios"
+msgstr "⟦Dámágé scénáríós␣␣⟧"
+
+msgid "Damage scenarios it leads to"
+msgstr "⟦Dámágé scénáríós ít léáds tó␣␣⟧"
+
+msgid "Dark theme"
+msgstr "⟦Dárk thémé␣␣⟧"
+
+msgid "Deciding damage"
+msgstr "⟦Décídíng dámágé␣␣⟧"
+
+msgid "Delete"
+msgstr "⟦Délété␣␣⟧"
+
+msgid "Delete project"
+msgstr "⟦Délété prójéct␣␣⟧"
+
+msgid "Delete project…"
+msgstr "⟦Délété prójéct…␣␣⟧"
+
+msgid "Description"
+msgstr "⟦Déscríptíón␣␣⟧"
+
+msgid "Detach"
+msgstr "⟦Détách␣␣⟧"
+
+msgid "Development server: no password is checked."
+msgstr "⟦Dévélópmént sérvér: nó pásswórd ís chéckéd.␣␣⟧"
+
+msgid "Device"
+msgstr "⟦Dévícé␣␣⟧"
+
+msgid "Direct feasibility"
+msgstr "⟦Díréct féásíbílíty␣␣⟧"
+
+msgid "Direct feasibility rating (concept phase; an attack tree overrides it)"
+msgstr "⟦Díréct féásíbílíty rátíng (cóncépt phásé; án áttáck tréé óvérrídés ít)␣␣⟧"
+
+msgid "Dismiss"
+msgstr "⟦Dísmíss␣␣⟧"
+
+msgid "Dismiss all"
+msgstr "⟦Dísmíss áll␣␣⟧"
+
+msgid "Download update"
+msgstr "⟦Dównlóád úpdáté␣␣⟧"
+
+msgid "Edit"
+msgstr "⟦Édít␣␣⟧"
+
+msgid "Edit outline"
+msgstr "⟦Édít óútlíné␣␣⟧"
+
+msgid "Edit the attack tree"
+msgstr "⟦Édít thé áttáck tréé␣␣⟧"
+
+msgid "End this session"
+msgstr "⟦Énd thís séssíón␣␣⟧"
+
+msgid "Ends (UTC)"
+msgstr "⟦Énds (ÚTC)␣␣⟧"
+
+msgid "Event log"
+msgstr "⟦Évént lóg␣␣⟧"
+
+msgid "Every threat scenario, worst risk first, with the decision on what to do about it."
+msgstr "⟦Évéry thréát scénáríó, wórst rísk fírst, wíth thé décísíón ón whát tó dó ábóút ít.␣␣⟧"
+
+msgid "Export SVG"
+msgstr "⟦Éxpórt SVG␣␣⟧"
+
+msgid "Export TARA report (HTML)"
+msgstr "⟦Éxpórt TÁRÁ répórt (HTML)␣␣⟧"
+
+msgid "Export TARA report (PDF)"
+msgstr "⟦Éxpórt TÁRÁ répórt (PDF)␣␣⟧"
+
+msgid "Export attack tree (SVG)"
+msgstr "⟦Éxpórt áttáck tréé (SVG)␣␣⟧"
+
+msgid "Export folder"
+msgstr "⟦Éxpórt fóldér␣␣⟧"
+
+msgid "Export risk register (CSV)"
+msgstr "⟦Éxpórt rísk régístér (CSV)␣␣⟧"
+
+msgid "Exports"
+msgstr "⟦Éxpórts␣␣⟧"
+
+msgid "Exports carry your name and the time, and the server records each one."
+msgstr "⟦Éxpórts cárry yóúr námé ánd thé tímé, ánd thé sérvér récórds éách óné.␣␣⟧"
+
+msgid "Feasibility"
+msgstr "⟦Féásíbílíty␣␣⟧"
+
+msgid "Feasibility the engine uses: "
+msgstr "⟦Féásíbílíty thé éngíné úsés: ␣␣⟧"
+
+msgid "File"
+msgstr "⟦Fílé␣␣⟧"
+
+msgid "First password"
+msgstr "⟦Fírst pásswórd␣␣⟧"
+
+msgid "First password (10+ characters)"
+msgstr "⟦Fírst pásswórd (10+ cháráctérs)␣␣⟧"
+
+msgid "Fit"
+msgstr "⟦Fít␣␣⟧"
+
+msgid "Fit the tree"
+msgstr "⟦Fít thé tréé␣␣⟧"
+
+msgid "Full name"
+msgstr "⟦Fúll námé␣␣⟧"
+
+msgid "Gate logic"
+msgstr "⟦Gáté lógíc␣␣⟧"
+
+msgid "Go to"
+msgstr "⟦Gó tó␣␣⟧"
+
+msgid "Goal"
+msgstr "⟦Góál␣␣⟧"
+
+msgid "Goals"
+msgstr "⟦Góáls␣␣⟧"
+
+msgid "Goals and claims"
+msgstr "⟦Góáls ánd cláíms␣␣⟧"
+
+msgid "Goals back a Reduce decision with controls; claims back Retain and Share."
+msgstr "⟦Góáls báck á Rédúcé décísíón wíth cóntróls; cláíms báck Rétáín ánd Sháré.␣␣⟧"
+
+msgid "Help"
+msgstr "⟦Hélp␣␣⟧"
+
+msgid "Highest risks"
+msgstr "⟦Híghést rísks␣␣⟧"
+
+msgid "History"
+msgstr "⟦Hístóry␣␣⟧"
+
+msgid "How an attacker could harm an asset, with STRIDE and UN R155 Annex 5."
+msgstr "⟦Hów án áttáckér cóúld hárm án ássét, wíth STRÍDÉ ánd ÚN R155 Ánnéx 5.␣␣⟧"
+
+msgid "ISO/SAE 21434 · UN R155"
+msgstr "⟦ÍSÓ/SÁÉ 21434 · ÚN R155␣␣⟧"
+
+msgid "Impact"
+msgstr "⟦Ímpáct␣␣⟧"
+
+msgid "Impact rating"
+msgstr "⟦Ímpáct rátíng␣␣⟧"
+
+msgid "Insert"
+msgstr "⟦Ínsért␣␣⟧"
+
+msgid "Insert gate above:"
+msgstr "⟦Ínsért gáté ábóvé:␣␣⟧"
+
+msgid "Item"
+msgstr "⟦Ítém␣␣⟧"
+
+msgid "Keep me logged in on this computer"
+msgstr "⟦Kéép mé lóggéd ín ón thís cómpútér␣␣⟧"
+
+msgid "Keyboard shortcuts"
+msgstr "⟦Kéybóárd shórtcúts␣␣⟧"
+
+msgid "Kind"
+msgstr "⟦Kínd␣␣⟧"
+
+msgid "Last login"
+msgstr "⟦Lást lógín␣␣⟧"
+
+msgid "Last saved: "
+msgstr "⟦Lást sávéd: ␣␣⟧"
+
+msgid "Library"
+msgstr "⟦Líbráry␣␣⟧"
+
+msgid "Library items"
+msgstr "⟦Líbráry ítéms␣␣⟧"
+
+msgid "License"
+msgstr "⟦Lícénsé␣␣⟧"
+
+msgid "Log in"
+msgstr "⟦Lóg ín␣␣⟧"
+
+msgid "Log out"
+msgstr "⟦Lóg óút␣␣⟧"
+
+msgid "Login"
+msgstr "⟦Lógín␣␣⟧"
+
+msgid "Logins"
+msgstr "⟦Lógíns␣␣⟧"
+
+msgid "Measures that make attack steps harder. Attach them to steps on the Attack trees page."
+msgstr "⟦Méásúrés thát máké áttáck stéps hárdér. Áttách thém tó stéps ón thé Áttáck tréés págé.␣␣⟧"
+
+msgid "Methodology"
+msgstr "⟦Méthódólógy␣␣⟧"
+
+msgid "Move down"
+msgstr "⟦Móvé dówn␣␣⟧"
+
+msgid "Move up"
+msgstr "⟦Móvé úp␣␣⟧"
+
+msgid "Name"
+msgstr "⟦Námé␣␣⟧"
+
+msgid "Narrow by"
+msgstr "⟦Nárrów by␣␣⟧"
+
+msgid "Narrowed by "
+msgstr "⟦Nárrówéd by ␣␣⟧"
+
+msgid "New"
+msgstr "⟦Néw␣␣⟧"
+
+msgid "New folder"
+msgstr "⟦Néw fóldér␣␣⟧"
+
+msgid "New node kind"
+msgstr "⟦Néw nódé kínd␣␣⟧"
+
+msgid "New node label"
+msgstr "⟦Néw nódé lábél␣␣⟧"
+
+msgid "New password"
+msgstr "⟦Néw pásswórd␣␣⟧"
+
+msgid "New password (at least 10 characters)"
+msgstr "⟦Néw pásswórd (át léást 10 cháráctérs)␣␣⟧"
+
+msgid "New password again"
+msgstr "⟦Néw pásswórd ágáín␣␣⟧"
+
+msgid "New project folder…"
+msgstr "⟦Néw prójéct fóldér…␣␣⟧"
+
+msgid "New project name"
+msgstr "⟦Néw prójéct námé␣␣⟧"
+
+msgid "New project…"
+msgstr "⟦Néw prójéct…␣␣⟧"
+
+msgid "New threat scenario"
+msgstr "⟦Néw thréát scénáríó␣␣⟧"
+
+msgid "New tree"
+msgstr "⟦Néw tréé␣␣⟧"
+
+msgid "New user name"
+msgstr "⟦Néw úsér námé␣␣⟧"
+
+msgid "No attack step yet."
+msgstr "⟦Nó áttáck stép yét.␣␣⟧"
+
+msgid "No problems. The analysis is complete and consistent."
+msgstr "⟦Nó próbléms. Thé ánálysís ís cómplété ánd cónsístént.␣␣⟧"
+
+msgid "No threat scenario yet."
+msgstr "⟦Nó thréát scénáríó yét.␣␣⟧"
+
+msgid "None."
+msgstr "⟦Nóné.␣␣⟧"
+
+msgid "OK"
+msgstr "⟦ÓK␣␣⟧"
+
+msgid "OR"
+msgstr "⟦ÓR␣␣⟧"
+
+msgid "On asset "
+msgstr "⟦Ón ássét ␣␣⟧"
+
+msgid "One node per line; indent a child under its parent. Start a gate with OR, AND or SEQ (sequential AND); a step with - or nothing. Lines with the same text are the same node, which is how a step is shared. Nodes that keep their text keep their ratings and controls."
+msgstr "⟦Óné nódé pér líné; índént á chíld úndér íts párént. Stárt á gáté wíth ÓR, ÁND ór SÉQ (séqúéntíál ÁND); á stép wíth - ór nóthíng. Línés wíth thé sámé téxt áré thé sámé nódé, whích ís hów á stép ís sháréd. Nódés thát kéép théír téxt kéép théír rátíngs ánd cóntróls.␣␣⟧"
+
+msgid "Open"
+msgstr "⟦Ópén␣␣⟧"
+
+msgid "Open folder"
+msgstr "⟦Ópén fóldér␣␣⟧"
+
+msgid "Open password sessions, newest first. Ending one logs that device out at its next request."
+msgstr "⟦Ópén pásswórd séssíóns, néwést fírst. Éndíng óné lógs thát dévícé óút át íts néxt réqúést.␣␣⟧"
+
+msgid "Open project "
+msgstr "⟦Ópén prójéct ␣␣⟧"
+
+msgid "Open project folder…"
+msgstr "⟦Ópén prójéct fóldér…␣␣⟧"
+
+msgid "Open threat scenario"
+msgstr "⟦Ópén thréát scénáríó␣␣⟧"
+
+msgid "Or work without a server"
+msgstr "⟦Ór wórk wíthóút á sérvér␣␣⟧"
+
+msgid "Overview"
+msgstr "⟦Óvérvíéw␣␣⟧"
+
+msgid "Part of goals"
+msgstr "⟦Párt óf góáls␣␣⟧"
+
+msgid "Password"
+msgstr "⟦Pásswórd␣␣⟧"
+
+msgid "Plain text. Ctrl+Enter saves, Escape cancels."
+msgstr "⟦Pláín téxt. Ctrl+Éntér sávés, Éscápé cáncéls.␣␣⟧"
+
+msgid "Preview"
+msgstr "⟦Prévíéw␣␣⟧"
+
+msgid "Problems"
+msgstr "⟦Próbléms␣␣⟧"
+
+msgid "Project"
+msgstr "⟦Prójéct␣␣⟧"
+
+msgid "Project folder"
+msgstr "⟦Prójéct fóldér␣␣⟧"
+
+msgid "Project notes"
+msgstr "⟦Prójéct nótés␣␣⟧"
+
+msgid "Projects"
+msgstr "⟦Prójécts␣␣⟧"
+
+msgid "Properties"
+msgstr "⟦Própértíés␣␣⟧"
+
+msgid "Rate all five factors to calculate it. Until then the rating above is used."
+msgstr "⟦Ráté áll fívé fáctórs tó cálcúláté ít. Úntíl thén thé rátíng ábóvé ís úséd.␣␣⟧"
+
+msgid "Rating"
+msgstr "⟦Rátíng␣␣⟧"
+
+msgid "Redo"
+msgstr "⟦Rédó␣␣⟧"
+
+msgid "Reference"
+msgstr "⟦Référéncé␣␣⟧"
+
+msgid "Refresh"
+msgstr "⟦Réfrésh␣␣⟧"
+
+msgid "Release edit lock"
+msgstr "⟦Réléásé édít lóck␣␣⟧"
+
+msgid "Release the edit lock"
+msgstr "⟦Réléásé thé édít lóck␣␣⟧"
+
+msgid "Reload"
+msgstr "⟦Rélóád␣␣⟧"
+
+msgid "Reload newer version"
+msgstr "⟦Rélóád néwér vérsíón␣␣⟧"
+
+msgid "Reload the newer version"
+msgstr "⟦Rélóád thé néwér vérsíón␣␣⟧"
+
+msgid "Remove"
+msgstr "⟦Rémóvé␣␣⟧"
+
+msgid "Remove asset"
+msgstr "⟦Rémóvé ássét␣␣⟧"
+
+msgid "Remove claim"
+msgstr "⟦Rémóvé cláím␣␣⟧"
+
+msgid "Remove control"
+msgstr "⟦Rémóvé cóntról␣␣⟧"
+
+msgid "Remove damage scenario"
+msgstr "⟦Rémóvé dámágé scénáríó␣␣⟧"
+
+msgid "Remove goal"
+msgstr "⟦Rémóvé góál␣␣⟧"
+
+msgid "Remove threat scenario"
+msgstr "⟦Rémóvé thréát scénáríó␣␣⟧"
+
+msgid "Rename"
+msgstr "⟦Rénámé␣␣⟧"
+
+msgid "Rename project…"
+msgstr "⟦Rénámé prójéct…␣␣⟧"
+
+msgid "Reports"
+msgstr "⟦Répórts␣␣⟧"
+
+msgid "Reviewed"
+msgstr "⟦Révíéwéd␣␣⟧"
+
+msgid "Risk after controls"
+msgstr "⟦Rísk áftér cóntróls␣␣⟧"
+
+msgid "Risk register"
+msgstr "⟦Rísk régístér␣␣⟧"
+
+msgid "Risk register (CSV)"
+msgstr "⟦Rísk régístér (CSV)␣␣⟧"
+
+msgid "Risks and treatment"
+msgstr "⟦Rísks ánd tréátmént␣␣⟧"
+
+msgid "SEQ"
+msgstr "⟦SÉQ␣␣⟧"
+
+msgid "Save"
+msgstr "⟦Sávé␣␣⟧"
+
+msgid "Save files in this folder"
+msgstr "⟦Sávé fílés ín thís fóldér␣␣⟧"
+
+msgid "Search (English or Japanese)"
+msgstr "⟦Séárch (Énglísh ór Jápánésé)␣␣⟧"
+
+msgid "Search the attack tree library and copy an item into the project"
+msgstr "⟦Séárch thé áttáck tréé líbráry ánd cópy án ítém íntó thé prójéct␣␣⟧"
+
+msgid "Search the library"
+msgstr "⟦Séárch thé líbráry␣␣⟧"
+
+msgid "Security control"
+msgstr "⟦Sécúríty cóntról␣␣⟧"
+
+msgid "Security controls"
+msgstr "⟦Sécúríty cóntróls␣␣⟧"
+
+msgid "Security controls on this step"
+msgstr "⟦Sécúríty cóntróls ón thís stép␣␣⟧"
+
+msgid "Security properties"
+msgstr "⟦Sécúríty própértíés␣␣⟧"
+
+msgid "Select a node on the canvas to inspect its feasibility or expand the attack tree."
+msgstr "⟦Séléct á nódé ón thé cánvás tó ínspéct íts féásíbílíty ór éxpánd thé áttáck tréé.␣␣⟧"
+
+msgid "Server"
+msgstr "⟦Sérvér␣␣⟧"
+
+msgid "Server address"
+msgstr "⟦Sérvér áddréss␣␣⟧"
+
+msgid "Sessions"
+msgstr "⟦Séssíóns␣␣⟧"
+
+msgid "Sessions are managed by the company identity provider."
+msgstr "⟦Séssíóns áré mánágéd by thé cómpány ídéntíty próvídér.␣␣⟧"
+
+msgid "Set password"
+msgstr "⟦Sét pásswórd␣␣⟧"
+
+msgid "Share steps the tree already has"
+msgstr "⟦Sháré stéps thé tréé álréády hás␣␣⟧"
+
+msgid "Show problems"
+msgstr "⟦Shów próbléms␣␣⟧"
+
+msgid "Signed license file"
+msgstr "⟦Sígnéd lícénsé fílé␣␣⟧"
+
+msgid "Standalone license file"
+msgstr "⟦Stándálóné lícénsé fílé␣␣⟧"
+
+msgid "Standalone project folder"
+msgstr "⟦Stándálóné prójéct fóldér␣␣⟧"
+
+msgid "Started (UTC)"
+msgstr "⟦Stártéd (ÚTC)␣␣⟧"
+
+msgid "Status"
+msgstr "⟦Státús␣␣⟧"
+
+msgid "Stop comparing"
+msgstr "⟦Stóp cómpáríng␣␣⟧"
+
+msgid "Suggest steps"
+msgstr "⟦Súggést stéps␣␣⟧"
+
+msgid "Synthesize ghost attack-tree steps with Aegis-Core Gear 1"
+msgstr "⟦Synthésízé ghóst áttáck-tréé stéps wíth Áégís-Córé Géár 1␣␣⟧"
+
+msgid "TARA report (HTML)"
+msgstr "⟦TÁRÁ répórt (HTML)␣␣⟧"
+
+msgid "TARA report (PDF)"
+msgstr "⟦TÁRÁ répórt (PDF)␣␣⟧"
+
+msgid "Take the edit lock"
+msgstr "⟦Táké thé édít lóck␣␣⟧"
+
+msgid "The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. The PDF has the watermark and page numbers on every page. The HTML version opens in a browser, where you can also print it."
+msgstr "⟦Thé TÁRÁ répórt hás án éxécútívé súmmáry ánd thé fúll wórk pródúct: ásséts, dámágé scénáríós, thréát scénáríós, áttáck tréés ás díágráms, thé rísk régístér wíth tréátmént, cóntróls, góáls ánd cláíms, ánd thé ópén próbléms. Thé PDF hás thé wátérmárk ánd págé númbérs ón évéry págé. Thé HTML vérsíón ópéns ín á brówsér, whéré yóú cán álsó prínt ít.␣␣⟧"
+
+msgid "The engine uses: "
+msgstr "⟦Thé éngíné úsés: ␣␣⟧"
+
+msgid "The latest accepted changes on the server, newest first. Every change is in the hash-chained audit log."
+msgstr "⟦Thé látést áccéptéd chángés ón thé sérvér, néwést fírst. Évéry chángé ís ín thé hásh-cháínéd áúdít lóg.␣␣⟧"
+
+msgid "The project at a glance: what is analysed, how risky it is, and what is still open."
+msgstr "⟦Thé prójéct át á gláncé: whát ís ánályséd, hów rísky ít ís, ánd whát ís stíll ópén.␣␣⟧"
+
+msgid "The two new passwords differ."
+msgstr "⟦Thé twó néw pásswórds díffér.␣␣⟧"
+
+msgid "There are no projects yet. Create the first one below."
+msgstr "⟦Théré áré nó prójécts yét. Créáté thé fírst óné bélów.␣␣⟧"
+
+msgid "This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Icons by Lucide (ISC license). Third-party licenses are listed in the release notices."
+msgstr "⟦Thís ápplícátíón úsés thé Slínt tóólkít úndér thé Slínt Róyálty-fréé Lícénsé 2.0. Ícóns by Lúcídé (ÍSC lícénsé). Thírd-párty lícénsés áré lístéd ín thé réléásé nótícés.␣␣⟧"
+
+msgid "This project"
+msgstr "⟦Thís prójéct␣␣⟧"
+
+msgid "This rating was copied from the library and has not been reviewed."
+msgstr "⟦Thís rátíng wás cópíéd fróm thé líbráry ánd hás nót béén révíéwéd.␣␣⟧"
+
+msgid "This server has no company login, so password login cannot be turned off."
+msgstr "⟦Thís sérvér hás nó cómpány lógín, só pásswórd lógín cánnót bé túrnéd óff.␣␣⟧"
+
+msgid "Threat analysis and risk assessment for vehicle cybersecurity."
+msgstr "⟦Thréát ánálysís ánd rísk ásséssmént fór véhíclé cybérsécúríty.␣␣⟧"
+
+msgid "Threat scenario"
+msgstr "⟦Thréát scénáríó␣␣⟧"
+
+msgid "Threat scenarios"
+msgstr "⟦Thréát scénáríós␣␣⟧"
+
+msgid "Threat scenarios by risk after controls"
+msgstr "⟦Thréát scénáríós by rísk áftér cóntróls␣␣⟧"
+
+msgid "Threat scenarios by risk before controls"
+msgstr "⟦Thréát scénáríós by rísk béfóré cóntróls␣␣⟧"
+
+msgid "Threat scenarios leading here"
+msgstr "⟦Thréát scénáríós léádíng héré␣␣⟧"
+
+msgid "Threat scenarios on this asset"
+msgstr "⟦Thréát scénáríós ón thís ássét␣␣⟧"
+
+msgid "Threats"
+msgstr "⟦Thréáts␣␣⟧"
+
+msgid "Treatment"
+msgstr "⟦Tréátmént␣␣⟧"
+
+msgid "Treatment decision"
+msgstr "⟦Tréátmént décísíón␣␣⟧"
+
+msgid "Tree"
+msgstr "⟦Tréé␣␣⟧"
+
+msgid "Try again"
+msgstr "⟦Try ágáín␣␣⟧"
+
+msgid "Undo"
+msgstr "⟦Úndó␣␣⟧"
+
+msgid "Use a user name and password"
+msgstr "⟦Úsé á úsér námé ánd pásswórd␣␣⟧"
+
+msgid "Use company login"
+msgstr "⟦Úsé cómpány lógín␣␣⟧"
+
+msgid "Use the arrow keys to move between nodes, and Escape to select nothing."
+msgstr "⟦Úsé thé árrów kéys tó móvé bétwéén nódés, ánd Éscápé tó séléct nóthíng.␣␣⟧"
+
+msgid "User"
+msgstr "⟦Úsér␣␣⟧"
+
+msgid "User name"
+msgstr "⟦Úsér námé␣␣⟧"
+
+msgid "Users"
+msgstr "⟦Úsérs␣␣⟧"
+
+msgid "Users and login"
+msgstr "⟦Úsérs ánd lógín␣␣⟧"
+
+msgid "Users and project tools"
+msgstr "⟦Úsérs ánd prójéct tóóls␣␣⟧"
+
+msgid "Users come from the company identity provider. Manage them there."
+msgstr "⟦Úsérs cómé fróm thé cómpány ídéntíty próvídér. Mánágé thém théré.␣␣⟧"
+
+msgid "Users of this server (password login), and tools for the open project."
+msgstr "⟦Úsérs óf thís sérvér (pásswórd lógín), ánd tóóls fór thé ópén prójéct.␣␣⟧"
+
+msgid "Versions"
+msgstr "⟦Vérsíóns␣␣⟧"
+
+msgid "Versions and comparison"
+msgstr "⟦Vérsíóns ánd cómpárísón␣␣⟧"
+
+msgid "View"
+msgstr "⟦Víéw␣␣⟧"
+
+msgid "What"
+msgstr "⟦Whát␣␣⟧"
+
+msgid "What could go wrong, rated per impact category."
+msgstr "⟦Whát cóúld gó wróng, rátéd pér ímpáct cátégóry.␣␣⟧"
+
+msgid "What must be protected, and which security properties matter."
+msgstr "⟦Whát múst bé prótéctéd, ánd whích sécúríty própértíés máttér.␣␣⟧"
+
+msgid "When"
+msgstr "⟦Whén␣␣⟧"
+
+msgid "Where to put it"
+msgstr "⟦Whéré tó pút ít␣␣⟧"
+
+msgid "Who"
+msgstr "⟦Whó␣␣⟧"
+
+msgid "Why?"
+msgstr "⟦Why?␣␣⟧"
+
+msgid "With the suggested ratings (marked for review)"
+msgstr "⟦Wíth thé súggéstéd rátíngs (márkéd fór révíéw)␣␣⟧"
+
+msgid "Worst risk"
+msgstr "⟦Wórst rísk␣␣⟧"
+
+msgid "Yes"
+msgstr "⟦Yés␣␣⟧"
+
+msgid "Zoom to 100%"
+msgstr "⟦Zóóm tó 100%␣␣⟧"
+
+msgid "caps at"
+msgstr "⟦cáps át␣␣⟧"
+
+msgid "https://aegis.example.com"
+msgstr "⟦https://áégís.éxámplé.cóm␣␣⟧"
+
+msgid "user name"
+msgstr "⟦úsér námé␣␣⟧"
+

@@ -281,19 +281,19 @@ fn a_report_of_a_project_without_descriptions_has_no_description_parts() {
     let html = aegis_client::report::report_html(&ws, &context());
     assert!(!html.contains("Project notes"));
     assert!(!html.contains("class=\"desc\""));
-    let doc = aegis_client::pdf::report_doc(&ws, &context());
+    let doc = aegis_client::report::report_doc(&ws, &context());
     assert!(
-        !doc.blocks
-            .iter()
-            .any(|b| matches!(b, aegis_client::pdf::Block::Heading(_, h) if h == "Project notes"))
+        !doc.blocks.iter().any(
+            |b| matches!(b, aegis_client::report::Block::Heading(_, h) if h == "Project notes")
+        )
     );
 }
 
 #[test]
 fn the_pdf_report_has_the_same_notes_and_descriptions() {
-    use aegis_client::pdf::Block;
+    use aegis_client::report::Block;
     let (ws, words) = described_workspace();
-    let doc = aegis_client::pdf::report_doc(&ws, &context());
+    let doc = aegis_client::report::report_doc(&ws, &context());
     assert!(
         doc.blocks
             .iter()
