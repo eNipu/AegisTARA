@@ -498,6 +498,10 @@ async fn start<S: ProjectStore>(
             )
         }
     };
+    service
+        .load_access_cache()
+        .await
+        .map_err(|e| e.to_string())?;
     let purger = accounts
         .as_ref()
         .map(|a| spawn_purger(Arc::clone(a), Duration::from_secs(600)));

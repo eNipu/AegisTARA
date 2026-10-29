@@ -24,7 +24,10 @@ use aegis_model::Project;
 
 use crate::actor::Loaded;
 use crate::registry::Registry;
-use crate::store::{FolderStore, Hash, ProjectMeta, ProjectStore, StoreFault};
+use crate::store::{
+    FigureMeta, FolderStore, Hash, ProjectMeta, ProjectStore, StoreFault,
+    validate_and_sanitize_figure, validate_caption, validate_target,
+};
 
 /// What an import copied.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,16 +194,39 @@ impl<S: ProjectStore> Registry<S> {
                 .await
                 .map_err(damaged)?
                 .ok_or_else(|| ImportError::Damaged("a figure vanished while reading".into()))?;
-            crate::store::validate_and_sanitize_figure(
+            let validated = validate_and_sanitize_figure(
                 &figure.media_type,
                 &bytes,
                 self.config().max_figure_bytes,
             )
-            .map_err(|e| ImportError::Damaged(format!("invalid figure {}: {e}", figure.id)))?;
+            .map_err(|e| ImportError::Damaged(format!("invalid figure: {e}")))?;
+            if figure.byte_len != bytes.len() as u64
+                || figure.sha256 != validated.sha256
+                || figure.width != validated.width
+                || figure.height != validated.height
+            {
+                return Err(ImportError::Damaged(
+                    "figure metadata does not match its validated bytes".into(),
+                ));
+            }
+            let caption = validate_caption(&figure.caption)
+                .map_err(|e| ImportError::Damaged(format!("invalid figure caption: {e}")))?;
+            let target = validate_target(&figure.target)
+                .map_err(|e| ImportError::Damaged(format!("invalid figure target: {e}")))?;
+            let normalized = FigureMeta {
+                caption,
+                target,
+                media_type: validated.media.as_str().to_owned(),
+                width: validated.width,
+                height: validated.height,
+                byte_len: validated.bytes.len() as u64,
+                sha256: validated.sha256,
+                ..figure
+            };
             store
                 .put_figure(
-                    &figure,
-                    &bytes,
+                    &normalized,
+                    &validated.bytes,
                     self.config().max_figures_per_project,
                     self.config().max_project_figures_bytes,
                 )

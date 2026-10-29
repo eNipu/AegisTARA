@@ -165,13 +165,17 @@ pub enum AuditKind {
     SessionRevoked,
     /// Old events were removed by the retention trimmer (job 062, SEC-06).
     EventsTrimmed,
+    /// A project membership was added or its role changed (job 058).
+    MembershipChanged,
+    /// A project membership was removed (job 058).
+    MembershipRemoved,
 }
 
 impl AuditKind {
     /// Every kind, so a backend can read a stored name back. Adding a kind
     /// means adding it here; the test `every_kind_is_listed_and_round_trips`
     /// fails if it is missing.
-    pub const ALL: [AuditKind; 13] = [
+    pub const ALL: [AuditKind; 15] = [
         AuditKind::LoginOk,
         AuditKind::LoginFailed,
         AuditKind::Logout,
@@ -185,6 +189,8 @@ impl AuditKind {
         AuditKind::PasswordLoginChanged,
         AuditKind::SessionRevoked,
         AuditKind::EventsTrimmed,
+        AuditKind::MembershipChanged,
+        AuditKind::MembershipRemoved,
     ];
 
     /// The kind with this stored name, if there is one.
@@ -212,6 +218,8 @@ impl AuditKind {
             AuditKind::PasswordLoginChanged => 10,
             AuditKind::SessionRevoked => 11,
             AuditKind::EventsTrimmed => 12,
+            AuditKind::MembershipChanged => 13,
+            AuditKind::MembershipRemoved => 14,
         }
     }
 
@@ -232,6 +240,8 @@ impl AuditKind {
             AuditKind::PasswordLoginChanged => "password_login_changed",
             AuditKind::SessionRevoked => "session_revoked",
             AuditKind::EventsTrimmed => "events_trimmed",
+            AuditKind::MembershipChanged => "membership_changed",
+            AuditKind::MembershipRemoved => "membership_removed",
         }
     }
 }
@@ -1182,6 +1192,7 @@ impl Accounts {
             subject: user.username.as_str().into(),
             admin: user.admin,
             method: AuthMethod::Password,
+            groups: Vec::new(),
         })
     }
 

@@ -111,6 +111,20 @@ pub struct BaselineMeta {
     pub snapshot_bytes: u64,
 }
 
+/// One user or SSO group assigned a built-in role on a project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectMembership {
+    /// Project whose access table contains this row.
+    pub project: ProjectId,
+    /// Stable key (`user:<subject>` or `group:<SSO group>`).
+    pub member: String,
+    /// Built-in role key, validated by the access module.
+    pub role: String,
+}
+
+/// Most user/group entries on one project (R3).
+pub const MAX_PROJECT_MEMBERSHIPS: usize = 1_000;
+
 /// A storage failure. Details stay in the server log.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreFault {
@@ -254,6 +268,37 @@ pub trait ProjectStore: Send + Sync + 'static {
         project: ProjectId,
         id: uuid::Uuid,
     ) -> impl Future<Output = Result<Option<(BaselineMeta, Vec<u8>)>, StoreFault>> + Send;
+
+    /// Returns every access row in the store, ordered by project and member
+    /// key. Used to rebuild the in-memory access cache at startup.
+    fn all_memberships(
+        &self,
+    ) -> impl Future<Output = Result<Vec<ProjectMembership>, StoreFault>> + Send;
+
+    /// Returns the access table for one project, ordered by member key.
+    fn project_memberships(
+        &self,
+        project: ProjectId,
+    ) -> impl Future<Output = Result<Vec<ProjectMembership>, StoreFault>> + Send;
+
+    /// Returns access rows whose member key is in `members`, across projects.
+    fn memberships_for(
+        &self,
+        members: &[String],
+    ) -> impl Future<Output = Result<Vec<ProjectMembership>, StoreFault>> + Send;
+
+    /// Adds or changes one access row, enforcing the per-project cap.
+    fn set_membership(
+        &self,
+        membership: &ProjectMembership,
+    ) -> impl Future<Output = Result<(), StoreFault>> + Send;
+
+    /// Removes one access row. Returns `false` when no row existed.
+    fn remove_membership(
+        &self,
+        project: ProjectId,
+        member: &str,
+    ) -> impl Future<Output = Result<bool, StoreFault>> + Send;
 
     /// Stores a figure attachment while enforcing `max_count` and
     /// `max_total_bytes` across the project's figures (`ARC-01`).

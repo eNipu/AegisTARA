@@ -239,12 +239,9 @@ impl<S: ProjectStore> Registry<S> {
         .map_err(figure_error)?;
 
         let who_sub = who.subject.to_string();
-        self.with(id, |h| {
-            let (who, token) = (who.clone(), token.clone());
-            async move { h.check_lease(who, token).await }
-        })
-        .await?;
-
+        let max_count = self.config.max_figures_per_project;
+        let max_total_bytes = self.config.max_project_figures_bytes;
+        let data = Arc::new(validated.bytes);
         let meta = FigureMeta {
             id: uuid::Uuid::now_v7(),
             project: id,
@@ -253,20 +250,25 @@ impl<S: ProjectStore> Registry<S> {
             media_type: validated.media.as_str().to_owned(),
             width: validated.width,
             height: validated.height,
-            byte_len: validated.bytes.len() as u64,
+            byte_len: data.len() as u64,
             sha256: validated.sha256,
             created_by: who_sub,
             created_ms: (self.config.wall_clock)(),
         };
-        self.store
-            .put_figure(
-                &meta,
-                &validated.bytes,
-                self.config.max_figures_per_project,
-                self.config.max_project_figures_bytes,
-            )
-            .await
-            .map_err(|e| missing(e, id))?;
+        self.with(id, |handle| {
+            let (who, token, data, meta) =
+                (who.clone(), token.clone(), Arc::clone(&data), meta.clone());
+            async move {
+                handle
+                    .put_figure(who, token, meta, data, max_count, max_total_bytes)
+                    .await
+            }
+        })
+        .await
+        .map_err(|error| match error {
+            ServerError::Store(fault) => missing(fault, id),
+            other => other,
+        })?;
         Ok(meta)
     }
 
@@ -283,16 +285,20 @@ impl<S: ProjectStore> Registry<S> {
     ) -> Result<FigureMeta, ServerError> {
         let caption = validate_caption(caption).map_err(figure_error)?;
         let target = validate_target(target).map_err(figure_error)?;
-        self.with(id, |h| {
+        self.with(id, |handle| {
             let (who, token) = (who.clone(), token.clone());
-            async move { h.check_lease(who, token).await }
+            let (caption, target) = (caption.clone(), target.clone());
+            async move {
+                handle
+                    .update_figure(who, token, figure_id, caption, target)
+                    .await
+            }
         })
-        .await?;
-        self.store
-            .update_figure(id, figure_id, &caption, &target)
-            .await
-            .map_err(|e| missing(e, id))?
-            .ok_or(ServerError::InvalidRequest("unknown figure"))
+        .await
+        .map_err(|error| match error {
+            ServerError::Store(fault) => missing(fault, id),
+            other => other,
+        })
     }
 
     /// Deletes a figure attachment (`ARC-01`). Requires the edit lease.
@@ -303,20 +309,15 @@ impl<S: ProjectStore> Registry<S> {
         token: String,
         figure_id: uuid::Uuid,
     ) -> Result<(), ServerError> {
-        self.with(id, |h| {
+        self.with(id, |handle| {
             let (who, token) = (who.clone(), token.clone());
-            async move { h.check_lease(who, token).await }
+            async move { handle.delete_figure(who, token, figure_id).await }
         })
-        .await?;
-        let removed = self
-            .store
-            .delete_figure(id, figure_id)
-            .await
-            .map_err(|e| missing(e, id))?;
-        if !removed {
-            return Err(ServerError::InvalidRequest("unknown figure"));
-        }
-        Ok(())
+        .await
+        .map_err(|error| match error {
+            ServerError::Store(fault) => missing(fault, id),
+            other => other,
+        })
     }
 
     /// Lists projects, oldest first, up to `max_projects`.

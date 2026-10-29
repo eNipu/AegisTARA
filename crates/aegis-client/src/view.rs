@@ -304,12 +304,12 @@ pub fn target_to_element_ref(target: &str) -> Option<ElementRef> {
         "data_flow" => Some(ElementRef::DataFlow(uuid_str.parse().ok()?)),
         "trust_boundary" => Some(ElementRef::TrustBoundary(uuid_str.parse().ok()?)),
         "asset" => Some(ElementRef::Asset(uuid_str.parse().ok()?)),
-        "damage" => Some(ElementRef::Damage(uuid_str.parse().ok()?)),
-        "threat" => Some(ElementRef::Threat(uuid_str.parse().ok()?)),
-        "tree" => Some(ElementRef::Tree(uuid_str.parse().ok()?)),
-        "control" => Some(ElementRef::Control(uuid_str.parse().ok()?)),
-        "goal" => Some(ElementRef::Goal(uuid_str.parse().ok()?)),
-        "claim" => Some(ElementRef::Claim(uuid_str.parse().ok()?)),
+        "damage" | "damage_scenario" => Some(ElementRef::Damage(uuid_str.parse().ok()?)),
+        "threat" | "threat_scenario" => Some(ElementRef::Threat(uuid_str.parse().ok()?)),
+        "tree" | "attack_tree" => Some(ElementRef::Tree(uuid_str.parse().ok()?)),
+        "control" | "security_control" => Some(ElementRef::Control(uuid_str.parse().ok()?)),
+        "goal" | "cybersecurity_goal" => Some(ElementRef::Goal(uuid_str.parse().ok()?)),
+        "claim" | "cybersecurity_claim" => Some(ElementRef::Claim(uuid_str.parse().ok()?)),
         _ => None,
     }
 }

@@ -1331,13 +1331,14 @@ sets the transport limits: `accept_http1(true)`, `CALL_TIMEOUT = 30 s`,
 | `main.rs` | | Reads environment variables (table in the module docs), opens the store and accounts, loads the license, restores seats, serves. `aegis-server import-folder <folder>` imports a standalone project folder instead of serving (II.4.7). `PORT` (Railway) means `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset. |
 | `server.rs` | `Layers<A>`, `builder()`, `router()` | See II.4.1. |
 | `health.rs` | `HealthLayer`, `Health<S>` | Answers `GET /healthz` before any other layer. |
-| `auth.rs` | `AuthMethod { Oidc, Password, Dev }`, `Principal { subject, admin, method }` | The principal is what every handler sees. |
+| `auth.rs` | `AuthMethod { Oidc, Password, Dev }`, `Principal { subject, admin, method, groups }` | The principal is what every handler sees; `groups` carries SSO group names for role mapping (ACC-02, ADR 0061). |
 | `auth_layer.rs` | `RequestInfo { headers, method, url }`, trait `Authn`, `OidcAuthn<H>`, `PasswordAuthn(Arc<Accounts>)`, `HybridAuthn<H>`, `DevAuthn`, `AuthLayer<A>`, `Authenticated<A, S>` | Static dispatch over the method (D11). |
 | `accounts/mod.rs` | `Accounts`, `AccountBackend { Memory, Postgres }`, `UserRecord`, `SessionRecord`, `SessionKey`, `AuditKind`, `AuditEvent`, `AccountsConfig`, `NewSession`, `UserUpdate`, `LoadedAccounts`, `AccountError` | Users and sessions, see II.4.3. |
 | `accounts/password.rs` | `PasswordRule`, `hash()`, `verify()`, `decoy()` | Argon2id: 19 MiB, 2 passes, 1 lane. At least 10 characters, at most 256 bytes. |
 | `accounts/memory.rs`, `accounts/postgres.rs` | `MemoryAccounts`, `PostgresAccounts` | Storage backends. Postgres shares the project store's pool. |
 | `accounts/service.rs` | `AccountsService`, `LoginOptions`, `PUBLIC_PATH_PREFIX`, `RETRY_AFTER_HEADER` | The public `Accounts` gRPC service. |
 | `service.rs` | `AegisService<S>` | All `Aegis` handlers. Maps `ServerError` to a status. `with_accounts()` adds the account calls. |
+| `access.rs` | `Access`, `Permission { Read, Write, Manage, Admin }`, `Member` | Built-in role table and per-project membership; `AegisService` checks `Permission` before every project RPC (`ACC-01`, ADR 0061). |
 | `registry.rs` | `Registry<S>` | Owns the open project actors (map of `ProjectId` to `ProjectHandle`), caps (`max_open_projects`, `max_projects`), name checks, baselines, seat restore. |
 | `actor.rs` | `ProjectHandle`, `OpenData`, `Status`, `RiskReport`, `ThreatRiskRow`, `Loaded` | One task per open project (C1). Bounded mailbox (`mailbox`, R4). Commands include `Status`, `Rename` and `Delete`. `Status` answers from memory (nothing is serialized). |
 | `lease.rs` | `LeaseToken`, `Grant`, `LeaseState` | Edit lock with expiry (`lease`, default 120 s). |
@@ -1913,14 +1914,14 @@ appears (the trigger is named in the table).
 | | `trace.rs` | `Requirement`, `Verification`, `TraceLink`, `ExternalRef`, suspect state (TRC-01 to TRC-03) | |
 | `aegis-canvas` | `diagram.rs` | Data-flow diagram layout and drawing into the same display list (ARC-03) | |
 | `aegis-proto` | new RPC groups | Access, library, report profiles, AI (suggest stream, accept, reject), connectors | |
-| `aegis-server` | `access.rs` | Role table and membership, checked before every RPC (ACC-01) | |
+| `aegis-server` | `access.rs` | Role table and membership, checked before every RPC (ACC-01) — **built** (`crates/aegis-server/src/access.rs`, ADR 0061; see Part II.4.2) | |
 | | `library.rs` | Company library: states, publish permission, usage counts (LIB-05, LIB-06) | |
 | | `secrets.rs` | Encrypted credentials, key from the environment or the cloud key service | |
 | | `ai/` | Gateway: `Provider` enum over two adapters (rule D11 enum dispatch), policy table, context builder, schema and citation check, AI audit (AI-01 to AI-05) | `aegis-ai` crate when the MCP server (AI-10) needs it outside the server |
 | | `connect/` | Connector worker: one adapter per ALM tool, field mapping, push and status pull (INT-03 to INT-06) | |
 | `aegis-client` | `reqif.rs` | ReqIF exchange (INT-01) | |
 | `aegis-shell` | `ui/` (panel slots, command palette, history panel) | UI-01 to UI-04 | |
-| `aegis-model` | `methodology/` (extended) | Catalog packs with text (DOM-04) | |
+| `aegis-model` | `methodology/` (extended) | Catalog packs with text (DOM-04) — **built** as `catalog_pack.rs` and `methodology/stride.rs`, ADR 0062 | |
 
 Repository additions: `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
 where licenses allow). The i18n, report, figure attachment, item definition, and

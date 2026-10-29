@@ -1,0 +1,19 @@
+{
+  "format": "aegis-catalog-pack",
+  "version": 1,
+  "id": "mitre-attack",
+  "title": "MITRE ATT&CK Catalog Metadata",
+  "pack_version": "1.0.0",
+  "license": "MITRE ATT&CK Terms of Use",
+  "metadata_only": true,
+  "catalog": {
+    "key": "mitre-attack",
+    "name": "MITRE ATT&CK®",
+    "description": "A knowledge base and model for organizing observed adversary tactics and techniques across technology domains.",
+    "source_url": "https://attack.mitre.org/",
+    "terms_url": "https://attack.mitre.org/resources/legal-and-branding/terms-of-use/",
+    "attribution": "© 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation.",
+    "license_terms": "The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use ATT&CK ® for research, development, and commercial purposes. Any copy you make for such purposes is authorized provided that you reproduce MITRE's copyright designation and this license in any such copy.",
+    "conditions": "Use MITRE ATT&CK® on first reference; do not imply MITRE affiliation or endorsement. See https://attack.mitre.org/resources/legal-and-branding/ for trademark guidance."
+  }
+}

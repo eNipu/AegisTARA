@@ -190,23 +190,18 @@ pub fn validate_target(target: &str) -> Result<String, FigureError> {
             "target must be empty or <kind>:<uuid>",
         ));
     };
-    let valid_kind = matches!(
-        kind,
-        "component"
-            | "interface"
-            | "data_flow"
-            | "trust_boundary"
-            | "asset"
-            | "damage_scenario"
-            | "threat_scenario"
-            | "attack_tree"
-            | "security_control"
-            | "cybersecurity_goal"
-            | "cybersecurity_claim"
-    );
-    if !valid_kind {
-        return Err(FigureError::InvalidTarget("unknown target element kind"));
-    }
+    let canonical_kind = match kind {
+        "component" | "interface" | "data_flow" | "trust_boundary" | "asset" | "damage"
+        | "threat" | "tree" | "control" | "goal" | "claim" => kind,
+        // Accept target strings persisted by early 073 builds.
+        "damage_scenario" => "damage",
+        "threat_scenario" => "threat",
+        "attack_tree" => "tree",
+        "security_control" => "control",
+        "cybersecurity_goal" => "goal",
+        "cybersecurity_claim" => "claim",
+        _ => return Err(FigureError::InvalidTarget("unknown target element kind")),
+    };
     let uuid = Uuid::parse_str(id_str)
         .map_err(|_| FigureError::InvalidTarget("target ID is not a valid UUID"))?;
     if uuid.get_version_num() != 7 || uuid.to_string() != id_str {
@@ -214,7 +209,7 @@ pub fn validate_target(target: &str) -> Result<String, FigureError> {
             "target ID must be a canonical lowercase UUIDv7",
         ));
     }
-    Ok(format!("{kind}:{uuid}"))
+    Ok(format!("{canonical_kind}:{uuid}"))
 }
 
 /// Validates (and for SVG, sanitizes) a raw figure byte slice against `max_bytes`.
@@ -920,5 +915,23 @@ mod tests {
             format!("component:{id}")
         );
         assert!(validate_target("unknown:123").is_err());
+        // Targets persisted by the early 073 builds are normalized to the
+        // canonical kind names the client emits and parses.
+        assert_eq!(
+            validate_target(&format!("damage_scenario:{id}")).expect("ok"),
+            format!("damage:{id}")
+        );
+        assert_eq!(
+            validate_target(&format!("threat_scenario:{id}")).expect("ok"),
+            format!("threat:{id}")
+        );
+        assert_eq!(
+            validate_target(&format!("attack_tree:{id}")).expect("ok"),
+            format!("tree:{id}")
+        );
+        assert_eq!(
+            validate_target(&format!("security_control:{id}")).expect("ok"),
+            format!("control:{id}")
+        );
     }
 }

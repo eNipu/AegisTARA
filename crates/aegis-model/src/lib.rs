@@ -224,6 +224,7 @@
 extern crate self as aegis_model;
 
 mod asset;
+pub mod catalog_pack;
 mod control;
 mod damage;
 mod description;

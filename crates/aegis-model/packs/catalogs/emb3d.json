@@ -1,0 +1,19 @@
+{
+  "format": "aegis-catalog-pack",
+  "version": 1,
+  "id": "mitre-emb3d",
+  "title": "MITRE EMB3D Catalog Metadata",
+  "pack_version": "1.0.0",
+  "license": "MITRE EMB3D Terms of Use",
+  "metadata_only": true,
+  "catalog": {
+    "key": "emb3d",
+    "name": "MITRE EMB3D™",
+    "description": "A threat model for embedded devices that relates device properties to threats and mitigations.",
+    "source_url": "https://emb3d.mitre.org/",
+    "terms_url": "https://emb3d.mitre.org/subtabs/terms-of-use.html",
+    "attribution": "©2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation.",
+    "license_terms": "The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use, copy, and create derivative works of EMB3D™ for internal business purposes or commercial use. Any copy you make for such purposes is authorized provided that you reproduce MITRE’s copyright designation and this license in any such copy and provide MITRE notice of such use at EMB3D@mitre.org.",
+    "conditions": "Notify EMB3D@mitre.org of use. Do not include a charge for EMB3D in sales or licenses of derivative products or services to the U.S. Government."
+  }
+}

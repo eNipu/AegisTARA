@@ -44,6 +44,9 @@ pub struct Principal {
     pub admin: bool,
     /// How the caller logged in.
     pub method: AuthMethod,
+    /// SSO groups from the access token (`roles` and `groups` claims). Empty
+    /// for password and development logins.
+    pub groups: Vec<Arc<str>>,
 }
 
 impl Principal {
@@ -54,6 +57,7 @@ impl Principal {
             subject: subject.into(),
             admin: false,
             method: AuthMethod::Development,
+            groups: Vec::new(),
         }
     }
 
@@ -64,6 +68,7 @@ impl Principal {
             subject: subject.into(),
             admin: true,
             method: AuthMethod::Development,
+            groups: Vec::new(),
         }
     }
 
@@ -112,6 +117,7 @@ pub fn dev_interceptor(mut request: Request<()>) -> Result<Request<()>, Status> 
         subject: user.into(),
         admin,
         method: AuthMethod::Development,
+        groups: Vec::new(),
     });
     Ok(request)
 }

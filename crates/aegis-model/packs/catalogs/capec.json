@@ -1,0 +1,19 @@
+{
+  "format": "aegis-catalog-pack",
+  "version": 1,
+  "id": "mitre-capec",
+  "title": "CAPEC Catalog Metadata",
+  "pack_version": "1.0.0",
+  "license": "MITRE CAPEC Terms of Use",
+  "metadata_only": true,
+  "catalog": {
+    "key": "capec",
+    "name": "CAPEC™ — Common Attack Pattern Enumeration and Classification",
+    "description": "A public catalog that classifies recurring attack patterns and provides a shared vocabulary for describing ways systems may be attacked.",
+    "source_url": "https://capec.mitre.org/",
+    "terms_url": "https://capec.mitre.org/about/termsofuse.html",
+    "attribution": "Copyright © 2007–2026, The MITRE Corporation. CAPEC and the CAPEC logo are trademarks of The MITRE Corporation.",
+    "license_terms": "The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use Common Attack Pattern Enumeration and Classification (CAPEC™) for research, development, and commercial purposes. Any copy you make for such purposes is authorized provided that you reproduce MITRE’s copyright designation and this license in any such copy.",
+    "conditions": ""
+  }
+}

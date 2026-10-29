@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod access;
 pub mod accounts;
 pub mod actor;
 pub mod auth;

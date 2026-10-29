@@ -130,6 +130,19 @@ service Aegis {
   // Records that the caller exported a report, so exports are audited
   // (direction section 6).
   rpc RecordExport(RecordExportRequest) returns (RecordExportResponse);
+
+  // ---- project access (job 058, ACC-01 to ACC-03, D19) ----
+
+  // Lists a project's membership rows (member key and role). Requires
+  // `read` on the project.
+  rpc ListMemberships(ListMembershipsRequest) returns (ListMembershipsResponse);
+  // Adds a membership row or changes an existing one. Requires `manage` on
+  // the project; assigning an `admin` or `methodology_owner` row also
+  // requires a server admin.
+  rpc SetMembership(SetMembershipRequest) returns (MembershipInfo);
+  // Removes a membership row. Requires `manage` on the project. The last
+  // owner row cannot be removed.
+  rpc RemoveMembership(RemoveMembershipRequest) returns (RemoveMembershipResponse);
 }
 
 // Login. Callable without credentials: a client learns how to log in from
@@ -360,6 +373,34 @@ message HistoryEntry {
 message ListHistoryResponse {
   repeated HistoryEntry entries = 1;
 }
+
+message MembershipInfo {
+  // `user:<subject>` or `group:<SSO group name>`.
+  string member = 1;
+  // One of the six built-in role keys.
+  string role = 2;
+}
+
+message ListMembershipsRequest {
+  string project_id = 1;
+}
+
+message ListMembershipsResponse {
+  repeated MembershipInfo memberships = 1;
+}
+
+message SetMembershipRequest {
+  string project_id = 1;
+  string member = 2;
+  string role = 3;
+}
+
+message RemoveMembershipRequest {
+  string project_id = 1;
+  string member = 2;
+}
+
+message RemoveMembershipResponse {}
 
 message RecordExportRequest {
   string project_id = 1;

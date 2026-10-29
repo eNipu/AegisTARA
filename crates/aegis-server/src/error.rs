@@ -31,6 +31,9 @@ pub enum ServerError {
     /// The caller is not an admin.
     #[error("admin only")]
     NotAdmin,
+    /// The caller has no membership that grants this access on the project.
+    #[error("not authorized for this project")]
+    NotAuthorized,
     /// Another editor holds the lease.
     #[error("project is locked by {holder}")]
     LockHeld {
@@ -102,6 +105,7 @@ impl ServerError {
             ServerError::InvalidRequest(_) => "invalid_request",
             ServerError::UnknownMethodology => "unknown_methodology",
             ServerError::NotAdmin => "not_admin",
+            ServerError::NotAuthorized => "not_authorized",
             ServerError::LockHeld { .. } => "lock_held",
             ServerError::NotLocked => "not_locked",
             ServerError::LockInvalid => "lock_invalid",
@@ -126,7 +130,7 @@ impl ServerError {
             | ServerError::UnknownMethodology
             | ServerError::MalformedOp { .. }
             | ServerError::RejectedOp { .. } => Code::InvalidArgument,
-            ServerError::NotAdmin => Code::PermissionDenied,
+            ServerError::NotAdmin | ServerError::NotAuthorized => Code::PermissionDenied,
             ServerError::LockHeld { .. }
             | ServerError::NotLocked
             | ServerError::LockInvalid

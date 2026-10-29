@@ -39,7 +39,7 @@ use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::ids::ProjectId;
 use crate::lease::{Grant, LeaseState};
-use crate::store::{ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot};
+use crate::store::{FigureMeta, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot};
 
 /// A serialized project and the sequence number it is current as of.
 #[derive(Debug)]
@@ -110,6 +110,29 @@ enum Cmd {
     CheckLease {
         who: Principal,
         token: String,
+        reply: Reply<()>,
+    },
+    PutFigure {
+        who: Principal,
+        token: String,
+        meta: FigureMeta,
+        data: Arc<Vec<u8>>,
+        max_count: usize,
+        max_total_bytes: u64,
+        reply: Reply<()>,
+    },
+    UpdateFigure {
+        who: Principal,
+        token: String,
+        id: uuid::Uuid,
+        caption: String,
+        target: String,
+        reply: Reply<FigureMeta>,
+    },
+    DeleteFigure {
+        who: Principal,
+        token: String,
+        id: uuid::Uuid,
         reply: Reply<()>,
     },
     Delete(Reply<()>),
@@ -264,6 +287,64 @@ impl ProjectHandle {
     pub async fn check_lease(&self, who: Principal, token: String) -> Result<(), ServerError> {
         self.call(|reply| Cmd::CheckLease { who, token, reply })
             .await
+    }
+
+    /// Stores a figure while serializing the lease check with the write.
+    pub async fn put_figure(
+        &self,
+        who: Principal,
+        token: String,
+        meta: FigureMeta,
+        data: Arc<Vec<u8>>,
+        max_count: usize,
+        max_total_bytes: u64,
+    ) -> Result<(), ServerError> {
+        self.call(|reply| Cmd::PutFigure {
+            who,
+            token,
+            meta,
+            data,
+            max_count,
+            max_total_bytes,
+            reply,
+        })
+        .await
+    }
+
+    /// Updates a figure while serializing the lease check with the write.
+    pub async fn update_figure(
+        &self,
+        who: Principal,
+        token: String,
+        id: uuid::Uuid,
+        caption: String,
+        target: String,
+    ) -> Result<FigureMeta, ServerError> {
+        self.call(|reply| Cmd::UpdateFigure {
+            who,
+            token,
+            id,
+            caption,
+            target,
+            reply,
+        })
+        .await
+    }
+
+    /// Deletes a figure while serializing the lease check with the write.
+    pub async fn delete_figure(
+        &self,
+        who: Principal,
+        token: String,
+        id: uuid::Uuid,
+    ) -> Result<(), ServerError> {
+        self.call(|reply| Cmd::DeleteFigure {
+            who,
+            token,
+            id,
+            reply,
+        })
+        .await
     }
 
     /// Deletes the project from storage and stops the actor. Refused while
@@ -538,6 +619,63 @@ impl<S: ProjectStore> Actor<S> {
             }
             Cmd::CheckLease { who, token, reply } => {
                 let _ = reply.send(self.lease.require(Instant::now(), &who, &token));
+            }
+            Cmd::PutFigure {
+                who,
+                token,
+                meta,
+                data,
+                max_count,
+                max_total_bytes,
+                reply,
+            } => {
+                let result = match self.lease.require(Instant::now(), &who, &token) {
+                    Ok(()) => self
+                        .store
+                        .put_figure(&meta, data.as_slice(), max_count, max_total_bytes)
+                        .await
+                        .map_err(ServerError::Store),
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+            }
+            Cmd::UpdateFigure {
+                who,
+                token,
+                id,
+                caption,
+                target,
+                reply,
+            } => {
+                let result = match self.lease.require(Instant::now(), &who, &token) {
+                    Ok(()) => match self
+                        .store
+                        .update_figure(self.id, id, &caption, &target)
+                        .await
+                    {
+                        Ok(Some(meta)) => Ok(meta),
+                        Ok(None) => Err(ServerError::InvalidRequest("unknown figure")),
+                        Err(error) => Err(ServerError::Store(error)),
+                    },
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+            }
+            Cmd::DeleteFigure {
+                who,
+                token,
+                id,
+                reply,
+            } => {
+                let result = match self.lease.require(Instant::now(), &who, &token) {
+                    Ok(()) => match self.store.delete_figure(self.id, id).await {
+                        Ok(true) => Ok(()),
+                        Ok(false) => Err(ServerError::InvalidRequest("unknown figure")),
+                        Err(error) => Err(ServerError::Store(error)),
+                    },
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
             }
             Cmd::Delete(reply) => {
                 if let Some(holder) = self.lease.holder(Instant::now()) {
