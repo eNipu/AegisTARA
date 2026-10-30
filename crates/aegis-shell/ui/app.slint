@@ -136,8 +136,14 @@ export component AppWindow inherits Window {
     min-height: 600px;
     background: Theme.sheet;
     icon: @image-url("brand/App_Icon_Resolutions/AegisTARA_Icon_256x256.png");
-    init => {
-        Palette.color-scheme = ColorScheme.dark;
+    // Appearance (UI-07.5): 0 System, 1 Light, 2 Dark. System hands the
+    // palette back to the OS (`unknown`), so the window follows the OS live;
+    // `Theme.dark` reads the palette, so the brand tokens follow too.
+    in-out property <int> appearance: 0;
+    callback appearance-selected(int);
+    changed appearance => {
+        Palette.color-scheme = root.appearance == 1 ? ColorScheme.light
+            : root.appearance == 2 ? ColorScheme.dark : ColorScheme.unknown;
     }
 
     // Side panels follow the window: full size on a big window, narrower on a
@@ -848,13 +854,11 @@ export component AppWindow inherits Window {
             MenuItem { title: @tr("Fit the tree"); icon: @image-url("icons/maximize.svg"); enabled: root.in-project && root.has-tree; activated => { root.fit(); } }
             MenuItem { title: @tr("Zoom to 100%"); icon: @image-url("icons/zoom-in.svg"); enabled: root.in-project && root.has-tree; activated => { root.zoom-reset(); } }
             MenuSeparator {}
-            MenuItem {
-                title: @tr("Dark theme");
-                checkable: true;
-                checked: Theme.dark;
-                activated => {
-                    Palette.color-scheme = Theme.dark ? ColorScheme.light : ColorScheme.dark;
-                }
+            Menu {
+                title: @tr("Appearance");
+                MenuItem { title: @tr("System"); checkable: true; checked: root.appearance == 0; activated => { root.appearance = 0; root.appearance-selected(0); } }
+                MenuItem { title: @tr("Light"); checkable: true; checked: root.appearance == 1; activated => { root.appearance = 1; root.appearance-selected(1); } }
+                MenuItem { title: @tr("Dark"); checkable: true; checked: root.appearance == 2; activated => { root.appearance = 2; root.appearance-selected(2); } }
             }
         }
         Menu {
@@ -2837,7 +2841,7 @@ export component AppWindow inherits Window {
                 TextEdit {
                     vertical-stretch: 1;
                     text <=> root.outline-draft;
-                    font-family: "monospace";
+                    font-family: root.mono-font-family;
                     font-size: 13px;
                     wrap: no-wrap;
                 }
@@ -2901,7 +2905,7 @@ export component AppWindow inherits Window {
                             x: 8px; y: 8px;
                             width: parent.width - 16px;
                             text: root.library-preview == "" ? "Pick an item to see it here." : root.library-preview;
-                            font-family: "monospace";
+                            font-family: root.mono-font-family;
                             font-size: 12px;
                             color: Theme.ink;
                             wrap: word-wrap;

@@ -77,3 +77,44 @@
   guarantee holds (headless never uses the GPU path), but the criterion's
   "assert the headless renderer is `software` even when the env asks for GPU"
   test is not written yet.
+
+## Round 2
+
+### Built
+- **System/Light/Dark appearance (UI-07.5).** `Settings.appearance` (`system`,
+  `light`, `dark`; empty means system) with an `Appearance` enum in
+  `aegis-client`. The window has `appearance` (0/1/2) and an
+  `appearance-selected` callback; the launcher persists the choice through the
+  existing settings file. System writes `ColorScheme.unknown` to `Palette`,
+  which both Slint styles resolve to the OS value live. `Theme.dark` now reads
+  the palette background instead of the raw scheme, so the brand tokens
+  follow System mode too. The forced-dark `init` is gone; the View menu's
+  "Dark theme" toggle became an Appearance submenu. Splash/About keep their
+  obsidian tokens. ja and pseudo catalogs updated.
+- **Monospace binding (UI-07.7).** The outline editor and the library
+  preview now use `mono-font-family` instead of the literal `"monospace"`.
+  Catalog details stay proportional (prose). The `ID` table column stays in the
+  UI font because `StandardTableView` has no per-column font.
+- **Headless renderer assertion (UI-07.9).** `headless::RENDERER` is
+  `Software`; `tests/appearance.rs` checks it while `renderer::parse` asks for
+  Skia, and renders a frame. Setting the variable itself is not possible
+  (`deny(unsafe_code)`), so the test proves the headless path never reads it
+  by construction.
+- **Offline build (UI-07.3).** Measured, not assumed: see ADR 0063. The
+  no-network release build fails at `skia-bindings`; the checklist now says to
+  vendor the archive via `SKIA_BINARIES_URL`.
+
+### Verified
+- `cargo fmt`, `cargo clippy -p aegis-shell -p aegis-client --all-targets -D
+  warnings`, `cargo test --workspace --locked` (1596 passed, 0 failed),
+  `scripts/deny.sh`.
+- `tests/appearance.rs`: Dark and Light repaint the same window live.
+
+### Not done
+- Renderer spike on a Retina Mac and a Windows laptop (owner-run); ADR stays
+  `proposed`.
+- Offline build from a vendored archive on macOS and Windows.
+- Live OS-appearance following is not exercised by any test (the headless
+  platform has no OS scheme); check it by hand: flip the OS appearance with
+  Appearance = System and watch the window.
+- Japanese and pseudo-locale screenshots on the real macOS window.

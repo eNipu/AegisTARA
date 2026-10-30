@@ -412,7 +412,7 @@
     },
     {
       "id": "024-cybersecurity-goals-and-claims",
-      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 \u00a715.4)",
+      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 §15.4)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1053,9 +1053,9 @@
         "code": "PASS"
       },
       "decision": "ESCALATE",
-      "updated_at": "2026-10-30T21:52:38Z",
-      "notes": "Build round 1 on factory/113-platform-fidelity: Skia default with a software fallback and AEGIS_RENDERER, per-target cupertino/fluent style, one shortcut table driving the menus, native UI font. Checks pass. ESCALATE: the ADR 0063 spike is still TBD and System/Light/Dark appearance (UI-07.5) is not built."
+      "updated_at": "2026-10-30T22:49:46Z",
+      "notes": "Rework built on factory/113-platform-fidelity: System/Light/Dark appearance (persisted), monospace binding, headless-renderer assertion, offline-build finding (no-network release build fails at skia-bindings; vendor via SKIA_BINARIES_URL). Checks pass. Round 1 reviews are stale; re-review pending. Still needs the owner-run Retina Mac + Windows spike and a vendored-archive offline build before ADR 0063 can be accepted."
     }
   ],
-  "updated_at": "2026-10-30T21:52:38Z"
+  "updated_at": "2026-10-30T22:49:46Z"
 }

@@ -6,9 +6,10 @@
 import { Palette } from "std-widgets.slint";
 
 export global Theme {
-    // Default to the signature Tactical Obsidian dark theme unless light mode
-    // is explicitly selected.
-    out property <bool> dark: Palette.color-scheme != ColorScheme.light;
+    // Dark when the widget palette is dark. The palette follows the OS in
+    // System mode (UI-07.5), so reading its background (not the raw
+    // `color-scheme`, which is `unknown` there) keeps every token in step.
+    out property <bool> dark: Palette.background.to-hsv().value < 0.5;
 
     // ---- Master Brand Tokens (always dark obsidian for splash/brand headers) ----
     // Obsidian Background: #14181D (center radial) -> #0B0D10 (outer edge)

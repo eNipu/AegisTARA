@@ -288,9 +288,6 @@ msgstr "⟦Dámágé scénáríós␣␣⟧"
 msgid "Damage scenarios it leads to"
 msgstr "⟦Dámágé scénáríós ít léáds tó␣␣⟧"
 
-msgid "Dark theme"
-msgstr "⟦Dárk thémé␣␣⟧"
-
 msgid "Deciding damage"
 msgstr "⟦Décídíng dámágé␣␣⟧"
 
@@ -1142,3 +1139,15 @@ msgstr "⟦ÍD␣⟧"
 
 
 
+
+msgid "Appearance"
+msgstr "⟦Áppéáráncé␣␣⟧"
+
+msgid "System"
+msgstr "⟦Systém␣␣⟧"
+
+msgid "Light"
+msgstr "⟦Líght␣␣⟧"
+
+msgid "Dark"
+msgstr "⟦Dárk␣␣⟧"
