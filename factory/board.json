@@ -1053,9 +1053,9 @@
         "code": "pending"
       },
       "decision": null,
-      "updated_at": "2026-10-30T20:08:47Z",
-      "notes": "Spec written. Renderer spike (Retina Mac + Windows laptop) and owner pick are pending before build; ADR 0063 is proposed."
+      "updated_at": "2026-10-30T20:21:59Z",
+      "notes": "Owner picked Skia (2026-10-30). Renderer spike evidence on a Retina Mac and Windows laptop is still required before build; ADR 0063 stays proposed."
     }
   ],
-  "updated_at": "2026-10-30T20:08:47Z"
+  "updated_at": "2026-10-30T20:21:59Z"
 }

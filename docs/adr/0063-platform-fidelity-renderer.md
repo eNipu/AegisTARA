@@ -2,9 +2,9 @@
 
 - **Date:** 2026-10-30
 - **Status:** proposed
-- **Decision:** `TBD` — the owner picks software, Skia or FemtoVG from the spike
-  evidence below. This record stays `proposed` until that pick is made and the
-  evidence table is filled in. Job 113 (`UI-07`), decision D25.
+- **Decision:** Skia, chosen by the owner on 2026-10-30. The spike evidence and
+  the D5/offline-build checks below still have to confirm it before this record
+  becomes `accepted`. Job 113 (`UI-07`), decision D25.
 
 ## Context
 
@@ -115,10 +115,12 @@ The owner weighs, in this order:
 
 ## Decision
 
-`TBD` — chosen renderer: TBD. Also record here: whether a vendored Skia archive
-is used (and its version/checksum/licence notice), the measured values quoted
-from the evidence table, the owner's date, and any `UI-07.8` menu bar gap.
-Change `Status: proposed` to `accepted` only then.
+**Skia**, picked by the owner on 2026-10-30. Still to be recorded here before
+changing `Status: proposed` to `accepted`: the measured values from the evidence
+table, whether a vendored Skia archive is used (with version, checksum and
+licence notice), that D5 and `cargo-deny` pass, that the offline build works,
+and any `UI-07.8` menu bar gap. If Skia cannot pass `UI-07.3` even with a
+vendored archive, `UI-07.3` allows FemtoVG; record that change here first.
 
 ## Consequences
 
