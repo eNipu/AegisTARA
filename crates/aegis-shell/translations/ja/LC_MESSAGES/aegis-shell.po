@@ -288,9 +288,6 @@ msgstr "損害シナリオ"
 msgid "Damage scenarios it leads to"
 msgstr "そこから生じる損害シナリオ"
 
-msgid "Dark theme"
-msgstr "ダークテーマ"
-
 msgid "Deciding damage"
 msgstr "決定する損害"
 
@@ -1142,3 +1139,15 @@ msgstr "ID"
 
 
 
+
+msgid "Appearance"
+msgstr "外観"
+
+msgid "System"
+msgstr "システム"
+
+msgid "Light"
+msgstr "ライト"
+
+msgid "Dark"
+msgstr "ダーク"

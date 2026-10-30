@@ -122,6 +122,21 @@ licence notice), that D5 and `cargo-deny` pass, that the offline build works,
 and any `UI-07.8` menu bar gap. If Skia cannot pass `UI-07.3` even with a
 vendored archive, `UI-07.3` allows FemtoVG; record that change here first.
 
+## Offline build observation (measured 2026-10-30)
+
+`cargo build --offline --locked --release -p aegis-shell` in a fresh target
+directory, on an Apple-silicon Mac with the network denied (`sandbox-exec`
+`deny network*`), **fails**. `skia-bindings 0.153.3` first tries the prebuilt
+`skia-binaries-b7f043e0b1e2a850e702-aarch64-apple-darwin-ganesh-gl-jpegd-jpege-metal-pdf.tar.gz`
+from `github.com/rust-skia/skia-binaries`, then falls back to downloading the
+Skia sources (`codeload.github.com/rust-skia/skia`), and stops with
+`curl: (6) Could not resolve host`. `--offline` only covers the crates.io
+registry. `UI-07.3` therefore needs the vendored-archive route: the crate's
+`SKIA_BINARIES_URL` accepts a `file://` URL. Still open: build the shipped
+targets (macOS, Windows) from a vendored archive with the network blocked, and
+record the archive's checksum and licence notice here. If that proves too
+heavy, `UI-07.3` allows FemtoVG.
+
 ## Consequences
 
 - The default becomes the chosen GPU renderer; the software renderer stays as
