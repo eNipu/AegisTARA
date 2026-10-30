@@ -50,6 +50,8 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | G44 | Element type names ("damage scenario") are fixed in pages and reports | `pages.rs`, `report.rs` | CRA, cloud and medical work use other words | 109 |
 | G45 | Packs hold catalog ID syntax only, no catalog text; only attack-potential and direct feasibility | `methodology/catalog.rs` | STRIDE plus MITRE work and CRA packs need catalog text and a plain likelihood scale | 109, 112 |
 | G46 | `deny.toml` treats dev-dependencies like shipped code | `deny.toml`, D5 | D5 now allows any license for development-only tools | 110 |
+| G47 | Elements carry internal UUIDs only, no human-readable visual ID (`A00`, `D00`, `T00`) | `aegis-model` IDs, `pages.rs`, `report/doc.rs`, `brainstorm-visual-ids.md` | Analysts and reviewers need short, stable IDs to cite in tables, cross-references and reports (FND-06, FND-07) | 118 |
+| G48 | One flat TARA per project; no way to model multiple systems in one project and evaluate or report on them together | `Project` in `aegis-model`, `brainstorm-multi-tara.md` | A vehicle or product holds several systems (Braking, ADAS, Infotainment) that need independent configuration plus combined cross-system evaluation and reports (SYS-01 to SYS-06) | 119 to 121 |
 
 ---
 

@@ -6222,24 +6222,27 @@ impl Project {
         text: Arc<str>,
         provenance: Provenance,
     ) -> Op {
-        let old = if text.is_empty() {
-            self.descriptions.remove(&target)
+        let old = self.descriptions.remove(&target);
+        let (old_text, old_provenance, translations) = old.map_or_else(
+            || (Arc::<str>::from(""), Provenance::default(), Vec::new()),
+            |d| (d.text, d.provenance, d.translations),
+        );
+        self.description_bytes -= old_text.len();
+        if text.is_empty() {
+            for t in &translations {
+                self.description_bytes -= t.text.len();
+            }
         } else {
             self.description_bytes += text.len();
             self.descriptions.insert(
                 target,
                 Described {
                     text,
-                    translations: Vec::new(),
+                    translations,
                     provenance,
                 },
-            )
-        };
-        let (old_text, old_provenance) = old.map_or_else(
-            || (Arc::<str>::from(""), Provenance::default()),
-            |d| (d.text, d.provenance),
-        );
-        self.description_bytes -= old_text.len();
+            );
+        }
         Op::SetDescription {
             target,
             text: old_text,

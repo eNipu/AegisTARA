@@ -1029,9 +1029,10 @@ pub fn report_doc_with_options(
     let languages = opts.languages();
     let mut blocks = Vec::new();
     for (i, lang) in languages.iter().enumerate() {
-        if i > 0 {
-            // A bilingual report writes the second language after the first,
-            // with its own title block.
+        if i > 0 && !opts.profile.sections.cover {
+            // A bilingual report writes the second language after the first;
+            // when the cover section is disabled, add a title heading for the
+            // second language (`sections.cover` already starts with a Heading(1)).
             blocks.push(Block::Heading(
                 1,
                 format!("{} — {}", ctx.project, lang.display_name()),

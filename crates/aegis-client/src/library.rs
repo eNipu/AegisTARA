@@ -442,7 +442,7 @@ pub struct LibraryView {
     picked: Option<usize>,
     /// The built-in catalog packs, searchable but not insertable (job 112).
     catalogs: Vec<CatalogView>,
-    /// The picked catalog row, as a position in the filtered catalog list.
+    /// The picked catalog's position in `catalogs`.
     catalog_picked: Option<usize>,
 }
 
@@ -492,6 +492,12 @@ impl LibraryView {
             .is_some_and(|p| !self.hits.iter().any(|h| h.index == p))
         {
             self.picked = None;
+        }
+        if self
+            .catalog_picked
+            .is_some_and(|p| !self.catalog_hits().iter().any(|(i, _)| *i == p))
+        {
+            self.catalog_picked = None;
         }
     }
 
@@ -635,11 +641,12 @@ impl LibraryView {
 
     /// The catalog packs whose metadata matches the query. An empty query
     /// lists every catalog (job 112).
-    fn catalog_hits(&self) -> Vec<&CatalogView> {
+    fn catalog_hits(&self) -> Vec<(usize, &CatalogView)> {
         let q = self.query.to_lowercase();
         self.catalogs
             .iter()
-            .filter(|c| {
+            .enumerate()
+            .filter(|(_, c)| {
                 q.is_empty()
                     || c.name.to_lowercase().contains(&q)
                     || c.key.to_lowercase().contains(&q)
@@ -654,29 +661,27 @@ impl LibraryView {
     pub fn catalog_rows(&self) -> Vec<Vec<String>> {
         self.catalog_hits()
             .into_iter()
-            .map(|c| vec![c.name.clone(), c.key.clone()])
+            .map(|(_, c)| vec![c.name.clone(), c.key.clone()])
             .collect()
     }
 
     /// Picks the catalog at this row, or none.
     pub fn pick_catalog(&mut self, row: Option<usize>) {
-        self.catalog_picked = row;
+        self.catalog_picked = row.and_then(|r| self.catalog_hits().get(r).map(|(i, _)| *i));
     }
 
     /// The row of the picked catalog.
     #[must_use]
     pub fn catalog_picked_row(&self) -> Option<usize> {
-        self.catalog_picked
+        let p = self.catalog_picked?;
+        self.catalog_hits().iter().position(|(i, _)| *i == p)
     }
 
     /// The preview of the picked catalog, or a hint when none is picked.
     #[must_use]
     pub fn catalog_preview(&self) -> String {
-        let Some(row) = self.catalog_picked else {
-            return String::new();
-        };
-        self.catalog_hits()
-            .get(row)
-            .map_or_else(String::new, |c| c.preview())
+        self.catalog_picked
+            .and_then(|p| self.catalogs.get(p))
+            .map_or_else(String::new, CatalogView::preview)
     }
 }

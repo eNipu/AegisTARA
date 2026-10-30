@@ -176,14 +176,13 @@ fn links(items: &[aegis_client::pages::LinkRow]) -> ModelRc<LinkItem> {
     )
 }
 
-/// The six built-in role keys, least to most capable (job 058, ADR 0061).
-const ROLE_KEYS: [&str; 6] = [
+/// The five assignable per-project role keys, least to most capable (job 058, ADR 0061).
+const ROLE_KEYS: [&str; 5] = [
     "viewer",
     "reviewer",
     "analyst",
     "project_owner",
     "methodology_owner",
-    "admin",
 ];
 
 /// The shown label for a role key.
@@ -1486,6 +1485,7 @@ impl Controller {
         // ---- command palette (job 081) ----
         on!(on_open_palette, |c| {
             if let Some(w) = c.window.upgrade() {
+                w.set_palette_open(true);
                 w.set_palette_query(s(""));
                 w.set_palette_shortcuts_open(false);
             }
@@ -1560,7 +1560,7 @@ impl Controller {
                 .map(|e| vec![e.label.clone(), e.keys.clone()])
                 .collect(),
         ));
-        w.set_palette_selected(-1);
+        w.set_palette_selected(if entries.is_empty() { -1 } else { 0 });
         *self.palette.borrow_mut() = entries;
     }
 

@@ -459,7 +459,7 @@ export component AppWindow inherits Window {
     in-out property <bool> palette-shortcuts-open: false;
     in-out property <string> palette-query;
     in property <[[StandardListViewItem]]> palette-rows;
-    in property <int> palette-selected: -1;
+    in-out property <int> palette-selected: -1;
     in property <[[StandardListViewItem]]> shortcut-rows;
     in-out property <bool> prompt-open: false;
     in-out property <string> prompt-kind;
@@ -706,6 +706,12 @@ export component AppWindow inherits Window {
         root.palette-open = false;
         root.palette-shortcuts-open = false;
         root.palette-query = "";
+    }
+
+    function run-palette-row(row: int) {
+        if (!root.palette-shortcuts-open && root.palette-rows.length > 0) {
+            root.palette-pick(row >= 0 && row < root.palette-rows.length ? row : 0);
+        }
     }
 
     function prompt-done(kind: string, text: string) {
@@ -2527,7 +2533,7 @@ export component AppWindow inherits Window {
                                 }
                                 ComboBox {
                                     width: 200px;
-                                    model: ["Viewer", "Reviewer", "Analyst", "Project owner", "Methodology owner", "Admin"];
+                                    model: ["Viewer", "Reviewer", "Analyst", "Project owner", "Methodology owner"];
                                     current-index <=> root.new-member-role;
                                     accessible-label: @tr("Role");
                                 }
@@ -2551,7 +2557,7 @@ export component AppWindow inherits Window {
                                 Text { text: @tr("Role"); color: Theme.graphite; }
                                 ComboBox {
                                     width: 200px;
-                                    model: ["Viewer", "Reviewer", "Analyst", "Project owner", "Methodology owner", "Admin"];
+                                    model: ["Viewer", "Reviewer", "Analyst", "Project owner", "Methodology owner"];
                                     current-index: root.membership-role;
                                     accessible-label: @tr("Role");
                                     selected(v) => { root.set-membership-role(self.current-index); }
@@ -2961,6 +2967,24 @@ export component AppWindow inherits Window {
         FocusScope {
             key-pressed(event) => {
                 if (event.text == Key.Escape) { root.close-palette(); return accept; }
+                if (!root.palette-shortcuts-open && root.palette-rows.length > 0) {
+                    if (event.text == Key.DownArrow) {
+                        root.palette-selected = root.palette-selected < 0
+                            ? 0
+                            : min(root.palette-selected + 1, root.palette-rows.length - 1);
+                        return accept;
+                    }
+                    if (event.text == Key.UpArrow) {
+                        root.palette-selected = root.palette-selected <= 0
+                            ? 0
+                            : root.palette-selected - 1;
+                        return accept;
+                    }
+                    if (event.text == Key.Return) {
+                        root.run-palette-row(root.palette-selected);
+                        return accept;
+                    }
+                }
                 reject
             }
             Rectangle {
@@ -2980,6 +3004,7 @@ export component AppWindow inherits Window {
                         text <=> root.palette-query;
                         accessible-label: @tr("Command palette");
                         edited(t) => { root.palette-query-changed(t); }
+                        accepted(t) => { root.run-palette-row(root.palette-selected); }
                     }
                     if !root.palette-shortcuts-open: Table {
                         label: @tr("Commands");

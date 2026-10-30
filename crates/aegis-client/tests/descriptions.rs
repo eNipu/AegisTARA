@@ -138,11 +138,24 @@ fn deleting_an_asset_clears_its_description_first() {
         },
     );
     edit(&mut ws, &set(ElementRef::Asset(id), "Text"));
+    edit(
+        &mut ws,
+        &Edit::SetDescriptionTranslation {
+            target: ElementRef::Asset(id),
+            lang: "ja".into(),
+            text: "ゲートウェイ".into(),
+        },
+    );
     let before = ws.project().clone();
     edit(&mut ws, &Edit::RemoveAsset { asset: id });
     assert_eq!(ws.project().asset_count(), 0);
     ws.undo().expect("undo");
     assert_eq!(ws.project(), &before);
+    assert_eq!(
+        ws.project()
+            .description_translation(ElementRef::Asset(id), "ja"),
+        Some("ゲートウェイ")
+    );
 }
 
 #[test]
@@ -248,6 +261,33 @@ fn a_translation_is_one_op_and_undo_restores_the_description_exactly() {
     );
     ws.undo().expect("undo the replacement");
     assert_eq!(ws.project(), &before);
+
+    // Editing the source description keeps existing translations intact, and
+    // undoing the edit restores the exact previous state in one step.
+    edit(
+        &mut ws,
+        &Edit::SetDescriptionTranslation {
+            target,
+            lang: "ja".into(),
+            text: "その資産".into(),
+        },
+    );
+    let with_translation = ws.project().clone();
+    edit(&mut ws, &set(target, "Updated asset description"));
+    assert_eq!(
+        ws.project().description_translation(target, "ja"),
+        Some("その資産")
+    );
+    ws.undo().expect("undo source description edit");
+    assert_eq!(ws.project(), &with_translation);
+
+    // Clearing the description or removing the element clears translations in
+    // the same batch so one undo restores both the description and translations.
+    edit(&mut ws, &set(target, ""));
+    assert_eq!(ws.project().description(target), None);
+    assert_eq!(ws.project().description_translation(target, "ja"), None);
+    ws.undo().expect("undo clearing description");
+    assert_eq!(ws.project(), &with_translation);
 }
 
 fn context() -> aegis_client::report::ReportContext {
