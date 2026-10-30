@@ -17,7 +17,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Japan is the first export market; English and Japanese ship first (D13).
 - Library, item definition, traceability, report builder, ReqIF-first integrations and a built-in role table are decided (D14 to D19).
 - Extensions through data files, a public API and built-in connectors (D20). No vendor-hosted service for now; consultancy first in Japan (D21).
-- A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24).
+- A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25).
 
 ---
 
@@ -190,6 +190,13 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Decision:** the core stays methodology-neutral (D1). After the ISO/SAE 21434 pack comes a product-security pack for EU CRA (any product with digital elements), then STRIDE with MITRE catalogs (CAPEC, ATT&CK, EMB3D) for services, cloud and small electronics. Medical (IEC 81001-5-1, FDA) and industrial (IEC 62443) packs follow customer demand. Packs may rename the element types ("damage scenario" becomes "harm"), and catalog packs may carry catalog text where the catalog's license allows it (D5 review).
 - **Why:** many companies must do TARA-like risk assessment under the CRA, including Japanese makers that export to the EU.
 - **Details:** [brainstorm-product-v2.md](brainstorm-product-v2.md) section 2.5, [brainstorm.md](brainstorm.md) section 2.
+
+## D25. Stay on Slint; fix how it renders and remove modal editing
+
+- **Date:** 2026-10-30
+- **Decision:** no native rewrite (SwiftUI on macOS, WinUI or WPF on Windows). The app keeps Slint (D7) and gets a GPU renderer with a software fallback, the Cupertino style on macOS, the system appearance and ⌘ shortcuts (job 113). Editing becomes modeless: elements are created as a draft in the inspector, removals offer undo instead of a confirmation, and editors move into panels (jobs 114 to 117). A dialog is kept only for actions undo cannot reverse, security tasks, file pickers and About.
+- **Why:** the "not solid on macOS" feel comes from the forced software renderer and the Windows-style widgets, not from Slint. A native rewrite would build every screen and the canvas twice and add two bindings to the Rust core, for no new capability. Reconsider only if a paying customer requires a native Mac app after jobs 113 to 117.
+- **Details:** [ui-ux-requirements.md](ui-ux-requirements.md) (UI-07 to UI-12).
 
 ## Open
 
