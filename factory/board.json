@@ -1038,7 +1038,24 @@
       "decision": "APPROVE",
       "updated_at": "2026-10-30T19:15:29Z",
       "notes": "Completed and reviewed (docs/brainstorm-visual-ids.md)."
+    },
+    {
+      "id": "113-platform-fidelity",
+      "title": "Platform fidelity: GPU renderer with software fallback, system appearance, macOS shortcuts and fonts (D25, UI-07)",
+      "stage": "spec",
+      "worktree": null,
+      "branch": "factory/113-platform-fidelity",
+      "round": 1,
+      "reviews": {
+        "security": "pending",
+        "ux": "pending",
+        "ui": "pending",
+        "code": "pending"
+      },
+      "decision": null,
+      "updated_at": "2026-10-30T20:08:47Z",
+      "notes": "Spec written. Renderer spike (Retina Mac + Windows laptop) and owner pick are pending before build; ADR 0063 is proposed."
     }
   ],
-  "updated_at": "2026-10-30T19:15:29Z"
+  "updated_at": "2026-10-30T20:08:47Z"
 }
