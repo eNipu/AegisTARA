@@ -39,6 +39,7 @@ use crate::adapter::{bucket, draw_items, draw_layers};
 use crate::{
     AccessNode, AppWindow, CheckItem, CountItem, DescriptionItem, DiffItem, FactorItem, LinkItem,
     MitigationItem, NoticeItem, ProblemItem, ProjectItem, SuggestionItem, ThreatItem,
+    TranslationItem,
 };
 
 /// Pixels the pointer must move before a press becomes a drag.
@@ -63,6 +64,8 @@ struct State {
     event_group: Option<EventGroup>,
     /// The session row chosen on the administration page (job 055).
     session: Option<usize>,
+    /// The membership row chosen on the Access tab (job 058).
+    membership: Option<usize>,
     /// The figure row chosen on the reports page (job 073).
     figure: Option<usize>,
 }
@@ -103,6 +106,8 @@ pub struct Controller {
     state: RefCell<State>,
     /// The Library panel's search, narrowing and pick (job 057).
     library: RefCell<LibraryView>,
+    /// The command palette's filtered entries (job 081).
+    palette: RefCell<Vec<crate::shortcuts::PaletteEntry>>,
     hooks: Hooks,
 }
 
@@ -171,6 +176,38 @@ fn links(items: &[aegis_client::pages::LinkRow]) -> ModelRc<LinkItem> {
     )
 }
 
+/// The six built-in role keys, least to most capable (job 058, ADR 0061).
+const ROLE_KEYS: [&str; 6] = [
+    "viewer",
+    "reviewer",
+    "analyst",
+    "project_owner",
+    "methodology_owner",
+    "admin",
+];
+
+/// The shown label for a role key.
+fn role_label(key: &str) -> &str {
+    match key {
+        "viewer" => "Viewer",
+        "reviewer" => "Reviewer",
+        "analyst" => "Analyst",
+        "project_owner" => "Project owner",
+        "methodology_owner" => "Methodology owner",
+        "admin" => "Admin",
+        _ => key,
+    }
+}
+
+/// The dropdown position of a role key, or -1 when unknown.
+fn role_index(key: &str) -> i32 {
+    ROLE_KEYS
+        .iter()
+        .position(|k| *k == key)
+        .and_then(|i| i32::try_from(i).ok())
+        .unwrap_or(-1)
+}
+
 impl Controller {
     /// Connects `window` to `session`. `log_in` is called when the user
     /// presses the company login button.
@@ -208,9 +245,11 @@ impl Controller {
                 user: None,
                 event_group: None,
                 session: None,
+                membership: None,
                 figure: None,
             }),
             library: RefCell::new(LibraryView::new(Arc::new(LibraryPack::builtin_demo()))),
+            palette: RefCell::new(Vec::new()),
             hooks,
         });
         controller.wire(window);
@@ -422,6 +461,7 @@ impl Controller {
                 .unwrap_or(0)
             {
                 1 => "eu-cra",
+                2 => "stride-services-cloud",
                 _ => "iso21434-r155",
             };
             c.send(Command::CreateProject {
@@ -650,6 +690,36 @@ impl Controller {
                 c.edit(Edit::SetDescription {
                     target,
                     text: text.to_string(),
+                });
+            }
+        });
+        on!(on_set_description_translation, |c, index, lang, text| {
+            let target = c.with_project(|p| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| p.descriptions.get(i))
+                    .map(|d| d.target)
+            });
+            if let Some(target) = target {
+                c.edit(Edit::SetDescriptionTranslation {
+                    target,
+                    lang: lang.to_string(),
+                    text: text.to_string(),
+                });
+            }
+        });
+        on!(on_remove_description_translation, |c, index, lang| {
+            let target = c.with_project(|p| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| p.descriptions.get(i))
+                    .map(|d| d.target)
+            });
+            if let Some(target) = target {
+                c.edit(Edit::SetDescriptionTranslation {
+                    target,
+                    lang: lang.to_string(),
+                    text: String::new(),
                 });
             }
         });
@@ -923,6 +993,10 @@ impl Controller {
         });
         on!(on_library_pick, |c, i| {
             c.library.borrow_mut().pick(pos(i));
+            c.show_library();
+        });
+        on!(on_library_pick_catalog, |c, i| {
+            c.library.borrow_mut().pick_catalog(pos(i));
             c.show_library();
         });
         on!(on_library_insert, |c, mode, ratings, share| {
@@ -1369,6 +1443,81 @@ impl Controller {
         });
         on!(on_break_lock, |c| c.send(Command::BreakLock));
         on!(on_verify_audit, |c| c.send(Command::VerifyAudit));
+        on!(on_refresh_memberships, |c| c.send(Command::LoadMemberships));
+        on!(on_pick_membership, |c, i| {
+            c.state.borrow_mut().membership = pos(i);
+            c.apply_memberships();
+        });
+        on!(on_add_membership, |c, member, role| {
+            let role = usize::try_from(role)
+                .ok()
+                .and_then(|i| ROLE_KEYS.get(i))
+                .copied()
+                .unwrap_or("viewer");
+            let member = member.trim().to_owned();
+            if member.is_empty() {
+                return;
+            }
+            c.send(Command::SetMembership {
+                member,
+                role: role.to_owned(),
+            });
+        });
+        on!(on_set_membership_role, |c, role| {
+            let role = usize::try_from(role)
+                .ok()
+                .and_then(|i| ROLE_KEYS.get(i))
+                .copied()
+                .unwrap_or("viewer");
+            if let Some(m) = c.selected_membership() {
+                c.send(Command::SetMembership {
+                    member: m.member,
+                    role: role.to_owned(),
+                });
+            }
+        });
+        on!(on_remove_membership, |c| {
+            if let Some(m) = c.selected_membership() {
+                c.state.borrow_mut().membership = None;
+                c.send(Command::RemoveMembership { member: m.member });
+            }
+        });
+
+        // ---- command palette (job 081) ----
+        on!(on_open_palette, |c| {
+            if let Some(w) = c.window.upgrade() {
+                w.set_palette_query(s(""));
+                w.set_palette_shortcuts_open(false);
+            }
+            c.apply_palette("");
+        });
+        on!(on_palette_query_changed, |c, text| c.apply_palette(&text));
+        on!(on_palette_pick, |c, i| {
+            let id = pos(i).and_then(|i| c.palette.borrow().get(i).map(|e| e.id.clone()));
+            if let Some(id) = id {
+                if let Some(page) = id
+                    .strip_prefix("page:")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .and_then(aegis_client::view::Page::from_index)
+                {
+                    c.send(Command::ShowPage(page));
+                } else if let Some(cmd) = id.strip_prefix("cmd:") {
+                    c.run_palette_command(cmd);
+                }
+            }
+            if let Some(w) = c.window.upgrade() {
+                w.set_palette_open(false);
+            }
+        });
+        on!(on_palette_show_shortcuts, |c| {
+            if let Some(w) = c.window.upgrade() {
+                let open = !w.get_palette_shortcuts_open();
+                w.set_palette_shortcuts_open(open);
+                if open {
+                    c.apply_shortcuts();
+                }
+            }
+        });
 
         // ---- canvas ----
         on!(on_canvas_resized, |c, width, height| c
@@ -1386,6 +1535,71 @@ impl Controller {
         on!(on_canvas_key, |c, text, shift| c.key(&text, shift));
         on!(on_fit, |c| c.fit());
         on!(on_zoom_reset, |c| c.reset_zoom());
+    }
+
+    // ---- command palette (job 081) ------------------------------------
+
+    /// Filters the palette entries by `query` and shows them.
+    fn apply_palette(&self, query: &str) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let q = query.to_lowercase();
+        let entries: Vec<crate::shortcuts::PaletteEntry> = crate::shortcuts::palette_entries()
+            .into_iter()
+            .filter(|e| {
+                q.is_empty()
+                    || e.label.to_lowercase().contains(&q)
+                    || e.group.to_lowercase().contains(&q)
+                    || e.keys.to_lowercase().contains(&q)
+            })
+            .collect();
+        w.set_palette_rows(rows(
+            entries
+                .iter()
+                .map(|e| vec![e.label.clone(), e.keys.clone()])
+                .collect(),
+        ));
+        w.set_palette_selected(-1);
+        *self.palette.borrow_mut() = entries;
+    }
+
+    /// Shows the shortcut table as the palette's cheat-sheet view (UI-11.5).
+    fn apply_shortcuts(&self) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        w.set_shortcut_rows(rows(
+            crate::shortcuts::table()
+                .iter()
+                .map(|s| vec![s.label.to_owned(), crate::shortcuts::keys(s).to_owned()])
+                .collect(),
+        ));
+    }
+
+    /// Runs a command chosen from the palette by its shortcut id.
+    fn run_palette_command(&self, id: &str) {
+        match id {
+            "undo" => self.send(Command::Undo),
+            "redo" => self.send(Command::Redo),
+            "begin-edit" => self.send(Command::BeginEdit),
+            "end-edit" => self.send(Command::EndEdit),
+            "palette" => {
+                if let Some(w) = self.window.upgrade() {
+                    w.set_palette_open(true);
+                }
+            }
+            "new-element" => {
+                if let Some(w) = self.window.upgrade() {
+                    w.set_palette_open(false);
+                }
+            }
+            page => {
+                if let Some(page) = crate::shortcuts::page_for(page) {
+                    self.send(Command::ShowPage(page));
+                }
+            }
+        }
     }
 
     // ---- what is selected -------------------------------------------------
@@ -1406,6 +1620,13 @@ impl Controller {
         w.set_library_preview(s(&lib.preview()));
         w.set_library_facets(model(lib.facet_choices().iter().map(|c| s(c)).collect()));
         w.set_library_filter(s(&lib.filter_text()));
+        w.set_catalog_rows(rows(lib.catalog_rows()));
+        w.set_catalog_selected(
+            lib.catalog_picked_row()
+                .and_then(|r| i32::try_from(r).ok())
+                .unwrap_or(-1),
+        );
+        w.set_catalog_preview(s(&lib.catalog_preview()));
         let place = self.library_place();
         w.set_library_can_gate(matches!(place, Some((_, Some(false)))));
         w.set_library_can_leaf(matches!(place, Some((_, Some(true)))));
@@ -1517,6 +1738,11 @@ impl Controller {
     fn selected_user(&self) -> Option<aegis_client::state::UserRow> {
         let i = self.state.borrow().user?;
         self.view()?.users.get(i).cloned()
+    }
+
+    fn selected_membership(&self) -> Option<aegis_client::state::MembershipRow> {
+        let i = self.state.borrow().membership?;
+        self.view()?.memberships.get(i).cloned()
     }
 
     // ---- edits from the inspector ---------------------------------------
@@ -1832,6 +2058,13 @@ impl Controller {
             self.apply_sessions();
         }
         if prev.as_ref().is_none_or(|old| {
+            old.memberships != view.memberships
+                || old.memberships_error != view.memberships_error
+                || old.membership_error != view.membership_error
+        }) {
+            self.apply_memberships();
+        }
+        if prev.as_ref().is_none_or(|old| {
             old.events != view.events
                 || old.events_error != view.events_error
                 || old.connection != view.connection
@@ -1861,6 +2094,15 @@ impl Controller {
                         kind: s(d.kind),
                         text: s(&d.text),
                         by: s(&d.by),
+                        translations: model(
+                            d.translations
+                                .iter()
+                                .map(|t| TranslationItem {
+                                    lang: s(&t.lang),
+                                    text: s(&t.text),
+                                })
+                                .collect(),
+                        ),
                     })
                     .collect(),
             ));
@@ -2524,6 +2766,39 @@ impl Controller {
         } else {
             ""
         }));
+    }
+
+    fn apply_memberships(&self) {
+        let (Some(w), Some(view)) = (self.window.upgrade(), self.view()) else {
+            return;
+        };
+        w.set_membership_rows(rows(
+            view.memberships
+                .iter()
+                .map(|m| vec![m.name.clone(), role_label(&m.role).to_owned()])
+                .collect(),
+        ));
+        let mut st = self.state.borrow_mut();
+        if st.membership.is_some_and(|i| i >= view.memberships.len()) {
+            st.membership = None;
+        }
+        w.set_membership_selected(
+            st.membership
+                .and_then(|i| i32::try_from(i).ok())
+                .unwrap_or(-1),
+        );
+        let chosen = st.membership.and_then(|i| view.memberships.get(i));
+        w.set_membership_role(chosen.map_or(0, |m| role_index(&m.role)));
+        w.set_selected_member_name(s(chosen.map_or("", |m| m.name.as_str())));
+        let empty = if let Some(why) = &view.memberships_error {
+            why.clone()
+        } else if view.memberships.is_empty() {
+            "No members yet. Add the first one above.".to_owned()
+        } else {
+            String::new()
+        };
+        w.set_memberships_text(s(&empty));
+        w.set_membership_error(s(view.membership_error.as_deref().unwrap_or("")));
     }
 
     fn apply_users(&self) {

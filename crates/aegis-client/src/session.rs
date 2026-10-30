@@ -58,8 +58,9 @@ use crate::report::{
 };
 use crate::sample::sample_ops;
 use crate::state::{
-    BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, Mode, Notice, NumbersCheck, PageData,
-    ProjectEntry, ProjectView, ServerSettingsView, Severity, SyncView, UserRow, ViewModel,
+    BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, MembershipRow, Mode, Notice,
+    NumbersCheck, PageData, ProjectEntry, ProjectView, ServerSettingsView, Severity, SyncView,
+    UserRow, ViewModel,
 };
 use crate::time::format_ms;
 use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
@@ -192,6 +193,9 @@ impl Session {
             events: Vec::new(),
             events_error: None,
             sessions: Vec::new(),
+            memberships: Vec::new(),
+            memberships_error: None,
+            membership_error: None,
         });
         let (view_tx, view) = watch::channel(initial);
         let actor = Actor {
@@ -223,6 +227,9 @@ impl Session {
             audit_rows: Vec::new(),
             events_error: None,
             session_rows: Vec::new(),
+            memberships: Vec::new(),
+            memberships_error: None,
+            membership_error: None,
             offered: None,
             downloading: false,
         };
@@ -405,6 +412,11 @@ enum Internal<P> {
     Downloaded(Result<std::path::PathBuf, UpdateError>),
     Events(Result<Vec<pb::EventInfo>, ClientError>),
     Sessions(Result<Vec<pb::SessionInfo>, ClientError>),
+    Memberships(Result<Vec<pb::MembershipInfo>, ClientError>),
+    MembershipDone {
+        what: String,
+        result: Result<(), ClientError>,
+    },
     Settings(Result<pb::ServerSettings, ClientError>),
     SettingsSet(Result<pb::ServerSettings, ClientError>),
     AdminDone {
@@ -452,6 +464,12 @@ struct Actor<P: CredentialProvider> {
     audit_rows: Vec<crate::audit::EventRow>,
     events_error: Option<String>,
     session_rows: Vec<crate::audit::SessionRow>,
+    /// The open project's membership rows (project access, job 058).
+    memberships: Vec<MembershipRow>,
+    /// Why the membership list is empty when it could not be read.
+    memberships_error: Option<String>,
+    /// The last membership add/change/remove error, shown inline.
+    membership_error: Option<String>,
     /// The release the last update check offered, for "Download update".
     offered: Option<UpdateOffer>,
     /// An installer download is running.
@@ -892,6 +910,40 @@ impl<P: CredentialProvider> Actor<P> {
                     self.on_failure("Could not load the sessions", &e);
                 }
             },
+            Internal::Memberships(result) => match result {
+                Ok(list) => {
+                    self.memberships = list
+                        .into_iter()
+                        .map(|m| MembershipRow {
+                            name: m
+                                .member
+                                .split_once(':')
+                                .map_or(m.member.as_str(), |(_, n)| n)
+                                .to_owned(),
+                            member: m.member,
+                            role: m.role,
+                        })
+                        .collect();
+                    self.memberships_error = None;
+                    self.membership_error = None;
+                }
+                Err(e) => {
+                    self.memberships.clear();
+                    self.memberships_error =
+                        Some(format!("The membership list could not be read: {e}"));
+                }
+            },
+            Internal::MembershipDone { what, result } => match result {
+                Ok(()) => {
+                    self.notice(Severity::Info, format!("{what}: done."));
+                    self.membership_error = None;
+                    self.load_memberships();
+                }
+                Err(e) => {
+                    self.membership_error = Some(e.to_string());
+                    self.notice(Severity::Error, format!("{what}: {e}"));
+                }
+            },
             Internal::Updates(result) => match result {
                 Ok(UpdateStatus::UpToDate) => {
                     self.notice(Severity::Info, "AegisTARA is up to date.");
@@ -1021,6 +1073,9 @@ impl<P: CredentialProvider> Actor<P> {
                 self.audit_rows.clear();
                 self.events_error = None;
                 self.session_rows.clear();
+                self.memberships.clear();
+                self.memberships_error = None;
+                self.membership_error = None;
                 self.projects.clear();
                 if let Some(hook) = &self.config.on_log_out {
                     (hook.0)();
@@ -1154,6 +1209,15 @@ impl<P: CredentialProvider> Actor<P> {
         {
             self.spawn(|conn| async move { Internal::Sessions(conn.sessions().await) });
         }
+    }
+
+    /// Loads the open project's membership rows. Needs a project; the
+    /// server checks the caller's `read` permission (job 058).
+    fn load_memberships(&self) {
+        let Some(id) = self.open.as_ref().map(|o| o.id.clone()) else {
+            return;
+        };
+        self.spawn(move |conn| async move { Internal::Memberships(conn.memberships(&id).await) });
     }
 
     fn load_events(&self) {
@@ -1345,10 +1409,14 @@ impl<P: CredentialProvider> Actor<P> {
                 let downloaded = conn.open_project(&id).await?;
                 let key = downloaded.summary.methodology_key.clone();
                 let version = downloaded.summary.methodology_version.clone();
-                let methodology = match [Methodology::iso21434_r155(), Methodology::eu_cra()]
-                    .into_iter()
-                    .flatten()
-                    .find(|m| m.key() == key && m.version() == version)
+                let methodology = match [
+                    Methodology::iso21434_r155(),
+                    Methodology::eu_cra(),
+                    Methodology::stride_services_cloud(),
+                ]
+                .into_iter()
+                .flatten()
+                .find(|m| m.key() == key && m.version() == version)
                 {
                     Some(builtin) => Arc::new(builtin),
                     None => conn.methodology(&key).await?,
@@ -1459,6 +1527,8 @@ impl<P: CredentialProvider> Actor<P> {
         let Some(mut open) = self.open.take() else {
             return;
         };
+        self.memberships.clear();
+        self.memberships_error = None;
         if release
             && let Some(lease) = open.lease.take()
             && let Some(conn) = self.conn.clone()
@@ -2163,6 +2233,27 @@ impl<P: CredentialProvider> Actor<P> {
             Command::DownloadUpdate => self.download_update(),
             Command::LoadEvents => self.load_events(),
             Command::LoadSessions => self.load_sessions(),
+            Command::LoadMemberships => self.load_memberships(),
+            Command::SetMembership { member, role } => {
+                let Some(id) = self.open.as_ref().map(|o| o.id.clone()) else {
+                    return;
+                };
+                let what = format!("Set {member} to {role}");
+                self.spawn(move |conn| async move {
+                    let result = conn.set_membership(&id, &member, &role).await.map(|_| ());
+                    Internal::MembershipDone { what, result }
+                });
+            }
+            Command::RemoveMembership { member } => {
+                let Some(id) = self.open.as_ref().map(|o| o.id.clone()) else {
+                    return;
+                };
+                let what = format!("Remove {member}");
+                self.spawn(move |conn| async move {
+                    let result = conn.remove_membership(&id, &member).await;
+                    Internal::MembershipDone { what, result }
+                });
+            }
             Command::LoadUsers => {
                 self.load_users();
                 self.load_settings();
@@ -2607,6 +2698,9 @@ impl<P: CredentialProvider> Actor<P> {
                 events: self.audit_rows.clone(),
                 events_error: self.events_error.clone(),
                 sessions: self.session_rows.clone(),
+                memberships: self.memberships.clone(),
+                memberships_error: self.memberships_error.clone(),
+                membership_error: self.membership_error.clone(),
             }));
             return;
         };
@@ -2728,6 +2822,9 @@ impl<P: CredentialProvider> Actor<P> {
             events: self.audit_rows.clone(),
             events_error: self.events_error.clone(),
             sessions: self.session_rows.clone(),
+            memberships: self.memberships.clone(),
+            memberships_error: self.memberships_error.clone(),
+            membership_error: self.membership_error.clone(),
         }));
     }
 }

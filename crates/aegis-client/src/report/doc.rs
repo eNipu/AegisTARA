@@ -228,13 +228,18 @@ pub(crate) enum Described {
 }
 
 /// `(name, text)` of the elements of a section that have a description, in
-/// project order. Empty when none has. Time O(n log n).
-pub(crate) fn section_descriptions(ws: &Workspace, section: Described) -> Vec<(String, String)> {
+/// project order. Empty when none has. For a non-English language the text is
+/// the translation when one exists, else the source. Time O(n log n).
+pub(crate) fn section_descriptions(
+    ws: &Workspace,
+    section: Described,
+    lang: Language,
+) -> Vec<(String, String)> {
     let p = ws.project();
     let mut out = Vec::new();
     let mut add = |name: &str, target: ElementRef| {
-        if let Some(text) = p.description(target) {
-            out.push((name.to_owned(), text.to_owned()));
+        if let Some(text) = description_of(ws, target, lang) {
+            out.push((name.to_owned(), text));
         }
     };
     match section {
@@ -267,8 +272,15 @@ pub(crate) fn section_descriptions(ws: &Workspace, section: Described) -> Vec<(S
     out
 }
 
-/// The description text of one element, if it has any.
-pub(crate) fn description_of(ws: &Workspace, target: ElementRef) -> Option<String> {
+/// The description text of one element, if it has any. For a non-English
+/// language this is the translation when one exists, else the source
+/// (FND-04, L10N-08).
+pub(crate) fn description_of(ws: &Workspace, target: ElementRef, lang: Language) -> Option<String> {
+    if lang == Language::Ja
+        && let Some(text) = ws.project().description_translation(target, "ja")
+    {
+        return Some(text.to_owned());
+    }
     ws.project().description(target).map(str::to_owned)
 }
 
@@ -497,7 +509,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     }
 
     if sections.notes
-        && let Some(notes) = description_of(ws, ElementRef::Project)
+        && let Some(notes) = description_of(ws, ElementRef::Project, lang)
     {
         b.push(Heading(2, catalog.tr("project-notes")));
         desc_blocks(&mut b, &notes);
@@ -689,7 +701,11 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         for tb in &tb_rows {
             push_target_figures(&mut b, &profile.figures, ElementRef::TrustBoundary(tb.id));
         }
-        desc_list(&mut b, &section_descriptions(ws, Described::Item), &catalog);
+        desc_list(
+            &mut b,
+            &section_descriptions(ws, Described::Item, lang),
+            &catalog,
+        );
     }
 
     // ---- assets ----
@@ -730,7 +746,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         }
         desc_list(
             &mut b,
-            &section_descriptions(ws, Described::Assets),
+            &section_descriptions(ws, Described::Assets, lang),
             &catalog,
         );
     }
@@ -764,7 +780,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         ));
         desc_list(
             &mut b,
-            &section_descriptions(ws, Described::Damage),
+            &section_descriptions(ws, Described::Damage, lang),
             &catalog,
         );
     }
@@ -780,7 +796,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 continue;
             };
             b.push(Heading(3, t.name.clone()));
-            if let Some(text) = description_of(ws, ElementRef::Threat(id)) {
+            if let Some(text) = description_of(ws, ElementRef::Threat(id), lang) {
                 desc_blocks(&mut b, &text);
             }
             let damages: Vec<&str> = t
@@ -842,7 +858,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         }
         for row in trees {
             b.push(Heading(3, row.title.clone()));
-            if let Some(text) = description_of(ws, ElementRef::Tree(row.id)) {
+            if let Some(text) = description_of(ws, ElementRef::Tree(row.id), lang) {
                 desc_blocks(&mut b, &text);
             }
             let nodes = row.nodes.to_string();
@@ -902,7 +918,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         ));
         desc_list(
             &mut b,
-            &section_descriptions(ws, Described::Controls),
+            &section_descriptions(ws, Described::Controls, lang),
             &catalog,
         );
     }
@@ -924,7 +940,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         ));
         desc_list(
             &mut b,
-            &section_descriptions(ws, Described::Goals),
+            &section_descriptions(ws, Described::Goals, lang),
             &catalog,
         );
         b.push(Heading(3, catalog.tr("claims")));
@@ -940,7 +956,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         ));
         desc_list(
             &mut b,
-            &section_descriptions(ws, Described::Claims),
+            &section_descriptions(ws, Described::Claims, lang),
             &catalog,
         );
     }

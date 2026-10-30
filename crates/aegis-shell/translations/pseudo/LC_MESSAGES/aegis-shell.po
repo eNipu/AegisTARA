@@ -1068,4 +1068,73 @@ msgstr "⟦Wórkbóók páth␣␣⟧"
 msgid "Workbook path (.xlsx)"
 msgstr "⟦Wórkbóók páth (.xlsx)␣␣⟧"
 
+msgid "Access"
+msgstr "⟦Áccéss␣␣⟧"
+
+msgid "Add member"
+msgstr "⟦Ádd mémbér␣␣⟧"
+
+msgid "Member"
+msgstr "⟦Mémbér␣␣⟧"
+
+msgid "Members"
+msgstr "⟦Mémbérs␣␣⟧"
+
+msgid "Remove member"
+msgstr "⟦Rémóvé mémbér␣␣⟧"
+
+msgid "Role"
+msgstr "⟦Rólé␣␣⟧"
+
+msgid "user:name or group:name"
+msgstr "⟦úsér:námé ór gróúp:námé␣␣⟧"
+
+msgid "Catalog"
+msgstr "⟦Cátálóg␣␣⟧"
+
+msgid "Catalog details"
+msgstr "⟦Cátálóg détáíls␣␣⟧"
+
+msgid "Catalogs"
+msgstr "⟦Cátálógs␣␣⟧"
+
+msgid "Catalogs (reference only)"
+msgstr "⟦Cátálógs (référéncé ónly)␣␣⟧"
+
+msgid "Key"
+msgstr "⟦Kéy␣␣⟧"
+
+msgid "Language tag"
+msgstr "⟦Lángúágé tág␣␣⟧"
+
+msgid "Translation"
+msgstr "⟦Tránslátíón␣␣⟧"
+
+msgid "Translation text"
+msgstr "⟦Tránslátíón téxt␣␣⟧"
+
+msgid "Action"
+msgstr "⟦Áctíón␣␣⟧"
+
+msgid "Back to commands"
+msgstr "⟦Báck tó cómmánds␣␣⟧"
+
+msgid "Command palette"
+msgstr "⟦Cómmánd pálétté␣␣⟧"
+
+msgid "Command palette…"
+msgstr "⟦Cómmánd pálétté…␣␣⟧"
+
+msgid "Commands"
+msgstr "⟦Cómmánds␣␣⟧"
+
+msgid "Command"
+msgstr "⟦Cómmánd␣␣⟧"
+
+msgid "Search pages and commands"
+msgstr "⟦Séárch págés ánd cómmánds␣␣⟧"
+
+msgid "Shortcut"
+msgstr "⟦Shórtcút␣␣⟧"
+
 

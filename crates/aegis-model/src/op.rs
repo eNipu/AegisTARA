@@ -125,6 +125,20 @@ pub enum Op {
         /// Provenance of the change.
         provenance: Provenance,
     },
+    /// Sets or clears one translation of a description (FND-04, L10N-08).
+    /// Empty `text` clears the translation for `lang`. Plain text, at most
+    /// [`ElementRef::max_chars`] chars, and `lang` is a BCP 47 tag.
+    SetDescriptionTranslation {
+        /// What the description belongs to; an element must exist and have a
+        /// description.
+        target: ElementRef,
+        /// The language tag of the translation.
+        lang: Arc<str>,
+        /// The translated text; empty clears it.
+        text: Arc<str>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
     /// Adds one node to an attack tree, as child number `position` of the
     /// gate `parent`, at arena index `index`. A node added at the end has
     /// `index` = the number of nodes and `position` = the number of children
@@ -760,6 +774,7 @@ impl Op {
     pub const fn provenance(&self) -> Option<&Provenance> {
         match self {
             Self::SetDescription { provenance, .. }
+            | Self::SetDescriptionTranslation { provenance, .. }
             | Self::SetReviewMark { provenance, .. }
             | Self::AddTreeNode { provenance, .. }
             | Self::RemoveTreeNode { provenance, .. }
@@ -848,6 +863,7 @@ impl Op {
     pub fn with_provenance(mut self, new_provenance: Provenance) -> Self {
         match &mut self {
             Self::SetDescription { provenance, .. }
+            | Self::SetDescriptionTranslation { provenance, .. }
             | Self::SetReviewMark { provenance, .. }
             | Self::AddTreeNode { provenance, .. }
             | Self::RemoveTreeNode { provenance, .. }

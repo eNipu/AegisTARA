@@ -9,7 +9,7 @@ import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, Abo
 import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
-    DescriptionItem, DescriptionBox, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
+    DescriptionItem, DescriptionBox, TranslationEditor, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, Table, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
     LinkList, CheckList, Tile, Bars
 } from "widgets.slint";
@@ -72,12 +72,20 @@ component DescriptionFor inherits VerticalLayout {
     in property <bool> editable;
     in property <string> label: @tr("Description");
     callback edit-requested(int, string, string);
+    callback translation-requested(int, string, string);
+    callback translation-removed(int, string);
     if root.items.length > 0 && root.items[0].kind == root.kind: DescriptionBox {
         label: root.label;
         text: root.items[0].text;
         by: root.items[0].by;
         editable: root.editable;
         edit-requested => { root.edit-requested(0, root.label, root.items[0].text); }
+        TranslationEditor {
+            items: root.items[0].translations;
+            editable: root.editable;
+            save(l, t) => { root.translation-requested(0, l, t); }
+            remove(l) => { root.translation-removed(0, l); }
+        }
     }
     if root.items.length > 1 && root.items[1].kind == root.kind: DescriptionBox {
         label: root.label;
@@ -85,6 +93,12 @@ component DescriptionFor inherits VerticalLayout {
         by: root.items[1].by;
         editable: root.editable;
         edit-requested => { root.edit-requested(1, root.label, root.items[1].text); }
+        TranslationEditor {
+            items: root.items[1].translations;
+            editable: root.editable;
+            save(l, t) => { root.translation-requested(1, l, t); }
+            remove(l) => { root.translation-removed(1, l); }
+        }
     }
     if root.items.length > 2 && root.items[2].kind == root.kind: DescriptionBox {
         label: root.label;
@@ -92,6 +106,12 @@ component DescriptionFor inherits VerticalLayout {
         by: root.items[2].by;
         editable: root.editable;
         edit-requested => { root.edit-requested(2, root.label, root.items[2].text); }
+        TranslationEditor {
+            items: root.items[2].translations;
+            editable: root.editable;
+            save(l, t) => { root.translation-requested(2, l, t); }
+            remove(l) => { root.translation-removed(2, l); }
+        }
     }
     if root.items.length > 3 && root.items[3].kind == root.kind: DescriptionBox {
         label: root.label;
@@ -99,6 +119,12 @@ component DescriptionFor inherits VerticalLayout {
         by: root.items[3].by;
         editable: root.editable;
         edit-requested => { root.edit-requested(3, root.label, root.items[3].text); }
+        TranslationEditor {
+            items: root.items[3].translations;
+            editable: root.editable;
+            save(l, t) => { root.translation-requested(3, l, t); }
+            remove(l) => { root.translation-removed(3, l); }
+        }
     }
 }
 
@@ -164,6 +190,8 @@ export component AppWindow inherits Window {
     // The description boxes of the page on screen, and saving one.
     in property <[DescriptionItem]> descriptions;
     callback set-description(int, string);
+    callback set-description-translation(int, string, string);
+    callback remove-description-translation(int, string);
     // The window that edits one description.
     in-out property <bool> description-open: false;
     in-out property <int> description-index: 0;
@@ -404,6 +432,15 @@ export component AppWindow inherits Window {
     in property <int> event-filter: 0;
     in property <string> events-text;
     in property <string> license-text;
+    // Project access (job 058): the open project's membership rows.
+    in property <[[StandardListViewItem]]> membership-rows;
+    in property <int> membership-selected: -1;
+    in property <int> membership-role: 0;
+    in property <string> selected-member-name;
+    in property <string> memberships-text;
+    in property <string> membership-error;
+    in-out property <string> new-member;
+    in-out property <int> new-member-role: 2;
     // The login switch (job 045): shown once an administrator has loaded it.
     in property <bool> settings-known;
     in property <bool> password-login-on;
@@ -418,7 +455,12 @@ export component AppWindow inherits Window {
 
     // ---- dialogs ----
     in-out property <bool> show-about: false;
-    in-out property <bool> show-shortcuts: false;
+    in-out property <bool> palette-open: false;
+    in-out property <bool> palette-shortcuts-open: false;
+    in-out property <string> palette-query;
+    in property <[[StandardListViewItem]]> palette-rows;
+    in property <int> palette-selected: -1;
+    in property <[[StandardListViewItem]]> shortcut-rows;
     in-out property <bool> prompt-open: false;
     in-out property <string> prompt-kind;
     in-out property <string> prompt-title;
@@ -428,6 +470,8 @@ export component AppWindow inherits Window {
     in-out property <bool> confirm-open: false;
     in-out property <string> confirm-kind;
     in-out property <string> confirm-text;
+    in-out property <string> confirm-title;
+    in-out property <string> confirm-action;
     in-out property <bool> outline-open: false;
     in-out property <bool> library-open: false;
     in property <[[StandardListViewItem]]> library-rows;
@@ -437,6 +481,9 @@ export component AppWindow inherits Window {
     in property <string> library-filter;
     in property <bool> library-can-gate;
     in property <bool> library-can-leaf;
+    in property <[[StandardListViewItem]]> catalog-rows;
+    in property <int> catalog-selected: -1;
+    in property <string> catalog-preview;
     in-out property <int> library-mode: 0;
     in-out property <bool> library-ratings: false;
     in-out property <bool> library-share: false;
@@ -461,6 +508,10 @@ export component AppWindow inherits Window {
     callback check-for-updates();
     callback download-update();
     callback change-password(string, string);
+    callback open-palette();
+    callback palette-query-changed(string);
+    callback palette-pick(int);
+    callback palette-show-shortcuts();
 
     // ---- callbacks: projects and editing ----
     callback open-project(string);
@@ -539,6 +590,7 @@ export component AppWindow inherits Window {
     callback library-clear-filters();
     callback library-pick(int);
     callback library-insert(int, bool, bool);
+    callback library-pick-catalog(int);
     callback remove-tree();
     callback rename-tree-node(string);
     callback set-tree-node-gate(int);
@@ -612,6 +664,11 @@ export component AppWindow inherits Window {
     callback refresh-sessions();
     callback pick-session(int);
     callback revoke-session();
+    callback refresh-memberships();
+    callback pick-membership(int);
+    callback add-membership(string, int);
+    callback set-membership-role(int);
+    callback remove-membership();
     callback break-lock();
     callback set-password-login(bool);
     callback set-event-filter(int);
@@ -632,7 +689,23 @@ export component AppWindow inherits Window {
     public function confirm(kind: string, text: string) {
         root.confirm-kind = kind;
         root.confirm-text = text;
+        root.confirm-title = "";
+        root.confirm-action = "Yes";
         root.confirm-open = true;
+    }
+
+    public function confirm-named(kind: string, title: string, text: string, action: string) {
+        root.confirm-kind = kind;
+        root.confirm-title = title;
+        root.confirm-text = text;
+        root.confirm-action = action;
+        root.confirm-open = true;
+    }
+
+    function close-palette() {
+        root.palette-open = false;
+        root.palette-shortcuts-open = false;
+        root.palette-query = "";
     }
 
     function prompt-done(kind: string, text: string) {
@@ -668,6 +741,7 @@ export component AppWindow inherits Window {
         if (kind == "remove-claim") { root.remove-claim(); }
         if (kind == "delete-user") { root.delete-user(); }
         if (kind == "revoke-session") { root.revoke-session(); }
+        if (kind == "remove-member") { root.remove-membership(); }
         if (kind == "delete-project") { root.delete-project(); }
         if (kind == "break-lock") { root.break-lock(); }
         if (kind == "password-login-off") { root.set-password-login(false); }
@@ -709,6 +783,7 @@ export component AppWindow inherits Window {
         }
         Menu {
             title: @tr("View");
+            MenuItem { title: @tr("Command palette…"); icon: @image-url("icons/keyboard.svg"); shortcut: @keys(Control + K); enabled: root.in-project; activated => { root.open-palette(); } }
             MenuItem { title: @tr("Overview"); icon: @image-url("icons/layout-dashboard.svg"); shortcut: @keys(Control + "1"); enabled: root.in-project; activated => { root.show-page(Pages.overview); } }
             MenuItem { title: @tr("Item definition"); icon: @image-url("icons/network.svg"); enabled: root.in-project; activated => { root.show-page(Pages.item); } }
             MenuItem { title: @tr("Assets"); icon: @image-url("icons/box.svg"); shortcut: @keys(Control + "2"); enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
@@ -753,7 +828,7 @@ export component AppWindow inherits Window {
         }
         Menu {
             title: @tr("Help");
-            MenuItem { title: @tr("Keyboard shortcuts"); icon: @image-url("icons/keyboard.svg"); activated => { root.show-shortcuts = true; } }
+            MenuItem { title: @tr("Keyboard shortcuts"); icon: @image-url("icons/keyboard.svg"); activated => { root.open-palette(); root.palette-shortcuts-open = true; } }
             MenuItem { title: @tr("Check for updates"); icon: @image-url("icons/refresh-cw.svg"); activated => { root.check-for-updates(); } }
             MenuItem { title: @tr("Download update"); icon: @image-url("icons/file-down.svg"); activated => { root.download-update(); } }
             MenuItem { title: @tr("About AegisTARA"); icon: @image-url("icons/info.svg"); activated => { root.show-about = true; } }
@@ -1027,7 +1102,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         Choice {
-                            options: ["ISO/SAE 21434 (Automotive)", "EU CRA (Annex I)"];
+                            options: ["ISO/SAE 21434 (Automotive)", "EU CRA (Annex I)", "STRIDE (Services & Cloud)"];
                             index <=> root.new-project-methodology;
                             label: @tr("Methodology");
                         }
@@ -1238,7 +1313,7 @@ export component AppWindow inherits Window {
                         padding: 20px;
                         spacing: 16px;
                         PageTitle { title: @tr("Overview"); subtitle: @tr("The project at a glance: what is analysed, how risky it is, and what is still open."); icon: @image-url("icons/layout-dashboard.svg"); }
-                        DescriptionFor { items: root.descriptions; kind: "project"; label: @tr("Project notes"); editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "project"; label: @tr("Project notes"); editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         HorizontalLayout {
                             vertical-stretch: 0;
                             spacing: 10px;
@@ -1300,7 +1375,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: @tr("Asset"); }
                         NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Component");
                             ComboBox {
@@ -1346,7 +1421,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: root.damage-singular; }
                         NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Impact rating"); }
                         for f[fi] in root.damage-impacts: Field {
                             label: f.label;
@@ -1401,7 +1476,7 @@ export component AppWindow inherits Window {
                             width: root.side-width + 12px;
                             SectionTitle { text: @tr("Threat scenario"); }
                             NameEditor { name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
-                            DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                            DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             Text { text: @tr("On asset ") + root.td-asset; color: Theme.graphite; font-size: 12px; }
                             HorizontalLayout {
                                 spacing: 8px;
@@ -1478,7 +1553,7 @@ export component AppWindow inherits Window {
                             if root.has-tree: Button { horizontal-stretch: 1; text: @tr("Suggest steps"); icon: @image-url("icons/workflow.svg"); enabled: root.editing; accessible-description: @tr("Synthesize ghost attack-tree steps with Aegis-Core Gear 1"); clicked => { root.suggest-tree-nodes(); } }
                         }
                         if root.has-tree: Button { text: @tr("Export SVG"); icon: @image-url("icons/image.svg"); clicked => { root.export-svg(); } }
-                        DescriptionFor { items: root.descriptions; kind: "tree"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "tree"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         // Legend.
                         VerticalLayout {
                             spacing: 4px;
@@ -1856,7 +1931,7 @@ export component AppWindow inherits Window {
                     if root.has-threat-detail: Panel {
                         width: min(360px, root.side-width);
                         Text { text: root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
-                        DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         HorizontalLayout {
                             spacing: 8px;
                             Swatch { tone: root.td-inherent-tone; y: 4px; }
@@ -1911,7 +1986,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: @tr("Security control"); }
                         NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Attached to"); }
                         LinkList { items: root.control-steps; empty-text: @tr("No attack step yet."); clicked(i) => { root.control-step-clicked(i); } }
                         SectionTitle { text: @tr("Part of goals"); }
@@ -1959,7 +2034,7 @@ export component AppWindow inherits Window {
                         if root.has-goal: Panel {
                             SectionTitle { text: root.goal-singular; }
                             NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
-                            DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                            DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Controls that realize it"); }
                             CheckList { items: root.goal-controls; editable: root.editing; empty-text: @tr("Add security controls first."); toggled(i, on) => { root.toggle-goal-control(i, on); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
@@ -1969,7 +2044,7 @@ export component AppWindow inherits Window {
                         if root.has-claim: Panel {
                             SectionTitle { text: @tr("Cybersecurity claim"); }
                             NameEditor { name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
-                            DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                            DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
                             LinkList { items: root.claim-threats; clicked(i) => { root.claim-threat-clicked(i); } }
                             Button { text: @tr("Remove claim"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-claim", "Remove claim \"" + root.claim-name + "\"?"); } }
@@ -2247,7 +2322,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: @tr("Component"); }
                         NameEditor { name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Parent");
                             ComboBox {
@@ -2270,7 +2345,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: @tr("Interface"); }
                         NameEditor { name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Kind");
                             ComboBox {
@@ -2289,7 +2364,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: @tr("Data flow"); }
                         NameEditor { name: root.data-flow-name; editable: root.editing; renamed(t) => { root.rename-data-flow(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "data-flow"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "data-flow"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Interface");
                             ComboBox {
@@ -2308,7 +2383,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         SectionTitle { text: @tr("Trust boundary"); }
                         NameEditor { name: root.trust-boundary-name; editable: root.editing; renamed(t) => { root.rename-trust-boundary(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "trust-boundary"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } }
+                        DescriptionFor { items: root.descriptions; kind: "trust-boundary"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Components"); }
                         CheckList { items: root.trust-boundary-members; editable: root.editing; toggled(i, on) => { root.toggle-trust-boundary-member(i, on); } }
                         Text { text: root.trust-boundary-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
@@ -2332,6 +2407,7 @@ export component AppWindow inherits Window {
                             Button { text: @tr("Users and login"); icon: @image-url("icons/users.svg"); primary: root.admin-tab == 0; clicked => { root.admin-tab = 0; } }
                             Button { text: @tr("Event log"); icon: @image-url("icons/scroll-text.svg"); primary: root.admin-tab == 1; clicked => { root.admin-tab = 1; root.refresh-events(); } }
                             Button { text: @tr("Sessions"); icon: @image-url("icons/shield.svg"); primary: root.admin-tab == 2; clicked => { root.admin-tab = 2; root.refresh-sessions(); } }
+                            Button { text: @tr("Access"); icon: @image-url("icons/key-round.svg"); primary: root.admin-tab == 3; clicked => { root.admin-tab = 3; root.refresh-memberships(); } }
                         }
                         if root.admin-tab == 0: VerticalLayout {
                             spacing: 10px;
@@ -2437,6 +2513,56 @@ export component AppWindow inherits Window {
                             }
                             if root.is-password && root.session-selected >= 0: Button { text: @tr("End this session"); icon: @image-url("icons/log-out.svg"); clicked => { root.confirm("revoke-session", "End this session? That device is logged out at its next request."); } }
                             if root.is-password && root.sessions-text != "": Text { text: root.sessions-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
+                        }
+                        if root.admin-tab == 3: VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    placeholder-text: @tr("user:name or group:name");
+                                    text <=> root.new-member;
+                                    accessible-label: @tr("Member");
+                                    accepted(t) => { root.add-membership(t, root.new-member-role); root.new-member = ""; }
+                                }
+                                ComboBox {
+                                    width: 200px;
+                                    model: ["Viewer", "Reviewer", "Analyst", "Project owner", "Methodology owner", "Admin"];
+                                    current-index <=> root.new-member-role;
+                                    accessible-label: @tr("Role");
+                                }
+                                Button {
+                                    text: @tr("Add member");
+                                    icon: @image-url("icons/plus.svg");
+                                    enabled: root.new-member != "";
+                                    clicked => { root.add-membership(root.new-member, root.new-member-role); root.new-member = ""; }
+                                }
+                            }
+                            if root.membership-error != "": Text { text: root.membership-error; color: Theme.high; font-size: 12px; wrap: word-wrap; }
+                            Table {
+                                label: @tr("Members");
+                                columns: [{ title: @tr("Member"), horizontal-stretch: 2 }, { title: @tr("Role"), horizontal-stretch: 2 }];
+                                rows: root.membership-rows;
+                                selected: root.membership-selected;
+                                picked(i) => { root.pick-membership(i); }
+                            }
+                            if root.membership-selected >= 0: HorizontalLayout {
+                                spacing: 6px;
+                                Text { text: @tr("Role"); color: Theme.graphite; }
+                                ComboBox {
+                                    width: 200px;
+                                    model: ["Viewer", "Reviewer", "Analyst", "Project owner", "Methodology owner", "Admin"];
+                                    current-index: root.membership-role;
+                                    accessible-label: @tr("Role");
+                                    selected(v) => { root.set-membership-role(self.current-index); }
+                                }
+                                Button {
+                                    text: @tr("Remove member");
+                                    icon: @image-url("icons/trash-2.svg");
+                                    clicked => { root.confirm-named("remove-member", "Remove " + root.selected-member-name + " from '" + root.project-name + "'?", "This cannot be undone from this session.", "Remove"); }
+                                }
+                            }
+                            if root.memberships-text != "": Text { text: root.memberships-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
                         }
                     }
                     Panel {
@@ -2576,12 +2702,13 @@ export component AppWindow inherits Window {
             confirm-column := VerticalLayout {
                 padding: 20px;
                 spacing: 14px;
-                Text { text: root.confirm-text; font-size: 15px; color: Theme.ink; wrap: word-wrap; }
+                if root.confirm-title != "": Text { text: root.confirm-title; font-size: 18px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
+                if root.confirm-text != "": Text { text: root.confirm-text; font-size: 15px; color: Theme.ink; wrap: word-wrap; }
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: end;
                     Button { text: @tr("Cancel"); clicked => { root.confirm-open = false; } }
-                    Button { text: @tr("Yes"); primary: true; clicked => { root.confirm-done(root.confirm-kind); } }
+                    Button { text: root.confirm-action; primary: true; clicked => { root.confirm-done(root.confirm-kind); } }
                 }
             }
         }
@@ -2734,6 +2861,33 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+                SectionTitle { text: @tr("Catalogs (reference only)"); }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Table {
+                        horizontal-stretch: 1;
+                        label: @tr("Catalogs");
+                        columns: [{ title: @tr("Catalog"), horizontal-stretch: 1 }, { title: @tr("Key"), width: 120px, min-width: 120px }];
+                        rows: root.catalog-rows;
+                        selected: root.catalog-selected;
+                        picked(i) => { root.library-pick-catalog(i); }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        border-width: 1px;
+                        border-color: Theme.rule;
+                        Text {
+                            x: 8px; y: 8px;
+                            width: parent.width - 16px;
+                            text: root.catalog-preview == "" ? "Pick a catalog to see its source and terms." : root.catalog-preview;
+                            font-size: 12px;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                            accessible-role: AccessibleRole.text;
+                            accessible-label: @tr("Catalog details");
+                        }
+                    }
+                }
                 HorizontalLayout {
                     spacing: 10px;
                     ComboBox {
@@ -2799,34 +2953,61 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.show-shortcuts: Rectangle {
+    // Command palette: a transient popup. Escape closes it and focus returns
+    // where it was (UI-01, job 081).
+    if root.palette-open: Rectangle {
         background: #000000A0;
-        TouchArea { clicked => { root.show-shortcuts = false; } }
-        Rectangle {
-            width: min(parent.width - 48px, 480px);
-            height: keys-column.preferred-height + 40px;
-            background: Theme.panel;
-            border-width: 1px;
-            border-color: Theme.rule;
-            border-radius: 2px;
-            keys-column := VerticalLayout {
-                padding: 20px;
-                spacing: 6px;
-                Text { text: @tr("Keyboard shortcuts"); font-size: 18px; font-weight: 700; color: Theme.ink; }
-                for k in [
-                    { keys: "Ctrl+Z / Ctrl+Y", what: "Undo / redo" },
-                    { keys: "Ctrl+E", what: "Take the edit lock" },
-                    { keys: "Ctrl+1 to Ctrl+9", what: "Go to a TARA step" },
-                    { keys: "Arrow keys", what: "Move between nodes on the canvas" },
-                    { keys: "+ / - / 0 / F", what: "Zoom in / out / 100% / fit" },
-                    { keys: "Esc", what: "Clear the selection on the canvas" },
-                ]: HorizontalLayout {
-                    spacing: 12px;
-                    Text { text: k.keys; width: 150px; font-size: 13px; font-weight: 600; color: Theme.ink; }
-                    Text { text: k.what; font-size: 13px; color: Theme.ink; }
-                }
-                HorizontalLayout { alignment: end; Button { text: @tr("Close"); clicked => { root.show-shortcuts = false; } } }
+        TouchArea { clicked => { root.close-palette(); } }
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) { root.close-palette(); return accept; }
+                reject
             }
+            Rectangle {
+                width: min(parent.width - 48px, 640px);
+                height: min(parent.height - 48px, 520px);
+                background: Theme.panel;
+                border-width: 1px;
+                border-color: Theme.rule;
+                border-radius: 2px;
+                TouchArea {}
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 8px;
+                    palette-search := LineEdit {
+                        horizontal-stretch: 1;
+                        placeholder-text: @tr("Search pages and commands");
+                        text <=> root.palette-query;
+                        accessible-label: @tr("Command palette");
+                        edited(t) => { root.palette-query-changed(t); }
+                    }
+                    if !root.palette-shortcuts-open: Table {
+                        label: @tr("Commands");
+                        columns: [{ title: @tr("Command"), horizontal-stretch: 2 }, { title: @tr("Shortcut"), width: 120px, min-width: 120px }];
+                        rows: root.palette-rows;
+                        selected: root.palette-selected;
+                        picked(i) => { root.palette-pick(i); }
+                    }
+                    if root.palette-shortcuts-open: VerticalLayout {
+                        Text { text: @tr("Keyboard shortcuts"); font-size: 18px; font-weight: 700; color: Theme.ink; }
+                        Table {
+                            label: @tr("Keyboard shortcuts");
+                            columns: [{ title: @tr("Action"), horizontal-stretch: 2 }, { title: @tr("Shortcut"), width: 140px, min-width: 140px }];
+                            rows: root.shortcut-rows;
+                            selected: -1;
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        Button {
+                            text: root.palette-shortcuts-open ? @tr("Back to commands") : @tr("Keyboard shortcuts");
+                            clicked => { root.palette-show-shortcuts(); }
+                        }
+                        Button { text: @tr("Close"); clicked => { root.close-palette(); } }
+                    }
+                }
+            }
+            init => { palette-search.focus(); }
         }
     }
 

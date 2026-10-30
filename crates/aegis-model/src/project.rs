@@ -10,7 +10,10 @@ use crate::control::{
     SecurityControl, StepMitigation,
 };
 use crate::damage::DamageScenario;
-use crate::description::{Described, ElementRef, MAX_DESCRIPTION_TOTAL_BYTES, check_text};
+use crate::description::{
+    Described, ElementRef, MAX_DESCRIPTION_TOTAL_BYTES, MAX_DESCRIPTION_TRANSLATIONS, Translation,
+    check_lang, check_text,
+};
 use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
@@ -4848,6 +4851,12 @@ impl Project {
                 text,
                 provenance,
             } => return self.check_set_description(*target, text, provenance),
+            Op::SetDescriptionTranslation {
+                target,
+                lang,
+                text,
+                provenance,
+            } => return self.check_set_description_translation(*target, lang, text, provenance),
             Op::SetReviewMark {
                 tree,
                 node,
@@ -5219,6 +5228,12 @@ impl Project {
                 text,
                 provenance,
             } => Ok(self.commit_set_description(target, text, provenance)),
+            Op::SetDescriptionTranslation {
+                target,
+                lang,
+                text,
+                provenance,
+            } => Ok(self.commit_set_description_translation(target, lang, text, provenance)),
             Op::SetReviewMark {
                 tree,
                 node,
@@ -6149,6 +6164,25 @@ impl Project {
         })
     }
 
+    /// Checks that the element a description names exists (or that it is
+    /// the project itself).
+    fn live_target(&self, target: ElementRef) -> Result<(), ModelError> {
+        match target {
+            ElementRef::Project => Ok(()),
+            ElementRef::Asset(id) => self.live_asset(id).map(|_| ()),
+            ElementRef::Damage(id) => self.live_damage(id).map(|_| ()),
+            ElementRef::Threat(id) => self.live_threat(id).map(|_| ()),
+            ElementRef::Tree(id) => self.live_tree(id).map(|_| ()),
+            ElementRef::Control(id) => self.live_control(id).map(|_| ()),
+            ElementRef::Goal(id) => self.live_goal(id).map(|_| ()),
+            ElementRef::Claim(id) => self.live_claim(id).map(|_| ()),
+            ElementRef::Component(id) => self.live_component(id).map(|_| ()),
+            ElementRef::Interface(id) => self.live_interface(id).map(|_| ()),
+            ElementRef::DataFlow(id) => self.live_data_flow(id).map(|_| ()),
+            ElementRef::TrustBoundary(id) => self.live_trust_boundary(id).map(|_| ()),
+        }
+    }
+
     /// Checks a description change. Time O(text length).
     fn check_set_description(
         &self,
@@ -6156,42 +6190,7 @@ impl Project {
         text: &str,
         provenance: &Provenance,
     ) -> Result<(), ModelError> {
-        match target {
-            ElementRef::Project => {}
-            ElementRef::Asset(id) => {
-                self.live_asset(id)?;
-            }
-            ElementRef::Damage(id) => {
-                self.live_damage(id)?;
-            }
-            ElementRef::Threat(id) => {
-                self.live_threat(id)?;
-            }
-            ElementRef::Tree(id) => {
-                self.live_tree(id)?;
-            }
-            ElementRef::Control(id) => {
-                self.live_control(id)?;
-            }
-            ElementRef::Goal(id) => {
-                self.live_goal(id)?;
-            }
-            ElementRef::Claim(id) => {
-                self.live_claim(id)?;
-            }
-            ElementRef::Component(id) => {
-                self.live_component(id)?;
-            }
-            ElementRef::Interface(id) => {
-                self.live_interface(id)?;
-            }
-            ElementRef::DataFlow(id) => {
-                self.live_data_flow(id)?;
-            }
-            ElementRef::TrustBoundary(id) => {
-                self.live_trust_boundary(id)?;
-            }
-        }
+        self.live_target(target)?;
         check_text(text, target.max_chars())?;
         check_provenance(provenance)?;
         let old = self.descriptions.get(&target).map_or(0, |d| d.text.len());
@@ -6227,8 +6226,14 @@ impl Project {
             self.descriptions.remove(&target)
         } else {
             self.description_bytes += text.len();
-            self.descriptions
-                .insert(target, Described { text, provenance })
+            self.descriptions.insert(
+                target,
+                Described {
+                    text,
+                    translations: Vec::new(),
+                    provenance,
+                },
+            )
         };
         let (old_text, old_provenance) = old.map_or_else(
             || (Arc::<str>::from(""), Provenance::default()),
@@ -6270,6 +6275,108 @@ impl Project {
     #[must_use]
     pub fn description_provenance(&self, target: ElementRef) -> Option<&Provenance> {
         self.descriptions.get(&target).map(|d| &d.provenance)
+    }
+
+    /// Checks a description translation change. The description must exist,
+    /// the tag must be a short BCP 47 tag, and the text must fit (FND-04).
+    fn check_set_description_translation(
+        &self,
+        target: ElementRef,
+        lang: &str,
+        text: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        self.live_target(target)?;
+        check_lang(lang)?;
+        check_text(text, target.max_chars())?;
+        check_provenance(provenance)?;
+        let described = self
+            .descriptions
+            .get(&target)
+            .ok_or(ModelError::NoDescription)?;
+        let old = described
+            .translations
+            .iter()
+            .find(|t| &*t.lang == lang)
+            .map_or(0, |t| t.text.len());
+        if self.description_bytes - old + text.len() > MAX_DESCRIPTION_TOTAL_BYTES {
+            return Err(ModelError::DescriptionTotalTooLarge {
+                max: MAX_DESCRIPTION_TOTAL_BYTES,
+            });
+        }
+        if !text.is_empty()
+            && !described.translations.iter().any(|t| &*t.lang == lang)
+            && described.translations.len() >= MAX_DESCRIPTION_TRANSLATIONS
+        {
+            return Err(ModelError::TooManyTranslations {
+                max: MAX_DESCRIPTION_TRANSLATIONS,
+            });
+        }
+        Ok(())
+    }
+
+    /// Stores or clears one translation and returns the inverse (FND-04).
+    fn commit_set_description_translation(
+        &mut self,
+        target: ElementRef,
+        lang: Arc<str>,
+        text: Arc<str>,
+        provenance: Provenance,
+    ) -> Op {
+        let described = self
+            .descriptions
+            .get_mut(&target)
+            .expect("the description exists: validate checked it");
+        let old = if text.is_empty() {
+            if let Some(i) = described.translations.iter().position(|t| t.lang == lang) {
+                let removed = described.translations.remove(i);
+                self.description_bytes -= removed.text.len();
+                Some(removed.text)
+            } else {
+                None
+            }
+        } else {
+            self.description_bytes += text.len();
+            if let Some(t) = described.translations.iter_mut().find(|t| t.lang == lang) {
+                self.description_bytes -= t.text.len();
+                Some(std::mem::replace(&mut t.text, text))
+            } else {
+                described.translations.push(Translation {
+                    lang: lang.clone(),
+                    text,
+                });
+                None
+            }
+        };
+        Op::SetDescriptionTranslation {
+            target,
+            lang,
+            text: old.unwrap_or_else(|| Arc::from("")),
+            provenance,
+        }
+    }
+
+    /// One translation of a description, if set (FND-04). Time O(log n).
+    #[must_use]
+    pub fn description_translation(&self, target: ElementRef, lang: &str) -> Option<&str> {
+        self.descriptions
+            .get(&target)?
+            .translations
+            .iter()
+            .find(|t| &*t.lang == lang)
+            .map(|t| &*t.text)
+    }
+
+    /// Every translation of a description, in insertion order, as `(lang,
+    /// text)` (FND-04). Time O(log n) to start.
+    pub fn description_translations(
+        &self,
+        target: ElementRef,
+    ) -> impl Iterator<Item = (&str, &str)> {
+        self.descriptions
+            .get(&target)
+            .into_iter()
+            .flat_map(|d| d.translations.iter().map(|t| (&*t.lang, &*t.text)))
     }
 
     /// Whether the rating of a step is marked as needing review. Time
@@ -9632,6 +9739,7 @@ impl ProjectEvalCache {
         }
         match op {
             Op::SetDescription { .. }
+            | Op::SetDescriptionTranslation { .. }
             | Op::SetReviewMark { .. }
             | Op::RenameTreeNode { .. }
             | Op::AddAsset { .. }

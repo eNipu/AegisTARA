@@ -192,6 +192,12 @@ pub enum Limit {
         /// The cap, in bytes.
         max: usize,
     },
+    /// A translation language tag is longer than
+    /// [`MAX_LANG_TAG_BYTES`](crate::MAX_LANG_TAG_BYTES).
+    LangBytes {
+        /// The cap, in bytes.
+        max: usize,
+    },
     /// A provenance actor is longer than [`MAX_ACTOR_BYTES`].
     ActorBytes {
         /// The cap, in bytes.
@@ -346,6 +352,9 @@ impl Limit {
     pub(crate) const DESCRIPTION: Limit = Limit::DescriptionBytes {
         max: MAX_DESCRIPTION_BYTES,
     };
+    pub(crate) const LANG: Limit = Limit::LangBytes {
+        max: crate::description::MAX_LANG_TAG_BYTES,
+    };
     pub(crate) const ACTOR: Limit = Limit::ActorBytes {
         max: MAX_ACTOR_BYTES,
     };
@@ -424,6 +433,7 @@ impl fmt::Display for Limit {
             Limit::DescriptionBytes { max } => {
                 write!(f, "description is longer than {max} bytes")
             }
+            Limit::LangBytes { max } => write!(f, "language tag is longer than {max} bytes"),
             Limit::ActorBytes { max } => write!(f, "provenance actor is longer than {max} bytes"),
             Limit::KeyBytes { max } => write!(f, "key is longer than {max} bytes"),
             Limit::MethodologyVersionBytes { max } => {

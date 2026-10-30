@@ -314,6 +314,7 @@ macro_rules! caps {
 caps! {
     NameCap = super::MAX_NAME_BYTES, Limit::NAME;
     DescriptionCap = super::MAX_DESCRIPTION_BYTES, Limit::DESCRIPTION;
+    LangCap = crate::description::MAX_LANG_TAG_BYTES, Limit::LANG;
     ActorCap = super::MAX_ACTOR_BYTES, Limit::ACTOR;
     KeyCap = super::MAX_KEY_BYTES, Limit::KEY;
     VersionCap = super::MAX_METHODOLOGY_VERSION_BYTES, Limit::VERSION;
@@ -331,6 +332,7 @@ pub(crate) struct BoundedStr<C>(pub(crate) Arc<str>, PhantomData<C>);
 
 pub(super) type Name = BoundedStr<NameCap>;
 pub(super) type DescriptionText = BoundedStr<DescriptionCap>;
+pub(super) type LangText = BoundedStr<LangCap>;
 pub(super) type Actor = BoundedStr<ActorCap>;
 pub(crate) type Key = BoundedStr<KeyCap>;
 pub(crate) type VersionText = BoundedStr<VersionCap>;
@@ -1429,6 +1431,16 @@ pub(super) struct DescriptionWire {
     pub(super) text: DescriptionText,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
+    #[serde(default)]
+    pub(super) translations: Vec<TranslationWire>,
+}
+
+/// One description translation, as read from a snapshot (FND-04).
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TranslationWire {
+    pub(super) lang: LangText,
+    pub(super) text: DescriptionText,
 }
 
 /// A snapshot asset: 48 bytes plus its name.
@@ -1657,6 +1669,13 @@ pub(super) enum OpWire {
     },
     SetDescription {
         target: TargetWire,
+        text: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetDescriptionTranslation {
+        target: TargetWire,
+        lang: LangText,
         text: DescriptionText,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,

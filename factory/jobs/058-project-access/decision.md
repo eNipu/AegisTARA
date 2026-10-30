@@ -3,6 +3,14 @@
 ## Decision
 Built-in role table plus per-project membership, checked on the server before every project RPC, stored in MemoryStore, FolderStore, and PostgresStore. See ADR 0061.
 
+## UI decision (round 2)
+The Access tab lives inside Administration (which is reachable by server
+admins). It is a table plus one inline add row, not a dialog: the member key
+and role are entered in place, and the role changes in place through a
+dropdown. Removing a member is the one confirmation that stays (UI-12): it is
+not on the project undo history, so it gets a named title and an action-named
+button.
+
 ## Roles and permissions
 
 | Role | Read | Write | Manage membership | Admin |

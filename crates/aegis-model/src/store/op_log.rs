@@ -116,6 +116,13 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetDescriptionTranslation {
+        target: TargetView,
+        lang: &'a str,
+        text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddAsset {
         id: Text<AssetId>,
         name: &'a str,
@@ -449,6 +456,10 @@ fn within_caps(op: &Op) -> bool {
     let name_ok = |name: &str| name.len() <= MAX_NAME_BYTES;
     match op {
         Op::SetDescription { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
+        Op::SetDescriptionTranslation { lang, text, .. } => {
+            lang.len() <= crate::description::MAX_LANG_TAG_BYTES
+                && text.len() <= MAX_DESCRIPTION_BYTES
+        }
         Op::AddTreeNode { node, .. } => name_ok(node.label()),
         Op::RenameTreeNode { label, .. } => name_ok(label),
         Op::AddAsset { name, .. }
@@ -595,6 +606,17 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance,
         } => OpView::SetDescription {
             target: (*target).into(),
+            text,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetDescriptionTranslation {
+            target,
+            lang,
+            text,
+            provenance,
+        } => OpView::SetDescriptionTranslation {
+            target: (*target).into(),
+            lang,
             text,
             provenance: ProvenanceView::of(provenance),
         },
@@ -1186,6 +1208,17 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance,
         } => Op::SetDescription {
             target: target.into_ref(),
+            text: text.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetDescriptionTranslation {
+            target,
+            lang,
+            text,
+            provenance,
+        } => Op::SetDescriptionTranslation {
+            target: target.into_ref(),
+            lang: lang.0,
             text: text.0,
             provenance: wire::unwrap_provenance(provenance),
         },
