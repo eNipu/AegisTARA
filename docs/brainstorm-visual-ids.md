@@ -42,6 +42,10 @@ example:
 | Data flow | `DF` | `DF00` |
 | Trust boundary | `TB` | `TB00` |
 
+Attack tree nodes (`NodeId` — gates and steps inside a tree) remain unnumbered:
+a tree can hold up to 4,096 nodes (`FND-03`), and users cite the tree (`AT00`)
+and the step's name within it rather than a global node number.
+
 The prefix is fixed per type (it never changes even when a pack renames the
 type, so a cited ID stays meaningful). The number is padded to a width that
 grows with the count (2 digits up to 99, then 3, and so on), so IDs sort in
@@ -59,9 +63,15 @@ creation order and stay short.
 | Friendly | `A00`, `A01` | `A-3f9a2c` is not what the user asked for |
 
 **Recommendation: store it.** The number is a monotonic per-type counter in the
-snapshot; an `Add*` op records it (or the model assigns the next free number
-deterministically). Undo keeps the counter so a re-created element never
-collides.
+snapshot; each `Op::Add*` payload carries an optional explicit visual number
+`Option<u32>` (`None` on fresh creation lets the model assign the next counter
+value; `Some(n)` on op-log replay and on the inverse `Op::Add*` produced by
+`Op::Remove*` restores the exact visual number `n` and bumps the high-water
+counter to at least `n + 1`). Per-kind high-water counters are saved in the
+snapshot so numbers are never reused after reload, while `Project::eq` compares
+live elements (and their visual numbers) and ignores the high-water counters on
+empty/tombstoned slots — matching how `Arena` tombstones work today so `apply`
+followed by `inverse` always restores `Project` equality (`UI-10.6`).
 
 ### 3.2 Stability and reuse
 
@@ -91,10 +101,17 @@ collides.
    traceability matrix (job 078).
 4. **Command palette search**, so typing `T03` navigates to that threat.
 
-### 3.5 Imports and duplicates
+### 3.5 Diff, imports and exports
 
-- Excel import (job 080), ReqIF import (job 079) and library inserts create
-  elements through the same `Add*` ops, so they get the next free number.
+- **`Project::diff` (`A7`):** Because an element's visual number is immutable
+  for its lifetime, visual IDs never diff as modified; diff lines and reports
+  can include the visual ID next to the element name for clarity.
+- **CSV / XLSX / ReqIF exports:** Include the visual ID column (`A00`, `T03`,
+  ...) so external spreadsheets and ALM round-trips can cite it.
+- **Excel import (job 080), ReqIF import (job 079) and library inserts:** Create
+  elements through the same `Add*` ops, so newly imported elements get the next
+  free number (an optional visual ID column in an imported sheet is ignored or
+  used only for row matching, never to overwrite the monotonic counter).
 - If an import maps two source rows onto what the user expects to be the same
   element, that is an existing merge question, not an ID question; the visual
   ID simply follows whichever element the ops produce.

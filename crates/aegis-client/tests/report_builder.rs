@@ -195,6 +195,25 @@ fn a_japanese_report_writes_ja_headings() {
         "{:?}",
         headings(&doc)
     );
+
+    let bilingual = report_doc_with_options(
+        &ws,
+        &ctx,
+        &ReportOptions {
+            profile: ReportProfile {
+                language: ReportLanguage::Bilingual,
+                ..ReportProfile::default()
+            },
+            baseline_project: None,
+        },
+    );
+    assert!(
+        !bilingual
+            .blocks
+            .windows(2)
+            .any(|w| matches!(w, [Block::Heading(1, _), Block::Heading(1, _)])),
+        "bilingual cover must not emit consecutive level-1 headings"
+    );
 }
 
 #[test]

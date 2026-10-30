@@ -654,6 +654,14 @@ fn clear_descriptions_before_removal(
             _ => None,
         };
         if let Some(target) = target.filter(|t| project.description(*t).is_some()) {
+            for (lang, _) in project.description_translations(target) {
+                out.push(Op::SetDescriptionTranslation {
+                    target,
+                    lang: lang.into(),
+                    text: "".into(),
+                    provenance: provenance.clone(),
+                });
+            }
             out.push(Op::SetDescription {
                 target,
                 text: "".into(),
@@ -729,11 +737,27 @@ impl Edit {
         let p = Provenance::human(actor, now_ms);
         let clearing = p.clone();
         let ops = match self {
-            Edit::SetDescription { target, text } => vec![Op::SetDescription {
-                target: *target,
-                text: text.replace("\r\n", "\n").replace('\r', "\n").into(),
-                provenance: p,
-            }],
+            Edit::SetDescription { target, text } => {
+                let normalized: std::sync::Arc<str> =
+                    text.replace("\r\n", "\n").replace('\r', "\n").into();
+                let mut ops = Vec::new();
+                if normalized.is_empty() {
+                    for (lang, _) in project.description_translations(*target) {
+                        ops.push(Op::SetDescriptionTranslation {
+                            target: *target,
+                            lang: lang.into(),
+                            text: "".into(),
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                ops.push(Op::SetDescription {
+                    target: *target,
+                    text: normalized,
+                    provenance: p,
+                });
+                ops
+            }
             Edit::SetDescriptionTranslation { target, lang, text } => {
                 vec![Op::SetDescriptionTranslation {
                     target: *target,

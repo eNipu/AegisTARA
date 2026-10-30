@@ -79,6 +79,10 @@ case of "one system".
 - Ops gain a `system` field (or the element's system is implied by its target
   ID, so the op stays small). The store is additive, so v1 fixtures load as a
   single unnamed system.
+- **System deletion and cascade rules:** Removing a system must remove (or
+  reassign) all elements scoped to that system plus any cross-system interfaces
+  or data flows touching it in a single atomic, undoable op batch (`UI-10.6`),
+  analogous to how `RemoveComponent` or `RemoveAsset` cascades links today.
 
 ### 4.3 Combined evaluation
 
@@ -87,6 +91,13 @@ case of "one system".
   systems' trees and their cross-system links, recomputes only what changed,
   and explains every number with the existing explain-why trace (so "why is the
   combined risk high" still works).
+- **Explicit cross-system tree/threat link (`SYS-04`, `SYS-05`):** Today in
+  `aegis-model`, `Interface` and `DataFlow` do not link directly to `AttackTree`
+  or `ThreatScenario`. For combined evaluation to follow an attack path across
+  a system boundary, the design session must define the explicit model link —
+  for example, allowing an attack step in System B's tree to reference a threat
+  scenario or attack tree root in System A across a cross-system `DataFlow` or
+  `Interface` (with cycle detection across the composed graph).
 - Cross-system attack paths come from the same top-k path enumeration (job
   021), now walking links that cross a system boundary.
 
@@ -130,4 +141,7 @@ case of "one system".
 2. One lease per project now, or a per-system lease from the start?
 3. Should "All systems" be a first-class default scope, or always an explicit selection?
 4. Do visual IDs (job 118) stay per-project or become per-system when systems land (recommended: per-system, prefixed by the system name in combined views)?
-5. Is the current single-TARA project enough for the first customer, with systems as the next wave, or is multi-system needed before any customer demo?
+5. **Shared vs. per-system elements:** Are vehicle-level damage scenarios (for example "Loss of braking deceleration"), security controls, and cybersecurity goals strictly per-system, or can a project also hold shared project-scope damage scenarios, controls, and goals referenced by threats across multiple systems?
+6. **Methodology compatibility:** Must all systems in a project share the project's single `Methodology` (recommended, so impact, feasibility, and risk scales are directly commensurable in combined evaluation), or can systems pick different packs?
+7. **Cross-system attack tree link (`SYS-04`, `SYS-05`):** How does an attack path cross a system boundary in the model — by linking an attack step in one system to a threat scenario/tree root in another system over a cross-system `DataFlow`/`Interface`?
+8. Is the current single-TARA project enough for the first customer, with systems as the next wave, or is multi-system needed before any customer demo?

@@ -1519,6 +1519,9 @@ impl<P: CredentialProvider> Actor<P> {
         self.check = Some(interval);
         self.request_risks();
         self.load_figures();
+        if self.open.as_ref().is_some_and(|o| o.ui.page == Page::Admin) {
+            self.load_memberships();
+        }
     }
 
     fn close_project(&mut self, release: bool) {

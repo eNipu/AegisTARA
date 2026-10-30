@@ -73,3 +73,24 @@ fn search_is_bounded_by_the_query_length() {
     v.set_query(&"a".repeat(10_000));
     assert!(v.query().chars().count() <= 200);
 }
+
+#[test]
+fn catalog_pick_tracks_the_same_catalog_across_filtering_and_clears_when_filtered_out() {
+    let mut v = view();
+    assert_eq!(v.catalog_rows().len(), 3);
+    v.pick_catalog(Some(2));
+    assert_eq!(v.catalog_picked_row(), Some(2));
+    assert!(v.catalog_preview().contains("EMB3D"));
+
+    // Narrowing to EMB3D shifts its row to 0 while keeping the pick.
+    v.set_query("emb3d");
+    assert_eq!(v.catalog_rows().len(), 1);
+    assert_eq!(v.catalog_picked_row(), Some(0));
+    assert!(v.catalog_preview().contains("EMB3D"));
+
+    // A query that excludes the picked catalog clears the pick.
+    v.set_query("zzzzqq");
+    assert!(v.catalog_rows().is_empty());
+    assert_eq!(v.catalog_picked_row(), None);
+    assert!(v.catalog_preview().is_empty());
+}
