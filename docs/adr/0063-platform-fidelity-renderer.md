@@ -131,11 +131,22 @@ directory, on an Apple-silicon Mac with the network denied (`sandbox-exec`
 from `github.com/rust-skia/skia-binaries`, then falls back to downloading the
 Skia sources (`codeload.github.com/rust-skia/skia`), and stops with
 `curl: (6) Could not resolve host`. `--offline` only covers the crates.io
-registry. `UI-07.3` therefore needs the vendored-archive route: the crate's
-`SKIA_BINARIES_URL` accepts a `file://` URL. Still open: build the shipped
-targets (macOS, Windows) from a vendored archive with the network blocked, and
-record the archive's checksum and licence notice here. If that proves too
-heavy, `UI-07.3` allows FemtoVG.
+registry. `UI-07.3` therefore needs the vendored-archive route.
+
+**Vendored-archive result (measured 2026-10-30, macOS aarch64).** With the
+archive kept locally and `SKIA_BINARIES_URL="file:///<dir>/skia-binaries-{key}.tar.gz"`,
+the same no-network command (`sandbox-exec` `deny network*`, fresh target
+directory, `--offline --locked --release -p aegis-shell`) **succeeds** in
+4 min 44 s and produces a 46.3 MB `aegis-shell`. The archive is
+`skia-binaries-b7f043e0b1e2a850e702-aarch64-apple-darwin-ganesh-gl-jpegd-jpege-metal-pdf.tar.gz`
+(4.7 MB), SHA-256
+`688dc8a8f81f918cfaaae5f5af44262e75fc5d1a69589735926add090730d16a`. It is not
+committed to the repository; the offline bundle (job 100) carries it with
+that checksum.
+
+Still open: the same build for the Windows target (its archive has a different
+key), and the licence notice for the archive (owner review, `NFR-04`). If the
+Windows build proves too heavy, `UI-07.3` allows FemtoVG.
 
 ## Consequences
 

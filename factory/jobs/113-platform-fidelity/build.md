@@ -118,3 +118,13 @@
   platform has no OS scheme); check it by hand: flip the OS appearance with
   Appearance = System and watch the window.
 - Japanese and pseudo-locale screenshots on the real macOS window.
+
+### Round 2 addendum: offline build proven on macOS
+- With the cached Skia archive vendored and `SKIA_BINARIES_URL` pointing at it,
+  `cargo build --offline --locked --release -p aegis-shell` succeeds with the
+  network denied (46.3 MB binary). Checksum and details are in ADR 0063.
+- Verified locally on `28d4aa5`: `scripts/ci.sh`, `scripts/deny.sh`,
+  `tools/deny-fixtures/run.sh` (from a clean clone), per-crate `cargo check
+  --locked`, and `deploy/verify-image.sh`. GitHub Actions did not run (billing).
+- Still open: Windows vendored build, archive licence notice, the owner-run
+  Retina Mac + Windows spike, and a hand check of live OS appearance.

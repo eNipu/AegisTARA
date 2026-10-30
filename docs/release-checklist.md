@@ -55,8 +55,9 @@ Run this list for every release build. Tick each line in the release notes.
       archive (or, failing that, the Skia sources) at build time, so
       `cargo build --offline` alone is not an offline build. For the offline
       bundle, point `SKIA_BINARIES_URL` at a vendored archive
-      (`file:///...`), keep its checksum and licence notice with the bundle,
-      and rebuild with the network blocked. Users can force the CPU renderer
+      (`SKIA_BINARIES_URL="file:///dir/skia-binaries-{key}.tar.gz"`), keep
+      its checksum (ADR 0063) and licence notice with the bundle, and rebuild
+      with the network blocked. Proven on macOS aarch64; repeat for Windows. Users can force the CPU renderer
       with `AEGIS_RENDERER=software`.
 
 ## Server
