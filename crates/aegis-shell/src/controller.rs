@@ -236,6 +236,11 @@ impl Controller {
         session: Option<Session>,
         hooks: Hooks,
     ) -> Rc<Controller> {
+        // Platform fidelity (job 113): the one shortcut table drives every
+        // menu accelerator, and the native font families are applied before
+        // the first frame.
+        crate::shortcuts::install(window);
+        crate::platform::apply_fonts(window);
         let controller = Rc::new(Controller {
             window: window.as_weak(),
             session: RefCell::new(session),
