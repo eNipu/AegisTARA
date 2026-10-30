@@ -1137,4 +1137,8 @@ msgstr "⟦Séárch págés ánd cómmánds␣␣⟧"
 msgid "Shortcut"
 msgstr "⟦Shórtcút␣␣⟧"
 
+msgid "ID"
+msgstr "⟦ÍD␣⟧"
+
+
 

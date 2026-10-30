@@ -23,7 +23,7 @@ pub fn risk_register_csv(ws: &Workspace, ctx: &ReportContext) -> String {
     let _ = writeln!(out, "# {}", csv_field(&ctx.watermark()));
     let _ = write!(
         out,
-        "{},{},Deciding {},Impact,{},Risk before controls,Risk after controls,Treatment,Goal or claim\r\n",
+        "{},{},Deciding {},Impact,{},Risk before controls,Risk after controls,Treatment,Goal or claim,ID\r\n",
         names.threat_scenario.singular,
         names.asset.singular,
         names.damage_scenario.singular.to_lowercase(),
@@ -40,6 +40,7 @@ pub fn risk_register_csv(ws: &Workspace, ctx: &ReportContext) -> String {
             &risk_text(r.residual.as_ref()),
             &r.treatment,
             &r.backing,
+            &r.visual_id,
         ];
         let line: Vec<String> = fields.iter().map(|f| csv_field(f)).collect();
         out.push_str(&line.join(","));

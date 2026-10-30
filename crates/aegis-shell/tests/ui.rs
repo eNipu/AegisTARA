@@ -962,3 +962,68 @@ async fn suggesting_tree_steps_renders_ghost_nodes_on_canvas_and_accepts_them() 
     drop(app);
     server.stop().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn visual_ids_are_shown_in_tables_inspector_and_command_palette() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server, "alice").await;
+    app.controller.apply_latest();
+
+    // On the Attack Trees page, `tree-rows` prepends the visual ID in column 0,
+    // and selecting a node on the attack tree populates `inspector-tree-id` with `AT00`.
+    let tree_row0 = app.window.get_tree_rows().row_data(0).expect("tree 0");
+    assert_eq!(tree_row0.row_data(0).expect("col 0").text.as_str(), "AT00");
+    let (x, y) = node_position(&app, "Exploit");
+    app.headless.click(x, y);
+    app.until("step selected", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.inspector.is_some())
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(app.window.get_inspector_tree_id().as_str(), "AT00");
+
+    // Searching by visual ID in the command palette finds the element and jumps to it,
+    // populating that page's table and detail header with its visual ID.
+    app.window.invoke_open_palette();
+    app.window.invoke_palette_query_changed("A00".into());
+    assert_eq!(app.window.get_palette_rows().row_count(), 1);
+    app.window.invoke_palette_pick(0);
+    app.until("navigated to A00 on Assets page", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.page == Page::Assets && p.data.asset.as_ref().is_some_and(|a| a.visual_id == "A00")
+        })
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(app.window.get_asset_id().as_str(), "A00");
+    let asset_row0 = app.window.get_asset_rows().row_data(0).expect("asset 0");
+    assert_eq!(asset_row0.row_data(0).expect("col 0").text.as_str(), "A00");
+
+    app.window.invoke_open_palette();
+    app.window.invoke_palette_query_changed("T00".into());
+    let palette_rows = app.window.get_palette_rows();
+    assert_eq!(palette_rows.row_count(), 1);
+    let entry = palette_rows.row_data(0).expect("palette row 0");
+    assert!(
+        entry
+            .row_data(0)
+            .expect("label")
+            .text
+            .as_str()
+            .starts_with("T00 \u{b7} ")
+    );
+    app.window.invoke_palette_pick(0);
+    app.until("navigated to T00 on Threats page", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.page == Page::Threats && p.data.threat.as_ref().is_some_and(|t| t.visual_id == "T00")
+        })
+    })
+    .await;
+    app.controller.apply_latest();
+    assert_eq!(app.window.get_td_id().as_str(), "T00");
+    let threat_row0 = app.window.get_threat_rows().row_data(0).expect("threat 0");
+    assert_eq!(threat_row0.row_data(0).expect("col 0").text.as_str(), "T00");
+
+    drop(app);
+    server.stop().await;
+}

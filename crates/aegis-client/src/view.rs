@@ -52,6 +52,8 @@ pub struct RiskView {
 pub struct ThreatRow {
     /// Stable ID.
     pub id: ThreatId,
+    /// Short visual ID (`T00`, `T01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Name of the asset it targets.
@@ -488,6 +490,8 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
 pub struct MitigationView {
     /// The control.
     pub control: ControlId,
+    /// Short visual ID (`SC00`, `SC01`, ...).
+    pub visual_id: String,
     /// Its name.
     pub name: String,
     /// The cap, as a position in the feasibility levels.
@@ -500,6 +504,8 @@ pub struct TreeView {
     pub threat: Option<ThreatId>,
     /// The tree.
     pub tree: TreeId,
+    /// Short visual ID (`AT00`, `AT01`, ...).
+    pub visual_id: String,
     /// The laid-out scene, ready for `aegis_canvas::render`.
     pub scene: Arc<Scene>,
     /// Which node is selected, as a scene position.
@@ -531,6 +537,8 @@ pub struct FactorView {
 pub struct Inspector {
     /// Tree the node is in.
     pub tree: TreeId,
+    /// Short visual ID of the tree (`AT00`, `AT01`, ...).
+    pub tree_visual_id: String,
     /// The node.
     pub node: NodeId,
     /// Its label.
@@ -651,7 +659,7 @@ pub fn threat_rows(ws: &Workspace) -> Vec<ThreatRow> {
     let m = project.methodology();
     project
         .threat_scenarios()
-        .map(|(_, id, threat)| {
+        .map(|(t_idx, id, threat)| {
             let risk = |r: Result<&aegis_model::ThreatRisk, _>| {
                 r.ok()
                     .and_then(aegis_model::ThreatRisk::max_risk)
@@ -659,6 +667,7 @@ pub fn threat_rows(ws: &Workspace) -> Vec<ThreatRow> {
             };
             ThreatRow {
                 id,
+                visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
                 name: threat.name().to_owned(),
                 asset: project
                     .asset(threat.asset())
@@ -798,6 +807,7 @@ pub fn tree_view_cached(
     Some(TreeView {
         threat: threat_id,
         tree: tree_id,
+        visual_id: project.attack_tree_visual_id(tree_idx).unwrap_or_default(),
         scene,
         selected,
         residual: ui.show_residual,
@@ -904,6 +914,9 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
                 let control = project.security_control_id(s.control())?;
                 Some(MitigationView {
                     control,
+                    visual_id: project
+                        .security_control_visual_id(s.control())
+                        .unwrap_or_default(),
                     name: project
                         .security_control(s.control())
                         .map(|c| c.name().to_owned())
@@ -918,7 +931,12 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         let attachable = project
             .security_controls()
             .filter(|(c_idx, _, _)| !attached.iter().any(|s| s.control() == *c_idx))
-            .map(|(_, id, c)| (id, c.name().to_owned()))
+            .map(|(c_idx, id, c)| {
+                let vis = project
+                    .security_control_visual_id(c_idx)
+                    .unwrap_or_default();
+                (id, format!("{vis} \u{b7} {}", c.name()))
+            })
             .collect();
         let inherent = project.effective_step_feasibility(tree_idx, idx);
         let after = project.residual_step_feasibility(tree_idx, idx);
@@ -950,6 +968,7 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
 
     Some(Inspector {
         tree: tree_id,
+        tree_visual_id: project.attack_tree_visual_id(tree_idx).unwrap_or_default(),
         node: node_id,
         title: node.label().to_owned(),
         kind: kind_text(kind).to_owned(),

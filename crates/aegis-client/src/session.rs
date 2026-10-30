@@ -2776,6 +2776,7 @@ impl<P: CredentialProvider> Actor<P> {
                 selected_suggestion,
                 figures: open.figures.clone(),
                 excel_preview: open.excel_preview.clone(),
+                palette_elements: pages::palette_elements(&open.ws),
                 entry: open.entry.clone(),
                 mode: open.mode,
                 lock_holder: open.lock_holder.clone(),

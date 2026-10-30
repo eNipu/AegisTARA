@@ -1137,4 +1137,8 @@ msgstr "ページとコマンドを検索"
 msgid "Shortcut"
 msgstr "ショートカット"
 
+msgid "ID"
+msgstr "ID"
+
+
 

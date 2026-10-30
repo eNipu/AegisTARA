@@ -922,6 +922,134 @@ impl fmt::Display for SuggestionId {
     }
 }
 
+/// Fixed human-readable prefix for an element kind's visual ID (FND-06).
+///
+/// Every numbered element kind has a short uppercase prefix (`A`, `D`, `T`,
+/// `AT`, `SC`, `G`, `CL`, `C`, `IF`, `DF`, `TB`). Combined with a 0-based
+/// sequence number zero-padded to at least two digits (`00`..`99`, growing
+/// to `100`+), it forms a stable human-readable visual ID such as `A00`,
+/// `T01`, or `DF12`.
+///
+/// ```
+/// use aegis_model::{VisualPrefix, format_visual_id};
+///
+/// assert_eq!(VisualPrefix::Asset.as_str(), "A");
+/// assert_eq!(VisualPrefix::DataFlow.format(0), "DF00");
+/// assert_eq!(format_visual_id(VisualPrefix::Threat, 7), "T07");
+/// assert_eq!(format_visual_id(VisualPrefix::Threat, 100), "T100");
+/// assert_eq!(VisualPrefix::Threat.parse_num("T07"), Some(7));
+/// assert_eq!(VisualPrefix::Threat.parse_num("T007"), None);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum VisualPrefix {
+    /// Asset (`A00`, `A01`, ...).
+    Asset,
+    /// Damage scenario (`D00`, `D01`, ...).
+    Damage,
+    /// Threat scenario (`T00`, `T01`, ...).
+    Threat,
+    /// Attack tree (`AT00`, `AT01`, ...).
+    Tree,
+    /// Security control (`SC00`, `SC01`, ...).
+    Control,
+    /// Cybersecurity goal (`G00`, `G01`, ...).
+    Goal,
+    /// Cybersecurity claim (`CL00`, `CL01`, ...).
+    Claim,
+    /// Item-definition component (`C00`, `C01`, ...).
+    Component,
+    /// Item-definition interface (`IF00`, `IF01`, ...).
+    Interface,
+    /// Item-definition data flow (`DF00`, `DF01`, ...).
+    DataFlow,
+    /// Item-definition trust boundary (`TB00`, `TB01`, ...).
+    TrustBoundary,
+}
+
+impl VisualPrefix {
+    /// The uppercase ASCII prefix string (`"A"`, `"D"`, `"T"`, `"AT"`,
+    /// `"SC"`, `"G"`, `"CL"`, `"C"`, `"IF"`, `"DF"`, `"TB"`). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::VisualPrefix;
+    ///
+    /// assert_eq!(VisualPrefix::Asset.as_str(), "A");
+    /// assert_eq!(VisualPrefix::TrustBoundary.as_str(), "TB");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Asset => "A",
+            Self::Damage => "D",
+            Self::Threat => "T",
+            Self::Tree => "AT",
+            Self::Control => "SC",
+            Self::Goal => "G",
+            Self::Claim => "CL",
+            Self::Component => "C",
+            Self::Interface => "IF",
+            Self::DataFlow => "DF",
+            Self::TrustBoundary => "TB",
+        }
+    }
+
+    /// Formats `num` with this prefix, zero-padded to at least 2 digits
+    /// (`00`..`99`, growing to 3+ digits at `100`). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::VisualPrefix;
+    ///
+    /// assert_eq!(VisualPrefix::Control.format(0), "SC00");
+    /// assert_eq!(VisualPrefix::Control.format(99), "SC99");
+    /// assert_eq!(VisualPrefix::Control.format(100), "SC100");
+    /// ```
+    #[must_use]
+    pub fn format(self, num: u32) -> String {
+        format!("{}{num:02}", self.as_str())
+    }
+
+    /// Parses a canonical visual ID string with this prefix into its
+    /// sequence number. Rejects wrong prefixes, fewer than 2 digits,
+    /// non-ASCII-digit characters, and redundant leading zeros on numbers
+    /// of 3 or more digits (such as `"A001"`). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::VisualPrefix;
+    ///
+    /// assert_eq!(VisualPrefix::Asset.parse_num("A00"), Some(0));
+    /// assert_eq!(VisualPrefix::Asset.parse_num("A42"), Some(42));
+    /// assert_eq!(VisualPrefix::Asset.parse_num("A100"), Some(100));
+    /// assert_eq!(VisualPrefix::Asset.parse_num("A0"), None);
+    /// assert_eq!(VisualPrefix::Asset.parse_num("A001"), None);
+    /// assert_eq!(VisualPrefix::Asset.parse_num("D00"), None);
+    /// ```
+    #[must_use]
+    pub fn parse_num(self, text: &str) -> Option<u32> {
+        let digits = text.strip_prefix(self.as_str())?;
+        if digits.len() < 2 || digits.len() > 10 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        if digits.len() > 2 && digits.starts_with('0') {
+            return None;
+        }
+        digits.parse::<u32>().ok()
+    }
+}
+
+/// Formats a visual ID from its [`VisualPrefix`] and 0-based sequence
+/// number, zero-padded to at least 2 digits (`00`..`99`, `100`+). Time O(1).
+///
+/// ```
+/// use aegis_model::{VisualPrefix, format_visual_id};
+///
+/// assert_eq!(format_visual_id(VisualPrefix::Goal, 0), "G00");
+/// assert_eq!(format_visual_id(VisualPrefix::Interface, 14), "IF14");
+/// ```
+#[must_use]
+pub fn format_visual_id(prefix: VisualPrefix, num: u32) -> String {
+    prefix.format(num)
+}
+
 #[cfg(test)]
 mod parse {
     use super::*;

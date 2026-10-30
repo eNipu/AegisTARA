@@ -278,7 +278,7 @@ pub use id::{
     AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId, ControlIdx,
     DamageId, DamageIdx, DataFlowId, DataFlowIdx, GoalId, GoalIdx, InterfaceId, InterfaceIdx,
     NodeId, NodeIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
-    TrustBoundaryIdx,
+    TrustBoundaryIdx, VisualPrefix, format_visual_id,
 };
 pub use item::{
     Component, DataFlow, Interface, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS, TrustBoundary,

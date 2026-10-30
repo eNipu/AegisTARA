@@ -171,6 +171,8 @@ pub fn changed_text(p: &Provenance) -> String {
 /// A row that names a related entity and leads to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkRow {
+    /// Short human-readable visual ID (`A00`, `T01`, ...).
+    pub visual_id: String,
     /// Main text.
     pub label: String,
     /// Second text (a rating, a kind).
@@ -227,6 +229,8 @@ fn worse(a: Option<RiskView>, b: Option<RiskView>) -> Option<RiskView> {
 pub struct AssetRow {
     /// ID.
     pub id: AssetId,
+    /// Short visual ID (`A00`, `A01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Name of the component it is bound to, or empty if unbound.
@@ -244,6 +248,8 @@ pub struct AssetRow {
 pub struct AssetDetail {
     /// ID.
     pub id: AssetId,
+    /// Short visual ID (`A00`, `A01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Bound component, if any.
@@ -281,10 +287,11 @@ pub fn asset_rows(ws: &Workspace) -> Vec<AssetRow> {
     project
         .assets()
         .enumerate()
-        .map(|(pos, (_, id, a))| {
+        .map(|(pos, (idx, id, a))| {
             let (threats, worst) = counts.get(pos).cloned().unwrap_or_default();
             AssetRow {
                 id,
+                visual_id: project.asset_visual_id(idx).unwrap_or_default(),
                 name: a.name().to_owned(),
                 component: a
                     .component()
@@ -307,6 +314,7 @@ pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
     let a = project.asset(idx)?;
     Some(AssetDetail {
         id,
+        visual_id: project.asset_visual_id(idx).unwrap_or_default(),
         name: a.name().to_owned(),
         component: a.component().and_then(|c| project.component_id(c)),
         component_name: a
@@ -315,8 +323,9 @@ pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
             .map_or_else(String::new, |c| c.name().to_owned()),
         components: project
             .components()
-            .map(|(_, cid, c)| Choice {
+            .map(|(c_idx, cid, c)| Choice {
                 id: cid,
+                visual_id: project.component_visual_id(c_idx).unwrap_or_default(),
                 name: c.name().to_owned(),
             })
             .collect(),
@@ -324,7 +333,8 @@ pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
         threats: project
             .threat_scenarios()
             .filter(|(_, _, t)| t.asset() == idx)
-            .map(|(_, tid, t)| LinkRow {
+            .map(|(t_idx, tid, t)| LinkRow {
+                visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
                 label: t.name().to_owned(),
                 detail: threat_risks(ws, tid)
                     .0
@@ -345,6 +355,8 @@ pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
 pub struct ComponentRow {
     /// ID.
     pub id: ComponentId,
+    /// Short visual ID (`C00`, `C01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Parent component name, or empty if top-level.
@@ -360,6 +372,8 @@ pub struct ComponentRow {
 pub struct ComponentDetail {
     /// ID.
     pub id: ComponentId,
+    /// Short visual ID (`C00`, `C01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Parent component, if any.
@@ -379,6 +393,8 @@ pub struct ComponentDetail {
 pub struct InterfaceRow {
     /// ID.
     pub id: InterfaceId,
+    /// Short visual ID (`IF00`, `IF01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Owning component name.
@@ -394,6 +410,8 @@ pub struct InterfaceRow {
 pub struct InterfaceDetail {
     /// ID.
     pub id: InterfaceId,
+    /// Short visual ID (`IF00`, `IF01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Owning component ID.
@@ -413,6 +431,8 @@ pub struct InterfaceDetail {
 pub struct DataFlowRow {
     /// ID.
     pub id: DataFlowId,
+    /// Short visual ID (`DF00`, `DF01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Source component name.
@@ -430,6 +450,8 @@ pub struct DataFlowRow {
 pub struct DataFlowDetail {
     /// ID.
     pub id: DataFlowId,
+    /// Short visual ID (`DF00`, `DF01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Source component ID.
@@ -455,6 +477,8 @@ pub struct DataFlowDetail {
 pub struct TrustBoundaryRow {
     /// ID.
     pub id: TrustBoundaryId,
+    /// Short visual ID (`TB00`, `TB01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Number of member components.
@@ -466,6 +490,8 @@ pub struct TrustBoundaryRow {
 pub struct TrustBoundaryMember {
     /// Component ID.
     pub id: ComponentId,
+    /// Short visual ID (`C00`, `C01`, ...).
+    pub visual_id: String,
     /// Component name.
     pub name: String,
     /// Whether the component is inside this trust boundary.
@@ -477,6 +503,8 @@ pub struct TrustBoundaryMember {
 pub struct TrustBoundaryDetail {
     /// ID.
     pub id: TrustBoundaryId,
+    /// Short visual ID (`TB00`, `TB01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Every component and whether it is a member.
@@ -500,6 +528,7 @@ pub fn component_rows(ws: &Workspace) -> Vec<ComponentRow> {
         .components()
         .map(|(idx, id, c)| ComponentRow {
             id,
+            visual_id: project.component_visual_id(idx).unwrap_or_default(),
             name: c.name().to_owned(),
             parent: c
                 .parent()
@@ -538,20 +567,23 @@ pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDeta
     };
     Some(ComponentDetail {
         id,
+        visual_id: project.component_visual_id(idx).unwrap_or_default(),
         name: c.name().to_owned(),
         parent: c.parent().and_then(|p| project.component_id(p)),
         parents: project
             .components()
             .filter(|(c_idx, _, _)| !is_descendant_or_self(*c_idx))
-            .map(|(_, cid, comp)| Choice {
+            .map(|(c_idx, cid, comp)| Choice {
                 id: cid,
+                visual_id: project.component_visual_id(c_idx).unwrap_or_default(),
                 name: comp.name().to_owned(),
             })
             .collect(),
         interfaces: project
             .interfaces()
             .filter(|(_, _, i)| i.component() == idx)
-            .map(|(_, iid, i)| LinkRow {
+            .map(|(i_idx, iid, i)| LinkRow {
+                visual_id: project.interface_visual_id(i_idx).unwrap_or_default(),
                 label: i.name().to_owned(),
                 detail: m.interface_kind_label(i.kind()).unwrap_or("?").to_owned(),
                 target: Selection::Interface(iid),
@@ -560,7 +592,8 @@ pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDeta
         assets: project
             .assets()
             .filter(|(_, _, a)| a.component() == Some(idx))
-            .map(|(_, aid, a)| LinkRow {
+            .map(|(a_idx, aid, a)| LinkRow {
+                visual_id: project.asset_visual_id(a_idx).unwrap_or_default(),
                 label: a.name().to_owned(),
                 detail: String::new(),
                 target: Selection::Asset(aid),
@@ -579,6 +612,7 @@ pub fn interface_rows(ws: &Workspace) -> Vec<InterfaceRow> {
         .interfaces()
         .map(|(idx, id, i)| InterfaceRow {
             id,
+            visual_id: project.interface_visual_id(idx).unwrap_or_default(),
             name: i.name().to_owned(),
             component: project
                 .component(i.component())
@@ -601,6 +635,7 @@ pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDeta
     let i = project.interface(idx)?;
     Some(InterfaceDetail {
         id,
+        visual_id: project.interface_visual_id(idx).unwrap_or_default(),
         name: i.name().to_owned(),
         component: project.component_id(i.component())?,
         component_name: project
@@ -610,7 +645,8 @@ pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDeta
         flows: project
             .data_flows()
             .filter(|(_, _, df)| df.interface() == Some(idx))
-            .map(|(_, df_id, df)| LinkRow {
+            .map(|(df_idx, df_id, df)| LinkRow {
+                visual_id: project.data_flow_visual_id(df_idx).unwrap_or_default(),
                 label: df.name().to_owned(),
                 detail: format!(
                     "{} -> {}",
@@ -630,8 +666,9 @@ pub fn data_flow_rows(ws: &Workspace) -> Vec<DataFlowRow> {
     let project = ws.project();
     project
         .data_flows()
-        .map(|(_, id, df)| DataFlowRow {
+        .map(|(idx, id, df)| DataFlowRow {
             id,
+            visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
             name: df.name().to_owned(),
             from: project
                 .component(df.from())
@@ -656,6 +693,7 @@ pub fn data_flow_detail(ws: &Workspace, id: DataFlowId) -> Option<DataFlowDetail
     let df = project.data_flow(idx)?;
     Some(DataFlowDetail {
         id,
+        visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
         name: df.name().to_owned(),
         from: project.component_id(df.from())?,
         from_label: project
@@ -669,8 +707,9 @@ pub fn data_flow_detail(ws: &Workspace, id: DataFlowId) -> Option<DataFlowDetail
         interfaces: project
             .interfaces()
             .filter(|(_, _, i)| i.component() == df.from() || i.component() == df.to())
-            .map(|(_, iid, i)| Choice {
+            .map(|(i_idx, iid, i)| Choice {
                 id: iid,
+                visual_id: project.interface_visual_id(i_idx).unwrap_or_default(),
                 name: i.name().to_owned(),
             })
             .collect(),
@@ -685,8 +724,9 @@ pub fn trust_boundary_rows(ws: &Workspace) -> Vec<TrustBoundaryRow> {
     let project = ws.project();
     project
         .trust_boundaries()
-        .map(|(_, id, tb)| TrustBoundaryRow {
+        .map(|(idx, id, tb)| TrustBoundaryRow {
             id,
+            visual_id: project.trust_boundary_visual_id(idx).unwrap_or_default(),
             name: tb.name().to_owned(),
             members: tb.components().len(),
         })
@@ -701,11 +741,13 @@ pub fn trust_boundary_detail(ws: &Workspace, id: TrustBoundaryId) -> Option<Trus
     let tb = project.trust_boundary(idx)?;
     Some(TrustBoundaryDetail {
         id,
+        visual_id: project.trust_boundary_visual_id(idx).unwrap_or_default(),
         name: tb.name().to_owned(),
         members: project
             .components()
             .map(|(c_idx, cid, c)| TrustBoundaryMember {
                 id: cid,
+                visual_id: project.component_visual_id(c_idx).unwrap_or_default(),
                 name: c.name().to_owned(),
                 member: tb.contains(c_idx),
             })
@@ -723,6 +765,8 @@ pub fn trust_boundary_detail(ws: &Workspace, id: TrustBoundaryId) -> Option<Trus
 pub struct DamageRow {
     /// ID.
     pub id: DamageId,
+    /// Short visual ID (`D00`, `D01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Per impact category: the level's position, if rated.
@@ -738,6 +782,8 @@ pub struct DamageRow {
 pub struct DamageDetail {
     /// ID.
     pub id: DamageId,
+    /// Short visual ID (`D00`, `D01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Per impact category: the level's position, if rated.
@@ -782,6 +828,7 @@ pub fn damage_rows(ws: &Workspace) -> Vec<DamageRow> {
             let (impacts, impacts_text) = impacts(m, d);
             DamageRow {
                 id,
+                visual_id: project.damage_scenario_visual_id(idx).unwrap_or_default(),
                 name: d.name().to_owned(),
                 impacts,
                 impacts_text,
@@ -800,12 +847,14 @@ pub fn damage_detail(ws: &Workspace, id: DamageId) -> Option<DamageDetail> {
     let d = project.damage_scenario(idx)?;
     Some(DamageDetail {
         id,
+        visual_id: project.damage_scenario_visual_id(idx).unwrap_or_default(),
         name: d.name().to_owned(),
         impacts: impacts(m, d).0,
         threats: project
             .threat_scenarios()
             .filter(|(_, _, t)| t.damages().contains(&idx))
-            .map(|(_, tid, t)| LinkRow {
+            .map(|(t_idx, tid, t)| LinkRow {
+                visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
                 label: t.name().to_owned(),
                 detail: String::new(),
                 target: Selection::Threat(tid),
@@ -824,6 +873,8 @@ pub fn damage_detail(ws: &Workspace, id: DamageId) -> Option<DamageDetail> {
 pub struct DamageLink {
     /// The damage scenario.
     pub id: DamageId,
+    /// Short visual ID (`D00`, `D01`, ...).
+    pub visual_id: String,
     /// Its name.
     pub name: String,
     /// Whether the threat links it.
@@ -835,6 +886,8 @@ pub struct DamageLink {
 pub struct Choice<Id> {
     /// The entity.
     pub id: Id,
+    /// Short visual ID (`C00`, `AT00`, `G00`, ...).
+    pub visual_id: String,
     /// Its name.
     pub name: String,
 }
@@ -844,10 +897,14 @@ pub struct Choice<Id> {
 pub struct ThreatDetail {
     /// ID.
     pub id: ThreatId,
+    /// Short visual ID (`T00`, `T01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// The targeted asset.
     pub asset: AssetId,
+    /// Short visual ID of the targeted asset (`A00`, ...).
+    pub asset_visual_id: String,
     /// Its name.
     pub asset_name: String,
     /// Position in the threat categories.
@@ -921,7 +978,8 @@ fn explain_risk(
 pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
     let project = ws.project();
     let m = project.methodology();
-    let t = project.threat_scenario(project.threat_scenario_idx(&id)?)?;
+    let t_idx = project.threat_scenario_idx(&id)?;
+    let t = project.threat_scenario(t_idx)?;
     let asset_idx = t.asset();
     let (inherent, residual) = threat_risks(ws, id);
     let mut why = explain_risk(
@@ -952,8 +1010,10 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
         .map(|e| feasibility_label(m, *e.root_value()));
     Some(ThreatDetail {
         id,
+        visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
         name: t.name().to_owned(),
         asset: project.asset_id(asset_idx)?,
+        asset_visual_id: project.asset_visual_id(asset_idx).unwrap_or_default(),
         asset_name: project
             .asset(asset_idx)
             .map(|a| a.name().to_owned())
@@ -977,6 +1037,7 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
             .damage_scenarios()
             .map(|(idx, did, d)| DamageLink {
                 id: did,
+                visual_id: project.damage_scenario_visual_id(idx).unwrap_or_default(),
                 name: d.name().to_owned(),
                 linked: t.damages().contains(&idx),
             })
@@ -987,8 +1048,9 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
         tree: t.attack_tree().and_then(|i| project.attack_tree_id(i)),
         trees: project
             .attack_trees()
-            .map(|(_, tid, tree)| Choice {
+            .map(|(tr_idx, tid, tree)| Choice {
                 id: tid,
+                visual_id: project.attack_tree_visual_id(tr_idx).unwrap_or_default(),
                 name: tree
                     .get(tree.root())
                     .map(|n| n.label().to_owned())
@@ -1001,16 +1063,22 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
         goal: t.goal().and_then(|i| project.cybersecurity_goal_id(i)),
         goals: project
             .cybersecurity_goals()
-            .map(|(_, gid, g)| Choice {
+            .map(|(g_idx, gid, g)| Choice {
                 id: gid,
+                visual_id: project
+                    .cybersecurity_goal_visual_id(g_idx)
+                    .unwrap_or_default(),
                 name: g.name().to_owned(),
             })
             .collect(),
         claim: t.claim().and_then(|i| project.cybersecurity_claim_id(i)),
         claims: project
             .cybersecurity_claims()
-            .map(|(_, cid, c)| Choice {
+            .map(|(cl_idx, cid, c)| Choice {
                 id: cid,
+                visual_id: project
+                    .cybersecurity_claim_visual_id(cl_idx)
+                    .unwrap_or_default(),
                 name: c.name().to_owned(),
             })
             .collect(),
@@ -1028,6 +1096,8 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
 pub struct RiskRow {
     /// The threat.
     pub id: ThreatId,
+    /// Short visual ID (`T00`, `T01`, ...).
+    pub visual_id: String,
     /// Its name.
     pub threat: String,
     /// The asset's name.
@@ -1057,7 +1127,7 @@ pub fn risk_rows(ws: &Workspace) -> Vec<RiskRow> {
     let mut rows: Vec<(usize, RiskRow)> = project
         .threat_scenarios()
         .enumerate()
-        .map(|(pos, (_, id, t))| {
+        .map(|(pos, (t_idx, id, t))| {
             let (inherent, residual) = threat_risks(ws, id);
             let deciding = ws
                 .cache()
@@ -1095,6 +1165,7 @@ pub fn risk_rows(ws: &Workspace) -> Vec<RiskRow> {
                 pos,
                 RiskRow {
                     id,
+                    visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
                     threat: t.name().to_owned(),
                     asset: project
                         .asset(t.asset())
@@ -1134,6 +1205,8 @@ pub fn risk_rows(ws: &Workspace) -> Vec<RiskRow> {
 pub struct TreeRow {
     /// ID.
     pub id: TreeId,
+    /// Short visual ID (`AT00`, `AT01`, ...).
+    pub visual_id: String,
     /// The root's text.
     pub title: String,
     /// Number of nodes.
@@ -1159,6 +1232,7 @@ pub fn tree_rows(ws: &Workspace) -> Vec<TreeRow> {
                 .collect();
             TreeRow {
                 id,
+                visual_id: project.attack_tree_visual_id(idx).unwrap_or_default(),
                 title: tree
                     .get(tree.root())
                     .map(|n| n.label().to_owned())
@@ -1186,6 +1260,8 @@ pub fn tree_rows(ws: &Workspace) -> Vec<TreeRow> {
 pub struct ControlRow {
     /// ID.
     pub id: ControlId,
+    /// Short visual ID (`SC00`, `SC01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Steps it is attached to.
@@ -1199,6 +1275,8 @@ pub struct ControlRow {
 pub struct ControlDetail {
     /// ID.
     pub id: ControlId,
+    /// Short visual ID (`SC00`, `SC01`, ...).
+    pub visual_id: String,
     /// Name.
     pub name: String,
     /// Where it is attached: step, tree and the cap.
@@ -1214,10 +1292,12 @@ fn control_uses(project: &Project, c_idx: aegis_model::ControlIdx) -> Vec<LinkRo
     let mut out = Vec::new();
     for (t_idx, tree_id, tree) in project.attack_trees() {
         let title = tree.get(tree.root()).map_or("", |n| n.label());
+        let tree_vis = project.attack_tree_visual_id(t_idx).unwrap_or_default();
         for (n_idx, _, node) in tree.iter() {
             for s in project.step_mitigations(t_idx, n_idx) {
                 if s.control() == c_idx {
                     out.push(LinkRow {
+                        visual_id: tree_vis.clone(),
                         label: node.label().to_owned(),
                         detail: format!(
                             "in \"{title}\", caps feasibility at {}",
@@ -1254,6 +1334,7 @@ pub fn control_rows(ws: &Workspace) -> Vec<ControlRow> {
         .security_controls()
         .map(|(idx, id, c)| ControlRow {
             id,
+            visual_id: project.security_control_visual_id(idx).unwrap_or_default(),
             name: c.name().to_owned(),
             steps: steps.get(&idx).copied().unwrap_or(0),
             goals: goals.get(&idx).copied().unwrap_or(0),
@@ -1269,12 +1350,16 @@ pub fn control_detail(ws: &Workspace, id: ControlId) -> Option<ControlDetail> {
     let c = project.security_control(idx)?;
     Some(ControlDetail {
         id,
+        visual_id: project.security_control_visual_id(idx).unwrap_or_default(),
         name: c.name().to_owned(),
         steps: control_uses(project, idx),
         goals: project
             .cybersecurity_goals()
             .filter(|(_, _, g)| g.controls().contains(&idx))
-            .map(|(_, gid, g)| LinkRow {
+            .map(|(g_idx, gid, g)| LinkRow {
+                visual_id: project
+                    .cybersecurity_goal_visual_id(g_idx)
+                    .unwrap_or_default(),
                 label: g.name().to_owned(),
                 detail: String::new(),
                 target: Selection::Goal(gid),
@@ -1294,6 +1379,8 @@ pub type ClaimRow = GoalRowOf<ClaimId>;
 pub struct GoalRowOf<Id> {
     /// ID.
     pub id: Id,
+    /// Short visual ID (`G00`, `CL00`, ...).
+    pub visual_id: String,
     /// Name or statement.
     pub name: String,
     /// Linked controls (goals) or 0 (claims).
@@ -1307,6 +1394,8 @@ pub struct GoalRowOf<Id> {
 pub struct ControlLink {
     /// The control.
     pub id: ControlId,
+    /// Short visual ID (`SC00`, `SC01`, ...).
+    pub visual_id: String,
     /// Its name.
     pub name: String,
     /// Whether the goal lists it.
@@ -1318,6 +1407,8 @@ pub struct ControlLink {
 pub struct GoalDetail<Id> {
     /// ID.
     pub id: Id,
+    /// Short visual ID (`G00`, `CL00`, ...).
+    pub visual_id: String,
     /// Name or statement.
     pub name: String,
     /// Every control and whether it is linked (goals only).
@@ -1336,6 +1427,9 @@ pub fn goal_rows(ws: &Workspace) -> Vec<GoalRow> {
         .cybersecurity_goals()
         .map(|(idx, id, g)| GoalRowOf {
             id,
+            visual_id: project
+                .cybersecurity_goal_visual_id(idx)
+                .unwrap_or_default(),
             name: g.name().to_owned(),
             controls: g.controls().len(),
             threats: project
@@ -1354,6 +1448,9 @@ pub fn claim_rows(ws: &Workspace) -> Vec<ClaimRow> {
         .cybersecurity_claims()
         .map(|(idx, id, c)| GoalRowOf {
             id,
+            visual_id: project
+                .cybersecurity_claim_visual_id(idx)
+                .unwrap_or_default(),
             name: c.name().to_owned(),
             controls: 0,
             threats: project
@@ -1372,11 +1469,17 @@ pub fn goal_detail(ws: &Workspace, id: GoalId) -> Option<GoalDetail<GoalId>> {
     let g = project.cybersecurity_goal(idx)?;
     Some(GoalDetail {
         id,
+        visual_id: project
+            .cybersecurity_goal_visual_id(idx)
+            .unwrap_or_default(),
         name: g.name().to_owned(),
         controls: project
             .security_controls()
             .map(|(c_idx, cid, c)| ControlLink {
                 id: cid,
+                visual_id: project
+                    .security_control_visual_id(c_idx)
+                    .unwrap_or_default(),
                 name: c.name().to_owned(),
                 linked: g.controls().contains(&c_idx),
             })
@@ -1384,7 +1487,8 @@ pub fn goal_detail(ws: &Workspace, id: GoalId) -> Option<GoalDetail<GoalId>> {
         threats: project
             .threat_scenarios()
             .filter(|(_, _, t)| t.goal() == Some(idx))
-            .map(|(_, tid, t)| LinkRow {
+            .map(|(t_idx, tid, t)| LinkRow {
+                visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
                 label: t.name().to_owned(),
                 detail: t
                     .treatment()
@@ -1406,12 +1510,16 @@ pub fn claim_detail(ws: &Workspace, id: ClaimId) -> Option<GoalDetail<ClaimId>> 
     let c = project.cybersecurity_claim(idx)?;
     Some(GoalDetail {
         id,
+        visual_id: project
+            .cybersecurity_claim_visual_id(idx)
+            .unwrap_or_default(),
         name: c.name().to_owned(),
         controls: Vec::new(),
         threats: project
             .threat_scenarios()
             .filter(|(_, _, t)| t.claim() == Some(idx))
-            .map(|(_, tid, t)| LinkRow {
+            .map(|(t_idx, tid, t)| LinkRow {
+                visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
                 label: t.name().to_owned(),
                 detail: t
                     .treatment()
@@ -1434,10 +1542,53 @@ pub fn claim_detail(ws: &Workspace, id: ClaimId) -> Option<GoalDetail<ClaimId>> 
 pub struct ProblemRow {
     /// Blocks evaluation or treatment (error) or not (warning).
     pub error: bool,
+    /// Short visual ID of the target element (`A00`, `T01`, ...).
+    pub visual_id: String,
     /// What is wrong, naming the entity.
     pub text: String,
     /// The entity to open.
     pub target: Option<Selection>,
+}
+
+/// Short human-readable visual ID for `s` (`A00`, `T01`, `AT00`, ...).
+#[must_use]
+pub fn selection_visual_id(project: &Project, s: Selection) -> String {
+    match s {
+        Selection::Component(id) => project
+            .component_idx(&id)
+            .and_then(|i| project.component_visual_id(i)),
+        Selection::Interface(id) => project
+            .interface_idx(&id)
+            .and_then(|i| project.interface_visual_id(i)),
+        Selection::DataFlow(id) => project
+            .data_flow_idx(&id)
+            .and_then(|i| project.data_flow_visual_id(i)),
+        Selection::TrustBoundary(id) => project
+            .trust_boundary_idx(&id)
+            .and_then(|i| project.trust_boundary_visual_id(i)),
+        Selection::Asset(id) => project
+            .asset_idx(&id)
+            .and_then(|i| project.asset_visual_id(i)),
+        Selection::Damage(id) => project
+            .damage_scenario_idx(&id)
+            .and_then(|i| project.damage_scenario_visual_id(i)),
+        Selection::Threat(id) => project
+            .threat_scenario_idx(&id)
+            .and_then(|i| project.threat_scenario_visual_id(i)),
+        Selection::Tree(id) | Selection::TreeNode(id, _) => project
+            .attack_tree_idx(&id)
+            .and_then(|i| project.attack_tree_visual_id(i)),
+        Selection::Control(id) => project
+            .security_control_idx(&id)
+            .and_then(|i| project.security_control_visual_id(i)),
+        Selection::Goal(id) => project
+            .cybersecurity_goal_idx(&id)
+            .and_then(|i| project.cybersecurity_goal_visual_id(i)),
+        Selection::Claim(id) => project
+            .cybersecurity_claim_idx(&id)
+            .and_then(|i| project.cybersecurity_claim_visual_id(i)),
+    }
+    .unwrap_or_default()
 }
 
 fn named(project: &Project, s: Selection) -> &str {
@@ -1496,6 +1647,16 @@ fn named(project: &Project, s: Selection) -> &str {
     .unwrap_or("?")
 }
 
+fn cited(project: &Project, s: Selection) -> String {
+    let vis = selection_visual_id(project, s);
+    let name = named(project, s);
+    if vis.is_empty() {
+        format!("\"{name}\"")
+    } else {
+        format!("{vis} \"{name}\"")
+    }
+}
+
 fn node_label(project: &Project, tree: TreeId, node: aegis_model::NodeId) -> String {
     project
         .attack_tree_idx(&tree)
@@ -1509,7 +1670,7 @@ fn node_label(project: &Project, tree: TreeId, node: aegis_model::NodeId) -> Str
 pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
     use LintCode as L;
     let m = project.methodology();
-    let q = |s: Selection| format!("\"{}\"", named(project, s));
+    let q = |s: Selection| cited(project, s);
     let (text, target) = match code {
         L::AssetWithoutThreats { asset } => {
             let s = Selection::Asset(asset);
@@ -1803,6 +1964,7 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
     };
     ProblemRow {
         error: code.severity() == LintSeverity::Error,
+        visual_id: selection_visual_id(project, target),
         text,
         target: Some(target),
     }
@@ -1992,6 +2154,123 @@ pub fn select(ui: &mut UiState, s: Selection) {
 }
 
 // ---------------------------------------------------------------------------
+// Command palette element index (FND-07).
+// ---------------------------------------------------------------------------
+
+/// One element entry for the command palette (FND-07).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteElement {
+    /// Short human-readable visual ID (`A00`, `T01`, `AT00`, ...).
+    pub visual_id: String,
+    /// Element name or title.
+    pub name: String,
+    /// Element type singular label (`Asset`, `Threat scenario`, ...).
+    pub kind: String,
+    /// Selection target when picked.
+    pub target: Selection,
+}
+
+/// Every project element indexed by visual ID and name for the command palette.
+#[must_use]
+pub fn palette_elements(ws: &Workspace) -> Vec<PaletteElement> {
+    let p = ws.project();
+    let names = p.methodology().element_names();
+    let mut out = Vec::new();
+    for (idx, id, a) in p.assets() {
+        out.push(PaletteElement {
+            visual_id: p.asset_visual_id(idx).unwrap_or_default(),
+            name: a.name().to_owned(),
+            kind: names.asset.singular.to_string(),
+            target: Selection::Asset(id),
+        });
+    }
+    for (idx, id, d) in p.damage_scenarios() {
+        out.push(PaletteElement {
+            visual_id: p.damage_scenario_visual_id(idx).unwrap_or_default(),
+            name: d.name().to_owned(),
+            kind: names.damage_scenario.singular.to_string(),
+            target: Selection::Damage(id),
+        });
+    }
+    for (idx, id, t) in p.threat_scenarios() {
+        out.push(PaletteElement {
+            visual_id: p.threat_scenario_visual_id(idx).unwrap_or_default(),
+            name: t.name().to_owned(),
+            kind: names.threat_scenario.singular.to_string(),
+            target: Selection::Threat(id),
+        });
+    }
+    for (idx, id, tree) in p.attack_trees() {
+        out.push(PaletteElement {
+            visual_id: p.attack_tree_visual_id(idx).unwrap_or_default(),
+            name: tree
+                .get(tree.root())
+                .map(|n| n.label().to_owned())
+                .unwrap_or_default(),
+            kind: names.attack_tree.singular.to_string(),
+            target: Selection::Tree(id),
+        });
+    }
+    for (idx, id, c) in p.security_controls() {
+        out.push(PaletteElement {
+            visual_id: p.security_control_visual_id(idx).unwrap_or_default(),
+            name: c.name().to_owned(),
+            kind: names.security_control.singular.to_string(),
+            target: Selection::Control(id),
+        });
+    }
+    for (idx, id, g) in p.cybersecurity_goals() {
+        out.push(PaletteElement {
+            visual_id: p.cybersecurity_goal_visual_id(idx).unwrap_or_default(),
+            name: g.name().to_owned(),
+            kind: names.cybersecurity_goal.singular.to_string(),
+            target: Selection::Goal(id),
+        });
+    }
+    for (idx, id, c) in p.cybersecurity_claims() {
+        out.push(PaletteElement {
+            visual_id: p.cybersecurity_claim_visual_id(idx).unwrap_or_default(),
+            name: c.name().to_owned(),
+            kind: names.cybersecurity_claim.singular.to_string(),
+            target: Selection::Claim(id),
+        });
+    }
+    for (idx, id, c) in p.components() {
+        out.push(PaletteElement {
+            visual_id: p.component_visual_id(idx).unwrap_or_default(),
+            name: c.name().to_owned(),
+            kind: names.component.singular.to_string(),
+            target: Selection::Component(id),
+        });
+    }
+    for (idx, id, i) in p.interfaces() {
+        out.push(PaletteElement {
+            visual_id: p.interface_visual_id(idx).unwrap_or_default(),
+            name: i.name().to_owned(),
+            kind: names.interface.singular.to_string(),
+            target: Selection::Interface(id),
+        });
+    }
+    for (idx, id, df) in p.data_flows() {
+        out.push(PaletteElement {
+            visual_id: p.data_flow_visual_id(idx).unwrap_or_default(),
+            name: df.name().to_owned(),
+            kind: names.data_flow.singular.to_string(),
+            target: Selection::DataFlow(id),
+        });
+    }
+    for (idx, id, tb) in p.trust_boundaries() {
+        out.push(PaletteElement {
+            visual_id: p.trust_boundary_visual_id(idx).unwrap_or_default(),
+            name: tb.name().to_owned(),
+            kind: names.trust_boundary.singular.to_string(),
+            target: Selection::TrustBoundary(id),
+        });
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Versions: comparison with a baseline.
 // ---------------------------------------------------------------------------
 
@@ -2046,84 +2325,78 @@ pub fn comparison(
         });
     };
     macro_rules! entity {
-        ($what:literal, $set:expr, $name:expr) => {{
+        ($what:literal, $set:expr, $cite:expr) => {{
             let set = $set;
             for id in set.added() {
-                push("Added", format!("{} \"{}\"", $what, $name(current, *id)));
+                push("Added", format!("{} {}", $what, $cite(current, *id)));
             }
             for id in set.removed() {
-                push("Removed", format!("{} \"{}\"", $what, $name(base, *id)));
+                push("Removed", format!("{} {}", $what, $cite(base, *id)));
             }
             for id in set.modified() {
-                push("Changed", format!("{} \"{}\"", $what, $name(current, *id)));
+                push("Changed", format!("{} {}", $what, $cite(current, *id)));
             }
         }};
     }
-    entity!("Component", diff.components(), |p: &Project, id| named(
+    entity!("Component", diff.components(), |p: &Project, id| cited(
         p,
         Selection::Component(id)
-    )
-    .to_owned());
-    entity!("Interface", diff.interfaces(), |p: &Project, id| named(
+    ));
+    entity!("Interface", diff.interfaces(), |p: &Project, id| cited(
         p,
         Selection::Interface(id)
-    )
-    .to_owned());
-    entity!("Data flow", diff.data_flows(), |p: &Project, id| named(
+    ));
+    entity!("Data flow", diff.data_flows(), |p: &Project, id| cited(
         p,
         Selection::DataFlow(id)
-    )
-    .to_owned());
+    ));
     entity!(
         "Trust boundary",
         diff.trust_boundaries(),
-        |p: &Project, id| named(p, Selection::TrustBoundary(id)).to_owned()
+        |p: &Project, id| cited(p, Selection::TrustBoundary(id))
     );
-    entity!("Asset", diff.assets(), |p: &Project, id| named(
+    entity!("Asset", diff.assets(), |p: &Project, id| cited(
         p,
         Selection::Asset(id)
-    )
-    .to_owned());
+    ));
     entity!(
         "Damage scenario",
         diff.damage_scenarios(),
-        |p: &Project, id| named(p, Selection::Damage(id)).to_owned()
+        |p: &Project, id| cited(p, Selection::Damage(id))
     );
     entity!(
         "Threat scenario",
         diff.threat_scenarios(),
-        |p: &Project, id| named(p, Selection::Threat(id)).to_owned()
+        |p: &Project, id| cited(p, Selection::Threat(id))
     );
-    entity!("Attack tree", diff.attack_trees(), |p: &Project, id| named(
+    entity!("Attack tree", diff.attack_trees(), |p: &Project, id| cited(
         p,
         Selection::Tree(id)
-    )
-    .to_owned());
+    ));
     entity!(
         "Security control",
         diff.security_controls(),
-        |p: &Project, id| named(p, Selection::Control(id)).to_owned()
+        |p: &Project, id| cited(p, Selection::Control(id))
     );
-    entity!("Goal", diff.cybersecurity_goals(), |p: &Project, id| named(
+    entity!("Goal", diff.cybersecurity_goals(), |p: &Project, id| cited(
         p,
         Selection::Goal(id)
-    )
-    .to_owned());
+    ));
     entity!("Claim", diff.cybersecurity_claims(), |p: &Project, id| {
-        named(p, Selection::Claim(id)).to_owned()
+        cited(p, Selection::Claim(id))
     });
     let mut moved = 0;
     for d in diff.changed_risks() {
         moved += 1;
-        let name = if current.threat_scenario_idx(&d.threat()).is_some() {
-            named(current, Selection::Threat(d.threat()))
+        let threat_ref = if current.threat_scenario_idx(&d.threat()).is_some() {
+            cited(current, Selection::Threat(d.threat()))
         } else {
-            named(base, Selection::Threat(d.threat()))
+            cited(base, Selection::Threat(d.threat()))
         };
         push(
             "Risk",
             format!(
-                "\"{name}\": before controls {} to {} ({}); after controls {} to {} ({})",
+                "{threat_ref}: before controls {} to {} ({}); after controls {} to {} ({})",
                 risk_snapshot_text(m, d.inherent().before()),
                 risk_snapshot_text(m, d.inherent().after()),
                 d.inherent().change().as_str(),

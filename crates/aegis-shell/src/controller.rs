@@ -168,7 +168,11 @@ fn links(items: &[aegis_client::pages::LinkRow]) -> ModelRc<LinkItem> {
         items
             .iter()
             .map(|l| LinkItem {
-                label: s(&l.label),
+                label: if l.visual_id.is_empty() {
+                    s(&l.label)
+                } else {
+                    s(&format!("{} \u{b7} {}", l.visual_id, l.label))
+                },
                 detail: s(&l.detail),
                 tone: 0,
             })
@@ -306,6 +310,15 @@ impl Controller {
     fn select(&self, selection: Selection, navigate: bool) {
         if matches!(selection, Selection::Tree(_)) {
             self.state.borrow_mut().shown_tree = None;
+        }
+        if navigate && let Some(w) = self.window.upgrade() {
+            match selection {
+                Selection::Component(_) => w.set_item_tab(0),
+                Selection::Interface(_) => w.set_item_tab(1),
+                Selection::DataFlow(_) => w.set_item_tab(2),
+                Selection::TrustBoundary(_) => w.set_item_tab(3),
+                _ => {}
+            }
         }
         self.send(Command::Select {
             selection,
@@ -1493,9 +1506,12 @@ impl Controller {
         });
         on!(on_palette_query_changed, |c, text| c.apply_palette(&text));
         on!(on_palette_pick, |c, i| {
-            let id = pos(i).and_then(|i| c.palette.borrow().get(i).map(|e| e.id.clone()));
-            if let Some(id) = id {
-                if let Some(page) = id
+            let picked =
+                pos(i).and_then(|i| c.palette.borrow().get(i).map(|e| (e.id.clone(), e.target)));
+            if let Some((id, target)) = picked {
+                if let Some(target) = target {
+                    c.select(target, true);
+                } else if let Some(page) = id
                     .strip_prefix("page:")
                     .and_then(|n| n.parse::<usize>().ok())
                     .and_then(aegis_client::view::Page::from_index)
@@ -1545,13 +1561,36 @@ impl Controller {
             return;
         };
         let q = query.to_lowercase();
-        let entries: Vec<crate::shortcuts::PaletteEntry> = crate::shortcuts::palette_entries()
+        let mut all = crate::shortcuts::palette_entries();
+        if let Some(elements) = self.with_project(|p| Some(p.palette_elements.clone())) {
+            for e in elements {
+                all.push(crate::shortcuts::PaletteEntry {
+                    id: format!("el:{}", e.visual_id),
+                    label: format!("{} \u{b7} {}", e.visual_id, e.name),
+                    group: e.kind.to_owned(),
+                    keys: e.visual_id,
+                    name: e.name,
+                    target: Some(e.target),
+                });
+            }
+        }
+        let entries: Vec<crate::shortcuts::PaletteEntry> = all
             .into_iter()
             .filter(|e| {
-                q.is_empty()
-                    || e.label.to_lowercase().contains(&q)
-                    || e.group.to_lowercase().contains(&q)
-                    || e.keys.to_lowercase().contains(&q)
+                if q.is_empty() {
+                    return true;
+                }
+                let label = e.label.to_lowercase();
+                let group = e.group.to_lowercase();
+                let keys = e.keys.to_lowercase();
+                // Element visual IDs are matched by prefix so `T00` finds the
+                // threat `T00` and not the attack tree `AT00` (whose ID merely
+                // contains `T00`). Their name is matched separately.
+                if e.id.starts_with("el:") {
+                    keys.starts_with(&q) || e.name.to_lowercase().contains(&q) || group.contains(&q)
+                } else {
+                    label.contains(&q) || group.contains(&q) || keys.contains(&q)
+                }
             })
             .collect();
         w.set_palette_rows(rows(
@@ -2186,6 +2225,11 @@ impl Controller {
         }) {
             self.apply_pages(&w, project);
         }
+        if w.get_palette_open()
+            && prev_proj.is_none_or(|old| old.palette_elements != project.palette_elements)
+        {
+            self.apply_palette(&w.get_palette_query());
+        }
         self.apply_canvas(view, prev_proj);
     }
 
@@ -2227,6 +2271,7 @@ impl Controller {
                 .iter()
                 .map(|t| {
                     vec![
+                        t.visual_id.clone(),
                         t.name.clone(),
                         t.asset.clone(),
                         risk_text(t.inherent.as_ref()),
@@ -2243,16 +2288,18 @@ impl Controller {
         let d = p.data.threat.as_ref();
         w.set_has_threat_detail(d.is_some());
         let Some(d) = d else {
+            w.set_td_id(s(""));
             return;
         };
+        w.set_td_id(s(&d.visual_id));
         w.set_td_name(s(&d.name));
-        w.set_td_asset(s(&d.asset_name));
+        w.set_td_asset(s(&format!("{} \u{b7} {}", d.asset_visual_id, d.asset_name)));
         w.set_td_category(i32::try_from(d.category).unwrap_or(0));
         w.set_td_damages(model(
             d.damages
                 .iter()
                 .map(|x| CheckItem {
-                    label: s(&x.name),
+                    label: s(&format!("{} \u{b7} {}", x.visual_id, x.name)),
                     checked: x.linked,
                 })
                 .collect(),
@@ -2260,7 +2307,12 @@ impl Controller {
         w.set_td_refs(model(d.catalog_refs.iter().map(|x| s(x)).collect()));
         let plus_one = |x: Option<usize>| x.map_or(0, |i| i32::try_from(i + 1).unwrap_or(0));
         w.set_td_feasibility(plus_one(d.direct_feasibility));
-        w.set_tree_names(with_none("None", d.trees.iter().map(|t| t.name.clone())));
+        w.set_tree_names(with_none(
+            "None",
+            d.trees
+                .iter()
+                .map(|t| format!("{} \u{b7} {}", t.visual_id, t.name)),
+        ));
         w.set_td_tree(plus_one(
             d.tree.and_then(|t| d.trees.iter().position(|x| x.id == t)),
         ));
@@ -2272,11 +2324,21 @@ impl Controller {
         w.set_td_why(model(d.why.iter().map(|x| s(x)).collect()));
         w.set_td_changed(s(&d.changed));
         w.set_td_treatment(plus_one(d.treatment));
-        w.set_goal_names(with_none("None", d.goals.iter().map(|g| g.name.clone())));
+        w.set_goal_names(with_none(
+            "None",
+            d.goals
+                .iter()
+                .map(|g| format!("{} \u{b7} {}", g.visual_id, g.name)),
+        ));
         w.set_td_goal(plus_one(
             d.goal.and_then(|g| d.goals.iter().position(|x| x.id == g)),
         ));
-        w.set_claim_names(with_none("None", d.claims.iter().map(|g| g.name.clone())));
+        w.set_claim_names(with_none(
+            "None",
+            d.claims
+                .iter()
+                .map(|g| format!("{} \u{b7} {}", g.visual_id, g.name)),
+        ));
         w.set_td_claim(plus_one(
             d.claim
                 .and_then(|g| d.claims.iter().position(|x| x.id == g)),
@@ -2317,7 +2379,7 @@ impl Controller {
                 ov.top
                     .iter()
                     .map(|r| LinkItem {
-                        label: s(&r.threat),
+                        label: s(&format!("{} \u{b7} {}", r.visual_id, r.threat)),
                         detail: s(&format!(
                             "{} before, {} after",
                             risk_text(r.inherent.as_ref()),
@@ -2331,12 +2393,18 @@ impl Controller {
 
         // Item definition (job 074).
         let plus_one = |x: Option<usize>| x.map_or(0, |i| i32::try_from(i + 1).unwrap_or(0));
-        w.set_component_names(model(d.components.iter().map(|c| s(&c.name)).collect()));
+        w.set_component_names(model(
+            d.components
+                .iter()
+                .map(|c| s(&format!("{} \u{b7} {}", c.visual_id, c.name)))
+                .collect(),
+        ));
         w.set_component_rows(rows(
             d.components
                 .iter()
                 .map(|c| {
                     vec![
+                        c.visual_id.clone(),
                         c.name.clone(),
                         c.parent.clone(),
                         c.interfaces.to_string(),
@@ -2351,10 +2419,13 @@ impl Controller {
         ));
         w.set_has_component(d.component.is_some());
         if let Some(c) = &d.component {
+            w.set_component_id(s(&c.visual_id));
             w.set_component_name(s(&c.name));
             w.set_component_parent_options(with_none(
                 "None",
-                c.parents.iter().map(|x| x.name.clone()),
+                c.parents
+                    .iter()
+                    .map(|x| format!("{} \u{b7} {}", x.visual_id, x.name)),
             ));
             w.set_component_parent(plus_one(
                 c.parent
@@ -2363,12 +2434,15 @@ impl Controller {
             w.set_component_interfaces(links(&c.interfaces));
             w.set_component_assets(links(&c.assets));
             w.set_component_changed(s(&c.changed));
+        } else {
+            w.set_component_id(s(""));
         }
         w.set_interface_rows(rows(
             d.interfaces
                 .iter()
                 .map(|i| {
                     vec![
+                        i.visual_id.clone(),
                         i.name.clone(),
                         i.component.clone(),
                         i.kind.clone(),
@@ -2383,17 +2457,21 @@ impl Controller {
         ));
         w.set_has_interface(d.interface.is_some());
         if let Some(i) = &d.interface {
+            w.set_interface_id(s(&i.visual_id));
             w.set_interface_name(s(&i.name));
             w.set_interface_component(s(&i.component_name));
             w.set_interface_kind(i32::try_from(i.kind).unwrap_or(0));
             w.set_interface_flows(links(&i.flows));
             w.set_interface_changed(s(&i.changed));
+        } else {
+            w.set_interface_id(s(""));
         }
         w.set_data_flow_rows(rows(
             d.data_flows
                 .iter()
                 .map(|df| {
                     vec![
+                        df.visual_id.clone(),
                         df.name.clone(),
                         df.from.clone(),
                         df.to.clone(),
@@ -2408,12 +2486,15 @@ impl Controller {
         ));
         w.set_has_data_flow(d.data_flow.is_some());
         if let Some(df) = &d.data_flow {
+            w.set_data_flow_id(s(&df.visual_id));
             w.set_data_flow_name(s(&df.name));
             w.set_data_flow_from(s(&df.from_label));
             w.set_data_flow_to(s(&df.to_label));
             w.set_data_flow_interface_options(with_none(
                 "None",
-                df.interfaces.iter().map(|x| x.name.clone()),
+                df.interfaces
+                    .iter()
+                    .map(|x| format!("{} \u{b7} {}", x.visual_id, x.name)),
             ));
             w.set_data_flow_interface(plus_one(
                 df.interface
@@ -2421,11 +2502,19 @@ impl Controller {
             ));
             w.set_data_flow_crosses_boundary(df.crosses_boundary);
             w.set_data_flow_changed(s(&df.changed));
+        } else {
+            w.set_data_flow_id(s(""));
         }
         w.set_trust_boundary_rows(rows(
             d.trust_boundaries
                 .iter()
-                .map(|tb| vec![tb.name.clone(), tb.members.to_string()])
+                .map(|tb| {
+                    vec![
+                        tb.visual_id.clone(),
+                        tb.name.clone(),
+                        tb.members.to_string(),
+                    ]
+                })
                 .collect(),
         ));
         w.set_trust_boundary_selected(index_of(
@@ -2434,21 +2523,29 @@ impl Controller {
         ));
         w.set_has_trust_boundary(d.trust_boundary.is_some());
         if let Some(tb) = &d.trust_boundary {
+            w.set_trust_boundary_id(s(&tb.visual_id));
             w.set_trust_boundary_name(s(&tb.name));
             w.set_trust_boundary_members(model(
                 tb.members
                     .iter()
                     .map(|m| CheckItem {
-                        label: s(&m.name),
+                        label: s(&format!("{} \u{b7} {}", m.visual_id, m.name)),
                         checked: m.member,
                     })
                     .collect(),
             ));
             w.set_trust_boundary_changed(s(&tb.changed));
+        } else {
+            w.set_trust_boundary_id(s(""));
         }
 
         // Assets (also the asset choices of the threats page).
-        w.set_asset_names(model(d.assets.iter().map(|a| s(&a.name)).collect()));
+        w.set_asset_names(model(
+            d.assets
+                .iter()
+                .map(|a| s(&format!("{} \u{b7} {}", a.visual_id, a.name)))
+                .collect(),
+        ));
         w.set_asset_rows(rows(
             d.assets
                 .iter()
@@ -2461,6 +2558,7 @@ impl Controller {
                         .map(|(_, l)| l.as_str())
                         .collect();
                     vec![
+                        a.visual_id.clone(),
                         a.name.clone(),
                         props.join(", "),
                         a.threats.to_string(),
@@ -2477,10 +2575,13 @@ impl Controller {
         ));
         w.set_has_asset(d.asset.is_some());
         if let Some(a) = &d.asset {
+            w.set_asset_id(s(&a.visual_id));
             w.set_asset_name(s(&a.name));
             w.set_asset_component_options(with_none(
                 "None",
-                a.components.iter().map(|c| c.name.clone()),
+                a.components
+                    .iter()
+                    .map(|c| format!("{} \u{b7} {}", c.visual_id, c.name)),
             ));
             w.set_asset_component(plus_one(
                 a.component
@@ -2498,6 +2599,8 @@ impl Controller {
             ));
             w.set_asset_threats(links(&a.threats));
             w.set_asset_changed(s(&a.changed));
+        } else {
+            w.set_asset_id(s(""));
         }
 
         // Damage.
@@ -2514,6 +2617,7 @@ impl Controller {
                 .iter()
                 .map(|x| {
                     vec![
+                        x.visual_id.clone(),
                         x.name.clone(),
                         impact_text(&x.impacts),
                         x.threats.to_string(),
@@ -2527,6 +2631,7 @@ impl Controller {
         ));
         w.set_has_damage(d.damage.is_some());
         if let Some(x) = &d.damage {
+            w.set_damage_id(s(&x.visual_id));
             w.set_damage_name(s(&x.name));
             w.set_damage_impacts(model(
                 x.impacts
@@ -2541,6 +2646,8 @@ impl Controller {
             ));
             w.set_damage_threats(links(&x.threats));
             w.set_damage_changed(s(&x.changed));
+        } else {
+            w.set_damage_id(s(""));
         }
 
         // Risks.
@@ -2549,6 +2656,7 @@ impl Controller {
                 .iter()
                 .map(|r| {
                     vec![
+                        r.visual_id.clone(),
                         r.threat.clone(),
                         r.damage.clone(),
                         r.impact.clone(),
@@ -2569,7 +2677,7 @@ impl Controller {
         w.set_tree_rows(rows(
             d.trees
                 .iter()
-                .map(|t| vec![t.title.clone(), t.feasibility.clone()])
+                .map(|t| vec![t.visual_id.clone(), t.title.clone(), t.feasibility.clone()])
                 .collect(),
         ));
         w.set_tree_selected(index_of(
@@ -2582,7 +2690,14 @@ impl Controller {
         w.set_control_rows(rows(
             d.controls
                 .iter()
-                .map(|c| vec![c.name.clone(), c.steps.to_string(), c.goals.to_string()])
+                .map(|c| {
+                    vec![
+                        c.visual_id.clone(),
+                        c.name.clone(),
+                        c.steps.to_string(),
+                        c.goals.to_string(),
+                    ]
+                })
                 .collect(),
         ));
         w.set_control_selected(index_of(
@@ -2591,10 +2706,13 @@ impl Controller {
         ));
         w.set_has_control(d.control.is_some());
         if let Some(c) = &d.control {
+            w.set_control_id(s(&c.visual_id));
             w.set_control_name(s(&c.name));
             w.set_control_steps(links(&c.steps));
             w.set_control_goals(links(&c.goals));
             w.set_control_changed(s(&c.changed));
+        } else {
+            w.set_control_id(s(""));
         }
 
         // Goals and claims.
@@ -2603,6 +2721,7 @@ impl Controller {
                 .iter()
                 .map(|g| {
                     vec![
+                        g.visual_id.clone(),
                         g.name.clone(),
                         g.controls.to_string(),
                         g.threats.to_string(),
@@ -2616,22 +2735,25 @@ impl Controller {
         ));
         w.set_has_goal(d.goal.is_some());
         if let Some(g) = &d.goal {
+            w.set_goal_id(s(&g.visual_id));
             w.set_goal_name(s(&g.name));
             w.set_goal_controls(model(
                 g.controls
                     .iter()
                     .map(|c| CheckItem {
-                        label: s(&c.name),
+                        label: s(&format!("{} \u{b7} {}", c.visual_id, c.name)),
                         checked: c.linked,
                     })
                     .collect(),
             ));
             w.set_goal_threats(links(&g.threats));
+        } else {
+            w.set_goal_id(s(""));
         }
         w.set_claim_rows(rows(
             d.claims
                 .iter()
-                .map(|c| vec![c.name.clone(), c.threats.to_string()])
+                .map(|c| vec![c.visual_id.clone(), c.name.clone(), c.threats.to_string()])
                 .collect(),
         ));
         w.set_claim_selected(index_of(
@@ -2640,8 +2762,11 @@ impl Controller {
         ));
         w.set_has_claim(d.claim.is_some());
         if let Some(c) = &d.claim {
+            w.set_claim_id(s(&c.visual_id));
             w.set_claim_name(s(&c.name));
             w.set_claim_threats(links(&c.threats));
+        } else {
+            w.set_claim_id(s(""));
         }
 
         // Problems.
@@ -2886,10 +3011,12 @@ impl Controller {
             let threat = t
                 .threat
                 .and_then(|id| project.threats.iter().find(|r| r.id == id))
-                .map(|r| r.name.clone());
+                .map(|r| format!("{} \u{b7} {}", r.visual_id, r.name));
             match threat {
-                Some(name) if name != root => format!("{name} \u{b7} {root} \u{b7} {how}"),
-                _ => format!("{root} \u{b7} {how}"),
+                Some(name) if name != root => {
+                    format!("{} \u{b7} {name} \u{b7} {root} \u{b7} {how}", t.visual_id)
+                }
+                _ => format!("{} \u{b7} {root} \u{b7} {how}", t.visual_id),
             }
         });
         w.set_tree_title(s(title.as_deref().unwrap_or("")));
@@ -2934,6 +3061,7 @@ impl Controller {
             match project.inspector.as_ref() {
                 Some(i) => {
                     w.set_has_inspector(true);
+                    w.set_inspector_tree_id(s(&i.tree_visual_id));
                     w.set_inspector_title(s(&i.title));
                     w.set_inspector_kind(s(&i.kind));
                     w.set_inspector_is_step(i.is_step);
@@ -2971,7 +3099,7 @@ impl Controller {
                         i.mitigations
                             .iter()
                             .map(|m| MitigationItem {
-                                name: s(&m.name),
+                                name: s(&format!("{} \u{b7} {}", m.visual_id, m.name)),
                                 level: i32::try_from(m.level).unwrap_or(0),
                             })
                             .collect(),
@@ -2982,7 +3110,10 @@ impl Controller {
                     }
                     w.set_step_residual_text(s(i.residual.as_deref().unwrap_or("")));
                 }
-                None => w.set_has_inspector(false),
+                None => {
+                    w.set_has_inspector(false);
+                    w.set_inspector_tree_id(s(""));
+                }
             }
         }
 

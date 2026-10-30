@@ -113,15 +113,18 @@ pub fn page_for(id: &str) -> Option<aegis_client::view::Page> {
 
 /// The palette entries: every page and every command that has a shortcut.
 ///
-/// Each entry is `(id, label, group, keys)`; the palette filters by label and
-/// keys and dispatches by id. Pages that are not commands (Versions, History,
-/// Reports, Administration) are listed too, so the palette really does reach
-/// every page.
+/// Each entry is `(id, label, group, keys, name)`; the palette filters by
+/// label, group, keys and (for element entries) the bare element name, and
+/// dispatches by id. Pages that are not commands (Versions, History, Reports,
+/// Administration) are listed too, so the palette really does reach every
+/// page.
 pub struct PaletteEntry {
     pub id: String,
     pub label: String,
     pub group: String,
     pub keys: String,
+    pub name: String,
+    pub target: Option<aegis_client::view::Selection>,
 }
 
 /// Builds the palette entries once: the pages, then the commands.
@@ -134,6 +137,8 @@ pub fn palette_entries() -> Vec<PaletteEntry> {
             label: page.label().to_owned(),
             group: "Pages".to_owned(),
             keys: String::new(),
+            name: String::new(),
+            target: None,
         });
     }
     for s in table() {
@@ -142,6 +147,8 @@ pub fn palette_entries() -> Vec<PaletteEntry> {
             label: s.label.to_owned(),
             group: s.group.to_owned(),
             keys: keys(s).to_owned(),
+            name: String::new(),
+            target: None,
         });
     }
     out

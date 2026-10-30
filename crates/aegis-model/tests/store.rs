@@ -294,15 +294,21 @@ fn save_is_deterministic() {
     let first = apply_all(
         &m,
         &[
-            add_asset(a3, "gone"),
-            add_asset(a2, "b"),
             add_asset(a1, "a"),
+            add_asset(a2, "b"),
+            add_asset(a3, "gone"),
+            add_damage(d1, rated.clone()),
             add_damage(d2, vec![]),
             add_damage(damage_id(9), vec![]),
-            add_damage(d1, rated.clone()),
             Op::RemoveAsset { id: a3 },
             Op::RemoveDamageScenario { id: damage_id(9) },
             threat(vec!["5", "4.1", "4"], vec![d2, d1]),
+            Op::AddAttackTree {
+                id: tr1,
+                tree: build_tree(),
+                step_feasibility: vec![(s2, feas(&m, "high")), (s1, feas(&m, "low"))],
+                provenance: p_tree.clone(),
+            },
             Op::AddAttackTree {
                 id: tr2,
                 tree: AttackTree::new(node_id(99), Node::step("temp")).expect("temp"),
@@ -310,12 +316,6 @@ fn save_is_deterministic() {
                 provenance: Provenance::default(),
             },
             Op::RemoveAttackTree { id: tr2 },
-            Op::AddAttackTree {
-                id: tr1,
-                tree: build_tree(),
-                step_feasibility: vec![(s2, feas(&m, "high")), (s1, feas(&m, "low"))],
-                provenance: p_tree.clone(),
-            },
             Op::SetStepFactor {
                 tree: tr1,
                 node: s1,
@@ -1666,4 +1666,109 @@ fn rejects_malformed_attack_tree_and_provenance_wire_shapes() {
         ),
         "unknown claim on threat should fail"
     );
+}
+
+#[test]
+fn visual_ids_round_trip_after_deletion_and_reject_invalid_or_duplicate() {
+    let m = builtin();
+    let (a1, a2, a3, a4) = (asset_id(1), asset_id(2), asset_id(3), asset_id(4));
+    let mut p = apply_all(
+        &m,
+        &[
+            Op::AddAsset {
+                id: a3,
+                name: "First created".into(),
+                properties: m.all_properties(),
+                provenance: Provenance::default(),
+            },
+            Op::AddAsset {
+                id: a2,
+                name: "Second created".into(),
+                properties: m.all_properties(),
+                provenance: Provenance::default(),
+            },
+            Op::AddAsset {
+                id: a1,
+                name: "Third created".into(),
+                properties: m.all_properties(),
+                provenance: Provenance::default(),
+            },
+        ],
+    );
+    // Creation order visual IDs: a3 -> A00, a2 -> A01, a1 -> A02.
+    assert_eq!(
+        p.visual_id(aegis_model::ElementRef::Asset(a3)).as_deref(),
+        Some("A00")
+    );
+    assert_eq!(
+        p.visual_id(aegis_model::ElementRef::Asset(a2)).as_deref(),
+        Some("A01")
+    );
+    assert_eq!(
+        p.visual_id(aegis_model::ElementRef::Asset(a1)).as_deref(),
+        Some("A02")
+    );
+
+    // Delete a3 (A00); undo restores A00; redo removes it again.
+    let undo = p.apply(Op::RemoveAsset { id: a3 }).expect("remove a3");
+    p.apply(undo).expect("undo remove a3");
+    assert_eq!(
+        p.visual_id(aegis_model::ElementRef::Asset(a3)).as_deref(),
+        Some("A00")
+    );
+    p.apply(Op::RemoveAsset { id: a3 })
+        .expect("remove a3 again");
+
+    // Save and reload: a2 stays A01, a1 stays A02, and adding a4 gets A03 (never reusing A00).
+    let bytes = save(&p);
+    let text = String::from_utf8(bytes.clone()).expect("utf8");
+    assert!(text.contains(r#""visual_id":"A02""#), "{text}");
+
+    let mut loaded = load(&bytes, &m).expect("loads");
+    assert_eq!(save(&loaded), bytes);
+    assert_eq!(
+        loaded
+            .visual_id(aegis_model::ElementRef::Asset(a2))
+            .as_deref(),
+        Some("A01")
+    );
+    assert_eq!(
+        loaded
+            .visual_id(aegis_model::ElementRef::Asset(a1))
+            .as_deref(),
+        Some("A02")
+    );
+    loaded
+        .apply(Op::AddAsset {
+            id: a4,
+            name: "Fourth created".into(),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        })
+        .expect("add a4");
+    assert_eq!(
+        loaded
+            .visual_id(aegis_model::ElementRef::Asset(a4))
+            .as_deref(),
+        Some("A03")
+    );
+
+    // Duplicate visual_id in a snapshot is rejected with DuplicateEntry.
+    let dup = text.replacen(r#""visual_id":"A02""#, r#""visual_id":"A01""#, 1);
+    assert!(matches!(
+        load(dup.as_bytes(), &m).err(),
+        Some(StoreError::DuplicateEntry)
+    ));
+
+    // Malformed or wrong-prefix visual_id is rejected with InvalidId without leaking input.
+    for bad in [r#""D02""#, r#""A2""#, r#""A002""#, r#""Axx""#] {
+        let malformed = text.replacen(r#""visual_id":"A02""#, &format!(r#""visual_id":{bad}"#), 1);
+        assert!(
+            matches!(
+                load(malformed.as_bytes(), &m).err(),
+                Some(StoreError::InvalidId)
+            ),
+            "{bad}"
+        );
+    }
 }

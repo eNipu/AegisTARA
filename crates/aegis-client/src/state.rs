@@ -427,6 +427,8 @@ pub struct ProjectView {
     pub figures: Vec<crate::report::FigureAttachment>,
     /// Current dry-run preview of an Excel TARA import, if any (job 080, INT-02).
     pub excel_preview: Option<crate::excel::ExcelPreview>,
+    /// All project elements indexed by visual ID and name for the command palette (FND-07).
+    pub palette_elements: Vec<crate::pages::PaletteElement>,
 }
 
 impl ProjectView {

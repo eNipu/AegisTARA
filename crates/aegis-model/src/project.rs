@@ -21,7 +21,7 @@ use crate::id::{
     ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId,
     ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, GoalId, GoalIdx, InterfaceId,
     InterfaceIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
-    TrustBoundaryIdx,
+    TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS, TrustBoundary,
@@ -55,6 +55,9 @@ pub const MAX_NAME_CHARS: usize = 256;
 struct Arena<Id, Idx, T> {
     slots: Vec<Option<T>>,
     ids: Vec<Id>,
+    visuals: Vec<u32>,
+    next_visual: u32,
+    removed_visuals: BTreeMap<Id, u32>,
     by_id: BTreeMap<Id, Idx>,
 }
 
@@ -63,6 +66,9 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
         Arena {
             slots: Vec::new(),
             ids: Vec::new(),
+            visuals: Vec::new(),
+            next_visual: 0,
+            removed_visuals: BTreeMap::new(),
             by_id: BTreeMap::new(),
         }
     }
@@ -88,6 +94,23 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
         self.ids.get(idx.position()).copied()
     }
 
+    /// The 0-based visual sequence number of a live entity. O(1).
+    fn visual_num(&self, idx: Idx) -> Option<u32> {
+        self.get(idx)?;
+        self.visuals.get(idx.position()).copied()
+    }
+
+    /// Overrides the visual sequence number of a loaded entity and updates
+    /// `next_visual`. O(log n).
+    fn set_loaded_visual(&mut self, id: &Id, vis: u32, next_visual: u32) {
+        if let Some(idx) = self.idx(id)
+            && let Some(slot) = self.visuals.get_mut(idx.position())
+        {
+            *slot = vis;
+            self.next_visual = next_visual;
+        }
+    }
+
     /// Live entities. O(1).
     fn len(&self) -> usize {
         self.by_id.len()
@@ -111,8 +134,15 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
     /// arena is full. O(log n) amortized.
     fn push(&mut self, id: Id, value: T, limit: u32) -> Option<Idx> {
         let idx = self.next_idx(limit)?;
+        let vis = self.removed_visuals.remove(&id).unwrap_or_else(|| {
+            let current = self.next_visual;
+            self.next_visual = self.next_visual.saturating_add(1);
+            current
+        });
+        self.next_visual = self.next_visual.max(vis.saturating_add(1));
         self.slots.push(Some(value));
         self.ids.push(id);
+        self.visuals.push(vis);
         self.by_id.insert(id, idx);
         Some(idx)
     }
@@ -120,8 +150,10 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
     /// Tombstones a live entity and returns it. O(log n).
     fn remove(&mut self, idx: Idx) -> Option<T> {
         let id = self.id(idx)?;
+        let vis = self.visuals.get(idx.position()).copied()?;
         let value = self.slots.get_mut(idx.position())?.take();
         self.by_id.remove(&id);
+        self.removed_visuals.insert(id, vis);
         value
     }
 
@@ -2103,6 +2135,659 @@ impl Project {
         &self,
     ) -> impl Iterator<Item = (TrustBoundaryIdx, TrustBoundaryId, &TrustBoundary)> {
         self.trust_boundaries.iter()
+    }
+
+    // -- Visual IDs (FND-06) -----------------------------------------------------
+
+    /// Returns a live asset's 0-based visual sequence number in O(1), or
+    /// `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id, name: "Brake ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.asset_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.asset_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn asset_visual_num(&self, idx: AssetIdx) -> Option<u32> {
+        self.assets.visual_num(idx)
+    }
+
+    /// Returns a live asset's human-readable visual ID (`A00`, `A01`, ...) in
+    /// O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id, name: "Brake ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.asset_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.asset_visual_id(idx).as_deref(), Some("A00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn asset_visual_id(&self, idx: AssetIdx) -> Option<String> {
+        self.asset_visual_num(idx)
+            .map(|n| VisualPrefix::Asset.format(n))
+    }
+
+    /// Returns a live damage scenario's 0-based visual sequence number in
+    /// O(1), or `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = DamageId::new_v7();
+    /// project.apply(Op::AddDamageScenario {
+    ///     id, name: "Crash".into(), impacts: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.damage_scenario_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.damage_scenario_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn damage_scenario_visual_num(&self, idx: DamageIdx) -> Option<u32> {
+        self.damages.visual_num(idx)
+    }
+
+    /// Returns a live damage scenario's human-readable visual ID (`D00`,
+    /// `D01`, ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{DamageId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = DamageId::new_v7();
+    /// project.apply(Op::AddDamageScenario {
+    ///     id, name: "Crash".into(), impacts: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.damage_scenario_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.damage_scenario_visual_id(idx).as_deref(), Some("D00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn damage_scenario_visual_id(&self, idx: DamageIdx) -> Option<String> {
+        self.damage_scenario_visual_num(idx)
+            .map(|n| VisualPrefix::Damage.format(n))
+    }
+
+    /// Returns a live threat scenario's 0-based visual sequence number in
+    /// O(1), or `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let cat = m.threat_category("tampering").ok_or("no cat")?;
+    /// let id = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id, name: "Tamper".into(), asset, category: cat, catalog_refs: vec![],
+    ///     damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.threat_scenario_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.threat_scenario_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn threat_scenario_visual_num(&self, idx: ThreatIdx) -> Option<u32> {
+        self.threats.visual_num(idx)
+    }
+
+    /// Returns a live threat scenario's human-readable visual ID (`T00`,
+    /// `T01`, ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AssetId, Methodology, Op, Project, Provenance, ThreatId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let asset = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id: asset, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let cat = m.threat_category("tampering").ok_or("no cat")?;
+    /// let id = ThreatId::new_v7();
+    /// project.apply(Op::AddThreatScenario {
+    ///     id, name: "Tamper".into(), asset, category: cat, catalog_refs: vec![],
+    ///     damages: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.threat_scenario_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.threat_scenario_visual_id(idx).as_deref(), Some("T00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn threat_scenario_visual_id(&self, idx: ThreatIdx) -> Option<String> {
+        self.threat_scenario_visual_num(idx)
+            .map(|n| VisualPrefix::Threat.format(n))
+    }
+
+    /// Returns a live attack tree's 0-based visual sequence number in O(1),
+    /// or `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TreeId::new_v7();
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.attack_tree_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree_visual_num(&self, idx: TreeIdx) -> Option<u32> {
+        self.trees.visual_num(idx)
+    }
+
+    /// Returns a live attack tree's human-readable visual ID (`AT00`, `AT01`,
+    /// ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AttackTree, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TreeId::new_v7();
+    /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.attack_tree_visual_id(idx).as_deref(), Some("AT00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn attack_tree_visual_id(&self, idx: TreeIdx) -> Option<String> {
+        self.attack_tree_visual_num(idx)
+            .map(|n| VisualPrefix::Tree.format(n))
+    }
+
+    /// Returns a live security control's 0-based visual sequence number in
+    /// O(1), or `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id, name: "HSM".into(), provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.security_control_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn security_control_visual_num(&self, idx: ControlIdx) -> Option<u32> {
+        self.controls.visual_num(idx)
+    }
+
+    /// Returns a live security control's human-readable visual ID (`SC00`,
+    /// `SC01`, ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id, name: "HSM".into(), provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.security_control_visual_id(idx).as_deref(), Some("SC00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn security_control_visual_id(&self, idx: ControlIdx) -> Option<String> {
+        self.security_control_visual_num(idx)
+            .map(|n| VisualPrefix::Control.format(n))
+    }
+
+    /// Returns a live cybersecurity goal's 0-based visual sequence number in
+    /// O(1), or `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{GoalId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = GoalId::new_v7();
+    /// project.apply(Op::AddCybersecurityGoal {
+    ///     id, name: "Auth".into(), controls: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.cybersecurity_goal_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.cybersecurity_goal_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn cybersecurity_goal_visual_num(&self, idx: GoalIdx) -> Option<u32> {
+        self.goals.visual_num(idx)
+    }
+
+    /// Returns a live cybersecurity goal's human-readable visual ID (`G00`,
+    /// `G01`, ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{GoalId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = GoalId::new_v7();
+    /// project.apply(Op::AddCybersecurityGoal {
+    ///     id, name: "Auth".into(), controls: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.cybersecurity_goal_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.cybersecurity_goal_visual_id(idx).as_deref(), Some("G00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn cybersecurity_goal_visual_id(&self, idx: GoalIdx) -> Option<String> {
+        self.cybersecurity_goal_visual_num(idx)
+            .map(|n| VisualPrefix::Goal.format(n))
+    }
+
+    /// Returns a live cybersecurity claim's 0-based visual sequence number in
+    /// O(1), or `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ClaimId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ClaimId::new_v7();
+    /// project.apply(Op::AddCybersecurityClaim {
+    ///     id, name: "Physical".into(), provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.cybersecurity_claim_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.cybersecurity_claim_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn cybersecurity_claim_visual_num(&self, idx: ClaimIdx) -> Option<u32> {
+        self.claims.visual_num(idx)
+    }
+
+    /// Returns a live cybersecurity claim's human-readable visual ID (`CL00`,
+    /// `CL01`, ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ClaimId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ClaimId::new_v7();
+    /// project.apply(Op::AddCybersecurityClaim {
+    ///     id, name: "Physical".into(), provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.cybersecurity_claim_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.cybersecurity_claim_visual_id(idx).as_deref(), Some("CL00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn cybersecurity_claim_visual_id(&self, idx: ClaimIdx) -> Option<String> {
+        self.cybersecurity_claim_visual_num(idx)
+            .map(|n| VisualPrefix::Claim.format(n))
+    }
+
+    /// Returns a live component's 0-based visual sequence number in O(1), or
+    /// `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.component_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.component_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn component_visual_num(&self, idx: ComponentIdx) -> Option<u32> {
+        self.components.visual_num(idx)
+    }
+
+    /// Returns a live component's human-readable visual ID (`C00`, `C01`, ...)
+    /// in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.component_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.component_visual_id(idx).as_deref(), Some("C00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn component_visual_id(&self, idx: ComponentIdx) -> Option<String> {
+        self.component_visual_num(idx)
+            .map(|n| VisualPrefix::Component.format(n))
+    }
+
+    /// Returns a live interface's 0-based visual sequence number in O(1), or
+    /// `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, InterfaceId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let comp = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: comp, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let kind = m.interface_kinds().next().ok_or("no kind")?;
+    /// let id = InterfaceId::new_v7();
+    /// project.apply(Op::AddInterface {
+    ///     id, name: "CAN".into(), component: comp, kind, provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.interface_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.interface_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn interface_visual_num(&self, idx: InterfaceIdx) -> Option<u32> {
+        self.interfaces.visual_num(idx)
+    }
+
+    /// Returns a live interface's human-readable visual ID (`IF00`, `IF01`,
+    /// ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, InterfaceId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let comp = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: comp, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let kind = m.interface_kinds().next().ok_or("no kind")?;
+    /// let id = InterfaceId::new_v7();
+    /// project.apply(Op::AddInterface {
+    ///     id, name: "CAN".into(), component: comp, kind, provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.interface_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.interface_visual_id(idx).as_deref(), Some("IF00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn interface_visual_id(&self, idx: InterfaceIdx) -> Option<String> {
+        self.interface_visual_num(idx)
+            .map(|n| VisualPrefix::Interface.format(n))
+    }
+
+    /// Returns a live data flow's 0-based visual sequence number in O(1), or
+    /// `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, DataFlowId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let (c1, c2) = (ComponentId::new_v7(), ComponentId::new_v7());
+    /// for id in [c1, c2] {
+    ///     project.apply(Op::AddComponent {
+    ///         id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let id = DataFlowId::new_v7();
+    /// project.apply(Op::AddDataFlow {
+    ///     id, name: "CAN".into(), from: c1, to: c2, interface: None,
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.data_flow_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.data_flow_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn data_flow_visual_num(&self, idx: DataFlowIdx) -> Option<u32> {
+        self.data_flows.visual_num(idx)
+    }
+
+    /// Returns a live data flow's human-readable visual ID (`DF00`, `DF01`,
+    /// ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, DataFlowId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let (c1, c2) = (ComponentId::new_v7(), ComponentId::new_v7());
+    /// for id in [c1, c2] {
+    ///     project.apply(Op::AddComponent {
+    ///         id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let id = DataFlowId::new_v7();
+    /// project.apply(Op::AddDataFlow {
+    ///     id, name: "CAN".into(), from: c1, to: c2, interface: None,
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.data_flow_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.data_flow_visual_id(idx).as_deref(), Some("DF00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn data_flow_visual_id(&self, idx: DataFlowIdx) -> Option<String> {
+        self.data_flow_visual_num(idx)
+            .map(|n| VisualPrefix::DataFlow.format(n))
+    }
+
+    /// Returns a live trust boundary's 0-based visual sequence number in
+    /// O(1), or `None` if `idx` is out of range or tombstoned. Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Op, Project, Provenance, TrustBoundaryId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TrustBoundaryId::new_v7();
+    /// project.apply(Op::AddTrustBoundary {
+    ///     id, name: "Zone A".into(), components: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.trust_boundary_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.trust_boundary_visual_num(idx), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn trust_boundary_visual_num(&self, idx: TrustBoundaryIdx) -> Option<u32> {
+        self.trust_boundaries.visual_num(idx)
+    }
+
+    /// Returns a live trust boundary's human-readable visual ID (`TB00`,
+    /// `TB01`, ...) in O(1), or `None` if `idx` is out of range or tombstoned.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Op, Project, Provenance, TrustBoundaryId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = TrustBoundaryId::new_v7();
+    /// project.apply(Op::AddTrustBoundary {
+    ///     id, name: "Zone A".into(), components: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.trust_boundary_idx(&id).ok_or("missing")?;
+    /// assert_eq!(project.trust_boundary_visual_id(idx).as_deref(), Some("TB00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn trust_boundary_visual_id(&self, idx: TrustBoundaryIdx) -> Option<String> {
+        self.trust_boundary_visual_num(idx)
+            .map(|n| VisualPrefix::TrustBoundary.format(n))
+    }
+
+    /// Returns the human-readable visual ID of any live [`ElementRef`] in
+    /// O(log n), or `None` for [`ElementRef::Project`] or a missing ID.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{AssetId, ElementRef, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let id = AssetId::new_v7();
+    /// project.apply(Op::AddAsset {
+    ///     id, name: "ECU".into(), properties: m.all_properties(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// assert_eq!(project.visual_id(ElementRef::Asset(id)).as_deref(), Some("A00"));
+    /// assert_eq!(project.visual_id(ElementRef::Project), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn visual_id(&self, target: ElementRef) -> Option<String> {
+        match target {
+            ElementRef::Project => None,
+            ElementRef::Asset(id) => self
+                .asset_idx(&id)
+                .and_then(|idx| self.asset_visual_id(idx)),
+            ElementRef::Damage(id) => self
+                .damage_scenario_idx(&id)
+                .and_then(|idx| self.damage_scenario_visual_id(idx)),
+            ElementRef::Threat(id) => self
+                .threat_scenario_idx(&id)
+                .and_then(|idx| self.threat_scenario_visual_id(idx)),
+            ElementRef::Tree(id) => self
+                .attack_tree_idx(&id)
+                .and_then(|idx| self.attack_tree_visual_id(idx)),
+            ElementRef::Control(id) => self
+                .security_control_idx(&id)
+                .and_then(|idx| self.security_control_visual_id(idx)),
+            ElementRef::Goal(id) => self
+                .cybersecurity_goal_idx(&id)
+                .and_then(|idx| self.cybersecurity_goal_visual_id(idx)),
+            ElementRef::Claim(id) => self
+                .cybersecurity_claim_idx(&id)
+                .and_then(|idx| self.cybersecurity_claim_visual_id(idx)),
+            ElementRef::Component(id) => self
+                .component_idx(&id)
+                .and_then(|idx| self.component_visual_id(idx)),
+            ElementRef::Interface(id) => self
+                .interface_idx(&id)
+                .and_then(|idx| self.interface_visual_id(idx)),
+            ElementRef::DataFlow(id) => self
+                .data_flow_idx(&id)
+                .and_then(|idx| self.data_flow_visual_id(idx)),
+            ElementRef::TrustBoundary(id) => self
+                .trust_boundary_idx(&id)
+                .and_then(|idx| self.trust_boundary_visual_id(idx)),
+        }
+    }
+
+    pub(crate) fn set_asset_loaded_visual(&mut self, id: &AssetId, vis: u32, next: u32) {
+        self.assets.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_damage_loaded_visual(&mut self, id: &DamageId, vis: u32, next: u32) {
+        self.damages.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_threat_loaded_visual(&mut self, id: &ThreatId, vis: u32, next: u32) {
+        self.threats.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_tree_loaded_visual(&mut self, id: &TreeId, vis: u32, next: u32) {
+        self.trees.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_control_loaded_visual(&mut self, id: &ControlId, vis: u32, next: u32) {
+        self.controls.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_goal_loaded_visual(&mut self, id: &GoalId, vis: u32, next: u32) {
+        self.goals.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_claim_loaded_visual(&mut self, id: &ClaimId, vis: u32, next: u32) {
+        self.claims.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_component_loaded_visual(&mut self, id: &ComponentId, vis: u32, next: u32) {
+        self.components.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_interface_loaded_visual(&mut self, id: &InterfaceId, vis: u32, next: u32) {
+        self.interfaces.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_data_flow_loaded_visual(&mut self, id: &DataFlowId, vis: u32, next: u32) {
+        self.data_flows.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_trust_boundary_loaded_visual(
+        &mut self,
+        id: &TrustBoundaryId,
+        vis: u32,
+        next: u32,
+    ) {
+        self.trust_boundaries.set_loaded_visual(id, vis, next);
     }
 
     /// Returns the [`StepMitigation`]s attached to `node` in `tree` in
