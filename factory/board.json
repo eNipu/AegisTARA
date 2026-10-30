@@ -1042,8 +1042,8 @@
     {
       "id": "113-platform-fidelity",
       "title": "Platform fidelity: GPU renderer with software fallback, system appearance, macOS shortcuts and fonts (D25, UI-07)",
-      "stage": "spec",
-      "worktree": null,
+      "stage": "build",
+      "worktree": "factory/worktrees/113-platform-fidelity",
       "branch": "factory/113-platform-fidelity",
       "round": 1,
       "reviews": {
@@ -1053,9 +1053,9 @@
         "code": "pending"
       },
       "decision": null,
-      "updated_at": "2026-10-30T20:21:59Z",
-      "notes": "Owner picked Skia (2026-10-30). Renderer spike evidence on a Retina Mac and Windows laptop is still required before build; ADR 0063 stays proposed."
+      "updated_at": "2026-10-30T20:24:34Z",
+      "notes": "Owner picked Skia (2026-10-30). Build started on factory/113-platform-fidelity; ADR 0063 stays proposed and merge is gated on the human-run Retina Mac + Windows laptop spike evidence."
     }
   ],
-  "updated_at": "2026-10-30T20:21:59Z"
+  "updated_at": "2026-10-30T20:24:34Z"
 }
