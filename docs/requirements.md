@@ -173,7 +173,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | UI-07 | Platform fidelity: GPU renderer with software fallback, Cupertino style on macOS, system appearance, ⌘ shortcuts, system fonts ([ui-ux-requirements.md](ui-ux-requirements.md), D25) | M | 5 | 113 |
 | UI-08 | Modeless creation: every element is created as a draft in the inspector (no name dialog, no draft sent to the server); names save on Enter, Tab and focus loss | M | 5 | 114 |
 | UI-09 | Row actions: a `DataTable` widget with + (add child) and ⋯ on each row, keyboard reachable | S | 5 | 115 |
-| UI-10 | Undo instead of confirmation: removals happen at once with an undo toast; errors inline, never in a dialog | M | 5 | 116 |
+| UI-10 | Visible undo and redo (top bar buttons naming the action, platform shortcuts, every op kind tested to undo exactly), then undo instead of confirmation: removals happen at once with an undo toast; errors inline, never in a dialog | M | 5 | 116 |
 | UI-11 | Editors in panels: description in the inspector, library in a panel slot next to the canvas, outline editor as a page mode, rename project and create baseline in place | S | 5 | 117 |
 | UI-12 | Dialog policy: a modal dialog only for irreversible actions, security tasks, file pickers and About, checked by a test with an allow list | M | all | every job |
 

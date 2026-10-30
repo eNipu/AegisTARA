@@ -28,10 +28,11 @@ A design review of `crates/aegis-shell` (2026-10-30) found the causes.
 | F5 | Ten "Add" or "Create" actions open a one-line name dialog | `root.ask("add-asset", ...)` and the same for damage, tree, control, goal, claim, component, trust boundary, baseline, project | A full stop of the flow for one word; the dialog covers the context the user is naming |
 | F6 | Three different ways to create things | dialogs (F5); inline forms for threats, interfaces and data flows; inline node fields in the attack tree page | The user must learn three patterns for one job |
 | F7 | Renaming needs a "Rename" button or Enter | `NameEditor` in `app.slint` | Typing a new name and clicking elsewhere silently loses the change |
-| F8 | Removing anything asks "Are you sure?" though undo exists | `root.confirm("remove-asset", ...)`, `Undo` in the Edit menu | Every delete costs two clicks and a read, and the dialog trains users to click "Yes" without reading |
+| F8 | Removing anything asks "Are you sure?" | `root.confirm("remove-asset", ...)` | Every delete costs two clicks and a read, and the dialog trains users to click "Yes" without reading |
 | F9 | The attack tree library is a modal dialog, but inserting needs a selection on the canvas | library dialog text: "Select a gate of the tree on the canvas first." | The user cannot do what the dialog asks while the dialog is open |
 | F10 | The description editor and outline editor are modal | `description-open`, `outline-open` overlays | The user cannot see the element or the tree while writing about it |
 | F11 | Tables are `StandardTableView`, with no per-row actions | `Table` in `widgets.slint` | No "+" on a row to add a child; no hover or focus actions |
+| F12 | Undo and redo are effectively missing for the user. The client core has them (`Workspace::undo`, `redo`), but the app shows them only as two small text buttons in the status bar next to "numbers checked", and in the Edit menu. Both are disabled unless the user holds the edit lease. They never say what will be undone, nothing confirms what an undo did, and redo uses Ctrl+Y, which is not the Mac shortcut (⇧⌘Z). | `app.slint` status bar `Button { text: @tr("Undo") ... enabled: root.can-undo && root.editing }`; Edit menu; `"Ctrl+Z / Ctrl+Y"` in the shortcut list | The owner could not find undo. A user who does not know undo exists cannot trust it, so confirmation dialogs cannot be removed until undo is visible and reliable. |
 
 None of these needs a new UI toolkit. They are choices inside the current app.
 
@@ -49,7 +50,8 @@ When a job breaks one, its UX review fails.
    that already exists on every page.
 3. **Undo is the safety net, not confirmation.** Anything undoable happens at
    once and offers Undo. A confirmation is kept only for what undo cannot bring
-   back.
+   back. Undo must be visible and say what it will do; an undo the user cannot
+   find is not a safety net, so confirmations go only after undo is visible.
 4. **Never lose typing.** Leaving a field saves it. Only Escape throws away.
 5. **One selection, one inspector.** Selecting a row or a canvas node always
    shows that element in the same right panel, with the same layout.
@@ -140,15 +142,38 @@ before and after.
 | UI-09.5 | Rows are 28 px in compact density and 32 px in normal density (085); the header stays visible while scrolling; long names end with "…" and show the full name in a tooltip. | S |
 | UI-09.6 | The table stays fast at the large reference project: scrolling 5,000 rows holds 60 frames per second on the GPU renderer and the selection change stays inside the A1 budget. | M |
 
-### UI-10 Undo instead of "Are you sure?" (M, job 116)
+### UI-10 Visible undo and redo, instead of "Are you sure?" (M, job 116)
+
+Undo and redo work in the client core today but the user cannot find them
+(F12). Part A makes them first-class actions. Part B removes the confirmations,
+and only after Part A.
+
+**Part A: undo and redo the user can see and trust**
 
 | ID | Requirement | Pri |
 |---|---|---|
-| UI-10.1 | Removing an element, unlinking, and every other undoable change happen at once, with no confirmation dialog. | M |
-| UI-10.2 | A toast at the bottom center says what happened and offers Undo: "Asset 'Brake ECU' removed · Undo (⌘Z)". It stays 8 seconds, longer while the pointer is over it, and never covers the inspector buttons. A new toast replaces the old one. It is read by screen readers (polite live region, or the accessible label route used in job 051). | M |
-| UI-10.3 | When a removal also changes other elements (unlinks threats, orphans a tree), the toast says so in one line: "… and unlinked from 3 threat scenarios". | S |
-| UI-10.4 | Errors that belong to a field show next to the field, in the inspector, in the error color with an icon. Errors that belong to the whole action show as an error toast that stays until closed. No error opens a dialog. | M |
-| UI-10.5 | Confirmation stays only for actions undo cannot reverse (UI-12). | M |
+| UI-10.1 | Undo and Redo are icon buttons in one fixed place: the left end of the project top bar, before the page title, as in Figma or Notion. They are shown on every page of an open project. The small text buttons in the status bar are removed. | M |
+| UI-10.2 | The tooltip and the Edit menu name the action and the shortcut: "Undo remove asset 'Brake ECU' (⌘Z)", "Redo rename threat scenario (⇧⌘Z)". When there is nothing to undo, the button is disabled and the tooltip says "Nothing to undo"; when the user may not edit, it says why ("Read only: Hana Suzuki is editing"). | M |
+| UI-10.3 | Shortcuts follow the platform: ⌘Z and ⇧⌘Z on macOS; Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z on Windows and Linux. They work wherever focus is: a table, the canvas, the inspector, a panel. | M |
+| UI-10.4 | Text fields keep their own typing undo. While a text field has focus and its text differs from the saved value, ⌘/Ctrl+Z undoes the typing in that field. Otherwise it undoes the last project change. After a field is saved (UI-08.3), its whole edit is one project undo step. | M |
+| UI-10.5 | After an undo or redo, the app shows the change: it opens the page of the affected element if needed, selects it, scrolls it into view, and shows a toast "Undone: remove asset 'Brake ECU' · Redo". | M |
+| UI-10.6 | Every user action is one undo step, including a batch (library insert, outline apply, Excel import into an open project, create from a draft). A test applies and undoes every `Op` kind and checks the project is exactly as before, links, ratings, descriptions and tree nodes included; a removal's undo brings back every link the removal cut. The property tests in `aegis-client` `workspace.rs` are extended to every op kind. | M |
+| UI-10.7 | The undo history is this session's own edits. It is kept while the project stays open and cleared when the project is closed, reloaded or the lease is lost; the app says so in a toast when it happens ("Undo history cleared: the project was reloaded"). Older changes are reached through the history panel (083). | S |
+
+**Part B: no confirmation for what undo can bring back**
+
+| ID | Requirement | Pri |
+|---|---|---|
+| UI-10.8 | Removing an element, unlinking, and every other undoable change happen at once, with no confirmation dialog. For each element type this lands only when the UI-10.6 test for its removal passes. | M |
+| UI-10.9 | A toast at the bottom center says what happened and offers Undo: "Asset 'Brake ECU' removed · Undo (⌘Z)". It stays 8 seconds, longer while the pointer is over it, and never covers the inspector buttons. A new toast replaces the old one. It is read by screen readers (polite live region, or the accessible label route used in job 051). | M |
+| UI-10.10 | When a removal also changes other elements (unlinks threats, orphans a tree), the toast says so in one line: "… and unlinked from 3 threat scenarios". | S |
+| UI-10.11 | Errors that belong to a field show next to the field, in the inspector, in the error color with an icon. Errors that belong to the whole action show as an error toast that stays until closed. No error opens a dialog. | M |
+| UI-10.12 | Confirmation stays only for actions undo cannot reverse (UI-12). | M |
+
+**Done when:** a new user finds Undo within ten seconds without help (the
+two-person check in section 7); undo and redo of the last three changes work
+from the keyboard on macOS and Windows and show what changed; the per-op undo
+test passes for every op kind.
 
 ### UI-11 Editors in panels, not over them (S, job 117; after 082)
 
@@ -194,7 +219,8 @@ default for Enter; Escape cancels; focus starts in the first field or on Cancel.
 | New project | Inline card on the start screen | 114 |
 | Rename project | Edit in place in the header | 117 |
 | Create baseline | Inline row in the Versions table | 117 |
-| Remove (asset, damage, threat, tree, control, ...) confirmation | Immediate, with undo toast | 116 |
+| Remove (asset, damage, threat, tree, control, ...) confirmation | Immediate, with undo toast, once undo is visible (UI-10 part A) | 116 |
+| Undo and Redo text buttons in the status bar (not a dialog, but hidden) | Icon buttons at the left of the top bar, naming what they undo | 116 |
 | Description editor | Field in the inspector | 117 |
 | Outline editor | Mode of the attack tree page | 117 |
 | Attack tree library | Right panel slot | 117 (after 082) |
@@ -213,7 +239,7 @@ Each job above checks its pages in these states, with a screenshot each.
 | Empty | One sentence on what belongs here and one main action ("No assets yet. Assets are what must be protected." + **New asset**). The empty state of 085 uses the draft flow of 114. |
 | Draft | The draft row and the draft inspector (UI-08) |
 | Read only | No row + buttons; the header button disabled with the reason; inspector fields shown as text, not disabled inputs |
-| Error | Field errors inline; action errors as a toast that stays (UI-10.4) |
+| Error | Field errors inline; action errors as a toast that stays (UI-10.11) |
 | Slow server | The optimistic change shows at once; if the confirm takes more than 1 second, a small spinner on the row; the "numbers checked" mark (047) follows as today |
 | Japanese | No clipped text at 100 % and 150 % scale; IME works in every draft field |
 
@@ -224,8 +250,8 @@ Each job above checks its pages in these states, with a screenshot each.
 | Order | Job | Why this order |
 |---|---|---|
 | 1 | 113 platform fidelity | The biggest change in how solid the app feels, with the smallest code change. Independent of the rest. The spike decides the renderer before anything else is polished. |
-| 2 | 114 modeless creation | Removes most dialogs. Uses the inspector that exists today. |
-| 3 | 116 undo toasts | Small; removes the remaining everyday dialogs; adds the toast that 114 needs for server errors. |
+| 2 | 116 visible undo and redo, then undo toasts | Undo is the safety net every later job leans on, so it must be visible and tested first. Part A (undo and redo) before Part B (removing confirmations). Adds the toast that 114 needs for server errors. |
+| 3 | 114 modeless creation | Removes most dialogs. Uses the inspector that exists today; "undo after create" relies on 116. |
 | 4 | 115 data table | Gives the row + and ⋯; prepares 084 and 085. |
 | 5 | 082 panel slots, then 117 | The library panel needs the slots. |
 | 6 | 081, 083, 084, 085 | As planned; 085 reviews the result as a whole. |
@@ -236,9 +262,10 @@ Each job above checks its pages in these states, with a screenshot each.
 
 - **Task timing**, recorded in each job's UX review, before and after, on macOS
   and Windows: add five assets; add a threat scenario to an asset and rate it;
-  remove an asset and undo; insert a library tree under a gate; write a
-  description. The goal: no dialog in any of these tasks, and each one done
-  with the keyboard alone.
+  remove an asset and undo; undo then redo the last three changes and say what
+  each one did; insert a library tree under a gate; write a description. The
+  goal: no dialog in any of these tasks, and each one done with the keyboard
+  alone.
 - **Two-person check** after 114 and 116: the owner and one consultant colleague
   do the five tasks on a Mac without help, say out loud where they hesitate,
   and rate each task from 1 (very hard) to 7 (very easy). Anything under 5 goes
@@ -271,7 +298,9 @@ Each job above checks its pages in these states, with a screenshot each.
 | A GPU renderer fails on some customer laptops or virtual desktops | Automatic software fallback (07.1) and a setting to force it |
 | The headless screenshot tests use the software renderer while users see the GPU one | Keep the tests on software (they check layout, not pixels of anti-aliasing); the spike's screenshots and the per-job manual screenshots cover the GPU look |
 | Cupertino style controls are taller or wider and break a tight layout | 085 checks every page; the pseudo-locale test (066) already catches clipping |
-| Users miss the confirmation dialog and delete by mistake | Undo toast with ⌘Z in the text; history panel (083) as the second net |
+| Users miss the confirmation dialog and delete by mistake | Visible undo first (UI-10 part A), then the undo toast with ⌘Z in the text; history panel (083) as the second net |
+| An op kind whose undo does not fully restore the project (a lost link or rating) | The per-op undo test (UI-10.6) gates removing each confirmation (UI-10.8) |
+| ⌘Z inside a text field undoes a project change the user did not mean | The text-field rule (UI-10.4), with a headless test for both cases |
 | A draft is lost when the app closes | Accepted: a draft is one name being typed. A non-empty draft is created on window close like on focus loss. |
 
 ---

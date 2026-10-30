@@ -194,7 +194,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 ## D25. Stay on Slint; fix how it renders and remove modal editing
 
 - **Date:** 2026-10-30
-- **Decision:** no native rewrite (SwiftUI on macOS, WinUI or WPF on Windows). The app keeps Slint (D7) and gets a GPU renderer with a software fallback, the Cupertino style on macOS, the system appearance and ⌘ shortcuts (job 113). Editing becomes modeless: elements are created as a draft in the inspector, removals offer undo instead of a confirmation, and editors move into panels (jobs 114 to 117). A dialog is kept only for actions undo cannot reverse, security tasks, file pickers and About.
+- **Decision:** no native rewrite (SwiftUI on macOS, WinUI or WPF on Windows). The app keeps Slint (D7) and gets a GPU renderer with a software fallback, the Cupertino style on macOS, the system appearance and ⌘ shortcuts (job 113). Undo and redo, which the client core has but the app hides, become visible top-bar actions that name what they undo (job 116, first part). Editing becomes modeless: elements are created as a draft in the inspector, removals offer undo instead of a confirmation, and editors move into panels (jobs 114 to 117). A dialog is kept only for actions undo cannot reverse, security tasks, file pickers and About.
 - **Why:** the "not solid on macOS" feel comes from the forced software renderer and the Windows-style widgets, not from Slint. A native rewrite would build every screen and the canvas twice and add two bindings to the Rust core, for no new capability. Reconsider only if a paying customer requires a native Mac app after jobs 113 to 117.
 - **Details:** [ui-ux-requirements.md](ui-ux-requirements.md) (UI-07 to UI-12).
 
