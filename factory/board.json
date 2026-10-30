@@ -1042,20 +1042,20 @@
     {
       "id": "113-platform-fidelity",
       "title": "Platform fidelity: GPU renderer with software fallback, system appearance, macOS shortcuts and fonts (D25, UI-07)",
-      "stage": "build",
+      "stage": "needs-human",
       "worktree": "factory/worktrees/113-platform-fidelity",
       "branch": "factory/113-platform-fidelity",
       "round": 1,
       "reviews": {
-        "security": "pending",
-        "ux": "pending",
-        "ui": "pending",
-        "code": "pending"
+        "security": "PASS",
+        "ux": "CHANGES",
+        "ui": "CHANGES",
+        "code": "PASS"
       },
-      "decision": null,
-      "updated_at": "2026-10-30T20:24:34Z",
-      "notes": "Owner picked Skia (2026-10-30). Build started on factory/113-platform-fidelity; ADR 0063 stays proposed and merge is gated on the human-run Retina Mac + Windows laptop spike evidence."
+      "decision": "ESCALATE",
+      "updated_at": "2026-10-30T21:52:38Z",
+      "notes": "Build round 1 on factory/113-platform-fidelity: Skia default with a software fallback and AEGIS_RENDERER, per-target cupertino/fluent style, one shortcut table driving the menus, native UI font. Checks pass. ESCALATE: the ADR 0063 spike is still TBD and System/Light/Dark appearance (UI-07.5) is not built."
     }
   ],
-  "updated_at": "2026-10-30T20:24:34Z"
+  "updated_at": "2026-10-30T21:52:38Z"
 }

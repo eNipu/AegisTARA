@@ -24,6 +24,8 @@ pub mod adapter;
 pub mod controller;
 pub mod headless;
 pub mod launcher;
+pub mod platform;
 pub mod provider;
+pub mod renderer;
 pub mod shortcuts;
 pub mod standalone;

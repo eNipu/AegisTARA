@@ -212,6 +212,38 @@ export component AppWindow inherits Window {
     in property <bool> show-residual;
     in property <bool> is-empty;
     in property <int> page: 0;
+
+    // ---- platform fidelity (job 113, D25, UI-07) ----
+    // True on macOS; lets the UI spell a modifier the Apple way.
+    in property <bool> mac-shortcuts: false;
+    // A platform-spelled hint for the description editor, built from the one
+    // shortcut table in Rust (shortcuts.rs) so no .slint file names a key.
+    in property <string> save-description-hint;
+    // The single shortcut table in Rust (shortcuts.rs) drives every menu
+    // accelerator, so a shortcut is written once (UI-07.6).
+    in property <keys> palette-keys;
+    in property <keys> undo-keys;
+    in property <keys> redo-keys;
+    in property <keys> begin-edit-keys;
+    in property <keys> end-edit-keys;
+    in property <keys> new-element-keys;
+    in property <keys> save-description-keys;
+    in property <keys> overview-keys;
+    in property <keys> assets-keys;
+    in property <keys> damage-keys;
+    in property <keys> threats-keys;
+    in property <keys> trees-keys;
+    in property <keys> risks-keys;
+    in property <keys> controls-keys;
+    in property <keys> goals-keys;
+    in property <keys> problems-keys;
+    in property <keys> item-keys;
+    // System font families applied by platform.rs (UI-07.7). The UI family is
+    // bound to `default-font-family` below; the monospace family is used by
+    // identifier and detail surfaces.
+    in property <string> ui-font-family;
+    in property <string> mono-font-family;
+    default-font-family: root.ui-font-family;
     // One entry per page: a count shown in the sidebar, or empty.
     in property <[string]> nav-counts;
 
@@ -792,25 +824,25 @@ export component AppWindow inherits Window {
         }
         Menu {
             title: @tr("Edit");
-            MenuItem { title: @tr("Undo"); icon: @image-url("icons/undo-2.svg"); shortcut: @keys(Control + Z); enabled: root.in-project && root.editing && root.can-undo; activated => { root.undo(); } }
-            MenuItem { title: @tr("Redo"); icon: @image-url("icons/redo-2.svg"); shortcut: @keys(Control + Y); enabled: root.in-project && root.editing && root.can-redo; activated => { root.redo(); } }
+            MenuItem { title: @tr("Undo"); icon: @image-url("icons/undo-2.svg"); shortcut: root.undo-keys; enabled: root.in-project && root.editing && root.can-undo; activated => { root.undo(); } }
+            MenuItem { title: @tr("Redo"); icon: @image-url("icons/redo-2.svg"); shortcut: root.redo-keys; enabled: root.in-project && root.editing && root.can-redo; activated => { root.redo(); } }
             MenuSeparator {}
-            MenuItem { title: @tr("Take the edit lock"); icon: @image-url("icons/pencil.svg"); shortcut: @keys(Control + E); enabled: root.in-project && root.band-kind == 0; activated => { root.begin-edit(); } }
+            MenuItem { title: @tr("Take the edit lock"); icon: @image-url("icons/pencil.svg"); shortcut: root.begin-edit-keys; enabled: root.in-project && root.band-kind == 0; activated => { root.begin-edit(); } }
             MenuItem { title: @tr("Release the edit lock"); icon: @image-url("icons/lock.svg"); enabled: root.in-project && root.editing; activated => { root.end-edit(); } }
         }
         Menu {
             title: @tr("View");
-            MenuItem { title: @tr("Command palette…"); icon: @image-url("icons/keyboard.svg"); shortcut: @keys(Control + K); enabled: root.in-project; activated => { root.open-palette(); } }
-            MenuItem { title: @tr("Overview"); icon: @image-url("icons/layout-dashboard.svg"); shortcut: @keys(Control + "1"); enabled: root.in-project; activated => { root.show-page(Pages.overview); } }
-            MenuItem { title: @tr("Item definition"); icon: @image-url("icons/network.svg"); enabled: root.in-project; activated => { root.show-page(Pages.item); } }
-            MenuItem { title: @tr("Assets"); icon: @image-url("icons/box.svg"); shortcut: @keys(Control + "2"); enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
-            MenuItem { title: @tr("Damage scenarios"); icon: @image-url("icons/triangle-alert.svg"); shortcut: @keys(Control + "3"); enabled: root.in-project; activated => { root.show-page(Pages.damage); } }
-            MenuItem { title: @tr("Threat scenarios"); icon: @image-url("icons/swords.svg"); shortcut: @keys(Control + "4"); enabled: root.in-project; activated => { root.show-page(Pages.threats); } }
-            MenuItem { title: @tr("Attack trees"); icon: @image-url("icons/network.svg"); shortcut: @keys(Control + "5"); enabled: root.in-project; activated => { root.show-page(Pages.trees); } }
-            MenuItem { title: @tr("Risks and treatment"); icon: @image-url("icons/gauge.svg"); shortcut: @keys(Control + "6"); enabled: root.in-project; activated => { root.show-page(Pages.risks); } }
-            MenuItem { title: @tr("Security controls"); icon: @image-url("icons/shield-check.svg"); shortcut: @keys(Control + "7"); enabled: root.in-project; activated => { root.show-page(Pages.controls); } }
-            MenuItem { title: @tr("Goals and claims"); icon: @image-url("icons/target.svg"); shortcut: @keys(Control + "8"); enabled: root.in-project; activated => { root.show-page(Pages.goals); } }
-            MenuItem { title: @tr("Problems"); icon: @image-url("icons/circle-alert.svg"); shortcut: @keys(Control + "9"); enabled: root.in-project; activated => { root.show-page(Pages.problems); } }
+            MenuItem { title: @tr("Command palette…"); icon: @image-url("icons/keyboard.svg"); shortcut: root.palette-keys; enabled: root.in-project; activated => { root.open-palette(); } }
+            MenuItem { title: @tr("Overview"); icon: @image-url("icons/layout-dashboard.svg"); shortcut: root.overview-keys; enabled: root.in-project; activated => { root.show-page(Pages.overview); } }
+            MenuItem { title: @tr("Item definition"); icon: @image-url("icons/network.svg"); shortcut: root.item-keys; enabled: root.in-project; activated => { root.show-page(Pages.item); } }
+            MenuItem { title: @tr("Assets"); icon: @image-url("icons/box.svg"); shortcut: root.assets-keys; enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
+            MenuItem { title: @tr("Damage scenarios"); icon: @image-url("icons/triangle-alert.svg"); shortcut: root.damage-keys; enabled: root.in-project; activated => { root.show-page(Pages.damage); } }
+            MenuItem { title: @tr("Threat scenarios"); icon: @image-url("icons/swords.svg"); shortcut: root.threats-keys; enabled: root.in-project; activated => { root.show-page(Pages.threats); } }
+            MenuItem { title: @tr("Attack trees"); icon: @image-url("icons/network.svg"); shortcut: root.trees-keys; enabled: root.in-project; activated => { root.show-page(Pages.trees); } }
+            MenuItem { title: @tr("Risks and treatment"); icon: @image-url("icons/gauge.svg"); shortcut: root.risks-keys; enabled: root.in-project; activated => { root.show-page(Pages.risks); } }
+            MenuItem { title: @tr("Security controls"); icon: @image-url("icons/shield-check.svg"); shortcut: root.controls-keys; enabled: root.in-project; activated => { root.show-page(Pages.controls); } }
+            MenuItem { title: @tr("Goals and claims"); icon: @image-url("icons/target.svg"); shortcut: root.goals-keys; enabled: root.in-project; activated => { root.show-page(Pages.goals); } }
+            MenuItem { title: @tr("Problems"); icon: @image-url("icons/circle-alert.svg"); shortcut: root.problems-keys; enabled: root.in-project; activated => { root.show-page(Pages.problems); } }
             MenuSeparator {}
             MenuItem { title: @tr("Risk after controls"); icon: @image-url("icons/eye.svg"); checkable: true; checked: root.show-residual; enabled: root.in-project; activated => { root.set-residual(!root.show-residual); } }
             MenuItem { title: @tr("Fit the tree"); icon: @image-url("icons/maximize.svg"); enabled: root.in-project && root.has-tree; activated => { root.fit(); } }
@@ -2735,7 +2767,7 @@ export component AppWindow inherits Window {
         background: #000000A0;
         FocusScope {
             // The text box keeps Tab for itself, so the keys that leave it are
-            // fixed: Ctrl+Enter saves, Escape cancels.
+            // fixed: the save shortcut saves, Escape cancels.
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
                     root.description-open = false;
@@ -2760,7 +2792,7 @@ export component AppWindow inherits Window {
                     spacing: 10px;
                     Text { text: root.description-title; font-size: 18px; font-weight: 700; color: Theme.ink; }
                     Text {
-                        text: @tr("Plain text. Ctrl+Enter saves, Escape cancels.");
+                        text: root.save-description-hint;
                         color: Theme.graphite;
                         font-size: 12px;
                         wrap: word-wrap;
