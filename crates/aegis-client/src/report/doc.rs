@@ -195,7 +195,7 @@ fn risk_rows_block(catalog: &Catalog, rows: &[RiskRow]) -> Block {
         rows.iter()
             .map(|r| {
                 vec![
-                    r.threat.clone(),
+                    format!("{} · {}", r.visual_id, r.threat),
                     r.asset.clone(),
                     r.damage.clone(),
                     r.impact.clone(),
@@ -239,7 +239,11 @@ pub(crate) fn section_descriptions(
     let mut out = Vec::new();
     let mut add = |name: &str, target: ElementRef| {
         if let Some(text) = description_of(ws, target, lang) {
-            out.push((name.to_owned(), text));
+            let label = match p.visual_id(target) {
+                Some(vis) => format!("{vis} · {name}"),
+                None => name.to_owned(),
+            };
+            out.push((label, text));
         }
     };
     match section {
@@ -624,7 +628,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 .iter()
                 .map(|c| {
                     vec![
-                        c.name.clone(),
+                        format!("{} · {}", c.visual_id, c.name),
                         c.parent.clone(),
                         c.interfaces.to_string(),
                         c.assets.to_string(),
@@ -649,7 +653,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 .iter()
                 .map(|i| {
                     vec![
-                        i.name.clone(),
+                        format!("{} · {}", i.visual_id, i.name),
                         i.component.clone(),
                         i.kind.clone(),
                         i.flows.to_string(),
@@ -674,7 +678,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 .iter()
                 .map(|df| {
                     vec![
-                        df.name.clone(),
+                        format!("{} · {}", df.visual_id, df.name),
                         df.from.clone(),
                         df.to.clone(),
                         df.interface.clone(),
@@ -695,7 +699,12 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             tb_rows
                 .iter()
-                .map(|tb| vec![tb.name.clone(), tb.members.to_string()])
+                .map(|tb| {
+                    vec![
+                        format!("{} · {}", tb.visual_id, tb.name),
+                        tb.members.to_string(),
+                    ]
+                })
                 .collect(),
         ));
         for tb in &tb_rows {
@@ -730,7 +739,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             asset_rows
                 .iter()
                 .map(|a| {
-                    let mut row = vec![a.name.clone()];
+                    let mut row = vec![format!("{} · {}", a.visual_id, a.name)];
                     row.extend(
                         a.properties
                             .iter()
@@ -762,7 +771,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             pages::damage_rows(ws)
                 .into_iter()
                 .map(|d| {
-                    let mut row = vec![d.name];
+                    let mut row = vec![format!("{} · {}", d.visual_id, d.name)];
                     for (i, level) in d.impacts.iter().enumerate() {
                         row.push(
                             level
@@ -795,20 +804,25 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             let Some(t) = pages::threat_detail(ws, id) else {
                 continue;
             };
-            b.push(Heading(3, t.name.clone()));
+            b.push(Heading(3, format!("{} · {}", t.visual_id, t.name)));
             if let Some(text) = description_of(ws, ElementRef::Threat(id), lang) {
                 desc_blocks(&mut b, &text);
             }
-            let damages: Vec<&str> = t
+            let damages: Vec<String> = t
                 .damages
                 .iter()
                 .filter(|d| d.linked)
-                .map(|d| d.name.as_str())
+                .map(|d| format!("{} · {}", d.visual_id, d.name))
                 .collect();
+            let asset_cell = if t.asset_visual_id.is_empty() {
+                t.asset_name.clone()
+            } else {
+                format!("{} · {}", t.asset_visual_id, t.asset_name)
+            };
             b.push(table(
                 &[catalog.tr("field"), catalog.tr("value")],
                 vec![
-                    vec![names.asset.singular.to_string(), t.asset_name.clone()],
+                    vec![names.asset.singular.to_string(), asset_cell],
                     vec![
                         catalog.tr("category"),
                         vocab
@@ -857,7 +871,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             b.push(Paragraph(catalog.tr("none"), Style::Muted));
         }
         for row in trees {
-            b.push(Heading(3, row.title.clone()));
+            b.push(Heading(3, format!("{} · {}", row.visual_id, row.title)));
             if let Some(text) = description_of(ws, ElementRef::Tree(row.id), lang) {
                 desc_blocks(&mut b, &text);
             }
@@ -913,7 +927,13 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             pages::control_rows(ws)
                 .into_iter()
-                .map(|c| vec![c.name, c.steps.to_string(), c.goals.to_string()])
+                .map(|c| {
+                    vec![
+                        format!("{} · {}", c.visual_id, c.name),
+                        c.steps.to_string(),
+                        c.goals.to_string(),
+                    ]
+                })
                 .collect(),
         ));
         desc_list(
@@ -935,7 +955,13 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             pages::goal_rows(ws)
                 .into_iter()
-                .map(|g| vec![g.name, g.controls.to_string(), g.threats.to_string()])
+                .map(|g| {
+                    vec![
+                        format!("{} · {}", g.visual_id, g.name),
+                        g.controls.to_string(),
+                        g.threats.to_string(),
+                    ]
+                })
                 .collect(),
         ));
         desc_list(
@@ -951,7 +977,12 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             pages::claim_rows(ws)
                 .into_iter()
-                .map(|c| vec![c.name, c.threats.to_string()])
+                .map(|c| {
+                    vec![
+                        format!("{} · {}", c.visual_id, c.name),
+                        c.threats.to_string(),
+                    ]
+                })
                 .collect(),
         ));
         desc_list(

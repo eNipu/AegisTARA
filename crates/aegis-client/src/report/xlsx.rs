@@ -275,6 +275,7 @@ fn zip_stored(files: &[(String, Vec<u8>)]) -> Vec<u8> {
 fn risk_register_sheet(ws: &Workspace) -> Sheet {
     let names = ws.project().methodology().element_names();
     let header = vec![
+        "ID".to_owned(),
         names.threat_scenario.singular.to_string(),
         names.asset.singular.to_string(),
         format!("Deciding {}", names.damage_scenario.singular.to_lowercase()),
@@ -291,6 +292,7 @@ fn risk_register_sheet(ws: &Workspace) -> Sheet {
             v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
         };
         rows.push(vec![
+            r.visual_id,
             r.threat,
             r.asset,
             r.damage,
@@ -383,6 +385,7 @@ pub fn report_workbook_xlsx_with_figures(
 
     if has_item {
         let mut comps = vec![vec![
+            "ID".to_owned(),
             names.component.singular.to_string(),
             "Parent".to_owned(),
             names.interface.plural.to_string(),
@@ -390,6 +393,7 @@ pub fn report_workbook_xlsx_with_figures(
         ]];
         for c in pages::component_rows(ws) {
             comps.push(vec![
+                c.visual_id,
                 c.name,
                 c.parent,
                 c.interfaces.to_string(),
@@ -402,13 +406,20 @@ pub fn report_workbook_xlsx_with_figures(
         });
 
         let mut ifaces = vec![vec![
+            "ID".to_owned(),
             names.interface.singular.to_string(),
             names.component.singular.to_string(),
             "Kind".to_owned(),
             names.data_flow.plural.to_string(),
         ]];
         for i in pages::interface_rows(ws) {
-            ifaces.push(vec![i.name, i.component, i.kind, i.flows.to_string()]);
+            ifaces.push(vec![
+                i.visual_id,
+                i.name,
+                i.component,
+                i.kind,
+                i.flows.to_string(),
+            ]);
         }
         sheets.push(Sheet {
             name: sheet_name(&names.interface.plural),
@@ -416,13 +427,14 @@ pub fn report_workbook_xlsx_with_figures(
         });
 
         let mut flows = vec![vec![
+            "ID".to_owned(),
             names.data_flow.singular.to_string(),
             "From component".to_owned(),
             "To component".to_owned(),
             names.interface.singular.to_string(),
         ]];
         for df in pages::data_flow_rows(ws) {
-            flows.push(vec![df.name, df.from, df.to, df.interface]);
+            flows.push(vec![df.visual_id, df.name, df.from, df.to, df.interface]);
         }
         sheets.push(Sheet {
             name: sheet_name(&names.data_flow.plural),
@@ -430,11 +442,12 @@ pub fn report_workbook_xlsx_with_figures(
         });
 
         let mut bounds = vec![vec![
+            "ID".to_owned(),
             names.trust_boundary.singular.to_string(),
             "Members".to_owned(),
         ]];
         for tb in pages::trust_boundary_rows(ws) {
-            bounds.push(vec![tb.name, tb.members.to_string()]);
+            bounds.push(vec![tb.visual_id, tb.name, tb.members.to_string()]);
         }
         sheets.push(Sheet {
             name: sheet_name(&names.trust_boundary.plural),
@@ -443,11 +456,11 @@ pub fn report_workbook_xlsx_with_figures(
     }
 
     // Assets.
-    let mut assets = vec![vec![names.asset.singular.to_string()]];
+    let mut assets = vec![vec!["ID".to_owned(), names.asset.singular.to_string()]];
     assets[0].extend(vocab.properties.iter().cloned());
     assets[0].push("Threats".to_owned());
     for a in pages::asset_rows(ws) {
-        let mut row = vec![a.name];
+        let mut row = vec![a.visual_id, a.name];
         row.extend(
             a.properties
                 .iter()
@@ -462,11 +475,14 @@ pub fn report_workbook_xlsx_with_figures(
     });
 
     // Damage scenarios.
-    let mut damage = vec![vec![names.damage_scenario.singular.to_string()]];
+    let mut damage = vec![vec![
+        "ID".to_owned(),
+        names.damage_scenario.singular.to_string(),
+    ]];
     damage[0].extend(vocab.impact_categories.iter().map(|c| c.label.clone()));
     damage[0].push("Threats".to_owned());
     for d in pages::damage_rows(ws) {
-        let mut row = vec![d.name];
+        let mut row = vec![d.visual_id, d.name];
         for (i, level) in d.impacts.iter().enumerate() {
             row.push(
                 level
@@ -485,6 +501,7 @@ pub fn report_workbook_xlsx_with_figures(
 
     // Threats.
     let mut threats = vec![vec![
+        "ID".to_owned(),
         names.threat_scenario.singular.to_string(),
         names.asset.singular.to_string(),
         "Category".to_owned(),
@@ -509,6 +526,7 @@ pub fn report_workbook_xlsx_with_figures(
             v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
         };
         threats.push(vec![
+            r.visual_id,
             r.threat,
             r.asset,
             category,
@@ -527,13 +545,20 @@ pub fn report_workbook_xlsx_with_figures(
 
     // Attack trees.
     let mut trees = vec![vec![
+        "ID".to_owned(),
         "Attack tree".to_owned(),
         "Nodes".to_owned(),
         names.threat_scenario.plural.to_string(),
         names.feasibility.to_string(),
     ]];
     for t in pages::tree_rows(ws) {
-        trees.push(vec![t.title, t.nodes.to_string(), t.threats, t.feasibility]);
+        trees.push(vec![
+            t.visual_id,
+            t.title,
+            t.nodes.to_string(),
+            t.threats,
+            t.feasibility,
+        ]);
     }
     sheets.push(Sheet {
         name: sheet_name(&names.attack_tree.plural),
@@ -542,12 +567,18 @@ pub fn report_workbook_xlsx_with_figures(
 
     // Controls.
     let mut controls = vec![vec![
+        "ID".to_owned(),
         names.security_control.singular.to_string(),
         "Attack steps".to_owned(),
         "Goals".to_owned(),
     ]];
     for c in pages::control_rows(ws) {
-        controls.push(vec![c.name, c.steps.to_string(), c.goals.to_string()]);
+        controls.push(vec![
+            c.visual_id,
+            c.name,
+            c.steps.to_string(),
+            c.goals.to_string(),
+        ]);
     }
     sheets.push(Sheet {
         name: sheet_name(&names.security_control.plural),
@@ -556,12 +587,18 @@ pub fn report_workbook_xlsx_with_figures(
 
     // Goals and claims.
     let mut goals = vec![vec![
+        "ID".to_owned(),
         names.cybersecurity_goal.singular.to_string(),
         "Controls".to_owned(),
         names.threat_scenario.plural.to_string(),
     ]];
     for g in pages::goal_rows(ws) {
-        goals.push(vec![g.name, g.controls.to_string(), g.threats.to_string()]);
+        goals.push(vec![
+            g.visual_id,
+            g.name,
+            g.controls.to_string(),
+            g.threats.to_string(),
+        ]);
     }
     sheets.push(Sheet {
         name: sheet_name(&names.cybersecurity_goal.plural),
@@ -569,11 +606,12 @@ pub fn report_workbook_xlsx_with_figures(
     });
 
     let mut claims = vec![vec![
+        "ID".to_owned(),
         names.cybersecurity_claim.singular.to_string(),
         names.threat_scenario.plural.to_string(),
     ]];
     for c in pages::claim_rows(ws) {
-        claims.push(vec![c.name, c.threats.to_string()]);
+        claims.push(vec![c.visual_id, c.name, c.threats.to_string()]);
     }
     sheets.push(Sheet {
         name: sheet_name(&names.cybersecurity_claim.plural),

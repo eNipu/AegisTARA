@@ -1021,7 +1021,24 @@
       "decision": "APPROVE",
       "updated_at": "2026-10-28T06:25:00Z",
       "notes": "Completed and reviewed (docs/adr/0052-attack-tree-library.md)."
+    },
+    {
+      "id": "118-visual-ids",
+      "title": "Human-readable visual IDs on every element (FND-06, FND-07)",
+      "stage": "merged",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "PASS",
+        "ui": "PASS",
+        "code": "PASS"
+      },
+      "decision": "APPROVE",
+      "updated_at": "2026-10-30T19:15:29Z",
+      "notes": "Completed and reviewed (docs/brainstorm-visual-ids.md)."
     }
   ],
-  "updated_at": "2026-10-28T06:25:00Z"
+  "updated_at": "2026-10-30T19:15:29Z"
 }

@@ -10,11 +10,12 @@ use super::wire::{
     self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
     NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
     StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, TargetView, Text,
+    VisualDisplay,
 };
 use crate::error::StoreError;
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ThreatId,
-    TreeId, TrustBoundaryId,
+    TreeId, TrustBoundaryId, VisualPrefix,
 };
 use crate::methodology::Methodology;
 use crate::op::Op;
@@ -185,6 +186,8 @@ impl TrustBoundaries<'_> {
 #[derive(Serialize)]
 struct AssetView<'a> {
     id: Text<AssetId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     properties: PropertyKeys<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,6 +199,8 @@ struct AssetView<'a> {
 #[derive(Serialize)]
 struct DamageView<'a> {
     id: Text<DamageId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     impacts: ImpactsByKey<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -205,6 +210,8 @@ struct DamageView<'a> {
 #[derive(Serialize)]
 struct ThreatView<'a> {
     id: Text<ThreatId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     asset: Required<Text<AssetId>>,
     category: Required<&'a str>,
@@ -227,6 +234,8 @@ struct ThreatView<'a> {
 #[derive(Serialize)]
 struct TreeView<'a> {
     id: Text<TreeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     nodes: NodesView<'a>,
     step_feasibility: StepFeasibilityByNode<'a>,
     #[serde(skip_serializing_if = "StepFactorsByNode::is_empty")]
@@ -240,6 +249,8 @@ struct TreeView<'a> {
 #[derive(Serialize)]
 struct ControlView<'a> {
     id: Text<ControlId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
@@ -248,6 +259,8 @@ struct ControlView<'a> {
 #[derive(Serialize)]
 struct GoalView<'a> {
     id: Text<GoalId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     controls: LinkedControls<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,6 +270,8 @@ struct GoalView<'a> {
 #[derive(Serialize)]
 struct ClaimView<'a> {
     id: Text<ClaimId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
@@ -265,6 +280,8 @@ struct ClaimView<'a> {
 #[derive(Serialize)]
 struct ComponentView<'a> {
     id: Text<ComponentId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<Required<Text<ComponentId>>>,
@@ -275,6 +292,8 @@ struct ComponentView<'a> {
 #[derive(Serialize)]
 struct InterfaceView<'a> {
     id: Text<InterfaceId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     component: Required<Text<ComponentId>>,
     kind: Required<&'a str>,
@@ -285,6 +304,8 @@ struct InterfaceView<'a> {
 #[derive(Serialize)]
 struct DataFlowView<'a> {
     id: Text<DataFlowId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     from: Required<Text<ComponentId>>,
     to: Required<Text<ComponentId>>,
@@ -297,6 +318,8 @@ struct DataFlowView<'a> {
 #[derive(Serialize)]
 struct TrustBoundaryView<'a> {
     id: Text<TrustBoundaryId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     components: LinkedBoundaryComponents<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -324,8 +347,13 @@ struct LinkedBoundaryComponents<'a> {
 impl Serialize for Assets<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let Ctx { p, m, order } = self.0;
-        s.collect_seq(p.assets().map(|(_, id, a)| AssetView {
+        s.collect_seq(p.assets().enumerate().map(|(pos, (idx, id, a))| AssetView {
             id: Text(id),
+            visual_id: VisualDisplay::non_default(
+                VisualPrefix::Asset,
+                p.asset_visual_num(idx),
+                pos,
+            ),
             name: a.name(),
             properties: PropertyKeys {
                 m,
@@ -341,25 +369,39 @@ impl Serialize for Assets<'_> {
 impl Serialize for Damages<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let Ctx { p, m, order } = self.0;
-        s.collect_seq(p.damage_scenarios().map(|(_, id, d)| DamageView {
-            id: Text(id),
-            name: d.name(),
-            impacts: ImpactsByKey {
-                m,
-                order,
-                damage: d,
-            },
-            provenance: ProvenanceView::of(d.provenance()),
-        }))
+        s.collect_seq(
+            p.damage_scenarios()
+                .enumerate()
+                .map(|(pos, (idx, id, d))| DamageView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Damage,
+                        p.damage_scenario_visual_num(idx),
+                        pos,
+                    ),
+                    name: d.name(),
+                    impacts: ImpactsByKey {
+                        m,
+                        order,
+                        damage: d,
+                    },
+                    provenance: ProvenanceView::of(d.provenance()),
+                }),
+        )
     }
 }
 
 impl Serialize for Threats<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let Ctx { p, m, order } = self.0;
-        s.collect_seq(p.threat_scenarios().map(|(_, id, t)| {
+        s.collect_seq(p.threat_scenarios().enumerate().map(|(pos, (idx, id, t))| {
             ThreatView {
                 id: Text(id),
+                visual_id: VisualDisplay::non_default(
+                    VisualPrefix::Threat,
+                    p.threat_scenario_visual_num(idx),
+                    pos,
+                ),
                 name: t.name(),
                 asset: Required(p.asset_id(t.asset()).map(Text)),
                 category: Required(m.threat_category_key(t.category())),
@@ -394,77 +436,116 @@ impl Serialize for Threats<'_> {
 impl Serialize for Trees<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let Ctx { p, order, .. } = self.0;
-        s.collect_seq(p.attack_trees().map(|(tree_idx, id, tree)| {
-            TreeView {
-                id: Text(id),
-                nodes: NodesView(tree),
-                step_feasibility: StepFeasibilityByNode {
-                    project: p,
-                    tree_idx,
-                    tree,
-                },
-                step_factors: StepFactorsByNode {
-                    project: p,
-                    order,
-                    tree_idx,
-                    tree,
-                },
-                step_mitigations: StepMitigationsByNode {
-                    project: p,
-                    tree_idx,
-                    tree,
-                },
-                provenance: p
-                    .attack_tree_provenance(tree_idx)
-                    .and_then(ProvenanceView::of),
-            }
-        }))
+        s.collect_seq(
+            p.attack_trees()
+                .enumerate()
+                .map(|(pos, (tree_idx, id, tree))| TreeView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Tree,
+                        p.attack_tree_visual_num(tree_idx),
+                        pos,
+                    ),
+                    nodes: NodesView(tree),
+                    step_feasibility: StepFeasibilityByNode {
+                        project: p,
+                        tree_idx,
+                        tree,
+                    },
+                    step_factors: StepFactorsByNode {
+                        project: p,
+                        order,
+                        tree_idx,
+                        tree,
+                    },
+                    step_mitigations: StepMitigationsByNode {
+                        project: p,
+                        tree_idx,
+                        tree,
+                    },
+                    provenance: p
+                        .attack_tree_provenance(tree_idx)
+                        .and_then(ProvenanceView::of),
+                }),
+        )
     }
 }
 
 impl Serialize for Controls<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
-        s.collect_seq(p.security_controls().map(|(_, id, c)| ControlView {
-            id: Text(id),
-            name: c.name(),
-            provenance: ProvenanceView::of(c.provenance()),
-        }))
+        s.collect_seq(
+            p.security_controls()
+                .enumerate()
+                .map(|(pos, (idx, id, c))| ControlView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Control,
+                        p.security_control_visual_num(idx),
+                        pos,
+                    ),
+                    name: c.name(),
+                    provenance: ProvenanceView::of(c.provenance()),
+                }),
+        )
     }
 }
 
 impl Serialize for Goals<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
-        s.collect_seq(p.cybersecurity_goals().map(|(_, id, g)| GoalView {
-            id: Text(id),
-            name: g.name(),
-            controls: LinkedControls {
-                p,
-                links: g.controls(),
-            },
-            provenance: ProvenanceView::of(g.provenance()),
-        }))
+        s.collect_seq(
+            p.cybersecurity_goals()
+                .enumerate()
+                .map(|(pos, (idx, id, g))| GoalView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Goal,
+                        p.cybersecurity_goal_visual_num(idx),
+                        pos,
+                    ),
+                    name: g.name(),
+                    controls: LinkedControls {
+                        p,
+                        links: g.controls(),
+                    },
+                    provenance: ProvenanceView::of(g.provenance()),
+                }),
+        )
     }
 }
 
 impl Serialize for Claims<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
-        s.collect_seq(p.cybersecurity_claims().map(|(_, id, cl)| ClaimView {
-            id: Text(id),
-            name: cl.name(),
-            provenance: ProvenanceView::of(cl.provenance()),
-        }))
+        s.collect_seq(
+            p.cybersecurity_claims()
+                .enumerate()
+                .map(|(pos, (idx, id, cl))| ClaimView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Claim,
+                        p.cybersecurity_claim_visual_num(idx),
+                        pos,
+                    ),
+                    name: cl.name(),
+                    provenance: ProvenanceView::of(cl.provenance()),
+                }),
+        )
     }
 }
 
 impl Serialize for Components<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
-        s.collect_seq(p.components().map(|(_, id, c)| {
+        s.collect_seq(p.components().enumerate().map(|(pos, (idx, id, c))| {
             ComponentView {
                 id: Text(id),
+                visual_id: VisualDisplay::non_default(
+                    VisualPrefix::Component,
+                    p.component_visual_num(idx),
+                    pos,
+                ),
                 name: c.name(),
                 parent: c
                     .parent()
@@ -478,22 +559,36 @@ impl Serialize for Components<'_> {
 impl Serialize for Interfaces<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let Ctx { p, m, .. } = self.0;
-        s.collect_seq(p.interfaces().map(|(_, id, iface)| InterfaceView {
-            id: Text(id),
-            name: iface.name(),
-            component: Required(p.component_id(iface.component()).map(Text)),
-            kind: Required(m.interface_kind_key(iface.kind())),
-            provenance: ProvenanceView::of(iface.provenance()),
-        }))
+        s.collect_seq(
+            p.interfaces()
+                .enumerate()
+                .map(|(pos, (idx, id, iface))| InterfaceView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Interface,
+                        p.interface_visual_num(idx),
+                        pos,
+                    ),
+                    name: iface.name(),
+                    component: Required(p.component_id(iface.component()).map(Text)),
+                    kind: Required(m.interface_kind_key(iface.kind())),
+                    provenance: ProvenanceView::of(iface.provenance()),
+                }),
+        )
     }
 }
 
 impl Serialize for DataFlows<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
-        s.collect_seq(p.data_flows().map(|(_, id, df)| {
+        s.collect_seq(p.data_flows().enumerate().map(|(pos, (idx, id, df))| {
             DataFlowView {
                 id: Text(id),
+                visual_id: VisualDisplay::non_default(
+                    VisualPrefix::DataFlow,
+                    p.data_flow_visual_num(idx),
+                    pos,
+                ),
                 name: df.name(),
                 from: Required(p.component_id(df.from()).map(Text)),
                 to: Required(p.component_id(df.to()).map(Text)),
@@ -509,15 +604,24 @@ impl Serialize for DataFlows<'_> {
 impl Serialize for TrustBoundaries<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
-        s.collect_seq(p.trust_boundaries().map(|(_, id, tb)| TrustBoundaryView {
-            id: Text(id),
-            name: tb.name(),
-            components: LinkedBoundaryComponents {
-                p,
-                links: tb.components(),
-            },
-            provenance: ProvenanceView::of(tb.provenance()),
-        }))
+        s.collect_seq(
+            p.trust_boundaries()
+                .enumerate()
+                .map(|(pos, (idx, id, tb))| TrustBoundaryView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::TrustBoundary,
+                        p.trust_boundary_visual_num(idx),
+                        pos,
+                    ),
+                    name: tb.name(),
+                    components: LinkedBoundaryComponents {
+                        p,
+                        links: tb.components(),
+                    },
+                    provenance: ProvenanceView::of(tb.provenance()),
+                }),
+        )
     }
 }
 
@@ -724,7 +828,9 @@ impl Project {
         // Add components in two passes (roots first, then parent links) so
         // parent-after-child ID ordering in snapshots never fails.
         let mut pending_parents = Vec::new();
-        for c in snapshot.components {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, c) in snapshot.components.into_iter().enumerate() {
+            let vis = claim_visual(c.visual_id, pos, &mut used, &mut next_vis)?;
             let provenance = wire::unwrap_provenance(c.provenance);
             let id = c.id.0;
             project.apply(Op::AddComponent {
@@ -733,6 +839,7 @@ impl Project {
                 parent: None,
                 provenance: provenance.clone(),
             })?;
+            project.set_component_loaded_visual(&id, vis, next_vis);
             if let Some(parent) = c.parent {
                 pending_parents.push((id, parent.0, provenance));
             }
@@ -744,34 +851,48 @@ impl Project {
                 provenance,
             })?;
         }
-        for iface in snapshot.interfaces {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, iface) in snapshot.interfaces.into_iter().enumerate() {
+            let vis = claim_visual(iface.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = iface.id.0;
             project.apply(Op::AddInterface {
-                id: iface.id.0,
+                id,
                 name: iface.name.0,
                 component: iface.component.0,
                 kind: iface.kind.0,
                 provenance: wire::unwrap_provenance(iface.provenance),
             })?;
+            project.set_interface_loaded_visual(&id, vis, next_vis);
         }
-        for df in snapshot.data_flows {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, df) in snapshot.data_flows.into_iter().enumerate() {
+            let vis = claim_visual(df.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = df.id.0;
             project.apply(Op::AddDataFlow {
-                id: df.id.0,
+                id,
                 name: df.name.0,
                 from: df.from.0,
                 to: df.to.0,
                 interface: df.interface.map(|i| i.0),
                 provenance: wire::unwrap_provenance(df.provenance),
             })?;
+            project.set_data_flow_loaded_visual(&id, vis, next_vis);
         }
-        for tb in snapshot.trust_boundaries {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, tb) in snapshot.trust_boundaries.into_iter().enumerate() {
+            let vis = claim_visual(tb.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = tb.id.0;
             project.apply(Op::AddTrustBoundary {
-                id: tb.id.0,
+                id,
                 name: tb.name.0,
                 components: tb.components.0.into_iter().map(|c| c.0).collect(),
                 provenance: wire::unwrap_provenance(tb.provenance),
             })?;
+            project.set_trust_boundary_loaded_visual(&id, vis, next_vis);
         }
-        for a in snapshot.assets {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, a) in snapshot.assets.into_iter().enumerate() {
+            let vis = claim_visual(a.visual_id, pos, &mut used, &mut next_vis)?;
             let provenance = wire::unwrap_provenance(a.provenance);
             let id = a.id.0;
             let component = a.component.map(|c| c.0);
@@ -781,6 +902,7 @@ impl Project {
                 properties: a.properties.0,
                 provenance: provenance.clone(),
             })?;
+            project.set_asset_loaded_visual(&id, vis, next_vis);
             if let Some(comp) = component {
                 project.apply(Op::SetAssetComponent {
                     asset: id,
@@ -789,35 +911,51 @@ impl Project {
                 })?;
             }
         }
-        for d in snapshot.damage_scenarios {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, d) in snapshot.damage_scenarios.into_iter().enumerate() {
+            let vis = claim_visual(d.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = d.id.0;
             project.apply(Op::AddDamageScenario {
-                id: d.id.0,
+                id,
                 name: d.name.0,
                 impacts: d.impacts.0,
                 provenance: wire::unwrap_provenance(d.provenance),
             })?;
+            project.set_damage_loaded_visual(&id, vis, next_vis);
         }
-        for c in snapshot.security_controls {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, c) in snapshot.security_controls.into_iter().enumerate() {
+            let vis = claim_visual(c.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = c.id.0;
             project.apply(Op::AddSecurityControl {
-                id: c.id.0,
+                id,
                 name: c.name.0,
                 provenance: wire::unwrap_provenance(c.provenance),
             })?;
+            project.set_control_loaded_visual(&id, vis, next_vis);
         }
-        for g in snapshot.cybersecurity_goals {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, g) in snapshot.cybersecurity_goals.into_iter().enumerate() {
+            let vis = claim_visual(g.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = g.id.0;
             project.apply(Op::AddCybersecurityGoal {
-                id: g.id.0,
+                id,
                 name: g.name.0,
                 controls: g.controls.0.into_iter().map(|c| c.0).collect(),
                 provenance: wire::unwrap_provenance(g.provenance),
             })?;
+            project.set_goal_loaded_visual(&id, vis, next_vis);
         }
-        for cl in snapshot.cybersecurity_claims {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, cl) in snapshot.cybersecurity_claims.into_iter().enumerate() {
+            let vis = claim_visual(cl.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = cl.id.0;
             project.apply(Op::AddCybersecurityClaim {
-                id: cl.id.0,
+                id,
                 name: cl.name.0,
                 provenance: wire::unwrap_provenance(cl.provenance),
             })?;
+            project.set_claim_loaded_visual(&id, vis, next_vis);
         }
         // Marks go on with their tree, under the tree's own provenance.
         let mut marks: std::collections::BTreeSet<(crate::id::TreeId, crate::id::NodeId)> =
@@ -826,11 +964,14 @@ impl Project {
                 .iter()
                 .map(|m| (m.tree.0, m.node.0))
                 .collect();
-        for tr in snapshot.attack_trees {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, tr) in snapshot.attack_trees.into_iter().enumerate() {
+            let vis = claim_visual(tr.visual_id, pos, &mut used, &mut next_vis)?;
             let provenance = wire::unwrap_provenance(tr.provenance);
             let id = tr.id.0;
             // A snapshot may hold a bigger tree than one op can carry.
             project.load_attack_tree(id, tr.nodes.0, tr.step_feasibility.0, provenance.clone())?;
+            project.set_tree_loaded_visual(&id, vis, next_vis);
             for (node, factors) in tr.step_factors.0 {
                 for (factor, level) in factors {
                     project.apply(Op::SetStepFactor {
@@ -864,8 +1005,12 @@ impl Project {
                 })?;
             }
         }
-        for t in snapshot.threat_scenarios {
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, mut t) in snapshot.threat_scenarios.into_iter().enumerate() {
+            let vis = claim_visual(t.visual_id.take(), pos, &mut used, &mut next_vis)?;
+            let id = t.id.0;
             apply_snapshot_threat(&mut project, t)?;
+            project.set_threat_loaded_visual(&id, vis, next_vis);
         }
         // Marks that name no tree of this snapshot are refused by the model.
         for (tree, node) in marks {
@@ -897,6 +1042,23 @@ impl Project {
         }
         Ok(project)
     }
+}
+
+fn claim_visual<K>(
+    wire: Option<wire::WireVisual<K>>,
+    pos: usize,
+    used: &mut std::collections::BTreeSet<u32>,
+    next: &mut u32,
+) -> Result<u32, StoreError> {
+    let vis = match wire {
+        Some(v) => v.0,
+        None => u32::try_from(pos).map_err(|_| StoreError::InvalidId)?,
+    };
+    if !used.insert(vis) {
+        return Err(StoreError::DuplicateEntry);
+    }
+    *next = (*next).max(vis.saturating_add(1));
+    Ok(vis)
 }
 
 fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(), StoreError> {

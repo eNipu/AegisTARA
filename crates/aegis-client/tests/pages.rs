@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use aegis_client::commands::{Edit, EditError};
 use aegis_client::outline::to_outline;
-use aegis_client::pages::{self, comparison};
+use aegis_client::pages::{
+    self, asset_detail, asset_rows, claim_rows, comparison, control_detail, control_rows,
+    damage_detail, damage_rows, goal_rows, risk_rows, threat_detail, tree_rows,
+};
 use aegis_client::report::{Block, Figure, report_doc, report_pdf};
 use aegis_client::report::{ReportContext, report_html, risk_register_csv, tree_svg};
 use aegis_client::view::{Selection, UiState, inspector, shown_tree};
@@ -1006,4 +1009,60 @@ fn eu_cra_pages_and_exports_use_methodology_names_and_plain_likelihood() {
         ),
         "{csv}"
     );
+}
+
+#[test]
+fn visual_ids_appear_in_pages_cross_references_palette_and_reports() {
+    let t = tara();
+    let assets = asset_rows(&t.ws);
+    assert_eq!(assets[0].visual_id, "A00");
+    let asset_det = asset_detail(&t.ws, t.asset).expect("asset detail");
+    assert_eq!(asset_det.visual_id, "A00");
+    assert_eq!(asset_det.threats[0].visual_id, "T00");
+
+    let damages = damage_rows(&t.ws);
+    assert_eq!(damages[0].visual_id, "D00");
+    let damage_det = damage_detail(&t.ws, t.damage).expect("damage detail");
+    assert_eq!(damage_det.visual_id, "D00");
+    assert_eq!(damage_det.threats[0].visual_id, "T00");
+
+    let risks = risk_rows(&t.ws);
+    assert_eq!(risks[0].visual_id, "T00");
+    let threat_det = threat_detail(&t.ws, t.threat).expect("threat detail");
+    assert_eq!(threat_det.visual_id, "T00");
+    assert_eq!(threat_det.asset_visual_id, "A00");
+    assert_eq!(threat_det.damages[0].visual_id, "D00");
+    assert_eq!(threat_det.trees[0].visual_id, "AT00");
+    assert_eq!(threat_det.goals[0].visual_id, "G00");
+    assert_eq!(threat_det.claims[0].visual_id, "CL00");
+
+    let trees = tree_rows(&t.ws);
+    assert_eq!(trees[0].visual_id, "AT00");
+    let controls = control_rows(&t.ws);
+    assert_eq!(controls[0].visual_id, "SC00");
+    let control_det = control_detail(&t.ws, t.control).expect("control detail");
+    assert_eq!(control_det.visual_id, "SC00");
+    assert_eq!(control_det.goals[0].visual_id, "G00");
+
+    let goals = goal_rows(&t.ws);
+    assert_eq!(goals[0].visual_id, "G00");
+    let claims = claim_rows(&t.ws);
+    assert_eq!(claims[0].visual_id, "CL00");
+
+    let palette = aegis_client::pages::palette_elements(&t.ws);
+    assert!(palette.iter().any(|e| e.visual_id == "A00"));
+    assert!(palette.iter().any(|e| e.visual_id == "D00"));
+    assert!(palette.iter().any(|e| e.visual_id == "T00"));
+    assert!(palette.iter().any(|e| e.visual_id == "AT00"));
+    assert!(palette.iter().any(|e| e.visual_id == "SC00"));
+    assert!(palette.iter().any(|e| e.visual_id == "G00"));
+    assert!(palette.iter().any(|e| e.visual_id == "CL00"));
+
+    let ctx = context(false);
+    let html = report_html(&t.ws, &ctx);
+    for vis in ["A00", "D00", "T00", "AT00", "SC00", "G00", "CL00"] {
+        assert!(html.contains(vis), "report html missing {vis}");
+    }
+    let csv = risk_register_csv(&t.ws, &ctx);
+    assert!(csv.contains(",T00\r\n"), "{csv}");
 }

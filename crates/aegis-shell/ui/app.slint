@@ -242,6 +242,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> component-rows;
     in property <int> component-selected: -1;
     in property <bool> has-component;
+    in property <string> component-id;
     in property <string> component-name;
     in property <[string]> component-parent-options;
     in property <int> component-parent: 0;
@@ -251,6 +252,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> interface-rows;
     in property <int> interface-selected: -1;
     in property <bool> has-interface;
+    in property <string> interface-id;
     in property <string> interface-name;
     in property <string> interface-component;
     in property <int> interface-kind: 0;
@@ -262,6 +264,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> data-flow-rows;
     in property <int> data-flow-selected: -1;
     in property <bool> has-data-flow;
+    in property <string> data-flow-id;
     in property <string> data-flow-name;
     in property <string> data-flow-from;
     in property <string> data-flow-to;
@@ -275,6 +278,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> trust-boundary-rows;
     in property <int> trust-boundary-selected: -1;
     in property <bool> has-trust-boundary;
+    in property <string> trust-boundary-id;
     in property <string> trust-boundary-name;
     in property <[CheckItem]> trust-boundary-members;
     in property <string> trust-boundary-changed;
@@ -283,6 +287,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> asset-rows;
     in property <int> asset-selected: -1;
     in property <bool> has-asset;
+    in property <string> asset-id;
     in property <string> asset-name;
     in property <[string]> asset-component-options;
     in property <int> asset-component: 0;
@@ -294,6 +299,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> damage-rows;
     in property <int> damage-selected: -1;
     in property <bool> has-damage;
+    in property <string> damage-id;
     in property <string> damage-name;
     in property <[FactorItem]> damage-impacts;
     in property <[LinkItem]> damage-threats;
@@ -308,6 +314,7 @@ export component AppWindow inherits Window {
     in-out property <int> new-threat-asset: 0;
     in-out property <int> new-threat-category: 0;
     in property <bool> has-threat-detail;
+    in property <string> td-id;
     in property <string> td-name;
     in property <string> td-asset;
     in property <int> td-category;
@@ -347,6 +354,7 @@ export component AppWindow inherits Window {
     in property <string> canvas-summary;
     in property <string> outline-text;
     in property <bool> has-inspector;
+    in property <string> inspector-tree-id;
     in property <string> inspector-title;
     in property <bool> inspector-needs-review;
     callback mark-reviewed();
@@ -380,6 +388,7 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> control-rows;
     in property <int> control-selected: -1;
     in property <bool> has-control;
+    in property <string> control-id;
     in property <string> control-name;
     in property <[LinkItem]> control-steps;
     in property <[LinkItem]> control-goals;
@@ -389,12 +398,14 @@ export component AppWindow inherits Window {
     in property <[[StandardListViewItem]]> goal-rows;
     in property <int> goal-selected: -1;
     in property <bool> has-goal;
+    in property <string> goal-id;
     in property <string> goal-name;
     in property <[CheckItem]> goal-controls;
     in property <[LinkItem]> goal-threats;
     in property <[[StandardListViewItem]]> claim-rows;
     in property <int> claim-selected: -1;
     in property <bool> has-claim;
+    in property <string> claim-id;
     in property <string> claim-name;
     in property <[LinkItem]> claim-threats;
 
@@ -1371,7 +1382,7 @@ export component AppWindow inherits Window {
                         }
                         Table {
                             label: @tr("Assets");
-                            columns: [{ title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Properties"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }, { title: @tr("Worst risk"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Properties"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }, { title: @tr("Worst risk"), horizontal-stretch: 1 }];
                             rows: root.asset-rows;
                             selected: root.asset-selected;
                             picked(i) => { root.pick-asset(i); }
@@ -1379,7 +1390,7 @@ export component AppWindow inherits Window {
                     }
                     if root.has-asset: Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Asset"); }
+                        SectionTitle { text: @tr("Asset") + " · " + root.asset-id; }
                         NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
                         DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
@@ -1417,7 +1428,7 @@ export component AppWindow inherits Window {
                         }
                         Table {
                             label: root.damage-plural;
-                            columns: [{ title: root.damage-singular, horizontal-stretch: 2 }, { title: @tr("Impact"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: root.damage-singular, horizontal-stretch: 2 }, { title: @tr("Impact"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.damage-rows;
                             selected: root.damage-selected;
                             picked(i) => { root.pick-damage(i); }
@@ -1425,7 +1436,7 @@ export component AppWindow inherits Window {
                     }
                     if root.has-damage: Panel {
                         width: root.side-width;
-                        SectionTitle { text: root.damage-singular; }
+                        SectionTitle { text: root.damage-singular + " · " + root.damage-id; }
                         NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
                         DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Impact rating"); }
@@ -1470,7 +1481,7 @@ export component AppWindow inherits Window {
                         }
                         Table {
                             label: @tr("Threat scenarios");
-                            columns: [{ title: @tr("Threat scenario"), horizontal-stretch: 3 }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Before"), horizontal-stretch: 1 }, { title: @tr("After"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Threat scenario"), horizontal-stretch: 3 }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Before"), horizontal-stretch: 1 }, { title: @tr("After"), horizontal-stretch: 1 }];
                             rows: root.threat-rows;
                             selected: root.threat-selected;
                             picked(i) => { root.select-threat(i); }
@@ -1480,7 +1491,7 @@ export component AppWindow inherits Window {
                         width: root.side-width + 30px;
                         Panel {
                             width: root.side-width + 12px;
-                            SectionTitle { text: @tr("Threat scenario"); }
+                            SectionTitle { text: @tr("Threat scenario") + " · " + root.td-id; }
                             NameEditor { name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
                             DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             Text { text: @tr("On asset ") + root.td-asset; color: Theme.graphite; font-size: 12px; }
@@ -1543,7 +1554,7 @@ export component AppWindow inherits Window {
                         }
                         Table {
                             label: @tr("Attack trees");
-                            columns: [{ title: @tr("Tree"), horizontal-stretch: 1 }, { title: @tr("Rating"), width: 92px, min-width: 92px }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Tree"), horizontal-stretch: 1 }, { title: @tr("Rating"), width: 92px, min-width: 92px }];
                             rows: root.tree-rows;
                             selected: root.tree-selected;
                             picked(i) => { root.pick-tree(i); }
@@ -1712,7 +1723,7 @@ export component AppWindow inherits Window {
                                         color: Theme.ink;
                                         wrap: word-wrap;
                                     }
-                                Text { text: root.inspector-kind; color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-semibold; }
+                                Text { text: root.inspector-tree-id + " · " + root.inspector-kind; color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-semibold; }
                                 if root.editing: NameEditor {
                                     name: root.inspector-title;
                                     editable: root.editing;
@@ -1928,7 +1939,7 @@ export component AppWindow inherits Window {
                             label: @tr("Risk register");
                             // The short columns get a minimum width so their titles and values
                             // ("not rated") are never cut; the names take the rest.
-                            columns: [{ title: @tr("Threat scenario"), horizontal-stretch: 3, min-width: 110px }, { title: @tr("Deciding damage"), horizontal-stretch: 2, min-width: 136px }, { title: @tr("Impact"), horizontal-stretch: 0, min-width: 84px }, { title: @tr("Feasibility"), horizontal-stretch: 0, min-width: 104px }, { title: @tr("Before"), horizontal-stretch: 0, min-width: 80px }, { title: @tr("After"), horizontal-stretch: 0, min-width: 76px }, { title: @tr("Treatment"), horizontal-stretch: 0, min-width: 104px }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Threat scenario"), horizontal-stretch: 3, min-width: 110px }, { title: @tr("Deciding damage"), horizontal-stretch: 2, min-width: 136px }, { title: @tr("Impact"), horizontal-stretch: 0, min-width: 84px }, { title: @tr("Feasibility"), horizontal-stretch: 0, min-width: 104px }, { title: @tr("Before"), horizontal-stretch: 0, min-width: 80px }, { title: @tr("After"), horizontal-stretch: 0, min-width: 76px }, { title: @tr("Treatment"), horizontal-stretch: 0, min-width: 104px }];
                             rows: root.risk-rows;
                             selected: root.risk-selected;
                             picked(i) => { root.pick-risk(i); }
@@ -1936,7 +1947,7 @@ export component AppWindow inherits Window {
                     }
                     if root.has-threat-detail: Panel {
                         width: min(360px, root.side-width);
-                        Text { text: root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
+                        Text { text: root.td-id + " · " + root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
                         DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         HorizontalLayout {
                             spacing: 8px;
@@ -1982,7 +1993,7 @@ export component AppWindow inherits Window {
                         }
                         Table {
                             label: @tr("Security controls");
-                            columns: [{ title: @tr("Control"), horizontal-stretch: 3 }, { title: @tr("Attack steps"), horizontal-stretch: 1 }, { title: @tr("Goals"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Control"), horizontal-stretch: 3 }, { title: @tr("Attack steps"), horizontal-stretch: 1 }, { title: @tr("Goals"), horizontal-stretch: 1 }];
                             rows: root.control-rows;
                             selected: root.control-selected;
                             picked(i) => { root.pick-control(i); }
@@ -1990,7 +2001,7 @@ export component AppWindow inherits Window {
                     }
                     if root.has-control: Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Security control"); }
+                        SectionTitle { text: @tr("Security control") + " · " + root.control-id; }
                         NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
                         DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Attached to"); }
@@ -2020,7 +2031,7 @@ export component AppWindow inherits Window {
                         SectionTitle { text: root.goal-plural; }
                         Table {
                             label: root.goal-plural;
-                            columns: [{ title: root.goal-singular, horizontal-stretch: 3 }, { title: @tr("Controls"), horizontal-stretch: 1 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: root.goal-singular, horizontal-stretch: 3 }, { title: @tr("Controls"), horizontal-stretch: 1 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.goal-rows;
                             selected: root.goal-selected;
                             picked(i) => { root.pick-goal(i); }
@@ -2028,7 +2039,7 @@ export component AppWindow inherits Window {
                         SectionTitle { text: @tr("Cybersecurity claims"); }
                         Table {
                             label: @tr("Cybersecurity claims");
-                            columns: [{ title: @tr("Claim"), horizontal-stretch: 3 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Claim"), horizontal-stretch: 3 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.claim-rows;
                             selected: root.claim-selected;
                             picked(i) => { root.pick-claim(i); }
@@ -2038,7 +2049,7 @@ export component AppWindow inherits Window {
                         width: root.side-width;
                         spacing: 12px;
                         if root.has-goal: Panel {
-                            SectionTitle { text: root.goal-singular; }
+                            SectionTitle { text: root.goal-singular + " · " + root.goal-id; }
                             NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
                             DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Controls that realize it"); }
@@ -2048,7 +2059,7 @@ export component AppWindow inherits Window {
                             Button { text: @tr("Remove goal"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-goal", "Remove goal \"" + root.goal-name + "\"?"); } }
                         }
                         if root.has-claim: Panel {
-                            SectionTitle { text: @tr("Cybersecurity claim"); }
+                            SectionTitle { text: @tr("Cybersecurity claim") + " · " + root.claim-id; }
                             NameEditor { name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
                             DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
@@ -2267,7 +2278,7 @@ export component AppWindow inherits Window {
                         }
                         if root.item-tab == 0: Table {
                             label: @tr("Components");
-                            columns: [{ title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Parent"), horizontal-stretch: 2 }, { title: @tr("Interfaces"), horizontal-stretch: 1 }, { title: @tr("Assets"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Parent"), horizontal-stretch: 2 }, { title: @tr("Interfaces"), horizontal-stretch: 1 }, { title: @tr("Assets"), horizontal-stretch: 1 }];
                             rows: root.component-rows;
                             selected: root.component-selected;
                             picked(i) => { root.pick-component(i); }
@@ -2288,7 +2299,7 @@ export component AppWindow inherits Window {
                             }
                             Table {
                                 label: @tr("Interfaces");
-                                columns: [{ title: @tr("Interface"), horizontal-stretch: 2 }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Kind"), horizontal-stretch: 2 }, { title: @tr("Data flows"), horizontal-stretch: 1 }];
+                                columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Interface"), horizontal-stretch: 2 }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Kind"), horizontal-stretch: 2 }, { title: @tr("Data flows"), horizontal-stretch: 1 }];
                                 rows: root.interface-rows;
                                 selected: root.interface-selected;
                                 picked(i) => { root.pick-interface(i); }
@@ -2310,7 +2321,7 @@ export component AppWindow inherits Window {
                             }
                             Table {
                                 label: @tr("Data flows");
-                                columns: [{ title: @tr("Data flow"), horizontal-stretch: 2 }, { title: @tr("From"), horizontal-stretch: 1 }, { title: @tr("To"), horizontal-stretch: 1 }, { title: @tr("Interface"), horizontal-stretch: 1 }];
+                                columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Data flow"), horizontal-stretch: 2 }, { title: @tr("From"), horizontal-stretch: 1 }, { title: @tr("To"), horizontal-stretch: 1 }, { title: @tr("Interface"), horizontal-stretch: 1 }];
                                 rows: root.data-flow-rows;
                                 selected: root.data-flow-selected;
                                 picked(i) => { root.pick-data-flow(i); }
@@ -2318,7 +2329,7 @@ export component AppWindow inherits Window {
                         }
                         if root.item-tab == 3: Table {
                             label: @tr("Trust boundaries");
-                            columns: [{ title: @tr("Trust boundary"), horizontal-stretch: 3 }, { title: @tr("Components"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Trust boundary"), horizontal-stretch: 3 }, { title: @tr("Components"), horizontal-stretch: 1 }];
                             rows: root.trust-boundary-rows;
                             selected: root.trust-boundary-selected;
                             picked(i) => { root.pick-trust-boundary(i); }
@@ -2326,7 +2337,7 @@ export component AppWindow inherits Window {
                     }
                     if root.item-tab == 0 && root.has-component: Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Component"); }
+                        SectionTitle { text: @tr("Component") + " · " + root.component-id; }
                         NameEditor { name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
                         DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
@@ -2349,7 +2360,7 @@ export component AppWindow inherits Window {
                     }
                     if root.item-tab == 1 && root.has-interface: Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Interface"); }
+                        SectionTitle { text: @tr("Interface") + " · " + root.interface-id; }
                         NameEditor { name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
                         DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
@@ -2368,7 +2379,7 @@ export component AppWindow inherits Window {
                     }
                     if root.item-tab == 2 && root.has-data-flow: Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Data flow"); }
+                        SectionTitle { text: @tr("Data flow") + " · " + root.data-flow-id; }
                         NameEditor { name: root.data-flow-name; editable: root.editing; renamed(t) => { root.rename-data-flow(t); } }
                         DescriptionFor { items: root.descriptions; kind: "data-flow"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
@@ -2387,7 +2398,7 @@ export component AppWindow inherits Window {
                     }
                     if root.item-tab == 3 && root.has-trust-boundary: Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Trust boundary"); }
+                        SectionTitle { text: @tr("Trust boundary") + " · " + root.trust-boundary-id; }
                         NameEditor { name: root.trust-boundary-name; editable: root.editing; renamed(t) => { root.rename-trust-boundary(t); } }
                         DescriptionFor { items: root.descriptions; kind: "trust-boundary"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Components"); }

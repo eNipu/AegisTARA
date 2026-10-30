@@ -54,7 +54,7 @@ use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment, Ste
 use crate::error::{PackError, StoreError};
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
+    NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
 };
 use crate::methodology::{
     CatalogRef, CatalogScheme, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
@@ -1227,6 +1227,81 @@ impl<'de, T: FromStr> Deserialize<'de> for WireId<T> {
     }
 }
 
+/// A visual ID formatted on the fly for [`Text`].
+#[derive(Clone, Copy)]
+pub(super) struct VisualDisplay {
+    pub(super) prefix: VisualPrefix,
+    pub(super) num: u32,
+}
+
+impl VisualDisplay {
+    /// Returns `Some(Text(VisualDisplay { prefix, num }))` when `num`
+    /// differs from the entity's 0-based position `pos` in canonical ID
+    /// order, and `None` when `num == pos`. Time O(1).
+    pub(super) fn non_default(
+        prefix: VisualPrefix,
+        num: Option<u32>,
+        pos: usize,
+    ) -> Option<Text<Self>> {
+        let num = num?;
+        if u32::try_from(pos).ok() == Some(num) {
+            None
+        } else {
+            Some(Text(Self { prefix, num }))
+        }
+    }
+}
+
+impl fmt::Display for VisualDisplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{:02}", self.prefix.as_str(), self.num)
+    }
+}
+
+/// Marker trait binding an entity wire type to its [`VisualPrefix`].
+pub(super) trait VisualKind {
+    const PREFIX: VisualPrefix;
+}
+
+macro_rules! visual_kinds {
+    ($($name:ident = $prefix:expr;)*) => {$(
+        pub(super) enum $name {}
+        impl VisualKind for $name {
+            const PREFIX: VisualPrefix = $prefix;
+        }
+    )*};
+}
+
+visual_kinds! {
+    AssetVisual = VisualPrefix::Asset;
+    DamageVisual = VisualPrefix::Damage;
+    ThreatVisual = VisualPrefix::Threat;
+    TreeVisual = VisualPrefix::Tree;
+    ControlVisual = VisualPrefix::Control;
+    GoalVisual = VisualPrefix::Goal;
+    ClaimVisual = VisualPrefix::Claim;
+    ComponentVisual = VisualPrefix::Component;
+    InterfaceVisual = VisualPrefix::Interface;
+    DataFlowVisual = VisualPrefix::DataFlow;
+    TrustBoundaryVisual = VisualPrefix::TrustBoundary;
+}
+
+/// A visual ID decoded from its canonical text (`A00`, `T01`, `DF12`, ...).
+/// Anything else is [`StoreError::InvalidId`]. Time O(1).
+pub(super) struct WireVisual<K>(pub(super) u32, PhantomData<K>);
+
+impl<'de, K: VisualKind> Deserialize<'de> for WireVisual<K> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            K::PREFIX
+                .parse_num(s)
+                .map(|n| WireVisual(n, PhantomData))
+                .ok_or(Fault::InvalidId)
+        })
+        .deserialize(d)
+    }
+}
+
 /// A format name: `aegis-project`, `aegis-oplog`, or
 /// `aegis-methodology-pack`.
 pub(crate) trait FormatName {
@@ -1448,6 +1523,8 @@ pub(super) struct TranslationWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct AssetWire {
     pub(super) id: WireId<AssetId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<AssetVisual>>,
     pub(super) name: Name,
     pub(super) properties: PropertySetKeys,
     #[serde(default, deserialize_with = "some")]
@@ -1461,6 +1538,8 @@ pub(super) struct AssetWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct DamageWire {
     pub(super) id: WireId<DamageId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<DamageVisual>>,
     pub(super) name: Name,
     pub(super) impacts: Impacts,
     #[serde(default, deserialize_with = "some")]
@@ -1472,6 +1551,8 @@ pub(super) struct DamageWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct ThreatWire {
     pub(super) id: WireId<ThreatId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<ThreatVisual>>,
     pub(super) name: Name,
     pub(super) asset: WireId<AssetId>,
     pub(super) category: ThreatCategoryKey,
@@ -1496,6 +1577,8 @@ pub(super) struct ThreatWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct TreeWire {
     pub(super) id: WireId<TreeId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<TreeVisual>>,
     pub(super) nodes: NodesWire,
     pub(super) step_feasibility: StepFeasibility,
     #[serde(default)]
@@ -1511,6 +1594,8 @@ pub(super) struct TreeWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct ControlWire {
     pub(super) id: WireId<ControlId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<ControlVisual>>,
     pub(super) name: Name,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
@@ -1521,6 +1606,8 @@ pub(super) struct ControlWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct GoalWire {
     pub(super) id: WireId<GoalId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<GoalVisual>>,
     pub(super) name: Name,
     pub(super) controls: BoundedVec<WireId<ControlId>, GoalControlsCap>,
     #[serde(default, deserialize_with = "some")]
@@ -1532,6 +1619,8 @@ pub(super) struct GoalWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct ClaimWire {
     pub(super) id: WireId<ClaimId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<ClaimVisual>>,
     pub(super) name: Name,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
@@ -1542,6 +1631,8 @@ pub(super) struct ClaimWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct ComponentWire {
     pub(super) id: WireId<ComponentId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<ComponentVisual>>,
     pub(super) name: Name,
     #[serde(default, deserialize_with = "some")]
     pub(super) parent: Option<WireId<ComponentId>>,
@@ -1554,6 +1645,8 @@ pub(super) struct ComponentWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct InterfaceWire {
     pub(super) id: WireId<InterfaceId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<InterfaceVisual>>,
     pub(super) name: Name,
     pub(super) component: WireId<ComponentId>,
     pub(super) kind: InterfaceKindKey,
@@ -1566,6 +1659,8 @@ pub(super) struct InterfaceWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct DataFlowWire {
     pub(super) id: WireId<DataFlowId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<DataFlowVisual>>,
     pub(super) name: Name,
     pub(super) from: WireId<ComponentId>,
     pub(super) to: WireId<ComponentId>,
@@ -1580,6 +1675,8 @@ pub(super) struct DataFlowWire {
 #[serde(deny_unknown_fields)]
 pub(super) struct TrustBoundaryWire {
     pub(super) id: WireId<TrustBoundaryId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<TrustBoundaryVisual>>,
     pub(super) name: Name,
     pub(super) components: BoundedVec<WireId<ComponentId>, BoundaryMembersCap>,
     #[serde(default, deserialize_with = "some")]
