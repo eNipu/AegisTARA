@@ -74,6 +74,8 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | FND-03 | The per-tree node cap is raised (target 4,096) with the 5 ms edit budget (A1) and the op-log line cap still met, measured by benchmarks | M | 4 | 065 |
 | FND-04 | Text fields carry a language tag and optional translations (capped count) | S | 5 | 069 |
 | FND-05 | A suggestion branch holds proposed ops (from AI or the library) apart from the project until accepted; accept and reject are ops with provenance | M | 7 | 089 |
+| FND-06 | Every element carries a short, human-readable visual ID (type prefix + sequence number, for example `A00` for an asset, `D00` for a damage scenario, `T00` for a threat scenario) next to its internal ID; unique per project, stable across reloads, never reused after deletion; stored in the snapshot and op log so it round-trips (P4), and assigned deterministically to old fixtures on load | M | 5 | 118 |
+| FND-07 | The visual ID is shown wherever an element is named: a table column, the inspector title, cross-references, reports and the command palette search | S | 5 | 118 |
 
 ### 2.1a Domains beyond automotive (DOM)
 
@@ -129,6 +131,17 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | ARC-02 | Item definition elements: component, interface, data flow, trust boundary; assets bound to components; ops, store, diff, lint | M | 4 | 074 |
 | ARC-03 | Architecture diagram on the canvas (data-flow style), user-placed positions plus auto-layout, click-through to threats | S | 6 | 075 |
 | ARC-04 | Import from draw.io, SysML v2, ARXML | C | later | none |
+
+### 2.5a Systems and multi-TARA (SYS)
+
+| ID | Requirement | Pri | Phase | Job |
+|---|---|---|---|---|
+| SYS-01 | A project holds one or more named systems (TARAs), for example Braking, ADAS and Infotainment for one vehicle; the project header and start screen make them first-class | M | 5 | 119 |
+| SYS-02 | Each system owns its item definition (components, interfaces, data flows, trust boundaries) and its assets, damage scenarios, threats, attack trees, controls, goals and claims; elements are scoped to a system | M | 5 | 119 |
+| SYS-03 | Each system is configured independently: its interfaces, connections, protocols and physical controls | M | 5 | 119 |
+| SYS-04 | Interfaces and data flows between systems are captured, so a combined evaluation can follow an attack path across a system boundary | M | 5 | 120 |
+| SYS-05 | Evaluation can run on one system, a chosen subset (1..N), or all systems combined; combined evaluation composes the selected systems' trees and risks, including cross-system paths | M | 5 | 120 |
+| SYS-06 | Reports and exports can be generated per system, for a selected subset, or for the whole project, with per-system and combined risk views | S | 5 | 121 |
 
 ### 2.6 Traceability and integrations (TRC, INT)
 
