@@ -38,6 +38,12 @@ pub const MAX_DESCRIPTION_CHARS: usize = 8_000;
 /// ```
 pub const MAX_NOTES_CHARS: usize = 15_000;
 
+/// Most translations a description may carry (FND-04).
+pub const MAX_DESCRIPTION_TRANSLATIONS: usize = 8;
+
+/// Longest language tag accepted on a translation, in bytes (BCP 47).
+pub const MAX_LANG_TAG_BYTES: usize = 16;
+
 /// Most description bytes in one project, all elements and the notes
 /// together (R3): a quarter of the largest snapshot.
 ///
@@ -103,7 +109,19 @@ impl ElementRef {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Described {
     pub(crate) text: Arc<str>,
+    /// Optional translations of the text, capped at
+    /// [`MAX_DESCRIPTION_TRANSLATIONS`] (FND-04).
+    pub(crate) translations: Vec<Translation>,
     pub(crate) provenance: Provenance,
+}
+
+/// One translation of a description, tagged with a BCP 47 language.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Translation {
+    /// The language tag, for example `"ja"`.
+    pub lang: Arc<str>,
+    /// The translated text, capped like the source text.
+    pub text: Arc<str>,
 }
 
 /// Checks description text: plain text, at most `max` chars. Tabs and line
@@ -118,6 +136,14 @@ pub(crate) fn check_text(text: &str, max: usize) -> Result<(), ModelError> {
     }
     if text.chars().count() > max {
         return Err(ModelError::DescriptionTooLong { max });
+    }
+    Ok(())
+}
+
+/// Checks a BCP 47 language tag: short, non-empty, no control characters.
+pub(crate) fn check_lang(lang: &str) -> Result<(), ModelError> {
+    if lang.is_empty() || lang.len() > MAX_LANG_TAG_BYTES || lang.chars().any(char::is_control) {
+        return Err(ModelError::InvalidText);
     }
     Ok(())
 }

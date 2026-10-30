@@ -265,7 +265,8 @@ pub use control::{
 };
 pub use damage::DamageScenario;
 pub use description::{
-    ElementRef, MAX_DESCRIPTION_CHARS, MAX_DESCRIPTION_TOTAL_BYTES, MAX_NOTES_CHARS,
+    ElementRef, MAX_DESCRIPTION_CHARS, MAX_DESCRIPTION_TOTAL_BYTES, MAX_DESCRIPTION_TRANSLATIONS,
+    MAX_LANG_TAG_BYTES, MAX_NOTES_CHARS, Translation,
 };
 pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};

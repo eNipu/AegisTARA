@@ -1068,4 +1068,73 @@ msgstr "ワークブックのパス"
 msgid "Workbook path (.xlsx)"
 msgstr "ワークブックのパス (.xlsx)"
 
+msgid "Access"
+msgstr "アクセス"
+
+msgid "Add member"
+msgstr "メンバーを追加"
+
+msgid "Member"
+msgstr "メンバー"
+
+msgid "Members"
+msgstr "メンバー"
+
+msgid "Remove member"
+msgstr "メンバーを削除"
+
+msgid "Role"
+msgstr "役割"
+
+msgid "user:name or group:name"
+msgstr "user:名前 または group:名前"
+
+msgid "Catalog"
+msgstr "カタログ"
+
+msgid "Catalog details"
+msgstr "カタログの詳細"
+
+msgid "Catalogs"
+msgstr "カタログ"
+
+msgid "Catalogs (reference only)"
+msgstr "カタログ（参照のみ）"
+
+msgid "Key"
+msgstr "キー"
+
+msgid "Language tag"
+msgstr "言語タグ"
+
+msgid "Translation"
+msgstr "翻訳"
+
+msgid "Translation text"
+msgstr "翻訳文"
+
+msgid "Action"
+msgstr "操作"
+
+msgid "Back to commands"
+msgstr "コマンドに戻る"
+
+msgid "Command palette"
+msgstr "コマンドパレット"
+
+msgid "Command palette…"
+msgstr "コマンドパレット…"
+
+msgid "Commands"
+msgstr "コマンド"
+
+msgid "Command"
+msgstr "コマンド"
+
+msgid "Search pages and commands"
+msgstr "ページとコマンドを検索"
+
+msgid "Shortcut"
+msgstr "ショートカット"
+
 

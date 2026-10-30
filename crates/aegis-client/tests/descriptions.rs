@@ -209,6 +209,47 @@ fn every_page_that_shows_elements_offers_a_description_box() {
     assert!(page_descriptions(&ws, &gone).is_empty());
 }
 
+#[test]
+fn a_translation_is_one_op_and_undo_restores_the_description_exactly() {
+    let mut ws = workspace();
+    let (_, asset, _) = ws.project().assets().next().expect("asset");
+    let target = ElementRef::Asset(asset);
+    edit(&mut ws, &set(target, "The asset"));
+    let before = ws.project().clone();
+
+    edit(
+        &mut ws,
+        &Edit::SetDescriptionTranslation {
+            target,
+            lang: "ja".into(),
+            text: "その資産".into(),
+        },
+    );
+    assert_eq!(
+        ws.project().description_translation(target, "ja"),
+        Some("その資産")
+    );
+    ws.undo().expect("undo the translation");
+    assert_eq!(ws.project().description_translation(target, "ja"), None);
+    assert_eq!(
+        ws.project(),
+        &before,
+        "undo restores the description exactly"
+    );
+
+    // Replacing an existing translation is also one undo step.
+    edit(
+        &mut ws,
+        &Edit::SetDescriptionTranslation {
+            target,
+            lang: "ja".into(),
+            text: "新しい説明".into(),
+        },
+    );
+    ws.undo().expect("undo the replacement");
+    assert_eq!(ws.project(), &before);
+}
+
 fn context() -> aegis_client::report::ReportContext {
     aegis_client::report::ReportContext {
         project: "Brake ECU".into(),

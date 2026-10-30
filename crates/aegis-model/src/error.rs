@@ -406,6 +406,15 @@ pub enum ModelError {
         /// Which kind of element.
         kind: EntityKind,
     },
+    /// A translation was set on a target that has no description text.
+    #[error("the element has no description to translate")]
+    NoDescription,
+    /// A description has more translations than `max`.
+    #[error("a description has more than {max} translations")]
+    TooManyTranslations {
+        /// The limit.
+        max: usize,
+    },
     /// A name is longer than `max` chars.
     #[error("{kind} name is longer than {max} chars")]
     NameTooLong {

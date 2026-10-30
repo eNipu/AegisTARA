@@ -107,19 +107,30 @@ struct DescriptionView<'a> {
     text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    translations: Vec<TranslationView<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct TranslationView<'a> {
+    lang: &'a str,
+    text: &'a str,
 }
 
 impl Serialize for Descriptions<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_seq(
-            self.0
-                .descriptions()
-                .map(|(target, text, provenance)| DescriptionView {
-                    target: target.into(),
-                    text,
-                    provenance: ProvenanceView::of(provenance),
-                }),
-        )
+        s.collect_seq(self.0.descriptions().map(|(target, text, provenance)| {
+            DescriptionView {
+                target: target.into(),
+                text,
+                provenance: ProvenanceView::of(provenance),
+                translations: self
+                    .0
+                    .description_translations(target)
+                    .map(|(lang, text)| TranslationView { lang, text })
+                    .collect(),
+            }
+        }))
     }
 }
 
@@ -867,11 +878,22 @@ impl Project {
         }
         // Descriptions last: every element they name exists by now.
         for d in snapshot.descriptions {
+            let target = d.target.into_ref();
+            let provenance = wire::unwrap_provenance(d.provenance);
+            let translations = d.translations;
             project.apply(Op::SetDescription {
-                target: d.target.into_ref(),
+                target,
                 text: d.text.0,
-                provenance: wire::unwrap_provenance(d.provenance),
+                provenance,
             })?;
+            for t in translations {
+                project.apply(Op::SetDescriptionTranslation {
+                    target,
+                    lang: t.lang.0,
+                    text: t.text.0,
+                    provenance: crate::provenance::Provenance::default(),
+                })?;
+            }
         }
         Ok(project)
     }

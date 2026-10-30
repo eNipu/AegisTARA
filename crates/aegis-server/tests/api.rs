@@ -37,9 +37,9 @@ async fn server_info_lists_the_engine_and_methodologies() {
     assert_eq!(info.engine_version, aegis_model::ENGINE_VERSION);
     assert_eq!(info.lease_ms, 60_000);
     let keys: Vec<&str> = info.methodologies.iter().map(|m| m.key.as_str()).collect();
-    assert_eq!(keys, vec!["eu-cra", METHODOLOGY]);
+    assert_eq!(keys, vec!["eu-cra", METHODOLOGY, "stride-services-cloud"]);
 
-    for key in ["eu-cra", METHODOLOGY] {
+    for key in ["eu-cra", METHODOLOGY, "stride-services-cloud"] {
         let pack = alice
             .get_methodology(pb::GetMethodologyRequest { key: key.into() })
             .await

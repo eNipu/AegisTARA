@@ -347,6 +347,17 @@ pub struct UserRow {
     pub sessions: u32,
 }
 
+/// One project membership row (job 058, ACC-01).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MembershipRow {
+    /// The wire member key: `user:<subject>` or `group:<SSO group name>`.
+    pub member: String,
+    /// The un-prefixed subject or group name, for display.
+    pub name: String,
+    /// One of the six built-in role keys.
+    pub role: String,
+}
+
 /// The open project.
 pub struct ProjectView {
     /// Which project.
@@ -454,6 +465,14 @@ pub struct ViewModel {
     pub events_error: Option<String>,
     /// The open sessions, newest first (administrators, password login).
     pub sessions: Vec<crate::audit::SessionRow>,
+    /// The open project's membership rows, oldest first (project access, job
+    /// 058).
+    pub memberships: Vec<MembershipRow>,
+    /// Why the membership list is empty when it could not be read.
+    pub memberships_error: Option<String>,
+    /// The last membership add/change/remove error, shown inline by the
+    /// Access tab (for example the last-owner refusal).
+    pub membership_error: Option<String>,
 }
 
 #[cfg(test)]

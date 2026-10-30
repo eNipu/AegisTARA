@@ -14,3 +14,12 @@ Ship metadata-only catalog packs and a STRIDE methodology pack. See ADR 0062.
 - Format `aegis-catalog-pack` v1, `deny_unknown_fields`, HTTPS-only URLs.
 - `stride-services-cloud` defines six STRIDE categories and three reference
   syntaxes; it is byte-canonical for deterministic reports and diffs (P4).
+
+## UI decision (round 2)
+Catalogs are searchable metadata, not insertable items (ADR 0062), so they
+live in a **Catalogs (reference only)** section inside the attack tree library
+panel, next to the insert flow but not part of it. The section is built inside
+the existing library panel so it moves unchanged when job 117 turns the panel
+into a right-panel slot. The STRIDE methodology pack is selectable in the
+new-project methodology picker (and hosted by the server) wherever
+methodologies are picked.

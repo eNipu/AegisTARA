@@ -553,6 +553,72 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(())
     }
 
+    /// The membership rows of a project (requires `read` on the project; job
+    /// 058, ACC-01).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`]; [`ServerCode::NotAuthorized`](crate::error::ServerCode::NotAuthorized)
+    /// when the caller may not read the project.
+    pub async fn memberships(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<pb::MembershipInfo>, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .list_memberships(pb::ListMembershipsRequest {
+                project_id: project_id.to_owned(),
+            })
+            .await?
+            .into_inner()
+            .memberships)
+    }
+
+    /// Adds or changes a membership row (requires `manage` on the project).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn set_membership(
+        &self,
+        project_id: &str,
+        member: &str,
+        role: &str,
+    ) -> Result<pb::MembershipInfo, ClientError> {
+        Ok(self
+            .client
+            .clone()
+            .set_membership(pb::SetMembershipRequest {
+                project_id: project_id.to_owned(),
+                member: member.to_owned(),
+                role: role.to_owned(),
+            })
+            .await?
+            .into_inner())
+    }
+
+    /// Removes a membership row (requires `manage` on the project). The last
+    /// owner row is refused by the server.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn remove_membership(
+        &self,
+        project_id: &str,
+        member: &str,
+    ) -> Result<(), ClientError> {
+        self.client
+            .clone()
+            .remove_membership(pb::RemoveMembershipRequest {
+                project_id: project_id.to_owned(),
+                member: member.to_owned(),
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Uploads a PNG, JPEG, or sanitized static SVG figure to a project
     /// (requires the edit lease; job 073, ARC-01, RPT-06).
     ///

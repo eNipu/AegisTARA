@@ -2,7 +2,7 @@
 //
 // Every widget here only shows what it is given and reports what the user
 // did; the client core decides everything else.
-import { Button, ComboBox, CheckBox, StandardTableView, ScrollView } from "std-widgets.slint";
+import { Button, ComboBox, CheckBox, LineEdit, StandardTableView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 export struct ProjectItem {
@@ -11,12 +11,19 @@ export struct ProjectItem {
     methodology: string,
 }
 
+// One translation of a description (FND-04): a language tag and the text.
+export struct TranslationItem {
+    lang: string,
+    text: string,
+}
+
 // One description box of the page: which element it is for, its text, and
 // who wrote it.
 export struct DescriptionItem {
     kind: string,
     text: string,
     by: string,
+    translations: [TranslationItem],
 }
 
 export struct ThreatItem {
@@ -302,6 +309,58 @@ export component DescriptionBox inherits VerticalLayout {
         accessible-label: root.label + ": " + (root.text == "" ? "none yet" : root.text);
     }
     if root.by != "": Text { text: root.by; color: Theme.graphite; font-size: Theme.font-caption; font-weight: Theme.weight-medium; wrap: word-wrap; }
+    @children
+}
+
+// Inline translation editor under a description (job 069, FND-04): shows the
+// existing translations and adds or clears one. No dialog; the draft saves on
+// the button, and an empty text clears the translation.
+export component TranslationEditor inherits VerticalLayout {
+    in property <[TranslationItem]> items;
+    in property <bool> editable;
+    in-out property <string> draft-lang: "ja";
+    in-out property <string> draft-text;
+    callback save(string, string);
+    callback remove(string);
+    spacing: 4px;
+    for t in root.items: HorizontalLayout {
+        spacing: 6px;
+        Text {
+            text: t.lang + ": " + t.text;
+            color: Theme.ink;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+            accessible-role: AccessibleRole.text;
+            accessible-label: @tr("Translation") + " " + t.lang;
+        }
+        Button {
+            text: @tr("Remove");
+            width: 76px;
+            enabled: root.editable;
+            clicked => { root.remove(t.lang); }
+        }
+    }
+    if root.editable: HorizontalLayout {
+        spacing: 6px;
+        LineEdit {
+            width: 80px;
+            text <=> root.draft-lang;
+            accessible-label: @tr("Language tag");
+        }
+        LineEdit {
+            horizontal-stretch: 1;
+            placeholder-text: @tr("Translation text");
+            text <=> root.draft-text;
+            accessible-label: @tr("Translation text");
+            accepted(t) => { root.save(root.draft-lang, t); root.draft-text = ""; }
+        }
+        Button {
+            text: @tr("Save");
+            enabled: root.draft-text != "";
+            clicked => { root.save(root.draft-lang, root.draft-text); root.draft-text = ""; }
+        }
+    }
 }
 
 export component Panel inherits Rectangle {

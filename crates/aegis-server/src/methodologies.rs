@@ -54,7 +54,8 @@ pub struct Methodologies {
 }
 
 impl Methodologies {
-    /// The built-in methodology packs (`"iso21434-r155"` and `"eu-cra"`).
+    /// The built-in methodology packs (`"iso21434-r155"`, `"eu-cra"`, and
+    /// `"stride-services-cloud"`).
     ///
     /// # Errors
     ///
@@ -65,6 +66,8 @@ impl Methodologies {
         me.add_bytes("built-in:iso21434-r155", pack)?;
         let cra_pack = Methodology::eu_cra_pack();
         me.add_bytes("built-in:eu-cra", cra_pack)?;
+        let stride_pack = Methodology::stride_services_cloud_pack();
+        me.add_bytes("built-in:stride-services-cloud", stride_pack)?;
         Ok(me)
     }
 
@@ -151,6 +154,10 @@ mod tests {
         assert_eq!(cra.methodology.key(), "eu-cra");
         let cra_again = Methodology::read_pack(&*cra.pack).expect("cra pack");
         assert_eq!(&cra_again, &*cra.methodology);
+        let stride = me.get("stride-services-cloud").expect("stride hosted");
+        assert_eq!(stride.methodology.key(), "stride-services-cloud");
+        let stride_again = Methodology::read_pack(&*stride.pack).expect("stride pack");
+        assert_eq!(&stride_again, &*stride.methodology);
         assert!(me.get("nope").is_none());
     }
 
@@ -161,6 +168,6 @@ mod tests {
         assert!(matches!(dup, Err(PackLoadError::Duplicate(k)) if k == "iso21434-r155"));
         let bad = me.add_bytes("junk", b"{}");
         assert!(matches!(bad, Err(PackLoadError::Invalid { .. })));
-        assert_eq!(me.iter().count(), 2);
+        assert_eq!(me.iter().count(), 3);
     }
 }

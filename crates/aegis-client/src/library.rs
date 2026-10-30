@@ -8,6 +8,7 @@
 
 use std::collections::BTreeSet;
 
+use aegis_model::catalog_pack::CatalogPack;
 use aegis_model::library::{ItemNode, LibraryItem, LibraryPack};
 use aegis_model::{
     ElementRef, MAX_ATTACK_TREE_NODES, MAX_LABEL_BYTES, Node, NodeId, Op, Project, Provenance,
@@ -56,6 +57,71 @@ pub struct InsertOptions {
 
 fn err(text: &str) -> EditError {
     EditError::Library(text.to_owned())
+}
+
+/// One built-in catalog pack, flattened for the library panel (job 112,
+/// DOM-04). Catalog packs are metadata only: they are searchable and shown,
+/// never inserted into a project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogView {
+    /// The catalog key (for example `capec`).
+    pub key: String,
+    /// The original catalog name.
+    pub name: String,
+    /// The original short description.
+    pub description: String,
+    /// Official homepage.
+    pub source_url: String,
+    /// Official license-terms page.
+    pub terms_url: String,
+    /// The required attribution text.
+    pub attribution: String,
+    /// The license grant, kept for review.
+    pub license_terms: String,
+}
+
+impl CatalogView {
+    fn from_pack(pack: &CatalogPack) -> Self {
+        let c = pack.catalog();
+        CatalogView {
+            key: pack.id().to_owned(),
+            name: c.name().to_owned(),
+            description: c.description().to_owned(),
+            source_url: c.source_url().to_owned(),
+            terms_url: c.terms_url().to_owned(),
+            attribution: c.attribution().to_owned(),
+            license_terms: c.license_terms().to_owned(),
+        }
+    }
+
+    /// The text shown in the preview, with links and attribution.
+    pub fn preview(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&self.name);
+        out.push('\n');
+        out.push_str(&self.description);
+        out.push('\n');
+        out.push_str(&format!("Source: {}", self.source_url));
+        out.push('\n');
+        out.push_str(&format!("Terms: {}", self.terms_url));
+        out.push('\n');
+        out.push_str(&format!("Attribution: {}", self.attribution));
+        out.push('\n');
+        out.push_str(&format!("License: {}", self.license_terms));
+        out
+    }
+}
+
+/// The three built-in catalog packs, in a stable order (job 112).
+pub fn builtin_catalogs() -> Vec<CatalogView> {
+    [
+        CatalogPack::builtin_capec(),
+        CatalogPack::builtin_mitre_attack(),
+        CatalogPack::builtin_emb3d(),
+    ]
+    .iter()
+    .map(CatalogView::from_pack)
+    .collect()
 }
 
 /// The texts of the item that the tree it goes into already has, in item
@@ -374,6 +440,10 @@ pub struct LibraryView {
     hits: Vec<aegis_model::library::Hit>,
     choices: Vec<(aegis_model::library::Facet, String, usize)>,
     picked: Option<usize>,
+    /// The built-in catalog packs, searchable but not insertable (job 112).
+    catalogs: Vec<CatalogView>,
+    /// The picked catalog row, as a position in the filtered catalog list.
+    catalog_picked: Option<usize>,
 }
 
 fn facet_name(f: aegis_model::library::Facet) -> &'static str {
@@ -400,6 +470,8 @@ impl LibraryView {
             hits: Vec::new(),
             choices: Vec::new(),
             picked: None,
+            catalogs: builtin_catalogs(),
+            catalog_picked: None,
         };
         v.refresh();
         v
@@ -559,5 +631,52 @@ impl LibraryView {
             self.pack.license()
         ));
         out
+    }
+
+    /// The catalog packs whose metadata matches the query. An empty query
+    /// lists every catalog (job 112).
+    fn catalog_hits(&self) -> Vec<&CatalogView> {
+        let q = self.query.to_lowercase();
+        self.catalogs
+            .iter()
+            .filter(|c| {
+                q.is_empty()
+                    || c.name.to_lowercase().contains(&q)
+                    || c.key.to_lowercase().contains(&q)
+                    || c.description.to_lowercase().contains(&q)
+                    || c.attribution.to_lowercase().contains(&q)
+            })
+            .collect()
+    }
+
+    /// The catalog list rows: name and key.
+    #[must_use]
+    pub fn catalog_rows(&self) -> Vec<Vec<String>> {
+        self.catalog_hits()
+            .into_iter()
+            .map(|c| vec![c.name.clone(), c.key.clone()])
+            .collect()
+    }
+
+    /// Picks the catalog at this row, or none.
+    pub fn pick_catalog(&mut self, row: Option<usize>) {
+        self.catalog_picked = row;
+    }
+
+    /// The row of the picked catalog.
+    #[must_use]
+    pub fn catalog_picked_row(&self) -> Option<usize> {
+        self.catalog_picked
+    }
+
+    /// The preview of the picked catalog, or a hint when none is picked.
+    #[must_use]
+    pub fn catalog_preview(&self) -> String {
+        let Some(row) = self.catalog_picked else {
+            return String::new();
+        };
+        self.catalog_hits()
+            .get(row)
+            .map_or_else(String::new, |c| c.preview())
     }
 }

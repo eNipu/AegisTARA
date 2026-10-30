@@ -43,6 +43,15 @@ pub enum Edit {
         /// The text; line breaks are normalized to `\n`.
         text: String,
     },
+    /// Sets or clears one translation of a description (FND-04).
+    SetDescriptionTranslation {
+        /// What the description belongs to.
+        target: aegis_model::ElementRef,
+        /// The language tag of the translation.
+        lang: String,
+        /// The translated text; empty clears it.
+        text: String,
+    },
 
     // ---- attack tree steps ----
     /// Sets or clears the direct feasibility rating of a step.
@@ -725,6 +734,14 @@ impl Edit {
                 text: text.replace("\r\n", "\n").replace('\r', "\n").into(),
                 provenance: p,
             }],
+            Edit::SetDescriptionTranslation { target, lang, text } => {
+                vec![Op::SetDescriptionTranslation {
+                    target: *target,
+                    lang: lang.trim().to_owned().into(),
+                    text: text.replace("\r\n", "\n").replace('\r', "\n").into(),
+                    provenance: p,
+                }]
+            }
             Edit::SetStepFeasibility { tree, node, level } => vec![Op::SetStepFeasibility {
                 tree: *tree,
                 node: *node,
@@ -1686,6 +1703,20 @@ pub enum Command {
     LoadSessions,
     /// Admin: create, change or delete a user.
     Admin(crate::view::AdminAction),
+    /// Project access: load the open project's membership rows.
+    LoadMemberships,
+    /// Project access: add or change a membership row.
+    SetMembership {
+        /// `user:<subject>` or `group:<name>`.
+        member: String,
+        /// One of the six built-in role keys.
+        role: String,
+    },
+    /// Project access: remove a membership row.
+    RemoveMembership {
+        /// `user:<subject>` or `group:<name>`.
+        member: String,
+    },
     /// Admin: break the open project's edit lock.
     BreakLock,
     /// Admin: check the open project's audit chain.

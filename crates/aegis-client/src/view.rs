@@ -341,6 +341,17 @@ pub struct DescriptionView {
     pub text: String,
     /// Who wrote it and when, empty when there is no text.
     pub by: String,
+    /// The translations of the text, in insertion order (FND-04).
+    pub translations: Vec<TranslationView>,
+}
+
+/// One translation of a description, as the view shows it (FND-04).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TranslationView {
+    /// The BCP 47 language tag.
+    pub lang: String,
+    /// The translated text.
+    pub text: String,
 }
 
 /// The description boxes the page offers, for what is selected on it.
@@ -461,6 +472,13 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
                         (who, when) => format!("Written by {who}, {when}"),
                     }
                 }),
+            translations: project
+                .description_translations(target)
+                .map(|(lang, text)| TranslationView {
+                    lang: lang.to_owned(),
+                    text: text.to_owned(),
+                })
+                .collect(),
         })
         .collect()
 }
