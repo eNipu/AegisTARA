@@ -128,3 +128,9 @@
   --locked`, and `deploy/verify-image.sh`. GitHub Actions did not run (billing).
 - Still open: Windows vendored build, archive licence notice, the owner-run
   Retina Mac + Windows spike, and a hand check of live OS appearance.
+
+### Round 2 review fixes (code review, CHANGES)
+- **Hint translated again:** the description-editor hint is `@tr("Plain text. {0} saves, Escape cancels.", ...)` with the key label as an argument; ja and pseudo catalogs updated (the existing `tests/i18n.rs` key check covers it).
+- **Redo keeps Ctrl+Y off macOS:** the table row has an `off_mac` spelling, so Windows/Linux keep Ctrl+Y (menu key and cheat sheet agree); macOS uses ⇧⌘Z. A test pins both labels.
+- **Dead code removed:** the unused `mac-shortcuts` property and the unused `Meta`/`Super` modifier entries.
+- **Left open (should-fix, not done):** `JAPANESE_FALLBACK` is only read by a test and the `.SF NS` names are unproven on a real macOS window (needs a screenshot); `reexec_on_software` spawns the child while the parent still holds the runtime and any standalone project, and hides the child's own error. Round 2 security, UX and UI reviews did not complete (stopped).
