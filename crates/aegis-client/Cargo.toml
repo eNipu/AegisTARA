@@ -40,6 +40,7 @@ aegis-auth = { workspace = true, features = ["test-support"] }
 aegis-server.workspace = true
 aegis-license = { workspace = true, features = ["issuer"] }
 proptest.workspace = true
+uuid.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 tokio-rustls.workspace = true

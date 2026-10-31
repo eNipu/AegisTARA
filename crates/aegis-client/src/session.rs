@@ -59,10 +59,11 @@ use crate::report::{
 use crate::sample::sample_ops;
 use crate::state::{
     BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, MembershipRow, Mode, Notice,
-    NumbersCheck, PageData, ProjectEntry, ProjectView, ServerSettingsView, Severity, SyncView,
-    UserRow, ViewModel,
+    NoticeAction, NumbersCheck, PageData, ProjectEntry, ProjectView, ServerSettingsView, Severity,
+    SyncView, UserRow, ViewModel,
 };
 use crate::time::format_ms;
+use crate::undo_label::Label;
 use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use crate::view::{
     AdminAction, Page, UiState, inspector, page_descriptions, risks_differ, shown_tree,
@@ -516,8 +517,21 @@ impl<P: CredentialProvider> Actor<P> {
     // ---- plumbing --------------------------------------------------------
 
     fn notice(&mut self, severity: Severity, text: impl Into<String>) {
+        self.notice_with(severity, text, None);
+    }
+
+    fn notice_with(
+        &mut self,
+        severity: Severity,
+        text: impl Into<String>,
+        action: Option<NoticeAction>,
+    ) {
         if self.notices.len() == MAX_NOTICES {
             self.notices.pop_front();
+        }
+        if action.is_some() {
+            // UI-10.9: a toast with a button replaces the previous one.
+            self.notices.retain(|n| n.action.is_none());
         }
         let id = self.next_notice;
         self.next_notice += 1;
@@ -525,7 +539,17 @@ impl<P: CredentialProvider> Actor<P> {
             id,
             severity,
             text: text.into(),
+            action,
         });
+    }
+
+    /// UI-10.7: says so when the undo history was dropped (a rejected edit,
+    /// a reload, a lost lock).
+    fn history_cleared(&mut self, why: &str) {
+        let steps = self.open.as_mut().map_or(0, |o| o.ws.take_cleared());
+        if steps > 0 {
+            self.notice(Severity::Info, format!("Undo history cleared: {why}."));
+        }
     }
 
     /// Runs `work` in a task and delivers its result as an event.
@@ -1554,6 +1578,8 @@ impl<P: CredentialProvider> Actor<P> {
             return;
         }
         tracing::info!(reason, "resyncing project");
+        // The old workspace goes away with its undo history (UI-10.7).
+        let steps = open.ws.take_cleared();
         open.resyncing = true;
         open.status_pending = false;
         open.risks_pending = false;
@@ -1573,6 +1599,12 @@ impl<P: CredentialProvider> Actor<P> {
         self.epoch += 1;
         open.epoch = self.epoch;
         let (epoch, id) = (self.epoch, open.id.clone());
+        if steps > 0 {
+            self.notice(
+                Severity::Info,
+                "Undo history cleared: the project was reloaded from the server.",
+            );
+        }
         self.start_open(epoch, id);
     }
 
@@ -1911,6 +1943,7 @@ impl<P: CredentialProvider> Actor<P> {
             format!("{why} You are now in read-only mode.")
         };
         self.notice(Severity::Warning, text);
+        self.history_cleared("the edit lock was lost");
         self.resync("lease lost");
     }
 
@@ -2009,6 +2042,7 @@ impl<P: CredentialProvider> Actor<P> {
                     open.ws.on_rejected();
                 }
                 self.notice(Severity::Warning, "The project changed on the server. It was reloaded; your last change was not saved.");
+                self.history_cleared("the project was reloaded");
                 self.resync("stale base");
             }
             Some(ServerCode::LockInvalid | ServerCode::NotLocked | ServerCode::LockHeld) => {
@@ -2022,6 +2056,7 @@ impl<P: CredentialProvider> Actor<P> {
                     Severity::Error,
                     format!("The server refused the change: {error}. It was undone."),
                 );
+                self.history_cleared("the server refused a change");
             }
             _ if error.is_transient() => {
                 // Keep the edits; try the same call again shortly.
@@ -2037,6 +2072,7 @@ impl<P: CredentialProvider> Actor<P> {
                     open.ws.on_rejected();
                 }
                 self.on_failure("Could not save the change", error);
+                self.history_cleared("a change could not be saved");
             }
         }
     }
@@ -2566,8 +2602,9 @@ impl<P: CredentialProvider> Actor<P> {
         let ops = match build(open.ws.project()) {
             Ok(ops) => ops,
             Err(why) => {
+                // UI-10.11: an action error is a sticky error toast.
                 self.notice(
-                    Severity::Warning,
+                    Severity::Error,
                     format!("That change is not possible: {why}."),
                 );
                 return false;
@@ -2580,11 +2617,24 @@ impl<P: CredentialProvider> Actor<P> {
             Ok(()) => {
                 open.cached_scene = None;
                 open.cached_lint_count = None;
+                // UI-10.9: a removal happens at once; the toast says what was
+                // removed and offers the way back.
+                let removed = (origin == Origin::Edit)
+                    .then(|| {
+                        open.ws
+                            .undo_label()
+                            .filter(|l| l.is_removal())
+                            .map(Label::past)
+                    })
+                    .flatten();
+                if let Some(text) = removed {
+                    self.notice_with(Severity::Info, text, Some(NoticeAction::Undo));
+                }
                 self.pump();
                 true
             }
             Err(e) => {
-                self.notice(Severity::Warning, format!("That change was refused: {e}."));
+                self.notice(Severity::Error, format!("That change was refused: {e}."));
                 false
             }
         }
@@ -2645,11 +2695,36 @@ impl<P: CredentialProvider> Actor<P> {
         let Some(open) = self.open.as_mut() else {
             return;
         };
+        let label = if undo {
+            open.ws.undo_label()
+        } else {
+            open.ws.redo_label()
+        }
+        .cloned();
         let result = if undo { open.ws.undo() } else { open.ws.redo() };
         match result {
             Ok(()) => {
                 open.cached_scene = None;
                 open.cached_lint_count = None;
+                // UI-10.5: say what changed and offer the way back.
+                let (done, action) = if undo {
+                    ("Undone", NoticeAction::Redo)
+                } else {
+                    ("Redone", NoticeAction::Undo)
+                };
+                let shown = label.as_ref().and_then(|l| l.selection(open.ws.project()));
+                let text = label.map_or_else(
+                    || format!("{done}."),
+                    |l| format!("{done}: {}", l.imperative()),
+                );
+                self.notice_with(Severity::Info, text, Some(action));
+                // Open the page of the element and select it.
+                if let Some(sel) = shown
+                    && let Some(open) = self.open.as_mut()
+                {
+                    pages::select(&mut open.ui, sel);
+                    self.show_page(pages::page_of(sel));
+                }
                 self.pump();
             }
             Err(e @ (WorkspaceError::NothingToUndo | WorkspaceError::NothingToRedo)) => {
@@ -2795,6 +2870,8 @@ impl<P: CredentialProvider> Actor<P> {
                 inspector: inspector(&open.ws, &open.ui),
                 can_undo: open.ws.can_undo(),
                 can_redo: open.ws.can_redo(),
+                undo_label: open.ws.undo_label().map(Label::imperative),
+                redo_label: open.ws.redo_label().map(Label::imperative),
                 show_residual: open.ui.show_residual,
                 confirmed_seq: open.ws.confirmed_seq(),
                 numbers,

@@ -216,6 +216,7 @@ dependencies = [
  "tower",
  "tracing",
  "unic-langid",
+ "uuid",
 ]
 
 [[package]]

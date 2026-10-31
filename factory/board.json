@@ -412,7 +412,7 @@
     },
     {
       "id": "024-cybersecurity-goals-and-claims",
-      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 \u00a715.4)",
+      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 §15.4)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1076,17 +1076,24 @@
       "stage": "needs-human",
       "worktree": null,
       "branch": "master",
-      "round": 1,
+      "round": 2,
       "reviews": {
         "security": "PASS",
         "ux": "CHANGES",
-        "ui": "CHANGES",
+        "ui": "PASS",
         "code": "PASS"
       },
-      "history": [],
+      "history": [
+        {
+          "security": "PASS",
+          "ux": "CHANGES",
+          "ui": "CHANGES",
+          "code": "PASS"
+        }
+      ],
       "decision": "ESCALATE",
-      "updated_at": "2026-10-31T09:50:51Z",
-      "notes": "Round 1 slice: Undo/Redo moved to icon buttons at the left of the project top bar with shortcut tooltips; status-bar text buttons removed. fmt/clippy/shell tests pass. ESCALATE: toast, per-op naming, text-field undo, per-op test, and Part B (removal-without-confirmation, inline field errors, sticky action-error toast, dialog allow list) still to build."
+      "updated_at": "2026-10-31T23:20:38Z",
+      "notes": "Round 2: per-op undo test (all 64 Op kinds), undo/redo labels, bottom-centre toast with Undo/Redo, history-cleared toast, 12 removal confirmations removed, sticky error toasts, FieldError widget, UI-12 dialog rules and allow-list test, kept dialog follows UI-12. ESCALATE: UX CHANGES, list not scrolled to the element after undo/redo (UI-10.5) and typing-undo stand-aside only for the rename field and unproven with a real key (UI-10.4). Backlog line stays [ ]."
     }
   ],
   "updated_at": "2026-10-31T09:50:51Z"

@@ -30,6 +30,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use crate::undo_label::{Label, describe};
 use aegis_model::{
     Methodology, ModelError, Op, Project, ProjectEvalCache, SuggestionBranch, SuggestionError,
     SuggestionId,
@@ -96,6 +97,12 @@ pub enum Origin {
     Redo,
 }
 
+/// One undo or redo step: the ops that reverse an edit, and what the edit was.
+struct Step {
+    ops: Vec<Op>,
+    label: Label,
+}
+
 struct Batch {
     ops: Vec<Op>,
     /// Inverses in the order the ops were applied.
@@ -119,8 +126,11 @@ pub struct Workspace {
     pending: VecDeque<Batch>,
     /// The first `in_flight` pending batches are with the server.
     in_flight: usize,
-    undo: Vec<Vec<Op>>,
-    redo: Vec<Vec<Op>>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    /// History steps dropped by a rejection since the last
+    /// [`take_cleared`](Self::take_cleared), to tell the user (UI-10.7).
+    cleared: usize,
     suggestions: Option<SuggestionBranch>,
 }
 
@@ -138,6 +148,7 @@ impl Workspace {
             in_flight: 0,
             undo: Vec::new(),
             redo: Vec::new(),
+            cleared: 0,
             suggestions: None,
         }
     }
@@ -190,6 +201,24 @@ impl Workspace {
         !self.redo.is_empty()
     }
 
+    /// What [`undo`](Self::undo) would undo, for the tooltip and the toast.
+    #[must_use]
+    pub fn undo_label(&self) -> Option<&Label> {
+        self.undo.last().map(|s| &s.label)
+    }
+
+    /// What [`redo`](Self::redo) would redo.
+    #[must_use]
+    pub fn redo_label(&self) -> Option<&Label> {
+        self.redo.last().map(|s| &s.label)
+    }
+
+    /// How many history steps a rejection or a reload dropped since the
+    /// last call; resets the count.
+    pub fn take_cleared(&mut self) -> usize {
+        std::mem::take(&mut self.cleared) + self.undo.len() + self.redo.len()
+    }
+
     /// Applies `ops` as one edit: all or nothing. On success the edit is
     /// queued for the server. Time O(size of the ops) plus the incremental
     /// cache update.
@@ -199,6 +228,17 @@ impl Workspace {
     /// [`WorkspaceError::Model`] if an op is refused (the project is left as
     /// it was), [`WorkspaceError::TooManyPending`].
     pub fn apply(&mut self, ops: Vec<Op>, origin: Origin) -> Result<(), WorkspaceError> {
+        self.apply_labeled(ops, origin, None)
+    }
+
+    /// [`apply`](Self::apply) with the description of the edit; `None`
+    /// describes `ops` against the project as it is now.
+    fn apply_labeled(
+        &mut self,
+        ops: Vec<Op>,
+        origin: Origin,
+        label: Option<Label>,
+    ) -> Result<(), WorkspaceError> {
         if self.pending.len() >= MAX_PENDING_BATCHES {
             return Err(WorkspaceError::TooManyPending);
         }
@@ -208,6 +248,7 @@ impl Workspace {
                 max: MAX_SUBMIT_OPS,
             });
         }
+        let label = label.unwrap_or_else(|| describe(&ops, &self.project));
         let mut inverses = Vec::with_capacity(ops.len());
         for op in ops.iter().cloned() {
             match self.project.apply_cached(op, &mut self.cache) {
@@ -218,14 +259,17 @@ impl Workspace {
                 }
             }
         }
-        let reversed: Vec<Op> = inverses.iter().rev().cloned().collect();
+        let step = Step {
+            ops: inverses.iter().rev().cloned().collect(),
+            label,
+        };
         match origin {
             Origin::Edit => {
                 self.redo.clear();
-                push_bounded(&mut self.undo, reversed);
+                push_bounded(&mut self.undo, step);
             }
-            Origin::Undo => push_bounded(&mut self.redo, reversed),
-            Origin::Redo => push_bounded(&mut self.undo, reversed),
+            Origin::Undo => push_bounded(&mut self.redo, step),
+            Origin::Redo => push_bounded(&mut self.undo, step),
         }
         self.pending.push_back(Batch { ops, inverses });
         if let Some(branch) = &self.suggestions
@@ -368,9 +412,9 @@ impl Workspace {
     /// [`WorkspaceError::NothingToUndo`], or an error of [`apply`](Self::apply)
     /// (the entry stays on the stack if applying fails).
     pub fn undo(&mut self) -> Result<(), WorkspaceError> {
-        let entry = self.undo.pop().ok_or(WorkspaceError::NothingToUndo)?;
-        self.apply(entry.clone(), Origin::Undo)
-            .inspect_err(|_| self.undo.push(entry))
+        let step = self.undo.pop().ok_or(WorkspaceError::NothingToUndo)?;
+        self.apply_labeled(step.ops.clone(), Origin::Undo, Some(step.label.clone()))
+            .inspect_err(|_| self.undo.push(step))
     }
 
     /// Redoes the last undone edit.
@@ -379,9 +423,9 @@ impl Workspace {
     ///
     /// [`WorkspaceError::NothingToRedo`] or an error of [`apply`](Self::apply).
     pub fn redo(&mut self) -> Result<(), WorkspaceError> {
-        let entry = self.redo.pop().ok_or(WorkspaceError::NothingToRedo)?;
-        self.apply(entry.clone(), Origin::Redo)
-            .inspect_err(|_| self.redo.push(entry))
+        let step = self.redo.pop().ok_or(WorkspaceError::NothingToRedo)?;
+        self.apply_labeled(step.ops.clone(), Origin::Redo, Some(step.label.clone()))
+            .inspect_err(|_| self.redo.push(step))
     }
 
     /// Takes the oldest edits not yet sent, as many whole edits as fit in
@@ -463,6 +507,7 @@ impl Workspace {
             self.undo_applied(batch.inverses);
         }
         self.in_flight = 0;
+        self.cleared += self.undo.len() + self.redo.len();
         self.undo.clear();
         self.redo.clear();
         self.suggestions = None;
@@ -486,7 +531,7 @@ impl Workspace {
     }
 }
 
-fn push_bounded(stack: &mut Vec<Vec<Op>>, entry: Vec<Op>) {
+fn push_bounded(stack: &mut Vec<Step>, entry: Step) {
     if stack.len() >= MAX_UNDO_STEPS {
         stack.remove(0);
     }
