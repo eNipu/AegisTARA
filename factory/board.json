@@ -1073,13 +1073,13 @@
     {
       "id": "116-undo-toasts",
       "title": "Visible undo and redo, then undo instead of confirmation (UI-10, UI-12)",
-      "stage": "needs-human",
+      "stage": "merged",
       "worktree": null,
       "branch": "master",
-      "round": 2,
+      "round": 3,
       "reviews": {
         "security": "PASS",
-        "ux": "CHANGES",
+        "ux": "PASS",
         "ui": "PASS",
         "code": "PASS"
       },
@@ -1089,11 +1089,17 @@
           "ux": "CHANGES",
           "ui": "CHANGES",
           "code": "PASS"
+        },
+        {
+          "security": "PASS",
+          "ux": "CHANGES",
+          "ui": "PASS",
+          "code": "PASS"
         }
       ],
-      "decision": "ESCALATE",
-      "updated_at": "2026-10-31T23:20:38Z",
-      "notes": "Round 2: per-op undo test (all 64 Op kinds), undo/redo labels, bottom-centre toast with Undo/Redo, history-cleared toast, 12 removal confirmations removed, sticky error toasts, FieldError widget, UI-12 dialog rules and allow-list test, kept dialog follows UI-12. ESCALATE: UX CHANGES, list not scrolled to the element after undo/redo (UI-10.5) and typing-undo stand-aside only for the rename field and unproven with a real key (UI-10.4). Backlog line stays [ ]."
+      "decision": "APPROVE",
+      "updated_at": "2026-10-31T23:52:30Z",
+      "notes": "Round 3: real-key test for typing undo (UI-10.4); undo scrolls the row into view on every list (UI-10.5, Table fix). All reviews PASS, built directly on master. Follow-ups for a person: macOS native-menu check of typing undo, VoiceOver/NVDA check of the toast."
     }
   ],
   "updated_at": "2026-10-31T09:50:51Z"

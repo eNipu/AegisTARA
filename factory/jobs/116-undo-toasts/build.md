@@ -112,3 +112,34 @@ Screenshots of the toast, the Undone toast and the delete-project dialog looked 
   undo.
 - **Hardware**: screen-reader announcement of the live region not checked with
   VoiceOver or NVDA.
+
+## Round 3
+
+Closes the two UX points of round 2. No change to the allow list: log out keeps
+its confirmation (owner decision, 2026-11-01).
+
+### Built
+- **UI-10.4 proof** (`crates/aegis-shell/tests/typing_undo.rs`): real key events
+  (`Control`, which Slint maps to Command on macOS) go through the window. With no
+  field focused the shortcut undoes the last project change; with the rename field
+  focused and typed into, the same key leaves the project unchanged. This works
+  because Slint matches menu-bar shortcuts at window level before any widget, and
+  only for enabled entries, so a disabled Undo item lets the key reach the text
+  field.
+- **UI-10.5 scroll into view**: the same test file builds a project with 40 threats,
+  leaves the Threats page, undoes a rename of the last threat, and checks the page
+  opened, T39 is selected and its row is on screen
+  (`target/shell-screenshots/undo-scroll-long-list.png`, viewed). The test first
+  failed: the list stayed at the top, because a table made when its page opens has
+  no size yet and `set-current-row` could not scroll. `Table` in `widgets.slint` now
+  says it again after a 60 ms timer once the layout has settled; this fixes every
+  list in the app.
+
+### Verified
+`cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`;
+`cargo test --workspace --locked` (82 test binaries, 0 failed); `scripts/deny.sh`.
+
+### Remaining (not code gates)
+- Check by hand on a real macOS window that ⌘Z in a dirty rename field undoes the
+  typing (the native menu bar is not in the headless test).
+- Check the toast live region with VoiceOver and NVDA.
