@@ -412,7 +412,7 @@
     },
     {
       "id": "024-cybersecurity-goals-and-claims",
-      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 \u00a715.4)",
+      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 §15.4)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1042,20 +1042,20 @@
     {
       "id": "113-platform-fidelity",
       "title": "Platform fidelity: GPU renderer with software fallback, system appearance, macOS shortcuts and fonts (D25, UI-07)",
-      "stage": "build",
+      "stage": "needs-human",
       "worktree": "factory/worktrees/113-platform-fidelity",
       "branch": "factory/113-platform-fidelity",
       "round": 1,
       "reviews": {
-        "security": "pending",
-        "ux": "pending",
-        "ui": "pending",
-        "code": "pending"
+        "security": "PASS",
+        "ux": "CHANGES",
+        "ui": "CHANGES",
+        "code": "PASS"
       },
-      "decision": null,
-      "updated_at": "2026-10-30T20:24:34Z",
-      "notes": "Owner picked Skia (2026-10-30). Build started on factory/113-platform-fidelity; ADR 0063 stays proposed and merge is gated on the human-run Retina Mac + Windows laptop spike evidence."
+      "decision": "ESCALATE",
+      "updated_at": "2026-10-30T22:49:46Z",
+      "notes": "Rework built on factory/113-platform-fidelity: System/Light/Dark appearance (persisted), monospace binding, headless-renderer assertion, offline-build finding (no-network release build fails at skia-bindings; vendor via SKIA_BINARIES_URL). Checks pass. Round 1 reviews are stale; re-review pending. Still needs the owner-run Retina Mac + Windows spike and a vendored-archive offline build before ADR 0063 can be accepted."
     }
   ],
-  "updated_at": "2026-10-30T20:24:34Z"
+  "updated_at": "2026-10-30T22:49:46Z"
 }

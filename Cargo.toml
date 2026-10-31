@@ -70,7 +70,10 @@ aegis-shell = { path = "crates/aegis-shell" }
 aegis-license = { path = "crates/aegis-license" }
 png = "0.18"
 rstar = "0.12"
-slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-path", "accessibility"] }
+# Skia is the default GPU renderer (ADR 0063, D25); the software renderer
+# stays compiled in as the fallback, the `AEGIS_RENDERER=software` escape
+# hatch, and the renderer of the headless test platform.
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "renderer-software", "software-renderer-path", "accessibility"] }
 slint-build = "=1.18.1"
 insta = "1"
 fluent-bundle = "0.15"

@@ -11,11 +11,14 @@
 //! |---|---|
 //! | `AEGIS_URL` | The server, for example `https://aegis.example.com`. Overrides the settings. |
 //! | `AEGIS_TRANSPORT` | `auto` (default), `grpc` or `grpc-web`. |
+//! | `AEGIS_RENDERER` | `skia` (default) or `software`; unknown values warn and use Skia. |
 //! | `AEGIS_DEV_USER` | Development login against a server run with `AEGIS_DEV_AUTH=1`, skipping the screens. |
 //! | `AEGIS_DEV_ADMIN` | With `AEGIS_DEV_USER`: also an admin. |
 //!
-//! The window always uses Slint's software renderer: it needs no GPU, so it
-//! behaves the same on a laptop, a virtual desktop, and a remote session.
+//! The window uses Slint's Skia renderer by default (ADR 0063, D25) and falls
+//! back to the software renderer when Skia cannot open a surface or when
+//! `AEGIS_RENDERER=software` is set, so it still runs on a virtual desktop, a
+//! remote session, or an old driver.
 
 use std::cell::RefCell;
 use std::process::ExitCode;
@@ -72,12 +75,10 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("cannot start the network runtime: {e}"))?;
     let _enter = runtime.enter();
 
-    // Software rendering on every platform (see the module docs).
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .renderer_name("software".into())
-        .select()
-        .map_err(|e| format!("cannot open a window: {e}"))?;
+    // Platform fidelity (job 113, ADR 0063): Skia by default, software when
+    // `AEGIS_RENDERER=software` or when Skia cannot be selected.
+    let renderer =
+        aegis_shell::renderer::select().map_err(|e| format!("cannot open a window: {e}"))?;
 
     let window = AppWindow::new().map_err(|e| format!("cannot create the window: {e}"))?;
     let settings_path =
@@ -145,10 +146,37 @@ fn run() -> Result<(), String> {
         }
     }
 
-    window
-        .run()
-        .map_err(|e| format!("the window failed: {e}"))?;
+    if let Err(error) = window.run() {
+        // A GPU surface can fail only once the first window is shown, after
+        // winit's event loop exists. A real retry means a fresh process on the
+        // software renderer (UI-07.1); the child sees AEGIS_RENDERER=software.
+        if renderer == aegis_shell::renderer::Renderer::Skia {
+            tracing::warn!(
+                %error,
+                fallback = "software",
+                "the Skia window failed; retrying with the software renderer"
+            );
+            return reexec_on_software(&error);
+        }
+        return Err(format!("the window failed: {error}"));
+    }
     drop(_enter);
     runtime.block_on(launcher.shutdown());
     Ok(())
+}
+
+/// Restarts this process with `AEGIS_RENDERER=software` after a GPU failure.
+fn reexec_on_software(error: &slint::PlatformError) -> Result<(), String> {
+    let exe =
+        std::env::current_exe().map_err(|e| format!("cannot find the executable to retry: {e}"))?;
+    let status = std::process::Command::new(exe)
+        .env("AEGIS_RENDERER", "software")
+        .args(std::env::args_os().skip(1))
+        .status()
+        .map_err(|e| format!("cannot restart with the software renderer: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("the software renderer window failed: {error}"))
+    }
 }
