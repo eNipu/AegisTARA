@@ -215,6 +215,9 @@ export component AppWindow inherits Window {
     in property <string> numbers-text;
     in property <bool> can-undo;
     in property <bool> can-redo;
+    // Platform-spelled shortcut labels for the Undo/Redo tooltips (UI-10.2).
+    in property <string> undo-shortcut;
+    in property <string> redo-shortcut;
     in property <bool> show-residual;
     in property <bool> is-empty;
     in property <int> page: 0;
@@ -1237,6 +1240,24 @@ export component AppWindow inherits Window {
                 }
                 Rectangle { width: 1px; height: 24px; y: 14px; background: Theme.rule; }
                 Button { text: @tr("Projects"); icon: @image-url("icons/folder-open.svg"); clicked => { root.close-project(); } }
+                Button {
+                    icon: @image-url("icons/undo-2.svg");
+                    accessible-label: @tr("Undo");
+                    enabled: root.in-project && root.editing && root.can-undo;
+                    clicked => { root.undo(); }
+                    Tooltip {
+                        Text { text: @tr("Undo") + " (" + root.undo-shortcut + ")"; color: #FFFFFF; font-size: 12px; }
+                    }
+                }
+                Button {
+                    icon: @image-url("icons/redo-2.svg");
+                    accessible-label: @tr("Redo");
+                    enabled: root.in-project && root.editing && root.can-redo;
+                    clicked => { root.redo(); }
+                    Tooltip {
+                        Text { text: @tr("Redo") + " (" + root.redo-shortcut + ")"; color: #FFFFFF; font-size: 12px; }
+                    }
+                }
                 Text {
                     text: root.project-name;
                     font-size: Theme.font-h1;
@@ -1273,8 +1294,6 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                     }
                 }
-                Button { text: @tr("Undo"); icon: @image-url("icons/undo-2.svg"); enabled: root.can-undo && root.editing; clicked => { root.undo(); } }
-                Button { text: @tr("Redo"); icon: @image-url("icons/redo-2.svg"); enabled: root.can-redo && root.editing; clicked => { root.redo(); } }
                 if root.is-empty && root.editing: Button {
                     text: @tr("Add sample TARA");
                     primary: true;

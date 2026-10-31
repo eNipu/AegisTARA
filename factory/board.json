@@ -1069,7 +1069,25 @@
           "code": "CHANGES"
         }
       ]
+    },
+    {
+      "id": "116-undo-toasts",
+      "title": "Visible undo and redo, then undo instead of confirmation (UI-10, UI-12)",
+      "stage": "needs-human",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "PASS",
+        "ux": "CHANGES",
+        "ui": "CHANGES",
+        "code": "PASS"
+      },
+      "history": [],
+      "decision": "ESCALATE",
+      "updated_at": "2026-10-31T09:50:51Z",
+      "notes": "Round 1 slice: Undo/Redo moved to icon buttons at the left of the project top bar with shortcut tooltips; status-bar text buttons removed. fmt/clippy/shell tests pass. ESCALATE: toast, per-op naming, text-field undo, per-op test, and Part B (removal-without-confirmation, inline field errors, sticky action-error toast, dialog allow list) still to build."
     }
   ],
-  "updated_at": "2026-10-31T09:21:14Z"
+  "updated_at": "2026-10-31T09:50:51Z"
 }
