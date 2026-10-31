@@ -137,7 +137,22 @@ export component Table inherits VerticalLayout {
             if (r != root.selected) { root.picked(r); }
         }
     }
-    changed selected => { tv.set-current-row(root.selected); }
+    // A table made when its page opens has no size yet, so the first
+    // set-current-row cannot scroll to the row. Say it again once the layout has
+    // settled, so a row selected from outside (after Undo) is brought into view.
+    property <bool> settling: true;
+    Timer {
+        interval: 60ms;
+        running: root.settling;
+        triggered => {
+            root.settling = false;
+            tv.set-current-row(root.selected);
+        }
+    }
+    changed selected => {
+        tv.set-current-row(root.selected);
+        root.settling = true;
+    }
     init => { tv.set-current-row(root.selected); }
 }
 
