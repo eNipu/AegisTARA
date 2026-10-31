@@ -97,6 +97,8 @@ pub struct Hooks {
     pub use_company: Option<Box<dyn Fn()>>,
     /// The export folder changed.
     pub export_dir_changed: Option<Box<dyn Fn(String)>>,
+    /// The appearance was chosen: `0` System, `1` Light, `2` Dark.
+    pub appearance_changed: Option<Box<dyn Fn(i32)>>,
 }
 
 /// Owns the window-side state and the session handle.
@@ -236,6 +238,11 @@ impl Controller {
         session: Option<Session>,
         hooks: Hooks,
     ) -> Rc<Controller> {
+        // Platform fidelity (job 113): the one shortcut table drives every
+        // menu accelerator, and the native font families are applied before
+        // the first frame.
+        crate::shortcuts::install(window);
+        crate::platform::apply_fonts(window);
         let controller = Rc::new(Controller {
             window: window.as_weak(),
             session: RefCell::new(session),
@@ -503,6 +510,11 @@ impl Controller {
         on!(on_redo, |c| c.send(Command::Redo));
         on!(on_create_sample, |c| c.send(Command::CreateSample));
         on!(on_set_residual, |c, on| c.send(Command::ShowResidual(on)));
+        on!(on_appearance_selected, |c, i| {
+            if let Some(hook) = &c.hooks.appearance_changed {
+                hook(i);
+            }
+        });
         on!(on_dismiss_notice, |c, id| c.send(Command::DismissNotice(
             u64::try_from(id).unwrap_or(0)
         )));

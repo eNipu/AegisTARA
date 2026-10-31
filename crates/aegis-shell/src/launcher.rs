@@ -25,7 +25,7 @@ use aegis_client::commands::Command;
 use aegis_client::connection::{DevLogin, LoginMethod, LoginOptions, PasswordSession, Public};
 use aegis_client::error::{ClientError, ServerCode};
 use aegis_client::session::{LogOutHook, Session, SessionConfig};
-use aegis_client::settings::Settings;
+use aegis_client::settings::{Appearance, Settings};
 use aegis_client::transport::TransportKind;
 use slint::ComponentHandle;
 
@@ -161,6 +161,7 @@ impl Launcher {
             window.set_transport_index(transport_position(&s.transport));
             window.set_login_user(s.username.as_str().into());
             window.set_export_dir(s.export_dir().display().to_string().into());
+            window.set_appearance(s.appearance().index());
             let language = s.language().code().to_owned();
             // The bundled gettext catalogs are selected after the first
             // component exists (the window is created before this runs).
@@ -178,6 +179,7 @@ impl Launcher {
         let w3 = weak.clone();
         let w4 = weak.clone();
         let w5 = weak.clone();
+        let w_appearance = weak.clone();
         let w6 = weak.clone();
         let w7 = weak.clone();
         let w8 = weak.clone();
@@ -231,6 +233,13 @@ impl Launcher {
             export_dir_changed: Some(Box::new(move |dir| {
                 if let Some(l) = w5.upgrade() {
                     l.settings.borrow_mut().export_dir = dir;
+                    l.save_settings();
+                }
+            })),
+            appearance_changed: Some(Box::new(move |index| {
+                if let Some(l) = w_appearance.upgrade() {
+                    l.settings.borrow_mut().appearance =
+                        Appearance::from_index(index).code().into();
                     l.save_settings();
                 }
             })),

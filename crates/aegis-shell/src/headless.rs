@@ -20,6 +20,11 @@ use slint::{
     LogicalPosition, PhysicalSize, PlatformError, Rgb8Pixel, SharedPixelBuffer, SharedString,
 };
 
+/// The renderer every headless window uses, whatever `AEGIS_RENDERER` or the
+/// chosen GPU renderer say (UI-07.9): tests need no GPU and draw the same
+/// pixels everywhere.
+pub const RENDERER: crate::renderer::Renderer = crate::renderer::Renderer::Software;
+
 thread_local! {
     /// The window the next `create_window_adapter` call hands out.
     static NEXT_WINDOW: RefCell<Option<Rc<MinimalSoftwareWindow>>> = const { RefCell::new(None) };

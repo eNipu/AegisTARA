@@ -51,6 +51,14 @@ Run this list for every release build. Tick each line in the release notes.
 - [ ] `scripts/ci.sh` passes with `AEGIS_TEST_DATABASE_URL` set, so the
       PostgreSQL tests run and are not skipped.
 - [ ] `cargo bench -p aegis-canvas` shows no budget regression.
+- [ ] Desktop renderer (ADR 0063): Skia's `skia-bindings` downloads a prebuilt
+      archive (or, failing that, the Skia sources) at build time, so
+      `cargo build --offline` alone is not an offline build. For the offline
+      bundle, point `SKIA_BINARIES_URL` at a vendored archive
+      (`SKIA_BINARIES_URL="file:///dir/skia-binaries-{key}.tar.gz"`), keep
+      its checksum (ADR 0063) and licence notice with the bundle, and rebuild
+      with the network blocked. Proven on macOS aarch64; repeat for Windows. Users can force the CPU renderer
+      with `AEGIS_RENDERER=software`.
 
 ## Server
 

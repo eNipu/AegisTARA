@@ -108,6 +108,63 @@ pub struct Settings {
     /// The UI language: `en`, `ja` or `pseudo`; empty follows the OS
     /// (L10N-02).
     pub language: String,
+    /// The appearance: `system`, `light` or `dark`; empty follows the OS
+    /// (UI-07.5).
+    pub appearance: String,
+}
+
+/// How the window picks light or dark (UI-07.5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Appearance {
+    /// Follow the operating system, live. The default.
+    #[default]
+    System,
+    /// Always light.
+    Light,
+    /// Always dark.
+    Dark,
+}
+
+impl Appearance {
+    /// The value stored in the settings file.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    /// Reads a stored value; anything unknown follows the OS.
+    #[must_use]
+    pub fn from_code(code: &str) -> Self {
+        match code.trim() {
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            _ => Self::System,
+        }
+    }
+
+    /// The position used by the window (`0` System, `1` Light, `2` Dark).
+    #[must_use]
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::System => 0,
+            Self::Light => 1,
+            Self::Dark => 2,
+        }
+    }
+
+    /// The inverse of [`Appearance::index`]; out of range follows the OS.
+    #[must_use]
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Light,
+            2 => Self::Dark,
+            _ => Self::System,
+        }
+    }
 }
 
 /// The configuration folder of this app, if the OS tells us one.
@@ -200,6 +257,12 @@ impl Settings {
         }
     }
 
+    /// The chosen appearance, defaulting to the OS.
+    #[must_use]
+    pub fn appearance(&self) -> Appearance {
+        Appearance::from_code(&self.appearance)
+    }
+
     /// The export folder to use.
     #[must_use]
     pub fn export_dir(&self) -> PathBuf {
@@ -258,9 +321,17 @@ mod tests {
             }],
             report_profile_name: "Submission".into(),
             language: "ja".into(),
+            appearance: "dark".into(),
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);
+        assert_eq!(s.appearance(), Appearance::Dark);
+        assert_eq!(Settings::default().appearance(), Appearance::System);
+        for a in [Appearance::System, Appearance::Light, Appearance::Dark] {
+            assert_eq!(Appearance::from_code(a.code()), a);
+            assert_eq!(Appearance::from_index(a.index()), a);
+        }
+        assert_eq!(Appearance::from_code("sepia"), Appearance::System);
         std::fs::write(&path, "{ not json").expect("write");
         assert_eq!(Settings::load(&path), Settings::default());
         // Unknown fields from a newer app are ignored, missing ones default.
