@@ -594,8 +594,8 @@ msgstr "⟦Párt óf góáls␣␣⟧"
 msgid "Password"
 msgstr "⟦Pásswórd␣␣⟧"
 
-msgid "Plain text. Ctrl+Enter saves, Escape cancels."
-msgstr "⟦Pláín téxt. Ctrl+Éntér sávés, Éscápé cáncéls.␣␣⟧"
+msgid "Plain text. {0} saves, Escape cancels."
+msgstr "⟦Pláín téxt. {0} sávés, Éscápé cáncéls.␣␣⟧"
 
 msgid "Preview"
 msgstr "⟦Prévíéw␣␣⟧"

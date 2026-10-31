@@ -25,12 +25,28 @@ pub struct Shortcut {
     pub group: &'static str,
     /// Modifiers and one key, in Slint's `Keys::from_parts` spelling.
     pub parts: &'static [&'static str],
+    /// A different spelling off macOS, where the platform convention differs
+    /// (Redo is Ctrl+Y on Windows and Linux, which already worked).
+    pub non_mac_parts: Option<&'static [&'static str]>,
     /// Whether the palette offers this as a runnable command. A hint that is
     /// only shown in the cheat sheet (saving a description) is `false`.
     pub in_palette: bool,
 }
 
 impl Shortcut {
+    /// The key parts for a platform.
+    fn parts_for(&self, mac: bool) -> &'static [&'static str] {
+        match (mac, self.non_mac_parts) {
+            (false, Some(parts)) => parts,
+            _ => self.parts,
+        }
+    }
+
+    const fn off_mac(mut self, parts: &'static [&'static str]) -> Self {
+        self.non_mac_parts = Some(parts);
+        self
+    }
+
     const fn new(
         id: &'static str,
         label: &'static str,
@@ -42,6 +58,7 @@ impl Shortcut {
             label,
             group,
             parts,
+            non_mac_parts: None,
             in_palette: true,
         }
     }
@@ -57,27 +74,19 @@ impl Shortcut {
             label,
             group,
             parts,
+            non_mac_parts: None,
             in_palette: false,
         }
     }
 }
 
-/// Modifier symbols on macOS, in the order Apple writes them: Control,
-/// Option, Shift, Command. Slint's `Control` is Command on Apple.
-const MAC_MODIFIERS: [(&str, char); 4] = [
-    ("Meta", '⌃'),
-    ("Alt", '⌥'),
-    ("Shift", '⇧'),
-    ("Control", '⌘'),
-];
+/// Modifier symbols on macOS, in the order Apple writes them: Option,
+/// Shift, Command. Slint's `Control` is Command on Apple.
+const MAC_MODIFIERS: [(&str, char); 3] = [("Alt", '⌥'), ("Shift", '⇧'), ("Control", '⌘')];
 
-/// Modifier names elsewhere, in the same order (Ctrl, Alt, Shift, Super).
-const OTHER_MODIFIERS: [(&str, &str); 4] = [
-    ("Control", "Ctrl"),
-    ("Alt", "Alt"),
-    ("Shift", "Shift"),
-    ("Meta", "Super"),
-];
+/// Modifier names elsewhere, in the same order (Ctrl, Alt, Shift).
+const OTHER_MODIFIERS: [(&str, &str); 3] =
+    [("Control", "Ctrl"), ("Alt", "Alt"), ("Shift", "Shift")];
 
 /// Whether the app runs on macOS (used to choose the key labels).
 #[must_use]
@@ -103,8 +112,8 @@ pub fn keys(s: &Shortcut) -> String {
 
 fn format_label(s: &Shortcut, mac: bool) -> String {
     let mut out = String::new();
-    let key = s
-        .parts
+    let parts = s.parts_for(mac);
+    let key = parts
         .iter()
         .rev()
         .find(|part| !MAC_MODIFIERS.iter().any(|(name, _)| *name == **part))
@@ -112,7 +121,7 @@ fn format_label(s: &Shortcut, mac: bool) -> String {
         .unwrap_or_default();
     if mac {
         for (name, symbol) in MAC_MODIFIERS {
-            if s.parts.contains(&name) {
+            if parts.contains(&name) {
                 out.push(symbol);
             }
         }
@@ -120,7 +129,7 @@ fn format_label(s: &Shortcut, mac: bool) -> String {
     } else {
         let modifiers: Vec<&str> = OTHER_MODIFIERS
             .iter()
-            .filter(|(name, _)| s.parts.contains(name))
+            .filter(|(name, _)| parts.contains(name))
             .map(|(_, label)| *label)
             .collect();
         if !modifiers.is_empty() {
@@ -140,7 +149,7 @@ fn format_label(s: &Shortcut, mac: bool) -> String {
 /// the table test rules out.
 #[must_use]
 pub fn slint_keys(s: &Shortcut) -> Keys {
-    Keys::from_parts(s.parts.iter().copied())
+    Keys::from_parts(s.parts_for(is_mac()).iter().copied())
         .unwrap_or_else(|e| panic!("shortcut {} has invalid parts: {e}", s.id))
 }
 
@@ -150,7 +159,8 @@ pub fn table() -> &'static [Shortcut] {
     const TABLE: [Shortcut; 17] = [
         Shortcut::new("palette", "Command palette", "General", &["Control", "K"]),
         Shortcut::new("undo", "Undo", "Editing", &["Control", "Z"]),
-        Shortcut::new("redo", "Redo", "Editing", &["Control", "Shift", "Z"]),
+        Shortcut::new("redo", "Redo", "Editing", &["Control", "Shift", "Z"])
+            .off_mac(&["Control", "Y"]),
         Shortcut::new(
             "begin-edit",
             "Take the edit lock",
@@ -193,7 +203,6 @@ pub fn table() -> &'static [Shortcut] {
 /// needs. Called from `Controller::attach_with`, so the real app and the
 /// tests get the same bindings.
 pub fn install(window: &AppWindow) {
-    window.set_mac_shortcuts(is_mac());
     window.set_palette_keys(keys_for("palette"));
     window.set_undo_keys(keys_for("undo"));
     window.set_redo_keys(keys_for("redo"));
@@ -211,13 +220,7 @@ pub fn install(window: &AppWindow) {
     window.set_goals_keys(keys_for("goals"));
     window.set_problems_keys(keys_for("problems"));
     window.set_item_keys(keys_for("item"));
-    window.set_save_description_hint(
-        format!(
-            "Plain text. {} saves, Escape cancels.",
-            keys_for_label("save-description")
-        )
-        .into(),
-    );
+    window.set_save_description_label(keys_for_label("save-description").into());
 }
 
 /// The platform-spelled label of a shortcut from the table.
@@ -352,7 +355,8 @@ mod tests {
             }
             assert!(label.starts_with("Ctrl+"), "{}: {label}", s.id);
         }
-        assert_eq!(format_label(&table()[2], false), "Ctrl+Shift+Z");
+        assert_eq!(format_label(&table()[2], false), "Ctrl+Y");
+        assert_eq!(format_label(&table()[2], true), "⇧⌘Z");
     }
 
     #[test]

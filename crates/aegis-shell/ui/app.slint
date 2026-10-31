@@ -221,10 +221,9 @@ export component AppWindow inherits Window {
 
     // ---- platform fidelity (job 113, D25, UI-07) ----
     // True on macOS; lets the UI spell a modifier the Apple way.
-    in property <bool> mac-shortcuts: false;
     // A platform-spelled hint for the description editor, built from the one
     // shortcut table in Rust (shortcuts.rs) so no .slint file names a key.
-    in property <string> save-description-hint;
+    in property <string> save-description-label;
     // The single shortcut table in Rust (shortcuts.rs) drives every menu
     // accelerator, so a shortcut is written once (UI-07.6).
     in property <keys> palette-keys;
@@ -2796,7 +2795,7 @@ export component AppWindow inherits Window {
                     spacing: 10px;
                     Text { text: root.description-title; font-size: 18px; font-weight: 700; color: Theme.ink; }
                     Text {
-                        text: root.save-description-hint;
+                        text: @tr("Plain text. {0} saves, Escape cancels.", root.save-description-label);
                         color: Theme.graphite;
                         font-size: 12px;
                         wrap: word-wrap;

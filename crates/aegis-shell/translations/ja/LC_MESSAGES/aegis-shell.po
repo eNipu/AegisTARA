@@ -594,8 +594,8 @@ msgstr "目標の一部"
 msgid "Password"
 msgstr "パスワード"
 
-msgid "Plain text. Ctrl+Enter saves, Escape cancels."
-msgstr "プレーンテキスト。Ctrl+Enter で保存、Escape でキャンセル。"
+msgid "Plain text. {0} saves, Escape cancels."
+msgstr "プレーンテキスト。{0} で保存、Escape でキャンセル。"
 
 msgid "Preview"
 msgstr "プレビュー"
