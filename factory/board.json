@@ -1100,6 +1100,24 @@
       "decision": "APPROVE",
       "updated_at": "2026-10-31T23:52:30Z",
       "notes": "Round 3: real-key test for typing undo (UI-10.4); undo scrolls the row into view on every list (UI-10.5, Table fix). All reviews PASS, built directly on master. Follow-ups for a person: macOS native-menu check of typing undo, VoiceOver/NVDA check of the toast."
+    },
+    {
+      "id": "114-modeless-create",
+      "title": "Modeless creation: draft in the inspector (UI-08)",
+      "stage": "build",
+      "worktree": null,
+      "branch": "master",
+      "round": 1,
+      "reviews": {
+        "security": "pending",
+        "ux": "pending",
+        "ui": "pending",
+        "code": "pending"
+      },
+      "history": [],
+      "decision": null,
+      "updated_at": "2026-10-31T23:55:56Z",
+      "notes": "Spec written 2026-11-01 with the build-versus-reuse table (no new dependencies). Building directly on master in slices S1 to S5."
     }
   ],
   "updated_at": "2026-10-31T09:50:51Z"
