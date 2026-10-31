@@ -241,6 +241,17 @@ compose stack.
       keeps the edits, and saves them when the network is back.
 - [ ] **Accessibility:** focus order, visible focus, contrast, text size;
       the canvas has no screen reader path yet (known gap G14).
+- [ ] **Dialogs and undo (UI-10, UI-12):** a removal or unlink happens at once
+      and shows a toast with Undo; Undo and Redo are icon buttons at the left of
+      the top bar whose tooltip names the action and the shortcut ("Undo remove
+      asset 'Brake ECU' (⌘Z)"); a confirmation dialog exists only for what Undo
+      cannot reverse (delete project, break another user's lock, reset or change
+      a password, end sessions, import that replaces data); a dialog names the
+      thing in its title, its main button says the action (not "Yes"), a
+      destructive main button is red and not the Enter default, Escape cancels;
+      errors never open a dialog (field error inline, action error as a sticky
+      toast). A new dialog is added to `crates/aegis-shell/tests/dialogs.rs`
+      with a reason.
 
 ---
 

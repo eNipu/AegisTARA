@@ -1151,3 +1151,54 @@ msgstr "⟦Líght␣␣⟧"
 
 msgid "Dark"
 msgstr "⟦Dárk␣␣⟧"
+
+msgid "Nothing to undo"
+msgstr "⟦Nóthíng tó úndó␣␣␣⟧"
+
+msgid "Nothing to redo"
+msgstr "⟦Nóthíng tó rédó␣␣␣⟧"
+
+msgid "Read only"
+msgstr "⟦Réád ónly␣␣⟧"
+
+msgid "Undo {} ({})"
+msgstr "⟦Úndó {} ({})␣␣␣⟧"
+
+msgid "Redo {} ({})"
+msgstr "⟦Rédó {} ({})␣␣␣⟧"
+
+msgid "Undo {}"
+msgstr "⟦Úndó {}␣␣⟧"
+
+msgid "Redo {}"
+msgstr "⟦Rédó {}␣␣⟧"
+
+msgid "Delete project '{}'?"
+msgstr "⟦Délété prójéct '{}'?␣␣␣␣␣⟧"
+
+msgid "Break the edit lock?"
+msgstr "⟦Bréák thé édít lóck?␣␣␣␣␣⟧"
+
+msgid "End this session?"
+msgstr "⟦Énd thís séssíón?␣␣␣␣⟧"
+
+msgid "Delete this user?"
+msgstr "⟦Délété thís úsér?␣␣␣␣⟧"
+
+msgid "Turn password login off?"
+msgstr "⟦Túrn pásswórd lógín óff?␣␣␣␣␣␣⟧"
+
+msgid "Log out?"
+msgstr "⟦Lóg óút?␣␣⟧"
+
+msgid "Break lock"
+msgstr "⟦Bréák lóck␣␣⟧"
+
+msgid "End session"
+msgstr "⟦Énd séssíón␣␣⟧"
+
+msgid "Delete user"
+msgstr "⟦Délété úsér␣␣⟧"
+
+msgid "Turn off"
+msgstr "⟦Túrn óff␣␣⟧"

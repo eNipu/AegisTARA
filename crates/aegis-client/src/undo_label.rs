@@ -1,0 +1,367 @@
+//! Short sentences that name an edit and its element, for the Undo/Redo
+//! tooltip, the Edit menu and the toasts (UI-10.2, UI-10.5, UI-10.9,
+//! UI-10.10). Built here, in the client core, from the ops and the project
+//! as it was before them. Element names appear only in these user-facing
+//! strings, never in logs.
+
+use aegis_model::{ElementRef, Op, Project};
+
+use crate::view::Selection;
+
+/// Longest element name shown in a sentence, in chars.
+const MAX_NAME_CHARS: usize = 40;
+
+/// What an edit did, to what, and how many other things it touched.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Label {
+    verb: &'static str,
+    noun: &'static str,
+    name: Option<String>,
+    /// Other ops of the same edit (unlinks, cleared text, ...).
+    others: usize,
+    /// How many threat scenarios the edit unlinked a damage scenario from.
+    unlinked: usize,
+    /// The element the edit is about, to show after an undo or redo.
+    target: Option<Selection>,
+}
+
+impl Label {
+    /// The element to open and select after undoing or redoing this edit
+    /// (UI-10.5), if it exists in `project` now: undoing an addition leaves
+    /// nothing to show.
+    #[must_use]
+    pub fn selection(&self, project: &Project) -> Option<Selection> {
+        let sel = self.target?;
+        let exists = match sel {
+            Selection::Asset(id) => project.asset_idx(&id).is_some(),
+            Selection::Damage(id) => project.damage_scenario_idx(&id).is_some(),
+            Selection::Threat(id) => project.threat_scenario_idx(&id).is_some(),
+            Selection::Tree(id) | Selection::TreeNode(id, _) => {
+                project.attack_tree_idx(&id).is_some()
+            }
+            Selection::Control(id) => project.security_control_idx(&id).is_some(),
+            Selection::Goal(id) => project.cybersecurity_goal_idx(&id).is_some(),
+            Selection::Claim(id) => project.cybersecurity_claim_idx(&id).is_some(),
+            Selection::Component(id) => project.component_idx(&id).is_some(),
+            Selection::Interface(id) => project.interface_idx(&id).is_some(),
+            Selection::DataFlow(id) => project.data_flow_idx(&id).is_some(),
+            Selection::TrustBoundary(id) => project.trust_boundary_idx(&id).is_some(),
+        };
+        exists.then_some(sel)
+    }
+
+    /// Whether the edit took something away: a removal or an unlink. These
+    /// are the edits that get an undo toast instead of a confirmation.
+    #[must_use]
+    pub fn is_removal(&self) -> bool {
+        matches!(self.verb, "remove" | "unlink")
+    }
+
+    /// "remove asset 'Brake ECU'", for "Undo …" / "Redo …".
+    #[must_use]
+    pub fn imperative(&self) -> String {
+        format!("{}{}", self.what(), self.extra())
+    }
+
+    /// "Asset 'Brake ECU' removed", for the toast after a removal.
+    #[must_use]
+    pub fn past(&self) -> String {
+        let past = match self.verb {
+            "add" => "added",
+            "remove" => "removed",
+            "rename" => "renamed",
+            "unlink" => "unlinked",
+            "rate" => "rated",
+            _ => "changed",
+        };
+        let noun = match self.noun.split_at_checked(1) {
+            Some((first, rest)) => format!("{}{rest}", first.to_uppercase()),
+            None => self.noun.to_owned(),
+        };
+        match &self.name {
+            Some(n) => format!("{noun} '{}' {past}{}", shorten(n), self.extra()),
+            None => format!("{noun} {past}{}", self.extra()),
+        }
+    }
+
+    fn what(&self) -> String {
+        match &self.name {
+            Some(n) => format!("{} {} '{}'", self.verb, self.noun, shorten(n)),
+            None => format!("{} {}", self.verb, self.noun),
+        }
+    }
+
+    /// UI-10.10: one line saying what else the edit changed.
+    fn extra(&self) -> String {
+        match (self.unlinked, self.others) {
+            (0, 0) => String::new(),
+            (0, n) => format!(" and {n} other change{}", plural(n)),
+            (n, _) => format!(" and unlinked from {n} threat scenario{}", plural(n)),
+        }
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+fn shorten(name: &str) -> String {
+    if name.chars().count() <= MAX_NAME_CHARS {
+        name.to_owned()
+    } else {
+        let head: String = name.chars().take(MAX_NAME_CHARS).collect();
+        format!("{head}\u{2026}")
+    }
+}
+
+/// Describes `ops`, one user edit, against `project` as it is before them.
+#[must_use]
+pub fn describe(ops: &[Op], project: &Project) -> Label {
+    let parts: Vec<_> = ops.iter().map(|op| parts(op, project)).collect();
+    // The edit is named after its removal, else its first addition, else its
+    // first op: removing a damage scenario is "remove damage scenario", not
+    // the unlinks that come first.
+    let main = parts
+        .iter()
+        .rposition(|p| p.0 == "remove")
+        .or_else(|| parts.iter().position(|p| p.0 == "add"))
+        .unwrap_or(0);
+    let (verb, noun, name) = parts
+        .get(main)
+        .cloned()
+        .unwrap_or(("change", "project", None));
+    let unlinked = if verb == "remove" {
+        ops.iter()
+            .filter(|op| matches!(op, Op::UnlinkDamage { .. }))
+            .count()
+    } else {
+        0
+    };
+    Label {
+        verb,
+        noun,
+        name,
+        others: ops.len().saturating_sub(1),
+        unlinked,
+        target: ops.get(main).and_then(target_of),
+    }
+}
+
+/// The element an op is about.
+fn target_of(op: &Op) -> Option<Selection> {
+    Some(match op {
+        Op::AddAsset { id, .. }
+        | Op::RenameAsset { id, .. }
+        | Op::SetAssetProperties { id, .. }
+        | Op::RemoveAsset { id } => Selection::Asset(*id),
+        Op::SetAssetComponent { asset, .. } => Selection::Asset(*asset),
+        Op::AddDamageScenario { id, .. }
+        | Op::RenameDamageScenario { id, .. }
+        | Op::SetImpact { id, .. }
+        | Op::RemoveDamageScenario { id } => Selection::Damage(*id),
+        Op::AddThreatScenario { id, .. }
+        | Op::RenameThreatScenario { id, .. }
+        | Op::SetThreatCategory { id, .. }
+        | Op::RemoveThreatScenario { id } => Selection::Threat(*id),
+        Op::AddCatalogRef { threat, .. }
+        | Op::RemoveCatalogRef { threat, .. }
+        | Op::LinkDamage { threat, .. }
+        | Op::UnlinkDamage { threat, .. }
+        | Op::SetThreatFeasibility { threat, .. }
+        | Op::SetThreatAttackTree { threat, .. }
+        | Op::SetRiskTreatment { threat, .. }
+        | Op::SetThreatGoal { threat, .. }
+        | Op::SetThreatClaim { threat, .. } => Selection::Threat(*threat),
+        Op::AddAttackTree { id, .. } | Op::RemoveAttackTree { id } => Selection::Tree(*id),
+        Op::RemoveTreeNode { tree, .. } => Selection::Tree(*tree),
+        Op::AddTreeNode { tree, id: node, .. }
+        | Op::RenameTreeNode { tree, id: node, .. }
+        | Op::SetTreeNodeGate { tree, id: node, .. }
+        | Op::SetStepFeasibility { tree, node, .. }
+        | Op::SetStepFactor { tree, node, .. }
+        | Op::SetStepMitigation { tree, node, .. }
+        | Op::SetReviewMark { tree, node, .. }
+        | Op::LinkTreeNode {
+            tree, child: node, ..
+        }
+        | Op::UnlinkTreeNode {
+            tree, child: node, ..
+        } => Selection::TreeNode(*tree, *node),
+        Op::AddSecurityControl { id, .. }
+        | Op::RenameSecurityControl { id, .. }
+        | Op::RemoveSecurityControl { id } => Selection::Control(*id),
+        Op::AddCybersecurityGoal { id, .. }
+        | Op::RenameCybersecurityGoal { id, .. }
+        | Op::RemoveCybersecurityGoal { id } => Selection::Goal(*id),
+        Op::LinkGoalControl { goal, .. } | Op::UnlinkGoalControl { goal, .. } => {
+            Selection::Goal(*goal)
+        }
+        Op::AddCybersecurityClaim { id, .. }
+        | Op::RenameCybersecurityClaim { id, .. }
+        | Op::RemoveCybersecurityClaim { id } => Selection::Claim(*id),
+        Op::AddComponent { id, .. }
+        | Op::RenameComponent { id, .. }
+        | Op::SetComponentParent { id, .. }
+        | Op::RemoveComponent { id } => Selection::Component(*id),
+        Op::AddInterface { id, .. }
+        | Op::RenameInterface { id, .. }
+        | Op::SetInterfaceKind { id, .. }
+        | Op::RemoveInterface { id } => Selection::Interface(*id),
+        Op::AddDataFlow { id, .. }
+        | Op::RenameDataFlow { id, .. }
+        | Op::SetDataFlowInterface { id, .. }
+        | Op::RemoveDataFlow { id } => Selection::DataFlow(*id),
+        Op::AddTrustBoundary { id, .. }
+        | Op::RenameTrustBoundary { id, .. }
+        | Op::RemoveTrustBoundary { id } => Selection::TrustBoundary(*id),
+        Op::AddBoundaryComponent { boundary, .. }
+        | Op::RemoveBoundaryComponent { boundary, .. } => Selection::TrustBoundary(*boundary),
+        Op::SetDescription { target, .. } | Op::SetDescriptionTranslation { target, .. } => {
+            match target {
+                ElementRef::Asset(id) => Selection::Asset(*id),
+                ElementRef::Damage(id) => Selection::Damage(*id),
+                ElementRef::Threat(id) => Selection::Threat(*id),
+                ElementRef::Tree(id) => Selection::Tree(*id),
+                ElementRef::Control(id) => Selection::Control(*id),
+                ElementRef::Goal(id) => Selection::Goal(*id),
+                ElementRef::Claim(id) => Selection::Claim(*id),
+                ElementRef::Component(id) => Selection::Component(*id),
+                ElementRef::Interface(id) => Selection::Interface(*id),
+                ElementRef::DataFlow(id) => Selection::DataFlow(*id),
+                ElementRef::TrustBoundary(id) => Selection::TrustBoundary(*id),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    })
+}
+
+type Parts = (&'static str, &'static str, Option<String>);
+
+/// (verb, noun, element name) of one op.
+fn parts(op: &Op, p: &Project) -> Parts {
+    let asset = |id: &_| name_of(p, &ElementRef::Asset(*id));
+    let damage = |id: &_| name_of(p, &ElementRef::Damage(*id));
+    let threat = |id: &_| name_of(p, &ElementRef::Threat(*id));
+    let control = |id: &_| name_of(p, &ElementRef::Control(*id));
+    let goal = |id: &_| name_of(p, &ElementRef::Goal(*id));
+    let claim = |id: &_| name_of(p, &ElementRef::Claim(*id));
+    let component = |id: &_| name_of(p, &ElementRef::Component(*id));
+    let interface = |id: &_| name_of(p, &ElementRef::Interface(*id));
+    let flow = |id: &_| name_of(p, &ElementRef::DataFlow(*id));
+    let boundary = |id: &_| name_of(p, &ElementRef::TrustBoundary(*id));
+    let some = |n: &str| Some(n.to_owned());
+    match op {
+        Op::AddAsset { name, .. } => ("add", "asset", some(name)),
+        Op::RenameAsset { id, .. } => ("rename", "asset", asset(id)),
+        Op::SetAssetProperties { id, .. } => ("change", "asset properties of", asset(id)),
+        Op::SetAssetComponent { asset: a, .. } => ("change", "component of asset", asset(a)),
+        Op::RemoveAsset { id } => ("remove", "asset", asset(id)),
+
+        Op::AddDamageScenario { name, .. } => ("add", "damage scenario", some(name)),
+        Op::RenameDamageScenario { id, .. } => ("rename", "damage scenario", damage(id)),
+        Op::SetImpact { id, .. } => ("rate", "damage scenario", damage(id)),
+        Op::RemoveDamageScenario { id } => ("remove", "damage scenario", damage(id)),
+
+        Op::AddThreatScenario { name, .. } => ("add", "threat scenario", some(name)),
+        Op::RenameThreatScenario { id, .. } => ("rename", "threat scenario", threat(id)),
+        Op::SetThreatCategory { id, .. } => ("change", "category of threat scenario", threat(id)),
+        Op::AddCatalogRef { threat: t, .. } => {
+            ("change", "catalog references of threat scenario", threat(t))
+        }
+        Op::RemoveCatalogRef { threat: t, .. } => {
+            ("change", "catalog references of threat scenario", threat(t))
+        }
+        Op::LinkDamage { threat: t, .. } => {
+            ("change", "damage links of threat scenario", threat(t))
+        }
+        Op::UnlinkDamage { threat: t, .. } => {
+            ("unlink", "damage link on threat scenario", threat(t))
+        }
+        Op::SetThreatFeasibility { threat: t, .. } => ("rate", "threat scenario", threat(t)),
+        Op::SetThreatAttackTree { threat: t, .. } => {
+            ("change", "attack tree of threat scenario", threat(t))
+        }
+        Op::SetRiskTreatment { threat: t, .. } => {
+            ("change", "risk treatment of threat scenario", threat(t))
+        }
+        Op::SetThreatGoal { threat: t, .. } => ("change", "goal of threat scenario", threat(t)),
+        Op::SetThreatClaim { threat: t, .. } => ("change", "claim of threat scenario", threat(t)),
+        Op::RemoveThreatScenario { id } => ("remove", "threat scenario", threat(id)),
+
+        Op::AddAttackTree { .. } => ("add", "attack tree", None),
+        Op::RemoveAttackTree { .. } => ("remove", "attack tree", None),
+        Op::AddTreeNode { node, .. } => ("add", "attack tree node", some(node.label())),
+        Op::RemoveTreeNode { .. } => ("remove", "attack tree node", None),
+        Op::UnlinkTreeNode { .. } => ("unlink", "attack tree node", None),
+        Op::RenameTreeNode { .. } => ("rename", "attack tree node", None),
+        Op::LinkTreeNode { .. }
+        | Op::SetTreeNodeGate { .. }
+        | Op::SetReviewMark { .. }
+        | Op::SetStepFeasibility { .. }
+        | Op::SetStepFactor { .. }
+        | Op::SetStepMitigation { .. } => ("change", "attack tree", None),
+
+        Op::AddSecurityControl { name, .. } => ("add", "security control", some(name)),
+        Op::RenameSecurityControl { id, .. } => ("rename", "security control", control(id)),
+        Op::RemoveSecurityControl { id } => ("remove", "security control", control(id)),
+        Op::AddCybersecurityGoal { name, .. } => ("add", "cybersecurity goal", some(name)),
+        Op::RenameCybersecurityGoal { id, .. } => ("rename", "cybersecurity goal", goal(id)),
+        Op::LinkGoalControl { goal: g, .. } => {
+            ("change", "controls of cybersecurity goal", goal(g))
+        }
+        Op::UnlinkGoalControl { goal: g, .. } => {
+            ("unlink", "control from cybersecurity goal", goal(g))
+        }
+        Op::RemoveCybersecurityGoal { id } => ("remove", "cybersecurity goal", goal(id)),
+        Op::AddCybersecurityClaim { name, .. } => ("add", "cybersecurity claim", some(name)),
+        Op::RenameCybersecurityClaim { id, .. } => ("rename", "cybersecurity claim", claim(id)),
+        Op::RemoveCybersecurityClaim { id } => ("remove", "cybersecurity claim", claim(id)),
+
+        Op::AddComponent { name, .. } => ("add", "component", some(name)),
+        Op::RenameComponent { id, .. } => ("rename", "component", component(id)),
+        Op::SetComponentParent { id, .. } => ("change", "parent of component", component(id)),
+        Op::RemoveComponent { id } => ("remove", "component", component(id)),
+        Op::AddInterface { name, .. } => ("add", "interface", some(name)),
+        Op::RenameInterface { id, .. } => ("rename", "interface", interface(id)),
+        Op::SetInterfaceKind { id, .. } => ("change", "kind of interface", interface(id)),
+        Op::RemoveInterface { id } => ("remove", "interface", interface(id)),
+        Op::AddDataFlow { name, .. } => ("add", "data flow", some(name)),
+        Op::RenameDataFlow { id, .. } => ("rename", "data flow", flow(id)),
+        Op::SetDataFlowInterface { id, .. } => ("change", "interface of data flow", flow(id)),
+        Op::RemoveDataFlow { id } => ("remove", "data flow", flow(id)),
+        Op::AddTrustBoundary { name, .. } => ("add", "trust boundary", some(name)),
+        Op::RenameTrustBoundary { id, .. } => ("rename", "trust boundary", boundary(id)),
+        Op::AddBoundaryComponent { boundary: b, .. }
+        | Op::RemoveBoundaryComponent { boundary: b, .. } => {
+            ("change", "components of trust boundary", boundary(b))
+        }
+        Op::RemoveTrustBoundary { id } => ("remove", "trust boundary", boundary(id)),
+
+        Op::SetDescription { target, .. } => ("change", "description of", name_of(p, target)),
+        Op::SetDescriptionTranslation { target, .. } => {
+            ("change", "description translation of", name_of(p, target))
+        }
+        _ => ("change", "project", None),
+    }
+}
+
+/// The name of an element, if it exists.
+fn name_of(p: &Project, e: &ElementRef) -> Option<String> {
+    let name = match e {
+        ElementRef::Asset(id) => p.asset(p.asset_idx(id)?)?.name(),
+        ElementRef::Damage(id) => p.damage_scenario(p.damage_scenario_idx(id)?)?.name(),
+        ElementRef::Threat(id) => p.threat_scenario(p.threat_scenario_idx(id)?)?.name(),
+        ElementRef::Control(id) => p.security_control(p.security_control_idx(id)?)?.name(),
+        ElementRef::Goal(id) => p.cybersecurity_goal(p.cybersecurity_goal_idx(id)?)?.name(),
+        ElementRef::Claim(id) => p
+            .cybersecurity_claim(p.cybersecurity_claim_idx(id)?)?
+            .name(),
+        ElementRef::Component(id) => p.component(p.component_idx(id)?)?.name(),
+        ElementRef::Interface(id) => p.interface(p.interface_idx(id)?)?.name(),
+        ElementRef::DataFlow(id) => p.data_flow(p.data_flow_idx(id)?)?.name(),
+        ElementRef::TrustBoundary(id) => p.trust_boundary(p.trust_boundary_idx(id)?)?.name(),
+        _ => return None,
+    };
+    Some(name.to_owned())
+}

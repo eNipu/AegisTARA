@@ -198,6 +198,15 @@ pub enum Severity {
     Error,
 }
 
+/// The button on a toast: undo or redo what it reports (UI-10.5, UI-10.9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeAction {
+    /// "Undo".
+    Undo,
+    /// "Redo".
+    Redo,
+}
+
 /// A message for the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notice {
@@ -207,6 +216,8 @@ pub struct Notice {
     pub severity: Severity,
     /// The text.
     pub text: String,
+    /// A button that undoes or redoes what the text reports.
+    pub action: Option<NoticeAction>,
 }
 
 /// The data of the page on screen. Only the fields of that page are
@@ -385,6 +396,10 @@ pub struct ProjectView {
     pub can_undo: bool,
     /// Whether redo is possible.
     pub can_redo: bool,
+    /// What undo would undo, as "remove asset 'Brake ECU'" (UI-10.2).
+    pub undo_label: Option<String>,
+    /// What redo would redo.
+    pub redo_label: Option<String>,
     /// Whether the residual evaluation is shown.
     pub show_residual: bool,
     /// The description boxes of the page on screen (see

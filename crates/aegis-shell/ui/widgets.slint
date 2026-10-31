@@ -50,6 +50,8 @@ export struct NoticeItem {
     // 0 info, 1 warning, 2 error
     severity: int,
     text: string,
+    // 0 none, 1 Undo, 2 Redo
+    action: int,
 }
 
 // A related entity: a click leads to it.
@@ -137,6 +139,61 @@ export component Table inherits VerticalLayout {
     }
     changed selected => { tv.set-current-row(root.selected); }
     init => { tv.set-current-row(root.selected); }
+}
+
+// The main button of a confirmation that cannot be undone (UI-12): red, so it
+// is not mistaken for a safe default. It is not focused first, so Enter does
+// not trigger it unless the user has moved focus to it.
+export component DangerButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    min-width: 96px;
+    height: 32px;
+    border-radius: 4px;
+    background: ta.has-hover || fs.has-focus ? #8F1D17 : #B3261E;
+    border-width: fs.has-focus ? 2px : 0px;
+    border-color: Theme.ink;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; }
+            reject
+        }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    Text {
+        text: root.text;
+        color: #FFFFFF;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A field error: next to the field, in the error colour with an icon, never in a
+// dialog (UI-10.11). The icon means the message does not rely on colour alone.
+export component FieldError inherits HorizontalLayout {
+    in property <string> text;
+    spacing: 6px;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    Image {
+        source: @image-url("icons/circle-alert.svg");
+        width: 14px;
+        height: 14px;
+        y: 1px;
+        colorize: Theme.high;
+    }
+    Text {
+        text: root.text;
+        color: Theme.high;
+        font-size: 12px;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+    }
 }
 
 export component SectionTitle inherits Text {

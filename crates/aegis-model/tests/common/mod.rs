@@ -1664,6 +1664,20 @@ pub fn describe(p: &Project) -> Vec<String> {
 // Ops over the second methodology.
 // ---------------------------------------------------------------------------
 
+thread_local! {
+    /// When `Some`, [`second_every_op`] pushes every op it applies.
+    static RECORDED: std::cell::RefCell<Option<Vec<Op>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The accepted ops of [`second_every_op`], in order. Applied to an empty
+/// project over `m`, they succeed and cover every `Op` variant, so other
+/// crates can replay them (job 116, UI-10.6).
+pub fn record_every_op(m: Arc<Methodology>) -> Vec<Op> {
+    RECORDED.with(|r| *r.borrow_mut() = Some(Vec::new()));
+    second_every_op(m);
+    RECORDED.with(|r| r.borrow_mut().take().unwrap_or_default())
+}
+
 /// Applies every `Op` variant over `m`, which must be the second
 /// methodology (built from `second_def()` or loaded from its pack), checks
 /// the resulting state, and tears the project down again (AC7 of job 009,
@@ -1671,7 +1685,14 @@ pub fn describe(p: &Project) -> Vec<String> {
 pub fn second_every_op(m: Arc<Methodology>) {
     fn ok(p: &mut Project, op: Op) -> Op {
         match p.apply(op.clone()) {
-            Ok(inverse) => inverse,
+            Ok(inverse) => {
+                RECORDED.with(|r| {
+                    if let Some(ops) = r.borrow_mut().as_mut() {
+                        ops.push(op.clone());
+                    }
+                });
+                inverse
+            }
             Err(e) => panic!("{op:?} failed: {e}"),
         }
     }

@@ -11,7 +11,7 @@ import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, Table, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
-    LinkList, CheckList, Tile, Bars
+    LinkList, CheckList, Tile, Bars, FieldError, DangerButton
 } from "widgets.slint";
 
 export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
@@ -42,12 +42,22 @@ component Field inherits VerticalLayout {
     @children
 }
 
+// True while a text field that has a saved value has focus and its text differs
+// from that value. The Undo and Redo menu items stand aside then, so the platform
+// undo shortcut reaches the field and undoes its own typing; otherwise it undoes
+// the last project change (UI-10.4). Saving the field is one project undo step.
+global Typing {
+    in-out property <bool> dirty;
+}
+
 // The rename row of a details panel.
 component NameEditor inherits HorizontalLayout {
     in property <string> name;
     in property <bool> editable;
     callback renamed(string);
+    property <bool> typing: edit.has-focus && edit.text != root.name;
     spacing: 6px;
+    changed typing => { Typing.dirty = root.typing; }
     edit := LineEdit {
         horizontal-stretch: 1;
         text: root.name;
@@ -146,6 +156,10 @@ export component AppWindow inherits Window {
             : root.appearance == 2 ? ColorScheme.dark : ColorScheme.unknown;
     }
 
+    // A field that goes away while it has focus cannot say it is clean again.
+    changed page => { Typing.dirty = false; }
+    changed in-project => { Typing.dirty = false; }
+
     // Side panels follow the window: full size on a big window, narrower on a
     // small one, so a page never pushes its detail panel off the screen
     // (checked at the smallest window, 980 x 600, by tests/small_windows.rs).
@@ -215,6 +229,9 @@ export component AppWindow inherits Window {
     in property <string> numbers-text;
     in property <bool> can-undo;
     in property <bool> can-redo;
+// What Undo / Redo would do, "remove asset 'Brake ECU'" (UI-10.2); empty if nothing.
+in property <string> undo-label;
+in property <string> redo-label;
     // Platform-spelled shortcut labels for the Undo/Redo tooltips (UI-10.2).
     in property <string> undo-shortcut;
     in property <string> redo-shortcut;
@@ -740,9 +757,28 @@ export component AppWindow inherits Window {
     public function confirm(kind: string, text: string) {
         root.confirm-kind = kind;
         root.confirm-text = text;
-        root.confirm-title = "";
-        root.confirm-action = "Yes";
+        root.confirm-title = root.confirm-title-for(kind);
+        root.confirm-action = root.confirm-action-for(kind);
         root.confirm-open = true;
+    }
+
+    // UI-12: a dialog names the thing in its title, and its main button says
+    // the action, never "Yes" or "OK".
+    pure function confirm-title-for(kind: string) -> string {
+        if (kind == "delete-project") { return @tr("Delete project '{}'?", root.project-name); }
+        if (kind == "break-lock") { return @tr("Break the edit lock?"); }
+        if (kind == "revoke-session") { return @tr("End this session?"); }
+        if (kind == "delete-user") { return @tr("Delete this user?"); }
+        if (kind == "password-login-off") { return @tr("Turn password login off?"); }
+        return @tr("Log out?");
+    }
+    pure function confirm-action-for(kind: string) -> string {
+        if (kind == "delete-project") { return @tr("Delete project"); }
+        if (kind == "break-lock") { return @tr("Break lock"); }
+        if (kind == "revoke-session") { return @tr("End session"); }
+        if (kind == "delete-user") { return @tr("Delete user"); }
+        if (kind == "password-login-off") { return @tr("Turn off"); }
+        return @tr("Log out");
     }
 
     public function confirm-named(kind: string, title: string, text: string, action: string) {
@@ -782,20 +818,20 @@ export component AppWindow inherits Window {
         if (kind == "reset-password") { root.reset-user-password(text); }
     }
 
+    // The Undo / Redo tooltip: the action and the shortcut, or why it is off (UI-10.2).
+    pure function undo-tip() -> string {
+        if (!root.editing) { return @tr("Read only") + ": " + root.band-text; }
+        if (!root.can-undo) { return @tr("Nothing to undo"); }
+        return @tr("Undo {} ({})", root.undo-label, root.undo-shortcut);
+    }
+    pure function redo-tip() -> string {
+        if (!root.editing) { return @tr("Read only") + ": " + root.band-text; }
+        if (!root.can-redo) { return @tr("Nothing to redo"); }
+        return @tr("Redo {} ({})", root.redo-label, root.redo-shortcut);
+    }
+
     function confirm-done(kind: string) {
         root.confirm-open = false;
-        if (kind == "remove-component") { root.remove-component(); }
-        if (kind == "remove-interface") { root.remove-interface(); }
-        if (kind == "remove-data-flow") { root.remove-data-flow(); }
-        if (kind == "remove-trust-boundary") { root.remove-trust-boundary(); }
-        if (kind == "remove-asset") { root.remove-asset(); }
-        if (kind == "remove-damage") { root.remove-damage(); }
-        if (kind == "remove-threat") { root.remove-threat(); }
-        if (kind == "remove-tree") { root.remove-tree(); }
-        if (kind == "remove-tree-node") { root.remove-tree-node(); }
-        if (kind == "remove-control") { root.remove-control(); }
-        if (kind == "remove-goal") { root.remove-goal(); }
-        if (kind == "remove-claim") { root.remove-claim(); }
         if (kind == "delete-user") { root.delete-user(); }
         if (kind == "revoke-session") { root.revoke-session(); }
         if (kind == "remove-member") { root.remove-membership(); }
@@ -832,8 +868,8 @@ export component AppWindow inherits Window {
         }
         Menu {
             title: @tr("Edit");
-            MenuItem { title: @tr("Undo"); icon: @image-url("icons/undo-2.svg"); shortcut: root.undo-keys; enabled: root.in-project && root.editing && root.can-undo; activated => { root.undo(); } }
-            MenuItem { title: @tr("Redo"); icon: @image-url("icons/redo-2.svg"); shortcut: root.redo-keys; enabled: root.in-project && root.editing && root.can-redo; activated => { root.redo(); } }
+            MenuItem { title: (root.can-undo && root.editing) ? @tr("Undo {}", root.undo-label) : @tr("Undo"); icon: @image-url("icons/undo-2.svg"); shortcut: root.undo-keys; enabled: root.in-project && root.editing && root.can-undo && !Typing.dirty; activated => { root.undo(); } }
+            MenuItem { title: (root.can-redo && root.editing) ? @tr("Redo {}", root.redo-label) : @tr("Redo"); icon: @image-url("icons/redo-2.svg"); shortcut: root.redo-keys; enabled: root.in-project && root.editing && root.can-redo && !Typing.dirty; activated => { root.redo(); } }
             MenuSeparator {}
             MenuItem { title: @tr("Take the edit lock"); icon: @image-url("icons/pencil.svg"); shortcut: root.begin-edit-keys; enabled: root.in-project && root.band-kind == 0; activated => { root.begin-edit(); } }
             MenuItem { title: @tr("Release the edit lock"); icon: @image-url("icons/lock.svg"); enabled: root.in-project && root.editing; activated => { root.end-edit(); } }
@@ -1020,7 +1056,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         CheckBox { text: @tr("Keep me logged in on this computer"); checked <=> root.remember; }
-                        if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
+                        if root.login-error != "": FieldError { text: root.login-error; }
                         HorizontalLayout {
                             spacing: 8px;
                             Button {
@@ -1047,7 +1083,7 @@ export component AppWindow inherits Window {
                     // Company login.
                     if root.connection == 3 && root.login-method == 0: VerticalLayout {
                         spacing: 8px;
-                        if root.login-error != "": Text { text: root.login-error; color: Theme.high; wrap: word-wrap; font-size: 13px; }
+                        if root.login-error != "": FieldError { text: root.login-error; }
                         HorizontalLayout {
                             spacing: 8px;
                             Button { text: @tr("Log in"); primary: true; clicked => { root.log-in(); } }
@@ -1242,20 +1278,20 @@ export component AppWindow inherits Window {
                 Button { text: @tr("Projects"); icon: @image-url("icons/folder-open.svg"); clicked => { root.close-project(); } }
                 Button {
                     icon: @image-url("icons/undo-2.svg");
-                    accessible-label: @tr("Undo");
+                    accessible-label: root.undo-tip();
                     enabled: root.in-project && root.editing && root.can-undo;
                     clicked => { root.undo(); }
                     Tooltip {
-                        Text { text: @tr("Undo") + " (" + root.undo-shortcut + ")"; color: #FFFFFF; font-size: 12px; }
+                        Text { text: root.undo-tip(); color: #FFFFFF; font-size: 12px; }
                     }
                 }
                 Button {
                     icon: @image-url("icons/redo-2.svg");
-                    accessible-label: @tr("Redo");
+                    accessible-label: root.redo-tip();
                     enabled: root.in-project && root.editing && root.can-redo;
                     clicked => { root.redo(); }
                     Tooltip {
-                        Text { text: @tr("Redo") + " (" + root.redo-shortcut + ")"; color: #FFFFFF; font-size: 12px; }
+                        Text { text: root.redo-tip(); color: #FFFFFF; font-size: 12px; }
                     }
                 }
                 Text {
@@ -1463,7 +1499,7 @@ export component AppWindow inherits Window {
                         LinkList { items: root.asset-threats; clicked(i) => { root.asset-threat-clicked(i); } }
                         Text { text: root.asset-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove asset"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-asset", "Remove asset \"" + root.asset-name + "\"?"); } }
+                        Button { text: @tr("Remove asset"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-asset(); } }
                     }
                 }
 
@@ -1502,7 +1538,7 @@ export component AppWindow inherits Window {
                         LinkList { items: root.damage-threats; clicked(i) => { root.damage-threat-clicked(i); } }
                         Text { text: root.damage-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove damage scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-damage", "Remove damage scenario \"" + root.damage-name + "\"? It is unlinked from its threat scenarios."); } }
+                        Button { text: @tr("Remove damage scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-damage(); } }
                     }
                 }
 
@@ -1590,7 +1626,7 @@ export component AppWindow inherits Window {
                             }
                             if root.td-feasibility-text != "": Text { text: @tr("Feasibility the engine uses: ") + root.td-feasibility-text; color: Theme.graphite; font-size: 12px; }
                             Text { text: root.td-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
-                            Button { text: @tr("Remove threat scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-threat", "Remove threat scenario \"" + root.td-name + "\"?"); } }
+                            Button { text: @tr("Remove threat scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-threat(); } }
                         }
                     }
                 }
@@ -1616,7 +1652,7 @@ export component AppWindow inherits Window {
                         if root.has-tree: HorizontalLayout {
                             spacing: 6px;
                             Button { text: @tr("Edit outline"); icon: @image-url("icons/pencil.svg"); enabled: root.editing; clicked => { root.outline-draft = root.outline-text; root.outline-open = true; } }
-                            Button { text: @tr("Delete"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-tree", "Delete this attack tree? Its threat scenarios lose their tree."); } }
+                            Button { text: @tr("Delete"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-tree(); } }
                         }
                         HorizontalLayout {
                             spacing: 6px;
@@ -1902,7 +1938,7 @@ export component AppWindow inherits Window {
                                         Button {
                                             text: @tr("Delete");
                                             icon: @image-url("icons/trash-2.svg");
-                                            clicked => { root.confirm("remove-tree-node", "Delete node \"" + root.inspector-title + "\" and its unshared children?"); }
+                                            clicked => { root.remove-tree-node(); }
                                         }
                                     }
                                 }
@@ -2064,7 +2100,7 @@ export component AppWindow inherits Window {
                         LinkList { items: root.control-goals; clicked(i) => { root.control-goal-clicked(i); } }
                         Text { text: root.control-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove control"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-control", "Remove control \"" + root.control-name + "\"? It is detached from its steps and goals."); } }
+                        Button { text: @tr("Remove control"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-control(); } }
                     }
                 }
 
@@ -2110,7 +2146,7 @@ export component AppWindow inherits Window {
                             CheckList { items: root.goal-controls; editable: root.editing; empty-text: @tr("Add security controls first."); toggled(i, on) => { root.toggle-goal-control(i, on); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
                             LinkList { items: root.goal-threats; clicked(i) => { root.goal-threat-clicked(i); } }
-                            Button { text: @tr("Remove goal"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-goal", "Remove goal \"" + root.goal-name + "\"?"); } }
+                            Button { text: @tr("Remove goal"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-goal(); } }
                         }
                         if root.has-claim: Panel {
                             SectionTitle { text: @tr("Cybersecurity claim") + " · " + root.claim-id; }
@@ -2118,7 +2154,7 @@ export component AppWindow inherits Window {
                             DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
                             LinkList { items: root.claim-threats; clicked(i) => { root.claim-threat-clicked(i); } }
-                            Button { text: @tr("Remove claim"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-claim", "Remove claim \"" + root.claim-name + "\"?"); } }
+                            Button { text: @tr("Remove claim"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-claim(); } }
                         }
                         Rectangle { vertical-stretch: 1; }
                     }
@@ -2410,7 +2446,7 @@ export component AppWindow inherits Window {
                         LinkList { items: root.component-assets; clicked(i) => { root.show-page(Pages.assets); } }
                         Text { text: root.component-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-component", "Remove component \"" + root.component-name + "\"?"); } }
+                        Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-component(); } }
                     }
                     if root.item-tab == 1 && root.has-interface: Panel {
                         width: root.side-width;
@@ -2429,7 +2465,7 @@ export component AppWindow inherits Window {
                         }
                         Text { text: root.interface-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove interface"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-interface", "Remove interface \"" + root.interface-name + "\"?"); } }
+                        Button { text: @tr("Remove interface"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-interface(); } }
                     }
                     if root.item-tab == 2 && root.has-data-flow: Panel {
                         width: root.side-width;
@@ -2448,7 +2484,7 @@ export component AppWindow inherits Window {
                         }
                         Text { text: root.data-flow-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove data flow"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-data-flow", "Remove data flow \"" + root.data-flow-name + "\"?"); } }
+                        Button { text: @tr("Remove data flow"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-data-flow(); } }
                     }
                     if root.item-tab == 3 && root.has-trust-boundary: Panel {
                         width: root.side-width;
@@ -2459,7 +2495,7 @@ export component AppWindow inherits Window {
                         CheckList { items: root.trust-boundary-members; editable: root.editing; toggled(i, on) => { root.toggle-trust-boundary-member(i, on); } }
                         Text { text: root.trust-boundary-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove trust boundary"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.confirm("remove-trust-boundary", "Remove trust boundary \"" + root.trust-boundary-name + "\"?"); } }
+                        Button { text: @tr("Remove trust boundary"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-trust-boundary(); } }
                     }
                 }
 
@@ -2609,7 +2645,7 @@ export component AppWindow inherits Window {
                                     clicked => { root.add-membership(root.new-member, root.new-member-role); root.new-member = ""; }
                                 }
                             }
-                            if root.membership-error != "": Text { text: root.membership-error; color: Theme.high; font-size: 12px; wrap: word-wrap; }
+                            if root.membership-error != "": FieldError { text: root.membership-error; }
                             Table {
                                 label: @tr("Members");
                                 columns: [{ title: @tr("Member"), horizontal-stretch: 2 }, { title: @tr("Role"), horizontal-stretch: 2 }];
@@ -2685,12 +2721,15 @@ export component AppWindow inherits Window {
     }
 
     // ===================================================================
-    // Notices: the newest at the bottom right.
+    // Notices and toasts: bottom centre of the work area, never over the
+    // inspector (UI-10.9). Info toasts go after 8 s, or 8 s after the pointer
+    // leaves; warnings and errors stay until dismissed (UI-10.11).
     // ===================================================================
     VerticalLayout {
-        x: parent.width - 420px;
+        property <length> reserved: root.in-project ? root.inspector-width : 0px;
+        width: max(200px, min(parent.width - self.reserved - 48px, 440px));
+        x: max(24px, (parent.width - self.reserved - self.width) / 2);
         y: parent.height - self.preferred-height - 40px;
-        width: 400px;
         spacing: 6px;
         for n in root.notices: Rectangle {
             background: n.severity == 2 ? (Theme.dark ? #2E1512 : #FDECEA) : (n.severity == 1 ? (Theme.dark ? #2E230E : #FFF4D6) : Theme.panel);
@@ -2700,6 +2739,13 @@ export component AppWindow inherits Window {
             height: notice-text.preferred-height + 20px;
             accessible-role: text;
             accessible-label: n.text;
+            accessible-live-region: polite;
+            toast-hover := TouchArea {}
+            Timer {
+                interval: 8s;
+                running: n.severity == 0 && !toast-hover.has-hover;
+                triggered => { root.dismiss-notice(n.id); }
+            }
             HorizontalLayout {
                 padding: 10px;
                 spacing: 8px;
@@ -2709,6 +2755,13 @@ export component AppWindow inherits Window {
                     color: Theme.ink;
                     font-size: 13px;
                     horizontal-stretch: 1;
+                }
+                if n.action != 0: Button {
+                    text: n.action == 1 ? @tr("Undo") : @tr("Redo");
+                    clicked => {
+                        root.dismiss-notice(n.id);
+                        if (n.action == 1) { root.undo(); } else { root.redo(); }
+                    }
                 }
                 Rectangle {
                     width: 22px;
@@ -2762,24 +2815,35 @@ export component AppWindow inherits Window {
     if root.confirm-open: Rectangle {
         background: #000000A0;
         TouchArea { clicked => { root.confirm-open = false; } }
-        Rectangle {
-            width: min(parent.width - 48px, 460px);
-            height: confirm-column.preferred-height + 40px;
-            background: Theme.panel;
-            border-width: 1px;
-            border-color: Theme.rule;
-            border-radius: 2px;
-            TouchArea {}
-            confirm-column := VerticalLayout {
-                padding: 20px;
-                spacing: 14px;
-                if root.confirm-title != "": Text { text: root.confirm-title; font-size: 18px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
-                if root.confirm-text != "": Text { text: root.confirm-text; font-size: 15px; color: Theme.ink; wrap: word-wrap; }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    Button { text: @tr("Cancel"); clicked => { root.confirm-open = false; } }
-                    Button { text: root.confirm-action; primary: true; clicked => { root.confirm-done(root.confirm-kind); } }
+        // Escape cancels; focus starts on Cancel, so Enter never confirms (UI-12).
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) { root.confirm-open = false; return accept; }
+                reject
+            }
+            Rectangle {
+                width: min(parent.width - 48px, 460px);
+                height: confirm-column.preferred-height + 40px;
+                background: Theme.panel;
+                border-width: 1px;
+                border-color: Theme.rule;
+                border-radius: 2px;
+                TouchArea {}
+                confirm-column := VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+                    if root.confirm-title != "": Text { text: root.confirm-title; font-size: 18px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
+                    if root.confirm-text != "": Text { text: root.confirm-text; font-size: 15px; color: Theme.ink; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        Button {
+                            text: @tr("Cancel");
+                            clicked => { root.confirm-open = false; }
+                            init => { self.focus(); }
+                        }
+                        DangerButton { text: root.confirm-action; clicked => { root.confirm-done(root.confirm-kind); } }
+                    }
                 }
             }
         }
@@ -3008,7 +3072,7 @@ export component AppWindow inherits Window {
                 Field { label: @tr("Current password"); LineEdit { input-type: password; text <=> root.pw-current; accessible-label: @tr("Current password"); } }
                 Field { label: @tr("New password (at least 10 characters)"); LineEdit { input-type: password; text <=> root.pw-new; accessible-label: @tr("New password"); } }
                 Field { label: @tr("New password again"); LineEdit { input-type: password; text <=> root.pw-repeat; accessible-label: @tr("New password again"); } }
-                if root.pw-repeat != "" && root.pw-new != root.pw-repeat: Text { text: @tr("The two new passwords differ."); color: Theme.high; font-size: 12px; }
+                if root.pw-repeat != "" && root.pw-new != root.pw-repeat: FieldError { text: @tr("The two new passwords differ."); }
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: end;

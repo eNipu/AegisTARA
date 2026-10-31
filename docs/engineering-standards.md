@@ -242,3 +242,33 @@ Because this project is also a school, these practices are part of the definitio
 | Blocking file or CPU work in async tasks | `spawn_blocking` or `rayon` (R5) |
 | "It feels faster" | A benchmark and a profile (section 8) |
 | Premature micro-optimization | Measure first (P2, P3) |
+
+---
+
+## 11. Dialogs and confirmation (UI-12)
+
+Undo is the safety net, so a change that Undo can bring back happens at once,
+with a toast that says what happened and offers Undo (UI-10.8, UI-10.9). A
+modal dialog is allowed only when one of these is true:
+
+1. The action cannot be undone: delete project, break another user's lock,
+   reset or change a password, end other users' sessions, import that replaces
+   data.
+2. The task is about security and must hold focus: log in, change password,
+   set a password.
+3. The operating system owns it: open and save file pickers.
+4. Information with no work context: About.
+
+A dialog that stays: names the thing in the title ("Delete project 'ECU
+Gen3'?"); has a main button that says the action ("Delete project", never "Yes"
+or "OK"); makes a destructive main button red and not the default for Enter;
+cancels on Escape; starts focus in the first field or on Cancel.
+
+Errors do not open dialogs. A field error shows next to the field (error colour
+and icon); an action error is a sticky error toast (UI-10.11).
+
+**How it is enforced:** `crates/aegis-shell/tests/dialogs.rs` lists every modal
+overlay and every confirmation question in `app.slint` with a reason. A new one
+fails the build until it is added there; adding it needs a reason a reviewer
+accepts. `crates/aegis-client/tests/undo_every_op.rs` applies and undoes every
+`Op` kind, which is what makes removing a confirmation safe (UI-10.6).

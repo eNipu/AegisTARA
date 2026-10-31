@@ -1151,3 +1151,54 @@ msgstr "ライト"
 
 msgid "Dark"
 msgstr "ダーク"
+
+msgid "Nothing to undo"
+msgstr "元に戻す操作はありません"
+
+msgid "Nothing to redo"
+msgstr "やり直す操作はありません"
+
+msgid "Read only"
+msgstr "読み取り専用"
+
+msgid "Undo {} ({})"
+msgstr "{} を元に戻す ({})"
+
+msgid "Redo {} ({})"
+msgstr "{} をやり直す ({})"
+
+msgid "Undo {}"
+msgstr "{} を元に戻す"
+
+msgid "Redo {}"
+msgstr "{} をやり直す"
+
+msgid "Delete project '{}'?"
+msgstr "プロジェクト「{}」を削除しますか？"
+
+msgid "Break the edit lock?"
+msgstr "編集ロックを解除しますか？"
+
+msgid "End this session?"
+msgstr "このセッションを終了しますか？"
+
+msgid "Delete this user?"
+msgstr "このユーザーを削除しますか？"
+
+msgid "Turn password login off?"
+msgstr "パスワードログインをオフにしますか？"
+
+msgid "Log out?"
+msgstr "ログアウトしますか？"
+
+msgid "Break lock"
+msgstr "ロックを解除"
+
+msgid "End session"
+msgstr "セッションを終了"
+
+msgid "Delete user"
+msgstr "ユーザーを削除"
+
+msgid "Turn off"
+msgstr "オフにする"

@@ -25,7 +25,7 @@ use aegis_client::library::{InsertMode, InsertOptions, LibraryView};
 use aegis_client::report::ExportKind;
 use aegis_client::session::Session;
 use aegis_client::state::{
-    ConnectionView, Mode, NumbersCheck, ProjectView, Severity, SyncView, ViewModel,
+    ConnectionView, Mode, NoticeAction, NumbersCheck, ProjectView, Severity, SyncView, ViewModel,
 };
 use aegis_client::view::{AdminAction, Page, RiskView, Selection};
 use aegis_model::library::LibraryPack;
@@ -2089,6 +2089,11 @@ impl Controller {
                             Severity::Error => 2,
                         },
                         text: s(&n.text),
+                        action: match n.action {
+                            None => 0,
+                            Some(NoticeAction::Undo) => 1,
+                            Some(NoticeAction::Redo) => 2,
+                        },
                     })
                     .collect(),
             ));
@@ -2203,6 +2208,8 @@ impl Controller {
         w.set_numbers_text(s(numbers_text));
         w.set_can_undo(project.can_undo);
         w.set_can_redo(project.can_redo);
+        w.set_undo_label(s(project.undo_label.as_deref().unwrap_or("")));
+        w.set_redo_label(s(project.redo_label.as_deref().unwrap_or("")));
         w.set_show_residual(project.show_residual);
         w.set_is_empty(project.is_empty);
         w.set_page(i32::try_from(project.page.index()).unwrap_or(0));

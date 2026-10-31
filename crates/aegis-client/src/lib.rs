@@ -18,6 +18,7 @@ pub mod suggest;
 pub mod time;
 pub mod transport;
 mod tree_diff;
+pub mod undo_label;
 pub mod updates;
 pub mod view;
 pub mod workspace;

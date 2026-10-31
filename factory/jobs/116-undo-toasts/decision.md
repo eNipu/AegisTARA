@@ -3,23 +3,31 @@
 ## Decision
 ESCALATE
 
-Round 1 delivered the first, highest-value slice: Undo/Redo are now visible
-icon buttons at the left of the project top bar on every page, with shortcut
-tooltips, and the hidden status-bar text buttons are gone. Code and security
-reviews PASS and all shell tests pass.
+Round 2 built nearly all of UI-10 and UI-12: every `Op` kind is proven to undo and
+redo exactly, undo/redo name the action and element, a bottom-centre toast
+(Undo/Redo button, 8 s, live region, replaces the previous one) reports undo, redo,
+removals and history-cleared, the 12 removal confirmations are gone, errors are
+sticky toasts or inline field errors, the kept dialogs follow the UI-12 rules, and
+the dialog rules and allow-list test are in. Code, security and UI reviews PASS.
+fmt, clippy, `cargo test --workspace --locked` and `scripts/deny.sh` all pass.
 
-The job is not approvable yet. The UX/UI reviews are CHANGES because the
-remaining scope is still to build:
+It is not APPROVE because the UX review is CHANGES on two acceptance points:
 
-- The "Undone: … · Redo" toast and per-action undo/redo naming (UI-10.2/10.5),
-  text-field typing undo (UI-10.4), the history-cleared toast (UI-10.7), and
-  the per-op undo test (UI-10.6).
-- Part B: undoable changes happen at once with an undo toast (UI-10.8/10.9/10.10),
-  inline field errors and a sticky action-error toast (UI-10.11), and the
-  confirmation allow list (UI-10.12), plus the UI-12 dialog rules and
-  modal-overlay test.
+1. **UI-10.5**: the affected element is selected on its page after Undo/Redo, but
+   the list is not scrolled to it.
+2. **UI-10.4**: only the rename field steps aside for the platform undo shortcut,
+   and no test sends the real key through the native menu, so it is unproven on
+   macOS, Windows and Linux.
+
+Neither is an owner or hardware gate for item 1; item 2 needs a real window.
+
+## Decisions to confirm
+- Four confirmations beyond the UI-12 list are kept (delete user, remove member,
+  password login off, log out), each with a reason in
+  `crates/aegis-shell/tests/dialogs.rs`. Drop log out if you prefer.
 
 ## What to do next
-`/factory rework 116-undo-toasts <note>` to continue with the toast, the undo
-description, the per-op test, and Part B. Code and security are green for this
-slice.
+`/factory rework 116-undo-toasts <note>`: scroll the list to the selected element
+after undo/redo, and extend or prove the typing-undo stand-aside (a window test with
+a real key, or a hardware check). Then the job can move to merged and backlog line
+116 to `[x]`.

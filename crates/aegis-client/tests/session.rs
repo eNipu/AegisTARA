@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 use aegis_client::commands::{Command, Edit};
 use aegis_client::connection::DevLogin;
 use aegis_client::session::{Session, SessionConfig};
-use aegis_client::state::{ConnectionView, Mode, NumbersCheck, Severity, SyncView, ViewModel};
+use aegis_client::state::{
+    ConnectionView, Mode, NoticeAction, NumbersCheck, Severity, SyncView, ViewModel,
+};
 use aegis_server::auth_layer::{AuthLayer, DevAuthn};
 use aegis_server::config::ServerConfig;
 use aegis_server::methodologies::Methodologies;
@@ -571,6 +573,83 @@ async fn rating_a_step_updates_the_risks_immediately_and_undo_restores_them() {
         seq,
         SAMPLE_OPS + 2,
         "the edit and its undo are both in the server's log"
+    );
+    drop(alice);
+    server.stop().await;
+}
+
+/// UI-10.5, UI-10.9: a removal happens at once and a toast offers Undo; Undo
+/// says what it undid and offers Redo; a new toast replaces the old one.
+#[tokio::test]
+async fn a_removal_toasts_with_undo_and_undo_toasts_with_redo() {
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    alice.send(Command::CreateSample).expect("sent");
+    let view = until(&alice, "saved", |vm| {
+        project_ready(vm) && vm.project.as_ref().is_some_and(|p| p.threats.len() == 2)
+    })
+    .await;
+    let threat = view.project.as_ref().expect("project").threats[0].clone();
+    let toast = |vm: &ViewModel| {
+        vm.notices
+            .iter()
+            .filter(|n| n.action.is_some())
+            .map(|n| (n.text.clone(), n.action))
+            .collect::<Vec<_>>()
+    };
+    assert!(toast(&view).is_empty());
+
+    alice
+        .send(Command::Edit(Edit::RemoveThreat { threat: threat.id }))
+        .expect("sent");
+    let view = until(&alice, "removal toast", |vm| !toast(vm).is_empty()).await;
+    let toasts = toast(&view);
+    assert_eq!(toasts.len(), 1);
+    assert_eq!(toasts[0].1, Some(NoticeAction::Undo));
+    // UI-10.10: the toast also says what else the removal changed.
+    assert!(
+        toasts[0]
+            .0
+            .starts_with(&format!("Threat scenario '{}' removed", threat.name)),
+        "{}",
+        toasts[0].0
+    );
+    let project = view.project.as_ref().expect("project");
+    assert_eq!(project.threats.len(), 1);
+    assert!(
+        project
+            .undo_label
+            .as_deref()
+            .is_some_and(|l| l.starts_with(&format!("remove threat scenario '{}'", threat.name)))
+    );
+
+    alice.send(Command::Undo).expect("sent");
+    let view = until(&alice, "undo toast", |vm| {
+        toast(vm)
+            .iter()
+            .any(|(_, a)| *a == Some(NoticeAction::Redo))
+    })
+    .await;
+    let toasts = toast(&view);
+    assert_eq!(toasts.len(), 1, "the new toast replaced the removal toast");
+    assert!(
+        toasts[0]
+            .0
+            .starts_with(&format!("Undone: remove threat scenario '{}'", threat.name)),
+        "{}",
+        toasts[0].0
+    );
+    let project = view.project.as_ref().expect("project");
+    assert_eq!(project.threats.len(), 2, "the threat is back");
+    // UI-10.5: the page of the restored element is open.
+    assert_eq!(project.page, aegis_client::view::Page::Threats);
+    assert!(
+        project
+            .redo_label
+            .as_deref()
+            .is_some_and(|l| l.starts_with(&format!("remove threat scenario '{}'", threat.name)))
     );
     drop(alice);
     server.stop().await;
