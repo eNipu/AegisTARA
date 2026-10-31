@@ -221,6 +221,8 @@ pub fn install(window: &AppWindow) {
     window.set_problems_keys(keys_for("problems"));
     window.set_item_keys(keys_for("item"));
     window.set_save_description_label(keys_for_label("save-description").into());
+    window.set_undo_shortcut(keys_for_label("undo").into());
+    window.set_redo_shortcut(keys_for_label("redo").into());
 }
 
 /// The platform-spelled label of a shortcut from the table.
