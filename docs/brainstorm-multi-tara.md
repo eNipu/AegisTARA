@@ -1,8 +1,9 @@
 # Brainstorm: systems and multi-TARA (one project, many analyses)
 
-- Status: **proposed**; the architecture question in section 4.1 is a blocking
-  design session (`factory/backlog.md`, "Waiting for a design session"). Once
-  decided, this note feeds backlog jobs 119 to 121 (`SYS-01` to `SYS-06`).
+- Status: **superseded** by [brainstorm-systems-config.md](brainstorm-systems-config.md)
+  and decision D26 (proposed, 2026-11-02), which answer section 4.1 (systems
+  inside one project) with a smaller model: a system is a list of components,
+  not a `system` field on every element. Kept as the record of the first idea.
 - Date: 2026-10-30
 - Asked for: the app creates **one TARA per project**. A real item, for
   example a vehicle, is one project that holds several **system TARAs** —
