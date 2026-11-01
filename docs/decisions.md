@@ -17,7 +17,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Japan is the first export market; English and Japanese ship first (D13).
 - Library, item definition, traceability, report builder, ReqIF-first integrations and a built-in role table are decided (D14 to D19).
 - Extensions through data files, a public API and built-in connectors (D20). No vendor-hosted service for now; consultancy first in Japan (D21).
-- A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25).
+- A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25). Systems group components in one project (one system per component), and settings are controls with pack-defined rules (D26).
 
 ---
 
@@ -197,6 +197,14 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Decision:** no native rewrite (SwiftUI on macOS, WinUI or WPF on Windows). The app keeps Slint (D7) and gets a GPU renderer with a software fallback, the Cupertino style on macOS, the system appearance and ⌘ shortcuts (job 113). Undo and redo, which the client core has but the app hides, become visible top-bar actions that name what they undo (job 116, first part). Editing becomes modeless: elements are created as a draft in the inspector, removals offer undo instead of a confirmation, and editors move into panels (jobs 114 to 117). A dialog is kept only for actions undo cannot reverse, security tasks, file pickers and About.
 - **Why:** the "not solid on macOS" feel comes from the forced software renderer and the Windows-style widgets, not from Slint. A native rewrite would build every screen and the canvas twice and add two bindings to the Rust core, for no new capability. Reconsider only if a paying customer requires a native Mac app after jobs 113 to 117.
 - **Details:** [ui-ux-requirements.md](ui-ux-requirements.md) (UI-07 to UI-12).
+
+## D26. Systems group components in one project; settings are controls with rules
+
+- **Date:** 2026-11-02
+- **Status:** accepted by the owner on 2026-11-02, with the change that a component is in at most one system ([brainstorm-systems-config.md](brainstorm-systems-config.md) sections 5.2 and 10).
+- **Decision:** (1) Several systems (Brake, ADAS, Backend) live inside one project, not in a program of projects. A system is a named group of components with its own boundary: each component is in at most one system, and a component several systems need (the gateway) becomes a system of its own, linked to the others by boundary data flows. Interfaces, assets, threats and trees belong to a system through the links they already have; damage scenarios, controls, goals and claims may be used by several systems. Viewing one system, a subset or all is a per-user filter, never an op, and a risk number does not depend on the view. One op log, lease, undo history, audit chain and baseline per project, as today. (2) ECU and interface settings are security controls applied to components and interfaces, with rules "attack type → feasibility ceiling". An attack step names the component or interface it goes through and its attack type; the engine derives the ceilings and the explain-why names them ("capped by: Secure boot on ADAS ECU"). Attack types and setting presets come from the methodology pack; a custom setting is a control with rules the user types. (3) Settings ship before systems.
+- **Why:** one system per component gives each TARA a clear boundary, as an item definition has, and totals that add up; one project keeps undo, baselines, reports and Excel import whole with no server change. Cross-system attacks need no tree links: a step goes via a component of another system, whose settings cap it. Settings replace the consultant's hand re-rating, which helps every project, and pack data keeps the core methodology-neutral (D1, D24).
+- **Details:** [brainstorm-systems-config.md](brainstorm-systems-config.md), [design/systems-config.md](design/systems-config.md); jobs 119 to 126.
 
 ## Open
 
