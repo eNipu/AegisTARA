@@ -118,8 +118,10 @@ Other hardening in the workflow:
 - `permissions: contents: read` at the top level. No job writes.
 - `actions/checkout` with `persist-credentials: false`, so the token is not
   left in `.git/config` for later steps.
-- Triggers are `pull_request` and `push` to `master` only, so a change is
-  checked once on its pull request and once when it lands. No secrets, no privileged pull
+- Triggers are `pull_request` and `push` to `master` only. A pull request
+  runs only `deny`; `check`, `msrv` and `image` run when a change lands on
+  `master`. The `.githooks/pre-push` hook runs `scripts/ci.sh` before each
+  push instead (amended 2026-11-01 to save CI time). No secrets, no privileged pull
   request trigger, and no `${{ }}` event data inside `run:` scripts.
 - `taiki-e/install-action` installs the prebuilt `cargo-deny@0.20.2` (the
   version ADR 0003 pins), checks it against the SHA-256 in the action's
