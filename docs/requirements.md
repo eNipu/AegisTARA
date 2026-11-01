@@ -51,7 +51,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | G45 | Packs hold catalog ID syntax only, no catalog text; only attack-potential and direct feasibility | `methodology/catalog.rs` | STRIDE plus MITRE work and CRA packs need catalog text and a plain likelihood scale | 109, 112 |
 | G46 | `deny.toml` treats dev-dependencies like shipped code | `deny.toml`, D5 | D5 now allows any license for development-only tools | 110 |
 | G47 | Elements carry internal UUIDs only, no human-readable visual ID (`A00`, `D00`, `T00`) | `aegis-model` IDs, `pages.rs`, `report/doc.rs`, `brainstorm-visual-ids.md` | Analysts and reviewers need short, stable IDs to cite in tables, cross-references and reports (FND-06, FND-07) | 118 |
-| G48 | One flat TARA per project; no way to model multiple systems in one project and evaluate or report on them together | `Project` in `aegis-model`, `brainstorm-multi-tara.md` | A vehicle or product holds several systems (Braking, ADAS, Infotainment) that share ECUs and need one combined register and report (SYS-01 to SYS-06; D26 proposed) | 119 to 121 |
+| G48 | One flat TARA per project; no way to model multiple systems in one project and evaluate or report on them together | `Project` in `aegis-model`, `brainstorm-multi-tara.md` | A vehicle or product holds several systems (Braking, ADAS, Gateway, Infotainment) linked by data flows that need one combined register and report (SYS-01 to SYS-06; D26) | 119 to 121 |
 | G49 | Controls have no type, no settings and no link to a component or interface; attack steps do not name what they go through; nothing connects an ECU or interface setting to the trees or the risk | `SecurityControl` in `control.rs` (name and provenance only); no item reference in `tree.rs`; `brainstorm-systems-config.md` section 3 | Consultants re-rate feasibility by hand when a setting changes, and reviewers cannot see which ratings depend on which setting (CFG-01 to CFG-09) | 122 to 126 |
 
 ---
@@ -137,24 +137,25 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 
 ### 2.5a Systems and multi-TARA (SYS)
 
-Rewritten 2026-11-02 after the design session (D26, proposed;
-[brainstorm-systems-config.md](brainstorm-systems-config.md)). A system is a
-named list of components; other elements belong to systems through their
-links. The old SYS-02 ("each system owns its elements") and the tree-to-tree
-part of SYS-04 and SYS-05 are dropped: a partition cannot hold a shared ECU.
+Rewritten 2026-11-02 after the design session (D26, accepted;
+[brainstorm-systems-config.md](brainstorm-systems-config.md)). Each component
+is in at most one system; a component several systems need becomes a system
+of its own. Other elements belong to systems through their links. The old
+SYS-02 (a system field on every element) and the tree-to-tree part of SYS-04
+and SYS-05 are dropped.
 
 | ID | Requirement | Pri | Phase | Job |
 |---|---|---|---|---|
 | SYS-01 | A project holds zero or more named systems (for example Brake, ADAS, Backend); with none, the app looks and behaves as today | M | 5 | 119 |
-| SYS-02 | A system is a named list of components (capped); a component can be in several systems and its child components follow it; every other element's systems are derived from its links (interface, data flow, asset, threat, tree, damage scenario, control, goal, claim); an element with nothing to derive from shows in every view, and the linter flags a component in no system | M | 5 | 119 |
-| SYS-03 | The user views one system, a chosen subset or all; the view filters every page, is remembered per user and project, and is never an op; removing a system removes no other element and is undoable with a toast | M | 5 | 119 |
-| SYS-04 | Data flows whose ends are in different systems show as boundary flows, with the same "no threat" check as trust boundaries; a shared component, its interfaces and its settings show and act in every system it is in | M | 5 | 120 |
-| SYS-05 | The combined view lists shared elements once, gives per-system totals and the highest residual risk, and runs top attack paths and choke points over the view; a risk number is the same in every view that contains it | M | 5 | 120 |
+| SYS-02 | Each top-level component is in at most one system and its child components follow it; a component several systems need is modelled as its own system (for example Gateway); interfaces, assets, threats and trees derive their one system from their links; damage scenarios, controls, goals and claims may be used by several systems; an element with nothing to derive from shows in every view, and the linter flags a component in no system | M | 5 | 119 |
+| SYS-03 | The user views one system, a chosen subset or all; the view filters every page, is remembered per user and project, and is never an op; moving a component to another system is one undo step and carries its interfaces, assets and threats; removing a system removes no other element and is undoable with a toast | M | 5 | 119 |
+| SYS-04 | Data flows whose ends are in different systems show as boundary flows, with the same "no threat" check as trust boundaries; a step that goes via a component of another system shows that system, and that component's settings cap it in every view | M | 5 | 120 |
+| SYS-05 | The combined view gives per-system totals that add up for components, assets and threats, lists a damage scenario or control used by several systems once, shows the highest residual risk, and runs top attack paths and choke points over the view; a risk number is the same in every view that contains it | M | 5 | 120 |
 | SYS-06 | Reports and exports per system, for a subset, or for the whole project; the cover names the systems; XLSX has a Systems column; Excel import can map a System column to memberships, with the dry-run preview | S | 5 | 121 |
 
 ### 2.5b Security settings on components and interfaces (CFG)
 
-New 2026-11-02 (D26, proposed). A setting is a security control applied to a
+New 2026-11-02 (D26, accepted). A setting is a security control applied to a
 component or interface, with rules from the methodology pack or typed by the
 user; the engine derives the caps.
 

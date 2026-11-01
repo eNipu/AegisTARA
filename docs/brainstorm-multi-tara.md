@@ -1,9 +1,10 @@
 # Brainstorm: systems and multi-TARA (one project, many analyses)
 
 - Status: **superseded** by [brainstorm-systems-config.md](brainstorm-systems-config.md)
-  and decision D26 (proposed, 2026-11-02), which answer section 4.1 (systems
-  inside one project) with a smaller model: a system is a list of components,
-  not a `system` field on every element. Kept as the record of the first idea.
+  and decision D26 (accepted, 2026-11-02), which answer section 4.1 (systems
+  inside one project) with a smaller model: each component is in at most one
+  system and everything else follows its links, instead of a `system` field on
+  every element. Kept as the record of the first idea.
 - Date: 2026-10-30
 - Asked for: the app creates **one TARA per project**. A real item, for
   example a vehicle, is one project that holds several **system TARAs** —
