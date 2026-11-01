@@ -348,6 +348,8 @@ pub struct UiState {
     pub draft: Option<DraftKind>,
     /// Changes with every new draft, so the window clears its text field.
     pub draft_seq: u64,
+    /// Why the last create was refused, shown in the draft (UI-08.6).
+    pub draft_error: Option<String>,
     /// The asset of a threat draft (from the context, or chosen).
     pub draft_asset: Option<AssetId>,
     /// The category of a threat draft, as a position in the vocabulary.

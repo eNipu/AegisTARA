@@ -2687,6 +2687,7 @@ impl<P: CredentialProvider> Actor<P> {
     fn set_draft(&mut self, draft: Option<DraftKind>) {
         if let Some(open) = self.open.as_mut() {
             open.ui.draft = draft;
+            open.ui.draft_error = None;
             if draft.is_some() {
                 open.ui.draft_seq += 1;
             }
@@ -2833,8 +2834,22 @@ impl<P: CredentialProvider> Actor<P> {
                 name,
             },
         };
+        let notice_before = self.next_notice;
         if self.edit(&edit) {
             self.set_draft(next.then_some(kind));
+        } else {
+            // UI-08.6, UI-10.11: the reason is shown in the draft, which keeps the
+            // user's text, instead of as a toast.
+            let reason = if self.next_notice > notice_before {
+                self.notices.pop_back().map(|n| n.text)
+            } else {
+                None
+            };
+            if let Some(open) = self.open.as_mut() {
+                open.ui.draft_error =
+                    Some(reason.unwrap_or_else(|| "That could not be created.".to_owned()));
+            }
+            self.pump();
         }
     }
 
@@ -3075,6 +3090,7 @@ impl<P: CredentialProvider> Actor<P> {
                 redo_label: open.ws.redo_label().map(Label::imperative),
                 draft: open.ui.draft,
                 draft_seq: open.ui.draft_seq,
+                draft_error: open.ui.draft_error.clone(),
                 draft_asset: open.ui.draft_asset,
                 draft_category: open.ui.draft_category,
                 draft_component: open.ui.draft_component,

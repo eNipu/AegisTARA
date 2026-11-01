@@ -1262,3 +1262,9 @@ msgstr "データフローには2つのコンポーネントが必要です。"
 
 msgid "A name is needed"
 msgstr "名前が必要です"
+
+msgid "New element on this page"
+msgstr "このページに新しい要素"
+
+msgid "Read only: take the edit lock first."
+msgstr "読み取り専用：先に編集ロックを取得してください。"
