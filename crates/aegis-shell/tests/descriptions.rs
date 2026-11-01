@@ -54,19 +54,9 @@ async fn the_notes_and_an_asset_description_are_saved_from_their_pages() {
     // Project notes on the Overview.
     show(&app, Page::Overview).await;
     assert_eq!(kinds(&app), ["project"]);
-    // The edit window opens from the page's box (what its Edit button sets)
-    // and Save sends the draft.
-    app.window.set_description_index(0);
+    // The box edits in place and saves on leaving it (what set-description gets).
     app.window
-        .set_description_draft("Scope: the brake ECU.\nOut of scope: the pedal.".into());
-    app.window.set_description_open(true);
-    app.window.set_description_title("Project notes".into());
-    save(&app.frame(), "p00a-description-window");
-    app.window.invoke_set_description(
-        app.window.get_description_index(),
-        app.window.get_description_draft(),
-    );
-    app.window.set_description_open(false);
+        .invoke_set_description(0, "Scope: the brake ECU.\nOut of scope: the pedal.".into());
     app.until("notes saved", |vm| {
         vm.project.as_ref().is_some_and(|p| {
             p.sync == SyncView::Synced
@@ -192,4 +182,55 @@ async fn a_read_only_view_cannot_change_a_description() {
     drop(reader);
     drop(editor);
     server.stop().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_description_is_typed_in_place_tab_saves_and_escape_restores() {
+    use common::{press_key, type_text};
+    use slint::platform::Key;
+
+    let server = TestServer::start().await;
+    let app = editing_with_sample(&server).await;
+    show(&app, Page::Assets).await;
+    app.window.invoke_pick_asset(0);
+    app.until("asset picked", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.data.asset.is_some())
+    })
+    .await;
+    app.controller.apply_latest();
+    app.frame();
+    // The name field has focus; Tab reaches the description box under it.
+    app.window.set_focus_name(true);
+    app.frame();
+    press_key(&app, Key::Tab, false);
+
+    // Escape throws the typing away: nothing is sent.
+    type_text(&app, "draft");
+    press_key(&app, Key::Escape, false);
+    press_key(&app, Key::Tab, false);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    app.controller.apply_latest();
+    assert_eq!(
+        app.window.get_descriptions().row_data(0).expect("box").text,
+        ""
+    );
+
+    // Typing and leaving with Tab saves.
+    app.window.set_focus_name(true);
+    app.frame();
+    press_key(&app, Key::Tab, false);
+    type_text(&app, "Holds the brake map.");
+    press_key(&app, Key::Tab, false);
+    app.until("typed text saved", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.sync == SyncView::Synced
+                && p.descriptions
+                    .first()
+                    .is_some_and(|d| d.text == "Holds the brake map.")
+        })
+    })
+    .await;
+    app.controller.apply_latest();
+    app.frame();
+    save(&app.frame(), "p02-asset-description-inline");
 }

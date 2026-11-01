@@ -268,6 +268,11 @@ fn every_page_shows_the_analysis() {
     assert_eq!(assets[0].properties.iter().filter(|p| **p).count(), 2);
     let a = pages::asset_detail(ws, t.asset).expect("asset");
     assert_eq!(a.threats.len(), 2);
+    // Both threats lead to the same damage scenario: it is listed once.
+    assert_eq!(
+        a.damages.iter().map(|l| l.target).collect::<Vec<_>>(),
+        [Selection::Damage(t.damage)]
+    );
     assert!(a.changed.contains("mira"), "{}", a.changed);
 
     let damages = pages::damage_rows(ws);
@@ -277,12 +282,11 @@ fn every_page_shows_the_analysis() {
         "{}",
         damages[0].impacts_text
     );
+    let dd = pages::damage_detail(ws, t.damage).expect("damage");
+    assert_eq!(dd.threats.len(), 2);
     assert_eq!(
-        pages::damage_detail(ws, t.damage)
-            .expect("damage")
-            .threats
-            .len(),
-        2
+        dd.assets.iter().map(|l| l.target).collect::<Vec<_>>(),
+        [Selection::Asset(t.asset)]
     );
 
     let d = pages::threat_detail(ws, t.threat).expect("threat");

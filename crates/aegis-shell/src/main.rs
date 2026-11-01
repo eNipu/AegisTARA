@@ -81,6 +81,7 @@ fn run() -> Result<(), String> {
         aegis_shell::renderer::select().map_err(|e| format!("cannot open a window: {e}"))?;
 
     let window = AppWindow::new().map_err(|e| format!("cannot create the window: {e}"))?;
+    window.set_gpu_renderer(renderer == aegis_shell::renderer::Renderer::Skia);
     let settings_path =
         aegis_client::settings::config_dir().map(|d| aegis_client::settings::Settings::path_in(&d));
     let launcher = Launcher::new(
