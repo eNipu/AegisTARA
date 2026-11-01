@@ -1381,3 +1381,21 @@ msgstr "ベースライン名（例: B1 設計凍結）"
 
 msgid "Baseline name"
 msgstr "ベースライン名"
+
+msgid "Show the history panel"
+msgstr "履歴パネルを表示"
+
+msgid "Hide the history panel"
+msgstr "履歴パネルを隠す"
+
+msgid "History of this session"
+msgstr "このセッションの履歴"
+
+msgid "Earlier changes"
+msgstr "以前の変更"
+
+msgid "Pick a row to see what going back to it would undo."
+msgstr "行を選ぶと、そこまで戻したときに取り消される内容を表示します。"
+
+msgid "Go back to here"
+msgstr "ここまで戻す"
