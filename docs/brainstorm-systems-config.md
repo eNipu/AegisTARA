@@ -1,8 +1,10 @@
 # Brainstorm: several systems in one project, and settings on ECUs and interfaces
 
-- Status: **proposed** (decision D26 in [decisions.md](decisions.md)); the owner
-  answers the questions in section 10, then the backlog lines move from
-  `[design]` to `[ ]`.
+- Status: **accepted** by the owner on 2026-11-02 (decision D26 in
+  [decisions.md](decisions.md)), with one change from the first draft: **each
+  component belongs to at most one system**. A component that several systems
+  need (the gateway) becomes a system of its own. Section 5.2 records the
+  change and why. The answers to section 10 are recorded there.
 - Date: 2026-11-02
 - Replaces the open architecture question in
   [brainstorm-multi-tara.md](brainstorm-multi-tara.md) section 4.1 and the plan
@@ -28,12 +30,14 @@ The owner asked for four things:
 
 The proposal, in plain words:
 
-- **A system is a named list of components** inside the one project, like a
-  trust boundary is today. A component can be in several systems (a shared
-  ECU, a gateway). Everything else (assets, threats, trees, damage scenarios,
-  controls) belongs to a system *through its links*, so nothing else gains a
-  system field. Looking at "Brake + ADAS" is a filter over the one project,
-  not a copy. A risk number never depends on which systems you are looking at.
+- **A system is a named group of components** inside the one project, with
+  its own boundary: **each component is in at most one system**. A component
+  that several systems use (the central gateway) becomes a system of its own
+  ("Gateway"), linked to the others by data flows that cross the boundary.
+  Everything else (interfaces, assets, threats, trees) belongs to a system
+  *through its links*, so only the component gains a system field. Looking at
+  "Brake + ADAS" is a filter over the one project, not a copy. A risk number
+  never depends on which systems you are looking at.
 - **A setting is a security control applied to a component or an interface.**
   Controls already exist and already cap attack-step feasibility
   ([ADR 0017](adr/0017-security-controls-and-residual-risk.md)). Today the user
@@ -69,7 +73,7 @@ imports):
    re-rates them. Misses are common, and the reviewer cannot see which ratings
    depend on which setting.
 5. For the vehicle-level report, the per-system workbooks are pasted together,
-   shared threats are counted twice, and totals are fixed by hand.
+   the copied gateway threats are counted twice, and totals are fixed by hand.
 
 What the consultant needs from the tool: settings recorded once per ECU or
 interface, ratings that follow when a setting changes, a reason the reviewer
@@ -102,9 +106,9 @@ risk. Gap G49 in [requirements.md](requirements.md).
 
 | # | As a ... | I want to ... | So that ... |
 |---|---|---|---|
-| U1 | consultant | add systems Brake, ADAS and Backend to one vehicle project and put each ECU in the systems it belongs to | one project holds the whole vehicle with no copies |
+| U1 | consultant | add systems Brake, ADAS, Gateway and Backend to one vehicle project and put each ECU in its system | one project holds the whole vehicle with no copies, and each system has a clear boundary |
 | U2 | consultant | look at Brake only, or Brake + ADAS, or everything | I can work and report at the level the client asks for |
-| U3 | consultant | see a shared ECU (the gateway) once, with its settings, in every system it is in | a change to it reaches every system |
+| U3 | consultant | model the gateway as its own system, and see from Brake which attacks go through it | a gateway setting lowers Brake and ADAS risks with no copy of the gateway |
 | U4 | consultant | list the interfaces of an ECU and mark how each is secured (debug port fused, Bluetooth pairing with PIN) | the architecture sheet lives in the tool |
 | U5 | consultant | set "secure boot" on an ECU and see which attack steps and risks it lowers | I do not re-rate by hand |
 | U6 | consultant | remove "secure flash" and see at once which risks go up, with Undo | I can show the client the cost of dropping a measure |
@@ -118,20 +122,20 @@ risk. Gap G49 in [requirements.md](requirements.md).
 
 | | A. Systems inside one project (recommended) | B. Program of projects (one project per system) |
 |---|---|---|
-| Shared ECU in two systems | One component in both member lists | A copy in each project, or a cross-project reference the model does not have |
+| ECU used by two systems | Its own system (Gateway), linked by boundary flows; steps in Brake trees go via it | A copy in each project, or a cross-project reference the model does not have |
 | Undo | One history; one undo step can span systems (moving the gateway into ADAS) | One history per project; an action that touches two systems is two undo steps in two windows |
 | Edit lease | One lease per project, as today (D4) | One per system; two analysts can edit Brake and ADAS at the same time |
 | Baselines | One baseline is the whole vehicle at one moment | A baseline per system; a "vehicle baseline" is a new set-of-baselines concept |
 | Diff | `Project::diff` as today, filtered by the view | Diff per project; combined diff needs a new merge step |
 | Audit chain | One chain, unchanged; new ops are ordinary ops | One chain per project; nothing proves the set was consistent at one time |
 | Reports | One report pipeline with a systems filter | Reports must read several projects and their versions |
-| Excel import | One import; an optional "System" column fills membership | One import per system; the shared rows are imported twice |
+| Excel import | One import; an optional "System" column puts each component in its system | One import per system; the shared rows are imported twice |
 | Methodology | One per project, so all systems share scales (combined numbers are comparable) | Each project could pick a pack; combining different scales has no meaning |
 | Server and standalone | No schema change; standalone folder unchanged | A new "program" table and a parent folder format; import and export of a program |
 | Access per system | No (project-level, ACC-01) | Yes |
 | Migration | None: a project with no systems is today's project | Existing projects become single-system members of a new program |
 
-**Recommendation: A.** Every row the consultant feels (shared ECUs, one undo,
+**Decision: A.** Every row the consultant feels (the gateway, one undo,
 one baseline, one report, one import) favours A, and A needs no server change.
 B buys two things: parallel editing of two systems and access per system.
 Neither has a customer asking for it, and the consultancy-first plan (D21,
@@ -139,42 +143,56 @@ D22) means one consultant per project most of the time. If a customer needs
 parallel editing later, a per-system lease can still be built on the single op
 log (section 5.3).
 
-### 5.2 Smaller than the first idea: a system is a list of components
+### 5.2 One system per component (the owner's rule)
 
-[brainstorm-multi-tara.md](brainstorm-multi-tara.md) section 4.2 put a
-`system` field on every element and every op. That is a partition: each
-element is in exactly one system. A partition breaks on the first real
-corner case: the central gateway is in Brake *and* ADAS, and the damage
-scenario "loss of braking" is shared by threats in both.
+Three shapes were considered:
 
-So the proposal is a **membership list**, the same shape as a trust boundary:
+| Shape | What it means | Verdict |
+|---|---|---|
+| A `system` field on every element and op ([brainstorm-multi-tara.md](brainstorm-multi-tara.md) section 4.2) | Each asset, threat, tree, control ... names its system | Too much: every op changes, and the field can disagree with the links (an asset in Brake bound to an ADAS component) |
+| A membership list per system (this note's first draft) | A component can be in several systems | Blurs the boundary: a shared ECU's threats show in two TARAs, every total needs "counted once" rules, and a reviewer cannot tell which TARA owns the gateway |
+| **One system per component** (decided) | `Component.system`, at most one; a component several systems need becomes its own system | Clear boundaries, as an ISO/SAE 21434 item definition has; totals add up; moving the gateway out is one edit |
 
-- `System { name, components: [ComponentIdx], description, provenance }`, in a
-  new arena on `Project`, capped (for example 32 systems, 256 members each;
-  the builder sets the caps with a benchmark, rule R3).
-- A component is in a system if it, or one of its parents, is in the list
-  (an HSM inside the gateway follows the gateway).
-- Every other element's systems are **derived** from links the model already
-  has: interface → its component; data flow → both ends; asset → its
-  component; threat → its asset; attack tree → the threats that use it; damage
-  scenario → the threats that link it; control → the components and
-  interfaces it is applied to and the trees it mitigates; goal and claim →
-  their threats and controls.
-- An element with nothing to derive from (an asset with no component, a
-  damage scenario with no threat, a control applied nowhere) shows in every
+The decided model:
+
+- `System { name, description, provenance }` in a new arena on `Project`,
+  capped (for example 32; the builder sets it with a benchmark, rule R3).
+- `Component.system: Option<SystemIdx>`, set only on top-level components.
+  A child component (an HSM inside the gateway) is in its parent's system.
+  The model rejects a system on a child, and rejects moving a component with
+  its own system under a parent (the client's batch clears it first, so the
+  child then follows its new parent).
+- Everything else is **derived** from links the model already has:
+  interface → its component; asset → its component; threat → its asset;
+  attack tree → the threats that use it. Each of these is in at most one
+  system too, because a component is.
+- Elements that describe consequences or measures may be used by several
+  systems, and that is correct: a damage scenario ("loss of braking
+  deceleration") linked by threats in Brake and Gateway; a control ("Secure
+  boot") applied to ECUs in two systems; a goal or claim on threats in two
+  systems. They show in each system that uses them and once in a combined
+  view. Forcing a copy per system would bring back the drift of section 2.
+- A data flow whose two ends are in different systems is a **boundary flow**.
+  It is how systems link: ADAS ECU → Gateway → ESC ECU.
+- An element with nothing to derive from (a component with no system, an
+  asset with no component, a damage scenario no threat links) shows in every
   view, marked "not in a system". The linter already flags the unbound asset;
   one new finding flags a component in no system once the project has systems.
 - A project with no systems looks exactly like today: no switcher, no column.
+  The whole project is then one TARA, as the owner noted it can be.
 
-What this buys: no change to any existing op, no store migration, v1 fixtures
-load as they are, removing a system removes no data (it only empties a list),
-and a shared ECU is simply listed twice. It costs one arena and five ops.
+What this buys: no change to any existing op, no store migration (the field
+is omitted when empty), v1 fixtures load as they are, removing a system
+removes no data (its components become "not in a system"), and moving a
+component to another system is one op that carries its interfaces, assets and
+threats along. It costs one arena, four ops and one field.
 
 ### 5.3 How each concern works under A
 
 - **Undo.** System ops are ordinary ops with exact inverses, so
-  `undo_every_op.rs` covers them. Removing a system is a batch: remove each
-  member, then the empty system (one undo step, an undo toast, UI-10.6). After
+  `undo_every_op.rs` covers them. Removing a system is a batch: clear the
+  system of each of its components, then remove the empty system (one undo
+  step, an undo toast, UI-10.6). After
   an undo, UI-10.5 selects the changed element; if the current view hides it,
   the view adds that element's system and the scope chip says so.
 - **Lease.** One per project, unchanged. Later, if needed: a per-system lease
@@ -182,22 +200,24 @@ and a shared ECU is simply listed twice. It costs one arena and five ops.
   It is possible on one op log, but not planned.
 - **Baselines.** Whole project, unchanged. The Versions page compares within
   the current view (diff lines filtered by scope).
-- **Diff.** `Project::diff` gains system lines ("System Brake: added
-  component Gateway"); `pages::comparison()` filters by the view.
+- **Diff.** `Project::diff` gains system lines ("Gateway: moved from Brake to
+  system Gateway"); `pages::comparison()` filters by the view.
 - **Audit chain.** Unchanged. The view is per-user UI state, never an op, so
   looking at Brake leaves no trace in the evidence (design principle 8 in
   [ui-ux-requirements.md](ui-ux-requirements.md)).
 - **Reports.** The report builder gains a systems filter next to its asset and
   component filters (job 071). The cover names the systems covered; a combined
-  report lists shared elements once. The profile and the export audit event
+  report lists a damage scenario or control used by two systems once. The
+  profile and the export audit event
   record the systems (RPT-03).
-- **Excel export and import.** Export adds a "Systems" column (names joined
-  with ", "). Import (job 080) can map a "System" column: each name becomes a
-  system (created if missing) and the row's component joins it. Same dry-run
+- **Excel export and import.** Export adds a "System" column (for damage
+  scenarios and controls used by several systems, the names joined with ", ").
+  Import (job 080) can map a "System" column: each name becomes a system
+  (created if missing) and the row's component is put in it. Same dry-run
   preview, same one batch.
-- **Visual IDs (job 118).** Stay per project. A shared element has one ID in
-  every view, which is what a reviewer cites. No system prefix (a shared
-  element has no single system).
+- **Visual IDs (job 118).** Stay per project, with no system prefix. An ID
+  stays the same when a component moves to another system, so a reviewer's
+  citation does not break.
 - **Methodology.** One per project. All systems share scales, so combined
   totals mean something.
 - **Access.** Per project (ACC-01). Per-system access is not planned.
@@ -331,7 +351,7 @@ empty, v1 fixtures load unchanged):
 | `ApplyControl { control, target: ItemRef }` / `UnapplyControl { ... }` | each other | 123 |
 | `SetControlRule { control, attack_type, ceiling: Option<FeasibilityLevel> }` | same, old value | 123 |
 | `SetControlKind { control, kind: Option<ControlKind> }` | same, old value | 124 |
-| `AddSystem`, `RenameSystem`, `AddSystemComponent`, `RemoveSystemComponent`, `RemoveSystem` (empty only) | the matching op | 119 |
+| `AddSystem`, `RenameSystem`, `SetComponentSystem { component, system: Option<SystemId> }` (top-level components only), `RemoveSystem` (only when no component is in it) | the matching op | 119 |
 
 Remove rules follow today's pattern (the model rejects; the client sends a
 batch): `RemoveComponent` and `RemoveInterface` are rejected while a control is
@@ -346,14 +366,17 @@ so packs without them load and behave as today.
 
 | Case | What happens |
 |---|---|
-| **A shared ECU in two systems** | The gateway is in both member lists. Its interfaces, settings, assets and threats show in both views. In the combined view it shows once; per-system totals both count it and the overview says "shared with ADAS". A setting on it changes both systems at once, which is the point. |
-| **A gateway between systems** | Either a member of both systems (it is part of both), or a member of neither with data flows to both (an outside actor). A data flow whose ends are in different systems is a **boundary flow**: listed in the combined overview and marked on the item definition page; the same check as the existing `BoundaryCrossingDataFlowWithoutThreat` lint (which covers trust boundaries) runs on it. An attack that crosses (ADAS compromised → brake request) is a tree in the Brake threat whose steps go via ADAS components, so ADAS settings cap it with no tree-to-tree link. |
+| **An ECU two systems need (the gateway)** | It becomes a system of its own, "Gateway", with its interfaces, assets, threats and settings. Brake and ADAS link to it by boundary flows. Splitting it out of Brake is one op (`SetComponentSystem`), one undo step; its interfaces, assets and threats move with it. |
+| **An attack that crosses systems** (ADAS compromised → brake request through the gateway) | The threat is on a Brake asset, so the tree is in Brake. Its steps go via ADAS and Gateway components, which the step's via chip shows with their system ("Gateway · Gateway system"). Gateway and ADAS settings cap those steps, with no tree-to-tree link, and the number is the same whether Brake is viewed alone or with the others. |
+| **A sensor that feeds several systems** (wheel speed to Brake and ADAS) | Put it in the system that owns it (Brake) and draw a boundary flow to the ADAS component that reads it. If it matters on its own (many consumers, its own threats), make it a system ("Chassis sensors"). Either way it is in one system. |
+| **A damage scenario or control used by two systems** | Allowed: these describe consequences and measures, not parts. "Loss of braking deceleration" is linked from Brake and Gateway threats and shows in both; in the combined view it is listed once. |
+| **A component with no system** once systems exist | Shown in every view as "not in a system", and a lint finding lists it, so nothing falls outside every TARA unnoticed. |
 | **A setting for one interface only** | Apply the control to the interface, not the ECU. It reaches only steps via that interface. A component-level setting also reaches its interfaces; the interface inspector shows those as "from ADAS ECU". |
 | **A setting the methodology does not know** | A custom setting: name, targets, rules over the pack's attack types. If no attack type fits, the manual ceiling on one step. No code change in either case. |
 | **Conflicting settings** | The maths cannot conflict: ceilings combine with `min`, so the strongest applies and the explain-why lists all of them. A *semantic* conflict ("debug port fused" and "debug port open for field service" on one interface) is flagged by an optional pack `conflicts_with` list as a lint warning, not blocked (job 126): the consultant may be recording a real defect. |
 | **A rule is too broad for one step** (secure boot does not stop this bootloader exploit) | Give the step the attack type that matches what it really is (for example "bootloader exploit"), which the preset does not cap. No per-step exception lists. |
 | **A step with no via** | No automatic cap; a lint info lists leaf steps with no via once the project has any applied setting, so gaps are visible. |
-| **Removing a component that has settings** | One batch: unapply settings, clear step vias, leave systems, remove. Toast: "Removed ADAS ECU and 3 settings; 4 steps lost their via. Undo". |
+| **Removing a component that has settings** | One batch: unapply settings, clear step vias, remove. Toast: "Removed ADAS ECU and 3 settings; 4 steps lost their via. Undo". |
 | **Pack upgraded with different preset ceilings** | Saved controls keep their copied rules. A lint info names controls whose rules differ from their preset's current defaults, with a one-click "use the pack's values" (a normal undoable batch). |
 | **A setting that makes things worse** (debug port left open) | Not a setting. Exposure is modelled as today: the step exists and its inherent rating says how easy it is. Settings only lower feasibility. |
 
@@ -361,9 +384,10 @@ so packs without them load and behave as today.
 
 | Idea | Why it is out | Add it when |
 |---|---|---|
-| A `system` field on every element and op (first idea) | A partition cannot hold a shared ECU; the membership list does it with five ops and no migration | never |
+| A `system` field on every element and op (first idea) | Only the component needs it; the rest follows from links and cannot disagree with them | never |
+| A component in several systems (first draft of this note) | Blurs each system's boundary and needs "counted once" rules everywhere; a system of its own is clearer (owner, 2026-11-02) | never |
 | Program of projects | Section 5.1 | a customer needs two analysts editing two systems at once, or per-system access |
-| Tree-to-tree links across systems (old SYS-04 idea) | A shared component plus "via" lets ADAS settings cap Brake steps already; tree links need cross-tree cycle checks and a second explain-why path | a consultant shows a case via cannot express |
+| Tree-to-tree links across systems (old SYS-04 idea) | "Via" on a step lets ADAS and Gateway settings cap Brake steps already; tree links need cross-tree cycle checks and a second explain-why path | a consultant shows a case via cannot express |
 | Component kinds (ECU, sensor, actuator) | The name already says it; no rule needs to tell them apart yet | a pack preset must apply only to ECUs, or the diagram (075) needs icons |
 | Factor-level effects (raise "window of opportunity" to Difficult) | One effect type (a ceiling) works for every pack, including plain likelihood (D24); factor effects would only fit attack potential | the ISO pack's users ask for factor-level reasoning |
 | A true "closed" state below the lowest level | Section 6.2 | a methodology needs "no path" with its own risk rule (Q2) |
@@ -385,14 +409,15 @@ files, so they run one after the other, not in parallel.
 | 2 | 123 | Settings: apply a control to components and interfaces, control rules, the derived ceilings in residual evaluation and the cache, explain-why lines, "Security settings" section in the component and interface inspectors, custom settings, canvas badge, undo toast with what moved | CFG-03, CFG-04, CFG-05, CFG-08 | M |
 | 3 | 124 | Presets: pack `control_kinds` with default rules in the three packs (EN, JA), control kind, "Add setting" menu grouped by preset, the "rules differ from preset" lint | CFG-06 | S |
 | 4 | 125 | "Reduced by" in the risk and control tables, a "Security settings" report section per component, XLSX columns | CFG-07 | S |
-| 5 | 119 | Systems: arena and ops, store, diff, lint, systems list on the item definition page, membership in the component inspector, the view switcher (one, a subset, all) filtering every page | SYS-01, SYS-02, SYS-03 | M |
-| 6 | 120 | Combined view: the overview's per-system totals and shared elements, boundary flows, top paths and choke points within the view, Versions diff within the view, undo revealing hidden elements | SYS-04, SYS-05 | S |
+| 5 | 119 | Systems: arena and ops, store, diff, lint, systems table on the item definition page, a system picker in the component inspector, the view switcher (one, a subset, all) filtering every page | SYS-01, SYS-02, SYS-03 | M |
+| 6 | 120 | Combined view: the overview's per-system totals and boundary flows, top paths and choke points within the view, Versions diff within the view, undo revealing hidden elements | SYS-04, SYS-05 | S |
 | 7 | 121 | Reports and exports by system: builder filter, cover lists systems, XLSX Systems column, Excel import System column | SYS-06 | S |
 | 8 | 126 | Conflicting settings: optional pack `conflicts_with`, one lint warning | CFG-09 | XS |
 
-Jobs 119 to 121 keep their numbers but are rewritten: 119 loses "each system
-owns its elements" (membership, not ownership); 120 loses "composing trees
-across system boundaries" (a view, no tree links); 121 is unchanged in scope.
+Jobs 119 to 121 keep their numbers but are rewritten: 119 puts the system on
+the component only (the rest is derived); 120 loses "composing trees across
+system boundaries" (a view, no tree links) and is renamed
+`120-system-overview`; 121 is unchanged in scope.
 
 ### 9.1 Acceptance tests per slice
 
@@ -445,9 +470,13 @@ Model property tests go in `crates/aegis-model/tests/` (proptest, as in
   preview.
 
 **119 Systems**
-- Model property: derived scope is monotone and a union: `scope(A ∪ B) =
-  scope(A) ∪ scope(B)`; an element with no link is in every scope; removing a
-  system changes no other element; system ops round-trip and undo exactly.
+- Model property: derived scope is a union: `scope(A ∪ B) = scope(A) ∪
+  scope(B)`; every component, interface, asset and threat is in at most one
+  system; an element with no link is in every scope; removing a system changes
+  no element except clearing its components' system; system ops round-trip and
+  undo exactly.
+- Model: a system on a child component is rejected; moving a component with a
+  system under a parent is rejected.
 - Model: v1 fixtures load with no systems; a project with no systems shows
   no system UI.
 - Client: page rows are filtered by the view; the view is a user setting per
@@ -459,43 +488,32 @@ Model property tests go in `crates/aegis-model/tests/` (proptest, as in
 **120 Combined view**
 - Model property: a risk number is the same in every view that contains its
   threat.
-- Client: the overview counts a shared element once in "All" and once in each
-  system's row; boundary flows are the flows with ends in different systems.
+- Client: the per-system rows add up to the "All" row for components, assets
+  and threats; a damage scenario used by two systems is in both rows and once
+  in "All"; boundary flows are the flows with ends in different systems.
 - Shell: undo of an edit outside the view adds that system to the view and
   selects the element.
 
 **121 Reports by system**
 - Client: a report profile with systems round-trips; the export audit detail
   names the systems; Excel import with a System column creates systems and
-  memberships in one batch with a dry-run preview.
+  puts components in them in one batch with a dry-run preview.
 - Shell: the report builder's systems filter is keyboard reachable.
 
 **126 Conflicts**
 - Model: a pack with `conflicts_with` decodes; the lint fires once per target
   with both kinds and not at all without them.
 
-## 10. Questions for the owner (with my recommendation)
+## 10. Questions for the owner, and the answers (2026-11-02)
 
-1. **Is a system a named list of components inside one project (shared ECUs
-   listed in several systems, everything else follows its links)?**
-   Recommended: yes. It handles shared ECUs and gateways, changes no existing
-   op, and needs no server change. (Section 5.)
-2. **"Closing" an attack path: cap at the lowest level and label it "closed",
-   or a real "no path" state?** Recommended: cap at the lowest level. No shipped
-   methodology has a level below it, and a real "no path" would need a new risk
-   rule in every pack.
-3. **Settings before systems?** Recommended: yes (jobs 122 to 125 first). Every
-   project benefits from settings now; systems help only multi-system
-   clients. If a client demo needs systems first, 119 can go first: the two
-   tracks do not depend on each other.
-4. **Cross-system attacks through shared components and "via", with no
-   tree-to-tree links for now?** Recommended: yes. A Brake tree with steps via
-   ADAS components is capped by ADAS settings already; tree links can come if a
-   real case needs them.
-5. **The shipped presets and their default ceilings are editable examples that
-   you review before client use (like the CRA risk matrix)?** Recommended: yes,
-   and you review the ISO pack's list before job 124 ships (about 12 presets:
-   secure boot, secure flash, debug port fused, physical access disabled,
-   housing sealed, physical separation, message authentication on CAN, TLS on
-   Ethernet, Bluetooth pairing with PIN, USB disabled in production, firewall
-   on the gateway, rate limiting).
+The owner agreed with every recommendation and changed one point of the
+model: each system has its own boundary, and a component several systems need
+becomes its own system (section 5.2).
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | Are systems groups of components inside one project, with everything else following its links? | Yes, inside one project. Changed: a component is in at most one system; the gateway is its own system. |
+| 2 | "Closing" an attack path: cap at the lowest level and label it "closed", or a real "no path" state? | Cap at the lowest level. |
+| 3 | Settings before systems (jobs 122 to 125 first)? | Yes. |
+| 4 | Cross-system attacks through components and "via", with no tree-to-tree links for now? | Yes. |
+| 5 | The shipped presets and their default ceilings are editable examples the owner reviews before client use? | Yes. The owner reviews the ISO pack's list (about 12 presets: secure boot, secure flash, debug port fused, physical access disabled, housing sealed, physical separation, message authentication on CAN, TLS on Ethernet, Bluetooth pairing with PIN, USB disabled in production, firewall on the gateway, rate limiting) before job 124 ships. |
