@@ -6,7 +6,8 @@
 - Jobs: 113 to 117 in [factory/backlog.md](../factory/backlog.md), Phase 5.
 - Decision: D25 in [decisions.md](decisions.md) (stay on Slint; no native rewrite).
 - Related jobs already planned: 081 command palette, 082 panel slots, 083 history
-  panel, 084 bulk edit, 085 design system pass. This document does not repeat them.
+  panel, 084 bulk edit (UI-04, built; its rules are below), 085 design system pass. This
+  document does not repeat the others.
   It says where they meet the new work.
 
 ---
@@ -130,6 +131,19 @@ no dialog; the headless tests create, cancel (Escape) and create-and-next for
 assets, threats and controls, and check that a cancelled draft sends no op; the
 UX review records the time and the number of key presses to add five assets
 before and after.
+
+### UI-04 Multi-select and bulk edit (S, job 084) — built
+
+| ID | Requirement | Pri |
+|---|---|---|
+| UI-04.1 | In the asset, damage, threat, control and risk tables, **ctrl-click** (⌘ on macOS, as in the shortcut table) adds or drops a row and **shift-click** picks every row from the selected row to the clicked one. A plain click, an arrow key, Home, End or Escape goes back to one row. | M |
+| UI-04.2 | Picked rows are kept by element ID, not by row number, so a table that re-sorts (the risk register) or a change from another editor keeps the right rows; rows whose element is gone drop out. | M |
+| UI-04.3 | With two or more rows picked, a bar under the table shows "N selected", **Remove selected** (not in the risk table) and **Clear selection**; Delete removes the picked rows. The risk table's bar has a treatment drop-down that sets every picked threat. | M |
+| UI-04.4 | A bulk change is one `Edit::Batch`: one undo step and one redo, named "remove 3 assets", with the undo toast "3 assets removed · Undo". No dialog. One refused item refuses the batch and changes nothing. | M |
+| UI-04.5 | A user who may not edit gets no bar, ctrl and shift clicks pick nothing, and a stale callback changes nothing. | M |
+
+Not built: select-all, shift+arrow to extend, and bulk edit of other fields
+(asset properties, damage impacts); see the backlog.
 
 ### UI-09 Row actions in tables (S, job 115)
 

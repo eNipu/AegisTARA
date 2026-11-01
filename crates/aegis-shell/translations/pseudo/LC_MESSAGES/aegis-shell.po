@@ -1399,3 +1399,18 @@ msgstr "⟦Píck á rów tó séé whát góíng báck tó ít wóúld úndó.�
 
 msgid "Go back to here"
 msgstr "⟦Gó báck tó héré␣␣⟧"
+
+msgid "{} selected"
+msgstr "⟦{} séléctéd␣␣⟧"
+
+msgid "Remove selected"
+msgstr "⟦Rémóvé séléctéd␣␣⟧"
+
+msgid "Remove {} selected"
+msgstr "⟦Rémóvé {} séléctéd␣␣⟧"
+
+msgid "Clear selection"
+msgstr "⟦Cléár séléctíón␣␣⟧"
+
+msgid "Set treatment"
+msgstr "⟦Sét tréátmént␣␣⟧"
