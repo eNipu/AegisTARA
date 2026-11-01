@@ -234,3 +234,54 @@ async fn a_description_is_typed_in_place_tab_saves_and_escape_restores() {
     app.frame();
     save(&app.frame(), "p02-asset-description-inline");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_translation_editor_shows_only_for_a_project_with_languages() {
+    use aegis_shell::ProjectLanguages;
+    use slint::ComponentHandle;
+
+    let server = TestServer::start().await;
+    let app = editing_with_sample(&server).await;
+    show(&app, Page::Assets).await;
+    app.window.invoke_pick_asset(0);
+    app.until("asset picked", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.data.asset.is_some())
+    })
+    .await;
+    let single = app.frame();
+    assert_eq!(
+        app.window
+            .global::<ProjectLanguages>()
+            .get_langs()
+            .row_count(),
+        0
+    );
+
+    // Comma or space separated, a repeat counts once.
+    app.window.invoke_set_project_languages("ja, de ja".into());
+    app.until("languages saved", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.languages == ["ja", "de"] && p.sync == SyncView::Synced)
+    })
+    .await;
+    let langs = app.window.global::<ProjectLanguages>();
+    assert_eq!(langs.get_text(), "ja, de");
+    assert_eq!(langs.get_langs().row_data(0).as_deref(), Some("ja"));
+    let multi = app.frame();
+    save(&multi, "p02-translation-editor");
+    assert_ne!(single.rgb, multi.rgb, "the add row appears");
+
+    // Back to one language: the add row is gone again.
+    app.window.invoke_set_project_languages("".into());
+    app.until("languages cleared", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.languages.is_empty() && p.sync == SyncView::Synced)
+    })
+    .await;
+    assert_eq!(app.frame().rgb, single.rgb);
+
+    drop(app);
+    server.stop().await;
+}
