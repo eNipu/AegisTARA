@@ -182,7 +182,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | UI-01 | Command palette (Ctrl+K / Cmd+K) over pages, elements and commands, with shortcuts shown | M | 5 | 081 |
 | UI-02 | The existing inspector shows every property of the selection with explain-why; resizable panel slots (left, right, bottom) remember their size; the library and AI panels use the same slots | M | 5 | 082 |
 | UI-03 | History panel listing ops, with undo to a point | S | 5 | 083 |
-| UI-04 | Multi-select and bulk edit in tables | S | 5 | 084 |
+| UI-04 | Multi-select (click, ctrl, shift) and bulk edit in the asset, damage, threat, control and risk tables: remove, and set the treatment of threats; one undo step with an undo toast, none for a user who may not edit ([ui-ux-requirements.md](ui-ux-requirements.md) UI-04) | S | 5 | 084 |
 | UI-05 | Design system pass: tokens, compact density, empty states, Japanese layout check, screenshots in both languages | M | 5 | 085 |
 | UI-06 | Every action under 100 ms or with visible progress (A1 budgets unchanged) | M | all | every job |
 | UI-07 | Platform fidelity: GPU renderer with software fallback, Cupertino style on macOS, system appearance, ⌘ shortcuts, system fonts ([ui-ux-requirements.md](ui-ux-requirements.md), D25) | M | 5 | 113 |
