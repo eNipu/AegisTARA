@@ -112,19 +112,31 @@ Commit e44319a (with S3's client-core part).
   elided to "A31...".
 - The unused `Table` component and its import were deleted.
 
+## Closing the gaps (after the first escalation)
+
+The first round ended ESCALATE with three open gaps. All three are built, each with a test.
+
+- **Return moves focus into the inspector** (UI-09.4). The window has `focus-name`; Enter or Open on an
+  element row sets it (only while editing). Each `NameEditor` binds `focus-requested <=> root.focus-name`
+  and, when the flag is set (on `init`, because the panel appears after the pick, or on change, when the
+  panel is already there), takes the keyboard and clears the flag. An 800 ms `Timer` clears a request no
+  field answered, so it cannot steal focus later. Attack trees are left alone: a tree row's detail is the
+  canvas. Test `return_moves_focus_into_the_inspector`: click a row, Return, type, Return renames the asset
+  from the keyboard (twice, on two rows). Enter in a table with no selection does nothing.
+- **The draft row has no row actions.** A draft row has an empty ID cell; `DataTable` draws no + or ⋯ on a
+  row whose first cell is empty. Test `a_draft_row_has_no_row_actions` (a real row has buttons, the draft
+  row has none); it was seen to fail with the check removed.
+- **Duplicate's " copy" suffix is translated.** The `Duplicate*` edits carry a `suffix` string; the window
+  property `copy-suffix: @tr("copy")` supplies it, so the core stays free of i18n. ja ("コピー") and pseudo
+  entries added. The duplicate test now compares with `get_copy_suffix()`.
+
 ## Gate
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --workspace --locked` (1,630 tests, 0 failed) and `scripts/deny.sh` pass on the tree
-as of the new tests and the VerticalLayout fix. After that run, two small edits (the callback
-assertions in the read-only test, deleting the unused `Table`) were checked with fmt, clippy on
-`aegis-shell` and the whole `aegis-shell` test suite; the full workspace run was not repeated.
+`cargo test --workspace --locked` (1,632 tests, 0 failed) and `scripts/deny.sh` pass on the final tree.
 
-## Not done
-- **Return does not move focus into the inspector** (UI-09.4): it re-picks the row. Each of the
-  eleven inspectors is a conditional panel that appears after the pick, so focus needs a
-  "focus when it exists" flag per page.
-- **The draft row still shows row actions** (a draft row is a table row; + and ⋯ on it do nothing useful).
-- **Duplicate's " copy" suffix is English** and lives in the client core, which has no i18n.
+## Not done (follow-ups for a person, not gates)
 - The ⋯ menu is operated by pointer; its keyboard path is the Control+D / Delete keys, not the menu.
-- UI-09.2 "on keyboard focus": the actions show on the selected row, which keyboard movement
-  follows; there is no separate per-button focus ring or Tab order inside a row.
+- UI-09.2 "on keyboard focus": the actions show on the selected row, which keyboard movement follows;
+  there is no separate per-button focus ring or Tab order inside a row.
+- The 5,000-row numbers are the software renderer in a headless window; the feel on a real window with the
+  GPU renderer needs a person. VoiceOver / NVDA on the table and menu, and a read of the ja strings, likewise.

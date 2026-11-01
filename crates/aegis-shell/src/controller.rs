@@ -321,6 +321,13 @@ impl Controller {
         self.send(Command::Edit(edit));
     }
 
+    /// The word a duplicate's name ends with, in the window's language.
+    fn copy_suffix(&self) -> String {
+        self.window
+            .upgrade()
+            .map_or_else(|| "copy".into(), |w| w.get_copy_suffix().to_string())
+    }
+
     fn view(&self) -> Option<Arc<ViewModel>> {
         self.state.borrow().view.clone()
     }
@@ -1417,6 +1424,7 @@ impl Controller {
                 c.edit(Edit::DuplicateComponent {
                     id: ComponentId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1425,6 +1433,7 @@ impl Controller {
                 c.edit(Edit::DuplicateInterface {
                     id: InterfaceId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1433,6 +1442,7 @@ impl Controller {
                 c.edit(Edit::DuplicateDataFlow {
                     id: DataFlowId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1443,6 +1453,7 @@ impl Controller {
                 c.edit(Edit::DuplicateTrustBoundary {
                     id: TrustBoundaryId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1451,6 +1462,7 @@ impl Controller {
                 c.edit(Edit::DuplicateAsset {
                     id: AssetId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1459,6 +1471,7 @@ impl Controller {
                 c.edit(Edit::DuplicateDamage {
                     id: DamageId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1467,6 +1480,7 @@ impl Controller {
                 c.edit(Edit::DuplicateThreat {
                     id: ThreatId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1475,6 +1489,7 @@ impl Controller {
                 c.edit(Edit::DuplicateControl {
                     id: ControlId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1483,6 +1498,7 @@ impl Controller {
                 c.edit(Edit::DuplicateGoal {
                     id: GoalId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });
@@ -1491,6 +1507,7 @@ impl Controller {
                 c.edit(Edit::DuplicateClaim {
                     id: ClaimId::new_v7(),
                     source,
+                    suffix: c.copy_suffix(),
                 });
             }
         });

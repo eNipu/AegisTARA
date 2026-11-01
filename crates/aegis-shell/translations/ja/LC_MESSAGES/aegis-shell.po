@@ -1281,6 +1281,9 @@ msgstr "複製"
 msgid "Duplicate {}"
 msgstr "{} を複製"
 
+msgid "copy"
+msgstr "コピー"
+
 msgid "Remove {}"
 msgstr "{} を削除"
 

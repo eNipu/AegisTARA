@@ -8,7 +8,7 @@ None. (A blocking defect, the header drawn below the rows, was found by the firs
 ## Advisory findings
 - The ⋯ button shows three dots as "..." at this size; it reads, but is lower than the + glyph.
 - Hover and selection use the OS accent and selection colours; the hover row on the selected-accent blue is a lighter blue that is close to the selected row's colour on macOS. Check Dark mode.
-- A draft row is not italic grey (a table cell cannot style one row; still open from job 114).
+- A draft row is not italic grey (a table cell cannot style one row; still open from job 114). It now shows no + or ⋯.
 
 ## What is good
 - Header bar above the rows, 28 px; rows 32 px (28 compact); alternate rows and the accent selected row; long names elide.

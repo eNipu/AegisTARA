@@ -1621,6 +1621,7 @@ async fn row_actions_pass_the_parent_as_draft_context() {
         .send(Command::Edit(Edit::DuplicateComponent {
             id: ComponentId::new_v7(),
             source: component,
+            suffix: "copy".into(),
         }))
         .expect("sent");
     alice.send(Command::ShowPage(Page::Item)).expect("sent");

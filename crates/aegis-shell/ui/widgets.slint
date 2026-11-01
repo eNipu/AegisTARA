@@ -297,7 +297,8 @@ export component DataTable inherits Rectangle {
                         }
                     }
                 }
-                if root.has-actions && (row-index == root.selected || row-touch.has-hover): HorizontalLayout {
+                // A draft row (an element being created) has no ID yet and no actions.
+            if root.has-actions && row[0].text != "" && (row-index == root.selected || row-touch.has-hover): HorizontalLayout {
                     x: parent.width - self.preferred-width - 8px;
                     y: (parent.height - self.preferred-height) / 2;
                     spacing: 4px;

@@ -56,6 +56,9 @@ global Typing {
 component NameEditor inherits VerticalLayout {
     in property <string> name;
     in property <bool> editable;
+    // Set by a table row's Enter or Open; the editor takes the keyboard when
+    // it exists (its panel appears after the pick) and clears the request.
+    in-out property <bool> focus-requested;
     callback renamed(string);
     property <bool> typing: edit.has-focus && edit.text != root.name;
     // The text already sent, so Enter and the focus leaving do not send it twice.
@@ -63,6 +66,14 @@ component NameEditor inherits VerticalLayout {
     property <bool> needed;
     spacing: 4px;
     changed typing => { Typing.dirty = root.typing; }
+    function take-focus() {
+        if (root.focus-requested && root.editable) {
+            root.focus-requested = false;
+            edit.focus();
+        }
+    }
+    init => { root.take-focus(); }
+    changed focus-requested => { root.take-focus(); }
     function save() {
         if (edit.text == root.name || (root.requested != "" && edit.text == root.requested)) { return; }
         if (edit.text == "") {
@@ -533,6 +544,19 @@ in property <string> redo-label;
     // Where the canvas is in the window, for tests that click on nodes.
     in-out property <length> canvas-x;
     // The last data table to lay out (tests aim real clicks at its rows).
+    // Enter or Open on a row asks the details panel's name field for the
+    // keyboard; the request lapses if no such field appears.
+    // The word a duplicated element's name ends with.
+    in property <string> copy-suffix: @tr("copy");
+    in-out property <bool> focus-name;
+    function focus-inspector() {
+        if (root.editing) { root.focus-name = true; }
+    }
+    Timer {
+        interval: 800ms;
+        running: root.focus-name;
+        triggered => { root.focus-name = false; }
+    }
     in-out property <length> table-x;
     in-out property <length> table-y;
     in-out property <length> table-w;
@@ -1600,8 +1624,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.pick-asset(i); }
-                            activated(i) => { root.pick-asset(i); }
-                            open-row(i) => { root.pick-asset(i); }
+                            activated(i) => { root.pick-asset(i); root.focus-inspector(); }
+                            open-row(i) => { root.pick-asset(i); root.focus-inspector(); }
                             add-child(i) => { root.add-child-asset(i); }
                             duplicate-row(i) => { root.duplicate-asset(i); }
                             remove-row(i) => { root.remove-row-asset(i); }
@@ -1622,7 +1646,7 @@ in property <string> redo-label;
                     if root.has-asset && root.draft-kind != "asset": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Asset") + " · " + root.asset-id; }
-                        NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
+                        NameEditor { focus-requested <=> root.focus-name; name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
                         DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Component");
@@ -1669,8 +1693,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.pick-damage(i); }
-                            activated(i) => { root.pick-damage(i); }
-                            open-row(i) => { root.pick-damage(i); }
+                            activated(i) => { root.pick-damage(i); root.focus-inspector(); }
+                            open-row(i) => { root.pick-damage(i); root.focus-inspector(); }
                             add-child(i) => { root.add-child-damage(i); }
                             duplicate-row(i) => { root.duplicate-damage(i); }
                             remove-row(i) => { root.remove-row-damage(i); }
@@ -1691,7 +1715,7 @@ in property <string> redo-label;
                     if root.has-damage && root.draft-kind != "damage": Panel {
                         width: root.side-width;
                         SectionTitle { text: root.damage-singular + " · " + root.damage-id; }
-                        NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
+                        NameEditor { focus-requested <=> root.focus-name; name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
                         DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Impact rating"); }
                         for f[fi] in root.damage-impacts: Field {
@@ -1731,8 +1755,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.select-threat(i); }
-                            activated(i) => { root.select-threat(i); }
-                            open-row(i) => { root.select-threat(i); }
+                            activated(i) => { root.select-threat(i); root.focus-inspector(); }
+                            open-row(i) => { root.select-threat(i); root.focus-inspector(); }
                             add-child(i) => { root.add-child-threat(i); }
                             duplicate-row(i) => { root.duplicate-threat(i); }
                             remove-row(i) => { root.remove-row-threat(i); }
@@ -1771,7 +1795,7 @@ in property <string> redo-label;
                         Panel {
                             width: root.side-width + 12px;
                             SectionTitle { text: @tr("Threat scenario") + " · " + root.td-id; }
-                            NameEditor { name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
+                            NameEditor { focus-requested <=> root.focus-name; name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
                             DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             Text { text: @tr("On asset ") + root.td-asset; color: Theme.graphite; font-size: 12px; }
                             HorizontalLayout {
@@ -2298,8 +2322,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.pick-control(i); }
-                            activated(i) => { root.pick-control(i); }
-                            open-row(i) => { root.pick-control(i); }
+                            activated(i) => { root.pick-control(i); root.focus-inspector(); }
+                            open-row(i) => { root.pick-control(i); root.focus-inspector(); }
                             add-child(i) => { root.add-child-control(i); }
                             duplicate-row(i) => { root.duplicate-control(i); }
                             remove-row(i) => { root.remove-row-control(i); }
@@ -2320,7 +2344,7 @@ in property <string> redo-label;
                     if root.has-control && root.draft-kind != "control": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Security control") + " · " + root.control-id; }
-                        NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
+                        NameEditor { focus-requested <=> root.focus-name; name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
                         DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Attached to"); }
                         LinkList { items: root.control-steps; empty-text: @tr("No attack step yet."); clicked(i) => { root.control-step-clicked(i); } }
@@ -2357,8 +2381,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.pick-goal(i); }
-                            activated(i) => { root.pick-goal(i); }
-                            open-row(i) => { root.pick-goal(i); }
+                            activated(i) => { root.pick-goal(i); root.focus-inspector(); }
+                            open-row(i) => { root.pick-goal(i); root.focus-inspector(); }
                             duplicate-row(i) => { root.duplicate-goal(i); }
                             remove-row(i) => { root.remove-row-goal(i); }
                         }
@@ -2373,8 +2397,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.pick-claim(i); }
-                            activated(i) => { root.pick-claim(i); }
-                            open-row(i) => { root.pick-claim(i); }
+                            activated(i) => { root.pick-claim(i); root.focus-inspector(); }
+                            open-row(i) => { root.pick-claim(i); root.focus-inspector(); }
                             duplicate-row(i) => { root.duplicate-claim(i); }
                             remove-row(i) => { root.remove-row-claim(i); }
                         }
@@ -2406,7 +2430,7 @@ in property <string> redo-label;
                         }
                         if root.has-goal && root.draft-kind == "": Panel {
                             SectionTitle { text: root.goal-singular + " · " + root.goal-id; }
-                            NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
+                            NameEditor { focus-requested <=> root.focus-name; name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
                             DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Controls that realize it"); }
                             CheckList { items: root.goal-controls; editable: root.editing; empty-text: @tr("Add security controls first."); toggled(i, on) => { root.toggle-goal-control(i, on); } }
@@ -2416,7 +2440,7 @@ in property <string> redo-label;
                         }
                         if root.has-claim && root.draft-kind == "": Panel {
                             SectionTitle { text: @tr("Cybersecurity claim") + " · " + root.claim-id; }
-                            NameEditor { name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
+                            NameEditor { focus-requested <=> root.focus-name; name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
                             DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
                             LinkList { items: root.claim-threats; clicked(i) => { root.claim-threat-clicked(i); } }
@@ -2649,8 +2673,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.pick-component(i); }
-                            activated(i) => { root.pick-component(i); }
-                            open-row(i) => { root.pick-component(i); }
+                            activated(i) => { root.pick-component(i); root.focus-inspector(); }
+                            open-row(i) => { root.pick-component(i); root.focus-inspector(); }
                             add-child(i) => { root.add-child-component(i); }
                             duplicate-row(i) => { root.duplicate-component(i); }
                             remove-row(i) => { root.remove-row-component(i); }
@@ -2667,8 +2691,8 @@ in property <string> redo-label;
                                 show-duplicate: true;
                                 show-remove: true;
                                 picked(i) => { root.pick-interface(i); }
-                                activated(i) => { root.pick-interface(i); }
-                                open-row(i) => { root.pick-interface(i); }
+                                activated(i) => { root.pick-interface(i); root.focus-inspector(); }
+                                open-row(i) => { root.pick-interface(i); root.focus-inspector(); }
                                 duplicate-row(i) => { root.duplicate-interface(i); }
                                 remove-row(i) => { root.remove-row-interface(i); }
                             }
@@ -2685,8 +2709,8 @@ in property <string> redo-label;
                                 show-duplicate: true;
                                 show-remove: true;
                                 picked(i) => { root.pick-data-flow(i); }
-                                activated(i) => { root.pick-data-flow(i); }
-                                open-row(i) => { root.pick-data-flow(i); }
+                                activated(i) => { root.pick-data-flow(i); root.focus-inspector(); }
+                                open-row(i) => { root.pick-data-flow(i); root.focus-inspector(); }
                                 duplicate-row(i) => { root.duplicate-data-flow(i); }
                                 remove-row(i) => { root.remove-row-data-flow(i); }
                             }
@@ -2701,8 +2725,8 @@ in property <string> redo-label;
                             show-duplicate: true;
                             show-remove: true;
                             picked(i) => { root.pick-trust-boundary(i); }
-                            activated(i) => { root.pick-trust-boundary(i); }
-                            open-row(i) => { root.pick-trust-boundary(i); }
+                            activated(i) => { root.pick-trust-boundary(i); root.focus-inspector(); }
+                            open-row(i) => { root.pick-trust-boundary(i); root.focus-inspector(); }
                             duplicate-row(i) => { root.duplicate-trust-boundary(i); }
                             remove-row(i) => { root.remove-row-trust-boundary(i); }
                         }
@@ -2790,7 +2814,7 @@ in property <string> redo-label;
                     if root.item-tab == 0 && root.has-component && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Component") + " · " + root.component-id; }
-                        NameEditor { name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
+                        NameEditor { focus-requested <=> root.focus-name; name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
                         DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Parent");
@@ -2813,7 +2837,7 @@ in property <string> redo-label;
                     if root.item-tab == 1 && root.has-interface && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Interface") + " · " + root.interface-id; }
-                        NameEditor { name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
+                        NameEditor { focus-requested <=> root.focus-name; name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
                         DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Kind");
@@ -2832,7 +2856,7 @@ in property <string> redo-label;
                     if root.item-tab == 2 && root.has-data-flow && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Data flow") + " · " + root.data-flow-id; }
-                        NameEditor { name: root.data-flow-name; editable: root.editing; renamed(t) => { root.rename-data-flow(t); } }
+                        NameEditor { focus-requested <=> root.focus-name; name: root.data-flow-name; editable: root.editing; renamed(t) => { root.rename-data-flow(t); } }
                         DescriptionFor { items: root.descriptions; kind: "data-flow"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Interface");
@@ -2851,7 +2875,7 @@ in property <string> redo-label;
                     if root.item-tab == 3 && root.has-trust-boundary && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Trust boundary") + " · " + root.trust-boundary-id; }
-                        NameEditor { name: root.trust-boundary-name; editable: root.editing; renamed(t) => { root.rename-trust-boundary(t); } }
+                        NameEditor { focus-requested <=> root.focus-name; name: root.trust-boundary-name; editable: root.editing; renamed(t) => { root.rename-trust-boundary(t); } }
                         DescriptionFor { items: root.descriptions; kind: "trust-boundary"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Components"); }
                         CheckList { items: root.trust-boundary-members; editable: root.editing; toggled(i, on) => { root.toggle-trust-boundary-member(i, on); } }
