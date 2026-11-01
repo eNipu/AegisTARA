@@ -1375,3 +1375,9 @@ msgstr "⟦Ínsért ín plácé óf '{}'␣␣⟧"
 
 msgid "Rename project"
 msgstr "⟦Rénámé prójéct␣␣⟧"
+
+msgid "Baseline name, for example B1 Design freeze"
+msgstr "⟦Básélíné námé, fór éxámplé B1 Désígn fréézé␣␣⟧"
+
+msgid "Baseline name"
+msgstr "⟦Básélíné námé␣␣⟧"
