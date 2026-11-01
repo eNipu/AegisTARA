@@ -5,7 +5,7 @@
 //! Two walks cover all kinds. The first replays the ops of the model's own "every op" walk-through applies over
 //! "every op" walk-through over the second methodology (`second_every_op`,
 //! 37 kinds: vocabulary, threats, trees, controls, goals); the second walk
-//! below covers the other 27 (item definition, tree nodes, descriptions,
+//! below covers the other 28 (item definition, tree nodes, descriptions,
 //! review marks). A new `Op` variant fails this test until a walk covers it.
 
 #[path = "../../aegis-model/tests/common/mod.rs"]
@@ -53,7 +53,7 @@ fn who() -> Provenance {
     Provenance::human("alice", 1)
 }
 
-/// The 27 kinds the model's walk-through does not reach, built against a
+/// The 28 kinds the model's walk-through does not reach, built against a
 /// valid starting state and torn down again.
 fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
     let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
@@ -179,6 +179,10 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
         target: ElementRef::Component(c1),
         lang: text("ja"),
         text: text("中央ゲートウェイ"),
+        provenance: who(),
+    });
+    go(Op::SetProjectLanguages {
+        langs: Arc::from([text("ja")]),
         provenance: who(),
     });
     go(Op::SetDescriptionTranslation {

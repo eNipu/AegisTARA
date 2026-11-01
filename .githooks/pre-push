@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs the CI gates before a push, so pull requests on GitHub only need the
+# cheap cargo-deny job (ADR 0007). Enable once per clone:
+#   git config core.hooksPath .githooks
+# Skip once with `git push --no-verify`.
+exec "$(git rev-parse --show-toplevel)/scripts/ci.sh"

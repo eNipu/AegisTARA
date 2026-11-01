@@ -284,3 +284,88 @@ fn diff_reports_changed_descriptions_and_notes() {
             .is_empty()
     );
 }
+
+fn set_languages(langs: &[&str], who: &str, at: u64) -> Op {
+    Op::SetProjectLanguages {
+        langs: langs.iter().map(|l| Arc::from(*l)).collect(),
+        provenance: Provenance::human(who, at),
+    }
+}
+
+#[test]
+fn project_languages_are_set_checked_undone_and_compared_by_diff() {
+    let (mut project, id) = with_asset();
+    assert!(project.languages().is_empty(), "a new project has none");
+    let base = project.clone();
+
+    let undo = project
+        .apply(set_languages(&["ja", "de"], "alice", 3))
+        .expect("set");
+    assert_eq!(project.languages(), [Arc::from("ja"), Arc::from("de")]);
+    assert!(base.diff(&project).expect("diff").languages_changed());
+    assert!(!base.diff(&base).expect("diff").languages_changed());
+    assert_eq!(
+        undo,
+        Op::SetProjectLanguages {
+            langs: Arc::from([]),
+            provenance: Provenance::default(),
+        }
+    );
+    project.apply(undo).expect("undo");
+    assert_eq!(project, base);
+
+    for (langs, err) in [
+        (&["ja", "ja"][..], ModelError::DuplicateLanguage),
+        (&[""][..], ModelError::InvalidText),
+        (&["ja\n"][..], ModelError::InvalidText),
+        (
+            &["a", "b", "c", "d", "e", "f", "g", "h", "i"][..],
+            ModelError::TooManyLanguages { max: 8 },
+        ),
+    ] {
+        assert_eq!(project.validate(&set_languages(langs, "a", 1)), Err(err));
+    }
+
+    // Translations in a language the project no longer lists stay.
+    project
+        .apply(set(ElementRef::Asset(id), "Text", "a", 4))
+        .expect("set");
+    project
+        .apply(Op::SetDescriptionTranslation {
+            target: ElementRef::Asset(id),
+            lang: "fr".into(),
+            text: "Texte".into(),
+            provenance: Provenance::default(),
+        })
+        .expect("translate");
+    project.apply(set_languages(&["ja"], "a", 5)).expect("set");
+    assert_eq!(
+        project.description_translation(ElementRef::Asset(id), "fr"),
+        Some("Texte")
+    );
+}
+
+#[test]
+fn project_languages_survive_save_load_and_the_op_log() {
+    let (mut project, _) = with_asset();
+    let m = methodology();
+    let mut plain = Vec::new();
+    project.save(&mut plain).expect("save");
+    assert!(!String::from_utf8_lossy(&plain).contains("languages"));
+
+    let op = set_languages(&["ja"], "alice", 9);
+    project.apply(op.clone()).expect("set");
+    let mut bytes = Vec::new();
+    project.save(&mut bytes).expect("save");
+    let loaded = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("load");
+    assert_eq!(loaded.languages(), [Arc::from("ja")]);
+    assert_eq!(loaded, project);
+
+    let codec = OpCodec::new(m);
+    assert_eq!(
+        codec
+            .decode(&codec.encode(&op).expect("encode"))
+            .expect("decode"),
+        op
+    );
+}

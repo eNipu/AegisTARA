@@ -3120,6 +3120,13 @@ impl<P: CredentialProvider> Actor<P> {
                     SyncView::Synced
                 },
                 descriptions: page_descriptions(&open.ws, &open.ui),
+                languages: open
+                    .ws
+                    .project()
+                    .languages()
+                    .iter()
+                    .map(|l| l.to_string())
+                    .collect(),
                 is_empty: open.ws.project().asset_count() == 0,
                 inspector: inspector(&open.ws, &open.ui),
                 can_undo: open.ws.can_undo(),

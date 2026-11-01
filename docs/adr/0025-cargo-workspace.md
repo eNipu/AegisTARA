@@ -34,7 +34,11 @@ client and server) is a product requirement.
    `[workspace.dependencies]` holds every third-party version used by more
    than one crate and the path to `aegis-model`. A crate writes
    `name.workspace = true`.
-3. `scripts/ci.sh` and `scripts/deny.sh` keep their per-crate loop. Inside a
+3. Amended (2026-11-01): with no arguments `scripts/ci.sh` checks the whole
+   workspace in one cargo run per step. Each crate built on its own unifies
+   features on its own, so shared dependencies were rebuilt per crate and CI
+   ran past its time limit. The MSRV job still checks each crate alone.
+   Originally: `scripts/ci.sh` and `scripts/deny.sh` keep their per-crate loop. Inside a
    crate directory, `cargo fmt`, `cargo clippy` and `cargo test` act on that
    package only, and `cargo deny --manifest-path` checks that crate's
    dependency graph, so one failing crate is still reported by name. Only the

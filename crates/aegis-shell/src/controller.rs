@@ -38,8 +38,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecMod
 use crate::adapter::{bucket, draw_items, draw_layers};
 use crate::{
     AccessNode, AppWindow, CheckItem, CountItem, DescriptionItem, DiffItem, FactorItem, LinkItem,
-    MitigationItem, NoticeItem, ProblemItem, ProjectItem, SuggestionItem, ThreatItem,
-    TranslationItem,
+    MitigationItem, NoticeItem, ProblemItem, ProjectItem, ProjectLanguages, SuggestionItem,
+    ThreatItem, TranslationItem,
 };
 
 /// Pixels the pointer must move before a press becomes a drag.
@@ -792,6 +792,16 @@ impl Controller {
                     text: text.to_string(),
                 });
             }
+        });
+        on!(on_set_project_languages, |c, text| {
+            // Commas or spaces separate tags; a repeated tag counts once.
+            let mut langs: Vec<String> = Vec::new();
+            for l in text.split([',', ' ']).filter(|l| !l.is_empty()) {
+                if !langs.iter().any(|x| x == l) {
+                    langs.push(l.to_owned());
+                }
+            }
+            c.edit(Edit::SetProjectLanguages { langs });
         });
         on!(on_remove_description_translation, |c, index, lang| {
             let target = c.with_project(|p| {
@@ -2429,6 +2439,11 @@ impl Controller {
         w.set_has_project(true);
         w.set_project_name(s(&project.entry.name));
         w.set_editing(project.mode == Mode::Editing);
+        if prev_proj.is_none_or(|old| old.languages != project.languages) {
+            let langs = w.global::<ProjectLanguages>();
+            langs.set_langs(model(project.languages.iter().map(|l| s(l)).collect()));
+            langs.set_text(s(&project.languages.join(", ")));
+        }
         if prev_proj.is_none_or(|old| old.descriptions != project.descriptions) {
             w.set_descriptions(model(
                 project

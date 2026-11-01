@@ -522,6 +522,8 @@ pub struct Project {
     /// Steps whose rating came from a library item and awaits review
     /// (job 057), in ID order.
     review_marks: std::collections::BTreeSet<(TreeId, NodeId)>,
+    /// The languages descriptions are translated into, and who set them.
+    languages: (Arc<[Arc<str>]>, Provenance),
 }
 
 /// Adds `ids` to the `modified` list of `diff`, except the ones that were
@@ -636,6 +638,7 @@ impl Project {
             descriptions: BTreeMap::new(),
             description_bytes: 0,
             review_marks: std::collections::BTreeSet::new(),
+            languages: (Arc::from([]), Provenance::default()),
         }
     }
 
@@ -5219,6 +5222,7 @@ impl Project {
             trust_boundaries,
             risk_deltas,
             notes_changed: false,
+            languages_changed: self.languages() != other.languages(),
         };
         self.merge_description_changes(other, &mut diff);
         Ok(diff)
@@ -5542,6 +5546,20 @@ impl Project {
                 text,
                 provenance,
             } => return self.check_set_description_translation(*target, lang, text, provenance),
+            Op::SetProjectLanguages { langs, provenance } => {
+                if langs.len() > MAX_DESCRIPTION_TRANSLATIONS {
+                    return Err(ModelError::TooManyLanguages {
+                        max: MAX_DESCRIPTION_TRANSLATIONS,
+                    });
+                }
+                for (i, lang) in langs.iter().enumerate() {
+                    check_lang(lang)?;
+                    if langs[..i].contains(lang) {
+                        return Err(ModelError::DuplicateLanguage);
+                    }
+                }
+                check_provenance(provenance)?;
+            }
             Op::SetReviewMark {
                 tree,
                 node,
@@ -5919,6 +5937,11 @@ impl Project {
                 text,
                 provenance,
             } => Ok(self.commit_set_description_translation(target, lang, text, provenance)),
+            Op::SetProjectLanguages { langs, provenance } => {
+                let (langs, provenance) =
+                    std::mem::replace(&mut self.languages, (langs, provenance));
+                Ok(Op::SetProjectLanguages { langs, provenance })
+            }
             Op::SetReviewMark {
                 tree,
                 node,
@@ -7072,6 +7095,13 @@ impl Project {
     #[must_use]
     pub fn review_marked(&self, tree: TreeId, node: NodeId) -> bool {
         self.review_marks.contains(&(tree, node))
+    }
+
+    /// The languages the project keeps description translations in, in
+    /// display order; empty for a single-language project. Time O(1).
+    #[must_use]
+    pub fn languages(&self) -> &[Arc<str>] {
+        &self.languages.0
     }
 
     /// Every step marked as needing review, in ID order. Time O(1) to start.
@@ -9463,6 +9493,7 @@ impl PartialEq for Project {
         same_methodology
             && self.descriptions == other.descriptions
             && self.review_marks == other.review_marks
+            && self.languages() == other.languages()
             && self.assets.len() == other.assets.len()
             && self.damages.len() == other.damages.len()
             && self.threats.len() == other.threats.len()
@@ -10428,6 +10459,7 @@ impl ProjectEvalCache {
         match op {
             Op::SetDescription { .. }
             | Op::SetDescriptionTranslation { .. }
+            | Op::SetProjectLanguages { .. }
             | Op::SetReviewMark { .. }
             | Op::RenameTreeNode { .. }
             | Op::AddAsset { .. }
