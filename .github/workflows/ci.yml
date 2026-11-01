@@ -11,8 +11,12 @@
 # run scripts.
 name: CI
 
+# Once per change: on the pull request, and once more when it lands on
+# master (which also refreshes the cache). Branch pushes without a pull
+# request are not checked.
 on:
   push:
+    branches: [master]
   pull_request:
 
 permissions:
@@ -44,7 +48,7 @@ jobs:
   check:
     name: fmt, clippy, test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     # The PostgreSQL store tests (crates/aegis-server/tests/postgres.rs) run
     # against a throwaway database. The password is a CI-only placeholder for
     # a container that lives for this job.
@@ -166,7 +170,7 @@ jobs:
   msrv:
     name: MSRV cargo check
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -174,6 +178,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ env.RUST_MSRV }}
+      # Read-only: the check job saves the entry. Uncached, aegis-shell alone
+      # took 12 minutes and the job ran out of time. The paths must match the
+      # check job's exactly, or the entry does not match.
+      - name: List cache paths
+        id: crates
+        run: |
+          {
+            cargo_home=${CARGO_HOME:-$HOME/.cargo}
+            echo 'paths<<CRATES_EOF'
+            echo "$cargo_home/registry/index/"
+            echo "$cargo_home/registry/cache/"
+            echo "$cargo_home/git/db/"
+            echo "target/"
+            echo 'CRATES_EOF'
+          } >> "$GITHUB_OUTPUT"
+      - name: Restore cargo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.crates.outputs.paths }}
+          key: cargo-${{ runner.os }}-${{ env.RUST_MSRV }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ env.RUST_MSRV }}-
       # aegis-shell builds Slint's winit backend, whose font code needs the
       # fontconfig headers and pkg-config. Windowing libraries are loaded at
       # run time, so nothing else is needed to build and to run the headless
