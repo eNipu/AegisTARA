@@ -6,7 +6,27 @@ mod common;
 
 use aegis_client::state::{Mode, SyncView};
 use aegis_client::view::Page;
-use common::{App, TestServer, node_position, save};
+use common::{App, TestServer, node_position, press_chord, press_key, save, type_text};
+use slint::ComponentHandle;
+use slint::platform::{Key, WindowEvent};
+
+fn click(app: &App, x: f32, y: f32) {
+    let w = app.window.window();
+    let position = slint::LogicalPosition::new(x, y);
+    w.dispatch_event(WindowEvent::PointerMoved { position });
+    w.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    w.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+}
+
+fn project_name(vm: &aegis_client::state::ViewModel) -> String {
+    vm.project.as_ref().map(|p| p.entry.name.clone()).unwrap_or_default()
+}
 
 async fn app_with_sample(server: &TestServer) -> App {
     let app = App::new(server.session("alice"), 1360, 860);
@@ -125,6 +145,58 @@ async fn the_outline_editor_is_a_mode_of_the_page_with_apply_and_cancel() {
     app.window.set_outline_editing(true);
     show(&app, Page::Risks).await;
     assert!(!app.window.get_outline_editing());
+
+    drop(app);
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clicking_the_project_name_renames_it_in_place() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server).await;
+    // The name in the header, with the pointer at its right end.
+    let at = (299.0, 83.0);
+
+    // Click: the name becomes a field with the keyboard in it. Enter saves.
+    click(&app, at.0, at.1);
+    app.frame();
+    assert!(app.window.get_renaming_project());
+    save(&app.frame(), "editors-after-rename");
+    press_chord(&app, 'a', false);
+    type_text(&app, "Editors v2");
+    press_key(&app, Key::Return, false);
+    app.until("renamed", |vm| project_name(vm) == "Editors v2").await;
+    app.frame();
+    assert!(!app.window.get_renaming_project());
+
+    // Escape puts the saved name back and sends nothing.
+    click(&app, at.0, at.1);
+    app.frame();
+    press_chord(&app, 'a', false);
+    type_text(&app, "nope");
+    press_key(&app, Key::Escape, false);
+    app.frame();
+    assert!(!app.window.get_renaming_project());
+    assert_eq!(project_name(&app.session.view()), "Editors v2");
+
+    // An empty name is never saved; the field says a name is needed.
+    click(&app, at.0, at.1);
+    app.frame();
+    press_chord(&app, 'a', false);
+    press_key(&app, Key::Backspace, false);
+    press_key(&app, Key::Return, false);
+    app.frame();
+    assert!(app.window.get_renaming_project(), "stays open with the note");
+    assert_eq!(project_name(&app.session.view()), "Editors v2");
+    save(&app.frame(), "editors-after-rename-empty");
+
+    // Leaving the field saves what was typed.
+    press_chord(&app, 'a', false);
+    type_text(&app, "Editors v3");
+    click(&app, 700.0, 500.0);
+    app.until("saved by focus loss", |vm| project_name(vm) == "Editors v3").await;
+    app.frame();
+    assert!(!app.window.get_renaming_project());
 
     drop(app);
     server.stop().await;
