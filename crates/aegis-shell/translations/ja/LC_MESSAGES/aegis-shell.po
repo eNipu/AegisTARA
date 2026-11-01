@@ -1202,3 +1202,24 @@ msgstr "ユーザーを削除"
 
 msgid "Turn off"
 msgstr "オフにする"
+
+msgid "New asset"
+msgstr "新しい資産"
+
+msgid "New "
+msgstr "新規 "
+
+msgid "New control"
+msgstr "新しいコントロール"
+
+msgid "Asset name"
+msgstr "資産名"
+
+msgid "What happens"
+msgstr "何が起きるか"
+
+msgid "Control name"
+msgstr "コントロール名"
+
+msgid "Press Enter to create, Escape to cancel."
+msgstr "Enterで作成、Escapeで取り消し。"

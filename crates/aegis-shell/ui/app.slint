@@ -11,7 +11,7 @@ import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, Table, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
-    LinkList, CheckList, Tile, Bars, FieldError, DangerButton
+    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm
 } from "widgets.slint";
 
 export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
@@ -229,6 +229,16 @@ export component AppWindow inherits Window {
     in property <string> numbers-text;
     in property <bool> can-undo;
     in property <bool> can-redo;
+    // The draft being typed (UI-08): "", "asset", "damage" or "control".
+    in property <string> draft-kind;
+    in property <int> draft-seq;
+    // The text of the draft row in each table; translated here, read by the controller.
+    out property <string> draft-row-asset: @tr("New asset");
+    out property <string> draft-row-damage: @tr("New ") + root.damage-singular;
+    out property <string> draft-row-control: @tr("New control");
+    callback begin-draft(string);
+    callback commit-draft(string, bool);
+    callback cancel-draft();
 // What Undo / Redo would do, "remove asset 'Brake ECU'" (UI-10.2); empty if nothing.
 in property <string> undo-label;
 in property <string> redo-label;
@@ -808,10 +818,7 @@ in property <string> redo-label;
         if (kind == "rename-project") { root.rename-project(text); }
         if (kind == "add-component") { root.add-component(text); }
         if (kind == "add-trust-boundary") { root.add-trust-boundary(text); }
-        if (kind == "add-asset") { root.add-asset(text); }
-        if (kind == "add-damage") { root.add-damage(text); }
         if (kind == "new-tree") { root.new-tree(text); }
-        if (kind == "add-control") { root.add-control(text); }
         if (kind == "add-goal") { root.add-goal(text); }
         if (kind == "add-claim") { root.add-claim(text); }
         if (kind == "create-baseline") { root.create-baseline(text); }
@@ -1468,7 +1475,7 @@ in property <string> redo-label;
                             title: @tr("Assets");
                             subtitle: @tr("What must be protected, and which security properties matter.");
                             icon: @image-url("icons/box.svg");
-                            Button { text: @tr("Add asset"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-asset", "Add asset", "Asset name", ""); } }
+                            Button { text: @tr("New asset"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("asset"); } }
                         }
                         Table {
                             label: @tr("Assets");
@@ -1478,7 +1485,18 @@ in property <string> redo-label;
                             picked(i) => { root.pick-asset(i); }
                         }
                     }
-                    if root.has-asset: Panel {
+                    if root.draft-kind == "asset": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New asset");
+                            placeholder: @tr("Asset name");
+                            hint: @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            commit(t, next) => { root.commit-draft(t, next); }
+                            cancel => { root.cancel-draft(); }
+                        }
+                    }
+                    if root.has-asset && root.draft-kind != "asset": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Asset") + " · " + root.asset-id; }
                         NameEditor { name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
@@ -1514,7 +1532,7 @@ in property <string> redo-label;
                             title: root.damage-plural;
                             subtitle: @tr("What could go wrong, rated per impact category.");
                             icon: @image-url("icons/triangle-alert.svg");
-                            Button { text: @tr("Add ") + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-damage", "Add " + root.damage-singular, "What happens", ""); } }
+                            Button { text: @tr("New ") + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("damage"); } }
                         }
                         Table {
                             label: root.damage-plural;
@@ -1524,7 +1542,18 @@ in property <string> redo-label;
                             picked(i) => { root.pick-damage(i); }
                         }
                     }
-                    if root.has-damage: Panel {
+                    if root.draft-kind == "damage": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New ") + root.damage-singular;
+                            placeholder: @tr("What happens");
+                            hint: @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            commit(t, next) => { root.commit-draft(t, next); }
+                            cancel => { root.cancel-draft(); }
+                        }
+                    }
+                    if root.has-damage && root.draft-kind != "damage": Panel {
                         width: root.side-width;
                         SectionTitle { text: root.damage-singular + " · " + root.damage-id; }
                         NameEditor { name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
@@ -2079,7 +2108,7 @@ in property <string> redo-label;
                             title: @tr("Security controls");
                             subtitle: @tr("Measures that make attack steps harder. Attach them to steps on the Attack trees page.");
                             icon: @image-url("icons/shield-check.svg");
-                            Button { text: @tr("Add control"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-control", "Add security control", "Control name", ""); } }
+                            Button { text: @tr("New control"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("control"); } }
                         }
                         Table {
                             label: @tr("Security controls");
@@ -2089,7 +2118,18 @@ in property <string> redo-label;
                             picked(i) => { root.pick-control(i); }
                         }
                     }
-                    if root.has-control: Panel {
+                    if root.draft-kind == "control": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New control");
+                            placeholder: @tr("Control name");
+                            hint: @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            commit(t, next) => { root.commit-draft(t, next); }
+                            cancel => { root.cancel-draft(); }
+                        }
+                    }
+                    if root.has-control && root.draft-kind != "control": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Security control") + " · " + root.control-id; }
                         NameEditor { name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }

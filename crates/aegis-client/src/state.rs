@@ -396,6 +396,10 @@ pub struct ProjectView {
     pub can_undo: bool,
     /// Whether redo is possible.
     pub can_redo: bool,
+    /// The draft being typed, if any (UI-08).
+    pub draft: Option<crate::view::DraftKind>,
+    /// Changes with every new draft.
+    pub draft_seq: u64,
     /// What undo would undo, as "remove asset 'Brake ECU'" (UI-10.2).
     pub undo_label: Option<String>,
     /// What redo would redo.

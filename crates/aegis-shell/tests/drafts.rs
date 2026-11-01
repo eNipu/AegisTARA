@@ -1,0 +1,118 @@
+//! UI-08 in the real window with real key events: a draft in the inspector,
+//! created by Enter or Ctrl/Cmd+Enter, discarded by Escape, for assets,
+//! damage scenarios and controls. A cancelled draft sends no op.
+
+mod common;
+
+use aegis_client::state::{Mode, ViewModel};
+use aegis_client::view::{DraftKind, Page};
+use common::{App, TestServer, press_key, save, type_text};
+use slint::Model;
+use slint::platform::Key;
+
+async fn editing_app(server: &TestServer) -> App {
+    let app = App::new(server.admin_session("root"), 1360, 860);
+    app.online().await;
+    app.window.invoke_create_project("Brake ECU".into());
+    app.until("open", |vm| vm.project.is_some()).await;
+    app.window.invoke_begin_edit();
+    app.until("editing", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.mode == Mode::Editing)
+    })
+    .await;
+    app
+}
+
+fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+    vm.project.as_ref().expect("project")
+}
+
+async fn settle(app: &App) -> std::sync::Arc<ViewModel> {
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    app.frame();
+    app.until("settled", |_| true).await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_asset_is_created_from_a_draft_with_the_keyboard_alone() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    app.window.invoke_show_page(Page::Assets.index() as i32);
+    app.window.invoke_begin_draft("asset".into());
+    app.until("draft", |vm| p(vm).draft == Some(DraftKind::Asset))
+        .await;
+    app.frame();
+    app.frame();
+    assert_eq!(app.window.get_draft_kind(), "asset");
+    // The draft row is in the table and selected.
+    assert_eq!(app.window.get_asset_rows().row_count(), 1);
+    assert_eq!(app.window.get_asset_selected(), 0);
+    type_text(&app, "Brake ECU");
+    save(&app.frame(), "draft-asset");
+
+    press_key(&app, Key::Return, false);
+    let vm = app
+        .until("created", |vm| {
+            p(vm).data.assets.len() == 1 && p(vm).draft.is_none()
+        })
+        .await;
+    assert_eq!(p(&vm).data.assets[0].name, "Brake ECU");
+    app.frame();
+    assert_eq!(app.window.get_draft_kind(), "");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn escape_discards_a_draft_and_sends_no_op() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    let before = settle(&app).await;
+    let start = p(&before).confirmed_seq;
+    app.window.invoke_show_page(Page::Controls.index() as i32);
+    app.window.invoke_begin_draft("control".into());
+    app.until("draft", |vm| p(vm).draft == Some(DraftKind::Control))
+        .await;
+    app.frame();
+    app.frame();
+    type_text(&app, "Secure boot");
+    press_key(&app, Key::Escape, false);
+    app.until("discarded", |vm| p(vm).draft.is_none()).await;
+    let vm = settle(&app).await;
+    assert_eq!(p(&vm).data.controls.len(), 0);
+    assert_eq!(p(&vm).confirmed_seq, start, "nothing was sent");
+    assert!(!p(&vm).can_undo, "nothing is in the history");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn control_enter_creates_and_starts_the_next_draft() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    app.window.invoke_show_page(Page::Damage.index() as i32);
+    app.window.invoke_begin_draft("damage".into());
+    app.until("draft", |vm| p(vm).draft == Some(DraftKind::Damage))
+        .await;
+    app.frame();
+    app.frame();
+    for name in ["Loss of braking", "Data leak", "Theft"] {
+        type_text(&app, name);
+        press_key(&app, Key::Return, true);
+        app.until(name, |vm| {
+            p(vm).data.damages.iter().any(|d| d.name == name) && p(vm).draft.is_some()
+        })
+        .await;
+        app.frame();
+        app.frame();
+    }
+    let vm = settle(&app).await;
+    assert_eq!(
+        p(&vm).data.damages.len(),
+        3,
+        "three created, one draft open"
+    );
+    assert_eq!(p(&vm).draft, Some(DraftKind::Damage));
+    save(&app.frame(), "draft-damage-next");
+    press_key(&app, Key::Escape, false);
+    app.until("last draft discarded", |vm| p(vm).draft.is_none())
+        .await;
+    let vm = settle(&app).await;
+    assert_eq!(p(&vm).data.damages.len(), 3);
+}

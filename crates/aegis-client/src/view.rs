@@ -237,11 +237,57 @@ pub enum AdminAction {
     },
 }
 
+/// What a draft will become (UI-08). The draft lives only in the client: it
+/// reaches the server as one ordinary edit when the element is complete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DraftKind {
+    /// A new asset.
+    Asset,
+    /// A new damage scenario.
+    Damage,
+    /// A new security control.
+    Control,
+}
+
+impl DraftKind {
+    /// The page whose table and inspector show the draft.
+    #[must_use]
+    pub fn page(self) -> Page {
+        match self {
+            Self::Asset => Page::Assets,
+            Self::Damage => Page::Damage,
+            Self::Control => Page::Controls,
+        }
+    }
+
+    /// A stable key for the window.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Asset => "asset",
+            Self::Damage => "damage",
+            Self::Control => "control",
+        }
+    }
+
+    /// The kind with this key.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::Asset, Self::Damage, Self::Control]
+            .into_iter()
+            .find(|k| k.key() == key)
+    }
+}
+
 /// The user's selection and display choices.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UiState {
     /// The page on screen.
     pub page: Page,
+    /// The draft being typed, if any (UI-08).
+    pub draft: Option<DraftKind>,
+    /// Changes with every new draft, so the window clears its text field.
+    pub draft_seq: u64,
     /// The selected threat (threat and risk pages; its tree when no tree is
     /// selected).
     pub selected_threat: Option<ThreatId>,

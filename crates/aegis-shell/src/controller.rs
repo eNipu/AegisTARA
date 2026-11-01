@@ -27,7 +27,7 @@ use aegis_client::session::Session;
 use aegis_client::state::{
     ConnectionView, Mode, NoticeAction, NumbersCheck, ProjectView, Severity, SyncView, ViewModel,
 };
-use aegis_client::view::{AdminAction, Page, RiskView, Selection};
+use aegis_client::view::{AdminAction, DraftKind, Page, RiskView, Selection};
 use aegis_model::library::LibraryPack;
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
@@ -695,6 +695,18 @@ impl Controller {
                 c.select(Selection::Asset(id), false);
             }
         });
+        on!(on_begin_draft, |c, kind| {
+            if let Some(kind) = DraftKind::from_key(&kind) {
+                c.send(Command::BeginDraft(kind));
+            }
+        });
+        on!(on_commit_draft, |c, name, next| c.send(
+            Command::CommitDraft {
+                name: name.to_string(),
+                next,
+            }
+        ));
+        on!(on_cancel_draft, |c| c.send(Command::CancelDraft));
         on!(on_add_asset, |c, name| {
             let all = c.with_project(|p| Some((0..p.vocab.properties.len()).collect()));
             c.edit(Edit::AddAsset {
@@ -2208,6 +2220,8 @@ impl Controller {
         w.set_numbers_text(s(numbers_text));
         w.set_can_undo(project.can_undo);
         w.set_can_redo(project.can_redo);
+        w.set_draft_kind(s(project.draft.map_or("", |k| k.key())));
+        w.set_draft_seq(i32::try_from(project.draft_seq).unwrap_or(i32::MAX));
         w.set_undo_label(s(project.undo_label.as_deref().unwrap_or("")));
         w.set_redo_label(s(project.redo_label.as_deref().unwrap_or("")));
         w.set_show_residual(project.show_residual);
@@ -2565,33 +2579,42 @@ impl Controller {
                 .map(|a| s(&format!("{} \u{b7} {}", a.visual_id, a.name)))
                 .collect(),
         ));
-        w.set_asset_rows(rows(
-            d.assets
-                .iter()
-                .map(|a| {
-                    let props: Vec<&str> = a
-                        .properties
-                        .iter()
-                        .zip(&p.vocab.properties)
-                        .filter(|(on, _)| **on)
-                        .map(|(_, l)| l.as_str())
-                        .collect();
-                    vec![
-                        a.visual_id.clone(),
-                        a.name.clone(),
-                        props.join(", "),
-                        a.threats.to_string(),
-                        a.worst
-                            .as_ref()
-                            .map_or_else(String::new, |r| r.label.clone()),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_asset_selected(index_of(
+        let mut list: Vec<Vec<String>> = d
+            .assets
+            .iter()
+            .map(|a| {
+                let props: Vec<&str> = a
+                    .properties
+                    .iter()
+                    .zip(&p.vocab.properties)
+                    .filter(|(on, _)| **on)
+                    .map(|(_, l)| l.as_str())
+                    .collect();
+                vec![
+                    a.visual_id.clone(),
+                    a.name.clone(),
+                    props.join(", "),
+                    a.threats.to_string(),
+                    a.worst
+                        .as_ref()
+                        .map_or_else(String::new, |r| r.label.clone()),
+                ]
+            })
+            .collect();
+        let drafting = p.draft == Some(DraftKind::Asset);
+        if drafting {
+            let mut row = vec![String::new(); 5];
+            row[1] = w.get_draft_row_asset().to_string();
+            list.push(row);
+        }
+        let draft_at = list.len() as i32 - 1;
+        w.set_asset_rows(rows(list));
+
+        let picked = index_of(
             d.assets.iter().map(|a| a.id),
             d.asset.as_ref().map(|a| a.id),
-        ));
+        );
+        w.set_asset_selected(if drafting { draft_at } else { picked });
         w.set_has_asset(d.asset.is_some());
         if let Some(a) = &d.asset {
             w.set_asset_id(s(&a.visual_id));
@@ -2631,23 +2654,32 @@ impl Controller {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        w.set_damage_rows(rows(
-            d.damages
-                .iter()
-                .map(|x| {
-                    vec![
-                        x.visual_id.clone(),
-                        x.name.clone(),
-                        impact_text(&x.impacts),
-                        x.threats.to_string(),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_damage_selected(index_of(
+        let mut list: Vec<Vec<String>> = d
+            .damages
+            .iter()
+            .map(|x| {
+                vec![
+                    x.visual_id.clone(),
+                    x.name.clone(),
+                    impact_text(&x.impacts),
+                    x.threats.to_string(),
+                ]
+            })
+            .collect();
+        let drafting = p.draft == Some(DraftKind::Damage);
+        if drafting {
+            let mut row = vec![String::new(); 4];
+            row[1] = w.get_draft_row_damage().to_string();
+            list.push(row);
+        }
+        let draft_at = list.len() as i32 - 1;
+        w.set_damage_rows(rows(list));
+
+        let picked = index_of(
             d.damages.iter().map(|x| x.id),
             d.damage.as_ref().map(|x| x.id),
-        ));
+        );
+        w.set_damage_selected(if drafting { draft_at } else { picked });
         w.set_has_damage(d.damage.is_some());
         if let Some(x) = &d.damage {
             w.set_damage_id(s(&x.visual_id));
@@ -2706,23 +2738,32 @@ impl Controller {
         w.set_outline_text(s(d.outline.as_deref().unwrap_or("")));
 
         // Controls.
-        w.set_control_rows(rows(
-            d.controls
-                .iter()
-                .map(|c| {
-                    vec![
-                        c.visual_id.clone(),
-                        c.name.clone(),
-                        c.steps.to_string(),
-                        c.goals.to_string(),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_control_selected(index_of(
+        let mut list: Vec<Vec<String>> = d
+            .controls
+            .iter()
+            .map(|c| {
+                vec![
+                    c.visual_id.clone(),
+                    c.name.clone(),
+                    c.steps.to_string(),
+                    c.goals.to_string(),
+                ]
+            })
+            .collect();
+        let drafting = p.draft == Some(DraftKind::Control);
+        if drafting {
+            let mut row = vec![String::new(); 4];
+            row[1] = w.get_draft_row_control().to_string();
+            list.push(row);
+        }
+        let draft_at = list.len() as i32 - 1;
+        w.set_control_rows(rows(list));
+
+        let picked = index_of(
             d.controls.iter().map(|c| c.id),
             d.control.as_ref().map(|c| c.id),
-        ));
+        );
+        w.set_control_selected(if drafting { draft_at } else { picked });
         w.set_has_control(d.control.is_some());
         if let Some(c) = &d.control {
             w.set_control_id(s(&c.visual_id));

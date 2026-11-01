@@ -435,6 +435,48 @@ export component TranslationEditor inherits VerticalLayout {
     }
 }
 
+// The inspector in draft mode (UI-08): a name field with focus. Enter or Tab
+// creates the element, Ctrl/Cmd+Enter creates it and starts the next draft,
+// Escape discards, and so does leaving the field empty. Leaving the field with a
+// name creates it. The window only reports; the client core decides.
+export component DraftForm inherits VerticalLayout {
+    in property <string> title;
+    in property <string> placeholder;
+    in property <string> hint;
+    // Changes with every new draft: the field starts empty again.
+    in property <int> seq;
+    callback commit(string, bool);
+    callback cancel();
+    property <bool> focused: edit.has-focus;
+    spacing: 8px;
+    SectionTitle { text: root.title; }
+    FocusScope {
+        min-height: edit.preferred-height;
+        capture-key-pressed(event) => {
+            if (event.text == Key.Escape) { root.cancel(); return accept; }
+            if (event.text == Key.Return && event.modifiers.control) { root.commit(edit.text, true); return accept; }
+            if (event.text == Key.Tab) { root.commit(edit.text, false); return accept; }
+            reject
+        }
+        edit := LineEdit {
+            width: parent.width;
+            placeholder-text: root.placeholder;
+            accessible-label: root.placeholder;
+            accepted(t) => { root.commit(t, false); }
+            init => { self.focus(); }
+        }
+    }
+    Text { text: root.hint; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+    Rectangle { vertical-stretch: 1; }
+    changed seq => {
+        edit.text = "";
+        edit.focus();
+    }
+    changed focused => {
+        if (!root.focused && edit.text != "") { root.commit(edit.text, false); }
+    }
+}
+
 export component Panel inherits Rectangle {
     background: Theme.panel;
     border-width: 1px;

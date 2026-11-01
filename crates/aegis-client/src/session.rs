@@ -41,13 +41,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aegis_auth::layer::CredentialProvider;
-use aegis_model::{Methodology, OpCodec, Project};
+use aegis_model::{AssetId, ControlId, DamageId, Methodology, OpCodec, Project};
 use aegis_proto as pb;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::commands::Command;
+use crate::commands::{Command, Edit};
 use crate::connection::{Connection, ServerInfo};
 use crate::error::{ClientError, ServerCode};
 use crate::pages;
@@ -66,7 +66,7 @@ use crate::time::format_ms;
 use crate::undo_label::Label;
 use crate::updates::{UpdateChecker, UpdateError, UpdateOffer, UpdateStatus};
 use crate::view::{
-    AdminAction, Page, UiState, inspector, page_descriptions, risks_differ, shown_tree,
+    AdminAction, DraftKind, Page, UiState, inspector, page_descriptions, risks_differ, shown_tree,
     threat_rows, tree_view_cached, use_server_risks,
 };
 use crate::workspace::{Origin, Workspace, WorkspaceError};
@@ -2113,19 +2113,11 @@ impl<P: CredentialProvider> Actor<P> {
             Command::BeginEdit => self.begin_edit(),
             Command::EndEdit => self.end_edit(),
             Command::Edit(edit) => {
-                let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
-                let created = edit.created();
-                let applied = self.apply_edit(
-                    |project| edit.to_ops(project, &user, now).map_err(|e| e.to_string()),
-                    Origin::Edit,
-                );
-                if applied
-                    && let Some(selection) = created
-                    && let Some(open) = self.open.as_mut()
-                {
-                    pages::select(&mut open.ui, selection);
-                }
+                self.edit(&edit);
             }
+            Command::BeginDraft(kind) => self.begin_draft(kind),
+            Command::CommitDraft { name, next } => self.commit_draft(&name, next),
+            Command::CancelDraft => self.set_draft(None),
             Command::SuggestTreeNodes => self.suggest_tree_nodes(),
             Command::AcceptSuggestion(index) => self.accept_suggestion(index),
             Command::AcceptAllSuggestions => self.accept_all_suggestions(),
@@ -2137,6 +2129,7 @@ impl<P: CredentialProvider> Actor<P> {
                 navigate,
             } => {
                 if let Some(open) = self.open.as_mut() {
+                    open.ui.draft = None;
                     pages::select(&mut open.ui, selection);
                     if navigate {
                         let page = pages::page_of(selection);
@@ -2640,10 +2633,89 @@ impl<P: CredentialProvider> Actor<P> {
         }
     }
 
+    /// Applies one edit as the user; true if it was applied.
+    fn edit(&mut self, edit: &Edit) -> bool {
+        let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
+        let created = edit.created();
+        let applied = self.apply_edit(
+            |project| edit.to_ops(project, &user, now).map_err(|e| e.to_string()),
+            Origin::Edit,
+        );
+        if applied
+            && let Some(selection) = created
+            && let Some(open) = self.open.as_mut()
+        {
+            pages::select(&mut open.ui, selection);
+        }
+        applied
+    }
+
+    /// Sets or clears the draft; a new draft gets a new sequence number.
+    fn set_draft(&mut self, draft: Option<DraftKind>) {
+        if let Some(open) = self.open.as_mut() {
+            open.ui.draft = draft;
+            if draft.is_some() {
+                open.ui.draft_seq += 1;
+            }
+            self.pump();
+        }
+    }
+
+    fn begin_draft(&mut self, kind: DraftKind) {
+        if !self.can_edit() {
+            return;
+        }
+        // The page opens first: leaving a page drops its draft.
+        self.show_page(kind.page());
+        self.set_draft(Some(kind));
+    }
+
+    /// UI-08: the draft becomes one element, or nothing. An empty name drops
+    /// the draft without an op; a refused edit keeps it (and says why).
+    fn commit_draft(&mut self, name: &str, next: bool) {
+        let Some(kind) = self.open.as_ref().and_then(|o| o.ui.draft) else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            self.set_draft(None);
+            return;
+        }
+        let name = name.to_owned();
+        let edit = match kind {
+            DraftKind::Asset => {
+                let count = self.open.as_ref().map_or(0, |o| {
+                    pages::vocabulary(o.ws.project().methodology())
+                        .properties
+                        .len()
+                });
+                Edit::AddAsset {
+                    id: AssetId::new_v7(),
+                    name,
+                    properties: (0..count).collect(),
+                }
+            }
+            DraftKind::Damage => Edit::AddDamage {
+                id: DamageId::new_v7(),
+                name,
+            },
+            DraftKind::Control => Edit::AddControl {
+                id: ControlId::new_v7(),
+                name,
+            },
+        };
+        if self.edit(&edit) {
+            self.set_draft(next.then_some(kind));
+        }
+    }
+
     fn show_page(&mut self, page: Page) {
         let Some(open) = self.open.as_mut() else {
             return;
         };
+        if open.ui.page != page {
+            open.ui.draft = None;
+        }
         open.ui.page = page;
         match page {
             Page::Versions => self.load_baselines(),
@@ -2872,6 +2944,8 @@ impl<P: CredentialProvider> Actor<P> {
                 can_redo: open.ws.can_redo(),
                 undo_label: open.ws.undo_label().map(Label::imperative),
                 redo_label: open.ws.redo_label().map(Label::imperative),
+                draft: open.ui.draft,
+                draft_seq: open.ui.draft_seq,
                 show_residual: open.ui.show_residual,
                 confirmed_seq: open.ws.confirmed_seq(),
                 numbers,

@@ -1666,6 +1666,20 @@ pub enum Command {
     },
     /// Close the open project.
     CloseProject,
+    /// Start a draft of a new element: the page opens, the inspector shows the
+    /// draft form (UI-08). Nothing is sent to the server.
+    BeginDraft(crate::view::DraftKind),
+    /// Create the element of the draft with this name as one edit. An empty
+    /// name discards the draft and sends nothing. With `next`, a new draft
+    /// starts at once. If the edit is refused, the draft stays.
+    CommitDraft {
+        /// The name typed in the draft.
+        name: String,
+        /// Start the next draft after creating this one.
+        next: bool,
+    },
+    /// Discard the draft; nothing was sent, nothing is in the history.
+    CancelDraft,
     /// Show a page of the open project.
     ShowPage(crate::view::Page),
     /// Select an entity (and show the page it belongs to when `navigate`).

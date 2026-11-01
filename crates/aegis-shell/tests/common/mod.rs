@@ -162,3 +162,32 @@ pub fn save(frame: &Frame, name: &str) {
         .write_image_data(&frame.rgb)
         .expect("png");
 }
+
+/// Types `text` into whatever has focus, one key at a time.
+pub fn type_text(app: &App, text: &str) {
+    use slint::ComponentHandle;
+    for c in text.chars() {
+        let s: slint::SharedString = c.to_string().into();
+        let w = app.window.window();
+        w.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: s.clone() });
+        w.dispatch_event(slint::platform::WindowEvent::KeyReleased { text: s });
+    }
+}
+
+/// Presses and releases one named key, with Control (Command on macOS) held
+/// when `control` is set.
+pub fn press_key(app: &App, key: slint::platform::Key, control: bool) {
+    use slint::ComponentHandle;
+    use slint::platform::{Key, WindowEvent};
+    let w = app.window.window();
+    let ctrl: slint::SharedString = Key::Control.into();
+    let k: slint::SharedString = key.into();
+    if control {
+        w.dispatch_event(WindowEvent::KeyPressed { text: ctrl.clone() });
+    }
+    w.dispatch_event(WindowEvent::KeyPressed { text: k.clone() });
+    w.dispatch_event(WindowEvent::KeyReleased { text: k });
+    if control {
+        w.dispatch_event(WindowEvent::KeyReleased { text: ctrl });
+    }
+}
