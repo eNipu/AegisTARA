@@ -655,6 +655,85 @@ async fn a_removal_toasts_with_undo_and_undo_toasts_with_redo() {
     server.stop().await;
 }
 
+/// UI-08: a draft is client-only. Cancelling or leaving it empty sends nothing;
+/// committing creates the element as one edit that one undo takes back;
+/// create-and-next starts the next draft.
+#[tokio::test]
+async fn a_draft_sends_nothing_until_it_is_created_and_undo_takes_it_back() {
+    use aegis_client::view::DraftKind;
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    let seq = |vm: &ViewModel| vm.project.as_ref().expect("project").confirmed_seq;
+    let assets = |vm: &ViewModel| vm.project.as_ref().expect("project").data.assets.len();
+    let draft = |vm: &ViewModel| vm.project.as_ref().expect("project").draft;
+    let view = until(&alice, "ready", project_ready).await;
+    let start = seq(&view);
+
+    // Begin, then cancel: no op, no history.
+    alice
+        .send(Command::BeginDraft(DraftKind::Asset))
+        .expect("sent");
+    let view = until(&alice, "draft", |vm| draft(vm) == Some(DraftKind::Asset)).await;
+    assert_eq!(
+        view.project.as_ref().expect("p").page,
+        aegis_client::view::Page::Assets
+    );
+    alice.send(Command::CancelDraft).expect("sent");
+    let view = until(&alice, "cancelled", |vm| draft(vm).is_none()).await;
+    assert_eq!((seq(&view), assets(&view)), (start, 0));
+    assert!(!view.project.as_ref().expect("p").can_undo);
+
+    // An empty name discards the draft the same way.
+    alice
+        .send(Command::BeginDraft(DraftKind::Asset))
+        .expect("sent");
+    until(&alice, "draft", |vm| draft(vm).is_some()).await;
+    alice
+        .send(Command::CommitDraft {
+            name: "   ".into(),
+            next: false,
+        })
+        .expect("sent");
+    let view = until(&alice, "discarded", |vm| draft(vm).is_none()).await;
+    assert_eq!((seq(&view), assets(&view)), (start, 0));
+
+    // Create and next: the asset exists and a new draft is open.
+    alice
+        .send(Command::BeginDraft(DraftKind::Asset))
+        .expect("sent");
+    let first = until(&alice, "draft", |vm| draft(vm).is_some()).await;
+    let first_seq = first.project.as_ref().expect("p").draft_seq;
+    alice
+        .send(Command::CommitDraft {
+            name: "Brake ECU".into(),
+            next: true,
+        })
+        .expect("sent");
+    let view = until(&alice, "created", |vm| assets(vm) == 1).await;
+    let p = view.project.as_ref().expect("p");
+    assert_eq!(p.draft, Some(DraftKind::Asset), "the next draft started");
+    assert!(p.draft_seq > first_seq, "the window clears its field");
+
+    // Create and finish: one undo removes it.
+    alice
+        .send(Command::CommitDraft {
+            name: "Gateway".into(),
+            next: false,
+        })
+        .expect("sent");
+    let view = until(&alice, "two assets", |vm| {
+        assets(vm) == 2 && draft(vm).is_none()
+    })
+    .await;
+    assert!(view.project.as_ref().expect("p").can_undo);
+    alice.send(Command::Undo).expect("sent");
+    until(&alice, "undone", |vm| assets(vm) == 1).await;
+    drop(alice);
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn a_second_user_reads_a_saved_version_and_is_offered_the_newer_one() {
     let server = TestServer::start(Duration::ZERO).await;

@@ -1202,3 +1202,24 @@ msgstr "⟦Délété úsér␣␣⟧"
 
 msgid "Turn off"
 msgstr "⟦Túrn óff␣␣⟧"
+
+msgid "New asset"
+msgstr "⟦Néw ássét␣␣⟧"
+
+msgid "New "
+msgstr "⟦Néw ␣␣⟧"
+
+msgid "New control"
+msgstr "⟦Néw cóntról␣␣⟧"
+
+msgid "Asset name"
+msgstr "⟦Ássét námé␣␣⟧"
+
+msgid "What happens"
+msgstr "⟦Whát háppéns␣␣␣⟧"
+
+msgid "Control name"
+msgstr "⟦Cóntról námé␣␣␣⟧"
+
+msgid "Press Enter to create, Escape to cancel."
+msgstr "⟦Préss Éntér tó créáté, Éscápé tó cáncél.␣␣␣␣␣␣␣␣␣␣⟧"
