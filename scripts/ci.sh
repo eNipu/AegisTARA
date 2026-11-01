@@ -4,10 +4,11 @@
 # same script, so a green local run means a green `check` job.
 #
 # Usage: scripts/ci.sh [CRATE_DIR...]
-#   With no arguments, checks each crates/*/ that has a Cargo.toml, in sorted
-#   order (the same discovery rule as scripts/deny.sh).
+#   With no arguments, checks the whole workspace (every crates/*/) in one
+#   cargo run per step, so shared dependencies are built once. With crate
+#   directories, checks each of them on its own, inside its directory.
 #
-# Steps, run inside each crate directory:
+# Steps:
 #   fmt     cargo fmt --check
 #   clippy  cargo clippy --locked --all-targets -- -D warnings
 #   test    cargo test --locked
@@ -19,7 +20,7 @@
 # if no crate was found. Inside GitHub Actions each crate is a folded log group
 # and each failing step is an error annotation.
 #
-# Cost: three cargo runs per crate, O(crates x build time).
+# Cost: three cargo runs for the workspace, or three per named crate.
 set -eu
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
@@ -87,11 +88,19 @@ if [ "$#" -gt 0 ]; then
         check_crate "${dir%/}"
     done
 else
-    # Globs expand in sorted order in POSIX sh.
+    # Per-crate runs rebuilt shared dependencies once per crate (each crate
+    # unifies features on its own) and CI ran out of time. A failure still
+    # names its crate in the output. MSRV in ci.yml checks each crate alone.
     for manifest in "$repo_root"/crates/*/Cargo.toml; do
-        [ -f "$manifest" ] || continue
-        check_crate "$(dirname "$manifest")"
+        [ -f "$manifest" ] && checked=$((checked + 1))
     done
+    if [ "$checked" -gt 0 ]; then
+        [ "$in_actions" = true ] && echo "::group::workspace"
+        run_step workspace "$repo_root" fmt cargo fmt --all --check
+        run_step workspace "$repo_root" clippy cargo clippy --locked --workspace --all-targets -- -D warnings
+        run_step workspace "$repo_root" test cargo test --locked --workspace
+        [ "$in_actions" = true ] && echo "::endgroup::"
+    fi
 fi
 
 if [ "$checked" -eq 0 ]; then
