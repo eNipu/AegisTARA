@@ -618,13 +618,15 @@ pub enum Edit {
 
     // ---- duplication (UI-09.2, UI-09.4) ----
     /// Duplicates an element, cloning its own scalar fields with a fresh id
-    /// and a " copy" name suffix. Cross-links (members, damages, controls,
+    /// and the name with the given suffix after it ("copy" in English). Cross-links (members, damages, controls,
     /// catalog refs, steps) are not cloned.
     DuplicateComponent {
         /// New ID.
         id: ComponentId,
         /// The component to copy.
         source: ComponentId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates an interface.
     DuplicateInterface {
@@ -632,6 +634,8 @@ pub enum Edit {
         id: InterfaceId,
         /// The interface to copy.
         source: InterfaceId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates a data flow.
     DuplicateDataFlow {
@@ -639,6 +643,8 @@ pub enum Edit {
         id: DataFlowId,
         /// The data flow to copy.
         source: DataFlowId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates a trust boundary (members are not copied).
     DuplicateTrustBoundary {
@@ -646,6 +652,8 @@ pub enum Edit {
         id: TrustBoundaryId,
         /// The trust boundary to copy.
         source: TrustBoundaryId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates an asset (its component binding is not copied).
     DuplicateAsset {
@@ -653,6 +661,8 @@ pub enum Edit {
         id: AssetId,
         /// The asset to copy.
         source: AssetId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates a damage scenario (its rated impacts are copied).
     DuplicateDamage {
@@ -660,6 +670,8 @@ pub enum Edit {
         id: DamageId,
         /// The damage scenario to copy.
         source: DamageId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates a threat scenario (damages and catalog refs are not copied).
     DuplicateThreat {
@@ -667,6 +679,8 @@ pub enum Edit {
         id: ThreatId,
         /// The threat scenario to copy.
         source: ThreatId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates a security control.
     DuplicateControl {
@@ -674,6 +688,8 @@ pub enum Edit {
         id: ControlId,
         /// The control to copy.
         source: ControlId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates a cybersecurity goal (controls are not copied).
     DuplicateGoal {
@@ -681,6 +697,8 @@ pub enum Edit {
         id: GoalId,
         /// The goal to copy.
         source: GoalId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
     /// Duplicates a cybersecurity claim.
     DuplicateClaim {
@@ -688,6 +706,8 @@ pub enum Edit {
         id: ClaimId,
         /// The claim to copy.
         source: ClaimId,
+        /// Word put after the name of the copy, in the user's language.
+        suffix: String,
     },
 }
 
@@ -790,8 +810,8 @@ fn name(text: &str) -> Result<std::sync::Arc<str>, EditError> {
 }
 
 /// The name a duplicated element gets (UI-09.2).
-fn copy_name(text: &str) -> String {
-    format!("{} copy", text.trim())
+fn copy_name(text: &str, suffix: &str) -> String {
+    format!("{} {}", text.trim(), suffix.trim())
 }
 
 fn feasibility(
@@ -1779,7 +1799,7 @@ impl Edit {
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
             }
-            Edit::DuplicateComponent { id, source } => {
+            Edit::DuplicateComponent { id, source, suffix } => {
                 let c = project
                     .component_idx(source)
                     .and_then(|i| project.component(i))
@@ -1787,12 +1807,12 @@ impl Edit {
                 let parent = c.parent().and_then(|i| project.component_id(i));
                 vec![Op::AddComponent {
                     id: *id,
-                    name: name(&copy_name(c.name()))?,
+                    name: name(&copy_name(c.name(), suffix))?,
                     parent,
                     provenance: p,
                 }]
             }
-            Edit::DuplicateInterface { id, source } => {
+            Edit::DuplicateInterface { id, source, suffix } => {
                 let i = project
                     .interface_idx(source)
                     .and_then(|x| project.interface(x))
@@ -1802,13 +1822,13 @@ impl Edit {
                     .ok_or(EditError::Missing)?;
                 vec![Op::AddInterface {
                     id: *id,
-                    name: name(&copy_name(i.name()))?,
+                    name: name(&copy_name(i.name(), suffix))?,
                     component,
                     kind: i.kind(),
                     provenance: p,
                 }]
             }
-            Edit::DuplicateDataFlow { id, source } => {
+            Edit::DuplicateDataFlow { id, source, suffix } => {
                 let df = project
                     .data_flow_idx(source)
                     .and_then(|x| project.data_flow(x))
@@ -1818,26 +1838,26 @@ impl Edit {
                 let interface = df.interface().and_then(|x| project.interface_id(x));
                 vec![Op::AddDataFlow {
                     id: *id,
-                    name: name(&copy_name(df.name()))?,
+                    name: name(&copy_name(df.name(), suffix))?,
                     from,
                     to,
                     interface,
                     provenance: p,
                 }]
             }
-            Edit::DuplicateTrustBoundary { id, source } => {
+            Edit::DuplicateTrustBoundary { id, source, suffix } => {
                 let tb = project
                     .trust_boundary_idx(source)
                     .and_then(|x| project.trust_boundary(x))
                     .ok_or(EditError::Missing)?;
                 vec![Op::AddTrustBoundary {
                     id: *id,
-                    name: name(&copy_name(tb.name()))?,
+                    name: name(&copy_name(tb.name(), suffix))?,
                     components: Vec::new(),
                     provenance: p,
                 }]
             }
-            Edit::DuplicateAsset { id, source } => {
+            Edit::DuplicateAsset { id, source, suffix } => {
                 let a = project
                     .asset_idx(source)
                     .and_then(|x| project.asset(x))
@@ -1848,12 +1868,12 @@ impl Edit {
                 }
                 vec![Op::AddAsset {
                     id: *id,
-                    name: name(&copy_name(a.name()))?,
+                    name: name(&copy_name(a.name(), suffix))?,
                     properties,
                     provenance: p,
                 }]
             }
-            Edit::DuplicateDamage { id, source } => {
+            Edit::DuplicateDamage { id, source, suffix } => {
                 let d = project
                     .damage_scenario_idx(source)
                     .and_then(|x| project.damage_scenario(x))
@@ -1864,12 +1884,12 @@ impl Edit {
                     .collect();
                 vec![Op::AddDamageScenario {
                     id: *id,
-                    name: name(&copy_name(d.name()))?,
+                    name: name(&copy_name(d.name(), suffix))?,
                     impacts,
                     provenance: p,
                 }]
             }
-            Edit::DuplicateThreat { id, source } => {
+            Edit::DuplicateThreat { id, source, suffix } => {
                 let t = project
                     .threat_scenario_idx(source)
                     .and_then(|x| project.threat_scenario(x))
@@ -1877,7 +1897,7 @@ impl Edit {
                 let asset = project.asset_id(t.asset()).ok_or(EditError::Missing)?;
                 vec![Op::AddThreatScenario {
                     id: *id,
-                    name: name(&copy_name(t.name()))?,
+                    name: name(&copy_name(t.name(), suffix))?,
                     asset,
                     category: t.category(),
                     catalog_refs: Vec::new(),
@@ -1885,37 +1905,37 @@ impl Edit {
                     provenance: p,
                 }]
             }
-            Edit::DuplicateControl { id, source } => {
+            Edit::DuplicateControl { id, source, suffix } => {
                 let c = project
                     .security_control_idx(source)
                     .and_then(|x| project.security_control(x))
                     .ok_or(EditError::Missing)?;
                 vec![Op::AddSecurityControl {
                     id: *id,
-                    name: name(&copy_name(c.name()))?,
+                    name: name(&copy_name(c.name(), suffix))?,
                     provenance: p,
                 }]
             }
-            Edit::DuplicateGoal { id, source } => {
+            Edit::DuplicateGoal { id, source, suffix } => {
                 let g = project
                     .cybersecurity_goal_idx(source)
                     .and_then(|x| project.cybersecurity_goal(x))
                     .ok_or(EditError::Missing)?;
                 vec![Op::AddCybersecurityGoal {
                     id: *id,
-                    name: name(&copy_name(g.name()))?,
+                    name: name(&copy_name(g.name(), suffix))?,
                     controls: Vec::new(),
                     provenance: p,
                 }]
             }
-            Edit::DuplicateClaim { id, source } => {
+            Edit::DuplicateClaim { id, source, suffix } => {
                 let c = project
                     .cybersecurity_claim_idx(source)
                     .and_then(|x| project.cybersecurity_claim(x))
                     .ok_or(EditError::Missing)?;
                 vec![Op::AddCybersecurityClaim {
                     id: *id,
-                    name: name(&copy_name(c.name()))?,
+                    name: name(&copy_name(c.name(), suffix))?,
                     provenance: p,
                 }]
             }

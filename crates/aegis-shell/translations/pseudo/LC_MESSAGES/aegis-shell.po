@@ -1281,6 +1281,9 @@ msgstr "⟦Dúplícáté␣⟧"
 msgid "Duplicate {}"
 msgstr "⟦Dúplícáté {}␣␣⟧"
 
+msgid "copy"
+msgstr "⟦cópý␣⟧"
+
 msgid "Remove {}"
 msgstr "⟦Rémóvé {}␣␣⟧"
 

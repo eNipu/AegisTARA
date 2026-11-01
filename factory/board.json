@@ -1122,21 +1122,28 @@
     {
       "id": "115-row-actions",
       "title": "Row actions in tables: DataTable, + and \u22ef actions, keyboard, read-only, 5,000-row check (UI-09)",
-      "stage": "escalated",
+      "stage": "merged",
       "worktree": null,
       "branch": "master",
       "round": 1,
       "reviews": {
         "security": "PASS",
-        "ux": "CHANGES",
+        "ux": "PASS",
         "ui": "PASS",
         "code": "PASS"
       },
-      "history": [],
-      "decision": "ESCALATE",
-      "updated_at": "2026-11-01T12:30:00Z",
-      "notes": "Built directly on master in four slices. Code, security and UI PASS; UX CHANGES: Return does not move focus into the inspector (UI-09.4). Also open: draft row shows row actions, Duplicate ' copy' suffix not translated. Measured 5,000 rows: scroll frame 9.5 ms median, software renderer headless. Follow-up for a person: GPU feel, VoiceOver/NVDA."
+      "history": [
+        {
+          "security": "PASS",
+          "ux": "CHANGES",
+          "ui": "PASS",
+          "code": "PASS"
+        }
+      ],
+      "decision": "APPROVE",
+      "updated_at": "2026-11-01T13:10:00Z",
+      "notes": "Built directly on master in four slices plus a gap-closing pass. All reviews PASS. Measured 5,000 rows: scroll frame 9.5 ms median (software renderer, headless). Follow-ups for a person: GPU feel at 5,000 rows, VoiceOver/NVDA, ja strings."
     }
   ],
-  "updated_at": "2026-11-01T12:30:00Z"
+  "updated_at": "2026-11-01T13:10:00Z"
 }

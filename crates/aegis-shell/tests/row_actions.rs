@@ -220,8 +220,11 @@ async fn real_keys_drive_the_table() {
     .await;
 
     common::press_chord(&app, 'd', false);
-    app.until("duplicated", |vm| p(vm).data.assets.len() == 3)
-        .await;
+    let copy = format!("Gateway {}", app.window.get_copy_suffix());
+    app.until("duplicated", |vm| {
+        p(vm).data.assets.len() == 3 && p(vm).data.assets.iter().any(|a| a.name == copy)
+    })
+    .await;
 
     common::press_key(&app, Key::Delete, false);
     app.until("deleted", |vm| {
@@ -379,4 +382,109 @@ async fn five_thousand_rows_scroll_and_select() {
         scroll_median < std::time::Duration::from_millis(250),
         "scrolling 5,000 rows is unusably slow: {scroll_median:?}"
     );
+}
+
+/// UI-09.4: Return on a row moves the keyboard into the details panel's name
+/// field, so the next keys edit the name.
+#[tokio::test(flavor = "current_thread")]
+async fn return_moves_focus_into_the_inspector() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    assets_page(&app).await;
+    add_assets(&app, &["ECU", "Gateway"]).await;
+    app.frame();
+
+    // Row 0 picked by a click, then Return (the panel already exists).
+    let (x, y) = row_point(&app, 0);
+    click_row(&app, x, y);
+    app.until("row 0", |vm| {
+        p(vm).data.asset.as_ref().is_some_and(|a| a.name == "ECU")
+    })
+    .await;
+    common::press_key(&app, Key::Return, false);
+    app.frame();
+    common::type_text(&app, "!");
+    common::press_key(&app, Key::Return, false);
+    app.until("renamed from the keyboard", |vm| {
+        p(vm).data.assets.iter().any(|a| a.name.contains('!')) && p(vm).data.assets.len() == 2
+    })
+    .await;
+
+    // The keyboard is in the name field now, not the table: a click on row 1
+    // gives the table back, and Return takes the keyboard into row 1's panel.
+    let (x, y) = row_point(&app, 1);
+    click_row(&app, x, y);
+    app.until("row 1", |vm| {
+        p(vm)
+            .data
+            .asset
+            .as_ref()
+            .is_some_and(|a| a.name == "Gateway")
+    })
+    .await;
+    common::press_key(&app, Key::Return, false);
+    app.frame();
+    common::type_text(&app, "?");
+    common::press_key(&app, Key::Return, false);
+    app.until("second rename", |vm| {
+        p(vm)
+            .data
+            .assets
+            .iter()
+            .any(|a| a.name.contains('?') && a.name.contains("ateway"))
+    })
+    .await;
+}
+
+/// The distinct colours in the right end of row `index`: the row background
+/// alone is one colour, the + and ⋯ buttons are many more.
+fn action_colours(app: &App, index: usize) -> usize {
+    let (_, y) = row_point(app, index);
+    let frame = app.frame();
+    let right = app.window.get_table_x() + app.window.get_table_w() - 60.0;
+    let mut seen = std::collections::HashSet::new();
+    for dx in 0..64 {
+        for dy in -10..10 {
+            seen.insert(frame.pixel(right as u32 + dx, (y as i32 + dy) as u32));
+        }
+    }
+    seen.len()
+}
+
+/// A row that is only a draft has no row actions.
+#[tokio::test(flavor = "current_thread")]
+async fn a_draft_row_has_no_row_actions() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    assets_page(&app).await;
+    add_assets(&app, &["ECU", "Gateway"]).await;
+    app.frame();
+    let (x, y) = row_point(&app, 1);
+    click_row(&app, x, y);
+    app.until("row 1", |vm| {
+        p(vm)
+            .data
+            .asset
+            .as_ref()
+            .is_some_and(|a| a.name == "Gateway")
+    })
+    .await;
+    assert!(action_colours(&app, 1) > 2, "a real row has buttons");
+
+    common::press_chord(&app, 'n', true);
+    app.until("draft", |vm| p(vm).draft == Some(DraftKind::Asset))
+        .await;
+    app.frame();
+    app.frame();
+    // The draft is the third row and is selected; hover it too.
+    let (x, y) = row_point(&app, 2);
+    {
+        use slint::ComponentHandle;
+        app.window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(x, y),
+            });
+    }
+    assert!(action_colours(&app, 2) <= 2, "the draft row has no buttons");
 }
