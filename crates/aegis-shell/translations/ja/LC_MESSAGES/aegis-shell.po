@@ -1348,3 +1348,15 @@ msgstr "まだありません"
 
 msgid "{} it can lead to"
 msgstr "つながりうる{}"
+
+msgid "Cut"
+msgstr "切り取り"
+
+msgid "Copy"
+msgstr "コピー"
+
+msgid "Paste"
+msgstr "貼り付け"
+
+msgid "Select all"
+msgstr "すべて選択"
