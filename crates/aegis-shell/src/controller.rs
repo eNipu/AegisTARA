@@ -99,9 +99,10 @@ pub struct Hooks {
     pub export_dir_changed: Option<Box<dyn Fn(String)>>,
     /// The appearance was chosen: `0` System, `1` Light, `2` Dark.
     pub appearance_changed: Option<Box<dyn Fn(i32)>>,
-    /// A panel slot was resized: the left and right widths in logical
-    /// pixels (`0` for a right panel that follows the window).
-    pub panels_resized: Option<Box<dyn Fn(f32, f32)>>,
+    /// A panel slot was resized: the left and right widths and the bottom
+    /// height in logical pixels (`0` for a right panel that follows the
+    /// window).
+    pub panels_resized: Option<Box<dyn Fn(f32, f32, f32)>>,
 }
 
 /// Owns the window-side state and the session handle.
@@ -544,7 +545,7 @@ impl Controller {
         });
         on!(on_panels_resized, |c| {
             if let (Some(hook), Some(w)) = (&c.hooks.panels_resized, c.window.upgrade()) {
-                hook(w.get_left_size(), w.get_right_size());
+                hook(w.get_left_size(), w.get_right_size(), w.get_bottom_size());
             }
         });
         on!(on_dismiss_notice, |c, id| c.send(Command::DismissNotice(
@@ -1651,6 +1652,15 @@ impl Controller {
         });
         on!(on_stop_compare, |c| c.send(Command::CompareWith(None)));
         on!(on_refresh_history, |c| c.send(Command::LoadHistory));
+        on!(on_history_pick, |c, i| {
+            let text = c.with_project(|p| Some(history_preview(&p.edits, pos(i)?)));
+            if let (Some(text), Some(w)) = (text, c.window.upgrade()) {
+                w.set_history_preview(s(&text));
+            }
+        });
+        on!(on_history_go_back, |c, i| if let Some(n) = pos(i) {
+            c.send(Command::UndoTo(n));
+        });
         on!(on_export_report, |c| c.export(ExportKind::Report));
         on!(on_export_pdf, |c| c.export(ExportKind::ReportPdf));
         on!(on_export_xlsx, |c| c.export(ExportKind::ReportXlsx));
@@ -2584,6 +2594,23 @@ impl Controller {
                 || old.tree.as_ref().map(|t| t.tree) != project.tree.as_ref().map(|t| t.tree)
         }) {
             self.apply_pages(&w, project);
+        }
+        if prev_proj.is_none_or(|old| old.edits != project.edits) {
+            // The rows are new, so a picked row and its preview no longer fit.
+            let who = w.get_user().to_string();
+            let mut list: Vec<Vec<String>> = project
+                .edits
+                .iter()
+                .map(|e| vec![e.what.clone(), who.clone(), e.when.clone()])
+                .collect();
+            list.push(vec![
+                "Project opened".to_owned(),
+                String::new(),
+                String::new(),
+            ]);
+            w.set_history_edit_rows(rows(list));
+            w.set_history_edit_selected(-1);
+            w.set_history_preview(s(""));
         }
         if w.get_palette_open()
             && prev_proj.is_none_or(|old| old.palette_elements != project.palette_elements)
@@ -3679,4 +3706,29 @@ fn evaluated_tone(project: &ProjectView, has_value: bool) -> i32 {
     tree.scene
         .style(u32::try_from(selected.index()).unwrap_or(0))
         .map_or(0, |style| bucket(style.tone))
+}
+
+/// What going back to row `row` of the history panel would undo: the edits
+/// above it, newest first (UI-03).
+fn history_preview(edits: &[aegis_client::state::EditRow], row: usize) -> String {
+    const SHOWN: usize = 3;
+    if row == 0 {
+        return "This is the current state.".to_owned();
+    }
+    let n = row.min(edits.len());
+    let list: Vec<&str> = edits
+        .iter()
+        .take(n.min(SHOWN))
+        .map(|e| e.what.as_str())
+        .collect();
+    let more = if n > SHOWN {
+        format!(" and {} more", n - SHOWN)
+    } else {
+        String::new()
+    };
+    let changes = if n == 1 { "change" } else { "changes" };
+    format!(
+        "Going back here undoes {n} {changes} as one step: {}{more}. Redo brings them back.",
+        list.join("; ")
+    )
 }
