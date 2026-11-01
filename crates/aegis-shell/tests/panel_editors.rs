@@ -165,7 +165,7 @@ async fn clicking_the_project_name_renames_it_in_place() {
     let server = TestServer::start().await;
     let app = app_with_sample(&server).await;
     // The name in the header, with the pointer at its right end.
-    let at = (299.0, 83.0);
+    let at = (349.0, 83.0);
 
     // Click: the name becomes a field with the keyboard in it. Enter saves.
     click(&app, at.0, at.1);
