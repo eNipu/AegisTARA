@@ -1411,6 +1411,8 @@ pub(super) struct SnapshotWire {
     pub(super) descriptions: Vec<DescriptionWire>,
     #[serde(default)]
     pub(super) review_marks: Vec<ReviewMarkWire>,
+    #[serde(default)]
+    pub(super) languages: Vec<LangText>,
 }
 
 /// A step whose rating awaits review.
@@ -1774,6 +1776,11 @@ pub(super) enum OpWire {
         target: TargetWire,
         lang: LangText,
         text: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetProjectLanguages {
+        langs: Vec<LangText>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

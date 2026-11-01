@@ -1298,8 +1298,11 @@ msgstr "⟦Ádd á déscríptíón. {0} ór léávíng thé bóx sávés.␣␣�
 msgid "Add threat scenario"
 msgstr "⟦Ádd thréát scénáríó␣␣⟧"
 
-msgid "Add translation"
-msgstr "⟦Ádd tránslátíón␣␣⟧"
+msgid "Translation languages"
+msgstr "⟦Tránslátíón láñgúágés␣␣␣␣⟧"
+
+msgid "None, e.g. ja"
+msgstr "⟦Ñóñé, é.g. já␣␣⟧"
 
 msgid "Assessment method"
 msgstr "⟦Ásséssmént méthód␣␣⟧"

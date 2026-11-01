@@ -1298,8 +1298,11 @@ msgstr "説明を入力します。{0} またはボックスを離れると保�
 msgid "Add threat scenario"
 msgstr "脅威シナリオを追加"
 
-msgid "Add translation"
-msgstr "翻訳を追加"
+msgid "Translation languages"
+msgstr "翻訳言語"
+
+msgid "None, e.g. ja"
+msgstr "なし (例: ja)"
 
 msgid "Assessment method"
 msgstr "評価手法"

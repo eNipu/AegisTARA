@@ -51,6 +51,8 @@ struct SnapshotView<'a> {
     descriptions: Descriptions<'a>,
     #[serde(skip_serializing_if = "ReviewMarks::is_empty")]
     review_marks: ReviewMarks<'a>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    languages: Vec<&'a str>,
 }
 
 /// What every entity view needs.
@@ -730,6 +732,7 @@ impl Project {
             trust_boundaries: TrustBoundaries(self),
             descriptions: Descriptions(self),
             review_marks: ReviewMarks(self),
+            languages: self.languages().iter().map(|l| &**l).collect(),
         };
         let mut out = BufWriter::new(w);
         serde_json::to_writer(&mut out, &view).map_err(wire::encode_error)?;
@@ -1021,6 +1024,10 @@ impl Project {
                 provenance: crate::provenance::Provenance::default(),
             })?;
         }
+        project.apply(Op::SetProjectLanguages {
+            langs: snapshot.languages.into_iter().map(|l| l.0).collect(),
+            provenance: crate::provenance::Provenance::default(),
+        })?;
         // Descriptions last: every element they name exists by now.
         for d in snapshot.descriptions {
             let target = d.target.into_ref();

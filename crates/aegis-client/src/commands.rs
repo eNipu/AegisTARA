@@ -52,6 +52,12 @@ pub enum Edit {
         /// The translated text; empty clears it.
         text: String,
     },
+    /// Sets the languages the project keeps translations in; empty makes
+    /// it single-language. Tags are trimmed.
+    SetProjectLanguages {
+        /// The language tags, in display order.
+        langs: Vec<String>,
+    },
 
     // ---- attack tree steps ----
     /// Sets or clears the direct feasibility rating of a step.
@@ -898,6 +904,10 @@ impl Edit {
                     provenance: p,
                 }]
             }
+            Edit::SetProjectLanguages { langs } => vec![Op::SetProjectLanguages {
+                langs: langs.iter().map(|l| l.trim().into()).collect(),
+                provenance: p,
+            }],
             Edit::SetStepFeasibility { tree, node, level } => vec![Op::SetStepFeasibility {
                 tree: *tree,
                 node: *node,
