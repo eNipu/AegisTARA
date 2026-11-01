@@ -415,6 +415,15 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// The project lists more than `max` languages.
+    #[error("the project lists more than {max} languages")]
+    TooManyLanguages {
+        /// The limit.
+        max: usize,
+    },
+    /// The project lists one language twice.
+    #[error("the project lists a language twice")]
+    DuplicateLanguage,
     /// A name is longer than `max` chars.
     #[error("{kind} name is longer than {max} chars")]
     NameTooLong {

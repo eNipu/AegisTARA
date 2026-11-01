@@ -123,6 +123,11 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetProjectLanguages {
+        langs: Vec<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddAsset {
         id: Text<AssetId>,
         name: &'a str,
@@ -460,6 +465,9 @@ fn within_caps(op: &Op) -> bool {
             lang.len() <= crate::description::MAX_LANG_TAG_BYTES
                 && text.len() <= MAX_DESCRIPTION_BYTES
         }
+        Op::SetProjectLanguages { langs, .. } => langs
+            .iter()
+            .all(|l| l.len() <= crate::description::MAX_LANG_TAG_BYTES),
         Op::AddTreeNode { node, .. } => name_ok(node.label()),
         Op::RenameTreeNode { label, .. } => name_ok(label),
         Op::AddAsset { name, .. }
@@ -618,6 +626,10 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             target: (*target).into(),
             lang,
             text,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetProjectLanguages { langs, provenance } => OpView::SetProjectLanguages {
+            langs: langs.iter().map(|l| &**l).collect(),
             provenance: ProvenanceView::of(provenance),
         },
         Op::AddAsset {
@@ -1220,6 +1232,10 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             target: target.into_ref(),
             lang: lang.0,
             text: text.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetProjectLanguages { langs, provenance } => Op::SetProjectLanguages {
+            langs: langs.into_iter().map(|l| l.0).collect(),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::AddAsset {
