@@ -11,7 +11,7 @@ import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectLanguages, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
-    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm, Splitter,
+    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm, Splitter, HSplitter,
     Button, LineEdit, TextEdit, ComboBox, CheckBox, Switch
 } from "widgets.slint";
 
@@ -283,12 +283,17 @@ export component AppWindow inherits Window {
     // window keeps room for its page.
     in-out property <length> left-size: 210px;
     in-out property <length> right-size: 0px;
+    // The bottom slot holds the history panel (UI-03); 0 is the default height.
+    in-out property <length> bottom-size: 0px;
     callback panels-resized();
     property <length> nav-width: max(160px, min(min(320px, root.left-size), root.width * 0.25));
     property <length> right-max: max(260px, root.width * 0.45);
     property <length> side-width: root.right-size > 0 ? max(260px, min(root.right-size, root.right-max)) : min(400px, max(300px, root.width * 0.3));
     property <length> tree-list-width: min(340px, max(240px, root.width * 0.24));
     property <length> inspector-width: root.right-size > 0 ? root.side-width : min(340px, max(260px, root.width * 0.25));
+    property <length> bottom-max: max(120px, root.height * 0.35);
+    property <length> bottom-height: max(120px, min(root.bottom-size > 0 ? root.bottom-size : 200px, root.bottom-max));
+    function drag-bottom(from: length, d: length) { root.bottom-size = max(120px, min(root.bottom-max, from - d)); }
     function drag-left(d: length) { root.left-size = max(160px, min(320px, root.nav-width + d)); }
     function drag-right(from: length, d: length) { root.right-size = max(260px, min(root.right-max, from - d)); }
 
@@ -323,6 +328,15 @@ export component AppWindow inherits Window {
     in property <string> project-name;
     in-out property <bool> renaming-project: false;
     in-out property <bool> creating-baseline: false;
+    // The history panel in the bottom slot (UI-03): this session's edits,
+    // newest first, then the state the project was opened in. Picking a row
+    // previews going back to it; the button goes back as one undo step.
+    in-out property <bool> history-shown: false;
+    in property <[[StandardListViewItem]]> history-edit-rows;
+    in-out property <int> history-edit-selected: -1;
+    in property <string> history-preview;
+    callback history-pick(int);
+    callback history-go-back(int);
     public function begin-baseline() {
         root.show-page(Pages.versions);
         root.creating-baseline = true;
@@ -1151,6 +1165,7 @@ in property <string> redo-label;
             MenuItem { title: @tr("Reload newer version"); icon: @image-url("icons/refresh-cw.svg"); enabled: root.in-project && root.newer-version; activated => { root.reload(); } }
             MenuItem { title: @tr("Create baseline…"); icon: @image-url("icons/flag.svg"); enabled: root.in-project; activated => { root.begin-baseline(); } }
             MenuItem { title: @tr("Versions and comparison"); icon: @image-url("icons/git-compare.svg"); enabled: root.in-project; activated => { root.show-page(Pages.versions); } }
+            MenuItem { title: root.history-shown ? @tr("Hide the history panel") : @tr("Show the history panel"); icon: @image-url("icons/history.svg"); enabled: root.in-project; activated => { root.history-shown = !root.history-shown; } }
             MenuItem { title: @tr("History"); icon: @image-url("icons/history.svg"); enabled: root.in-project; activated => { root.show-page(Pages.history); } }
             MenuItem { title: @tr("Reports"); icon: @image-url("icons/file-chart-column.svg"); enabled: root.in-project; activated => { root.show-page(Pages.reports); } }
         }
@@ -1555,6 +1570,15 @@ in property <string> redo-label;
                     clicked => { root.redo(); }
                     Tooltip {
                         Text { text: root.redo-tip(); color: #FFFFFF; font-size: Theme.font-label; }
+                    }
+                }
+                Button {
+                    icon: @image-url("icons/history.svg");
+                    primary: root.history-shown;
+                    accessible-label: root.history-shown ? @tr("Hide the history panel") : @tr("Show the history panel");
+                    clicked => { root.history-shown = !root.history-shown; }
+                    Tooltip {
+                        Text { text: root.history-shown ? @tr("Hide the history panel") : @tr("Show the history panel"); color: #FFFFFF; font-size: Theme.font-label; }
                     }
                 }
                 // Click the name to rename the project in place (UI-11.4); the
@@ -3354,6 +3378,55 @@ in property <string> redo-label;
                         SectionTitle { text: @tr("Server"); }
                         Text { text: root.engine-text; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
+                    }
+                }
+            }
+        }
+
+        // ---- history panel, in the bottom slot (UI-02, UI-03) ----
+        if root.history-shown: HSplitter { moved(d) => { root.drag-bottom(root.bottom-height, d); } released => { root.panels-resized(); } }
+        if root.history-shown: Rectangle {
+            height: root.bottom-height;
+            background: Theme.panel;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    SectionTitle { text: @tr("History of this session"); vertical-alignment: center; horizontal-stretch: 1; }
+                    Button { text: @tr("Earlier changes"); icon: @image-url("icons/history.svg"); clicked => { root.show-page(Pages.history); } }
+                    Button { icon: @image-url("icons/x.svg"); accessible-label: @tr("Hide the history panel"); clicked => { root.history-shown = false; } }
+                }
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: 12px;
+                    DataTable {
+                        horizontal-stretch: 1;
+                        min-height: 0px;
+                        label: @tr("History of this session");
+                        columns: [{ title: @tr("Change"), horizontal-stretch: 3 }, { title: @tr("Who"), horizontal-stretch: 1 }, { title: @tr("When"), horizontal-stretch: 2 }];
+                        rows: root.history-edit-rows;
+                        selected: root.history-edit-selected;
+                        picked(i) => { root.history-edit-selected = i; root.history-pick(i); }
+                    }
+                    VerticalLayout {
+                        width: 280px;
+                        spacing: 8px;
+                        Text {
+                            text: root.history-preview == "" ? @tr("Pick a row to see what going back to it would undo.") : root.history-preview;
+                            color: root.history-preview == "" ? Theme.graphite : Theme.ink;
+                            font-size: Theme.font-body;
+                            wrap: word-wrap;
+                            vertical-stretch: 1;
+                            accessible-role: AccessibleRole.text;
+                            accessible-label: @tr("Preview");
+                        }
+                        Button {
+                            text: @tr("Go back to here");
+                            primary: true;
+                            enabled: root.editing && root.history-edit-selected >= 1;
+                            clicked => { root.history-go-back(root.history-edit-selected); }
+                        }
                     }
                 }
             }

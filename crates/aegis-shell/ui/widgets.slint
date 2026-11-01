@@ -1279,6 +1279,35 @@ export component Splitter inherits Rectangle {
     }
 }
 
+// The top edge of the bottom panel slot (UI-02): drag it up or down. Like
+// `Splitter` it only reports how far it was dragged.
+export component HSplitter inherits Rectangle {
+    callback moved(length);
+    callback released();
+    height: 1px;
+    background: Theme.rule;
+    area := TouchArea {
+        y: -3px;
+        height: 7px;
+        mouse-cursor: row-resize;
+        moved => {
+            if self.pressed {
+                root.moved(self.mouse-y - self.pressed-y);
+            }
+        }
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.up {
+                root.released();
+            }
+        }
+    }
+    Rectangle {
+        y: -1px;
+        height: 3px;
+        background: area.has-hover || area.pressed ? Theme.accent : transparent;
+    }
+}
+
 export component Swatch inherits Rectangle {
     in property <int> tone;
     width: 12px;

@@ -1381,3 +1381,21 @@ msgstr "⟦Básélíné námé, fór éxámplé B1 Désígn fréézé␣␣⟧"
 
 msgid "Baseline name"
 msgstr "⟦Básélíné námé␣␣⟧"
+
+msgid "Show the history panel"
+msgstr "⟦Shów thé hístóry pánél␣␣⟧"
+
+msgid "Hide the history panel"
+msgstr "⟦Hídé thé hístóry pánél␣␣⟧"
+
+msgid "History of this session"
+msgstr "⟦Hístóry óf thís séssíón␣␣⟧"
+
+msgid "Earlier changes"
+msgstr "⟦Éárlíér chángés␣␣⟧"
+
+msgid "Pick a row to see what going back to it would undo."
+msgstr "⟦Píck á rów tó séé whát góíng báck tó ít wóúld úndó.␣␣⟧"
+
+msgid "Go back to here"
+msgstr "⟦Gó báck tó héré␣␣⟧"
