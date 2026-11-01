@@ -244,6 +244,25 @@ export component AppWindow inherits Window {
     in property <int> draft-asset: -1;
     in property <int> draft-category: -1;
     in property <bool> draft-incomplete;
+    out property <string> draft-row-component: @tr("New component");
+    out property <string> draft-row-interface: @tr("New interface");
+    out property <string> draft-row-data-flow: @tr("New data flow");
+    out property <string> draft-row-trust-boundary: @tr("New trust boundary");
+    // The item definition drafts: positions in the component list (interface component,
+    // flow from, flow to) and in the interface kinds, -1 if none.
+    in property <int> draft-component: -1;
+    in property <int> draft-to: -1;
+    in property <int> draft-interface-kind: -1;
+    callback set-draft-component(int);
+    callback set-draft-to(int);
+    callback set-draft-interface-kind(int);
+    // A draft of an item definition element opens its tab.
+    changed draft-kind => {
+        if (root.draft-kind == "component") { root.item-tab = 0; }
+        if (root.draft-kind == "interface") { root.item-tab = 1; }
+        if (root.draft-kind == "data-flow") { root.item-tab = 2; }
+        if (root.draft-kind == "trust-boundary") { root.item-tab = 3; }
+    }
     callback set-draft-asset(int);
     callback set-draft-category(int);
     callback begin-draft(string);
@@ -826,8 +845,6 @@ in property <string> redo-label;
         if (text == "") { return; }
         if (kind == "new-project") { root.create-project(text); }
         if (kind == "rename-project") { root.rename-project(text); }
-        if (kind == "add-component") { root.add-component(text); }
-        if (kind == "add-trust-boundary") { root.add-trust-boundary(text); }
         if (kind == "create-baseline") { root.create-baseline(text); }
         if (kind == "reset-password") { root.reset-user-password(text); }
     }
@@ -2442,8 +2459,12 @@ in property <string> redo-label;
                             title: @tr("Item definition");
                             subtitle: @tr("Components, interfaces, data flows, and trust boundaries of the item.");
                             icon: @image-url("icons/network.svg");
-                            Button { text: @tr("Add component"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.item-tab = 0; root.ask("add-component", "Add component", "Component name", ""); } }
-                            Button { text: @tr("Add trust boundary"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.item-tab = 3; root.ask("add-trust-boundary", "Add trust boundary", "Trust boundary name", ""); } }
+                            Button {
+                                text: root.item-tab == 0 ? @tr("New component") : root.item-tab == 1 ? @tr("New interface") : root.item-tab == 2 ? @tr("New data flow") : @tr("New trust boundary");
+                                icon: @image-url("icons/plus.svg");
+                                enabled: root.editing;
+                                clicked => { root.begin-draft(root.item-tab == 0 ? "component" : root.item-tab == 1 ? "interface" : root.item-tab == 2 ? "data-flow" : "trust-boundary"); }
+                            }
                         }
                         HorizontalLayout {
                             spacing: 6px;
@@ -2463,18 +2484,6 @@ in property <string> redo-label;
                         }
                         if root.item-tab == 1: VerticalLayout {
                             spacing: 8px;
-                            if root.editing && root.component-names.length > 0: HorizontalLayout {
-                                spacing: 6px;
-                                LineEdit { horizontal-stretch: 2; placeholder-text: @tr("Interface name"); text <=> root.new-interface-name; accessible-label: @tr("New interface name"); }
-                                ComboBox { horizontal-stretch: 1; model: root.component-names; current-index <=> root.new-interface-component; accessible-label: @tr("Component"); }
-                                ComboBox { horizontal-stretch: 1; model: root.interface-kinds; current-index <=> root.new-interface-kind; accessible-label: @tr("Kind"); }
-                                Button {
-                                    text: @tr("Add");
-                                    icon: @image-url("icons/plus.svg");
-                                    enabled: root.new-interface-name != "";
-                                    clicked => { root.add-interface(root.new-interface-name, root.new-interface-component, root.new-interface-kind); root.new-interface-name = ""; }
-                                }
-                            }
                             Table {
                                 label: @tr("Interfaces");
                                 columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Interface"), horizontal-stretch: 2 }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Kind"), horizontal-stretch: 2 }, { title: @tr("Data flows"), horizontal-stretch: 1 }];
@@ -2485,18 +2494,6 @@ in property <string> redo-label;
                         }
                         if root.item-tab == 2: VerticalLayout {
                             spacing: 8px;
-                            if root.editing && root.component-names.length >= 2: HorizontalLayout {
-                                spacing: 6px;
-                                LineEdit { horizontal-stretch: 2; placeholder-text: @tr("Data flow name"); text <=> root.new-flow-name; accessible-label: @tr("New data flow name"); }
-                                ComboBox { horizontal-stretch: 1; model: root.component-names; current-index <=> root.new-flow-from; accessible-label: @tr("From component"); }
-                                ComboBox { horizontal-stretch: 1; model: root.component-names; current-index <=> root.new-flow-to; accessible-label: @tr("To component"); }
-                                Button {
-                                    text: @tr("Add");
-                                    icon: @image-url("icons/plus.svg");
-                                    enabled: root.new-flow-name != "" && root.new-flow-from != root.new-flow-to;
-                                    clicked => { root.add-data-flow(root.new-flow-name, root.new-flow-from, root.new-flow-to); root.new-flow-name = ""; }
-                                }
-                            }
                             Table {
                                 label: @tr("Data flows");
                                 columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Data flow"), horizontal-stretch: 2 }, { title: @tr("From"), horizontal-stretch: 1 }, { title: @tr("To"), horizontal-stretch: 1 }, { title: @tr("Interface"), horizontal-stretch: 1 }];
@@ -2513,7 +2510,83 @@ in property <string> redo-label;
                             picked(i) => { root.pick-trust-boundary(i); }
                         }
                     }
-                    if root.item-tab == 0 && root.has-component: Panel {
+                    if root.item-tab == 0 && root.draft-kind == "component": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New component");
+                            placeholder: @tr("Component name");
+                            hint: @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            commit(t, next) => { root.commit-draft(t, next); }
+                            cancel => { root.cancel-draft(); }
+                        }
+                    }
+                    if root.item-tab == 1 && root.draft-kind == "interface": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New interface");
+                            placeholder: @tr("Interface name");
+                            hint: root.component-names.length == 0 ? @tr("Add a component first.") : @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            incomplete: root.draft-incomplete;
+                            blur-creates: false;
+                            commit(t, next) => {
+                                if (root.draft-incomplete && t != "") {
+                                    if (root.draft-component < 0) { draft-if-component.focus-box(); } else { draft-if-kind.focus-box(); }
+                                } else {
+                                    root.commit-draft(t, next);
+                                }
+                            }
+                            cancel => { root.cancel-draft(); }
+                            Field {
+                                label: @tr("Component");
+                                draft-if-component := Choice { options: root.component-names; index: root.draft-component; label: @tr("Component"); picked(i) => { root.set-draft-component(i); } }
+                            }
+                            Field {
+                                label: @tr("Kind");
+                                draft-if-kind := Choice { options: root.interface-kinds; index: root.draft-interface-kind; label: @tr("Kind"); picked(i) => { root.set-draft-interface-kind(i); } }
+                            }
+                        }
+                    }
+                    if root.item-tab == 2 && root.draft-kind == "data-flow": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New data flow");
+                            placeholder: @tr("Data flow name");
+                            hint: root.component-names.length < 2 ? @tr("A data flow needs two components.") : @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            incomplete: root.draft-incomplete;
+                            blur-creates: false;
+                            commit(t, next) => {
+                                if (root.draft-incomplete && t != "") {
+                                    if (root.draft-component < 0) { draft-flow-from.focus-box(); } else { draft-flow-to.focus-box(); }
+                                } else {
+                                    root.commit-draft(t, next);
+                                }
+                            }
+                            cancel => { root.cancel-draft(); }
+                            Field {
+                                label: @tr("From component");
+                                draft-flow-from := Choice { options: root.component-names; index: root.draft-component; label: @tr("From component"); picked(i) => { root.set-draft-component(i); } }
+                            }
+                            Field {
+                                label: @tr("To component");
+                                draft-flow-to := Choice { options: root.component-names; index: root.draft-to; label: @tr("To component"); picked(i) => { root.set-draft-to(i); } }
+                            }
+                        }
+                    }
+                    if root.item-tab == 3 && root.draft-kind == "trust-boundary": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New trust boundary");
+                            placeholder: @tr("Trust boundary name");
+                            hint: @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            commit(t, next) => { root.commit-draft(t, next); }
+                            cancel => { root.cancel-draft(); }
+                        }
+                    }
+                    if root.item-tab == 0 && root.has-component && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Component") + " · " + root.component-id; }
                         NameEditor { name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
@@ -2536,7 +2609,7 @@ in property <string> redo-label;
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-component(); } }
                     }
-                    if root.item-tab == 1 && root.has-interface: Panel {
+                    if root.item-tab == 1 && root.has-interface && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Interface") + " · " + root.interface-id; }
                         NameEditor { name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
@@ -2555,7 +2628,7 @@ in property <string> redo-label;
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove interface"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-interface(); } }
                     }
-                    if root.item-tab == 2 && root.has-data-flow: Panel {
+                    if root.item-tab == 2 && root.has-data-flow && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Data flow") + " · " + root.data-flow-id; }
                         NameEditor { name: root.data-flow-name; editable: root.editing; renamed(t) => { root.rename-data-flow(t); } }
@@ -2574,7 +2647,7 @@ in property <string> redo-label;
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove data flow"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-data-flow(); } }
                     }
-                    if root.item-tab == 3 && root.has-trust-boundary: Panel {
+                    if root.item-tab == 3 && root.has-trust-boundary && root.draft-kind == "": Panel {
                         width: root.side-width;
                         SectionTitle { text: @tr("Trust boundary") + " · " + root.trust-boundary-id; }
                         NameEditor { name: root.trust-boundary-name; editable: root.editing; renamed(t) => { root.rename-trust-boundary(t); } }

@@ -1235,3 +1235,27 @@ msgstr "⟦Chóósé thé réqúíréd fíélds␣␣␣␣␣␣⟧"
 
 msgid "The attacker's goal (the root)"
 msgstr "⟦Thé áttáckér's góál (thé róót)␣␣␣␣␣␣␣⟧"
+
+msgid "New component"
+msgstr "⟦Néw cómpónént␣␣␣⟧"
+
+msgid "New interface"
+msgstr "⟦Néw íntérfácé␣␣␣⟧"
+
+msgid "New data flow"
+msgstr "⟦Néw dátá flów␣␣␣⟧"
+
+msgid "New trust boundary"
+msgstr "⟦Néw trúst bóúndáry␣␣␣␣⟧"
+
+msgid "Component name"
+msgstr "⟦Cómpónént námé␣␣␣⟧"
+
+msgid "Trust boundary name"
+msgstr "⟦Trúst bóúndáry námé␣␣␣␣⟧"
+
+msgid "Add a component first."
+msgstr "⟦Ádd á cómpónént fírst.␣␣␣␣␣⟧"
+
+msgid "A data flow needs two components."
+msgstr "⟦Á dátá flów nééds twó cómpónénts.␣␣␣␣␣␣␣␣⟧"

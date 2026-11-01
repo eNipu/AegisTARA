@@ -255,6 +255,14 @@ pub enum DraftKind {
     Claim,
     /// A new attack tree (its root is named).
     Tree,
+    /// A new component of the item definition.
+    Component,
+    /// A new interface: needs a component and a kind.
+    Interface,
+    /// A new data flow: needs two different components.
+    DataFlow,
+    /// A new trust boundary.
+    TrustBoundary,
 }
 
 impl UiState {
@@ -262,8 +270,18 @@ impl UiState {
     /// a category; the other drafts need only a name (UI-08.2).
     #[must_use]
     pub fn draft_incomplete(&self) -> bool {
-        self.draft == Some(DraftKind::Threat)
-            && (self.draft_asset.is_none() || self.draft_category.is_none())
+        match self.draft {
+            Some(DraftKind::Threat) => self.draft_asset.is_none() || self.draft_category.is_none(),
+            Some(DraftKind::Interface) => {
+                self.draft_component.is_none() || self.draft_interface_kind.is_none()
+            }
+            Some(DraftKind::DataFlow) => {
+                self.draft_component.is_none()
+                    || self.draft_to.is_none()
+                    || self.draft_component == self.draft_to
+            }
+            _ => false,
+        }
     }
 }
 
@@ -278,6 +296,7 @@ impl DraftKind {
             Self::Threat => Page::Threats,
             Self::Goal | Self::Claim => Page::Goals,
             Self::Tree => Page::Trees,
+            Self::Component | Self::Interface | Self::DataFlow | Self::TrustBoundary => Page::Item,
         }
     }
 
@@ -292,6 +311,10 @@ impl DraftKind {
             Self::Goal => "goal",
             Self::Claim => "claim",
             Self::Tree => "tree",
+            Self::Component => "component",
+            Self::Interface => "interface",
+            Self::DataFlow => "data-flow",
+            Self::TrustBoundary => "trust-boundary",
         }
     }
 
@@ -306,6 +329,10 @@ impl DraftKind {
             Self::Goal,
             Self::Claim,
             Self::Tree,
+            Self::Component,
+            Self::Interface,
+            Self::DataFlow,
+            Self::TrustBoundary,
         ]
         .into_iter()
         .find(|k| k.key() == key)
@@ -325,6 +352,12 @@ pub struct UiState {
     pub draft_asset: Option<AssetId>,
     /// The category of a threat draft, as a position in the vocabulary.
     pub draft_category: Option<usize>,
+    /// The component of an interface draft, or the "from" end of a data flow.
+    pub draft_component: Option<ComponentId>,
+    /// The "to" end of a data flow draft.
+    pub draft_to: Option<ComponentId>,
+    /// The kind of an interface draft, as a position in the vocabulary.
+    pub draft_interface_kind: Option<usize>,
     /// The selected threat (threat and risk pages; its tree when no tree is
     /// selected).
     pub selected_threat: Option<ThreatId>,

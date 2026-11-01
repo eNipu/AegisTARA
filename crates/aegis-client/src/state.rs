@@ -404,6 +404,12 @@ pub struct ProjectView {
     pub draft_asset: Option<aegis_model::AssetId>,
     /// The category of a threat draft.
     pub draft_category: Option<usize>,
+    /// The component of an interface draft, or the "from" end of a flow draft.
+    pub draft_component: Option<aegis_model::ComponentId>,
+    /// The "to" end of a data flow draft.
+    pub draft_to: Option<aegis_model::ComponentId>,
+    /// The kind of an interface draft.
+    pub draft_interface_kind: Option<usize>,
     /// A required field of the draft has no value yet (UI-08.2).
     pub draft_incomplete: bool,
     /// What undo would undo, as "remove asset 'Brake ECU'" (UI-10.2).

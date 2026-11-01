@@ -862,6 +862,100 @@ async fn goal_claim_and_tree_drafts_are_created_from_a_name() {
     server.stop().await;
 }
 
+/// UI-08.1/08.2 on the item definition page: components and trust boundaries
+/// need a name; an interface needs a component and a kind; a data flow needs
+/// two different components.
+#[tokio::test]
+async fn item_definition_drafts_wait_for_their_required_fields() {
+    use aegis_client::view::DraftKind;
+    use aegis_model::ComponentId;
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    let commit = |name: &str| Command::CommitDraft {
+        name: name.into(),
+        next: false,
+    };
+
+    // Component and trust boundary: a name is enough.
+    for (kind, name) in [
+        (DraftKind::Component, "Gateway"),
+        (DraftKind::Component, "Brake ECU"),
+        (DraftKind::TrustBoundary, "Safety domain"),
+    ] {
+        alice.send(Command::BeginDraft(kind)).expect("sent");
+        let view = until(&alice, "draft", |vm| p(vm).draft == Some(kind)).await;
+        assert!(!p(&view).draft_incomplete, "{kind:?} needs only a name");
+        assert_eq!(p(&view).page, aegis_client::view::Page::Item);
+        alice.send(commit(name)).expect("sent");
+        until(&alice, name, |vm| p(vm).draft.is_none()).await;
+    }
+    let view = until(&alice, "two components", |vm| {
+        p(vm).data.components.len() == 2 && p(vm).data.trust_boundaries.len() == 1
+    })
+    .await;
+    let ids: Vec<ComponentId> = p(&view).data.components.iter().map(|c| c.id).collect();
+
+    // Interface: the component comes from the context (the last one created),
+    // the kind is missing until chosen.
+    alice
+        .send(Command::BeginDraft(DraftKind::Interface))
+        .expect("sent");
+    let view = until(&alice, "interface draft", |vm| {
+        p(vm).draft == Some(DraftKind::Interface)
+    })
+    .await;
+    assert!(
+        p(&view).draft_component.is_some(),
+        "context fills the component"
+    );
+    assert!(p(&view).draft_incomplete, "the kind is missing");
+    alice.send(commit("CAN-2 port")).expect("sent");
+    let view = until(&alice, "still a draft", |vm| p(vm).draft.is_some()).await;
+    assert_eq!(p(&view).data.interfaces.len(), 0);
+    alice.send(Command::SetDraftInterfaceKind(0)).expect("sent");
+    until(&alice, "complete", |vm| !p(vm).draft_incomplete).await;
+    alice.send(commit("CAN-2 port")).expect("sent");
+    until(&alice, "interface created", |vm| {
+        p(vm).draft.is_none() && p(vm).data.interfaces.len() == 1
+    })
+    .await;
+
+    // Data flow: from comes from the context, to is missing; the same component
+    // for both is still incomplete.
+    alice
+        .send(Command::BeginDraft(DraftKind::DataFlow))
+        .expect("sent");
+    let view = until(&alice, "flow draft", |vm| {
+        p(vm).draft == Some(DraftKind::DataFlow)
+    })
+    .await;
+    let from = p(&view).draft_component.expect("from from the context");
+    assert!(p(&view).draft_incomplete);
+    alice.send(Command::SetDraftTo(from)).expect("sent");
+    let view = until(&alice, "same end", |vm| p(vm).draft_to == Some(from)).await;
+    assert!(p(&view).draft_incomplete, "from and to must differ");
+    let other = *ids
+        .iter()
+        .find(|id| **id != from)
+        .expect("another component");
+    alice.send(Command::SetDraftTo(other)).expect("sent");
+    until(&alice, "complete", |vm| !p(vm).draft_incomplete).await;
+    alice.send(commit("Brake frame")).expect("sent");
+    until(&alice, "flow created", |vm| {
+        p(vm).draft.is_none() && p(vm).data.data_flows.len() == 1
+    })
+    .await;
+    alice.send(Command::Undo).expect("sent");
+    until(&alice, "flow undone", |vm| p(vm).data.data_flows.is_empty()).await;
+    drop(alice);
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn a_second_user_reads_a_saved_version_and_is_offered_the_newer_one() {
     let server = TestServer::start(Duration::ZERO).await;
