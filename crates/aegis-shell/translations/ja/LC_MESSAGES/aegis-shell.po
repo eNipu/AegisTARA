@@ -1268,3 +1268,18 @@ msgstr "このページに新しい要素"
 
 msgid "Read only: take the edit lock first."
 msgstr "読み取り専用：先に編集ロックを取得してください。"
+
+msgid "More actions for {}"
+msgstr "{} のその他の操作"
+
+msgid "Open {}"
+msgstr "{} を開く"
+
+msgid "Duplicate"
+msgstr "複製"
+
+msgid "Duplicate {}"
+msgstr "{} を複製"
+
+msgid "Remove {}"
+msgstr "{} を削除"

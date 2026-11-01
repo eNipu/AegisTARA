@@ -10,7 +10,7 @@ import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
-    CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, Table, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
+    CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, Table, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
     LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm
 } from "widgets.slint";
 
@@ -1556,7 +1556,7 @@ in property <string> redo-label;
                             icon: @image-url("icons/box.svg");
                             Button { text: @tr("New asset"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("asset"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
-                        Table {
+                        DataTable {
                             label: @tr("Assets");
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Properties"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }, { title: @tr("Worst risk"), horizontal-stretch: 1 }];
                             rows: root.asset-rows;
@@ -1614,7 +1614,7 @@ in property <string> redo-label;
                             icon: @image-url("icons/triangle-alert.svg");
                             Button { text: @tr("New ") + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("damage"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
-                        Table {
+                        DataTable {
                             label: root.damage-plural;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: root.damage-singular, horizontal-stretch: 2 }, { title: @tr("Impact"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.damage-rows;
@@ -1665,7 +1665,7 @@ in property <string> redo-label;
                             icon: @image-url("icons/swords.svg");
                             Button { text: @tr("New threat scenario"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("threat"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
-                        Table {
+                        DataTable {
                             label: @tr("Threat scenarios");
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Threat scenario"), horizontal-stretch: 3 }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Before"), horizontal-stretch: 1 }, { title: @tr("After"), horizontal-stretch: 1 }];
                             rows: root.threat-rows;
@@ -1766,7 +1766,7 @@ in property <string> redo-label;
                             SectionTitle { text: @tr("Attack trees"); vertical-alignment: center; horizontal-stretch: 1; }
                             Button { text: @tr("New"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("tree"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
-                        Table {
+                        DataTable {
                             label: @tr("Attack trees");
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Tree"), horizontal-stretch: 1 }, { title: @tr("Rating"), width: 92px, min-width: 92px }];
                             rows: root.tree-rows;
@@ -2158,7 +2158,7 @@ in property <string> redo-label;
                         horizontal-stretch: 3;
                         spacing: 10px;
                         PageTitle { title: @tr("Risks and treatment"); subtitle: @tr("Every threat scenario, worst risk first, with the decision on what to do about it."); icon: @image-url("icons/gauge.svg"); }
-                        Table {
+                        DataTable {
                             label: @tr("Risk register");
                             // The short columns get a minimum width so their titles and values
                             // ("not rated") are never cut; the names take the rest.
@@ -2214,7 +2214,7 @@ in property <string> redo-label;
                             icon: @image-url("icons/shield-check.svg");
                             Button { text: @tr("New control"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("control"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
-                        Table {
+                        DataTable {
                             label: @tr("Security controls");
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Control"), horizontal-stretch: 3 }, { title: @tr("Attack steps"), horizontal-stretch: 1 }, { title: @tr("Goals"), horizontal-stretch: 1 }];
                             rows: root.control-rows;
@@ -2264,7 +2264,7 @@ in property <string> redo-label;
                             Button { text: @tr("New claim"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("claim"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
                         SectionTitle { text: root.goal-plural; }
-                        Table {
+                        DataTable {
                             label: root.goal-plural;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: root.goal-singular, horizontal-stretch: 3 }, { title: @tr("Controls"), horizontal-stretch: 1 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.goal-rows;
@@ -2272,7 +2272,7 @@ in property <string> redo-label;
                             picked(i) => { root.pick-goal(i); }
                         }
                         SectionTitle { text: @tr("Cybersecurity claims"); }
-                        Table {
+                        DataTable {
                             label: @tr("Cybersecurity claims");
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Claim"), horizontal-stretch: 3 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.claim-rows;
@@ -2372,7 +2372,7 @@ in property <string> redo-label;
                             icon: @image-url("icons/git-compare.svg");
                             Button { text: @tr("Create baseline"); icon: @image-url("icons/flag.svg"); clicked => { root.ask("create-baseline", "Create baseline", "Baseline name, for example B1 Design freeze", ""); } }
                         }
-                        Table {
+                        DataTable {
                             label: @tr("Baselines");
                             columns: [{ title: @tr("Baseline"), horizontal-stretch: 2 }, { title: @tr("Change"), horizontal-stretch: 1 }, { title: @tr("By"), horizontal-stretch: 1 }, { title: @tr("Created"), horizontal-stretch: 2 }];
                             rows: root.baseline-rows;
@@ -2413,7 +2413,7 @@ in property <string> redo-label;
                         icon: @image-url("icons/history.svg");
                         Button { text: @tr("Refresh"); icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-history(); } }
                     }
-                    Table {
+                    DataTable {
                         label: @tr("History");
                         columns: [{ title: @tr("Change"), horizontal-stretch: 1 }, { title: @tr("Who"), horizontal-stretch: 2 }, { title: @tr("When"), horizontal-stretch: 2 }, { title: @tr("What"), horizontal-stretch: 3 }];
                         rows: root.history-rows;
@@ -2461,7 +2461,7 @@ in property <string> redo-label;
                                     clicked => { root.delete-figure(); }
                                 }
                             }
-                            if root.figure-rows.length > 0: Table {
+                            if root.figure-rows.length > 0: DataTable {
                                 label: @tr("Figures");
                                 columns: [{ title: @tr("Caption"), horizontal-stretch: 3 }, { title: @tr("Target"), horizontal-stretch: 2 }, { title: @tr("Format"), horizontal-stretch: 1 }];
                                 rows: root.figure-rows;
@@ -2494,7 +2494,7 @@ in property <string> redo-label;
                                 }
                             }
                             if root.excel-summary != "": Text { text: root.excel-summary; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
-                            if root.excel-unmapped-rows.length > 0: Table {
+                            if root.excel-unmapped-rows.length > 0: DataTable {
                                 label: @tr("Unmapped rows");
                                 columns: [{ title: @tr("Row"), width: 70px, min-width: 70px }, { title: @tr("Reason"), horizontal-stretch: 3 }];
                                 rows: root.excel-unmapped-rows;
@@ -2538,7 +2538,7 @@ in property <string> redo-label;
                             Button { text: @tr("Data flows"); primary: root.item-tab == 2; clicked => { root.item-tab = 2; } }
                             Button { text: @tr("Trust boundaries"); primary: root.item-tab == 3; clicked => { root.item-tab = 3; } }
                         }
-                        if root.item-tab == 0: Table {
+                        if root.item-tab == 0: DataTable {
                             label: @tr("Components");
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Parent"), horizontal-stretch: 2 }, { title: @tr("Interfaces"), horizontal-stretch: 1 }, { title: @tr("Assets"), horizontal-stretch: 1 }];
                             rows: root.component-rows;
@@ -2547,7 +2547,7 @@ in property <string> redo-label;
                         }
                         if root.item-tab == 1: VerticalLayout {
                             spacing: 8px;
-                            Table {
+                            DataTable {
                                 label: @tr("Interfaces");
                                 columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Interface"), horizontal-stretch: 2 }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Kind"), horizontal-stretch: 2 }, { title: @tr("Data flows"), horizontal-stretch: 1 }];
                                 rows: root.interface-rows;
@@ -2557,7 +2557,7 @@ in property <string> redo-label;
                         }
                         if root.item-tab == 2: VerticalLayout {
                             spacing: 8px;
-                            Table {
+                            DataTable {
                                 label: @tr("Data flows");
                                 columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Data flow"), horizontal-stretch: 2 }, { title: @tr("From"), horizontal-stretch: 1 }, { title: @tr("To"), horizontal-stretch: 1 }, { title: @tr("Interface"), horizontal-stretch: 1 }];
                                 rows: root.data-flow-rows;
@@ -2565,7 +2565,7 @@ in property <string> redo-label;
                                 picked(i) => { root.pick-data-flow(i); }
                             }
                         }
-                        if root.item-tab == 3: Table {
+                        if root.item-tab == 3: DataTable {
                             label: @tr("Trust boundaries");
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Trust boundary"), horizontal-stretch: 3 }, { title: @tr("Components"), horizontal-stretch: 1 }];
                             rows: root.trust-boundary-rows;
@@ -2746,7 +2746,7 @@ in property <string> redo-label;
                         }
                         if root.admin-tab == 0: VerticalLayout {
                             spacing: 10px;
-                            if root.is-password: Table {
+                            if root.is-password: DataTable {
                                 label: @tr("Users");
                                 columns: [{ title: @tr("User"), horizontal-stretch: 2 }, { title: @tr("Name"), horizontal-stretch: 2 }, { title: @tr("Admin"), width: 78px, min-width: 78px }, { title: @tr("Status"), width: 80px, min-width: 80px }, { title: @tr("Last login"), horizontal-stretch: 3 }, { title: @tr("Sessions"), width: 98px, min-width: 98px }];
                                 rows: root.user-rows;
@@ -2823,7 +2823,7 @@ in property <string> redo-label;
                                 Rectangle { horizontal-stretch: 1; }
                                 Button { text: @tr("Refresh"); icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-events(); } }
                             }
-                            Table {
+                            DataTable {
                                 label: @tr("Event log");
                                 columns: [{ title: @tr("When"), horizontal-stretch: 4 }, { title: @tr("Who"), horizontal-stretch: 2 }, { title: @tr("What"), horizontal-stretch: 5 }, { title: @tr("About"), horizontal-stretch: 2 }];
                                 rows: root.event-rows;
@@ -2839,7 +2839,7 @@ in property <string> redo-label;
                                 Text { text: @tr("Open password sessions, newest first. Ending one logs that device out at its next request."); color: Theme.graphite; wrap: word-wrap; font-size: 13px; horizontal-stretch: 1; }
                                 Button { text: @tr("Refresh"); icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-sessions(); } }
                             }
-                            if root.is-password: Table {
+                            if root.is-password: DataTable {
                                 label: @tr("Sessions");
                                 columns: [{ title: @tr("User"), horizontal-stretch: 2 }, { title: @tr("Device"), horizontal-stretch: 3 }, { title: @tr("Started (UTC)"), horizontal-stretch: 4 }, { title: @tr("Ends (UTC)"), horizontal-stretch: 4 }];
                                 rows: root.session-rows;
@@ -2874,7 +2874,7 @@ in property <string> redo-label;
                                 }
                             }
                             if root.membership-error != "": FieldError { text: root.membership-error; }
-                            Table {
+                            DataTable {
                                 label: @tr("Members");
                                 columns: [{ title: @tr("Member"), horizontal-stretch: 2 }, { title: @tr("Role"), horizontal-stretch: 2 }];
                                 rows: root.membership-rows;
@@ -3199,7 +3199,7 @@ in property <string> redo-label;
                 HorizontalLayout {
                     spacing: 12px;
                     vertical-stretch: 1;
-                    Table {
+                    DataTable {
                         horizontal-stretch: 1;
                         label: @tr("Library items");
                         columns: [{ title: @tr("Item"), horizontal-stretch: 1 }, { title: @tr("Kind"), width: 90px, min-width: 90px }];
@@ -3227,7 +3227,7 @@ in property <string> redo-label;
                 SectionTitle { text: @tr("Catalogs (reference only)"); }
                 HorizontalLayout {
                     spacing: 12px;
-                    Table {
+                    DataTable {
                         horizontal-stretch: 1;
                         label: @tr("Catalogs");
                         columns: [{ title: @tr("Catalog"), horizontal-stretch: 1 }, { title: @tr("Key"), width: 120px, min-width: 120px }];
@@ -3363,7 +3363,7 @@ in property <string> redo-label;
                         edited(t) => { root.palette-query-changed(t); }
                         accepted(t) => { root.run-palette-row(root.palette-selected); }
                     }
-                    if !root.palette-shortcuts-open: Table {
+                    if !root.palette-shortcuts-open: DataTable {
                         label: @tr("Commands");
                         columns: [{ title: @tr("Command"), horizontal-stretch: 2 }, { title: @tr("Shortcut"), width: 120px, min-width: 120px }];
                         rows: root.palette-rows;
@@ -3372,7 +3372,7 @@ in property <string> redo-label;
                     }
                     if root.palette-shortcuts-open: VerticalLayout {
                         Text { text: @tr("Keyboard shortcuts"); font-size: 18px; font-weight: 700; color: Theme.ink; }
-                        Table {
+                        DataTable {
                             label: @tr("Keyboard shortcuts");
                             columns: [{ title: @tr("Action"), horizontal-stretch: 2 }, { title: @tr("Shortcut"), width: 140px, min-width: 140px }];
                             rows: root.shortcut-rows;
