@@ -51,7 +51,8 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | G45 | Packs hold catalog ID syntax only, no catalog text; only attack-potential and direct feasibility | `methodology/catalog.rs` | STRIDE plus MITRE work and CRA packs need catalog text and a plain likelihood scale | 109, 112 |
 | G46 | `deny.toml` treats dev-dependencies like shipped code | `deny.toml`, D5 | D5 now allows any license for development-only tools | 110 |
 | G47 | Elements carry internal UUIDs only, no human-readable visual ID (`A00`, `D00`, `T00`) | `aegis-model` IDs, `pages.rs`, `report/doc.rs`, `brainstorm-visual-ids.md` | Analysts and reviewers need short, stable IDs to cite in tables, cross-references and reports (FND-06, FND-07) | 118 |
-| G48 | One flat TARA per project; no way to model multiple systems in one project and evaluate or report on them together | `Project` in `aegis-model`, `brainstorm-multi-tara.md` | A vehicle or product holds several systems (Braking, ADAS, Infotainment) that need independent configuration plus combined cross-system evaluation and reports (SYS-01 to SYS-06) | 119 to 121 |
+| G48 | One flat TARA per project; no way to model multiple systems in one project and evaluate or report on them together | `Project` in `aegis-model`, `brainstorm-multi-tara.md` | A vehicle or product holds several systems (Braking, ADAS, Infotainment) that share ECUs and need one combined register and report (SYS-01 to SYS-06; D26 proposed) | 119 to 121 |
+| G49 | Controls have no type, no settings and no link to a component or interface; attack steps do not name what they go through; nothing connects an ECU or interface setting to the trees or the risk | `SecurityControl` in `control.rs` (name and provenance only); no item reference in `tree.rs`; `brainstorm-systems-config.md` section 3 | Consultants re-rate feasibility by hand when a setting changes, and reviewers cannot see which ratings depend on which setting (CFG-01 to CFG-09) | 122 to 126 |
 
 ---
 
@@ -136,14 +137,38 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 
 ### 2.5a Systems and multi-TARA (SYS)
 
+Rewritten 2026-11-02 after the design session (D26, proposed;
+[brainstorm-systems-config.md](brainstorm-systems-config.md)). A system is a
+named list of components; other elements belong to systems through their
+links. The old SYS-02 ("each system owns its elements") and the tree-to-tree
+part of SYS-04 and SYS-05 are dropped: a partition cannot hold a shared ECU.
+
 | ID | Requirement | Pri | Phase | Job |
 |---|---|---|---|---|
-| SYS-01 | A project holds one or more named systems (TARAs), for example Braking, ADAS and Infotainment for one vehicle; the project header and start screen make them first-class | M | 5 | 119 |
-| SYS-02 | Each system owns its item definition (components, interfaces, data flows, trust boundaries) and its assets, damage scenarios, threats, attack trees, controls, goals and claims; elements are scoped to a system | M | 5 | 119 |
-| SYS-03 | Each system is configured independently: its interfaces, connections, protocols and physical controls | M | 5 | 119 |
-| SYS-04 | Interfaces and data flows between systems are captured, so a combined evaluation can follow an attack path across a system boundary | M | 5 | 120 |
-| SYS-05 | Evaluation can run on one system, a chosen subset (1..N), or all systems combined; combined evaluation composes the selected systems' trees and risks, including cross-system paths | M | 5 | 120 |
-| SYS-06 | Reports and exports can be generated per system, for a selected subset, or for the whole project, with per-system and combined risk views | S | 5 | 121 |
+| SYS-01 | A project holds zero or more named systems (for example Brake, ADAS, Backend); with none, the app looks and behaves as today | M | 5 | 119 |
+| SYS-02 | A system is a named list of components (capped); a component can be in several systems and its child components follow it; every other element's systems are derived from its links (interface, data flow, asset, threat, tree, damage scenario, control, goal, claim); an element with nothing to derive from shows in every view, and the linter flags a component in no system | M | 5 | 119 |
+| SYS-03 | The user views one system, a chosen subset or all; the view filters every page, is remembered per user and project, and is never an op; removing a system removes no other element and is undoable with a toast | M | 5 | 119 |
+| SYS-04 | Data flows whose ends are in different systems show as boundary flows, with the same "no threat" check as trust boundaries; a shared component, its interfaces and its settings show and act in every system it is in | M | 5 | 120 |
+| SYS-05 | The combined view lists shared elements once, gives per-system totals and the highest residual risk, and runs top attack paths and choke points over the view; a risk number is the same in every view that contains it | M | 5 | 120 |
+| SYS-06 | Reports and exports per system, for a subset, or for the whole project; the cover names the systems; XLSX has a Systems column; Excel import can map a System column to memberships, with the dry-run preview | S | 5 | 121 |
+
+### 2.5b Security settings on components and interfaces (CFG)
+
+New 2026-11-02 (D26, proposed). A setting is a security control applied to a
+component or interface, with rules from the methodology pack or typed by the
+user; the engine derives the caps.
+
+| ID | Requirement | Pri | Phase | Job |
+|---|---|---|---|---|
+| CFG-01 | A leaf attack step can name the one component or interface it goes through ("via"), shown in the step inspector and as a chip on the canvas; the component and interface inspectors list the steps through them | M | 5 | 122 |
+| CFG-02 | Packs define attack types (key, labels per language); a leaf step carries at most one; packs and projects without them load and behave as today | M | 5 | 122 |
+| CFG-03 | A security control can be applied to components and interfaces (capped count) and carries rules "attack type → feasibility ceiling" (at most 16) | M | 5 | 123 |
+| CFG-04 | Residual step feasibility is the minimum of the inherent rating, today's manual mitigations, and the ceiling of every matching rule of every control applied to the step's via element or, for an interface, to its component; derived, never stored; inherent ratings never change; settings do not flow to child components | M | 5 | 123 |
+| CFG-05 | Explain-why names every ceiling and its source ("capped by: Secure boot on ADAS ECU (firmware modification → Low)") in the step, threat and risk inspectors and on the canvas; after a settings change the undo toast says how many steps were capped and which risks moved | M | 5 | 123 |
+| CFG-06 | Packs offer setting presets (key, labels per language, applies to components or to some interface kinds, default rules); creating a setting from a preset copies its rules, so a later pack version never changes a saved result without an op; the linter notes settings whose rules differ from their preset | S | 5 | 124 |
+| CFG-07 | The risk table, the control table, reports and XLSX show which settings reduce each risk ("reduced by", on the deciding path) and the settings of each component and interface | S | 5 | 125 |
+| CFG-08 | Custom settings: a control with no preset and user-written rules behaves exactly like a preset-based one; odd cases need no code change | M | 5 | 123 |
+| CFG-09 | Packs may declare presets that conflict; the linter warns when one component or interface has both (never blocks) | C | 5 | 126 |
 
 ### 2.6 Traceability and integrations (TRC, INT)
 
