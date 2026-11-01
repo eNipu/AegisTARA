@@ -23,9 +23,31 @@ pub struct Label {
     unlinked: usize,
     /// The element the edit is about, to show after an undo or redo.
     target: Option<Selection>,
+    /// For a bulk edit (UI-04), how many elements it changed; 0 otherwise.
+    count: usize,
 }
 
 impl Label {
+    /// The label of a bulk edit (UI-04): "remove 3 assets", "3 assets removed".
+    #[must_use]
+    pub fn bulk(verb: &'static str, noun: &'static str, count: usize) -> Label {
+        Label {
+            verb,
+            noun,
+            name: None,
+            others: 0,
+            unlinked: 0,
+            target: None,
+            count,
+        }
+    }
+
+    /// Whether this was one change to several elements (UI-04).
+    #[must_use]
+    pub fn is_bulk(&self) -> bool {
+        self.count > 0
+    }
+
     /// The element to open and select after undoing or redoing this edit
     /// (UI-10.5), if it exists in `project` now: undoing an addition leaves
     /// nothing to show.
@@ -83,6 +105,9 @@ impl Label {
             "rate" => "rated",
             _ => "changed",
         };
+        if self.count > 0 {
+            return format!("{} {} {past}", self.count, self.noun);
+        }
         let noun = match self.noun.split_at_checked(1) {
             Some((first, rest)) => format!("{}{rest}", first.to_uppercase()),
             None => self.noun.to_owned(),
@@ -94,6 +119,9 @@ impl Label {
     }
 
     fn what(&self) -> String {
+        if self.count > 0 {
+            return format!("{} {} {}", self.verb, self.count, self.noun);
+        }
         match &self.name {
             Some(n) => format!("{} {} '{}'", self.verb, self.noun, shorten(n)),
             None => format!("{} {}", self.verb, self.noun),
@@ -153,6 +181,7 @@ pub fn describe(ops: &[Op], project: &Project) -> Label {
         others: ops.len().saturating_sub(1),
         unlinked,
         target: ops.get(main).and_then(target_of),
+        count: 0,
     }
 }
 

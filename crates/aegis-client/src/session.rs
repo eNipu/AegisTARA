@@ -2620,6 +2620,16 @@ impl<P: CredentialProvider> Actor<P> {
         build: impl FnOnce(&Project) -> Result<Vec<aegis_model::Op>, String>,
         origin: Origin,
     ) -> bool {
+        self.apply_edit_as(build, origin, None)
+    }
+
+    /// [`apply_edit`](Self::apply_edit) with the label the undo step gets.
+    fn apply_edit_as(
+        &mut self,
+        build: impl FnOnce(&Project) -> Result<Vec<aegis_model::Op>, String>,
+        origin: Origin,
+        label: Option<Label>,
+    ) -> bool {
         if !self.can_edit() {
             return false;
         }
@@ -2640,7 +2650,7 @@ impl<P: CredentialProvider> Actor<P> {
         if ops.is_empty() {
             return true;
         }
-        match open.ws.apply(ops, origin) {
+        match open.ws.apply_labeled(ops, origin, label) {
             Ok(()) => {
                 open.cached_scene = None;
                 open.cached_lint_count = None;
@@ -2650,7 +2660,7 @@ impl<P: CredentialProvider> Actor<P> {
                     .then(|| {
                         open.ws
                             .undo_label()
-                            .filter(|l| l.is_removal())
+                            .filter(|l| l.is_removal() || l.is_bulk())
                             .map(Label::past)
                     })
                     .flatten();
@@ -2671,9 +2681,10 @@ impl<P: CredentialProvider> Actor<P> {
     fn edit(&mut self, edit: &Edit) -> bool {
         let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
         let created = edit.created();
-        let applied = self.apply_edit(
+        let applied = self.apply_edit_as(
             |project| edit.to_ops(project, &user, now).map_err(|e| e.to_string()),
             Origin::Edit,
+            edit.bulk_label(),
         );
         if applied
             && let Some(selection) = created
