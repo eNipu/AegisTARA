@@ -1122,21 +1122,21 @@
     {
       "id": "115-row-actions",
       "title": "Row actions in tables: DataTable, + and \u22ef actions, keyboard, read-only, 5,000-row check (UI-09)",
-      "stage": "build",
+      "stage": "escalated",
       "worktree": null,
       "branch": "master",
       "round": 1,
       "reviews": {
-        "security": "pending",
-        "ux": "pending",
-        "ui": "pending",
-        "code": "pending"
+        "security": "PASS",
+        "ux": "CHANGES",
+        "ui": "PASS",
+        "code": "PASS"
       },
       "history": [],
-      "decision": null,
-      "updated_at": "2026-11-01T04:30:00Z",
-      "notes": "Built directly on master (matching jobs 114 and 116)."
+      "decision": "ESCALATE",
+      "updated_at": "2026-11-01T12:30:00Z",
+      "notes": "Built directly on master in four slices. Code, security and UI PASS; UX CHANGES: Return does not move focus into the inspector (UI-09.4). Also open: draft row shows row actions, Duplicate ' copy' suffix not translated. Measured 5,000 rows: scroll frame 9.5 ms median, software renderer headless. Follow-up for a person: GPU feel, VoiceOver/NVDA."
     }
   ],
-  "updated_at": "2026-11-01T04:30:00Z"
+  "updated_at": "2026-11-01T12:30:00Z"
 }
