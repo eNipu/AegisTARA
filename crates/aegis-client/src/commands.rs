@@ -2067,6 +2067,8 @@ pub enum Command {
     Edit(Edit),
     /// Undo the last edit.
     Undo,
+    /// Undo the newest `n` edits as one (the history panel, UI-03).
+    UndoTo(usize),
     /// Redo the last undone edit.
     Redo,
     /// Fill an empty project with a small example TARA.
