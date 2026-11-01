@@ -1363,3 +1363,12 @@ msgstr "⟦Pásté␣␣⟧"
 
 msgid "Select all"
 msgstr "⟦Séléct áll␣␣⟧"
+
+msgid "Insert as a new tree"
+msgstr "⟦Ínsért ás á néw tréé␣␣⟧"
+
+msgid "Insert under '{}'"
+msgstr "⟦Ínsért úndér '{}'␣␣⟧"
+
+msgid "Insert in place of '{}'"
+msgstr "⟦Ínsért ín plácé óf '{}'␣␣⟧"

@@ -3563,6 +3563,10 @@ impl Controller {
                     w.set_inspector_tree_id(s(""));
                 }
             }
+            // The library follows the canvas selection while it is open (UI-11.2).
+            if w.get_library_open() {
+                self.show_library();
+            }
         }
 
         // A tree that was not on the canvas before, or newly synthesized ghost
