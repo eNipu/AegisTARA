@@ -1,6 +1,6 @@
 # UX sketches: systems, and settings on ECUs and interfaces
 
-- Status: proposed, with decision D26 and
+- Status: accepted with decision D26 (one system per component) and
   [brainstorm-systems-config.md](../brainstorm-systems-config.md).
 - Date: 2026-11-02
 - Rules followed: [ui-ux-requirements.md](../ui-ux-requirements.md) section 2
@@ -32,10 +32,11 @@ focus leaves, and the page stays live behind it.
 
 ```text
                     ┌──────────────────────────────┐
-                    │ ◉ All systems           (42) │
+                    │ ◉ All systems           (51) │
                     │ ─────────────────────────────│
-                    │ ☑ Brake                 (18) │
-                    │ ☑ ADAS                  (21) │
+                    │ ☑ Brake                 (17) │
+                    │ ☑ ADAS                  (20) │
+                    │ ☐ Gateway                (2) │
                     │ ☐ Backend                (9) │
                     │ ─────────────────────────────│
                     │ ☐ Not in a system        (3) │
@@ -44,7 +45,8 @@ focus leaves, and the page stays live behind it.
                     └──────────────────────────────┘
 ```
 
-- Numbers are component counts. Shared components count in each row.
+- Numbers are component counts. A component is in one system, so they add
+  up to the "All systems" count.
 - "All systems" is a radio: it clears the checks. Checking any system turns it
   off. Unchecking the last system goes back to "All systems".
 - Keyboard: ↑ ↓ move, Space toggles, Enter closes, Escape closes and keeps the
@@ -67,37 +69,44 @@ Systems are edited where components live. Adding a system is a draft row
 ```text
 ┌ Item definition ─────────────────────────────────────────────────────────────┐
 │ Systems                                                         [+ System]   │
-│ ┌─────────┬──────────────────────────────┬─────────────┬───┐                 │
-│ │ Name    │ Components                   │ Shared      │   │                 │
-│ ├─────────┼──────────────────────────────┼─────────────┼───┤                 │
-│ │ Brake   │ ESC ECU, Wheel speed ×4, GW  │ GW          │ ⋯ │                 │
-│ │ ADAS    │ ADAS ECU, Front radar, GW    │ GW          │ ⋯ │                 │
-│ │ Backend │ OTA server, TCU              │ TCU         │ ⋯ │                 │
-│ │ ▌New system name…                      │             │   │  ← draft row    │
-│ └─────────┴──────────────────────────────┴─────────────┴───┘                 │
+│ ┌─────────┬──────────────────────────────┬────────────────┬───┐              │
+│ │ Name    │ Components                   │ Boundary flows │   │              │
+│ ├─────────┼──────────────────────────────┼────────────────┼───┤              │
+│ │ Brake   │ ESC ECU, Wheel speed ×4      │ ⇄ Gateway 2    │ ⋯ │              │
+│ │ ADAS    │ ADAS ECU, Front radar        │ ⇄ Gateway 3    │ ⋯ │              │
+│ │ Gateway │ Gateway (GW), OBD connector  │ ⇄ 3 systems 6  │ ⋯ │              │
+│ │ Backend │ OTA server, TCU              │ ⇄ Gateway 1    │ ⋯ │              │
+│ │ ▌New system name…                      │                │   │ ← draft row  │
+│ └─────────┴──────────────────────────────┴────────────────┴───┘              │
 │                                                                              │
 │ Components                                                   [+ Component]   │
 │ ┌────┬───────────────┬──────────────┬────────────┬──────────────────────┬───┐│
-│ │ ID │ Name          │ Systems      │ Interfaces │ Settings             │   ││
+│ │ ID │ Name          │ System       │ Interfaces │ Settings             │   ││
 │ ├────┼───────────────┼──────────────┼────────────┼──────────────────────┼───┤│
-│ │C01 │ Gateway (GW)  │ Brake, ADAS  │ 4          │ 🛡 Firewall, Sec.boot │ ⋯ ││
+│ │C01 │ Gateway (GW)  │ Gateway      │ 4          │ 🛡 Firewall, Sec.boot │ ⋯ ││
 │ │C02 │ ADAS ECU      │ ADAS         │ 3          │ 🛡 Sec.boot +2        │ ⋯ ││
 │ │C03 │ Front radar   │ ADAS         │ 1          │ —                    │ ⋯ ││
 │ │C09 │ Diag tester   │ ⚠ none       │ 1          │ —                    │ ⋯ ││
 │ └────┴───────────────┴──────────────┴────────────┴──────────────────────┴───┘│
 │ Data flows   (boundary flows marked ⇄)                                      │
-│ │ ADAS ECU → GW → ESC ECU   "Brake request"   ⇄ ADAS → Brake   2 threats │   │
+│ │ ADAS ECU → GW   "Brake request"   ⇄ ADAS → Gateway    2 threats      │   │
+│ │ GW → ESC ECU    "Brake request"   ⇄ Gateway → Brake   2 threats      │   │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- "Systems" and "Settings" columns appear only when there is something to show
-  (a project with no systems has no Systems column).
+- "System" and "Settings" columns appear only when there is something to show
+  (a project with no systems has no System column).
+- The gateway is a system of its own because Brake, ADAS and Backend all use
+  it. Moving it there from Brake is one edit: pick "Gateway" in its inspector
+  (section 3); its interfaces, assets and threats move with it, and the toast
+  says "Moved Gateway (GW) to Gateway: 4 interfaces, 3 assets, 7 threats
+  moved. Undo".
 - ⋯ on a system row: Rename, Remove. Remove happens at once and the toast says
-  "Removed system Backend (2 components kept). Undo". No confirmation:
-  removing a system removes no element.
+  "Removed system Backend (2 components now in no system). Undo". No
+  confirmation: removing a system removes no element.
 - ⚠ none: the component is in no system; the Problems page lists it too.
-- Bulk edit (UI-04) gains "Add to system ▾" and "Remove from system ▾" in the
-  bar for picked component rows, each one batch and one undo step.
+- Bulk edit (UI-04) gains "Move to system ▾" in the bar for picked component
+  rows (one batch, one undo step).
 
 ## 3. Component inspector: systems, interfaces, settings
 
@@ -106,8 +115,7 @@ Systems are edited where components live. Adding a system is a draft row
 │ C02  ADAS ECU                         ⋯    │
 │ Component                                  │
 │                                            │
-│ Systems                                    │
-│ [ADAS ×] [+ Add to system ▾]               │
+│ System    [ ADAS                      ▾ ]  │
 │                                            │
 │ Interfaces (3)                    [+ Add]  │
 │  CAN-1        CAN        🛡 1              │
@@ -130,6 +138,8 @@ Systems are edited where components live. Adding a system is a draft row
 └────────────────────────────────────────────┘
 ```
 
+- The System picker lists the project's systems and "No system"; for a child
+  component it is read-only and says "In ADAS, with its parent ADAS ECU".
 - "caps 3 steps · lowers 1 risk" is computed live; clicking it opens the risk
   table filtered to those risks (the filter chip says "Reduced by Secure boot
   on ADAS ECU", × clears it).
@@ -270,12 +280,15 @@ decides the threat stays highlighted as today:
      ┌─────────┴───┐ ┌─────┴────────┐ ┌───────────────────┐
      │ Flash FW USB│ │ Keys via JTAG│ │ Inject on CAN-1   │ ◀ decides
      │ High → Low 🛡│ │ Med → V.low🛡 │ │ Medium            │
-     │ ⟶ ADAS ECU  │ │ ⟶ ADAS/JTAG  │ │ ⟶ GW / OBD        │
+     │ ⟶ ADAS ECU  │ │ ⟶ ADAS/JTAG  │ │ ⟶ GW / OBD ·Gatew.│
      └─────────────┘ └──────────────┘ └───────────────────┘
 ```
 
 - The shield has an accessible name: "Capped by Secure boot on ADAS ECU".
 - "⟶ ADAS ECU" is the via chip (job 122); it truncates first in small nodes.
+  When the via component is in another system than the tree's threat, the
+  chip adds that system ("· Gateway"), so a Brake tree shows where it leaves
+  Brake. The step is capped by the Gateway's settings in every view.
 
 ## 8. Seeing why a rating changed: the undo toast
 
@@ -301,9 +314,9 @@ what moved:
 ```text
 ┌ Risks ── View: Brake + ADAS ─────────────────────────────────────────────────┐
 │ ┌────┬──────────────────────────┬────────────┬──────┬──────┬────────────────┐│
-│ │ ID │ Threat                   │ Systems    │ Inh. │ Res. │ Reduced by     ││
+│ │ ID │ Threat                   │ System     │ Inh. │ Res. │ Reduced by     ││
 │ ├────┼──────────────────────────┼────────────┼──────┼──────┼────────────────┤│
-│ │T07 │ Spoofed brake request    │ Brake,ADAS │ R4   │ R3   │ —  (CAN step)  ││
+│ │T07 │ Spoofed brake request    │ Brake      │ R4   │ R3   │ —  (CAN step)  ││
 │ │T03 │ ESC firmware replaced    │ Brake      │ R4   │ R2   │ Secure flash   ││
 │ │T12 │ Radar calibration altered│ ADAS       │ R3   │ R1   │ Debug fused +1 ││
 │ └────┴──────────────────────────┴────────────┴──────┴──────┴────────────────┘│
@@ -320,24 +333,28 @@ what moved:
 ```text
 ┌ Overview ── View: All systems ───────────────────────────────────────────────┐
 │ ┌─────────┬────────────┬────────┬───────────────┬──────────────────────────┐ │
-│ │ System  │ Components │ Risks  │ Highest res.  │ Shared with              │ │
+│ │ System  │ Components │ Risks  │ Highest res.  │ Boundary flows           │ │
 │ ├─────────┼────────────┼────────┼───────────────┼──────────────────────────┤ │
-│ │ Brake   │ 18         │ 24     │ R3            │ ADAS (GW)                │ │
-│ │ ADAS    │ 21         │ 31     │ R4            │ Brake (GW)               │ │
-│ │ Backend │ 9          │ 12     │ R2            │ — (TCU in no other)      │ │
+│ │ Brake   │ 17         │ 22     │ R3            │ ⇄ Gateway 2              │ │
+│ │ ADAS    │ 20         │ 29     │ R4            │ ⇄ Gateway 3              │ │
+│ │ Gateway │ 2          │ 7      │ R3            │ ⇄ Brake, ADAS, Backend 6 │ │
+│ │ Backend │ 9          │ 12     │ R2            │ ⇄ Gateway 1              │ │
+│ │ No sys. │ 3          │ 0      │ —             │ ⚠ put them in a system   │ │
 │ ├─────────┼────────────┼────────┼───────────────┼──────────────────────────┤ │
-│ │ All     │ 46 (not 48)│ 61     │ R4            │ shared counted once      │ │
+│ │ All     │ 51         │ 70     │ R4            │ 6                        │ │
 │ └─────────┴────────────┴────────┴───────────────┴──────────────────────────┘ │
-│ Boundary flows (3)                                                           │
-│  ⇄ ADAS ECU → GW → ESC ECU  "Brake request"         2 threats                │
-│  ⇄ TCU → OTA server         "Update package"        0 threats  ⚠             │
+│ Boundary flows (6)                                                           │
+│  ⇄ ADAS ECU → GW            "Brake request"         2 threats                │
+│  ⇄ GW → ESC ECU             "Brake request"         2 threats                │
+│  ⇄ TCU → GW                 "Update package"        0 threats  ⚠             │
 │ Top attack paths in this view                                                │
 │  1. Inject on CAN-1 via GW/OBD → Spoofed brake request (Medium)              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- The per-system rows count a shared element in each row; the "All" row
-  counts it once and says so.
+- Components, assets, threats and risks are in one system each, so the rows
+  add up to "All". A damage scenario or control used by two systems shows in
+  both systems' pages; the overview counts it once in "All".
 - ⚠ on a boundary flow with no threat, as the trust-boundary lint does.
 
 ## 11. Small window (900 × 600)
@@ -347,8 +364,8 @@ what moved:
 ├────┬──────────────────────────────┬────────────────┤
 │ ☰  │ Components                   │ Inspector      │
 │ ▣  │ ID  Name        Settings     │ C02 ADAS ECU   │
-│ ⚠  │ C01 Gateway     🛡 2          │ Systems        │
-│ ⛬  │ C02 ADAS ECU    🛡 3          │ [ADAS ×] [+]   │
+│ ⚠  │ C01 Gateway     🛡 2          │ System ADAS ▾  │
+│ ⛬  │ C02 ADAS ECU    🛡 3          │                │
 │ …  │ C03 Front radar —            │ Settings (2) + │
 │    │                              │  🛡 Secure boot │
 │    │                              │  🛡 Housing…    │
@@ -357,7 +374,7 @@ what moved:
 
 - The left page list collapses to icons (as today), the top bar drops the
   project name to an ellipsis before the view chip shrinks, and table columns
-  drop in this order: Interfaces, Systems, then Settings becomes a count.
+  drop in this order: Interfaces, System, then Settings becomes a count.
 - The inspector keeps its minimum width (UI-02); long setting names truncate
   with a tooltip; rule rows wrap the attack type onto two lines in Japanese.
 
@@ -387,7 +404,8 @@ pseudo-locale (the i18n test fails otherwise).
 | all systems | All systems | すべてのシステム |
 | view chip | View: | 表示: |
 | not in a system | Not in a system | どのシステムにも属さない |
-| shared | Shared with | 共有先 |
+| no system (picker) | No system | システムなし |
+| move to system | Move to system | システムへ移動 |
 | boundary flow | Boundary flow | システム間フロー |
 | security settings | Security settings | セキュリティ設定 |
 | add setting | Add setting | 設定を追加 |
