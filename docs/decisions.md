@@ -17,7 +17,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Japan is the first export market; English and Japanese ship first (D13).
 - Library, item definition, traceability, report builder, ReqIF-first integrations and a built-in role table are decided (D14 to D19).
 - Extensions through data files, a public API and built-in connectors (D20). No vendor-hosted service for now; consultancy first in Japan (D21).
-- A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25).
+- A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25). Proposed: systems as lists of components in one project, and settings as controls with rules (D26).
 
 ---
 
@@ -197,6 +197,14 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Decision:** no native rewrite (SwiftUI on macOS, WinUI or WPF on Windows). The app keeps Slint (D7) and gets a GPU renderer with a software fallback, the Cupertino style on macOS, the system appearance and ⌘ shortcuts (job 113). Undo and redo, which the client core has but the app hides, become visible top-bar actions that name what they undo (job 116, first part). Editing becomes modeless: elements are created as a draft in the inspector, removals offer undo instead of a confirmation, and editors move into panels (jobs 114 to 117). A dialog is kept only for actions undo cannot reverse, security tasks, file pickers and About.
 - **Why:** the "not solid on macOS" feel comes from the forced software renderer and the Windows-style widgets, not from Slint. A native rewrite would build every screen and the canvas twice and add two bindings to the Rust core, for no new capability. Reconsider only if a paying customer requires a native Mac app after jobs 113 to 117.
 - **Details:** [ui-ux-requirements.md](ui-ux-requirements.md) (UI-07 to UI-12).
+
+## D26. Systems are lists of components in one project; settings are controls with rules (proposed)
+
+- **Date:** 2026-11-02
+- **Status:** proposed; the owner answers the questions in [brainstorm-systems-config.md](brainstorm-systems-config.md) section 10.
+- **Decision:** (1) Several systems (Brake, ADAS, Backend) live inside one project, not in a program of projects. A system is a named list of components, like a trust boundary; a component can be in several systems; every other element belongs to systems through the links it already has (asset to component, threat to asset, and so on). Viewing one system, a subset or all is a per-user filter, never an op, and a risk number does not depend on the view. One op log, lease, undo history, audit chain and baseline per project, as today. (2) ECU and interface settings are security controls applied to components and interfaces, with rules "attack type → feasibility ceiling". An attack step names the component or interface it goes through and its attack type; the engine derives the ceilings and the explain-why names them ("capped by: Secure boot on ADAS ECU"). Attack types and setting presets come from the methodology pack; a custom setting is a control with rules the user types. (3) Settings ship before systems.
+- **Why:** shared ECUs and gateways need membership, not a partition; one project keeps undo, baselines, reports and Excel import whole with no server change. Settings replace the consultant's hand re-rating, which helps every project, and pack data keeps the core methodology-neutral (D1, D24).
+- **Details:** [brainstorm-systems-config.md](brainstorm-systems-config.md), [design/systems-config.md](design/systems-config.md); jobs 119 to 126.
 
 ## Open
 
