@@ -1399,3 +1399,18 @@ msgstr "行を選ぶと、そこまで戻したときに取り消される内容
 
 msgid "Go back to here"
 msgstr "ここまで戻す"
+
+msgid "{} selected"
+msgstr "{} 件を選択中"
+
+msgid "Remove selected"
+msgstr "選択を削除"
+
+msgid "Remove {} selected"
+msgstr "選択した {} 件を削除"
+
+msgid "Clear selection"
+msgstr "選択を解除"
+
+msgid "Set treatment"
+msgstr "対応方針を設定"

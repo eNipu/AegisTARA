@@ -10,12 +10,12 @@ import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectLanguages, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
-    CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
+    CountItem, DiffItem, ProblemItem, SuggestionItem, Marks, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
     LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm, Splitter, HSplitter,
     Button, LineEdit, TextEdit, ComboBox, CheckBox, Switch
 } from "widgets.slint";
 
-export { ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
+export { Marks, ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
 
 // Page numbers, in the order of aegis_client::view::Page::ALL.
 global Pages {
@@ -674,6 +674,12 @@ in property <string> redo-label;
     // ---- controls ----
     in property <[[StandardListViewItem]]> control-rows;
     in property <int> control-selected: -1;
+    // Rows picked together in the tables that take bulk edits (UI-04).
+    in property <Marks> asset-marks;
+    in property <Marks> damage-marks;
+    in property <Marks> threat-marks;
+    in property <Marks> control-marks;
+    in property <Marks> risk-marks;
     in property <bool> has-control;
     in property <string> control-id;
     in property <string> control-name;
@@ -857,6 +863,10 @@ in property <string> redo-label;
     callback rename-trust-boundary(string);
     callback toggle-trust-boundary-member(int, bool);
     callback remove-trust-boundary();
+    callback mark-click(string, int, bool);
+    callback clear-marks();
+    callback remove-marked(string);
+    callback treat-marked(int);
     callback pick-asset(int);
     callback add-asset(string);
     callback rename-asset(string);
@@ -1780,6 +1790,10 @@ in property <string> redo-label;
                             label: @tr("Assets");
                             columns: [{ title: @tr("ID"), width: 76px, min-width: 76px }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Properties"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }, { title: @tr("Worst risk"), horizontal-stretch: 1 }];
                             rows: root.asset-rows;
+                            marks: root.asset-marks;
+                            mark-click(i, shift) => { root.mark-click("asset", i, shift); }
+                            clear-marks => { root.clear-marks(); }
+                            remove-marked => { root.remove-marked("asset"); }
                             selected: root.asset-selected;
                             editable: root.editing;
                             show-add: true;
@@ -1854,6 +1868,10 @@ in property <string> redo-label;
                             label: root.damage-plural;
                             columns: [{ title: @tr("ID"), width: 76px, min-width: 76px }, { title: root.damage-singular, horizontal-stretch: 2 }, { title: @tr("Impact"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.damage-rows;
+                            marks: root.damage-marks;
+                            mark-click(i, shift) => { root.mark-click("damage", i, shift); }
+                            clear-marks => { root.clear-marks(); }
+                            remove-marked => { root.remove-marked("damage"); }
                             selected: root.damage-selected;
                             editable: root.editing;
                             show-add: true;
@@ -1919,6 +1937,10 @@ in property <string> redo-label;
                             label: @tr("Threat scenarios");
                             columns: [{ title: @tr("ID"), width: 76px, min-width: 76px }, { title: @tr("Threat scenario"), horizontal-stretch: 3 }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Before"), horizontal-stretch: 1 }, { title: @tr("After"), horizontal-stretch: 1 }];
                             rows: root.threat-rows;
+                            marks: root.threat-marks;
+                            mark-click(i, shift) => { root.mark-click("threat", i, shift); }
+                            clear-marks => { root.clear-marks(); }
+                            remove-marked => { root.remove-marked("threat"); }
                             selected: root.threat-selected;
                             editable: root.editing;
                             show-add: true;
@@ -2563,6 +2585,14 @@ in property <string> redo-label;
                             // ("not rated") are never cut; the names take the rest.
                             columns: [{ title: @tr("ID"), width: 76px, min-width: 76px }, { title: @tr("Threat scenario"), horizontal-stretch: 3, min-width: 110px }, { title: @tr("Deciding damage"), horizontal-stretch: 2, min-width: 136px }, { title: @tr("Impact"), horizontal-stretch: 0, min-width: 84px }, { title: @tr("Feasibility"), horizontal-stretch: 0, min-width: 104px }, { title: @tr("Before"), horizontal-stretch: 0, min-width: 80px }, { title: @tr("After"), horizontal-stretch: 0, min-width: 76px }, { title: @tr("Treatment"), horizontal-stretch: 0, min-width: 104px }];
                             rows: root.risk-rows;
+                            editable: root.editing;
+                            marks: root.risk-marks;
+                            mark-click(i, shift) => { root.mark-click("risk", i, shift); }
+                            clear-marks => { root.clear-marks(); }
+                            remove-marked => { root.remove-marked("risk"); }
+                            bulk-choices: root.treatment-options;
+                            bulk-choice-label: @tr("Set treatment");
+                            bulk-choice(i) => { root.treat-marked(i); }
                             selected: root.risk-selected;
                             picked(i) => { root.pick-risk(i); }
                         }
@@ -2617,6 +2647,10 @@ in property <string> redo-label;
                             label: @tr("Security controls");
                             columns: [{ title: @tr("ID"), width: 76px, min-width: 76px }, { title: @tr("Control"), horizontal-stretch: 3 }, { title: @tr("Attack steps"), horizontal-stretch: 1 }, { title: @tr("Goals"), horizontal-stretch: 1 }];
                             rows: root.control-rows;
+                            marks: root.control-marks;
+                            mark-click(i, shift) => { root.mark-click("control", i, shift); }
+                            clear-marks => { root.clear-marks(); }
+                            remove-marked => { root.remove-marked("control"); }
                             selected: root.control-selected;
                             editable: root.editing;
                             show-add: true;

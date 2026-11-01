@@ -235,7 +235,11 @@ impl Workspace {
 
     /// [`apply`](Self::apply) with the description of the edit; `None`
     /// describes `ops` against the project as it is now.
-    fn apply_labeled(
+    ///
+    /// # Errors
+    ///
+    /// As [`apply`](Self::apply).
+    pub fn apply_labeled(
         &mut self,
         ops: Vec<Op>,
         origin: Origin,

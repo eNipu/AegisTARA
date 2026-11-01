@@ -94,7 +94,7 @@ The id at the end of each line is the planned job id; `docs/requirements.md` nam
 - [x] Command palette (Ctrl+K / Cmd+K) over pages, elements and commands with shortcuts shown, and a keyboard cheat sheet (UI-01) (081-command-palette)
 - [x] Panel slots: resizable left, right and bottom panels that remember their size per user; the inspector shows every property of the selection with explain-why; the library panel uses a slot (UI-02) (082-panel-slots). Built: left and right slots; the bottom slot comes with its first panel in 083
 - [x] History panel: the op history as a list with author and time, preview on select, undo back to a chosen point as one batch, in a new resizable bottom panel slot remembered like the left and right ones (UI-02, UI-03) (083-history-panel)
-- [ ] Multi-select and bulk edit in the asset, damage, threat, control and risk tables (UI-04) (084-bulk-edit)
+- [x] Multi-select and bulk edit in the asset, damage, threat, control and risk tables (UI-04) (084-bulk-edit)
 - [ ] Design system pass: spacing grid and type scale tokens in `theme.slint`, a compact density mode, empty states with one action, Japanese and pseudo-locale layout checks, screenshots of every page in both languages for the UI review (UI-05) (085-design-system-pass)
 - [ ] CRA readiness for our own product: an SBOM per release in CI, `SECURITY.md` with the vulnerability disclosure policy, a support period and security update statement in the release checklist (NFR-05) (101-cra-readiness)
 - [ ] Offline bundle for air-gapped sites: installer, server image tarball, update manifest and checksums in one signed archive, with install steps in `docs/deployment.md` (NFR-06) (100-offline-bundle)

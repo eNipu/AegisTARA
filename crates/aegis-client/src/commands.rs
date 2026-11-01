@@ -34,6 +34,12 @@ pub const GATES: [GateKind; 3] = [GateKind::Or, GateKind::And, GateKind::SeqAnd]
 /// A change to the project, as the UI states it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Edit {
+    /// Several edits as one: one undo step, and refused as a whole if any of
+    /// them is (bulk edit, UI-04). Each is built against the project as it is
+    /// before the batch, so an edit that needs another one of the batch first
+    /// (removing an asset and the threats on it) is refused; remove those in
+    /// the order the model needs.
+    Batch(Vec<Edit>),
     // ---- descriptions and notes ----
     /// Sets the description of an element, or the notes of the project
     /// ([`ElementRef::Project`]). Empty text clears it.
@@ -875,6 +881,13 @@ impl Edit {
         let p = Provenance::human(actor, now_ms);
         let clearing = p.clone();
         let ops = match self {
+            Edit::Batch(items) => {
+                let mut ops = Vec::new();
+                for item in items {
+                    ops.extend(item.to_ops(project, actor, now_ms)?);
+                }
+                ops
+            }
             Edit::SetDescription { target, text } => {
                 let normalized: std::sync::Arc<str> =
                     text.replace("\r\n", "\n").replace('\r', "\n").into();
@@ -1951,6 +1964,24 @@ impl Edit {
             }
         };
         Ok(clear_descriptions_before_removal(project, ops, &clearing))
+    }
+
+    /// The undo label of a bulk edit: "remove 3 assets" (UI-04).
+    #[must_use]
+    pub fn bulk_label(&self) -> Option<crate::undo_label::Label> {
+        use crate::undo_label::Label;
+        let Edit::Batch(items) = self else {
+            return None;
+        };
+        let (verb, noun) = match items.first()? {
+            Edit::RemoveAsset { .. } => ("remove", "assets"),
+            Edit::RemoveDamage { .. } => ("remove", "damage scenarios"),
+            Edit::RemoveThreat { .. } => ("remove", "threat scenarios"),
+            Edit::RemoveControl { .. } => ("remove", "security controls"),
+            Edit::SetTreatment { .. } => ("set treatment of", "threat scenarios"),
+            _ => ("change", "items"),
+        };
+        Some(Label::bulk(verb, noun, items.len()))
     }
 
     /// The entity this edit creates, so the session can select it.

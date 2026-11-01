@@ -15,6 +15,7 @@
 //! [`Launcher`](crate::launcher::Launcher) drives the window then.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -38,7 +39,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecMod
 use crate::adapter::{bucket, draw_items, draw_layers};
 use crate::{
     AccessNode, AppWindow, CheckItem, CountItem, DescriptionItem, DiffItem, FactorItem, LinkItem,
-    MitigationItem, NoticeItem, ProblemItem, ProjectItem, ProjectLanguages, SuggestionItem,
+    Marks, MitigationItem, NoticeItem, ProblemItem, ProjectItem, ProjectLanguages, SuggestionItem,
     ThreatItem, TranslationItem,
 };
 
@@ -68,6 +69,109 @@ struct State {
     membership: Option<usize>,
     /// The figure row chosen on the reports page (job 073).
     figure: Option<usize>,
+    /// Elements picked together in the tables with bulk edit (UI-04), by ID
+    /// so a table that re-sorts keeps the right ones.
+    marks: HashSet<Selection>,
+}
+
+/// A table that takes bulk edits (UI-04).
+#[derive(Clone, Copy)]
+enum Table {
+    Asset,
+    Damage,
+    Threat,
+    Control,
+    Risk,
+}
+
+impl Table {
+    fn from_key(key: &str) -> Option<Table> {
+        Some(match key {
+            "asset" => Table::Asset,
+            "damage" => Table::Damage,
+            "threat" => Table::Threat,
+            "control" => Table::Control,
+            "risk" => Table::Risk,
+            _ => return None,
+        })
+    }
+
+    /// The elements of its rows, in row order.
+    fn order(self, p: &ProjectView) -> Vec<Selection> {
+        match self {
+            Table::Asset => p
+                .data
+                .assets
+                .iter()
+                .map(|x| Selection::Asset(x.id))
+                .collect(),
+            Table::Damage => p
+                .data
+                .damages
+                .iter()
+                .map(|x| Selection::Damage(x.id))
+                .collect(),
+            Table::Threat => p.threats.iter().map(|x| Selection::Threat(x.id)).collect(),
+            Table::Control => p
+                .data
+                .controls
+                .iter()
+                .map(|x| Selection::Control(x.id))
+                .collect(),
+            Table::Risk => p
+                .data
+                .risks
+                .iter()
+                .map(|x| Selection::Threat(x.id))
+                .collect(),
+        }
+    }
+
+    /// The element of the selected row.
+    fn selected(self, p: &ProjectView) -> Option<Selection> {
+        let d = &p.data;
+        match self {
+            Table::Asset => d.asset.as_ref().map(|x| Selection::Asset(x.id)),
+            Table::Damage => d.damage.as_ref().map(|x| Selection::Damage(x.id)),
+            Table::Threat => p
+                .selected_threat
+                .and_then(|i| p.threats.get(i))
+                .map(|x| Selection::Threat(x.id)),
+            Table::Control => d.control.as_ref().map(|x| Selection::Control(x.id)),
+            Table::Risk => d.threat.as_ref().map(|x| Selection::Threat(x.id)),
+        }
+    }
+}
+
+/// A click with ctrl (`range` false) or shift (`range` true) on row `clicked`
+/// of a table whose rows are `order` and whose selected row is `selected`:
+/// ctrl adds or drops that row (the selected row counts as picked when
+/// nothing else is), shift picks every row from the selected one to it.
+fn click_marks(
+    marks: &mut HashSet<Selection>,
+    order: &[Selection],
+    selected: Option<Selection>,
+    clicked: usize,
+    range: bool,
+) {
+    let Some(&at) = order.get(clicked) else {
+        return;
+    };
+    marks.retain(|m| order.contains(m));
+    if range {
+        let from = selected
+            .and_then(|s| order.iter().position(|o| *o == s))
+            .unwrap_or(clicked);
+        marks.clear();
+        marks.extend(order[from.min(clicked)..=from.max(clicked)].iter().copied());
+    } else {
+        if marks.is_empty() {
+            marks.extend(selected.filter(|s| order.contains(s)));
+        }
+        if !marks.remove(&at) {
+            marks.insert(at);
+        }
+    }
 }
 
 /// A password login request: user, password, keep the login.
@@ -278,6 +382,7 @@ impl Controller {
                 session: None,
                 membership: None,
                 figure: None,
+                marks: HashSet::new(),
             }),
             library: RefCell::new(LibraryView::new(Arc::new(LibraryPack::builtin_demo()))),
             palette: RefCell::new(Vec::new()),
@@ -330,6 +435,118 @@ impl Controller {
         self.window
             .upgrade()
             .map_or_else(|| "copy".into(), |w| w.get_copy_suffix().to_string())
+    }
+
+    /// ctrl-click or shift-click on a row of a bulk-edit table (UI-04). Only
+    /// a user who may edit picks rows together.
+    fn mark_click(&self, table: &str, row: i32, range: bool) {
+        let (Some(table), Some(i), Some(w)) =
+            (Table::from_key(table), pos(row), self.window.upgrade())
+        else {
+            return;
+        };
+        if !w.get_editing() {
+            return;
+        }
+        let Some((order, selected)) =
+            self.with_project(|p| Some((table.order(p), table.selected(p))))
+        else {
+            return;
+        };
+        click_marks(
+            &mut self.state.borrow_mut().marks,
+            &order,
+            selected,
+            i,
+            range,
+        );
+        self.push_marks();
+    }
+
+    fn clear_marks(&self) {
+        self.state.borrow_mut().marks.clear();
+        self.push_marks();
+    }
+
+    /// The picked elements of `table`, in row order.
+    fn marked(&self, table: Table) -> Vec<Selection> {
+        let marks = &self.state.borrow().marks;
+        self.with_project(|p| Some(table.order(p)))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| marks.contains(s))
+            .collect()
+    }
+
+    fn remove_marked(&self, table: &str) {
+        let Some(table) = Table::from_key(table) else {
+            return;
+        };
+        let items: Vec<Edit> = self
+            .marked(table)
+            .into_iter()
+            .filter_map(|s| {
+                Some(match s {
+                    Selection::Asset(asset) => Edit::RemoveAsset { asset },
+                    Selection::Damage(damage) => Edit::RemoveDamage { damage },
+                    Selection::Control(control) => Edit::RemoveControl { control },
+                    // The risk table has no remove; a threat row is removed on the Threats page.
+                    Selection::Threat(threat) if matches!(table, Table::Threat) => {
+                        Edit::RemoveThreat { threat }
+                    }
+                    _ => return None,
+                })
+            })
+            .collect();
+        if !items.is_empty() {
+            self.edit(Edit::Batch(items));
+        }
+    }
+
+    /// The treatment chosen in the risk table's bar goes to every picked threat.
+    fn treat_marked(&self, choice: i32) {
+        let treatment = after_none(choice);
+        let items: Vec<Edit> = self
+            .marked(Table::Risk)
+            .into_iter()
+            .filter_map(|s| match s {
+                Selection::Threat(threat) => Some(Edit::SetTreatment { threat, treatment }),
+                _ => None,
+            })
+            .collect();
+        if !items.is_empty() {
+            self.edit(Edit::Batch(items));
+        }
+    }
+
+    /// Shows the picked rows in each table; picks whose element is gone are dropped.
+    fn push_marks(&self) {
+        let (Some(w), Some(view)) = (self.window.upgrade(), self.view()) else {
+            return;
+        };
+        let Some(p) = view.project.as_ref() else {
+            return;
+        };
+        let mut st = self.state.borrow_mut();
+        let tables = [
+            Table::Asset,
+            Table::Damage,
+            Table::Threat,
+            Table::Control,
+            Table::Risk,
+        ];
+        let orders: Vec<_> = tables.iter().map(|t| t.order(p)).collect();
+        st.marks.retain(|m| orders.iter().any(|o| o.contains(m)));
+        let marks = |i: usize| Marks {
+            rows: model(orders[i].iter().map(|s| st.marks.contains(s)).collect()),
+            count: i32::try_from(orders[i].iter().filter(|s| st.marks.contains(s)).count())
+                .unwrap_or(0),
+        };
+        w.set_asset_marks(marks(0));
+        w.set_damage_marks(marks(1));
+        w.set_threat_marks(marks(2));
+        w.set_control_marks(marks(3));
+        w.set_risk_marks(marks(4));
     }
 
     fn view(&self) -> Option<Arc<ViewModel>> {
@@ -1563,6 +1780,14 @@ impl Controller {
             }
         });
 
+        // Bulk edit (UI-04): the picked rows change together, as one undo
+        // step with the undo toast.
+        on!(on_mark_click, |c, table, i, range| c
+            .mark_click(&table, i, range));
+        on!(on_clear_marks, |c| c.clear_marks());
+        on!(on_remove_marked, |c, table| c.remove_marked(&table));
+        on!(on_treat_marked, |c, i| c.treat_marked(i));
+
         // Remove from the row menu: immediate, one undo step, with the undo
         // toast (job 116).
         on!(on_remove_row_component, |c, i| {
@@ -2595,6 +2820,7 @@ impl Controller {
         }) {
             self.apply_pages(&w, project);
         }
+        self.push_marks();
         if prev_proj.is_none_or(|old| old.edits != project.edits) {
             // The rows are new, so a picked row and its preview no longer fit.
             let who = w.get_user().to_string();
