@@ -18,10 +18,6 @@ const OVERLAYS: &[(&str, &str)] = &[
         "asks for text the app cannot guess (a name); it is input, not a confirmation",
     ),
     (
-        "description-open",
-        "editor for a long description; input, not a confirmation",
-    ),
-    (
         "outline-open",
         "editor for a whole attack tree as an outline; input",
     ),
