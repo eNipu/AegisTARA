@@ -101,6 +101,8 @@ pub enum Origin {
 struct Step {
     ops: Vec<Op>,
     label: Label,
+    /// When the edit was made, in milliseconds since the Unix epoch (UI-03).
+    at_ms: u64,
 }
 
 struct Batch {
@@ -262,6 +264,7 @@ impl Workspace {
         let step = Step {
             ops: inverses.iter().rev().cloned().collect(),
             label,
+            at_ms: now_ms(),
         };
         match origin {
             Origin::Edit => {
@@ -417,6 +420,34 @@ impl Workspace {
             .inspect_err(|_| self.undo.push(step))
     }
 
+    /// This session's edits that undo can reverse, newest first, with the
+    /// time of each in milliseconds since the Unix epoch (UI-03).
+    pub fn edits(&self) -> impl Iterator<Item = (&Label, u64)> {
+        self.undo.iter().rev().map(|s| (&s.label, s.at_ms))
+    }
+
+    /// Undoes the `count` newest edits as one edit, so one redo brings them
+    /// all back. All or nothing: if one reversal is refused, nothing changes.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkspaceError::NothingToUndo`] if `count` is 0 or more than the
+    /// edits there are, or an error of [`apply`](Self::apply).
+    pub fn undo_to(&mut self, count: usize) -> Result<(), WorkspaceError> {
+        if count == 0 || count > self.undo.len() {
+            return Err(WorkspaceError::NothingToUndo);
+        }
+        if count == 1 {
+            return self.undo();
+        }
+        let steps = self.undo.split_off(self.undo.len() - count);
+        // Newest first: each step's ops fit the project as the newer ones left it.
+        let ops: Vec<Op> = steps.iter().rev().flat_map(|s| s.ops.clone()).collect();
+        let label = steps[0].label.clone().with_more(count - 1);
+        self.apply_labeled(ops, Origin::Undo, Some(label))
+            .inspect_err(|_| self.undo.extend(steps))
+    }
+
     /// Redoes the last undone edit.
     ///
     /// # Errors
@@ -529,6 +560,12 @@ impl Workspace {
     pub fn reset(&mut self, project: Project, seq: u64) {
         *self = Workspace::new(project, seq);
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
 }
 
 fn push_bounded(stack: &mut Vec<Step>, entry: Step) {
@@ -681,6 +718,37 @@ mod tests {
         // They all went to the server as ordinary edits.
         let sub = ws.next_submission().expect("queue");
         assert_eq!(sub.ops.len(), 2 + 4);
+    }
+
+    #[test]
+    fn undo_to_reverses_the_newest_edits_as_one_and_one_redo_brings_them_back() {
+        let mut ws = Workspace::empty(methodology());
+        ws.apply(vec![add(1, "A")], Origin::Edit).expect("applies");
+        ws.apply(vec![rename(1, "A2")], Origin::Edit)
+            .expect("applies");
+        ws.apply(vec![add(2, "B")], Origin::Edit).expect("applies");
+        ws.apply(vec![rename(1, "A3")], Origin::Edit)
+            .expect("applies");
+        let rows: Vec<_> = ws.edits().map(|(l, _)| l.imperative()).collect();
+        assert_eq!(rows.len(), 4, "newest first: {rows:?}");
+        assert!(ws.edits().all(|(_, at)| at > 0));
+
+        // Back to the state after the first edit: three edits reversed.
+        ws.undo_to(3).expect("undo to a point");
+        assert_eq!(name_of(ws.project(), 1).as_deref(), Some("A"));
+        assert_eq!(name_of(ws.project(), 2), None);
+        assert_eq!(ws.edits().count(), 1);
+
+        // One redo brings all three back.
+        ws.redo().expect("redo");
+        assert_eq!(name_of(ws.project(), 1).as_deref(), Some("A3"));
+        assert_eq!(name_of(ws.project(), 2).as_deref(), Some("B"));
+        assert!(!ws.can_redo(), "the batch was one redo step");
+
+        // Nothing, or more than there is, is refused and changes nothing.
+        assert_eq!(ws.undo_to(0), Err(WorkspaceError::NothingToUndo));
+        assert_eq!(ws.undo_to(9), Err(WorkspaceError::NothingToUndo));
+        assert_eq!(name_of(ws.project(), 1).as_deref(), Some("A3"));
     }
 
     #[test]
