@@ -123,6 +123,32 @@ component NameEditor inherits VerticalLayout {
     property <bool> focused: edit.has-focus;
 }
 
+// The row at the top of the Versions table that names a new baseline
+// (UI-11.4). Enter or Create adds it; Escape or Cancel closes the row.
+component BaselineRow inherits HorizontalLayout {
+    callback create(string);
+    callback cancel();
+    spacing: 6px;
+    FocusScope {
+        focus-on-tab-navigation: false;
+        horizontal-stretch: 1;
+        min-height: edit.preferred-height;
+        capture-key-pressed(event) => {
+            if (event.text == Key.Escape) { root.cancel(); return accept; }
+            reject
+        }
+        edit := LineEdit {
+            width: parent.width;
+            placeholder-text: @tr("Baseline name, for example B1 Design freeze");
+            accessible-label: @tr("Baseline name");
+            accepted(t) => { if (t != "") { root.create(t); } }
+            init => { self.focus(); }
+        }
+    }
+    Button { text: @tr("Create"); primary: true; enabled: edit.text != ""; clicked => { root.create(edit.text); } }
+    Button { text: @tr("Cancel"); clicked => { root.cancel(); } }
+}
+
 // The project's translation languages (L10N-08): tags separated by commas or
 // spaces. Saves on Enter or on leaving the field; empty makes the project
 // single-language, which hides the add row of every translation editor.
@@ -242,7 +268,7 @@ export component AppWindow inherits Window {
     }
 
     // A field that goes away while it has focus cannot say it is clean again.
-    changed page => { Typing.dirty = false; root.outline-editing = false; }
+    changed page => { Typing.dirty = false; root.outline-editing = false; if (root.page != Pages.versions) { root.creating-baseline = false; } }
     changed tree-selected => { root.outline-editing = false; }
     changed in-project => { Typing.dirty = false; }
 
@@ -296,6 +322,11 @@ export component AppWindow inherits Window {
     in property <bool> has-project;
     in property <string> project-name;
     in-out property <bool> renaming-project: false;
+    in-out property <bool> creating-baseline: false;
+    public function begin-baseline() {
+        root.show-page(Pages.versions);
+        root.creating-baseline = true;
+    }
     in-out property <bool> focus-project-name: false;
     public function begin-rename-project() {
         if (root.editing) {
@@ -1027,7 +1058,6 @@ in property <string> redo-label;
         root.prompt-open = false;
         if (text == "") { return; }
         if (kind == "new-project") { root.create-project(text); }
-        if (kind == "create-baseline") { root.create-baseline(text); }
         if (kind == "reset-password") { root.reset-user-password(text); }
     }
 
@@ -1119,7 +1149,7 @@ in property <string> redo-label;
             MenuItem { title: @tr("Add the sample TARA"); icon: @image-url("icons/plus.svg"); enabled: root.in-project && root.editing && root.is-empty; activated => { root.create-sample(); } }
             MenuSeparator {}
             MenuItem { title: @tr("Reload newer version"); icon: @image-url("icons/refresh-cw.svg"); enabled: root.in-project && root.newer-version; activated => { root.reload(); } }
-            MenuItem { title: @tr("Create baseline…"); icon: @image-url("icons/flag.svg"); enabled: root.in-project; activated => { root.ask("create-baseline", "Create baseline", "Baseline name, for example B1 Design freeze", ""); } }
+            MenuItem { title: @tr("Create baseline…"); icon: @image-url("icons/flag.svg"); enabled: root.in-project; activated => { root.begin-baseline(); } }
             MenuItem { title: @tr("Versions and comparison"); icon: @image-url("icons/git-compare.svg"); enabled: root.in-project; activated => { root.show-page(Pages.versions); } }
             MenuItem { title: @tr("History"); icon: @image-url("icons/history.svg"); enabled: root.in-project; activated => { root.show-page(Pages.history); } }
             MenuItem { title: @tr("Reports"); icon: @image-url("icons/file-chart-column.svg"); enabled: root.in-project; activated => { root.show-page(Pages.reports); } }
@@ -2743,7 +2773,11 @@ in property <string> redo-label;
                             title: @tr("Versions");
                             subtitle: @tr("Baselines freeze the saved state under a name. Compare the current state with one to see what changed and which risks moved.");
                             icon: @image-url("icons/git-compare.svg");
-                            Button { text: @tr("Create baseline"); icon: @image-url("icons/flag.svg"); clicked => { root.ask("create-baseline", "Create baseline", "Baseline name, for example B1 Design freeze", ""); } }
+                            Button { text: @tr("Create baseline"); icon: @image-url("icons/flag.svg"); enabled: !root.creating-baseline; clicked => { root.creating-baseline = true; } }
+                        }
+                        if root.creating-baseline: BaselineRow {
+                            create(name) => { root.create-baseline(name); root.creating-baseline = false; }
+                            cancel => { root.creating-baseline = false; }
                         }
                         DataTable {
                             label: @tr("Baselines");

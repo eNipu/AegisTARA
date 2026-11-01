@@ -201,3 +201,52 @@ async fn clicking_the_project_name_renames_it_in_place() {
     drop(app);
     server.stop().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_baseline_is_named_in_a_row_at_the_top_of_the_versions_table() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server).await;
+    let baselines = |vm: &aegis_client::state::ViewModel| {
+        vm.project.as_ref().map_or(0, |p| p.baselines.len())
+    };
+
+    // The menu command goes to the Versions page and opens the row.
+    app.window.invoke_begin_baseline();
+    app.until("versions", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.page == Page::Versions)
+    })
+    .await;
+    app.frame();
+    app.frame();
+    assert!(app.window.get_creating_baseline());
+    save(&app.frame(), "editors-after-baseline");
+
+    // Escape closes it and creates nothing.
+    type_text(&app, "B0");
+    press_key(&app, Key::Escape, false);
+    app.frame();
+    assert!(!app.window.get_creating_baseline());
+    assert_eq!(baselines(&app.session.view()), 0);
+
+    // Enter creates the baseline under the typed name and closes the row.
+    app.window.invoke_begin_baseline();
+    app.frame();
+    type_text(&app, "B1 Design freeze");
+    press_key(&app, Key::Return, false);
+    app.until("baseline created", |vm| baselines(vm) == 1).await;
+    app.frame();
+    assert!(!app.window.get_creating_baseline());
+    let view = app.session.view();
+    assert_eq!(view.project.as_ref().unwrap().baselines[0].name, "B1 Design freeze");
+
+    // An empty name creates nothing.
+    app.window.invoke_begin_baseline();
+    app.frame();
+    press_key(&app, Key::Return, false);
+    app.frame();
+    assert!(app.window.get_creating_baseline());
+    assert_eq!(baselines(&app.session.view()), 1);
+
+    drop(app);
+    server.stop().await;
+}

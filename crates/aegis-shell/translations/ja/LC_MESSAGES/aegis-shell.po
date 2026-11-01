@@ -1375,3 +1375,9 @@ msgstr "「{}」と置き換えて挿入"
 
 msgid "Rename project"
 msgstr "プロジェクト名を変更"
+
+msgid "Baseline name, for example B1 Design freeze"
+msgstr "ベースライン名（例: B1 設計凍結）"
+
+msgid "Baseline name"
+msgstr "ベースライン名"
