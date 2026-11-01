@@ -61,6 +61,9 @@ component NameEditor inherits VerticalLayout {
     // it exists (its panel appears after the pick) and clears the request.
     in-out property <bool> focus-requested;
     callback renamed(string);
+    // The edit is over: Enter saved, Escape cancelled or focus left. A header
+    // field that shows the name as text again listens to this.
+    callback finished();
     property <bool> typing: edit.has-focus && edit.text != root.name;
     // The text already sent, so Enter and the focus leaving do not send it twice.
     property <string> requested;
@@ -91,6 +94,7 @@ component NameEditor inherits VerticalLayout {
             if (event.text == Key.Escape) {
                 edit.text = root.name;
                 root.needed = false;
+                root.finished();
                 return accept;
             }
             if (event.text == Key.Tab) { root.save(); }
@@ -101,7 +105,7 @@ component NameEditor inherits VerticalLayout {
             text: root.name;
             enabled: root.editable;
             accessible-label: @tr("Name");
-            accepted(t) => { root.save(); }
+            accepted(t) => { root.save(); if (!root.needed) { root.finished(); } }
             edited(t) => {
                 root.needed = false;
                 root.requested = "";
@@ -114,7 +118,7 @@ component NameEditor inherits VerticalLayout {
         root.requested = "";
     }
     changed focused => {
-        if (!root.focused) { root.save(); }
+        if (!root.focused) { root.save(); root.finished(); }
     }
     property <bool> focused: edit.has-focus;
 }
@@ -291,6 +295,14 @@ export component AppWindow inherits Window {
     in property <[ProjectItem]> projects;
     in property <bool> has-project;
     in property <string> project-name;
+    in-out property <bool> renaming-project: false;
+    in-out property <bool> focus-project-name: false;
+    public function begin-rename-project() {
+        if (root.editing) {
+            root.renaming-project = true;
+            root.focus-project-name = true;
+        }
+    }
     in-out property <string> new-project-name: "";
     in-out property <int> new-project-methodology: 0;
 
@@ -1015,7 +1027,6 @@ in property <string> redo-label;
         root.prompt-open = false;
         if (text == "") { return; }
         if (kind == "new-project") { root.create-project(text); }
-        if (kind == "rename-project") { root.rename-project(text); }
         if (kind == "create-baseline") { root.create-baseline(text); }
         if (kind == "reset-password") { root.reset-user-password(text); }
     }
@@ -1104,7 +1115,7 @@ in property <string> redo-label;
         }
         Menu {
             title: @tr("Project");
-            MenuItem { title: @tr("Rename project…"); icon: @image-url("icons/pencil.svg"); enabled: root.in-project && root.editing; activated => { root.ask("rename-project", "Rename project", "Project name", root.project-name); } }
+            MenuItem { title: @tr("Rename project…"); icon: @image-url("icons/pencil.svg"); enabled: root.in-project && root.editing; activated => { root.begin-rename-project(); } }
             MenuItem { title: @tr("Add the sample TARA"); icon: @image-url("icons/plus.svg"); enabled: root.in-project && root.editing && root.is-empty; activated => { root.create-sample(); } }
             MenuSeparator {}
             MenuItem { title: @tr("Reload newer version"); icon: @image-url("icons/refresh-cw.svg"); enabled: root.in-project && root.newer-version; activated => { root.reload(); } }
@@ -1516,7 +1527,9 @@ in property <string> redo-label;
                         Text { text: root.redo-tip(); color: #FFFFFF; font-size: Theme.font-label; }
                     }
                 }
-                Text {
+                // Click the name to rename the project in place (UI-11.4); the
+                // rules are the NameEditor's (UI-08.3).
+                if !root.renaming-project: Text {
                     text: root.project-name;
                     font-size: Theme.font-h1;
                     font-weight: Theme.weight-heavy;
@@ -1525,6 +1538,23 @@ in property <string> redo-label;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
+                    accessible-role: AccessibleRole.button;
+                    accessible-label: @tr("Rename project");
+                    accessible-description: root.project-name;
+                    accessible-action-default => { root.begin-rename-project(); }
+                    TouchArea {
+                        enabled: root.editing;
+                        mouse-cursor: pointer;
+                        clicked => { root.begin-rename-project(); }
+                    }
+                }
+                if root.renaming-project: NameEditor {
+                    horizontal-stretch: 1;
+                    name: root.project-name;
+                    editable: root.editing;
+                    focus-requested <=> root.focus-project-name;
+                    renamed(t) => { root.rename-project(t); }
+                    finished => { root.renaming-project = false; }
                 }
                 Text {
                     text: root.sync-text;

@@ -1372,3 +1372,6 @@ msgstr "「{}」の下に挿入"
 
 msgid "Insert in place of '{}'"
 msgstr "「{}」と置き換えて挿入"
+
+msgid "Rename project"
+msgstr "プロジェクト名を変更"

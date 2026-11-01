@@ -1372,3 +1372,6 @@ msgstr "⟦Ínsért úndér '{}'␣␣⟧"
 
 msgid "Insert in place of '{}'"
 msgstr "⟦Ínsért ín plácé óf '{}'␣␣⟧"
+
+msgid "Rename project"
+msgstr "⟦Rénámé prójéct␣␣⟧"
