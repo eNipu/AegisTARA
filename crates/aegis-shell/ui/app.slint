@@ -798,6 +798,33 @@ in property <string> redo-label;
     callback rename-claim(string);
     callback remove-claim();
     callback claim-threat-clicked(int);
+    // ---- row actions (UI-09) ----
+    callback add-child-component(int);
+    callback add-child-asset(int);
+    callback add-child-damage(int);
+    callback add-child-threat(int);
+    callback add-child-control(int);
+    callback duplicate-component(int);
+    callback duplicate-interface(int);
+    callback duplicate-data-flow(int);
+    callback duplicate-trust-boundary(int);
+    callback duplicate-asset(int);
+    callback duplicate-damage(int);
+    callback duplicate-threat(int);
+    callback duplicate-control(int);
+    callback duplicate-goal(int);
+    callback duplicate-claim(int);
+    callback remove-row-component(int);
+    callback remove-row-interface(int);
+    callback remove-row-data-flow(int);
+    callback remove-row-trust-boundary(int);
+    callback remove-row-asset(int);
+    callback remove-row-damage(int);
+    callback remove-row-threat(int);
+    callback remove-row-control(int);
+    callback remove-row-goal(int);
+    callback remove-row-claim(int);
+    callback remove-row-tree(int);
     callback problem-clicked(int);
     callback pick-baseline(int);
     callback create-baseline(string);
@@ -1561,7 +1588,18 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Properties"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }, { title: @tr("Worst risk"), horizontal-stretch: 1 }];
                             rows: root.asset-rows;
                             selected: root.asset-selected;
+                            editable: root.editing;
+                            show-add: true;
+                            add-verb: @tr("Add threat scenario to");
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.pick-asset(i); }
+                            activated(i) => { root.pick-asset(i); }
+                            open-row(i) => { root.pick-asset(i); }
+                            add-child(i) => { root.add-child-asset(i); }
+                            duplicate-row(i) => { root.duplicate-asset(i); }
+                            remove-row(i) => { root.remove-row-asset(i); }
                         }
                     }
                     if root.draft-kind == "asset": Panel {
@@ -1619,7 +1657,18 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: root.damage-singular, horizontal-stretch: 2 }, { title: @tr("Impact"), horizontal-stretch: 2 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.damage-rows;
                             selected: root.damage-selected;
+                            editable: root.editing;
+                            show-add: true;
+                            add-verb: @tr("Add threat scenario leading to");
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.pick-damage(i); }
+                            activated(i) => { root.pick-damage(i); }
+                            open-row(i) => { root.pick-damage(i); }
+                            add-child(i) => { root.add-child-damage(i); }
+                            duplicate-row(i) => { root.duplicate-damage(i); }
+                            remove-row(i) => { root.remove-row-damage(i); }
                         }
                     }
                     if root.draft-kind == "damage": Panel {
@@ -1670,7 +1719,18 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Threat scenario"), horizontal-stretch: 3 }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Before"), horizontal-stretch: 1 }, { title: @tr("After"), horizontal-stretch: 1 }];
                             rows: root.threat-rows;
                             selected: root.threat-selected;
+                            editable: root.editing;
+                            show-add: true;
+                            add-verb: @tr("Add attack tree for");
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.select-threat(i); }
+                            activated(i) => { root.select-threat(i); }
+                            open-row(i) => { root.select-threat(i); }
+                            add-child(i) => { root.add-child-threat(i); }
+                            duplicate-row(i) => { root.duplicate-threat(i); }
+                            remove-row(i) => { root.remove-row-threat(i); }
                         }
                     }
                     if root.draft-kind == "threat": Panel {
@@ -1771,7 +1831,14 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Tree"), horizontal-stretch: 1 }, { title: @tr("Rating"), width: 92px, min-width: 92px }];
                             rows: root.tree-rows;
                             selected: root.tree-selected;
+                            editable: root.editing;
+                            show-open: true;
+                            show-duplicate: false;
+                            show-remove: true;
                             picked(i) => { root.pick-tree(i); }
+                            activated(i) => { root.pick-tree(i); }
+                            open-row(i) => { root.pick-tree(i); }
+                            remove-row(i) => { root.remove-row-tree(i); }
                         }
                         if root.draft-kind == "tree": DraftForm {
                             title: @tr("New attack tree");
@@ -2219,7 +2286,18 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Control"), horizontal-stretch: 3 }, { title: @tr("Attack steps"), horizontal-stretch: 1 }, { title: @tr("Goals"), horizontal-stretch: 1 }];
                             rows: root.control-rows;
                             selected: root.control-selected;
+                            editable: root.editing;
+                            show-add: true;
+                            add-verb: @tr("Add goal for");
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.pick-control(i); }
+                            activated(i) => { root.pick-control(i); }
+                            open-row(i) => { root.pick-control(i); }
+                            add-child(i) => { root.add-child-control(i); }
+                            duplicate-row(i) => { root.duplicate-control(i); }
+                            remove-row(i) => { root.remove-row-control(i); }
                         }
                     }
                     if root.draft-kind == "control": Panel {
@@ -2269,7 +2347,15 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: root.goal-singular, horizontal-stretch: 3 }, { title: @tr("Controls"), horizontal-stretch: 1 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.goal-rows;
                             selected: root.goal-selected;
+                            editable: root.editing;
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.pick-goal(i); }
+                            activated(i) => { root.pick-goal(i); }
+                            open-row(i) => { root.pick-goal(i); }
+                            duplicate-row(i) => { root.duplicate-goal(i); }
+                            remove-row(i) => { root.remove-row-goal(i); }
                         }
                         SectionTitle { text: @tr("Cybersecurity claims"); }
                         DataTable {
@@ -2277,7 +2363,15 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Claim"), horizontal-stretch: 3 }, { title: @tr("Threats"), horizontal-stretch: 1 }];
                             rows: root.claim-rows;
                             selected: root.claim-selected;
+                            editable: root.editing;
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.pick-claim(i); }
+                            activated(i) => { root.pick-claim(i); }
+                            open-row(i) => { root.pick-claim(i); }
+                            duplicate-row(i) => { root.duplicate-claim(i); }
+                            remove-row(i) => { root.remove-row-claim(i); }
                         }
                     }
                     VerticalLayout {
@@ -2543,7 +2637,18 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Parent"), horizontal-stretch: 2 }, { title: @tr("Interfaces"), horizontal-stretch: 1 }, { title: @tr("Assets"), horizontal-stretch: 1 }];
                             rows: root.component-rows;
                             selected: root.component-selected;
+                            editable: root.editing;
+                            show-add: true;
+                            add-verb: @tr("Add asset to");
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.pick-component(i); }
+                            activated(i) => { root.pick-component(i); }
+                            open-row(i) => { root.pick-component(i); }
+                            add-child(i) => { root.add-child-component(i); }
+                            duplicate-row(i) => { root.duplicate-component(i); }
+                            remove-row(i) => { root.remove-row-component(i); }
                         }
                         if root.item-tab == 1: VerticalLayout {
                             spacing: 8px;
@@ -2552,7 +2657,15 @@ in property <string> redo-label;
                                 columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Interface"), horizontal-stretch: 2 }, { title: @tr("Component"), horizontal-stretch: 2 }, { title: @tr("Kind"), horizontal-stretch: 2 }, { title: @tr("Data flows"), horizontal-stretch: 1 }];
                                 rows: root.interface-rows;
                                 selected: root.interface-selected;
+                                editable: root.editing;
+                                show-open: true;
+                                show-duplicate: true;
+                                show-remove: true;
                                 picked(i) => { root.pick-interface(i); }
+                                activated(i) => { root.pick-interface(i); }
+                                open-row(i) => { root.pick-interface(i); }
+                                duplicate-row(i) => { root.duplicate-interface(i); }
+                                remove-row(i) => { root.remove-row-interface(i); }
                             }
                         }
                         if root.item-tab == 2: VerticalLayout {
@@ -2562,7 +2675,15 @@ in property <string> redo-label;
                                 columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Data flow"), horizontal-stretch: 2 }, { title: @tr("From"), horizontal-stretch: 1 }, { title: @tr("To"), horizontal-stretch: 1 }, { title: @tr("Interface"), horizontal-stretch: 1 }];
                                 rows: root.data-flow-rows;
                                 selected: root.data-flow-selected;
+                                editable: root.editing;
+                                show-open: true;
+                                show-duplicate: true;
+                                show-remove: true;
                                 picked(i) => { root.pick-data-flow(i); }
+                                activated(i) => { root.pick-data-flow(i); }
+                                open-row(i) => { root.pick-data-flow(i); }
+                                duplicate-row(i) => { root.duplicate-data-flow(i); }
+                                remove-row(i) => { root.remove-row-data-flow(i); }
                             }
                         }
                         if root.item-tab == 3: DataTable {
@@ -2570,7 +2691,15 @@ in property <string> redo-label;
                             columns: [{ title: @tr("ID"), width: 56px, min-width: 56px }, { title: @tr("Trust boundary"), horizontal-stretch: 3 }, { title: @tr("Components"), horizontal-stretch: 1 }];
                             rows: root.trust-boundary-rows;
                             selected: root.trust-boundary-selected;
+                            editable: root.editing;
+                            show-open: true;
+                            show-duplicate: true;
+                            show-remove: true;
                             picked(i) => { root.pick-trust-boundary(i); }
+                            activated(i) => { root.pick-trust-boundary(i); }
+                            open-row(i) => { root.pick-trust-boundary(i); }
+                            duplicate-row(i) => { root.duplicate-trust-boundary(i); }
+                            remove-row(i) => { root.remove-row-trust-boundary(i); }
                         }
                     }
                     if root.item-tab == 0 && root.draft-kind == "component": Panel {

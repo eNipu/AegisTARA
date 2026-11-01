@@ -1283,3 +1283,18 @@ msgstr "{} を複製"
 
 msgid "Remove {}"
 msgstr "{} を削除"
+
+msgid "Add asset to"
+msgstr "アセットを追加:"
+
+msgid "Add threat scenario to"
+msgstr "脅威シナリオを追加:"
+
+msgid "Add threat scenario leading to"
+msgstr "この被害につながる脅威シナリオを追加:"
+
+msgid "Add attack tree for"
+msgstr "攻撃ツリーを追加:"
+
+msgid "Add goal for"
+msgstr "目標を追加:"

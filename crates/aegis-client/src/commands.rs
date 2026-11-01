@@ -125,6 +125,17 @@ pub enum Edit {
         /// The asset.
         asset: AssetId,
     },
+    /// Adds an asset bound to a component (row-action context, UI-09).
+    AddAssetBound {
+        /// New ID.
+        id: AssetId,
+        /// Name.
+        name: String,
+        /// Positions in the methodology's properties.
+        properties: Vec<usize>,
+        /// The component to bind it to.
+        component: ComponentId,
+    },
 
     // ---- item definition (job 074) ----
     /// Adds a component to the item definition.
@@ -288,6 +299,19 @@ pub enum Edit {
         asset: AssetId,
         /// Position in the threat categories.
         category: usize,
+    },
+    /// Adds a threat scenario that leads to a damage scenario (UI-09).
+    AddThreatLeading {
+        /// New ID.
+        id: ThreatId,
+        /// Name.
+        name: String,
+        /// The asset it targets.
+        asset: AssetId,
+        /// Position in the threat categories.
+        category: usize,
+        /// The damage scenario it leads to.
+        damage: DamageId,
     },
     /// Renames a threat scenario.
     RenameThreat {
@@ -542,6 +566,15 @@ pub enum Edit {
         /// Name.
         name: String,
     },
+    /// Adds a goal linked to a security control (row-action context, UI-09).
+    AddGoalFor {
+        /// New ID.
+        id: GoalId,
+        /// Name.
+        name: String,
+        /// The security control to link it to.
+        control: ControlId,
+    },
     /// Renames a cybersecurity goal.
     RenameGoal {
         /// The goal.
@@ -581,6 +614,80 @@ pub enum Edit {
     RemoveClaim {
         /// The claim.
         claim: ClaimId,
+    },
+
+    // ---- duplication (UI-09.2, UI-09.4) ----
+    /// Duplicates an element, cloning its own scalar fields with a fresh id
+    /// and a " copy" name suffix. Cross-links (members, damages, controls,
+    /// catalog refs, steps) are not cloned.
+    DuplicateComponent {
+        /// New ID.
+        id: ComponentId,
+        /// The component to copy.
+        source: ComponentId,
+    },
+    /// Duplicates an interface.
+    DuplicateInterface {
+        /// New ID.
+        id: InterfaceId,
+        /// The interface to copy.
+        source: InterfaceId,
+    },
+    /// Duplicates a data flow.
+    DuplicateDataFlow {
+        /// New ID.
+        id: DataFlowId,
+        /// The data flow to copy.
+        source: DataFlowId,
+    },
+    /// Duplicates a trust boundary (members are not copied).
+    DuplicateTrustBoundary {
+        /// New ID.
+        id: TrustBoundaryId,
+        /// The trust boundary to copy.
+        source: TrustBoundaryId,
+    },
+    /// Duplicates an asset (its component binding is not copied).
+    DuplicateAsset {
+        /// New ID.
+        id: AssetId,
+        /// The asset to copy.
+        source: AssetId,
+    },
+    /// Duplicates a damage scenario (its rated impacts are copied).
+    DuplicateDamage {
+        /// New ID.
+        id: DamageId,
+        /// The damage scenario to copy.
+        source: DamageId,
+    },
+    /// Duplicates a threat scenario (damages and catalog refs are not copied).
+    DuplicateThreat {
+        /// New ID.
+        id: ThreatId,
+        /// The threat scenario to copy.
+        source: ThreatId,
+    },
+    /// Duplicates a security control.
+    DuplicateControl {
+        /// New ID.
+        id: ControlId,
+        /// The control to copy.
+        source: ControlId,
+    },
+    /// Duplicates a cybersecurity goal (controls are not copied).
+    DuplicateGoal {
+        /// New ID.
+        id: GoalId,
+        /// The goal to copy.
+        source: GoalId,
+    },
+    /// Duplicates a cybersecurity claim.
+    DuplicateClaim {
+        /// New ID.
+        id: ClaimId,
+        /// The claim to copy.
+        source: ClaimId,
     },
 }
 
@@ -680,6 +787,11 @@ fn name(text: &str) -> Result<std::sync::Arc<str>, EditError> {
     } else {
         Ok(t.into())
     }
+}
+
+/// The name a duplicated element gets (UI-09.2).
+fn copy_name(text: &str) -> String {
+    format!("{} copy", text.trim())
 }
 
 fn feasibility(
@@ -829,6 +941,33 @@ impl Edit {
                     properties: set,
                     provenance: p,
                 }]
+            }
+            Edit::AddAssetBound {
+                id,
+                name: n,
+                properties,
+                component,
+            } => {
+                let mut set = PropertySet::default();
+                for &i in properties {
+                    set = set.with(m.properties().nth(i).ok_or(EditError::UnknownChoice)?);
+                }
+                if set.is_empty() {
+                    return Err(EditError::NoProperties);
+                }
+                vec![
+                    Op::AddAsset {
+                        id: *id,
+                        name: name(n)?,
+                        properties: set,
+                        provenance: p.clone(),
+                    },
+                    Op::SetAssetComponent {
+                        asset: *id,
+                        component: Some(*component),
+                        provenance: p,
+                    },
+                ]
             }
             Edit::RenameAsset { asset, name: n } => vec![Op::RenameAsset {
                 id: *asset,
@@ -1139,6 +1278,24 @@ impl Edit {
                     .ok_or(EditError::UnknownChoice)?,
                 catalog_refs: Vec::new(),
                 damages: Vec::new(),
+                provenance: p,
+            }],
+            Edit::AddThreatLeading {
+                id,
+                name: n,
+                asset,
+                category,
+                damage,
+            } => vec![Op::AddThreatScenario {
+                id: *id,
+                name: name(n)?,
+                asset: *asset,
+                category: m
+                    .threat_categories()
+                    .nth(*category)
+                    .ok_or(EditError::UnknownChoice)?,
+                catalog_refs: Vec::new(),
+                damages: vec![*damage],
                 provenance: p,
             }],
             Edit::RenameThreat { threat, name: n } => vec![Op::RenameThreatScenario {
@@ -1548,6 +1705,16 @@ impl Edit {
                 controls: Vec::new(),
                 provenance: p,
             }],
+            Edit::AddGoalFor {
+                id,
+                name: n,
+                control,
+            } => vec![Op::AddCybersecurityGoal {
+                id: *id,
+                name: name(n)?,
+                controls: vec![*control],
+                provenance: p,
+            }],
             Edit::RenameGoal { goal, name: n } => vec![Op::RenameCybersecurityGoal {
                 id: *goal,
                 name: name(n)?,
@@ -1612,6 +1779,146 @@ impl Edit {
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
             }
+            Edit::DuplicateComponent { id, source } => {
+                let c = project
+                    .component_idx(source)
+                    .and_then(|i| project.component(i))
+                    .ok_or(EditError::Missing)?;
+                let parent = c.parent().and_then(|i| project.component_id(i));
+                vec![Op::AddComponent {
+                    id: *id,
+                    name: name(&copy_name(c.name()))?,
+                    parent,
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateInterface { id, source } => {
+                let i = project
+                    .interface_idx(source)
+                    .and_then(|x| project.interface(x))
+                    .ok_or(EditError::Missing)?;
+                let component = project
+                    .component_id(i.component())
+                    .ok_or(EditError::Missing)?;
+                vec![Op::AddInterface {
+                    id: *id,
+                    name: name(&copy_name(i.name()))?,
+                    component,
+                    kind: i.kind(),
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateDataFlow { id, source } => {
+                let df = project
+                    .data_flow_idx(source)
+                    .and_then(|x| project.data_flow(x))
+                    .ok_or(EditError::Missing)?;
+                let from = project.component_id(df.from()).ok_or(EditError::Missing)?;
+                let to = project.component_id(df.to()).ok_or(EditError::Missing)?;
+                let interface = df.interface().and_then(|x| project.interface_id(x));
+                vec![Op::AddDataFlow {
+                    id: *id,
+                    name: name(&copy_name(df.name()))?,
+                    from,
+                    to,
+                    interface,
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateTrustBoundary { id, source } => {
+                let tb = project
+                    .trust_boundary_idx(source)
+                    .and_then(|x| project.trust_boundary(x))
+                    .ok_or(EditError::Missing)?;
+                vec![Op::AddTrustBoundary {
+                    id: *id,
+                    name: name(&copy_name(tb.name()))?,
+                    components: Vec::new(),
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateAsset { id, source } => {
+                let a = project
+                    .asset_idx(source)
+                    .and_then(|x| project.asset(x))
+                    .ok_or(EditError::Missing)?;
+                let properties = a.properties();
+                if properties.is_empty() {
+                    return Err(EditError::NoProperties);
+                }
+                vec![Op::AddAsset {
+                    id: *id,
+                    name: name(&copy_name(a.name()))?,
+                    properties,
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateDamage { id, source } => {
+                let d = project
+                    .damage_scenario_idx(source)
+                    .and_then(|x| project.damage_scenario(x))
+                    .ok_or(EditError::Missing)?;
+                let impacts: Vec<_> = d
+                    .impacts()
+                    .filter_map(|(category, level)| level.map(|l| (category, l)))
+                    .collect();
+                vec![Op::AddDamageScenario {
+                    id: *id,
+                    name: name(&copy_name(d.name()))?,
+                    impacts,
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateThreat { id, source } => {
+                let t = project
+                    .threat_scenario_idx(source)
+                    .and_then(|x| project.threat_scenario(x))
+                    .ok_or(EditError::Missing)?;
+                let asset = project.asset_id(t.asset()).ok_or(EditError::Missing)?;
+                vec![Op::AddThreatScenario {
+                    id: *id,
+                    name: name(&copy_name(t.name()))?,
+                    asset,
+                    category: t.category(),
+                    catalog_refs: Vec::new(),
+                    damages: Vec::new(),
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateControl { id, source } => {
+                let c = project
+                    .security_control_idx(source)
+                    .and_then(|x| project.security_control(x))
+                    .ok_or(EditError::Missing)?;
+                vec![Op::AddSecurityControl {
+                    id: *id,
+                    name: name(&copy_name(c.name()))?,
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateGoal { id, source } => {
+                let g = project
+                    .cybersecurity_goal_idx(source)
+                    .and_then(|x| project.cybersecurity_goal(x))
+                    .ok_or(EditError::Missing)?;
+                vec![Op::AddCybersecurityGoal {
+                    id: *id,
+                    name: name(&copy_name(g.name()))?,
+                    controls: Vec::new(),
+                    provenance: p,
+                }]
+            }
+            Edit::DuplicateClaim { id, source } => {
+                let c = project
+                    .cybersecurity_claim_idx(source)
+                    .and_then(|x| project.cybersecurity_claim(x))
+                    .ok_or(EditError::Missing)?;
+                vec![Op::AddCybersecurityClaim {
+                    id: *id,
+                    name: name(&copy_name(c.name()))?,
+                    provenance: p,
+                }]
+            }
         };
         Ok(clear_descriptions_before_removal(project, ops, &clearing))
     }
@@ -1625,9 +1932,13 @@ impl Edit {
             Edit::AddInterface { id, .. } => Some(Selection::Interface(*id)),
             Edit::AddDataFlow { id, .. } => Some(Selection::DataFlow(*id)),
             Edit::AddTrustBoundary { id, .. } => Some(Selection::TrustBoundary(*id)),
-            Edit::AddAsset { id, .. } => Some(Selection::Asset(*id)),
+            Edit::AddAsset { id, .. } | Edit::AddAssetBound { id, .. } => {
+                Some(Selection::Asset(*id))
+            }
             Edit::AddDamage { id, .. } => Some(Selection::Damage(*id)),
-            Edit::AddThreat { id, .. } => Some(Selection::Threat(*id)),
+            Edit::AddThreat { id, .. } | Edit::AddThreatLeading { id, .. } => {
+                Some(Selection::Threat(*id))
+            }
             Edit::NewTree { id, .. } => Some(Selection::Tree(*id)),
             Edit::AddTreeChild { tree, id, .. }
             | Edit::BranchStepToGate { tree, id, .. }
@@ -1638,8 +1949,18 @@ impl Edit {
                 ..
             } => Some(Selection::Tree(*id)),
             Edit::AddControl { id, .. } => Some(Selection::Control(*id)),
-            Edit::AddGoal { id, .. } => Some(Selection::Goal(*id)),
+            Edit::AddGoal { id, .. } | Edit::AddGoalFor { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),
+            Edit::DuplicateComponent { id, .. } => Some(Selection::Component(*id)),
+            Edit::DuplicateInterface { id, .. } => Some(Selection::Interface(*id)),
+            Edit::DuplicateDataFlow { id, .. } => Some(Selection::DataFlow(*id)),
+            Edit::DuplicateTrustBoundary { id, .. } => Some(Selection::TrustBoundary(*id)),
+            Edit::DuplicateAsset { id, .. } => Some(Selection::Asset(*id)),
+            Edit::DuplicateDamage { id, .. } => Some(Selection::Damage(*id)),
+            Edit::DuplicateThreat { id, .. } => Some(Selection::Threat(*id)),
+            Edit::DuplicateControl { id, .. } => Some(Selection::Control(*id)),
+            Edit::DuplicateGoal { id, .. } => Some(Selection::Goal(*id)),
+            Edit::DuplicateClaim { id, .. } => Some(Selection::Claim(*id)),
             _ => None,
         }
     }

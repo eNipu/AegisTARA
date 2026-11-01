@@ -1377,6 +1377,190 @@ impl Controller {
             }
         });
 
+        // ---- row actions (UI-09) ----
+        // + starts a draft with the selected row as the parent context (the
+        // client core fills the context from the selection, job 114).
+        on!(on_add_child_component, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.components.get(pos(i)?).map(|x| x.id)) {
+                c.select(Selection::Component(id), false);
+                c.send(Command::BeginDraft(DraftKind::Asset));
+            }
+        });
+        on!(on_add_child_asset, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.assets.get(pos(i)?).map(|a| a.id)) {
+                c.select(Selection::Asset(id), false);
+                c.send(Command::BeginDraft(DraftKind::Threat));
+            }
+        });
+        on!(on_add_child_damage, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.damages.get(pos(i)?).map(|d| d.id)) {
+                c.select(Selection::Damage(id), false);
+                c.send(Command::BeginDraft(DraftKind::Threat));
+            }
+        });
+        on!(on_add_child_threat, |c, i| {
+            if let Some(id) = c.with_project(|p| p.threats.get(pos(i)?).map(|t| t.id)) {
+                c.select(Selection::Threat(id), false);
+                c.send(Command::BeginDraft(DraftKind::Tree));
+            }
+        });
+        on!(on_add_child_control, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.controls.get(pos(i)?).map(|x| x.id)) {
+                c.select(Selection::Control(id), false);
+                c.send(Command::BeginDraft(DraftKind::Goal));
+            }
+        });
+
+        // Duplicate (UI-09.2, UI-09.4).
+        on!(on_duplicate_component, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.components.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::DuplicateComponent {
+                    id: ComponentId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_interface, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.interfaces.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::DuplicateInterface {
+                    id: InterfaceId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_data_flow, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.data_flows.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::DuplicateDataFlow {
+                    id: DataFlowId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_trust_boundary, |c, i| {
+            if let Some(source) =
+                c.with_project(|p| p.data.trust_boundaries.get(pos(i)?).map(|x| x.id))
+            {
+                c.edit(Edit::DuplicateTrustBoundary {
+                    id: TrustBoundaryId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_asset, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.assets.get(pos(i)?).map(|a| a.id)) {
+                c.edit(Edit::DuplicateAsset {
+                    id: AssetId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_damage, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.damages.get(pos(i)?).map(|d| d.id)) {
+                c.edit(Edit::DuplicateDamage {
+                    id: DamageId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_threat, |c, i| {
+            if let Some(source) = c.with_project(|p| p.threats.get(pos(i)?).map(|t| t.id)) {
+                c.edit(Edit::DuplicateThreat {
+                    id: ThreatId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_control, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.controls.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::DuplicateControl {
+                    id: ControlId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_goal, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.goals.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::DuplicateGoal {
+                    id: GoalId::new_v7(),
+                    source,
+                });
+            }
+        });
+        on!(on_duplicate_claim, |c, i| {
+            if let Some(source) = c.with_project(|p| p.data.claims.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::DuplicateClaim {
+                    id: ClaimId::new_v7(),
+                    source,
+                });
+            }
+        });
+
+        // Remove from the row menu: immediate, one undo step, with the undo
+        // toast (job 116).
+        on!(on_remove_row_component, |c, i| {
+            if let Some(component) =
+                c.with_project(|p| p.data.components.get(pos(i)?).map(|x| x.id))
+            {
+                c.edit(Edit::RemoveComponent { component });
+            }
+        });
+        on!(on_remove_row_interface, |c, i| {
+            if let Some(interface) =
+                c.with_project(|p| p.data.interfaces.get(pos(i)?).map(|x| x.id))
+            {
+                c.edit(Edit::RemoveInterface { interface });
+            }
+        });
+        on!(on_remove_row_data_flow, |c, i| {
+            if let Some(data_flow) =
+                c.with_project(|p| p.data.data_flows.get(pos(i)?).map(|x| x.id))
+            {
+                c.edit(Edit::RemoveDataFlow { data_flow });
+            }
+        });
+        on!(on_remove_row_trust_boundary, |c, i| {
+            if let Some(boundary) =
+                c.with_project(|p| p.data.trust_boundaries.get(pos(i)?).map(|x| x.id))
+            {
+                c.edit(Edit::RemoveTrustBoundary { boundary });
+            }
+        });
+        on!(on_remove_row_asset, |c, i| {
+            if let Some(asset) = c.with_project(|p| p.data.assets.get(pos(i)?).map(|a| a.id)) {
+                c.edit(Edit::RemoveAsset { asset });
+            }
+        });
+        on!(on_remove_row_damage, |c, i| {
+            if let Some(damage) = c.with_project(|p| p.data.damages.get(pos(i)?).map(|d| d.id)) {
+                c.edit(Edit::RemoveDamage { damage });
+            }
+        });
+        on!(on_remove_row_threat, |c, i| {
+            if let Some(threat) = c.with_project(|p| p.threats.get(pos(i)?).map(|t| t.id)) {
+                c.edit(Edit::RemoveThreat { threat });
+            }
+        });
+        on!(on_remove_row_control, |c, i| {
+            if let Some(control) = c.with_project(|p| p.data.controls.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::RemoveControl { control });
+            }
+        });
+        on!(on_remove_row_goal, |c, i| {
+            if let Some(goal) = c.with_project(|p| p.data.goals.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::RemoveGoal { goal });
+            }
+        });
+        on!(on_remove_row_claim, |c, i| {
+            if let Some(claim) = c.with_project(|p| p.data.claims.get(pos(i)?).map(|x| x.id)) {
+                c.edit(Edit::RemoveClaim { claim });
+            }
+        });
+        on!(on_remove_row_tree, |c, i| {
+            if let Some(tree) = c.with_project(|p| p.data.trees.get(pos(i)?).map(|t| t.id)) {
+                c.edit(Edit::RemoveTree { tree });
+            }
+        });
+
         // ---- problems, versions, history, reports ----
         on!(on_problem_clicked, |c, i| {
             if let Some(t) = c.with_project(|p| p.data.problems.get(pos(i)?)?.target) {
