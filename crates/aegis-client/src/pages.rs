@@ -262,6 +262,8 @@ pub struct AssetDetail {
     pub properties: Vec<bool>,
     /// The threats that target it.
     pub threats: Vec<LinkRow>,
+    /// The damage scenarios those threats lead to, each once, in damage order.
+    pub damages: Vec<LinkRow>,
     /// Provenance text.
     pub changed: String,
 }
@@ -305,7 +307,7 @@ pub fn asset_rows(ws: &Workspace) -> Vec<AssetRow> {
         .collect()
 }
 
-/// The selected asset's details. Time O(threats).
+/// The selected asset's details. Time O(threats + damage x threats).
 #[must_use]
 pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
     let project = ws.project();
@@ -340,6 +342,20 @@ pub fn asset_detail(ws: &Workspace, id: AssetId) -> Option<AssetDetail> {
                     .0
                     .map_or_else(|| "not rated".to_owned(), |r| r.label),
                 target: Selection::Threat(tid),
+            })
+            .collect(),
+        damages: project
+            .damage_scenarios()
+            .filter(|(d_idx, _, _)| {
+                project
+                    .threat_scenarios()
+                    .any(|(_, _, t)| t.asset() == idx && t.damages().contains(d_idx))
+            })
+            .map(|(d_idx, did, d)| LinkRow {
+                visual_id: project.damage_scenario_visual_id(d_idx).unwrap_or_default(),
+                label: d.name().to_owned(),
+                detail: String::new(),
+                target: Selection::Damage(did),
             })
             .collect(),
         changed: changed_text(a.provenance()),
@@ -790,6 +806,8 @@ pub struct DamageDetail {
     pub impacts: Vec<Option<usize>>,
     /// The threats that link it.
     pub threats: Vec<LinkRow>,
+    /// The assets those threats target, each once, in asset order.
+    pub assets: Vec<LinkRow>,
     /// Provenance text.
     pub changed: String,
 }
@@ -838,7 +856,7 @@ pub fn damage_rows(ws: &Workspace) -> Vec<DamageRow> {
         .collect()
 }
 
-/// The selected damage scenario's details.
+/// The selected damage scenario's details. Time O(threats + assets x threats).
 #[must_use]
 pub fn damage_detail(ws: &Workspace, id: DamageId) -> Option<DamageDetail> {
     let project = ws.project();
@@ -858,6 +876,20 @@ pub fn damage_detail(ws: &Workspace, id: DamageId) -> Option<DamageDetail> {
                 label: t.name().to_owned(),
                 detail: String::new(),
                 target: Selection::Threat(tid),
+            })
+            .collect(),
+        assets: project
+            .assets()
+            .filter(|(a_idx, _, _)| {
+                project
+                    .threat_scenarios()
+                    .any(|(_, _, t)| t.asset() == *a_idx && t.damages().contains(&idx))
+            })
+            .map(|(a_idx, aid, a)| LinkRow {
+                visual_id: project.asset_visual_id(a_idx).unwrap_or_default(),
+                label: a.name().to_owned(),
+                detail: String::new(),
+                target: Selection::Asset(aid),
             })
             .collect(),
         changed: changed_text(d.provenance()),
