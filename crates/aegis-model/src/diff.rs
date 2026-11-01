@@ -568,6 +568,7 @@ pub struct ProjectDiff {
     pub(crate) cybersecurity_claims: EntityDiff<ClaimId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
     pub(crate) notes_changed: bool,
+    pub(crate) languages_changed: bool,
 }
 
 impl ProjectDiff {
@@ -582,6 +583,18 @@ impl ProjectDiff {
     #[must_use]
     pub fn notes_changed(&self) -> bool {
         self.notes_changed
+    }
+
+    /// Whether the project's translation languages differ. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(!ProjectDiff::default().languages_changed());
+    /// ```
+    #[must_use]
+    pub fn languages_changed(&self) -> bool {
+        self.languages_changed
     }
 
     /// Returns the added, removed, and modified [`ComponentId`]s in canonical

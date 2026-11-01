@@ -397,3 +397,19 @@ fn the_pdf_report_has_the_same_notes_and_descriptions() {
         assert!(text.contains(word), "{word} is in the PDF report");
     }
 }
+
+#[test]
+fn project_languages_are_set_trimmed_and_undone() {
+    let mut ws = workspace();
+    let before = ws.project().clone();
+    edit(
+        &mut ws,
+        &Edit::SetProjectLanguages {
+            langs: vec![" ja ".into()],
+        },
+    );
+    assert_eq!(ws.project().languages(), [std::sync::Arc::from("ja")]);
+    ws.undo().expect("undo");
+    assert!(ws.project().languages().is_empty());
+    assert_eq!(ws.project(), &before);
+}
