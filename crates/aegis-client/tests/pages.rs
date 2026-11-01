@@ -1070,3 +1070,40 @@ fn visual_ids_appear_in_pages_cross_references_palette_and_reports() {
     let csv = risk_register_csv(&t.ws, &ctx);
     assert!(csv.contains(",T00\r\n"), "{csv}");
 }
+
+/// UI-04: a batch edit is one undo step and one redo, named after what it did,
+/// and a batch with one refused edit changes nothing.
+#[test]
+fn a_batch_edit_is_one_undo_step_and_one_redo() {
+    let mut t = tara();
+    let before: Project = t.ws.project().clone();
+    let steps = t.ws.edits().count();
+
+    let batch = Edit::Batch(vec![
+        Edit::RemoveThreat { threat: t.threat },
+        Edit::RemoveThreat { threat: t.second },
+    ]);
+    let ops = batch.to_ops(t.ws.project(), "mira", 1).expect("ops");
+    t.ws.apply_labeled(ops, Origin::Edit, batch.bulk_label())
+        .expect("applies");
+    assert_eq!(t.ws.project().threat_scenario_count(), 0);
+    assert_eq!(t.ws.edits().count(), steps + 1, "one step for both");
+    let label = t.ws.undo_label().expect("label");
+    assert!(label.is_bulk());
+    assert_eq!(label.imperative(), "remove 2 threat scenarios");
+    assert_eq!(label.past(), "2 threat scenarios removed");
+
+    t.ws.undo().expect("one undo brings both back");
+    assert!(t.ws.project().diff(&before).expect("diff").is_empty());
+    t.ws.redo().expect("one redo removes both again");
+    assert_eq!(t.ws.project().threat_scenario_count(), 0);
+
+    // One refused edit refuses the batch: the asset still has threats here.
+    t.ws.undo().expect("undo");
+    let bad = Edit::Batch(vec![
+        Edit::RemoveThreat { threat: t.threat },
+        Edit::RemoveAsset { asset: t.asset },
+    ]);
+    assert!(try_apply(&mut t.ws, &bad).is_err());
+    assert_eq!(t.ws.project().threat_scenario_count(), 2, "nothing changed");
+}
