@@ -1363,3 +1363,12 @@ msgstr "貼り付け"
 
 msgid "Select all"
 msgstr "すべて選択"
+
+msgid "Insert as a new tree"
+msgstr "新しいツリーとして挿入"
+
+msgid "Insert under '{}'"
+msgstr "「{}」の下に挿入"
+
+msgid "Insert in place of '{}'"
+msgstr "「{}」と置き換えて挿入"

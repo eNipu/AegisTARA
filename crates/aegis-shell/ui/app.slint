@@ -721,6 +721,11 @@ in property <string> redo-label;
     in property <string> library-filter;
     in property <bool> library-can-gate;
     in property <bool> library-can-leaf;
+    // What Insert will do with the canvas selection, live (UI-11.2).
+    out property <string> library-insert-label: root.library-mode == 0 ? @tr("Insert as a new tree")
+        : root.library-mode == 1 && root.library-can-gate ? @tr("Insert under '{}'", root.inspector-title)
+        : root.library-mode == 2 && root.library-can-leaf ? @tr("Insert in place of '{}'", root.inspector-title)
+        : @tr("Insert");
     in property <[[StandardListViewItem]]> catalog-rows;
     in property <int> catalog-selected: -1;
     in property <string> catalog-preview;
@@ -2121,7 +2126,7 @@ in property <string> redo-label;
                                     wrap: word-wrap;
                                 }
                                 Button {
-                                    text: @tr("Insert");
+                                    text: root.library-insert-label;
                                     primary: true;
                                     enabled: root.editing && root.library-selected >= 0 && (root.library-mode == 0 || (root.library-mode == 1 && root.library-can-gate) || (root.library-mode == 2 && root.library-can-leaf));
                                     clicked => { root.library-insert(root.library-mode, root.library-ratings, root.library-share); root.library-open = false; }
