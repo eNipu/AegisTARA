@@ -9,13 +9,13 @@ import { ScrollView, AboutSlint, StandardListView, Palette } from "std-widgets.s
 import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
-    DescriptionItem, DescriptionBox, TranslationEditor, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
+    DescriptionItem, DescriptionBox, TranslationEditor, ProjectLanguages, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
     LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm,
     Button, LineEdit, TextEdit, ComboBox, CheckBox, Switch
 } from "widgets.slint";
 
-export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
+export { ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
 
 // Page numbers, in the order of aegis_client::view::Page::ALL.
 global Pages {
@@ -117,6 +117,36 @@ component NameEditor inherits VerticalLayout {
         if (!root.focused) { root.save(); }
     }
     property <bool> focused: edit.has-focus;
+}
+
+// The project's translation languages (L10N-08): tags separated by commas or
+// spaces. Saves on Enter or on leaving the field; empty makes the project
+// single-language, which hides the add row of every translation editor.
+component LanguagesField inherits HorizontalLayout {
+    in property <bool> editable;
+    callback save(string);
+    spacing: 8px;
+    Text {
+        text: @tr("Translation languages");
+        color: Theme.graphite;
+        font-size: Theme.font-label;
+        vertical-alignment: center;
+    }
+    edit := LineEdit {
+        width: 200px;
+        text: ProjectLanguages.text;
+        enabled: root.editable;
+        placeholder-text: @tr("None, e.g. ja");
+        accessible-label: @tr("Translation languages");
+        accepted(t) => { if (t != ProjectLanguages.text) { root.save(t); } }
+    }
+    Rectangle { horizontal-stretch: 1; }
+    property <string> current: ProjectLanguages.text;
+    changed current => { edit.text = root.current; }
+    property <bool> focused: edit.has-focus;
+    changed focused => {
+        if (!root.focused && edit.text != ProjectLanguages.text) { root.save(edit.text); }
+    }
 }
 
 // The description boxes of the page that are for `kind`. A page has at most
@@ -262,6 +292,7 @@ export component AppWindow inherits Window {
     in property <[DescriptionItem]> descriptions;
     callback set-description(int, string);
     callback set-description-translation(int, string, string);
+    callback set-project-languages(string);
     callback remove-description-translation(int, string);
     // The window that edits one description.
     // The server holds a newer saved version than the one shown.
@@ -1591,6 +1622,7 @@ in property <string> redo-label;
                         spacing: 16px;
                         PageTitle { title: @tr("Overview"); subtitle: @tr("The project at a glance: what is analysed, how risky it is, and what is still open."); icon: @image-url("icons/layout-dashboard.svg"); }
                         DescriptionFor { items: root.descriptions; kind: "project"; label: @tr("Project notes"); editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        LanguagesField { editable: root.editing; save(t) => { root.set-project-languages(t); } }
                         HorizontalLayout {
                             vertical-stretch: 0;
                             spacing: 10px;

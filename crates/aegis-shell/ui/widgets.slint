@@ -115,7 +115,7 @@ component FocusRing inherits Rectangle {
 }
 
 // A push button. `primary` is the one main action of a form (accent fill);
-// `ghost` is a quiet text-only action such as "Add translation" (no frame
+// `ghost` is a quiet text-only action such as a row action (no frame
 // until hovered). Anything else is a secondary button.
 export component Button inherits Rectangle {
     in property <string> text;
@@ -1112,17 +1112,23 @@ export component DescriptionBox inherits VerticalLayout {
     @children
 }
 
+// The open project's translation languages (L10N-08), set by the controller:
+// the tags, and the same as the text the Overview field shows.
+export global ProjectLanguages {
+    in property <[string]> langs;
+    in property <string> text;
+}
+
 // Inline translation editor under a description (job 069, FND-04): shows the
 // existing translations and adds or clears one. No dialog; the draft saves on
-// the button, and an empty text clears the translation. The add row stays
-// folded behind one button: most projects are written in one language.
-// ponytail: per-element fold; a project-level language list would replace it.
+// the button, and an empty text clears the translation. The add row offers
+// only the project's languages, so a single-language project shows none.
 export component TranslationEditor inherits VerticalLayout {
     in property <[TranslationItem]> items;
     in property <bool> editable;
-    in-out property <string> draft-lang: "ja";
+    in-out property <int> lang-index;
     in-out property <string> draft-text;
-    in-out property <bool> adding;
+    property <string> draft-lang: ProjectLanguages.langs[root.lang-index];
     callback save(string, string);
     callback remove(string);
     spacing: 4px;
@@ -1144,15 +1150,12 @@ export component TranslationEditor inherits VerticalLayout {
             clicked => { root.remove(t.lang); }
         }
     }
-    if root.editable && !root.adding: HorizontalLayout {
-        alignment: start;
-        Button { text: @tr("Add translation"); ghost: true; icon: @image-url("icons/plus.svg"); clicked => { root.adding = true; } }
-    }
-    if root.editable && root.adding: HorizontalLayout {
+    if root.editable && ProjectLanguages.langs.length > 0: HorizontalLayout {
         spacing: 6px;
-        LineEdit {
+        ComboBox {
             width: 80px;
-            text <=> root.draft-lang;
+            model: ProjectLanguages.langs;
+            current-index <=> root.lang-index;
             accessible-label: @tr("Language tag");
         }
         LineEdit {
@@ -1160,14 +1163,13 @@ export component TranslationEditor inherits VerticalLayout {
             placeholder-text: @tr("Translation text");
             text <=> root.draft-text;
             accessible-label: @tr("Translation text");
-            accepted(t) => { root.save(root.draft-lang, t); root.draft-text = ""; root.adding = false; }
+            accepted(t) => { root.save(root.draft-lang, t); root.draft-text = ""; }
         }
         Button {
             text: @tr("Save");
             enabled: root.draft-text != "";
-            clicked => { root.save(root.draft-lang, root.draft-text); root.draft-text = ""; root.adding = false; }
+            clicked => { root.save(root.draft-lang, root.draft-text); root.draft-text = ""; }
         }
-        Button { text: @tr("Cancel"); clicked => { root.draft-text = ""; root.adding = false; } }
     }
 }
 
