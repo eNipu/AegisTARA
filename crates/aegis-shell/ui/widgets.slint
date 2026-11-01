@@ -1246,6 +1246,39 @@ export component Panel inherits Rectangle {
     }
 }
 
+// The edge of a panel slot (UI-02): drag it to resize the panel. It only
+// reports how far it was dragged; the window owns the size and remembers it
+// on `released`. With `line` it is the 1 px rule between two panels (the
+// grab area reaches 3 px either side); without, it fills the 16 px gap
+// between a page and its panel.
+export component Splitter inherits Rectangle {
+    in property <bool> line;
+    callback moved(length);
+    callback released();
+    width: root.line ? 1px : 16px;
+    background: root.line ? Theme.rule : transparent;
+    area := TouchArea {
+        x: root.line ? -3px : 0px;
+        width: root.line ? 7px : root.width;
+        mouse-cursor: col-resize;
+        moved => {
+            if self.pressed {
+                root.moved(self.mouse-x - self.pressed-x);
+            }
+        }
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.up {
+                root.released();
+            }
+        }
+    }
+    Rectangle {
+        x: (root.width - 2px) / 2;
+        width: 2px;
+        background: area.has-hover || area.pressed ? Theme.accent : transparent;
+    }
+}
+
 export component Swatch inherits Rectangle {
     in property <int> tone;
     width: 12px;

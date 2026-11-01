@@ -111,6 +111,12 @@ pub struct Settings {
     /// The appearance: `system`, `light` or `dark`; empty follows the OS
     /// (UI-07.5).
     pub appearance: String,
+    /// Width of the left panel (the TARA steps) in logical pixels; `0` is
+    /// the default (UI-02).
+    pub left_panel: u32,
+    /// Width of the right panel (the inspector) in logical pixels; `0`
+    /// follows the window (UI-02).
+    pub right_panel: u32,
 }
 
 /// How the window picks light or dark (UI-07.5).
@@ -322,6 +328,8 @@ mod tests {
             report_profile_name: "Submission".into(),
             language: "ja".into(),
             appearance: "dark".into(),
+            left_panel: 240,
+            right_panel: 420,
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);

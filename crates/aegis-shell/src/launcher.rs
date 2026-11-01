@@ -162,6 +162,10 @@ impl Launcher {
             window.set_login_user(s.username.as_str().into());
             window.set_export_dir(s.export_dir().display().to_string().into());
             window.set_appearance(s.appearance().index());
+            if s.left_panel > 0 {
+                window.set_left_size(s.left_panel as f32);
+            }
+            window.set_right_size(s.right_panel as f32);
             let language = s.language().code().to_owned();
             // The bundled gettext catalogs are selected after the first
             // component exists (the window is created before this runs).
@@ -180,6 +184,7 @@ impl Launcher {
         let w4 = weak.clone();
         let w5 = weak.clone();
         let w_appearance = weak.clone();
+        let w_panels = weak.clone();
         let w6 = weak.clone();
         let w7 = weak.clone();
         let w8 = weak.clone();
@@ -240,6 +245,15 @@ impl Launcher {
                 if let Some(l) = w_appearance.upgrade() {
                     l.settings.borrow_mut().appearance =
                         Appearance::from_index(index).code().into();
+                    l.save_settings();
+                }
+            })),
+            panels_resized: Some(Box::new(move |left, right| {
+                if let Some(l) = w_panels.upgrade() {
+                    let mut s = l.settings.borrow_mut();
+                    s.left_panel = left.round() as u32;
+                    s.right_panel = right.round() as u32;
+                    drop(s);
                     l.save_settings();
                 }
             })),
