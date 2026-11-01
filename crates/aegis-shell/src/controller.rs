@@ -102,7 +102,7 @@ pub struct Hooks {
     /// A panel slot was resized: the left and right widths and the bottom
     /// height in logical pixels (`0` for a right panel that follows the
     /// window).
-    pub panels_resized: Option<Box<dyn Fn(f32, f32, f32)>>,
+    pub panels_resized: Option<PanelSizes>,
 }
 
 /// Owns the window-side state and the session handle.
@@ -3707,6 +3707,9 @@ fn evaluated_tone(project: &ProjectView, has_value: bool) -> i32 {
         .style(u32::try_from(selected.index()).unwrap_or(0))
         .map_or(0, |style| bucket(style.tone))
 }
+
+/// Called with the left width, right width and bottom height after a panel is resized.
+pub type PanelSizes = Box<dyn Fn(f32, f32, f32)>;
 
 /// What going back to row `row` of the history panel would undo: the edits
 /// above it, newest first (UI-03).
