@@ -47,18 +47,22 @@ export global Theme {
     out property <color> medium: #E69F00;
     out property <color> high: #D55E00;
 
-    // ---- Typography System (Clean, Bold, High-Assurance Engineering) ----
-    out property <length> font-display: 22px;
-    out property <length> font-h1: 18px;
-    out property <length> font-h2: 15px;
-    out property <length> font-body: 13px;
-    out property <length> font-label: 12px;
-    out property <length> font-caption: 11px;
+    // ---- Typography System ----
+    // The system UI font (SF Pro, Segoe UI Variable) at a calm reading size:
+    // 14px body, like the Claude desktop app, and one step up from the first
+    // scale. The window's default-font-size is font-body, so Slint's own
+    // widgets (sized in rem) follow this scale too.
+    out property <length> font-display: 26px;
+    out property <length> font-h1: 20px;
+    out property <length> font-h2: 16px;
+    out property <length> font-body: 14px;
+    out property <length> font-label: 13px;
+    out property <length> font-caption: 12px;
     out property <int> weight-regular: 400;
     out property <int> weight-medium: 500;
     out property <int> weight-semibold: 600;
     out property <int> weight-bold: 700;
-    out property <int> weight-heavy: 800;
+    out property <int> weight-heavy: 700;
     out property <length> tracking-tight: -0.2px;
     out property <length> tracking-label: 0.3px;
     out property <length> tracking-header: 0.6px;

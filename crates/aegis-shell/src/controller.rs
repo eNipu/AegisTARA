@@ -858,6 +858,20 @@ impl Controller {
             }
         });
 
+        on!(on_asset_damage_clicked, |c, i| {
+            let d = c.with_project(|p| {
+                p.data
+                    .asset
+                    .as_ref()?
+                    .damages
+                    .get(pos(i)?)
+                    .map(|l| l.target)
+            });
+            if let Some(d) = d {
+                c.select(d, true);
+            }
+        });
+
         // ---- damage ----
         on!(on_pick_damage, |c, i| {
             if let Some(id) = c.with_project(|p| p.data.damages.get(pos(i)?).map(|d| d.id)) {
@@ -903,6 +917,24 @@ impl Controller {
             });
             if let Some(t) = t {
                 c.select(t, true);
+            }
+        });
+        on!(on_threat_asset_clicked, |c| {
+            if let Some(a) = c.with_project(|p| p.data.threat.as_ref().map(|d| d.asset)) {
+                c.select(Selection::Asset(a), true);
+            }
+        });
+        on!(on_damage_asset_clicked, |c, i| {
+            let a = c.with_project(|p| {
+                p.data
+                    .damage
+                    .as_ref()?
+                    .assets
+                    .get(pos(i)?)
+                    .map(|l| l.target)
+            });
+            if let Some(a) = a {
+                c.select(a, true);
             }
         });
 
@@ -2950,6 +2982,7 @@ impl Controller {
                     .collect(),
             ));
             w.set_asset_threats(links(&a.threats));
+            w.set_asset_damages(links(&a.damages));
             w.set_asset_changed(s(&a.changed));
         } else {
             w.set_asset_id(s(""));
@@ -3006,6 +3039,7 @@ impl Controller {
                     .collect(),
             ));
             w.set_damage_threats(links(&x.threats));
+            w.set_damage_assets(links(&x.assets));
             w.set_damage_changed(s(&x.changed));
         } else {
             w.set_damage_id(s(""));

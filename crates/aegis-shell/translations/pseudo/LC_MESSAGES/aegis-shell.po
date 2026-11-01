@@ -423,11 +423,7 @@ msgstr "⟦Híghést rísks␣␣⟧"
 msgid "History"
 msgstr "⟦Hístóry␣␣⟧"
 
-msgid "How an attacker could harm an asset, with STRIDE and UN R155 Annex 5."
-msgstr "⟦Hów án áttáckér cóúld hárm án ássét, wíth STRÍDÉ ánd ÚN R155 Ánnéx 5.␣␣⟧"
 
-msgid "ISO/SAE 21434 · UN R155"
-msgstr "⟦ÍSÓ/SÁÉ 21434 · ÚN R155␣␣⟧"
 
 msgid "Impact"
 msgstr "⟦Ímpáct␣␣⟧"
@@ -483,8 +479,6 @@ msgstr "⟦Lógíns␣␣⟧"
 msgid "Measures that make attack steps harder. Attach them to steps on the Attack trees page."
 msgstr "⟦Méásúrés thát máké áttáck stéps hárdér. Áttách thém tó stéps ón thé Áttáck tréés págé.␣␣⟧"
 
-msgid "Methodology"
-msgstr "⟦Méthódólógy␣␣⟧"
 
 msgid "Move down"
 msgstr "⟦Móvé dówn␣␣⟧"
@@ -558,8 +552,6 @@ msgstr "⟦ÓK␣␣⟧"
 msgid "OR"
 msgstr "⟦ÓR␣␣⟧"
 
-msgid "On asset "
-msgstr "⟦Ón ássét ␣␣⟧"
 
 msgid "One node per line; indent a child under its parent. Start a gate with OR, AND or SEQ (sequential AND); a step with - or nothing. Lines with the same text are the same node, which is how a step is shared. Nodes that keep their text keep their ratings and controls."
 msgstr "⟦Óné nódé pér líné; índént á chíld úndér íts párént. Stárt á gáté wíth ÓR, ÁND ór SÉQ (séqúéntíál ÁND); á stép wíth - ór nóthíng. Línés wíth thé sámé téxt áré thé sámé nódé, whích ís hów á stép ís sháréd. Nódés thát kéép théír téxt kéép théír rátíngs ánd cóntróls.␣␣⟧"
@@ -594,8 +586,6 @@ msgstr "⟦Párt óf góáls␣␣⟧"
 msgid "Password"
 msgstr "⟦Pásswórd␣␣⟧"
 
-msgid "Plain text. {0} saves, Escape cancels."
-msgstr "⟦Pláín téxt. {0} sávés, Éscápé cáncéls.␣␣⟧"
 
 msgid "Preview"
 msgstr "⟦Prévíéw␣␣⟧"
@@ -1301,3 +1291,60 @@ msgstr "⟦Ádd áttáck tréé fór␣␣⟧"
 
 msgid "Add goal for"
 msgstr "⟦Ádd góál fór␣␣⟧"
+
+msgid "Add a description. {0} or leaving the box saves."
+msgstr "⟦Ádd á déscríptíón. {0} ór léávíng thé bóx sávés.␣␣⟧"
+
+msgid "Add threat scenario"
+msgstr "⟦Ádd thréát scénáríó␣␣⟧"
+
+msgid "Add translation"
+msgstr "⟦Ádd tránslátíón␣␣⟧"
+
+msgid "Assessment method"
+msgstr "⟦Ásséssmént méthód␣␣⟧"
+
+msgid "Assets at stake"
+msgstr "⟦Ásséts át stáké␣␣⟧"
+
+msgid "EU Cyber Resilience Act · connected products"
+msgstr "⟦ÉÚ Cybér Résílíéncé Áct · cónnéctéd pródúcts␣␣⟧"
+
+msgid "For products with digital elements sold in the EU (CRA Annex I). Harms are rated on health and safety, data and privacy, availability, and financial impact; likelihood is rated directly; goals are called security requirements."
+msgstr "⟦Fór pródúcts wíth dígítál éléménts sóld ín thé ÉÚ (CRÁ Ánnéx Í). Hárms áré rátéd ón héálth ánd sáféty, dátá ánd prívácy, áváílábílíty, ánd fínáncíál ímpáct; líkélíhóód ís rátéd díréctly; góáls áré cálléd sécúríty réqúíréménts.␣␣⟧"
+
+msgid "For software services and cloud systems. One service-impact scale and a direct likelihood rating: the lightest method, good for a first pass."
+msgstr "⟦Fór sóftwáré sérvícés ánd clóúd systéms. Óné sérvícé-ímpáct scálé ánd á díréct líkélíhóód rátíng: thé líghtést méthód, góód fór á fírst páss.␣␣⟧"
+
+msgid "For vehicles and their parts (ISO/SAE 21434, UN R155). Damage is rated on safety, financial, operational and privacy impact; feasibility is worked out from attack potential."
+msgstr "⟦Fór véhíclés ánd théír párts (ÍSÓ/SÁÉ 21434, ÚN R155). Dámágé ís rátéd ón sáféty, fínáncíál, ópérátíónál ánd prívácy ímpáct; féásíbílíty ís wórkéd óút fróm áttáck póténtíál.␣␣⟧"
+
+msgid "GPU renderer"
+msgstr "⟦GPÚ réndérér␣␣⟧"
+
+msgid "How an attacker could harm an asset."
+msgstr "⟦Hów án áttáckér cóúld hárm án ássét.␣␣⟧"
+
+msgid "ISO/SAE 21434 · EU CRA · STRIDE"
+msgstr "⟦ÍSÓ/SÁÉ 21434 · ÉÚ CRÁ · STRÍDÉ␣␣⟧"
+
+msgid "ISO/SAE 21434 · road vehicles"
+msgstr "⟦ÍSÓ/SÁÉ 21434 · róád véhíclés␣␣⟧"
+
+msgid "New project: name it and pick the assessment method."
+msgstr "⟦Néw prójéct: námé ít ánd píck thé ásséssmént méthód.␣␣⟧"
+
+msgid "None yet."
+msgstr "⟦Nóné yét.␣␣⟧"
+
+msgid "Open, duplicate or remove"
+msgstr "⟦Ópén, dúplícáté ór rémóvé␣␣⟧"
+
+msgid "STRIDE · software and cloud services"
+msgstr "⟦STRÍDÉ · sóftwáré ánd clóúd sérvícés␣␣⟧"
+
+msgid "none yet"
+msgstr "⟦nóné yét␣␣⟧"
+
+msgid "{} it can lead to"
+msgstr "⟦{} ít cán léád tó␣␣⟧"
