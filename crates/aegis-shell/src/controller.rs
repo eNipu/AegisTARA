@@ -99,6 +99,9 @@ pub struct Hooks {
     pub export_dir_changed: Option<Box<dyn Fn(String)>>,
     /// The appearance was chosen: `0` System, `1` Light, `2` Dark.
     pub appearance_changed: Option<Box<dyn Fn(i32)>>,
+    /// A panel slot was resized: the left and right widths in logical
+    /// pixels (`0` for a right panel that follows the window).
+    pub panels_resized: Option<Box<dyn Fn(f32, f32)>>,
 }
 
 /// Owns the window-side state and the session handle.
@@ -537,6 +540,11 @@ impl Controller {
         on!(on_appearance_selected, |c, i| {
             if let Some(hook) = &c.hooks.appearance_changed {
                 hook(i);
+            }
+        });
+        on!(on_panels_resized, |c| {
+            if let (Some(hook), Some(w)) = (&c.hooks.panels_resized, c.window.upgrade()) {
+                hook(w.get_left_size(), w.get_right_size());
             }
         });
         on!(on_dismiss_notice, |c, id| c.send(Command::DismissNotice(

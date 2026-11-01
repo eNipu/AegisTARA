@@ -11,7 +11,7 @@ import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectLanguages, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
-    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm,
+    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm, Splitter,
     Button, LineEdit, TextEdit, ComboBox, CheckBox, Switch
 } from "widgets.slint";
 
@@ -244,9 +244,22 @@ export component AppWindow inherits Window {
     // Side panels follow the window: full size on a big window, narrower on a
     // small one, so a page never pushes its detail panel off the screen
     // (checked at the smallest window, 980 x 600, by tests/small_windows.rs).
-    property <length> side-width: min(400px, max(300px, root.width * 0.3));
+    // Panel slots (UI-02): the user drags the edge of the left panel (the
+    // TARA steps) and of the right panel (each page's inspector, and the
+    // library). The sizes are remembered per user (`left_panel`,
+    // `right_panel` in the client settings); a right size of 0 follows the
+    // window. Both stay inside limits taken from the window, so a small
+    // window keeps room for its page.
+    in-out property <length> left-size: 210px;
+    in-out property <length> right-size: 0px;
+    callback panels-resized();
+    property <length> nav-width: max(160px, min(min(320px, root.left-size), root.width * 0.25));
+    property <length> right-max: max(260px, root.width * 0.45);
+    property <length> side-width: root.right-size > 0 ? max(260px, min(root.right-size, root.right-max)) : min(400px, max(300px, root.width * 0.3));
     property <length> tree-list-width: min(340px, max(240px, root.width * 0.24));
-    property <length> inspector-width: min(340px, max(260px, root.width * 0.25));
+    property <length> inspector-width: root.right-size > 0 ? root.side-width : min(340px, max(260px, root.width * 0.25));
+    function drag-left(d: length) { root.left-size = max(160px, min(320px, root.nav-width + d)); }
+    function drag-right(from: length, d: length) { root.right-size = max(260px, min(root.right-max, from - d)); }
 
     // ---- connection and login ----
     // 0 connecting, 1 online, 2 offline, 3 login required, 4 choose a server
@@ -1552,7 +1565,7 @@ in property <string> redo-label;
             vertical-stretch: 1;
             // ---- TARA steps ----
             Rectangle {
-                width: 210px;
+                width: root.nav-width;
                 background: Theme.panel;
                 ScrollView {
                     VerticalLayout {
@@ -1608,7 +1621,7 @@ in property <string> redo-label;
                     }
                 }
             }
-            Rectangle { width: 1px; background: Theme.rule; }
+            Splitter { line: true; moved(d) => { root.drag-left(d); } released => { root.panels-resized(); } }
 
             // ---- the page ----
             Rectangle {
@@ -1662,7 +1675,6 @@ in property <string> redo-label;
                 // Assets
                 if root.page == Pages.assets: HorizontalLayout {
                     padding: 20px;
-                    spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
@@ -1692,6 +1704,7 @@ in property <string> redo-label;
                             remove-row(i) => { root.remove-row-asset(i); }
                         }
                     }
+                    if root.draft-kind == "asset" || root.has-asset: Splitter { moved(d) => { root.drag-right(root.side-width, d); } released => { root.panels-resized(); } }
                     if root.draft-kind == "asset": Panel {
                         width: root.side-width;
                         DraftForm {
@@ -1736,7 +1749,6 @@ in property <string> redo-label;
                 // Damage scenarios
                 if root.page == Pages.damage: HorizontalLayout {
                     padding: 20px;
-                    spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
@@ -1765,6 +1777,7 @@ in property <string> redo-label;
                             remove-row(i) => { root.remove-row-damage(i); }
                         }
                     }
+                    if root.draft-kind == "damage" || root.has-damage: Splitter { moved(d) => { root.drag-right(root.side-width, d); } released => { root.panels-resized(); } }
                     if root.draft-kind == "damage": Panel {
                         width: root.side-width;
                         DraftForm {
@@ -1801,7 +1814,6 @@ in property <string> redo-label;
                 // Threat scenarios
                 if root.page == Pages.threats: HorizontalLayout {
                     padding: 20px;
-                    spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
@@ -1830,6 +1842,7 @@ in property <string> redo-label;
                             remove-row(i) => { root.remove-row-threat(i); }
                         }
                     }
+                    if root.draft-kind == "threat" || root.has-threat-detail: Splitter { moved(d) => { root.drag-right(root.side-width, d); } released => { root.panels-resized(); } }
                     if root.draft-kind == "threat": Panel {
                         width: root.side-width;
                         DraftForm {
@@ -1876,6 +1889,7 @@ in property <string> redo-label;
                                 Swatch { tone: root.td-residual-tone; y: 4px; }
                                 Text { text: @tr("After: ") + (root.td-residual == "" ? "not rated" : root.td-residual); color: Theme.ink; font-size: Theme.font-body; }
                             }
+                            if root.td-why.length > 0: SectionTitle { text: @tr("Why?"); }
                             for line in root.td-why: Text { text: line; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
                             Field {
                                 label: @tr("Category");
@@ -1909,6 +1923,18 @@ in property <string> redo-label;
                                 Choice { options: root.feasibility-options; index: root.td-feasibility; editable: root.editing; label: @tr("Direct feasibility"); picked(i) => { root.set-threat-feasibility(i); } }
                             }
                             if root.td-feasibility-text != "": Text { text: @tr("Feasibility the engine uses: ") + root.td-feasibility-text; color: Theme.graphite; font-size: Theme.font-label; }
+                            Field {
+                                label: @tr("Treatment decision");
+                                Choice { options: root.treatment-options; index: root.td-treatment; editable: root.editing; label: @tr("Treatment"); picked(i) => { root.set-treatment(i); } }
+                            }
+                            Field {
+                                label: @tr("Cybersecurity goal (for Reduce)");
+                                Choice { options: root.goal-names; index: root.td-goal; editable: root.editing; label: @tr("Goal"); picked(i) => { root.set-threat-goal(i); } }
+                            }
+                            Field {
+                                label: @tr("Cybersecurity claim (for Retain and Share)");
+                                Choice { options: root.claim-names; index: root.td-claim; editable: root.editing; label: @tr("Claim"); picked(i) => { root.set-threat-claim(i); } }
+                            }
                             Text { text: root.td-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                             Button { text: @tr("Remove threat scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-threat(); } }
                         }
@@ -2025,12 +2051,101 @@ in property <string> redo-label;
                             }
                         }
                     }
-                    Rectangle { width: 1px; background: Theme.rule; }
-                    // Inspector
+                    Splitter { line: true; moved(d) => { root.drag-right(root.inspector-width, d); } released => { root.panels-resized(); } }
+                    // Inspector, or the library in its place (UI-02)
                     Rectangle {
                         width: root.inspector-width;
                         background: Theme.panel;
-                        if !root.has-inspector && root.suggestion-rows.length == 0: Text {
+                        if root.library-open: ScrollView {
+                            init => { lib-search.focus(); }
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { text: @tr("Attack tree library"); font-size: Theme.font-h2; font-weight: Theme.weight-bold; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+                                    Button { text: @tr("Close"); clicked => { root.library-open = false; } }
+                                }
+                                lib-search := LineEdit {
+                                    placeholder-text: @tr("Search (English or Japanese)");
+                                    accessible-label: @tr("Search the library");
+                                    edited(t) => { root.library-query(t); }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    ComboBox {
+                                        horizontal-stretch: 1;
+                                        model: root.library-facets;
+                                        current-index: -1;
+                                        accessible-label: @tr("Narrow by");
+                                        selected(v) => { root.library-facet(self.current-index); }
+                                    }
+                                    Button { text: @tr("Clear"); enabled: root.library-filter != ""; clicked => { root.library-clear-filters(); } }
+                                }
+                                if root.library-filter != "": Text { text: @tr("Narrowed by ") + root.library-filter; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
+                                DataTable {
+                                    height: 220px;
+                                    label: @tr("Library items");
+                                    columns: [{ title: @tr("Item"), horizontal-stretch: 1 }, { title: @tr("Kind"), width: 90px, min-width: 90px }];
+                                    rows: root.library-rows;
+                                    selected: root.library-selected;
+                                    picked(i) => { root.library-pick(i); }
+                                }
+                                Rectangle {
+                                    border-width: 1px;
+                                    border-color: Theme.rule;
+                                    VerticalLayout {
+                                        padding: 8px;
+                                        Text {
+                                            text: root.library-preview == "" ? "Pick an item to see it here." : root.library-preview;
+                                            font-family: root.mono-font-family;
+                                            font-size: Theme.font-label;
+                                            color: Theme.ink;
+                                            wrap: word-wrap;
+                                            accessible-role: AccessibleRole.text;
+                                            accessible-label: @tr("Preview");
+                                        }
+                                    }
+                                }
+                                ComboBox {
+                                    model: ["As a new tree", "Under the selected gate", "In place of the selected step"];
+                                    current-index <=> root.library-mode;
+                                    accessible-label: @tr("Where to put it");
+                                }
+                                CheckBox { text: @tr("With the suggested ratings (marked for review)"); checked <=> root.library-ratings; }
+                                CheckBox { text: @tr("Share steps the tree already has"); checked <=> root.library-share; }
+                                if (root.library-mode == 1 && !root.library-can-gate) || (root.library-mode == 2 && !root.library-can-leaf): Text {
+                                    text: root.library-mode == 1 ? "Select a gate of the tree on the canvas first." : "Select a step (not the root) of the tree on the canvas first.";
+                                    color: Theme.graphite;
+                                    font-size: Theme.font-label;
+                                    wrap: word-wrap;
+                                }
+                                Button {
+                                    text: @tr("Insert");
+                                    primary: true;
+                                    enabled: root.editing && root.library-selected >= 0 && (root.library-mode == 0 || (root.library-mode == 1 && root.library-can-gate) || (root.library-mode == 2 && root.library-can-leaf));
+                                    clicked => { root.library-insert(root.library-mode, root.library-ratings, root.library-share); root.library-open = false; }
+                                }
+                                SectionTitle { text: @tr("Catalogs (reference only)"); }
+                                DataTable {
+                                    height: 160px;
+                                    label: @tr("Catalogs");
+                                    columns: [{ title: @tr("Catalog"), horizontal-stretch: 1 }, { title: @tr("Key"), width: 120px, min-width: 120px }];
+                                    rows: root.catalog-rows;
+                                    selected: root.catalog-selected;
+                                    picked(i) => { root.library-pick-catalog(i); }
+                                }
+                                Text {
+                                    text: root.catalog-preview == "" ? "Pick a catalog to see its source and terms." : root.catalog-preview;
+                                    font-size: Theme.font-label;
+                                    color: Theme.ink;
+                                    wrap: word-wrap;
+                                    accessible-role: AccessibleRole.text;
+                                    accessible-label: @tr("Catalog details");
+                                }
+                            }
+                        }
+                        if !root.library-open && !root.has-inspector && root.suggestion-rows.length == 0: Text {
                             text: @tr("Select a node on the canvas to inspect its feasibility or expand the attack tree.");
                             color: Theme.graphite;
                             wrap: word-wrap;
@@ -2040,7 +2155,7 @@ in property <string> redo-label;
                             y: 16px;
                             width: parent.width - 32px;
                         }
-                        if root.has-inspector || root.suggestion-rows.length > 0: ScrollView {
+                        if !root.library-open && (root.has-inspector || root.suggestion-rows.length > 0): ScrollView {
                             VerticalLayout {
                                 padding: 16px;
                                 spacing: 10px;
@@ -2320,7 +2435,6 @@ in property <string> redo-label;
                 // Risks and treatment
                 if root.page == Pages.risks: HorizontalLayout {
                     padding: 20px;
-                    spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
@@ -2335,8 +2449,9 @@ in property <string> redo-label;
                             picked(i) => { root.pick-risk(i); }
                         }
                     }
+                    if root.has-threat-detail: Splitter { moved(d) => { root.drag-right(root.side-width, d); } released => { root.panels-resized(); } }
                     if root.has-threat-detail: Panel {
-                        width: min(360px, root.side-width);
+                        width: root.side-width;
                         Text { text: root.td-id + " · " + root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
                         DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         HorizontalLayout {
@@ -2371,7 +2486,6 @@ in property <string> redo-label;
                 // Security controls
                 if root.page == Pages.controls: HorizontalLayout {
                     padding: 20px;
-                    spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
@@ -2400,6 +2514,7 @@ in property <string> redo-label;
                             remove-row(i) => { root.remove-row-control(i); }
                         }
                     }
+                    if root.draft-kind == "control" || root.has-control: Splitter { moved(d) => { root.drag-right(root.side-width, d); } released => { root.panels-resized(); } }
                     if root.draft-kind == "control": Panel {
                         width: root.side-width;
                         DraftForm {
@@ -2430,7 +2545,6 @@ in property <string> redo-label;
                 // Goals and claims
                 if root.page == Pages.goals: HorizontalLayout {
                     padding: 20px;
-                    spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
@@ -2474,6 +2588,7 @@ in property <string> redo-label;
                             remove-row(i) => { root.remove-row-claim(i); }
                         }
                     }
+                    Splitter { moved(d) => { root.drag-right(root.side-width, d); } released => { root.panels-resized(); } }
                     VerticalLayout {
                         width: root.side-width;
                         spacing: 12px;
@@ -2707,7 +2822,6 @@ in property <string> redo-label;
                 // Item definition (job 074)
                 if root.page == Pages.item: HorizontalLayout {
                     padding: 20px;
-                    spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
@@ -2802,6 +2916,7 @@ in property <string> redo-label;
                             remove-row(i) => { root.remove-row-trust-boundary(i); }
                         }
                     }
+                    if root.draft-kind != "" || (root.item-tab == 0 && root.has-component) || (root.item-tab == 1 && root.has-interface) || (root.item-tab == 2 && root.has-data-flow) || (root.item-tab == 3 && root.has-trust-boundary): Splitter { moved(d) => { root.drag-right(root.side-width, d); } released => { root.panels-resized(); } }
                     if root.item-tab == 0 && root.draft-kind == "component": Panel {
                         width: root.side-width;
                         DraftForm {
@@ -3348,128 +3463,6 @@ in property <string> redo-label;
                     Button { text: @tr("Apply"); primary: true; clicked => { root.apply-outline(root.outline-draft); root.outline-open = false; } }
                 }
             }
-        }
-    }
-
-    if root.library-open: Rectangle {
-        background: #000000A0;
-        Rectangle {
-            width: min(parent.width - 48px, 980px);
-            height: min(parent.height - 48px, 640px);
-            background: Theme.panel;
-            border-width: 1px;
-            border-color: Theme.rule;
-            border-radius: Theme.radius-panel;
-            drop-shadow-blur: 24px;
-            drop-shadow-offset-y: 8px;
-            drop-shadow-color: #00000059;
-            VerticalLayout {
-                padding: 20px;
-                spacing: 10px;
-                Text { text: @tr("Attack tree library"); font-size: Theme.font-h1; font-weight: 700; color: Theme.ink; }
-                HorizontalLayout {
-                    spacing: 8px;
-                    lib-search := LineEdit {
-                        horizontal-stretch: 1;
-                        placeholder-text: @tr("Search (English or Japanese)");
-                        accessible-label: @tr("Search the library");
-                        edited(t) => { root.library-query(t); }
-                    }
-                    ComboBox {
-                        width: 260px;
-                        model: root.library-facets;
-                        current-index: -1;
-                        accessible-label: @tr("Narrow by");
-                        selected(v) => { root.library-facet(self.current-index); }
-                    }
-                    Button { text: @tr("Clear"); enabled: root.library-filter != ""; clicked => { root.library-clear-filters(); } }
-                }
-                Text { visible: root.library-filter != ""; text: @tr("Narrowed by ") + root.library-filter; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
-                HorizontalLayout {
-                    spacing: 12px;
-                    vertical-stretch: 1;
-                    DataTable {
-                        horizontal-stretch: 1;
-                        label: @tr("Library items");
-                        columns: [{ title: @tr("Item"), horizontal-stretch: 1 }, { title: @tr("Kind"), width: 90px, min-width: 90px }];
-                        rows: root.library-rows;
-                        selected: root.library-selected;
-                        picked(i) => { root.library-pick(i); }
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        border-width: 1px;
-                        border-color: Theme.rule;
-                        Text {
-                            x: 8px; y: 8px;
-                            width: parent.width - 16px;
-                            text: root.library-preview == "" ? "Pick an item to see it here." : root.library-preview;
-                            font-family: root.mono-font-family;
-                            font-size: Theme.font-label;
-                            color: Theme.ink;
-                            wrap: word-wrap;
-                            accessible-role: AccessibleRole.text;
-                            accessible-label: @tr("Preview");
-                        }
-                    }
-                }
-                SectionTitle { text: @tr("Catalogs (reference only)"); }
-                HorizontalLayout {
-                    spacing: 12px;
-                    DataTable {
-                        horizontal-stretch: 1;
-                        label: @tr("Catalogs");
-                        columns: [{ title: @tr("Catalog"), horizontal-stretch: 1 }, { title: @tr("Key"), width: 120px, min-width: 120px }];
-                        rows: root.catalog-rows;
-                        selected: root.catalog-selected;
-                        picked(i) => { root.library-pick-catalog(i); }
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        border-width: 1px;
-                        border-color: Theme.rule;
-                        Text {
-                            x: 8px; y: 8px;
-                            width: parent.width - 16px;
-                            text: root.catalog-preview == "" ? "Pick a catalog to see its source and terms." : root.catalog-preview;
-                            font-size: Theme.font-label;
-                            color: Theme.ink;
-                            wrap: word-wrap;
-                            accessible-role: AccessibleRole.text;
-                            accessible-label: @tr("Catalog details");
-                        }
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 10px;
-                    ComboBox {
-                        width: 250px;
-                        model: ["As a new tree", "Under the selected gate", "In place of the selected step"];
-                        current-index <=> root.library-mode;
-                        accessible-label: @tr("Where to put it");
-                    }
-                    CheckBox { text: @tr("With the suggested ratings (marked for review)"); checked <=> root.library-ratings; }
-                    CheckBox { text: @tr("Share steps the tree already has"); checked <=> root.library-share; }
-                }
-                Text {
-                    visible: (root.library-mode == 1 && !root.library-can-gate) || (root.library-mode == 2 && !root.library-can-leaf);
-                    text: root.library-mode == 1 ? "Select a gate of the tree on the canvas first." : "Select a step (not the root) of the tree on the canvas first.";
-                    color: Theme.graphite;
-                    font-size: Theme.font-label;
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    Button { text: @tr("Close"); clicked => { root.library-open = false; } }
-                    Button {
-                        text: @tr("Insert");
-                        primary: true;
-                        enabled: root.editing && root.library-selected >= 0 && (root.library-mode == 0 || (root.library-mode == 1 && root.library-can-gate) || (root.library-mode == 2 && root.library-can-leaf));
-                        clicked => { root.library-insert(root.library-mode, root.library-ratings, root.library-share); root.library-open = false; }
-                    }
-                }
-            }
-            init => { lib-search.focus(); }
         }
     }
 

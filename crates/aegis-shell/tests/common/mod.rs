@@ -147,6 +147,28 @@ impl App {
     }
 }
 
+/// The window position (logical pixels) of the node whose label starts with
+/// `label`, from the display list the controller drew.
+pub fn node_position(app: &App, label: &str) -> (f32, f32) {
+    let view = app.session.view();
+    let project = view.project.as_ref().expect("project");
+    let scene = project.scene().expect("scene");
+    let (position, _) = (0..scene.len())
+        .map(|i| (i, scene.label(i as u32)))
+        .find(|(_, l)| l.starts_with(label))
+        .expect("node");
+    // The window reports where the canvas is.
+    let idx = scene.node_idx(position as u32).expect("idx");
+    let rect = scene.node_rect(idx).expect("rect");
+    let centre = rect.center();
+    let st = app.controller.viewport_for_tests();
+    let screen = st.to_screen(aegis_canvas::Point::new(centre.x, centre.y));
+    (
+        app.window.get_canvas_x() + screen.x,
+        app.window.get_canvas_y() + screen.y,
+    )
+}
+
 /// Saves a frame as a PNG under `target/shell-screenshots/`.
 pub fn save(frame: &Frame, name: &str) {
     let dir =
