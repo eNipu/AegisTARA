@@ -5,7 +5,7 @@ mod common;
 
 use aegis_client::state::{Mode, SyncView};
 use aegis_client::view::Page;
-use common::{App, TestServer, save};
+use common::{App, TestServer, node_position, save};
 use slint::Model;
 
 #[tokio::test(flavor = "current_thread")]
@@ -85,28 +85,6 @@ async fn show_trees(app: &App) {
     // Two frames: one lays the canvas out, one draws the fitted tree.
     app.frame();
     app.frame();
-}
-
-/// The window position (logical pixels) of the node whose label starts with
-/// `label`, from the display list the controller drew.
-fn node_position(app: &App, label: &str) -> (f32, f32) {
-    let view = app.session.view();
-    let project = view.project.as_ref().expect("project");
-    let scene = project.scene().expect("scene");
-    let (position, _) = (0..scene.len())
-        .map(|i| (i, scene.label(i as u32)))
-        .find(|(_, l)| l.starts_with(label))
-        .expect("node");
-    // The window reports where the canvas is.
-    let idx = scene.node_idx(position as u32).expect("idx");
-    let rect = scene.node_rect(idx).expect("rect");
-    let centre = rect.center();
-    let st = app.controller.viewport_for_tests();
-    let screen = st.to_screen(aegis_canvas::Point::new(centre.x, centre.y));
-    (
-        app.window.get_canvas_x() + screen.x,
-        app.window.get_canvas_y() + screen.y,
-    )
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -21,10 +21,6 @@ const OVERLAYS: &[(&str, &str)] = &[
         "outline-open",
         "editor for a whole attack tree as an outline; input",
     ),
-    (
-        "library-open",
-        "the library chooser; a choice among items, not a confirmation",
-    ),
     ("password-open", "UI-12: change password"),
     (
         "palette-open",
