@@ -61,7 +61,7 @@ use crate::report::{
 };
 use crate::sample::sample_ops;
 use crate::state::{
-    BaselineRow, ConnectionView, HistoryRow, LicenseView, Me, MembershipRow, Mode, Notice,
+    BaselineRow, ConnectionView, EditRow, HistoryRow, LicenseView, Me, MembershipRow, Mode, Notice,
     NoticeAction, NumbersCheck, PageData, ProjectEntry, ProjectView, ServerSettingsView, Severity,
     SyncView, UserRow, ViewModel,
 };
@@ -2370,8 +2370,9 @@ impl<P: CredentialProvider> Actor<P> {
                     }
                 }
             }
-            Command::Undo => self.history(true),
-            Command::Redo => self.history(false),
+            Command::Undo => self.history(true, 1),
+            Command::UndoTo(n) => self.history(true, n),
+            Command::Redo => self.history(false, 1),
             Command::CreateSample => {
                 let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
                 let _ = self.apply_edit(
@@ -2942,20 +2943,34 @@ impl<P: CredentialProvider> Actor<P> {
         });
     }
 
-    fn history(&mut self, undo: bool) {
+    fn history(&mut self, undo: bool, count: usize) {
         if !self.can_edit() {
             return;
         }
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let label = if undo {
+        let mut label = if undo {
             open.ws.undo_label()
         } else {
             open.ws.redo_label()
         }
         .cloned();
-        let result = if undo { open.ws.undo() } else { open.ws.redo() };
+        if undo && count > 1 {
+            // The batch is named after its oldest edit.
+            label = open
+                .ws
+                .edits()
+                .nth(count - 1)
+                .map(|(l, _)| l.clone().with_more(count - 1));
+        }
+        let result = if !undo {
+            open.ws.redo()
+        } else if count > 1 {
+            open.ws.undo_to(count)
+        } else {
+            open.ws.undo()
+        };
         match result {
             Ok(()) => {
                 open.cached_scene = None;
@@ -3131,6 +3146,14 @@ impl<P: CredentialProvider> Actor<P> {
                 inspector: inspector(&open.ws, &open.ui),
                 can_undo: open.ws.can_undo(),
                 can_redo: open.ws.can_redo(),
+                edits: open
+                    .ws
+                    .edits()
+                    .map(|(label, at)| EditRow {
+                        what: label.imperative(),
+                        when: format_ms(at),
+                    })
+                    .collect(),
                 undo_label: open.ws.undo_label().map(Label::imperative),
                 redo_label: open.ws.redo_label().map(Label::imperative),
                 draft: open.ui.draft,

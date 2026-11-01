@@ -57,6 +57,15 @@ impl Label {
         matches!(self.verb, "remove" | "unlink")
     }
 
+    /// This edit and `steps` more edits done with it, as one: "add asset
+    /// 'Brake ECU' and 2 other changes".
+    #[must_use]
+    pub fn with_more(mut self, steps: usize) -> Label {
+        self.others += steps;
+        self.unlinked = 0;
+        self
+    }
+
     /// "remove asset 'Brake ECU'", for "Undo …" / "Redo …".
     #[must_use]
     pub fn imperative(&self) -> String {

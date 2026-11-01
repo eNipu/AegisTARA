@@ -302,6 +302,15 @@ pub struct HistoryRow {
     pub kind: String,
 }
 
+/// One of this session's edits that undo can reverse (UI-03).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditRow {
+    /// What it did, in words: "remove asset 'Brake ECU'".
+    pub what: String,
+    /// When, as text.
+    pub when: String,
+}
+
 /// Who the server says the user is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Me {
@@ -396,6 +405,8 @@ pub struct ProjectView {
     pub can_undo: bool,
     /// Whether redo is possible.
     pub can_redo: bool,
+    /// This session's edits, newest first: the history panel's rows (UI-03).
+    pub edits: Vec<EditRow>,
     /// The draft being typed, if any (UI-08).
     pub draft: Option<crate::view::DraftKind>,
     /// Changes with every new draft.

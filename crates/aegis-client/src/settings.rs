@@ -117,6 +117,9 @@ pub struct Settings {
     /// Width of the right panel (the inspector) in logical pixels; `0`
     /// follows the window (UI-02).
     pub right_panel: u32,
+    /// Height of the bottom panel (the history) in logical pixels; `0` is
+    /// the default (UI-02).
+    pub bottom_panel: u32,
 }
 
 /// How the window picks light or dark (UI-07.5).
@@ -330,6 +333,7 @@ mod tests {
             appearance: "dark".into(),
             left_panel: 240,
             right_panel: 420,
+            bottom_panel: 0,
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);

@@ -166,6 +166,9 @@ impl Launcher {
                 window.set_left_size(s.left_panel as f32);
             }
             window.set_right_size(s.right_panel as f32);
+            if s.bottom_panel > 0 {
+                window.set_bottom_size(s.bottom_panel as f32);
+            }
             let language = s.language().code().to_owned();
             // The bundled gettext catalogs are selected after the first
             // component exists (the window is created before this runs).
@@ -248,11 +251,12 @@ impl Launcher {
                     l.save_settings();
                 }
             })),
-            panels_resized: Some(Box::new(move |left, right| {
+            panels_resized: Some(Box::new(move |left, right, bottom| {
                 if let Some(l) = w_panels.upgrade() {
                     let mut s = l.settings.borrow_mut();
                     s.left_panel = left.round() as u32;
                     s.right_panel = right.round() as u32;
+                    s.bottom_panel = bottom.round() as u32;
                     drop(s);
                     l.save_settings();
                 }
