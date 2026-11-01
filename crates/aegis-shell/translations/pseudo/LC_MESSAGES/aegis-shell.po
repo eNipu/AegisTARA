@@ -1268,3 +1268,18 @@ msgstr "⟦Néw élémént ón thís págé␣␣␣␣␣␣⟧"
 
 msgid "Read only: take the edit lock first."
 msgstr "⟦Réád ónly: táké thé édít lóck fírst.␣␣␣␣␣␣␣␣␣⟧"
+
+msgid "More actions for {}"
+msgstr "⟦Móré áctíóns fór {}␣␣␣⟧"
+
+msgid "Open {}"
+msgstr "⟦Ópén {}␣␣⟧"
+
+msgid "Duplicate"
+msgstr "⟦Dúplícáté␣⟧"
+
+msgid "Duplicate {}"
+msgstr "⟦Dúplícáté {}␣␣⟧"
+
+msgid "Remove {}"
+msgstr "⟦Rémóvé {}␣␣⟧"

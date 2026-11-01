@@ -2,7 +2,7 @@
 //
 // Every widget here only shows what it is given and reports what the user
 // did; the client core decides everything else.
-import { Button, ComboBox, CheckBox, LineEdit, StandardTableView, ScrollView } from "std-widgets.slint";
+import { Button, ComboBox, CheckBox, LineEdit, StandardTableView, ScrollView, ListView, Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 export struct ProjectItem {
@@ -155,6 +155,236 @@ export component Table inherits VerticalLayout {
         root.settling = true;
     }
     init => { tv.set-current-row(root.selected); }
+}
+
+// A table built on Slint's `ListView` so each row can carry real buttons, a
+// fixed 28/32 px row height and a tooltip on the elided name (UI-09). It keeps
+// the exact `Table` API (columns, rows, selected, picked) and adds opt-in row
+// actions. The header stays above the scroll; the name column elides and shows
+// the full name in a tooltip. `Control` in the key handler is the platform
+// command key (the shortcut table's convention).
+export component DataTable inherits Rectangle {
+    in property <[TableColumn]> columns;
+    in property <[[StandardListViewItem]]> rows;
+    in property <int> selected: -1;
+    in property <string> label;
+    // Whether the user may act on rows (no actions for a read-only user).
+    in property <bool> editable: true;
+    // 28 px rows in compact density, 32 px otherwise (UI-09.5).
+    in property <bool> compact: false;
+    // Row actions. `add-verb` is the prefix of the + accessible name
+    // ("Add asset to" + " " + the row name). A table with no `show-add` and
+    // no menu items shows no action column.
+    in property <bool> show-add: false;
+    in property <string> add-verb;
+    in property <bool> show-open: false;
+    in property <bool> show-duplicate: false;
+    in property <bool> show-remove: false;
+    callback picked(int);
+    callback activated(int);
+    callback add-child(int);
+    callback open-row(int);
+    callback duplicate-row(int);
+    callback remove-row(int);
+
+    property <length> row-height: root.compact ? 28px : 32px;
+    property <length> header-height: 28px;
+    property <bool> has-actions: root.editable && (root.show-add || root.show-open || root.show-duplicate || root.show-remove);
+    property <int> current-row: -1;
+    property <bool> settling: true;
+    property <int> menu-row: -1;
+    property <bool> menu-open: false;
+
+    min-width: 0px;
+    min-height: 200px;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+    forward-focus: focus-scope;
+    accessible-role: AccessibleRole.table;
+    accessible-label: root.label;
+
+    public function set-current-row(index: int) {
+        if (index < 0 || index >= root.rows.length) { return; }
+        root.current-row = index;
+        root.bring-into-view(index);
+        if (index != root.selected) { root.picked(index); }
+    }
+
+    public function move-by(delta: int) {
+        if (root.rows.length == 0) { return; }
+        let target = root.current-row < 0 ? (delta > 0 ? 0 : root.rows.length - 1) : root.current-row + delta;
+        root.set-current-row(max(0, min(root.rows.length - 1, target)));
+    }
+
+    public function bring-into-view(index: int) {
+        if (index < 0 || index >= root.rows.length) { return; }
+        let y = scroll.content-y + index * root.row-height;
+        if (y < 0) { scroll.content-y += 0 - y; }
+        if (y + root.row-height > scroll.visible-height) {
+            scroll.content-y -= y + root.row-height - scroll.visible-height;
+        }
+    }
+
+    changed selected => {
+        root.set-current-row(root.selected);
+        root.settling = true;
+    }
+    init => { root.set-current-row(root.selected); }
+
+    Timer {
+        interval: 60ms;
+        running: root.settling;
+        triggered => {
+            root.settling = false;
+            root.set-current-row(root.selected);
+        }
+    }
+
+    header := Rectangle {
+        height: root.header-height;
+        clip: true;
+        background: Palette.background;
+        HorizontalLayout {
+            x: -scroll.content-x;
+            width: max(scroll.visible-width, self.preferred-width);
+            for column[index] in root.columns : Rectangle {
+                horizontal-stretch: column.horizontal-stretch;
+                min-width: max(column.min-width, column.width);
+                preferred-width: self.min-width;
+                max-width: (index < root.columns.length && column.width >= 1px) ? max(column.min-width, column.width) : 100000px;
+                Text {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: column.title;
+                    color: Palette.foreground;
+                    font-size: 12px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+            }
+        }
+        Rectangle {
+            y: parent.height - 1px;
+            width: parent.width;
+            height: 1px;
+            background: Palette.border;
+        }
+    }
+
+    scroll := ListView {
+        vertical-stretch: 1;
+        for row[row-index] in root.rows : Rectangle {
+            height: root.row-height;
+            clip: true;
+            background: row-index == root.selected ? Palette.accent-background
+                : (row-touch.has-hover ? Palette.selection-background
+                : (mod(row-index, 2) == 0 ? Palette.alternate-background : transparent));
+            row-touch := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.focus(); root.set-current-row(row-index); }
+            }
+            HorizontalLayout {
+                for cell[cell-index] in row : Rectangle {
+                    clip: true;
+                    horizontal-stretch: root.columns[cell-index].horizontal-stretch;
+                    min-width: max(root.columns[cell-index].min-width, root.columns[cell-index].width);
+                    preferred-width: self.min-width;
+                    max-width: (cell-index < root.columns.length && root.columns[cell-index].width >= 1px) ? max(root.columns[cell-index].min-width, root.columns[cell-index].width) : 100000px;
+                    Text {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        text: cell.text;
+                        color: row-index == root.selected ? Palette.accent-foreground : Palette.foreground;
+                        overflow: elide;
+                        if cell-index == 1 && cell.text != "": Tooltip {
+                            Text { text: cell.text; }
+                        }
+                    }
+                }
+            }
+            if root.has-actions && (row-index == root.selected || row-touch.has-hover): HorizontalLayout {
+                x: parent.width - self.preferred-width - 8px;
+                y: (parent.height - self.preferred-height) / 2;
+                spacing: 4px;
+                if root.show-add: Button {
+                    text: "+";
+                    width: 24px;
+                    height: 24px;
+                    accessible-label: root.add-verb + " " + row[1].text;
+                    clicked => { root.add-child(row-index); }
+                }
+                if root.show-open || root.show-duplicate || root.show-remove: Button {
+                    text: "\u{2026}";
+                    width: 24px;
+                    height: 24px;
+                    accessible-label: @tr("More actions for {}", row[1].text);
+                    clicked => {
+                        root.menu-row = row-index;
+                        root.menu-open = !root.menu-open;
+                    }
+                }
+            }
+        }
+    }
+
+    if root.menu-open: TouchArea {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.menu-open = false; }
+    }
+    if root.menu-open && root.menu-row >= 0: Rectangle {
+        x: parent.width - 156px - 8px;
+        y: root.header-height + (root.menu-row + 1) * root.row-height - scroll.content-y;
+        width: 156px;
+        background: Palette.background;
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 4px;
+        VerticalLayout {
+            padding: 4px;
+            spacing: 2px;
+            if root.show-open: Button {
+                text: @tr("Open");
+                accessible-label: @tr("Open {}", root.rows[root.menu-row][1].text);
+                clicked => { root.menu-open = false; root.open-row(root.menu-row); }
+            }
+            if root.show-duplicate: Button {
+                text: @tr("Duplicate");
+                accessible-label: @tr("Duplicate {}", root.rows[root.menu-row][1].text);
+                clicked => { root.menu-open = false; root.duplicate-row(root.menu-row); }
+            }
+            if root.show-remove: Button {
+                text: @tr("Remove");
+                accessible-label: @tr("Remove {}", root.rows[root.menu-row][1].text);
+                clicked => { root.menu-open = false; root.remove-row(root.menu-row); }
+            }
+        }
+    }
+
+    focus-scope := FocusScope {
+        x: 0;
+        width: 0;
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow) { root.move-by(-1); return accept; }
+            else if (event.text == Key.DownArrow) { root.move-by(1); return accept; }
+            else if (event.text == Key.Home) { root.set-current-row(0); return accept; }
+            else if (event.text == Key.End) { root.set-current-row(root.rows.length - 1); return accept; }
+            else if (event.text == Key.PageUp) { root.move-by(-10); return accept; }
+            else if (event.text == Key.PageDown) { root.move-by(10); return accept; }
+            else if (event.text == Key.Return && event.modifiers.control) { root.add-child(root.selected); return accept; }
+            else if (event.text == Key.Return) { root.activated(root.selected); return accept; }
+            else if (event.text == Key.Backspace || event.text == Key.Delete) { root.remove-row(root.selected); return accept; }
+            else if (event.modifiers.control && event.text == "d") { root.duplicate-row(root.selected); return accept; }
+            reject
+        }
+    }
 }
 
 // The main button of a confirmation that cannot be undone (UI-12): red, so it
