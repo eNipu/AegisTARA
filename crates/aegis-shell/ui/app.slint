@@ -1353,8 +1353,9 @@ in property <string> redo-label;
                         }
                         Choice {
                             options: [@tr("ISO/SAE 21434 · road vehicles"), @tr("EU Cyber Resilience Act · connected products"), @tr("STRIDE · software and cloud services")];
-                            index <=> root.new-project-methodology;
+                            index: root.new-project-methodology;
                             label: @tr("Assessment method");
+                            picked(i) => { root.new-project-methodology = i; }
                         }
                         Button {
                             text: @tr("Create");
