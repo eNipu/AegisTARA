@@ -87,3 +87,20 @@ Item-definition drafts (S3), `NameEditor` save semantics and Rename removal (S4)
 reasons on the header buttons, the shortcut, the start-screen card and the key-press count
 (S5). Still open from slice 1: draft row styling, an inline error in the inspector. A tree
 draft is a free tree; attaching to the selected threat stays on the threat page's "New tree".
+
+## Slice 3 (component, interface, data flow, trust boundary) — built test-first
+
+- **Red first:** the client test (`item_definition_drafts_wait_for_their_required_fields`) and the window test
+  (`item_definition_drafts_are_created_with_the_keyboard`) were written and failed to compile before any code.
+- **Client core:** `DraftKind` gains Component, Interface, DataFlow, TrustBoundary (page: Item). Required
+  fields: an interface needs a component and a kind; a data flow needs two different components. The component
+  (interface) or "from" end (flow) comes from the context: the selected component, else the only one. New
+  commands `SetDraftComponent`, `SetDraftTo`, `SetDraftInterfaceKind`; `draft_incomplete` also covers "from and
+  to are the same component".
+- **Window:** one contextual "New component / interface / data flow / trust boundary" button on the Item page
+  header; a draft opens its tab. The inline interface and data flow forms and the two `ask()` dialogs are gone.
+  Draft forms for each kind (choices for component, kind, from, to) with the same focus rules as the threat
+  draft; draft rows in the four tables.
+- **Verified:** client and window tests above (real keys; Enter with a missing field creates nothing, choosing
+  the field then Enter creates; same component for both ends stays incomplete); fmt, clippy `-D warnings`,
+  `cargo test -p aegis-shell -p aegis-client --locked`.

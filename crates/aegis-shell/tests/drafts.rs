@@ -198,3 +198,77 @@ async fn goal_claim_and_tree_drafts_are_created_with_the_keyboard() {
         .await;
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn item_definition_drafts_are_created_with_the_keyboard() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    app.window.invoke_show_page(Page::Item.index() as i32);
+
+    // Components and a trust boundary: a name and Enter.
+    for (key, kind, name) in [
+        ("component", DraftKind::Component, "Gateway"),
+        ("component", DraftKind::Component, "Brake ECU"),
+        ("trust-boundary", DraftKind::TrustBoundary, "Safety domain"),
+    ] {
+        app.window.invoke_begin_draft(key.into());
+        app.until(key, |vm| p(vm).draft == Some(kind)).await;
+        app.frame();
+        app.frame();
+        type_text(&app, name);
+        press_key(&app, Key::Return, false);
+        app.until(name, |vm| p(vm).draft.is_none()).await;
+    }
+    app.until("components and boundary", |vm| {
+        p(vm).data.components.len() == 2 && p(vm).data.trust_boundaries.len() == 1
+    })
+    .await;
+
+    // Interface: the component is the context; the kind is missing.
+    app.window.invoke_begin_draft("interface".into());
+    app.until("interface draft", |vm| {
+        p(vm).draft == Some(DraftKind::Interface)
+    })
+    .await;
+    app.frame();
+    app.frame();
+    assert_eq!(app.window.get_interface_rows().row_count(), 1, "draft row");
+    assert!(app.window.get_draft_incomplete());
+    assert!(app.window.get_draft_component() >= 0);
+    assert_eq!(app.window.get_draft_interface_kind(), -1);
+    type_text(&app, "CAN-2 port");
+    press_key(&app, Key::Return, false);
+    let vm = settle(&app).await;
+    assert_eq!(
+        p(&vm).data.interfaces.len(),
+        0,
+        "kind missing: nothing created"
+    );
+    app.window.invoke_set_draft_interface_kind(0);
+    app.until("complete", |vm| !p(vm).draft_incomplete).await;
+    app.frame();
+    press_key(&app, Key::Return, false);
+    app.until("interface", |vm| p(vm).data.interfaces.len() == 1)
+        .await;
+
+    // Data flow: from is the context, to must be another component.
+    app.window.invoke_begin_draft("data-flow".into());
+    app.until("flow draft", |vm| p(vm).draft == Some(DraftKind::DataFlow))
+        .await;
+    app.frame();
+    app.frame();
+    assert!(app.window.get_draft_incomplete());
+    let from = app.window.get_draft_component();
+    assert!(from >= 0);
+    app.window.invoke_set_draft_to(from);
+    let vm = settle(&app).await;
+    assert!(p(&vm).draft_incomplete, "from and to must differ");
+    app.window.invoke_set_draft_to(1 - from);
+    app.until("complete", |vm| !p(vm).draft_incomplete).await;
+    app.frame();
+    type_text(&app, "Brake frame");
+    press_key(&app, Key::Return, false);
+    app.until("flow", |vm| p(vm).data.data_flows.len() == 1)
+        .await;
+    save(&app.frame(), "draft-item-definition");
+}

@@ -1235,3 +1235,27 @@ msgstr "必須項目を選んでください"
 
 msgid "The attacker's goal (the root)"
 msgstr "攻撃者の目的（ルート）"
+
+msgid "New component"
+msgstr "新しいコンポーネント"
+
+msgid "New interface"
+msgstr "新しいインターフェース"
+
+msgid "New data flow"
+msgstr "新しいデータフロー"
+
+msgid "New trust boundary"
+msgstr "新しい信頼境界"
+
+msgid "Component name"
+msgstr "コンポーネント名"
+
+msgid "Trust boundary name"
+msgstr "信頼境界名"
+
+msgid "Add a component first."
+msgstr "先にコンポーネントを追加してください。"
+
+msgid "A data flow needs two components."
+msgstr "データフローには2つのコンポーネントが必要です。"

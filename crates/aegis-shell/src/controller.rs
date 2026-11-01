@@ -729,6 +729,21 @@ impl Controller {
                 c.send(Command::SetDraftAsset(id));
             }
         });
+        on!(on_set_draft_component, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.components.get(pos(i)?).map(|x| x.id)) {
+                c.send(Command::SetDraftComponent(id));
+            }
+        });
+        on!(on_set_draft_to, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.components.get(pos(i)?).map(|x| x.id)) {
+                c.send(Command::SetDraftTo(id));
+            }
+        });
+        on!(on_set_draft_interface_kind, |c, i| {
+            if let Some(i) = pos(i) {
+                c.send(Command::SetDraftInterfaceKind(i));
+            }
+        });
         on!(on_set_draft_category, |c, i| {
             if let Some(i) = pos(i) {
                 c.send(Command::SetDraftCategory(i));
@@ -2260,6 +2275,20 @@ impl Controller {
             project.data.assets.iter().map(|a| a.id),
             project.draft_asset,
         ));
+        w.set_draft_component(index_of(
+            project.data.components.iter().map(|c| c.id),
+            project.draft_component,
+        ));
+        w.set_draft_to(index_of(
+            project.data.components.iter().map(|c| c.id),
+            project.draft_to,
+        ));
+        w.set_draft_interface_kind(
+            project
+                .draft_interface_kind
+                .and_then(|i| i32::try_from(i).ok())
+                .unwrap_or(-1),
+        );
         w.set_undo_label(s(project.undo_label.as_deref().unwrap_or("")));
         w.set_redo_label(s(project.redo_label.as_deref().unwrap_or("")));
         w.set_show_residual(project.show_residual);
@@ -2478,24 +2507,32 @@ impl Controller {
                 .map(|c| s(&format!("{} \u{b7} {}", c.visual_id, c.name)))
                 .collect(),
         ));
-        w.set_component_rows(rows(
-            d.components
-                .iter()
-                .map(|c| {
-                    vec![
-                        c.visual_id.clone(),
-                        c.name.clone(),
-                        c.parent.clone(),
-                        c.interfaces.to_string(),
-                        c.assets.to_string(),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_component_selected(index_of(
-            d.components.iter().map(|c| c.id),
-            d.component.as_ref().map(|c| c.id),
-        ));
+        let mut list: Vec<Vec<String>> = d
+            .components
+            .iter()
+            .map(|c| {
+                vec![
+                    c.visual_id.clone(),
+                    c.name.clone(),
+                    c.parent.clone(),
+                    c.interfaces.to_string(),
+                    c.assets.to_string(),
+                ]
+            })
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::Component),
+            5,
+            w.get_draft_row_component().to_string(),
+        );
+        w.set_component_rows(rows(list));
+        w.set_component_selected(draft_at.unwrap_or_else(|| {
+            index_of(
+                d.components.iter().map(|c| c.id),
+                d.component.as_ref().map(|c| c.id),
+            )
+        }));
         w.set_has_component(d.component.is_some());
         if let Some(c) = &d.component {
             w.set_component_id(s(&c.visual_id));
@@ -2516,24 +2553,32 @@ impl Controller {
         } else {
             w.set_component_id(s(""));
         }
-        w.set_interface_rows(rows(
-            d.interfaces
-                .iter()
-                .map(|i| {
-                    vec![
-                        i.visual_id.clone(),
-                        i.name.clone(),
-                        i.component.clone(),
-                        i.kind.clone(),
-                        i.flows.to_string(),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_interface_selected(index_of(
-            d.interfaces.iter().map(|i| i.id),
-            d.interface.as_ref().map(|i| i.id),
-        ));
+        let mut list: Vec<Vec<String>> = d
+            .interfaces
+            .iter()
+            .map(|i| {
+                vec![
+                    i.visual_id.clone(),
+                    i.name.clone(),
+                    i.component.clone(),
+                    i.kind.clone(),
+                    i.flows.to_string(),
+                ]
+            })
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::Interface),
+            5,
+            w.get_draft_row_interface().to_string(),
+        );
+        w.set_interface_rows(rows(list));
+        w.set_interface_selected(draft_at.unwrap_or_else(|| {
+            index_of(
+                d.interfaces.iter().map(|i| i.id),
+                d.interface.as_ref().map(|i| i.id),
+            )
+        }));
         w.set_has_interface(d.interface.is_some());
         if let Some(i) = &d.interface {
             w.set_interface_id(s(&i.visual_id));
@@ -2545,24 +2590,32 @@ impl Controller {
         } else {
             w.set_interface_id(s(""));
         }
-        w.set_data_flow_rows(rows(
-            d.data_flows
-                .iter()
-                .map(|df| {
-                    vec![
-                        df.visual_id.clone(),
-                        df.name.clone(),
-                        df.from.clone(),
-                        df.to.clone(),
-                        df.interface.clone(),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_data_flow_selected(index_of(
-            d.data_flows.iter().map(|df| df.id),
-            d.data_flow.as_ref().map(|df| df.id),
-        ));
+        let mut list: Vec<Vec<String>> = d
+            .data_flows
+            .iter()
+            .map(|df| {
+                vec![
+                    df.visual_id.clone(),
+                    df.name.clone(),
+                    df.from.clone(),
+                    df.to.clone(),
+                    df.interface.clone(),
+                ]
+            })
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::DataFlow),
+            5,
+            w.get_draft_row_data_flow().to_string(),
+        );
+        w.set_data_flow_rows(rows(list));
+        w.set_data_flow_selected(draft_at.unwrap_or_else(|| {
+            index_of(
+                d.data_flows.iter().map(|df| df.id),
+                d.data_flow.as_ref().map(|df| df.id),
+            )
+        }));
         w.set_has_data_flow(d.data_flow.is_some());
         if let Some(df) = &d.data_flow {
             w.set_data_flow_id(s(&df.visual_id));
@@ -2584,22 +2637,30 @@ impl Controller {
         } else {
             w.set_data_flow_id(s(""));
         }
-        w.set_trust_boundary_rows(rows(
-            d.trust_boundaries
-                .iter()
-                .map(|tb| {
-                    vec![
-                        tb.visual_id.clone(),
-                        tb.name.clone(),
-                        tb.members.to_string(),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_trust_boundary_selected(index_of(
-            d.trust_boundaries.iter().map(|tb| tb.id),
-            d.trust_boundary.as_ref().map(|tb| tb.id),
-        ));
+        let mut list: Vec<Vec<String>> = d
+            .trust_boundaries
+            .iter()
+            .map(|tb| {
+                vec![
+                    tb.visual_id.clone(),
+                    tb.name.clone(),
+                    tb.members.to_string(),
+                ]
+            })
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::TrustBoundary),
+            3,
+            w.get_draft_row_trust_boundary().to_string(),
+        );
+        w.set_trust_boundary_rows(rows(list));
+        w.set_trust_boundary_selected(draft_at.unwrap_or_else(|| {
+            index_of(
+                d.trust_boundaries.iter().map(|tb| tb.id),
+                d.trust_boundary.as_ref().map(|tb| tb.id),
+            )
+        }));
         w.set_has_trust_boundary(d.trust_boundary.is_some());
         if let Some(tb) = &d.trust_boundary {
             w.set_trust_boundary_id(s(&tb.visual_id));

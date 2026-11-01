@@ -1684,6 +1684,12 @@ pub enum Command {
     SetDraftAsset(aegis_model::AssetId),
     /// Choose the category of a threat draft (a position in the vocabulary).
     SetDraftCategory(usize),
+    /// Choose the component of an interface draft, or the "from" end of a flow.
+    SetDraftComponent(aegis_model::ComponentId),
+    /// Choose the "to" end of a data flow draft.
+    SetDraftTo(aegis_model::ComponentId),
+    /// Choose the kind of an interface draft (a position in the vocabulary).
+    SetDraftInterfaceKind(usize),
     /// Show a page of the open project.
     ShowPage(crate::view::Page),
     /// Select an entity (and show the page it belongs to when `navigate`).

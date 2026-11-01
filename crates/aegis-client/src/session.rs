@@ -42,7 +42,8 @@ use std::time::Duration;
 
 use aegis_auth::layer::CredentialProvider;
 use aegis_model::{
-    AssetId, ClaimId, ControlId, DamageId, GoalId, Methodology, OpCodec, Project, ThreatId, TreeId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId,
+    Methodology, OpCodec, Project, ThreatId, TreeId, TrustBoundaryId,
 };
 use aegis_proto as pb;
 use tokio::sync::{mpsc, watch};
@@ -2132,6 +2133,24 @@ impl<P: CredentialProvider> Actor<P> {
                 }
                 self.pump();
             }
+            Command::SetDraftComponent(component) => {
+                if let Some(open) = self.open.as_mut() {
+                    open.ui.draft_component = Some(component);
+                }
+                self.pump();
+            }
+            Command::SetDraftTo(component) => {
+                if let Some(open) = self.open.as_mut() {
+                    open.ui.draft_to = Some(component);
+                }
+                self.pump();
+            }
+            Command::SetDraftInterfaceKind(kind) => {
+                if let Some(open) = self.open.as_mut() {
+                    open.ui.draft_interface_kind = Some(kind);
+                }
+                self.pump();
+            }
             Command::SuggestTreeNodes => self.suggest_tree_nodes(),
             Command::AcceptSuggestion(index) => self.accept_suggestion(index),
             Command::AcceptAllSuggestions => self.accept_all_suggestions(),
@@ -2686,6 +2705,18 @@ impl<P: CredentialProvider> Actor<P> {
             // only asset there is.
             let assets = pages::asset_rows(&open.ws);
             open.ui.draft_category = None;
+            open.ui.draft_to = None;
+            open.ui.draft_interface_kind = None;
+            let components = pages::component_rows(&open.ws);
+            let only_component = match components.as_slice() {
+                [only] => Some(only.id),
+                _ => None,
+            };
+            open.ui.draft_component = open
+                .ui
+                .selected_component
+                .filter(|id| components.iter().any(|c| c.id == *id))
+                .or(only_component);
             let only = match assets.as_slice() {
                 [only] => Some(only.id),
                 _ => None,
@@ -2718,6 +2749,11 @@ impl<P: CredentialProvider> Actor<P> {
             return;
         }
         let (asset, category) = (open.ui.draft_asset, open.ui.draft_category);
+        let (component, to, interface_kind) = (
+            open.ui.draft_component,
+            open.ui.draft_to,
+            open.ui.draft_interface_kind,
+        );
         let name = name.to_owned();
         let edit = match kind {
             DraftKind::Asset => {
@@ -2763,6 +2799,38 @@ impl<P: CredentialProvider> Actor<P> {
                 id: TreeId::new_v7(),
                 root: name,
                 threat: None,
+            },
+            DraftKind::Component => Edit::AddComponent {
+                id: ComponentId::new_v7(),
+                name,
+                parent: None,
+            },
+            DraftKind::Interface => {
+                let (Some(component), Some(kind)) = (component, interface_kind) else {
+                    return;
+                };
+                Edit::AddInterface {
+                    id: InterfaceId::new_v7(),
+                    name,
+                    component,
+                    kind,
+                }
+            }
+            DraftKind::DataFlow => {
+                let (Some(from), Some(to)) = (component, to) else {
+                    return;
+                };
+                Edit::AddDataFlow {
+                    id: DataFlowId::new_v7(),
+                    name,
+                    from,
+                    to,
+                    interface: None,
+                }
+            }
+            DraftKind::TrustBoundary => Edit::AddTrustBoundary {
+                id: TrustBoundaryId::new_v7(),
+                name,
             },
         };
         if self.edit(&edit) {
@@ -3009,6 +3077,9 @@ impl<P: CredentialProvider> Actor<P> {
                 draft_seq: open.ui.draft_seq,
                 draft_asset: open.ui.draft_asset,
                 draft_category: open.ui.draft_category,
+                draft_component: open.ui.draft_component,
+                draft_to: open.ui.draft_to,
+                draft_interface_kind: open.ui.draft_interface_kind,
                 draft_incomplete: open.ui.draft_incomplete(),
                 show_residual: open.ui.show_residual,
                 confirmed_seq: open.ws.confirmed_seq(),
