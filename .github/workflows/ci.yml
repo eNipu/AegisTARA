@@ -11,9 +11,9 @@
 # run scripts.
 name: CI
 
-# Once per change: on the pull request, and once more when it lands on
-# master (which also refreshes the cache). Branch pushes without a pull
-# request are not checked.
+# The .githooks/pre-push hook runs scripts/ci.sh before every push, so a pull
+# request only runs the cheap cargo-deny job here. Everything runs once when
+# a change lands on master (which also refreshes the cache).
 on:
   push:
     branches: [master]
@@ -47,6 +47,7 @@ env:
 jobs:
   check:
     name: fmt, clippy, test
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # The PostgreSQL store tests (crates/aegis-server/tests/postgres.rs) run
@@ -158,6 +159,7 @@ jobs:
   # test one. Docker and curl are preinstalled on the runner.
   image:
     name: server image
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -169,6 +171,7 @@ jobs:
 
   msrv:
     name: MSRV cargo check
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
