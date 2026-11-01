@@ -17,10 +17,6 @@ const OVERLAYS: &[(&str, &str)] = &[
         "prompt-open",
         "asks for text the app cannot guess (a name); it is input, not a confirmation",
     ),
-    (
-        "outline-open",
-        "editor for a whole attack tree as an outline; input",
-    ),
     ("password-open", "UI-12: change password"),
     (
         "palette-open",
