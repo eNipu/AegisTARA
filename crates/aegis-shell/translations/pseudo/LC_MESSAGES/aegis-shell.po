@@ -1259,3 +1259,6 @@ msgstr "⟦Ádd á cómpónént fírst.␣␣␣␣␣⟧"
 
 msgid "A data flow needs two components."
 msgstr "⟦Á dátá flów nééds twó cómpónénts.␣␣␣␣␣␣␣␣⟧"
+
+msgid "A name is needed"
+msgstr "⟦Á náme ís néédéd␣␣⟧"
