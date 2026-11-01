@@ -1697,6 +1697,7 @@ impl Controller {
             "new-element" => {
                 if let Some(w) = self.window.upgrade() {
                     w.set_palette_open(false);
+                    w.invoke_begin_new();
                 }
             }
             page => {
@@ -2265,6 +2266,7 @@ impl Controller {
         w.set_draft_kind(s(project.draft.map_or("", |k| k.key())));
         w.set_draft_seq(i32::try_from(project.draft_seq).unwrap_or(i32::MAX));
         w.set_draft_incomplete(project.draft_incomplete);
+        w.set_draft_error(s(project.draft_error.as_deref().unwrap_or("")));
         w.set_draft_category(
             project
                 .draft_category

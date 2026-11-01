@@ -400,6 +400,8 @@ pub struct ProjectView {
     pub draft: Option<crate::view::DraftKind>,
     /// Changes with every new draft.
     pub draft_seq: u64,
+    /// Why the last create was refused; the draft stays with the user's text.
+    pub draft_error: Option<String>,
     /// The asset of a threat draft.
     pub draft_asset: Option<aegis_model::AssetId>,
     /// The category of a threat draft.

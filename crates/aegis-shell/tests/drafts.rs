@@ -272,3 +272,91 @@ async fn item_definition_drafts_are_created_with_the_keyboard() {
         .await;
     save(&app.frame(), "draft-item-definition");
 }
+
+/// UI-08: the new-element shortcut starts the draft of the page on screen.
+#[tokio::test(flavor = "current_thread")]
+async fn the_new_element_shortcut_starts_a_draft_of_this_page() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    for (page, kind) in [
+        (Page::Assets, DraftKind::Asset),
+        (Page::Threats, DraftKind::Threat),
+        (Page::Controls, DraftKind::Control),
+    ] {
+        app.window.invoke_show_page(page.index() as i32);
+        app.until("page", |vm| p(vm).page == page).await;
+        app.frame();
+        common::press_chord(&app, 'n', true);
+        app.until("draft", |vm| p(vm).draft == Some(kind)).await;
+        app.window.invoke_cancel_draft();
+        app.until("cancelled", |vm| p(vm).draft.is_none()).await;
+    }
+}
+
+/// UI-08.5: a user who may not edit gets no draft, and the header buttons say
+/// why they are off.
+#[tokio::test(flavor = "current_thread")]
+async fn a_read_only_user_gets_no_draft_and_a_reason() {
+    let server = TestServer::start().await;
+    let app = App::new(server.admin_session("root"), 1360, 860);
+    app.online().await;
+    app.window.invoke_create_project("Brake ECU".into());
+    app.until("open", |vm| vm.project.is_some()).await;
+    app.window.invoke_show_page(Page::Assets.index() as i32);
+    app.until("assets", |vm| p(vm).page == Page::Assets).await;
+    app.frame();
+    assert!(
+        app.window.get_new_reason().starts_with("Read only"),
+        "the reason: {}",
+        app.window.get_new_reason()
+    );
+    common::press_chord(&app, 'n', true);
+    let vm = settle(&app).await;
+    assert!(p(&vm).draft.is_none(), "a read-only user gets no draft");
+    app.window.invoke_begin_edit();
+    app.until("editing", |vm| p(vm).mode == Mode::Editing).await;
+    app.frame();
+    assert_eq!(app.window.get_new_reason(), "", "editing: no reason");
+}
+
+/// UI-08 done-when: five assets with the keyboard alone, and how many key
+/// presses it takes (recorded in the UX review).
+#[tokio::test(flavor = "current_thread")]
+async fn five_assets_take_the_keyboard_alone() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    app.window.invoke_show_page(Page::Assets.index() as i32);
+    app.until("page", |vm| p(vm).page == Page::Assets).await;
+    app.frame();
+    let names = ["ECU", "Gateway", "Sensor", "Actuator", "Display"];
+    let mut presses = 0;
+    let started = std::time::Instant::now();
+    common::press_chord(&app, 'n', true);
+    presses += 1;
+    app.until("draft", |vm| p(vm).draft == Some(DraftKind::Asset))
+        .await;
+    app.frame();
+    app.frame();
+    for (i, name) in names.iter().enumerate() {
+        type_text(&app, name);
+        presses += name.chars().count();
+        let last = i == names.len() - 1;
+        press_key(&app, Key::Return, !last);
+        presses += 1;
+        app.until(name, |vm| p(vm).data.assets.iter().any(|a| a.name == *name))
+            .await;
+        app.frame();
+        app.frame();
+    }
+    let vm = settle(&app).await;
+    assert_eq!(p(&vm).data.assets.len(), 5);
+    assert!(p(&vm).draft.is_none());
+    let typed: usize = names.iter().map(|n| n.chars().count()).sum();
+    // One chord to start, one chord or Enter per asset, and the letters.
+    assert_eq!(presses, 1 + 5 + typed);
+    eprintln!(
+        "five assets: {presses} key presses ({typed} letters, {} actions), no mouse, {:?} headless",
+        presses - typed,
+        started.elapsed()
+    );
+}

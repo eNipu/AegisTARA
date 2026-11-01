@@ -266,6 +266,26 @@ export component AppWindow inherits Window {
     // The draft being typed (UI-08): "", "asset", "damage" or "control".
     in property <string> draft-kind;
     in property <int> draft-seq;
+    // Why the last create was refused, shown in the draft form (UI-08.6).
+    in property <string> draft-error;
+    // Why the header "New ..." buttons are off, "" when they work (UI-08.5).
+    out property <string> new-reason: root.editing ? "" : root.band-kind == 1 ? @tr("Read only") + ": " + root.band-text : @tr("Read only: take the edit lock first.");
+    // The draft the new-element shortcut starts on the page on screen, "" if the page has none.
+    pure function new-kind() -> string {
+        if (root.page == Pages.assets) { return "asset"; }
+        if (root.page == Pages.damage) { return "damage"; }
+        if (root.page == Pages.threats) { return "threat"; }
+        if (root.page == Pages.trees) { return "tree"; }
+        if (root.page == Pages.controls) { return "control"; }
+        if (root.page == Pages.goals) { return "goal"; }
+        if (root.page == Pages.item) {
+            return root.item-tab == 0 ? "component" : root.item-tab == 1 ? "interface" : root.item-tab == 2 ? "data-flow" : "trust-boundary";
+        }
+        return "";
+    }
+    public function begin-new() {
+        if (root.editing && root.new-kind() != "") { root.begin-draft(root.new-kind()); }
+    }
     // The text of the draft row in each table; translated here, read by the controller.
     out property <string> draft-row-asset: @tr("New asset");
     out property <string> draft-row-damage: @tr("New ") + root.damage-singular;
@@ -935,6 +955,7 @@ in property <string> redo-label;
             title: @tr("Edit");
             MenuItem { title: (root.can-undo && root.editing) ? @tr("Undo {}", root.undo-label) : @tr("Undo"); icon: @image-url("icons/undo-2.svg"); shortcut: root.undo-keys; enabled: root.in-project && root.editing && root.can-undo && !Typing.dirty; activated => { root.undo(); } }
             MenuItem { title: (root.can-redo && root.editing) ? @tr("Redo {}", root.redo-label) : @tr("Redo"); icon: @image-url("icons/redo-2.svg"); shortcut: root.redo-keys; enabled: root.in-project && root.editing && root.can-redo && !Typing.dirty; activated => { root.redo(); } }
+            MenuItem { title: @tr("New element on this page"); icon: @image-url("icons/plus.svg"); shortcut: root.new-element-keys; enabled: root.in-project && root.editing && root.new-kind() != ""; activated => { root.begin-new(); } }
             MenuSeparator {}
             MenuItem { title: @tr("Take the edit lock"); icon: @image-url("icons/pencil.svg"); shortcut: root.begin-edit-keys; enabled: root.in-project && root.band-kind == 0; activated => { root.begin-edit(); } }
             MenuItem { title: @tr("Release the edit lock"); icon: @image-url("icons/lock.svg"); enabled: root.in-project && root.editing; activated => { root.end-edit(); } }
@@ -1533,7 +1554,7 @@ in property <string> redo-label;
                             title: @tr("Assets");
                             subtitle: @tr("What must be protected, and which security properties matter.");
                             icon: @image-url("icons/box.svg");
-                            Button { text: @tr("New asset"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("asset"); } }
+                            Button { text: @tr("New asset"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("asset"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
                         Table {
                             label: @tr("Assets");
@@ -1550,6 +1571,7 @@ in property <string> redo-label;
                             placeholder: @tr("Asset name");
                             hint: @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             commit(t, next) => { root.commit-draft(t, next); }
                             cancel => { root.cancel-draft(); }
                         }
@@ -1590,7 +1612,7 @@ in property <string> redo-label;
                             title: root.damage-plural;
                             subtitle: @tr("What could go wrong, rated per impact category.");
                             icon: @image-url("icons/triangle-alert.svg");
-                            Button { text: @tr("New ") + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("damage"); } }
+                            Button { text: @tr("New ") + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("damage"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
                         Table {
                             label: root.damage-plural;
@@ -1607,6 +1629,7 @@ in property <string> redo-label;
                             placeholder: @tr("What happens");
                             hint: @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             commit(t, next) => { root.commit-draft(t, next); }
                             cancel => { root.cancel-draft(); }
                         }
@@ -1640,7 +1663,7 @@ in property <string> redo-label;
                             title: @tr("Threat scenarios");
                             subtitle: @tr("How an attacker could harm an asset, with STRIDE and UN R155 Annex 5.");
                             icon: @image-url("icons/swords.svg");
-                            Button { text: @tr("New threat scenario"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("threat"); } }
+                            Button { text: @tr("New threat scenario"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("threat"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
                         Table {
                             label: @tr("Threat scenarios");
@@ -1657,6 +1680,7 @@ in property <string> redo-label;
                             placeholder: @tr("Threat scenario");
                             hint: root.asset-names.length == 0 ? @tr("Add an asset first.") : @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             incomplete: root.draft-incomplete;
                             blur-creates: false;
                             commit(t, next) => {
@@ -1740,7 +1764,7 @@ in property <string> redo-label;
                         HorizontalLayout {
                             spacing: 6px;
                             SectionTitle { text: @tr("Attack trees"); vertical-alignment: center; horizontal-stretch: 1; }
-                            Button { text: @tr("New"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("tree"); } }
+                            Button { text: @tr("New"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("tree"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
                         Table {
                             label: @tr("Attack trees");
@@ -1754,6 +1778,7 @@ in property <string> redo-label;
                             placeholder: @tr("The attacker's goal (the root)");
                             hint: @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             commit(t, next) => { root.commit-draft(t, next); }
                             cancel => { root.cancel-draft(); }
                         }
@@ -2187,7 +2212,7 @@ in property <string> redo-label;
                             title: @tr("Security controls");
                             subtitle: @tr("Measures that make attack steps harder. Attach them to steps on the Attack trees page.");
                             icon: @image-url("icons/shield-check.svg");
-                            Button { text: @tr("New control"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("control"); } }
+                            Button { text: @tr("New control"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("control"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
                         Table {
                             label: @tr("Security controls");
@@ -2204,6 +2229,7 @@ in property <string> redo-label;
                             placeholder: @tr("Control name");
                             hint: @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             commit(t, next) => { root.commit-draft(t, next); }
                             cancel => { root.cancel-draft(); }
                         }
@@ -2234,8 +2260,8 @@ in property <string> redo-label;
                             title: @tr("Goals and claims");
                             subtitle: @tr("Goals back a Reduce decision with controls; claims back Retain and Share.");
                             icon: @image-url("icons/target.svg");
-                            Button { text: @tr("New ") + root.goal-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("goal"); } }
-                            Button { text: @tr("New claim"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("claim"); } }
+                            Button { text: @tr("New ") + root.goal-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("goal"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
+                            Button { text: @tr("New claim"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("claim"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
                         }
                         SectionTitle { text: root.goal-plural; }
                         Table {
@@ -2263,6 +2289,7 @@ in property <string> redo-label;
                                 placeholder: root.goal-singular;
                                 hint: @tr("Press Enter to create, Escape to cancel.");
                                 seq: root.draft-seq;
+                            error: root.draft-error;
                                 commit(t, next) => { root.commit-draft(t, next); }
                                 cancel => { root.cancel-draft(); }
                             }
@@ -2273,6 +2300,7 @@ in property <string> redo-label;
                                 placeholder: @tr("Claim");
                                 hint: @tr("Press Enter to create, Escape to cancel.");
                                 seq: root.draft-seq;
+                            error: root.draft-error;
                                 commit(t, next) => { root.commit-draft(t, next); }
                                 cancel => { root.cancel-draft(); }
                             }
@@ -2497,6 +2525,7 @@ in property <string> redo-label;
                                 text: root.item-tab == 0 ? @tr("New component") : root.item-tab == 1 ? @tr("New interface") : root.item-tab == 2 ? @tr("New data flow") : @tr("New trust boundary");
                                 icon: @image-url("icons/plus.svg");
                                 enabled: root.editing;
+                                if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } }
                                 clicked => { root.begin-draft(root.item-tab == 0 ? "component" : root.item-tab == 1 ? "interface" : root.item-tab == 2 ? "data-flow" : "trust-boundary"); }
                             }
                         }
@@ -2551,6 +2580,7 @@ in property <string> redo-label;
                             placeholder: @tr("Component name");
                             hint: @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             commit(t, next) => { root.commit-draft(t, next); }
                             cancel => { root.cancel-draft(); }
                         }
@@ -2562,6 +2592,7 @@ in property <string> redo-label;
                             placeholder: @tr("Interface name");
                             hint: root.component-names.length == 0 ? @tr("Add a component first.") : @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             incomplete: root.draft-incomplete;
                             blur-creates: false;
                             commit(t, next) => {
@@ -2589,6 +2620,7 @@ in property <string> redo-label;
                             placeholder: @tr("Data flow name");
                             hint: root.component-names.length < 2 ? @tr("A data flow needs two components.") : @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             incomplete: root.draft-incomplete;
                             blur-creates: false;
                             commit(t, next) => {
@@ -2616,6 +2648,7 @@ in property <string> redo-label;
                             placeholder: @tr("Trust boundary name");
                             hint: @tr("Press Enter to create, Escape to cancel.");
                             seq: root.draft-seq;
+                            error: root.draft-error;
                             commit(t, next) => { root.commit-draft(t, next); }
                             cancel => { root.cancel-draft(); }
                         }

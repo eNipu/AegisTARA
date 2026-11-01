@@ -117,3 +117,39 @@ draft is a free tree; attaching to the selected threat stays on the threat page'
   guard stops Enter followed by focus loss from sending the same name twice. ja and pseudo strings added.
 - **Verified:** the test above (Enter, Tab, focus loss, Escape sends no op, empty name not saved and the note
   drawn); fmt, clippy `-D warnings`, `cargo test -p aegis-shell --locked`.
+
+## Slice 5 (read-only reasons, shortcut, inline create error, measurement) — built test-first
+
+- **Red first:** window tests (`the_new_element_shortcut_starts_a_draft_of_this_page`,
+  `a_read_only_user_gets_no_draft_and_a_reason`, `five_assets_take_the_keyboard_alone`) and the client test
+  (`a_refused_draft_stays_and_says_why_in_the_draft`) did not compile before the change.
+- **Built:**
+  - ⌘/Ctrl+Shift+N (the table's existing "new-element" shortcut, until now a stub) starts the draft of the page
+    on screen, from a new Edit-menu item and from the command palette; on the Item page it follows the tab.
+  - UI-08.5: every header "New ..." button is disabled while the user cannot edit and its tooltip says why
+    ("Read only: <who is editing>", or "Read only: take the edit lock first."). A read-only user gets no draft.
+  - UI-08.6: a refused create keeps the draft and the typed text and shows the reason in the draft form
+    (`FieldError`), not as a toast; the next draft or a good commit clears it.
+  - UI-08.7: the start screen already has the inline new-project card (name, methodology, Create); no dialog
+    there. The File menu's "New project…" keeps its name prompt for use inside a project.
+- **Measured (UI-08 done-when):** five assets with the keyboard alone take 37 key presses (31 letters + 1 chord
+  to start + 4 Ctrl+Enter + 1 Enter) and no mouse. The old flow needs, per asset, a click on "Add asset", the
+  letters and an Enter in the dialog: 41 inputs of which 5 are mouse clicks, and a dialog opens five times.
+  The headless run takes 0.4 s; a person's time was not measured.
+- **Verified:** fmt, clippy `-D warnings`, `cargo test --workspace --locked` (84 binaries, 0 failed),
+  `scripts/deny.sh`.
+
+## Summary of job 114
+
+All eleven element types are created from a draft in the inspector (asset, damage scenario, threat scenario,
+attack tree, security control, goal, claim, component, interface, data flow, trust boundary). Nothing reaches the
+server until the element is complete; Escape or an empty name sends nothing; create is one undo step; names save
+on Enter, Tab and focus loss with no Rename button. Eleven `ask()` dialogs and the inline add forms are gone. No
+new dependency; Slint's text input and IME are reused.
+
+### Not done, for a person
+- UI-08.4: confirm by hand that the Enter which confirms an IME composition does not create the element, on macOS
+  (Japanese Romaji and Kana) and Windows (Microsoft IME). The code uses Slint's own IME path; there is no test.
+- Advisory: the draft row is plain text, not italic grey (a table cell cannot style one row); the draft row and
+  inspector need two frames in the headless tests (Slint runs `changed` handlers on the next turn), which is not
+  a measured one-frame guarantee.

@@ -956,6 +956,48 @@ async fn item_definition_drafts_wait_for_their_required_fields() {
     server.stop().await;
 }
 
+/// UI-08.6: when an edit is refused, the draft stays with the user's text and
+/// the reason shows in the draft, not as a toast.
+#[tokio::test]
+async fn a_refused_draft_stays_and_says_why_in_the_draft() {
+    use aegis_client::view::DraftKind;
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    alice
+        .send(Command::BeginDraft(DraftKind::Control))
+        .expect("sent");
+    until(&alice, "draft", |vm| p(vm).draft.is_some()).await;
+    // A name longer than the model allows is refused.
+    alice
+        .send(Command::CommitDraft {
+            name: "x".repeat(400),
+            next: false,
+        })
+        .expect("sent");
+    let view = until(&alice, "refused", |vm| p(vm).draft_error.is_some()).await;
+    assert!(p(&view).draft.is_some(), "the draft stays");
+    assert!(
+        !view.notices.iter().any(|n| n.severity == Severity::Error),
+        "no error toast: the reason is in the draft"
+    );
+    // A good name creates it and clears the error.
+    alice
+        .send(Command::CommitDraft {
+            name: "Secure boot".into(),
+            next: false,
+        })
+        .expect("sent");
+    let view = until(&alice, "created", |vm| p(vm).draft.is_none()).await;
+    assert!(p(&view).draft_error.is_none());
+    drop(alice);
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn a_second_user_reads_a_saved_version_and_is_offered_the_newer_one() {
     let server = TestServer::start(Duration::ZERO).await;

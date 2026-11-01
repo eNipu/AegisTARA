@@ -191,3 +191,30 @@ pub fn press_key(app: &App, key: slint::platform::Key, control: bool) {
         w.dispatch_event(WindowEvent::KeyReleased { text: ctrl });
     }
 }
+
+/// Presses a character with Control (Command on macOS) and optionally Shift
+/// held, as a keyboard shortcut.
+pub fn press_chord(app: &App, c: char, shift: bool) {
+    use slint::ComponentHandle;
+    use slint::platform::{Key, WindowEvent};
+    let w = app.window.window();
+    let ctrl: slint::SharedString = Key::Control.into();
+    let shift_key: slint::SharedString = Key::Shift.into();
+    let text: slint::SharedString = if shift {
+        c.to_ascii_uppercase().to_string().into()
+    } else {
+        c.to_string().into()
+    };
+    w.dispatch_event(WindowEvent::KeyPressed { text: ctrl.clone() });
+    if shift {
+        w.dispatch_event(WindowEvent::KeyPressed {
+            text: shift_key.clone(),
+        });
+    }
+    w.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    w.dispatch_event(WindowEvent::KeyReleased { text });
+    if shift {
+        w.dispatch_event(WindowEvent::KeyReleased { text: shift_key });
+    }
+    w.dispatch_event(WindowEvent::KeyReleased { text: ctrl });
+}

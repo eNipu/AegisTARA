@@ -1262,3 +1262,9 @@ msgstr "⟦Á dátá flów nééds twó cómpónénts.␣␣␣␣␣␣␣␣�
 
 msgid "A name is needed"
 msgstr "⟦Á náme ís néédéd␣␣⟧"
+
+msgid "New element on this page"
+msgstr "⟦Néw élémént ón thís págé␣␣␣␣␣␣⟧"
+
+msgid "Read only: take the edit lock first."
+msgstr "⟦Réád ónly: táké thé édít lóck fírst.␣␣␣␣␣␣␣␣␣⟧"

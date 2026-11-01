@@ -446,6 +446,8 @@ export component DraftForm inherits VerticalLayout {
     in property <string> hint;
     // Changes with every new draft: the field starts empty again.
     in property <int> seq;
+    // Why the last create was refused; the text stays (UI-08.6).
+    in property <string> error;
     // A required field has no value yet: Create waits (UI-08.2).
     in property <bool> incomplete;
     // Leaving the field with a name creates the element. Off when the form has
@@ -473,6 +475,7 @@ export component DraftForm inherits VerticalLayout {
         }
     }
     @children
+    if root.error != "": FieldError { text: root.error; }
     Text { text: root.hint; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
     Button {
         text: root.incomplete ? @tr("Choose the required fields") : @tr("Create");
