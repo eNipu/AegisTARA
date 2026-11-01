@@ -1259,3 +1259,6 @@ msgstr "先にコンポーネントを追加してください。"
 
 msgid "A data flow needs two components."
 msgstr "データフローには2つのコンポーネントが必要です。"
+
+msgid "A name is needed"
+msgstr "名前が必要です"

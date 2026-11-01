@@ -50,27 +50,61 @@ global Typing {
     in-out property <bool> dirty;
 }
 
-// The rename row of a details panel.
-component NameEditor inherits HorizontalLayout {
+// The name field of a details panel (UI-08.3). The name saves on Enter, on Tab
+// and when focus leaves; Escape puts the saved name back; an empty name is never
+// saved: the saved name returns and a short note says a name is needed.
+component NameEditor inherits VerticalLayout {
     in property <string> name;
     in property <bool> editable;
     callback renamed(string);
     property <bool> typing: edit.has-focus && edit.text != root.name;
-    spacing: 6px;
+    // The text already sent, so Enter and the focus leaving do not send it twice.
+    property <string> requested;
+    property <bool> needed;
+    spacing: 4px;
     changed typing => { Typing.dirty = root.typing; }
-    edit := LineEdit {
-        horizontal-stretch: 1;
-        text: root.name;
-        enabled: root.editable;
-        accessible-label: @tr("Name");
-        accepted(t) => { if (t != root.name && t != "") { root.renamed(t); } }
+    function save() {
+        if (edit.text == root.name || (root.requested != "" && edit.text == root.requested)) { return; }
+        if (edit.text == "") {
+            root.needed = true;
+            edit.text = root.name;
+            return;
+        }
+        root.requested = edit.text;
+        root.renamed(edit.text);
     }
-    Button {
-        text: @tr("Rename");
-        enabled: root.editable && edit.text != root.name && edit.text != "";
-        clicked => { root.renamed(edit.text); }
+    FocusScope {
+        min-height: edit.preferred-height;
+        capture-key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                edit.text = root.name;
+                root.needed = false;
+                return accept;
+            }
+            if (event.text == Key.Tab) { root.save(); }
+            reject
+        }
+        edit := LineEdit {
+            width: parent.width;
+            text: root.name;
+            enabled: root.editable;
+            accessible-label: @tr("Name");
+            accepted(t) => { root.save(); }
+            edited(t) => {
+                root.needed = false;
+                root.requested = "";
+            }
+        }
     }
-    changed name => { edit.text = root.name; }
+    if root.needed: FieldError { text: @tr("A name is needed"); }
+    changed name => {
+        edit.text = root.name;
+        root.requested = "";
+    }
+    changed focused => {
+        if (!root.focused) { root.save(); }
+    }
+    property <bool> focused: edit.has-focus;
 }
 
 // The description boxes of the page that are for `kind`. A page has at most

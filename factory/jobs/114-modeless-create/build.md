@@ -104,3 +104,16 @@ draft is a free tree; attaching to the selected threat stays on the threat page'
 - **Verified:** client and window tests above (real keys; Enter with a missing field creates nothing, choosing
   the field then Enter creates; same component for both ends stays incomplete); fmt, clippy `-D warnings`,
   `cargo test -p aegis-shell -p aegis-client --locked`.
+
+## Slice 4 (names save without a Rename button, UI-08.3) — built test-first
+
+- **Red first:** `crates/aegis-shell/tests/name_editor.rs` (real keys and clicks) failed at "saved by Tab"
+  before the change; a pixel check for the "A name is needed" note failed next and exposed a real bug (an
+  empty text equalled the empty "already sent" marker, so the note never showed).
+- **Built:** `NameEditor` (used by every details panel) saves on Enter, on Tab and when focus leaves
+  (including a click on another table row; the name still goes to the element that was selected when it was
+  typed); Escape puts the saved name back and sends nothing; an empty name is never saved: the saved name
+  returns and a `FieldError` "A name is needed" shows until the next keystroke. The Rename button is gone. A
+  guard stops Enter followed by focus loss from sending the same name twice. ja and pseudo strings added.
+- **Verified:** the test above (Enter, Tab, focus loss, Escape sends no op, empty name not saved and the note
+  drawn); fmt, clippy `-D warnings`, `cargo test -p aegis-shell --locked`.
