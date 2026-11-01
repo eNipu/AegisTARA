@@ -41,24 +41,49 @@ export global Theme {
     out property <color> band: dark ? #C83E1B : #14181D;
     out property <color> band-text: #FFFFFF;
 
+    // ---- Controls (ui/widgets.slint draws every button, field and box) ----
+    // Buttons and popups sit one step above the panel, text fields one step
+    // below it, so a field reads as a place to type and a button as a thing
+    // to press. One accent (crimson) for the primary action, focus and selection.
+    out property <color> raised: dark ? #1E252E : #FFFFFF;
+    out property <color> raised-hover: dark ? #262E39 : #F2F4F7;
+    out property <color> pressed: dark ? #171C23 : #E6EAEF;
+    out property <color> field: dark ? #0F1317 : #FFFFFF;
+    out property <color> line: dark ? #313B47 : #C5CDD6;
+    out property <color> line-strong: dark ? #44505E : #9AA6B3;
+    out property <color> accent-hover: dark ? #EB603A : #B03516;
+    out property <color> accent-pressed: dark ? #C83E1B : #8F240C;
+    out property <color> focus-ring: dark ? #E04F2699 : #C83E1B80;
+    out property <color> selection: dark ? #3A1E16 : #F9DDD4;
+    out property <color> danger: #B3261E;
+    out property <color> danger-hover: #8F1D17;
+    out property <length> radius-control: 6px;
+    out property <length> radius-panel: 8px;
+    out property <length> control-height: 28px;
+    out property <float> disabled-opacity: 0.45;
+
     // Rating colors: Okabe-Ito based, high-contrast in both themes.
     out property <color> very-low: #009E73;
     out property <color> low: #56B4E9;
     out property <color> medium: #E69F00;
     out property <color> high: #D55E00;
 
-    // ---- Typography System (Clean, Bold, High-Assurance Engineering) ----
-    out property <length> font-display: 22px;
-    out property <length> font-h1: 18px;
-    out property <length> font-h2: 15px;
-    out property <length> font-body: 13px;
-    out property <length> font-label: 12px;
-    out property <length> font-caption: 11px;
+    // ---- Typography System ----
+    // The system UI font (SF Pro, Segoe UI Variable) at a calm reading size:
+    // 14px body, like the Claude desktop app, and one step up from the first
+    // scale. The window's default-font-size is font-body, so Slint's own
+    // widgets (sized in rem) follow this scale too.
+    out property <length> font-display: 26px;
+    out property <length> font-h1: 20px;
+    out property <length> font-h2: 16px;
+    out property <length> font-body: 14px;
+    out property <length> font-label: 13px;
+    out property <length> font-caption: 12px;
     out property <int> weight-regular: 400;
     out property <int> weight-medium: 500;
     out property <int> weight-semibold: 600;
     out property <int> weight-bold: 700;
-    out property <int> weight-heavy: 800;
+    out property <int> weight-heavy: 700;
     out property <length> tracking-tight: -0.2px;
     out property <length> tracking-label: 0.3px;
     out property <length> tracking-header: 0.6px;
