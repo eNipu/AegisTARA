@@ -25,7 +25,10 @@ fn click(app: &App, x: f32, y: f32) {
 }
 
 fn project_name(vm: &aegis_client::state::ViewModel) -> String {
-    vm.project.as_ref().map(|p| p.entry.name.clone()).unwrap_or_default()
+    vm.project
+        .as_ref()
+        .map(|p| p.entry.name.clone())
+        .unwrap_or_default()
 }
 
 async fn app_with_sample(server: &TestServer) -> App {
@@ -93,7 +96,10 @@ async fn insert_follows_the_canvas_selection_and_says_what_it_will_do() {
 
     // As a new tree it needs no place.
     app.window.set_library_mode(0);
-    assert_eq!(app.window.get_library_insert_label(), "Insert as a new tree");
+    assert_eq!(
+        app.window.get_library_insert_label(),
+        "Insert as a new tree"
+    );
 
     drop(app);
     server.stop().await;
@@ -105,7 +111,10 @@ async fn the_outline_editor_is_a_mode_of_the_page_with_apply_and_cancel() {
     let app = app_with_sample(&server).await;
     let nodes = |app: &App| {
         let view = app.session.view();
-        view.project.as_ref().and_then(|p| p.scene()).map_or(0, |s| s.len())
+        view.project
+            .as_ref()
+            .and_then(|p| p.scene())
+            .map_or(0, |s| s.len())
     };
     let before = nodes(&app);
     let outline = app.window.get_outline_text().to_string();
@@ -131,7 +140,8 @@ async fn the_outline_editor_is_a_mode_of_the_page_with_apply_and_cancel() {
     );
     app.window.set_outline_draft(changed.into());
     app.window.set_outline_editing(true);
-    app.window.invoke_apply_outline(app.window.get_outline_draft());
+    app.window
+        .invoke_apply_outline(app.window.get_outline_draft());
     app.window.set_outline_editing(false);
     app.until("tree replaced", |vm| {
         vm.project
@@ -165,7 +175,8 @@ async fn clicking_the_project_name_renames_it_in_place() {
     press_chord(&app, 'a', false);
     type_text(&app, "Editors v2");
     press_key(&app, Key::Return, false);
-    app.until("renamed", |vm| project_name(vm) == "Editors v2").await;
+    app.until("renamed", |vm| project_name(vm) == "Editors v2")
+        .await;
     app.frame();
     assert!(!app.window.get_renaming_project());
 
@@ -186,7 +197,10 @@ async fn clicking_the_project_name_renames_it_in_place() {
     press_key(&app, Key::Backspace, false);
     press_key(&app, Key::Return, false);
     app.frame();
-    assert!(app.window.get_renaming_project(), "stays open with the note");
+    assert!(
+        app.window.get_renaming_project(),
+        "stays open with the note"
+    );
     assert_eq!(project_name(&app.session.view()), "Editors v2");
     save(&app.frame(), "editors-after-rename-empty");
 
@@ -194,7 +208,8 @@ async fn clicking_the_project_name_renames_it_in_place() {
     press_chord(&app, 'a', false);
     type_text(&app, "Editors v3");
     click(&app, 700.0, 500.0);
-    app.until("saved by focus loss", |vm| project_name(vm) == "Editors v3").await;
+    app.until("saved by focus loss", |vm| project_name(vm) == "Editors v3")
+        .await;
     app.frame();
     assert!(!app.window.get_renaming_project());
 
@@ -206,14 +221,15 @@ async fn clicking_the_project_name_renames_it_in_place() {
 async fn a_baseline_is_named_in_a_row_at_the_top_of_the_versions_table() {
     let server = TestServer::start().await;
     let app = app_with_sample(&server).await;
-    let baselines = |vm: &aegis_client::state::ViewModel| {
-        vm.project.as_ref().map_or(0, |p| p.baselines.len())
-    };
+    let baselines =
+        |vm: &aegis_client::state::ViewModel| vm.project.as_ref().map_or(0, |p| p.baselines.len());
 
     // The menu command goes to the Versions page and opens the row.
     app.window.invoke_begin_baseline();
     app.until("versions", |vm| {
-        vm.project.as_ref().is_some_and(|p| p.page == Page::Versions)
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.page == Page::Versions)
     })
     .await;
     app.frame();
@@ -237,7 +253,10 @@ async fn a_baseline_is_named_in_a_row_at_the_top_of_the_versions_table() {
     app.frame();
     assert!(!app.window.get_creating_baseline());
     let view = app.session.view();
-    assert_eq!(view.project.as_ref().unwrap().baselines[0].name, "B1 Design freeze");
+    assert_eq!(
+        view.project.as_ref().unwrap().baselines[0].name,
+        "B1 Design freeze"
+    );
 
     // An empty name creates nothing.
     app.window.invoke_begin_baseline();
