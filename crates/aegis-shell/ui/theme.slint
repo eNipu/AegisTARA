@@ -41,6 +41,27 @@ export global Theme {
     out property <color> band: dark ? #C83E1B : #14181D;
     out property <color> band-text: #FFFFFF;
 
+    // ---- Controls (ui/widgets.slint draws every button, field and box) ----
+    // Buttons and popups sit one step above the panel, text fields one step
+    // below it, so a field reads as a place to type and a button as a thing
+    // to press. One accent (crimson) for the primary action, focus and selection.
+    out property <color> raised: dark ? #1E252E : #FFFFFF;
+    out property <color> raised-hover: dark ? #262E39 : #F2F4F7;
+    out property <color> pressed: dark ? #171C23 : #E6EAEF;
+    out property <color> field: dark ? #0F1317 : #FFFFFF;
+    out property <color> line: dark ? #313B47 : #C5CDD6;
+    out property <color> line-strong: dark ? #44505E : #9AA6B3;
+    out property <color> accent-hover: dark ? #EB603A : #B03516;
+    out property <color> accent-pressed: dark ? #C83E1B : #8F240C;
+    out property <color> focus-ring: dark ? #E04F2699 : #C83E1B80;
+    out property <color> selection: dark ? #3A1E16 : #F9DDD4;
+    out property <color> danger: #B3261E;
+    out property <color> danger-hover: #8F1D17;
+    out property <length> radius-control: 6px;
+    out property <length> radius-panel: 8px;
+    out property <length> control-height: 28px;
+    out property <float> disabled-opacity: 0.45;
+
     // Rating colors: Okabe-Ito based, high-contrast in both themes.
     out property <color> very-low: #009E73;
     out property <color> low: #56B4E9;

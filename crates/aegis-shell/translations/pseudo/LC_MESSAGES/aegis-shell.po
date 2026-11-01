@@ -1348,3 +1348,15 @@ msgstr "⟦nóné yét␣␣⟧"
 
 msgid "{} it can lead to"
 msgstr "⟦{} ít cán léád tó␣␣⟧"
+
+msgid "Cut"
+msgstr "⟦Cút␣␣⟧"
+
+msgid "Copy"
+msgstr "⟦Cópy␣␣⟧"
+
+msgid "Paste"
+msgstr "⟦Pásté␣␣⟧"
+
+msgid "Select all"
+msgstr "⟦Séléct áll␣␣⟧"

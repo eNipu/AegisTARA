@@ -5,13 +5,14 @@
 // made by the client core in Rust; the window shows the view model and sends
 // commands back. Menu and sidebar glyphs are Lucide icons (ISC license,
 // ui/icons/LICENSE-lucide.txt).
-import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, AboutSlint, StandardListView, Palette } from "std-widgets.slint";
+import { ScrollView, AboutSlint, StandardListView, Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
-    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm
+    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm,
+    Button, LineEdit, TextEdit, ComboBox, CheckBox, Switch
 } from "widgets.slint";
 
 export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
@@ -1089,7 +1090,7 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 3px;
+            border-radius: Theme.radius-panel;
             clip: true;
             VerticalLayout {
                 spacing: 0px;
@@ -1259,7 +1260,7 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 3px;
+            border-radius: Theme.radius-panel;
             clip: true;
             VerticalLayout {
                 spacing: 0px;
@@ -1303,7 +1304,7 @@ in property <string> redo-label;
                                 background: area.has-hover ? Theme.wash : transparent;
                                 border-width: 1px;
                                 border-color: area.has-hover ? Theme.accent : Theme.rule;
-                                border-radius: 2px;
+                                border-radius: Theme.radius-control;
                                 accessible-role: button;
                                 accessible-label: @tr("Open project ") + p.name;
                                 accessible-action-default => { root.open-project(p.id); }
@@ -2034,7 +2035,7 @@ in property <string> redo-label;
                                         background: s.selected ? Theme.wash : Theme.sheet;
                                         border-width: 1px;
                                         border-color: s.selected ? Theme.accent : Theme.rule;
-                                        border-radius: 2px;
+                                        border-radius: Theme.radius-control;
                                         VerticalLayout {
                                             padding: 8px;
                                             spacing: 4px;
@@ -3158,7 +3159,7 @@ in property <string> redo-label;
             background: n.severity == 2 ? (Theme.dark ? #2E1512 : #FDECEA) : (n.severity == 1 ? (Theme.dark ? #2E230E : #FFF4D6) : Theme.panel);
             border-width: 1px;
             border-color: n.severity == 2 ? Theme.high : (n.severity == 1 ? Theme.medium : Theme.rule);
-            border-radius: 2px;
+            border-radius: Theme.radius-control;
             height: notice-text.preferred-height + 20px;
             accessible-role: text;
             accessible-label: n.text;
@@ -3211,7 +3212,10 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             TouchArea {}
             prompt-column := VerticalLayout {
                 padding: 20px;
@@ -3250,7 +3254,10 @@ in property <string> redo-label;
                 background: Theme.panel;
                 border-width: 1px;
                 border-color: Theme.rule;
-                border-radius: 2px;
+                border-radius: Theme.radius-panel;
+                drop-shadow-blur: 24px;
+                drop-shadow-offset-y: 8px;
+                drop-shadow-color: #00000059;
                 TouchArea {}
                 confirm-column := VerticalLayout {
                     padding: 20px;
@@ -3280,7 +3287,10 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
@@ -3316,7 +3326,10 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
@@ -3435,7 +3448,10 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             pw-column := VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
@@ -3493,7 +3509,10 @@ in property <string> redo-label;
                 background: Theme.panel;
                 border-width: 1px;
                 border-color: Theme.rule;
-                border-radius: 2px;
+                border-radius: Theme.radius-panel;
+                drop-shadow-blur: 24px;
+                drop-shadow-offset-y: 8px;
+                drop-shadow-color: #00000059;
                 TouchArea {}
                 VerticalLayout {
                     padding: 16px;
@@ -3546,7 +3565,7 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 3px;
+            border-radius: Theme.radius-panel;
             clip: true;
             VerticalLayout {
                 spacing: 0px;
