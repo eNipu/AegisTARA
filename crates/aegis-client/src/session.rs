@@ -41,7 +41,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aegis_auth::layer::CredentialProvider;
-use aegis_model::{AssetId, ControlId, DamageId, Methodology, OpCodec, Project};
+use aegis_model::{
+    AssetId, ClaimId, ControlId, DamageId, GoalId, Methodology, OpCodec, Project, ThreatId, TreeId,
+};
 use aegis_proto as pb;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -2118,6 +2120,18 @@ impl<P: CredentialProvider> Actor<P> {
             Command::BeginDraft(kind) => self.begin_draft(kind),
             Command::CommitDraft { name, next } => self.commit_draft(&name, next),
             Command::CancelDraft => self.set_draft(None),
+            Command::SetDraftAsset(asset) => {
+                if let Some(open) = self.open.as_mut() {
+                    open.ui.draft_asset = Some(asset);
+                }
+                self.pump();
+            }
+            Command::SetDraftCategory(category) => {
+                if let Some(open) = self.open.as_mut() {
+                    open.ui.draft_category = Some(category);
+                }
+                self.pump();
+            }
             Command::SuggestTreeNodes => self.suggest_tree_nodes(),
             Command::AcceptSuggestion(index) => self.accept_suggestion(index),
             Command::AcceptAllSuggestions => self.accept_all_suggestions(),
@@ -2667,6 +2681,21 @@ impl<P: CredentialProvider> Actor<P> {
         }
         // The page opens first: leaving a page drops its draft.
         self.show_page(kind.page());
+        if let Some(open) = self.open.as_mut() {
+            // UI-08.2: fill what the context gives: the selected asset, or the
+            // only asset there is.
+            let assets = pages::asset_rows(&open.ws);
+            open.ui.draft_category = None;
+            let only = match assets.as_slice() {
+                [only] => Some(only.id),
+                _ => None,
+            };
+            open.ui.draft_asset = open
+                .ui
+                .selected_asset
+                .filter(|id| assets.iter().any(|a| a.id == *id))
+                .or(only);
+        }
         self.set_draft(Some(kind));
     }
 
@@ -2681,6 +2710,14 @@ impl<P: CredentialProvider> Actor<P> {
             self.set_draft(None);
             return;
         }
+        // UI-08.2: nothing is created until every required field has a value.
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        if open.ui.draft_incomplete() {
+            return;
+        }
+        let (asset, category) = (open.ui.draft_asset, open.ui.draft_category);
         let name = name.to_owned();
         let edit = match kind {
             DraftKind::Asset => {
@@ -2702,6 +2739,30 @@ impl<P: CredentialProvider> Actor<P> {
             DraftKind::Control => Edit::AddControl {
                 id: ControlId::new_v7(),
                 name,
+            },
+            DraftKind::Threat => {
+                let (Some(asset), Some(category)) = (asset, category) else {
+                    return;
+                };
+                Edit::AddThreat {
+                    id: ThreatId::new_v7(),
+                    name,
+                    asset,
+                    category,
+                }
+            }
+            DraftKind::Goal => Edit::AddGoal {
+                id: GoalId::new_v7(),
+                name,
+            },
+            DraftKind::Claim => Edit::AddClaim {
+                id: ClaimId::new_v7(),
+                name,
+            },
+            DraftKind::Tree => Edit::NewTree {
+                id: TreeId::new_v7(),
+                root: name,
+                threat: None,
             },
         };
         if self.edit(&edit) {
@@ -2946,6 +3007,9 @@ impl<P: CredentialProvider> Actor<P> {
                 redo_label: open.ws.redo_label().map(Label::imperative),
                 draft: open.ui.draft,
                 draft_seq: open.ui.draft_seq,
+                draft_asset: open.ui.draft_asset,
+                draft_category: open.ui.draft_category,
+                draft_incomplete: open.ui.draft_incomplete(),
                 show_residual: open.ui.show_residual,
                 confirmed_seq: open.ws.confirmed_seq(),
                 numbers,

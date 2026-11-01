@@ -104,6 +104,7 @@ export component Choice inherits VerticalLayout {
     in property <bool> editable: true;
     in property <string> label;
     callback picked(int);
+    public function focus-box() { box.focus(); }
 
     box := ComboBox {
         model: root.options;
@@ -445,6 +446,11 @@ export component DraftForm inherits VerticalLayout {
     in property <string> hint;
     // Changes with every new draft: the field starts empty again.
     in property <int> seq;
+    // A required field has no value yet: Create waits (UI-08.2).
+    in property <bool> incomplete;
+    // Leaving the field with a name creates the element. Off when the form has
+    // other fields, so moving to one of them does not create it.
+    in property <bool> blur-creates: true;
     callback commit(string, bool);
     callback cancel();
     property <bool> focused: edit.has-focus;
@@ -466,14 +472,25 @@ export component DraftForm inherits VerticalLayout {
             init => { self.focus(); }
         }
     }
+    @children
     Text { text: root.hint; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+    Button {
+        text: root.incomplete ? @tr("Choose the required fields") : @tr("Create");
+        primary: true;
+        enabled: edit.text != "" && !root.incomplete;
+        clicked => { root.commit(edit.text, false); }
+    }
     Rectangle { vertical-stretch: 1; }
     changed seq => {
         edit.text = "";
         edit.focus();
     }
+    // The last required field got its value: back to the name, so Enter creates.
+    changed incomplete => {
+        if (!root.incomplete) { edit.focus(); }
+    }
     changed focused => {
-        if (!root.focused && edit.text != "") { root.commit(edit.text, false); }
+        if (!root.focused && root.blur-creates && edit.text != "") { root.commit(edit.text, false); }
     }
 }
 

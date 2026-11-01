@@ -1116,8 +1116,8 @@
       },
       "history": [],
       "decision": null,
-      "updated_at": "2026-11-01T00:24:27Z",
-      "notes": "Slice 1 done on master (asset, damage scenario, control drafts; client-core draft state; DraftForm; real-key tests). Next: S2 threat, goal, claim, tree with required fields."
+      "updated_at": "2026-11-01T01:10:53Z",
+      "notes": "Slices 1 and 2 done on master (asset, damage, control, threat with required fields, goal, claim, tree). Next: S3 component, interface, data flow, trust boundary."
     }
   ],
   "updated_at": "2026-10-31T09:50:51Z"

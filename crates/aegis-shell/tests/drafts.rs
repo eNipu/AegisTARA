@@ -116,3 +116,85 @@ async fn control_enter_creates_and_starts_the_next_draft() {
     let vm = settle(&app).await;
     assert_eq!(p(&vm).data.damages.len(), 3);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_threat_draft_waits_for_its_asset_and_category() {
+    use aegis_client::commands::{Command, Edit};
+    use aegis_model::AssetId;
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    app.send(Command::Edit(Edit::AddAsset {
+        id: AssetId::new_v7(),
+        name: "ECU".into(),
+        properties: (0..6).collect(),
+    }));
+    app.window.invoke_show_page(Page::Assets.index() as i32);
+    app.until("asset", |vm| p(vm).data.assets.len() == 1).await;
+    app.window.invoke_show_page(Page::Threats.index() as i32);
+    app.window.invoke_begin_draft("threat".into());
+    app.until("draft", |vm| p(vm).draft == Some(DraftKind::Threat))
+        .await;
+    app.frame();
+    app.frame();
+    assert_eq!(app.window.get_threat_rows().row_count(), 1, "the draft row");
+    assert_eq!(app.window.get_threat_selected(), 0, "and it is selected");
+    assert!(app.window.get_draft_incomplete(), "the category is missing");
+    assert_eq!(
+        app.window.get_draft_asset(),
+        0,
+        "the only asset is the context"
+    );
+    assert_eq!(app.window.get_draft_category(), -1);
+
+    // Enter without a category creates nothing.
+    type_text(&app, "Spoofed brake frame");
+    press_key(&app, Key::Return, false);
+    let vm = settle(&app).await;
+    assert_eq!(p(&vm).threats.len(), 0);
+    assert!(p(&vm).draft.is_some(), "the draft stays");
+    save(&app.frame(), "draft-threat-incomplete");
+
+    // Choosing a category completes it; Enter in the name field creates it.
+    app.window.invoke_set_draft_category(0);
+    app.until("complete", |vm| !p(vm).draft_incomplete).await;
+    app.frame();
+    assert!(!app.window.get_draft_incomplete());
+    press_key(&app, Key::Return, false);
+    let vm = app.until("created", |vm| p(vm).threats.len() == 1).await;
+    assert_eq!(p(&vm).threats[0].name, "Spoofed brake frame");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn goal_claim_and_tree_drafts_are_created_with_the_keyboard() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    for (page, key, kind, name) in [
+        (Page::Goals, "goal", DraftKind::Goal, "No remote braking"),
+        (
+            Page::Goals,
+            "claim",
+            DraftKind::Claim,
+            "Debug port is closed",
+        ),
+        (Page::Trees, "tree", DraftKind::Tree, "Reflash the ECU"),
+    ] {
+        app.window.invoke_show_page(page.index() as i32);
+        app.window.invoke_begin_draft(key.into());
+        app.until(key, |vm| p(vm).draft == Some(kind)).await;
+        app.frame();
+        app.frame();
+        type_text(&app, name);
+        press_key(&app, Key::Return, false);
+        // Each page fills only its own data: count on the page of the draft.
+        app.until(name, |vm| {
+            let d = &p(vm).data;
+            p(vm).draft.is_none()
+                && match kind {
+                    DraftKind::Goal => d.goals.len() == 1,
+                    DraftKind::Claim => d.claims.len() == 1,
+                    _ => d.trees.len() == 1,
+                }
+        })
+        .await;
+    }
+}
