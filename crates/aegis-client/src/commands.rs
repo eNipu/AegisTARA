@@ -1680,6 +1680,10 @@ pub enum Command {
     },
     /// Discard the draft; nothing was sent, nothing is in the history.
     CancelDraft,
+    /// Choose the asset of a threat draft.
+    SetDraftAsset(aegis_model::AssetId),
+    /// Choose the category of a threat draft (a position in the vocabulary).
+    SetDraftCategory(usize),
     /// Show a page of the open project.
     ShowPage(crate::view::Page),
     /// Select an entity (and show the page it belongs to when `navigate`).

@@ -1223,3 +1223,15 @@ msgstr "⟦Cóntról námé␣␣␣⟧"
 
 msgid "Press Enter to create, Escape to cancel."
 msgstr "⟦Préss Éntér tó créáté, Éscápé tó cáncél.␣␣␣␣␣␣␣␣␣␣⟧"
+
+msgid "New claim"
+msgstr "⟦Néw cláím␣␣⟧"
+
+msgid "New attack tree"
+msgstr "⟦Néw áttáck tréé␣␣␣⟧"
+
+msgid "Choose the required fields"
+msgstr "⟦Chóósé thé réqúíréd fíélds␣␣␣␣␣␣⟧"
+
+msgid "The attacker's goal (the root)"
+msgstr "⟦Thé áttáckér's góál (thé róót)␣␣␣␣␣␣␣⟧"

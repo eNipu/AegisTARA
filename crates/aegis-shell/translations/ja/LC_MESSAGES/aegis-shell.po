@@ -1223,3 +1223,15 @@ msgstr "コントロール名"
 
 msgid "Press Enter to create, Escape to cancel."
 msgstr "Enterで作成、Escapeで取り消し。"
+
+msgid "New claim"
+msgstr "新しい主張"
+
+msgid "New attack tree"
+msgstr "新しい攻撃ツリー"
+
+msgid "Choose the required fields"
+msgstr "必須項目を選んでください"
+
+msgid "The attacker's goal (the root)"
+msgstr "攻撃者の目的（ルート）"

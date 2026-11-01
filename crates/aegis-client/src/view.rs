@@ -247,6 +247,24 @@ pub enum DraftKind {
     Damage,
     /// A new security control.
     Control,
+    /// A new threat scenario: needs an asset and a category.
+    Threat,
+    /// A new cybersecurity goal.
+    Goal,
+    /// A new cybersecurity claim.
+    Claim,
+    /// A new attack tree (its root is named).
+    Tree,
+}
+
+impl UiState {
+    /// A required field of the draft has no value: a threat needs an asset and
+    /// a category; the other drafts need only a name (UI-08.2).
+    #[must_use]
+    pub fn draft_incomplete(&self) -> bool {
+        self.draft == Some(DraftKind::Threat)
+            && (self.draft_asset.is_none() || self.draft_category.is_none())
+    }
 }
 
 impl DraftKind {
@@ -257,6 +275,9 @@ impl DraftKind {
             Self::Asset => Page::Assets,
             Self::Damage => Page::Damage,
             Self::Control => Page::Controls,
+            Self::Threat => Page::Threats,
+            Self::Goal | Self::Claim => Page::Goals,
+            Self::Tree => Page::Trees,
         }
     }
 
@@ -267,15 +288,27 @@ impl DraftKind {
             Self::Asset => "asset",
             Self::Damage => "damage",
             Self::Control => "control",
+            Self::Threat => "threat",
+            Self::Goal => "goal",
+            Self::Claim => "claim",
+            Self::Tree => "tree",
         }
     }
 
     /// The kind with this key.
     #[must_use]
     pub fn from_key(key: &str) -> Option<Self> {
-        [Self::Asset, Self::Damage, Self::Control]
-            .into_iter()
-            .find(|k| k.key() == key)
+        [
+            Self::Asset,
+            Self::Damage,
+            Self::Control,
+            Self::Threat,
+            Self::Goal,
+            Self::Claim,
+            Self::Tree,
+        ]
+        .into_iter()
+        .find(|k| k.key() == key)
     }
 }
 
@@ -288,6 +321,10 @@ pub struct UiState {
     pub draft: Option<DraftKind>,
     /// Changes with every new draft, so the window clears its text field.
     pub draft_seq: u64,
+    /// The asset of a threat draft (from the context, or chosen).
+    pub draft_asset: Option<AssetId>,
+    /// The category of a threat draft, as a position in the vocabulary.
+    pub draft_category: Option<usize>,
     /// The selected threat (threat and risk pages; its tree when no tree is
     /// selected).
     pub selected_threat: Option<ThreatId>,

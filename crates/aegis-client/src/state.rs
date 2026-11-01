@@ -400,6 +400,12 @@ pub struct ProjectView {
     pub draft: Option<crate::view::DraftKind>,
     /// Changes with every new draft.
     pub draft_seq: u64,
+    /// The asset of a threat draft.
+    pub draft_asset: Option<aegis_model::AssetId>,
+    /// The category of a threat draft.
+    pub draft_category: Option<usize>,
+    /// A required field of the draft has no value yet (UI-08.2).
+    pub draft_incomplete: bool,
     /// What undo would undo, as "remove asset 'Brake ECU'" (UI-10.2).
     pub undo_label: Option<String>,
     /// What redo would redo.

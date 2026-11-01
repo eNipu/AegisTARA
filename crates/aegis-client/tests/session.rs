@@ -734,6 +734,134 @@ async fn a_draft_sends_nothing_until_it_is_created_and_undo_takes_it_back() {
     server.stop().await;
 }
 
+/// UI-08.2: a threat draft needs an asset and a category. The asset comes from
+/// the context when there is one; nothing is created until both have a value.
+#[tokio::test]
+async fn a_threat_draft_is_created_only_when_its_required_fields_are_set() {
+    use aegis_client::view::DraftKind;
+    use aegis_model::AssetId;
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+
+    // No asset yet: the draft is incomplete and committing creates nothing.
+    alice
+        .send(Command::BeginDraft(DraftKind::Threat))
+        .expect("sent");
+    let view = until(&alice, "draft", |vm| p(vm).draft == Some(DraftKind::Threat)).await;
+    assert!(p(&view).draft_incomplete);
+    alice
+        .send(Command::CommitDraft {
+            name: "Spoofed frame".into(),
+            next: false,
+        })
+        .expect("sent");
+    let view = until(&alice, "still a draft", |vm| p(vm).draft.is_some()).await;
+    assert_eq!(
+        p(&view).threats.len(),
+        0,
+        "an incomplete draft creates nothing"
+    );
+
+    // With exactly one asset, the asset comes from the context.
+    let asset = AssetId::new_v7();
+    alice
+        .send(Command::Edit(Edit::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: (0..6).collect(),
+        }))
+        .expect("sent");
+    until(&alice, "asset", |vm| p(vm).data.assets.len() == 1).await;
+    alice.send(Command::CancelDraft).expect("sent");
+    until(&alice, "no draft", |vm| p(vm).draft.is_none()).await;
+    alice
+        .send(Command::BeginDraft(DraftKind::Threat))
+        .expect("sent");
+    let view = until(&alice, "draft 2", |vm| p(vm).draft.is_some()).await;
+    assert_eq!(
+        p(&view).draft_asset,
+        Some(asset),
+        "the only asset is the context"
+    );
+    assert_eq!(p(&view).draft_category, None);
+    assert!(p(&view).draft_incomplete, "the category is missing");
+
+    // Commit without a category does nothing; with one it creates the threat.
+    alice
+        .send(Command::CommitDraft {
+            name: "Spoofed frame".into(),
+            next: false,
+        })
+        .expect("sent");
+    let view = until(&alice, "still a draft 2", |vm| p(vm).draft.is_some()).await;
+    assert_eq!(p(&view).threats.len(), 0);
+    alice.send(Command::SetDraftCategory(0)).expect("sent");
+    let view = until(&alice, "complete", |vm| !p(vm).draft_incomplete).await;
+    assert_eq!(p(&view).draft_category, Some(0));
+    alice
+        .send(Command::CommitDraft {
+            name: "Spoofed frame".into(),
+            next: false,
+        })
+        .expect("sent");
+    let view = until(&alice, "created", |vm| p(vm).threats.len() == 1).await;
+    assert_eq!(p(&view).threats[0].name, "Spoofed frame");
+    assert!(p(&view).draft.is_none());
+    alice.send(Command::Undo).expect("sent");
+    until(&alice, "undone", |vm| p(vm).threats.is_empty()).await;
+    drop(alice);
+    server.stop().await;
+}
+
+/// UI-08.1: goals, claims and trees are created from a name alone.
+#[tokio::test]
+async fn goal_claim_and_tree_drafts_are_created_from_a_name() {
+    use aegis_client::view::DraftKind;
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    for (kind, name) in [
+        (DraftKind::Goal, "No remote braking"),
+        (DraftKind::Claim, "Debug port is closed"),
+        (DraftKind::Tree, "Reflash the ECU"),
+    ] {
+        alice.send(Command::BeginDraft(kind)).expect("sent");
+        let view = until(&alice, "draft", |vm| p(vm).draft == Some(kind)).await;
+        assert!(!p(&view).draft_incomplete, "{kind:?} needs only a name");
+        alice
+            .send(Command::CommitDraft {
+                name: name.into(),
+                next: false,
+            })
+            .expect("sent");
+        // Each page fills only its own data, so check on the page of the draft.
+        let view = until(&alice, name, |vm| {
+            let p = p(vm);
+            p.draft.is_none()
+                && match kind {
+                    DraftKind::Goal => p.data.goals.len() == 1,
+                    DraftKind::Claim => p.data.claims.len() == 1,
+                    _ => p.data.trees.len() == 1,
+                }
+        })
+        .await;
+        if kind == DraftKind::Goal {
+            assert_eq!(p(&view).data.goals[0].name, name);
+        }
+    }
+    drop(alice);
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn a_second_user_reads_a_saved_version_and_is_offered_the_newer_one() {
     let server = TestServer::start(Duration::ZERO).await;

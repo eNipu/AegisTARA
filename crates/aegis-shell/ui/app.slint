@@ -236,6 +236,16 @@ export component AppWindow inherits Window {
     out property <string> draft-row-asset: @tr("New asset");
     out property <string> draft-row-damage: @tr("New ") + root.damage-singular;
     out property <string> draft-row-control: @tr("New control");
+    out property <string> draft-row-threat: @tr("New threat scenario");
+    out property <string> draft-row-goal: @tr("New ") + root.goal-singular;
+    out property <string> draft-row-claim: @tr("New claim");
+    out property <string> draft-row-tree: @tr("New attack tree");
+    // The threat draft's required fields: positions in the asset and category lists, -1 if none.
+    in property <int> draft-asset: -1;
+    in property <int> draft-category: -1;
+    in property <bool> draft-incomplete;
+    callback set-draft-asset(int);
+    callback set-draft-category(int);
     callback begin-draft(string);
     callback commit-draft(string, bool);
     callback cancel-draft();
@@ -818,9 +828,6 @@ in property <string> redo-label;
         if (kind == "rename-project") { root.rename-project(text); }
         if (kind == "add-component") { root.add-component(text); }
         if (kind == "add-trust-boundary") { root.add-trust-boundary(text); }
-        if (kind == "new-tree") { root.new-tree(text); }
-        if (kind == "add-goal") { root.add-goal(text); }
-        if (kind == "add-claim") { root.add-claim(text); }
         if (kind == "create-baseline") { root.create-baseline(text); }
         if (kind == "reset-password") { root.reset-user-password(text); }
     }
@@ -1578,25 +1585,11 @@ in property <string> redo-label;
                     VerticalLayout {
                         horizontal-stretch: 3;
                         spacing: 10px;
-                        PageTitle { title: @tr("Threat scenarios"); subtitle: @tr("How an attacker could harm an asset, with STRIDE and UN R155 Annex 5."); icon: @image-url("icons/swords.svg"); }
-                        if root.editing: Panel {
-                            SectionTitle { text: @tr("Add a threat scenario"); }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                LineEdit { horizontal-stretch: 1; placeholder-text: @tr("Threat scenario"); text <=> root.new-threat-name; accessible-label: @tr("New threat scenario"); }
-                                Button {
-                                    text: @tr("Add");
-                                    icon: @image-url("icons/plus.svg");
-                                    enabled: root.new-threat-name != "" && root.asset-names.length > 0;
-                                    clicked => { root.add-threat(root.new-threat-name, root.new-threat-asset, root.new-threat-category); root.new-threat-name = ""; }
-                                }
-                            }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                Choice { horizontal-stretch: 1; options: root.asset-names; index: root.new-threat-asset; label: @tr("Asset"); picked(i) => { root.new-threat-asset = i; } }
-                                Choice { horizontal-stretch: 1; options: root.threat-categories; index: root.new-threat-category; label: @tr("Category"); picked(i) => { root.new-threat-category = i; } }
-                            }
-                            if root.asset-names.length == 0: Text { text: @tr("Add an asset first."); color: Theme.graphite; font-size: 12px; }
+                        PageTitle {
+                            title: @tr("Threat scenarios");
+                            subtitle: @tr("How an attacker could harm an asset, with STRIDE and UN R155 Annex 5.");
+                            icon: @image-url("icons/swords.svg");
+                            Button { text: @tr("New threat scenario"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("threat"); } }
                         }
                         Table {
                             label: @tr("Threat scenarios");
@@ -1606,7 +1599,34 @@ in property <string> redo-label;
                             picked(i) => { root.select-threat(i); }
                         }
                     }
-                    if root.has-threat-detail: ScrollView {
+                    if root.draft-kind == "threat": Panel {
+                        width: root.side-width;
+                        DraftForm {
+                            title: @tr("New threat scenario");
+                            placeholder: @tr("Threat scenario");
+                            hint: root.asset-names.length == 0 ? @tr("Add an asset first.") : @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            incomplete: root.draft-incomplete;
+                            blur-creates: false;
+                            commit(t, next) => {
+                                if (root.draft-incomplete && t != "") {
+                                    if (root.draft-asset < 0) { draft-asset-choice.focus-box(); } else { draft-category-choice.focus-box(); }
+                                } else {
+                                    root.commit-draft(t, next);
+                                }
+                            }
+                            cancel => { root.cancel-draft(); }
+                            Field {
+                                label: @tr("Asset");
+                                draft-asset-choice := Choice { options: root.asset-names; index: root.draft-asset; label: @tr("Asset"); picked(i) => { root.set-draft-asset(i); } }
+                            }
+                            Field {
+                                label: @tr("Category");
+                                draft-category-choice := Choice { options: root.threat-categories; index: root.draft-category; label: @tr("Category"); picked(i) => { root.set-draft-category(i); } }
+                            }
+                        }
+                    }
+                    if root.has-threat-detail && root.draft-kind != "threat": ScrollView {
                         width: root.side-width + 30px;
                         Panel {
                             width: root.side-width + 12px;
@@ -1669,7 +1689,7 @@ in property <string> redo-label;
                         HorizontalLayout {
                             spacing: 6px;
                             SectionTitle { text: @tr("Attack trees"); vertical-alignment: center; horizontal-stretch: 1; }
-                            Button { text: @tr("New"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("new-tree", "New attack tree", "The attacker's goal (the root)", ""); } }
+                            Button { text: @tr("New"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("tree"); } }
                         }
                         Table {
                             label: @tr("Attack trees");
@@ -1678,7 +1698,15 @@ in property <string> redo-label;
                             selected: root.tree-selected;
                             picked(i) => { root.pick-tree(i); }
                         }
-                        if root.has-tree: HorizontalLayout {
+                        if root.draft-kind == "tree": DraftForm {
+                            title: @tr("New attack tree");
+                            placeholder: @tr("The attacker's goal (the root)");
+                            hint: @tr("Press Enter to create, Escape to cancel.");
+                            seq: root.draft-seq;
+                            commit(t, next) => { root.commit-draft(t, next); }
+                            cancel => { root.cancel-draft(); }
+                        }
+                        if root.has-tree && root.draft-kind != "tree": HorizontalLayout {
                             spacing: 6px;
                             Button { text: @tr("Edit outline"); icon: @image-url("icons/pencil.svg"); enabled: root.editing; clicked => { root.outline-draft = root.outline-text; root.outline-open = true; } }
                             Button { text: @tr("Delete"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-tree(); } }
@@ -2155,8 +2183,8 @@ in property <string> redo-label;
                             title: @tr("Goals and claims");
                             subtitle: @tr("Goals back a Reduce decision with controls; claims back Retain and Share.");
                             icon: @image-url("icons/target.svg");
-                            Button { text: @tr("Add goal"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-goal", "Add cybersecurity goal", "Goal", ""); } }
-                            Button { text: @tr("Add claim"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.ask("add-claim", "Add cybersecurity claim", "Claim", ""); } }
+                            Button { text: @tr("New ") + root.goal-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("goal"); } }
+                            Button { text: @tr("New claim"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("claim"); } }
                         }
                         SectionTitle { text: root.goal-plural; }
                         Table {
@@ -2178,7 +2206,27 @@ in property <string> redo-label;
                     VerticalLayout {
                         width: root.side-width;
                         spacing: 12px;
-                        if root.has-goal: Panel {
+                        if root.draft-kind == "goal": Panel {
+                            DraftForm {
+                                title: @tr("New ") + root.goal-singular;
+                                placeholder: root.goal-singular;
+                                hint: @tr("Press Enter to create, Escape to cancel.");
+                                seq: root.draft-seq;
+                                commit(t, next) => { root.commit-draft(t, next); }
+                                cancel => { root.cancel-draft(); }
+                            }
+                        }
+                        if root.draft-kind == "claim": Panel {
+                            DraftForm {
+                                title: @tr("New claim");
+                                placeholder: @tr("Claim");
+                                hint: @tr("Press Enter to create, Escape to cancel.");
+                                seq: root.draft-seq;
+                                commit(t, next) => { root.commit-draft(t, next); }
+                                cancel => { root.cancel-draft(); }
+                            }
+                        }
+                        if root.has-goal && root.draft-kind == "": Panel {
                             SectionTitle { text: root.goal-singular + " · " + root.goal-id; }
                             NameEditor { name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
                             DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
@@ -2188,7 +2236,7 @@ in property <string> redo-label;
                             LinkList { items: root.goal-threats; clicked(i) => { root.goal-threat-clicked(i); } }
                             Button { text: @tr("Remove goal"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-goal(); } }
                         }
-                        if root.has-claim: Panel {
+                        if root.has-claim && root.draft-kind == "": Panel {
                             SectionTitle { text: @tr("Cybersecurity claim") + " · " + root.claim-id; }
                             NameEditor { name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
                             DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }

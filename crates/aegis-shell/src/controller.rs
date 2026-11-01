@@ -135,6 +135,23 @@ fn rows(rows: Vec<Vec<String>>) -> ModelRc<ModelRc<StandardListViewItem>> {
     )
 }
 
+/// Adds the draft's row at the end of `list` when `drafting`, with its text in
+/// the name column; returns its position.
+fn push_draft_row(
+    list: &mut Vec<Vec<String>>,
+    drafting: bool,
+    cols: usize,
+    text: String,
+) -> Option<i32> {
+    if !drafting {
+        return None;
+    }
+    let mut row = vec![String::new(); cols];
+    row[1] = text;
+    list.push(row);
+    i32::try_from(list.len() - 1).ok()
+}
+
 fn risk_text(r: Option<&RiskView>) -> String {
     r.map_or_else(|| "not rated".to_owned(), |v| v.label.clone())
 }
@@ -707,6 +724,16 @@ impl Controller {
             }
         ));
         on!(on_cancel_draft, |c| c.send(Command::CancelDraft));
+        on!(on_set_draft_asset, |c, i| {
+            if let Some(id) = c.with_project(|p| p.data.assets.get(pos(i)?).map(|a| a.id)) {
+                c.send(Command::SetDraftAsset(id));
+            }
+        });
+        on!(on_set_draft_category, |c, i| {
+            if let Some(i) = pos(i) {
+                c.send(Command::SetDraftCategory(i));
+            }
+        });
         on!(on_add_asset, |c, name| {
             let all = c.with_project(|p| Some((0..p.vocab.properties.len()).collect()));
             c.edit(Edit::AddAsset {
@@ -2222,6 +2249,17 @@ impl Controller {
         w.set_can_redo(project.can_redo);
         w.set_draft_kind(s(project.draft.map_or("", |k| k.key())));
         w.set_draft_seq(i32::try_from(project.draft_seq).unwrap_or(i32::MAX));
+        w.set_draft_incomplete(project.draft_incomplete);
+        w.set_draft_category(
+            project
+                .draft_category
+                .and_then(|i| i32::try_from(i).ok())
+                .unwrap_or(-1),
+        );
+        w.set_draft_asset(index_of(
+            project.data.assets.iter().map(|a| a.id),
+            project.draft_asset,
+        ));
         w.set_undo_label(s(project.undo_label.as_deref().unwrap_or("")));
         w.set_redo_label(s(project.redo_label.as_deref().unwrap_or("")));
         w.set_show_residual(project.show_residual);
@@ -2241,6 +2279,7 @@ impl Controller {
         }
         if prev_proj.is_none_or(|old| {
             old.threats != project.threats
+                || old.draft != project.draft
                 || old.selected_threat != project.selected_threat
                 || old.data.threat != project.data.threat
         }) {
@@ -2248,6 +2287,7 @@ impl Controller {
         }
         if prev_proj.is_none_or(|old| {
             old.data != project.data
+                || old.draft != project.draft
                 || old.baselines != project.baselines
                 || old.comparison != project.comparison
                 || old.history != project.history
@@ -2299,25 +2339,31 @@ impl Controller {
                 })
                 .collect(),
         ));
-        w.set_threat_rows(rows(
-            p.threats
-                .iter()
-                .map(|t| {
-                    vec![
-                        t.visual_id.clone(),
-                        t.name.clone(),
-                        t.asset.clone(),
-                        risk_text(t.inherent.as_ref()),
-                        risk_text(t.residual.as_ref()),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_threat_selected(
+        let mut list: Vec<Vec<String>> = p
+            .threats
+            .iter()
+            .map(|t| {
+                vec![
+                    t.visual_id.clone(),
+                    t.name.clone(),
+                    t.asset.clone(),
+                    risk_text(t.inherent.as_ref()),
+                    risk_text(t.residual.as_ref()),
+                ]
+            })
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::Threat),
+            5,
+            w.get_draft_row_threat().to_string(),
+        );
+        w.set_threat_rows(rows(list));
+        w.set_threat_selected(draft_at.unwrap_or_else(|| {
             p.selected_threat
                 .and_then(|i| i32::try_from(i).ok())
-                .unwrap_or(-1),
-        );
+                .unwrap_or(-1)
+        }));
         let d = p.data.threat.as_ref();
         w.set_has_threat_detail(d.is_some());
         let Some(d) = d else {
@@ -2725,16 +2771,24 @@ impl Controller {
         ));
 
         // Trees.
-        w.set_tree_rows(rows(
-            d.trees
-                .iter()
-                .map(|t| vec![t.visual_id.clone(), t.title.clone(), t.feasibility.clone()])
-                .collect(),
-        ));
-        w.set_tree_selected(index_of(
-            d.trees.iter().map(|t| t.id),
-            p.tree.as_ref().map(|t| t.tree),
-        ));
+        let mut list: Vec<Vec<String>> = d
+            .trees
+            .iter()
+            .map(|t| vec![t.visual_id.clone(), t.title.clone(), t.feasibility.clone()])
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::Tree),
+            3,
+            w.get_draft_row_tree().to_string(),
+        );
+        w.set_tree_rows(rows(list));
+        w.set_tree_selected(draft_at.unwrap_or_else(|| {
+            index_of(
+                d.trees.iter().map(|t| t.id),
+                p.tree.as_ref().map(|t| t.tree),
+            )
+        }));
         w.set_outline_text(s(d.outline.as_deref().unwrap_or("")));
 
         // Controls.
@@ -2776,23 +2830,28 @@ impl Controller {
         }
 
         // Goals and claims.
-        w.set_goal_rows(rows(
-            d.goals
-                .iter()
-                .map(|g| {
-                    vec![
-                        g.visual_id.clone(),
-                        g.name.clone(),
-                        g.controls.to_string(),
-                        g.threats.to_string(),
-                    ]
-                })
-                .collect(),
-        ));
-        w.set_goal_selected(index_of(
-            d.goals.iter().map(|g| g.id),
-            d.goal.as_ref().map(|g| g.id),
-        ));
+        let mut list: Vec<Vec<String>> = d
+            .goals
+            .iter()
+            .map(|g| {
+                vec![
+                    g.visual_id.clone(),
+                    g.name.clone(),
+                    g.controls.to_string(),
+                    g.threats.to_string(),
+                ]
+            })
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::Goal),
+            4,
+            w.get_draft_row_goal().to_string(),
+        );
+        w.set_goal_rows(rows(list));
+        w.set_goal_selected(draft_at.unwrap_or_else(|| {
+            index_of(d.goals.iter().map(|g| g.id), d.goal.as_ref().map(|g| g.id))
+        }));
         w.set_has_goal(d.goal.is_some());
         if let Some(g) = &d.goal {
             w.set_goal_id(s(&g.visual_id));
@@ -2810,16 +2869,24 @@ impl Controller {
         } else {
             w.set_goal_id(s(""));
         }
-        w.set_claim_rows(rows(
-            d.claims
-                .iter()
-                .map(|c| vec![c.visual_id.clone(), c.name.clone(), c.threats.to_string()])
-                .collect(),
-        ));
-        w.set_claim_selected(index_of(
-            d.claims.iter().map(|c| c.id),
-            d.claim.as_ref().map(|c| c.id),
-        ));
+        let mut list: Vec<Vec<String>> = d
+            .claims
+            .iter()
+            .map(|c| vec![c.visual_id.clone(), c.name.clone(), c.threats.to_string()])
+            .collect();
+        let draft_at = push_draft_row(
+            &mut list,
+            p.draft == Some(DraftKind::Claim),
+            3,
+            w.get_draft_row_claim().to_string(),
+        );
+        w.set_claim_rows(rows(list));
+        w.set_claim_selected(draft_at.unwrap_or_else(|| {
+            index_of(
+                d.claims.iter().map(|c| c.id),
+                d.claim.as_ref().map(|c| c.id),
+            )
+        }));
         w.set_has_claim(d.claim.is_some());
         if let Some(c) = &d.claim {
             w.set_claim_id(s(&c.visual_id));

@@ -40,3 +40,50 @@
   of the Rename button (S4); the + and ⌘/Ctrl+Shift+N shortcut, read-only reasons on the
   button, the start-screen inline card, removing the remaining `ask()` sites, the
   key-press measurement and the Japanese IME check by hand (S5).
+
+## Slice 2 (threat scenario, goal, claim, attack tree) — built test-first
+
+### Red first
+The tests were written before the code and failed for the right reasons: the client tests
+did not compile (no `DraftKind::Threat`, `Goal`, `Claim`, `Tree`, no `SetDraftCategory`, no
+`draft_incomplete`), and the window tests lacked the callbacks and properties. A later
+assertion that the threat draft row exists failed on its own (the controller skipped the
+threat page when only the draft changed) and went green with the fix.
+
+### Built
+- **Client core:** `DraftKind` gains Threat, Goal, Claim, Tree. A threat draft has two
+  required fields, the asset and the category (`UiState.draft_asset`, `draft_category`,
+  `draft_incomplete()`; `Command::SetDraftAsset`, `SetDraftCategory`). `BeginDraft` fills the
+  asset from the context: the selected asset if there is one, else the only asset. Commit
+  with a missing required field creates nothing and keeps the draft; an empty name still
+  discards. `next` keeps the chosen asset and category for the following draft. Goal and
+  claim are created with `AddGoal`/`AddClaim`, a tree with `NewTree` (free tree, name is the
+  root), all through the one edit path, so each is one undo step.
+- **Window:** the inline "Add a threat scenario" form (F6) is gone; the page header has "New
+  threat scenario". The threat draft shows Asset and Category choices; Enter or Tab with a
+  field missing moves focus to the first missing one, and when the last one is set focus
+  returns to the name so Enter creates. A Create button (disabled with "Choose the required
+  fields" while incomplete) is on every draft form. A threat draft does not create on
+  focus loss (the other fields would trigger it). Goal and claim drafts are in the goals
+  inspector column, the tree draft under the tree list. The `ask()` dialogs for goal, claim
+  and tree are gone. The controller adds the draft row to the threat, tree, goal and claim
+  tables.
+- Strings: ja and pseudo catalogs; no new dependency.
+
+### Verified
+- `crates/aegis-client/tests/session.rs`: a threat draft with no asset is incomplete and
+  creates nothing; with one asset the asset is the context; a missing category blocks
+  commit; setting it completes the draft; commit creates the threat; one undo removes it.
+  Goal, claim and tree drafts are created from a name alone.
+- `crates/aegis-shell/tests/drafts.rs` with real keys: the threat draft row appears and is
+  selected, Enter with no category creates nothing, choosing the category then Enter creates
+  the threat; goal, claim and tree are created with the keyboard. Screenshot
+  `draft-threat-incomplete.png` viewed.
+- fmt, clippy `-D warnings`, `cargo test --workspace --locked` (83 binaries, 0 failed),
+  `scripts/deny.sh`.
+
+### Not built yet
+Item-definition drafts (S3), `NameEditor` save semantics and Rename removal (S4), read-only
+reasons on the header buttons, the shortcut, the start-screen card and the key-press count
+(S5). Still open from slice 1: draft row styling, an inline error in the inspector. A tree
+draft is a free tree; attaching to the selected threat stays on the threat page's "New tree".
