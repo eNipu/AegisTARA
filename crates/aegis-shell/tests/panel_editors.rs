@@ -78,3 +78,54 @@ async fn insert_follows_the_canvas_selection_and_says_what_it_will_do() {
     drop(app);
     server.stop().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_outline_editor_is_a_mode_of_the_page_with_apply_and_cancel() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server).await;
+    let nodes = |app: &App| {
+        let view = app.session.view();
+        view.project.as_ref().and_then(|p| p.scene()).map_or(0, |s| s.len())
+    };
+    let before = nodes(&app);
+    let outline = app.window.get_outline_text().to_string();
+    assert!(outline.contains("Compromise the backend credentials"));
+
+    // Opening it replaces the canvas area; no dialog, the page is still there.
+    app.window.set_outline_draft(outline.clone().into());
+    app.window.set_outline_editing(true);
+    app.frame();
+    save(&app.frame(), "editors-after-outline");
+
+    // Cancel leaves the tree as it was.
+    app.window
+        .set_outline_draft(format!("{outline}\n  - A new step").into());
+    app.window.set_outline_editing(false);
+    app.frame();
+    assert_eq!(nodes(&app), before);
+
+    // Apply writes the text back as the tree and leaves the mode.
+    let changed = outline.replace(
+        "Compromise the backend credentials",
+        "Compromise the backend credentials\n    - Steal a build token",
+    );
+    app.window.set_outline_draft(changed.into());
+    app.window.set_outline_editing(true);
+    app.window.invoke_apply_outline(app.window.get_outline_draft());
+    app.window.set_outline_editing(false);
+    app.until("tree replaced", |vm| {
+        vm.project
+            .as_ref()
+            .and_then(|p| p.scene())
+            .is_some_and(|s| s.len() == before + 1)
+    })
+    .await;
+
+    // Picking another tree, or another page, leaves the mode.
+    app.window.set_outline_editing(true);
+    show(&app, Page::Risks).await;
+    assert!(!app.window.get_outline_editing());
+
+    drop(app);
+    server.stop().await;
+}
