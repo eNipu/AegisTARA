@@ -2708,6 +2708,14 @@ impl<P: CredentialProvider> Actor<P> {
             open.ui.draft_category = None;
             open.ui.draft_to = None;
             open.ui.draft_interface_kind = None;
+            open.ui.draft_damage = None;
+            open.ui.draft_threat = None;
+            open.ui.draft_control = None;
+            // Row-action context (UI-09): the selected element of the page the
+            // user came from becomes the parent of the new element.
+            open.ui.draft_damage = open.ui.selected_damage;
+            open.ui.draft_threat = open.ui.selected_threat;
+            open.ui.draft_control = open.ui.selected_control;
             let components = pages::component_rows(&open.ws);
             let only_component = match components.as_slice() {
                 [only] => Some(only.id),
@@ -2755,6 +2763,11 @@ impl<P: CredentialProvider> Actor<P> {
             open.ui.draft_to,
             open.ui.draft_interface_kind,
         );
+        let (damage, threat, control) = (
+            open.ui.draft_damage,
+            open.ui.draft_threat,
+            open.ui.draft_control,
+        );
         let name = name.to_owned();
         let edit = match kind {
             DraftKind::Asset => {
@@ -2763,10 +2776,19 @@ impl<P: CredentialProvider> Actor<P> {
                         .properties
                         .len()
                 });
-                Edit::AddAsset {
-                    id: AssetId::new_v7(),
-                    name,
-                    properties: (0..count).collect(),
+                let properties = (0..count).collect();
+                match component {
+                    Some(component) => Edit::AddAssetBound {
+                        id: AssetId::new_v7(),
+                        name,
+                        properties,
+                        component,
+                    },
+                    None => Edit::AddAsset {
+                        id: AssetId::new_v7(),
+                        name,
+                        properties,
+                    },
                 }
             }
             DraftKind::Damage => Edit::AddDamage {
@@ -2781,16 +2803,32 @@ impl<P: CredentialProvider> Actor<P> {
                 let (Some(asset), Some(category)) = (asset, category) else {
                     return;
                 };
-                Edit::AddThreat {
-                    id: ThreatId::new_v7(),
-                    name,
-                    asset,
-                    category,
+                match damage {
+                    Some(damage) => Edit::AddThreatLeading {
+                        id: ThreatId::new_v7(),
+                        name,
+                        asset,
+                        category,
+                        damage,
+                    },
+                    None => Edit::AddThreat {
+                        id: ThreatId::new_v7(),
+                        name,
+                        asset,
+                        category,
+                    },
                 }
             }
-            DraftKind::Goal => Edit::AddGoal {
-                id: GoalId::new_v7(),
-                name,
+            DraftKind::Goal => match control {
+                Some(control) => Edit::AddGoalFor {
+                    id: GoalId::new_v7(),
+                    name,
+                    control,
+                },
+                None => Edit::AddGoal {
+                    id: GoalId::new_v7(),
+                    name,
+                },
             },
             DraftKind::Claim => Edit::AddClaim {
                 id: ClaimId::new_v7(),
@@ -2799,7 +2837,7 @@ impl<P: CredentialProvider> Actor<P> {
             DraftKind::Tree => Edit::NewTree {
                 id: TreeId::new_v7(),
                 root: name,
-                threat: None,
+                threat,
             },
             DraftKind::Component => Edit::AddComponent {
                 id: ComponentId::new_v7(),

@@ -240,6 +240,26 @@ export component DataTable inherits Rectangle {
         }
     }
 
+    focus-scope := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        accessible-role: AccessibleRole.table;
+        accessible-label: root.label;
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow) { root.move-by(-1); return accept; }
+            else if (event.text == Key.DownArrow) { root.move-by(1); return accept; }
+            else if (event.text == Key.Home) { root.set-current-row(0); return accept; }
+            else if (event.text == Key.End) { root.set-current-row(root.rows.length - 1); return accept; }
+            else if (event.text == Key.PageUp) { root.move-by(-10); return accept; }
+            else if (event.text == Key.PageDown) { root.move-by(10); return accept; }
+            else if (event.text == Key.Return && event.modifiers.control) { if (root.show-add) { root.add-child(root.selected); } return accept; }
+            else if (event.text == Key.Return) { root.activated(root.selected); return accept; }
+            else if ((event.text == Key.Backspace || event.text == Key.Delete) && root.show-remove) { root.remove-row(root.selected); return accept; }
+            else if (event.modifiers.control && event.text == "d" && root.show-duplicate) { root.duplicate-row(root.selected); return accept; }
+            reject
+        }
+    }
+
     header := Rectangle {
         height: root.header-height;
         clip: true;
@@ -284,7 +304,10 @@ export component DataTable inherits Rectangle {
             row-touch := TouchArea {
                 width: parent.width;
                 height: parent.height;
-                clicked => { root.focus(); root.set-current-row(row-index); }
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) { focus-scope.focus(); }
+                }
+                clicked => { focus-scope.focus(); root.set-current-row(row-index); }
             }
             HorizontalLayout {
                 for cell[cell-index] in row : Rectangle {
@@ -368,23 +391,6 @@ export component DataTable inherits Rectangle {
         }
     }
 
-    focus-scope := FocusScope {
-        x: 0;
-        width: 0;
-        key-pressed(event) => {
-            if (event.text == Key.UpArrow) { root.move-by(-1); return accept; }
-            else if (event.text == Key.DownArrow) { root.move-by(1); return accept; }
-            else if (event.text == Key.Home) { root.set-current-row(0); return accept; }
-            else if (event.text == Key.End) { root.set-current-row(root.rows.length - 1); return accept; }
-            else if (event.text == Key.PageUp) { root.move-by(-10); return accept; }
-            else if (event.text == Key.PageDown) { root.move-by(10); return accept; }
-            else if (event.text == Key.Return && event.modifiers.control) { root.add-child(root.selected); return accept; }
-            else if (event.text == Key.Return) { root.activated(root.selected); return accept; }
-            else if (event.text == Key.Backspace || event.text == Key.Delete) { root.remove-row(root.selected); return accept; }
-            else if (event.modifiers.control && event.text == "d") { root.duplicate-row(root.selected); return accept; }
-            reject
-        }
-    }
 }
 
 // The main button of a confirmation that cannot be undone (UI-12): red, so it

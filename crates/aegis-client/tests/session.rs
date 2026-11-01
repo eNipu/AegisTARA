@@ -1424,3 +1424,236 @@ async fn checking_for_updates_says_what_it_found() {
     drop((none, found, distrust));
     server.stop().await;
 }
+
+/// UI-09: the row-action + passes its parent as draft context, and Duplicate
+/// clones an element. Exercises the new edits end to end against the model.
+#[tokio::test(flavor = "current_thread")]
+async fn row_actions_pass_the_parent_as_draft_context() {
+    use aegis_client::view::{DraftKind, Page, Selection};
+    use aegis_model::{ComponentId, ControlId, DamageId};
+
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+
+    let component = ComponentId::new_v7();
+    let damage = DamageId::new_v7();
+    let control = ControlId::new_v7();
+
+    // Component -> asset bound to it.
+    alice
+        .send(Command::Edit(Edit::AddComponent {
+            id: component,
+            name: "Brake ECU".into(),
+            parent: None,
+        }))
+        .expect("sent");
+    alice
+        .send(Command::Select {
+            selection: Selection::Component(component),
+            navigate: false,
+        })
+        .expect("sent");
+    alice
+        .send(Command::BeginDraft(DraftKind::Asset))
+        .expect("sent");
+    until(&alice, "asset draft", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.draft == Some(DraftKind::Asset))
+    })
+    .await;
+    alice
+        .send(Command::CommitDraft {
+            name: "Bound asset".into(),
+            next: false,
+        })
+        .expect("sent");
+    let vm = until(&alice, "asset bound", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.draft.is_none()
+                && p.data
+                    .asset
+                    .as_ref()
+                    .is_some_and(|a| a.component == Some(component))
+        })
+    })
+    .await;
+    assert_eq!(vm.project.as_ref().unwrap().data.assets.len(), 1);
+
+    // Asset -> threat on it (the asset is the only one, so it is the context).
+    alice
+        .send(Command::BeginDraft(DraftKind::Threat))
+        .expect("sent");
+    until(&alice, "threat draft", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.draft == Some(DraftKind::Threat))
+    })
+    .await;
+    alice.send(Command::SetDraftCategory(0)).expect("sent");
+    alice
+        .send(Command::CommitDraft {
+            name: "On the asset".into(),
+            next: false,
+        })
+        .expect("sent");
+    let vm = until(&alice, "threat created", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.threats.len() == 1 && p.draft.is_none())
+    })
+    .await;
+    assert_eq!(vm.project.as_ref().unwrap().threats[0].asset, "Bound asset");
+
+    // Damage -> threat that leads to it.
+    alice
+        .send(Command::Edit(Edit::AddDamage {
+            id: damage,
+            name: "Loss of braking".into(),
+        }))
+        .expect("sent");
+    alice
+        .send(Command::Select {
+            selection: Selection::Damage(damage),
+            navigate: false,
+        })
+        .expect("sent");
+    alice
+        .send(Command::BeginDraft(DraftKind::Threat))
+        .expect("sent");
+    until(&alice, "threat draft 2", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.draft == Some(DraftKind::Threat))
+    })
+    .await;
+    alice.send(Command::SetDraftCategory(0)).expect("sent");
+    alice
+        .send(Command::CommitDraft {
+            name: "Leading threat".into(),
+            next: false,
+        })
+        .expect("sent");
+    let vm = until(&alice, "leading threat", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.threats.len() == 2
+                && p.data
+                    .threat
+                    .as_ref()
+                    .is_some_and(|t| t.damages.iter().any(|d| d.linked))
+        })
+    })
+    .await;
+
+    // Threat -> attack tree for it.
+    let threat = vm.project.as_ref().unwrap().threats[0].id;
+    alice
+        .send(Command::Select {
+            selection: Selection::Threat(threat),
+            navigate: false,
+        })
+        .expect("sent");
+    alice
+        .send(Command::BeginDraft(DraftKind::Tree))
+        .expect("sent");
+    until(&alice, "tree draft", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.draft == Some(DraftKind::Tree))
+    })
+    .await;
+    alice
+        .send(Command::CommitDraft {
+            name: "Reflash".into(),
+            next: false,
+        })
+        .expect("sent");
+    let _vm = until(&alice, "tree linked", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.draft.is_none() && p.tree.as_ref().is_some_and(|t| t.threat == Some(threat))
+        })
+    })
+    .await;
+
+    // Control -> goal linked to it.
+    alice
+        .send(Command::Edit(Edit::AddControl {
+            id: control,
+            name: "Secure boot".into(),
+        }))
+        .expect("sent");
+    alice
+        .send(Command::Select {
+            selection: Selection::Control(control),
+            navigate: false,
+        })
+        .expect("sent");
+    alice
+        .send(Command::BeginDraft(DraftKind::Goal))
+        .expect("sent");
+    until(&alice, "goal draft", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.draft == Some(DraftKind::Goal))
+    })
+    .await;
+    alice
+        .send(Command::CommitDraft {
+            name: "No remote braking".into(),
+            next: false,
+        })
+        .expect("sent");
+    let _vm = until(&alice, "goal linked", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.draft.is_none()
+                && p.data
+                    .goal
+                    .as_ref()
+                    .is_some_and(|g| g.controls.iter().any(|c| c.linked))
+        })
+    })
+    .await;
+
+    // Duplicate a component (the Item page fills the component data).
+    alice
+        .send(Command::Edit(Edit::DuplicateComponent {
+            id: ComponentId::new_v7(),
+            source: component,
+        }))
+        .expect("sent");
+    alice.send(Command::ShowPage(Page::Item)).expect("sent");
+    let vm = until(&alice, "component duplicated", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.data.components.len() == 2)
+    })
+    .await;
+    let names: Vec<_> = vm
+        .project
+        .as_ref()
+        .unwrap()
+        .data
+        .components
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+    assert!(names.contains(&"Brake ECU copy".to_owned()), "{names:?}");
+
+    // Undo the duplicate as one step: back to one component.
+    alice.send(Command::Undo).expect("sent");
+    let vm = until(&alice, "duplicate undone", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.data.components.len() == 1)
+    })
+    .await;
+    assert_eq!(
+        vm.project.as_ref().unwrap().data.components[0].name,
+        "Brake ECU"
+    );
+
+    drop(alice);
+    server.stop().await;
+}

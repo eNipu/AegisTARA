@@ -1283,3 +1283,18 @@ msgstr "⟦Dúplícáté {}␣␣⟧"
 
 msgid "Remove {}"
 msgstr "⟦Rémóvé {}␣␣⟧"
+
+msgid "Add asset to"
+msgstr "⟦Ádd ássét tó␣␣⟧"
+
+msgid "Add threat scenario to"
+msgstr "⟦Ádd thréát scénáríó tó␣␣␣⟧"
+
+msgid "Add threat scenario leading to"
+msgstr "⟦Ádd thréát scénáríó léádíng tó␣␣␣⟧"
+
+msgid "Add attack tree for"
+msgstr "⟦Ádd áttáck tréé fór␣␣⟧"
+
+msgid "Add goal for"
+msgstr "⟦Ádd góál fór␣␣⟧"

@@ -360,6 +360,12 @@ pub struct UiState {
     pub draft_to: Option<ComponentId>,
     /// The kind of an interface draft, as a position in the vocabulary.
     pub draft_interface_kind: Option<usize>,
+    /// The damage scenario a threat draft leads to (row-action context, UI-09).
+    pub draft_damage: Option<DamageId>,
+    /// The threat scenario a tree draft is linked to (row-action context, UI-09).
+    pub draft_threat: Option<ThreatId>,
+    /// The security control a goal draft is linked to (row-action context, UI-09).
+    pub draft_control: Option<ControlId>,
     /// The selected threat (threat and risk pages; its tree when no tree is
     /// selected).
     pub selected_threat: Option<ThreatId>,
