@@ -5,13 +5,14 @@
 // made by the client core in Rust; the window shows the view model and sends
 // commands back. Menu and sidebar glyphs are Lucide icons (ISC license,
 // ui/icons/LICENSE-lucide.txt).
-import { Button, ComboBox, ScrollView, LineEdit, Switch, CheckBox, TextEdit, AboutSlint, StandardListView, Palette } from "std-widgets.slint";
+import { ScrollView, AboutSlint, StandardListView, Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
-    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm
+    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm,
+    Button, LineEdit, TextEdit, ComboBox, CheckBox, Switch
 } from "widgets.slint";
 
 export { DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
@@ -126,7 +127,8 @@ component DescriptionFor inherits VerticalLayout {
     in property <string> kind;
     in property <bool> editable;
     in property <string> label: @tr("Description");
-    callback edit-requested(int, string, string);
+    in property <string> save-label;
+    callback save-requested(int, string);
     callback translation-requested(int, string, string);
     callback translation-removed(int, string);
     if root.items.length > 0 && root.items[0].kind == root.kind: DescriptionBox {
@@ -134,7 +136,8 @@ component DescriptionFor inherits VerticalLayout {
         text: root.items[0].text;
         by: root.items[0].by;
         editable: root.editable;
-        edit-requested => { root.edit-requested(0, root.label, root.items[0].text); }
+        save-label: root.save-label;
+        save(t) => { root.save-requested(0, t); }
         TranslationEditor {
             items: root.items[0].translations;
             editable: root.editable;
@@ -147,7 +150,8 @@ component DescriptionFor inherits VerticalLayout {
         text: root.items[1].text;
         by: root.items[1].by;
         editable: root.editable;
-        edit-requested => { root.edit-requested(1, root.label, root.items[1].text); }
+        save-label: root.save-label;
+        save(t) => { root.save-requested(1, t); }
         TranslationEditor {
             items: root.items[1].translations;
             editable: root.editable;
@@ -160,7 +164,8 @@ component DescriptionFor inherits VerticalLayout {
         text: root.items[2].text;
         by: root.items[2].by;
         editable: root.editable;
-        edit-requested => { root.edit-requested(2, root.label, root.items[2].text); }
+        save-label: root.save-label;
+        save(t) => { root.save-requested(2, t); }
         TranslationEditor {
             items: root.items[2].translations;
             editable: root.editable;
@@ -173,7 +178,8 @@ component DescriptionFor inherits VerticalLayout {
         text: root.items[3].text;
         by: root.items[3].by;
         editable: root.editable;
-        edit-requested => { root.edit-requested(3, root.label, root.items[3].text); }
+        save-label: root.save-label;
+        save(t) => { root.save-requested(3, t); }
         TranslationEditor {
             items: root.items[3].translations;
             editable: root.editable;
@@ -258,10 +264,6 @@ export component AppWindow inherits Window {
     callback set-description-translation(int, string, string);
     callback remove-description-translation(int, string);
     // The window that edits one description.
-    in-out property <bool> description-open: false;
-    in-out property <int> description-index: 0;
-    in-out property <string> description-title;
-    in-out property <string> description-draft;
     // The server holds a newer saved version than the one shown.
     in property <bool> newer-version;
     in property <string> band-text;
@@ -372,7 +374,10 @@ in property <string> redo-label;
     // identifier and detail surfaces.
     in property <string> ui-font-family;
     in property <string> mono-font-family;
+    // Set by main.rs from the renderer it selected; the test platform draws on the CPU.
+    in property <bool> gpu-renderer;
     default-font-family: root.ui-font-family;
+    default-font-size: Theme.font-body;
     // One entry per page: a count shown in the sidebar, or empty.
     in property <[string]> nav-counts;
 
@@ -454,6 +459,7 @@ in property <string> redo-label;
     in property <int> asset-component: 0;
     in property <[CheckItem]> asset-properties;
     in property <[LinkItem]> asset-threats;
+    in property <[LinkItem]> asset-damages;
     in property <string> asset-changed;
 
     // ---- damage ----
@@ -464,6 +470,7 @@ in property <string> redo-label;
     in property <string> damage-name;
     in property <[FactorItem]> damage-impacts;
     in property <[LinkItem]> damage-threats;
+    in property <[LinkItem]> damage-assets;
     in property <string> damage-changed;
 
     // ---- threats and risks ----
@@ -748,12 +755,15 @@ in property <string> redo-label;
     callback toggle-asset-property(int, bool);
     callback remove-asset();
     callback asset-threat-clicked(int);
+    callback asset-damage-clicked(int);
+    callback threat-asset-clicked();
     callback pick-damage(int);
     callback add-damage(string);
     callback rename-damage(string);
     callback set-impact(int, int);
     callback remove-damage();
     callback damage-threat-clicked(int);
+    callback damage-asset-clicked(int);
     callback select-threat(int);
     callback add-threat(string, int, int);
     callback rename-threat(string);
@@ -1080,7 +1090,7 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 3px;
+            border-radius: Theme.radius-panel;
             clip: true;
             VerticalLayout {
                 spacing: 0px;
@@ -1100,13 +1110,13 @@ in property <string> redo-label;
                     if root.server-name != "" && root.connection == 3: HorizontalLayout {
                         spacing: 8px;
                         Image { source: @image-url("icons/server.svg"); width: 16px; height: 16px; y: 2px; colorize: Theme.accent; }
-                        Text { text: root.server-name; color: Theme.ink; font-size: 14px; font-weight: 600; }
+                        Text { text: root.server-name; color: Theme.ink; font-size: Theme.font-body + 1px; font-weight: 600; }
                     }
                     Text {
                         text: root.connection-text;
                         wrap: word-wrap;
                         color: Theme.graphite;
-                        font-size: 13px;
+                        font-size: Theme.font-body;
                         accessible-role: text;
                     }
                     // Choose a server.
@@ -1138,7 +1148,7 @@ in property <string> redo-label;
                             clicked => { root.connect-server(root.server-url, root.transport-index); }
                         }
                         Rectangle { height: 1px; background: Theme.rule; }
-                        Text { text: @tr("Or work without a server"); color: Theme.graphite; font-size: 12px; font-weight: 600; }
+                        Text { text: @tr("Or work without a server"); color: Theme.graphite; font-size: Theme.font-label; font-weight: 600; }
                         Field {
                             label: @tr("Project folder");
                             LineEdit {
@@ -1214,7 +1224,7 @@ in property <string> redo-label;
                     // Development login.
                     if root.connection == 3 && root.login-method == 2: VerticalLayout {
                         spacing: 10px;
-                        Text { text: @tr("Development server: no password is checked."); color: Theme.medium; font-size: 12px; }
+                        Text { text: @tr("Development server: no password is checked."); color: Theme.medium; font-size: Theme.font-label; }
                         Field {
                             label: @tr("User name");
                             LineEdit { text <=> root.login-user; accessible-label: @tr("User name"); accepted(t) => { root.dev-log-in(t); } }
@@ -1250,7 +1260,7 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 3px;
+            border-radius: Theme.radius-panel;
             clip: true;
             VerticalLayout {
                 spacing: 0px;
@@ -1294,7 +1304,7 @@ in property <string> redo-label;
                                 background: area.has-hover ? Theme.wash : transparent;
                                 border-width: 1px;
                                 border-color: area.has-hover ? Theme.accent : Theme.rule;
-                                border-radius: 2px;
+                                border-radius: Theme.radius-control;
                                 accessible-role: button;
                                 accessible-label: @tr("Open project ") + p.name;
                                 accessible-action-default => { root.open-project(p.id); }
@@ -1323,6 +1333,14 @@ in property <string> redo-label;
                             }
                         }
                     }
+                    // The method decides the rating scales, the impact categories and
+                    // what the elements are called; it is fixed when the project is made.
+                    Text {
+                        text: @tr("New project: name it and pick the assessment method.");
+                        color: Theme.ink;
+                        font-size: Theme.font-label;
+                        font-weight: Theme.weight-semibold;
+                    }
                     HorizontalLayout {
                         spacing: 8px;
                         LineEdit {
@@ -1334,9 +1352,10 @@ in property <string> redo-label;
                             }
                         }
                         Choice {
-                            options: ["ISO/SAE 21434 (Automotive)", "EU CRA (Annex I)", "STRIDE (Services & Cloud)"];
-                            index <=> root.new-project-methodology;
-                            label: @tr("Methodology");
+                            options: [@tr("ISO/SAE 21434 · road vehicles"), @tr("EU Cyber Resilience Act · connected products"), @tr("STRIDE · software and cloud services")];
+                            index: root.new-project-methodology;
+                            label: @tr("Assessment method");
+                            picked(i) => { root.new-project-methodology = i; }
                         }
                         Button {
                             text: @tr("Create");
@@ -1348,6 +1367,16 @@ in property <string> redo-label;
                                 root.new-project-name = "";
                             }
                         }
+                    }
+                    Text {
+                        text: root.new-project-methodology == 1
+                            ? @tr("For products with digital elements sold in the EU (CRA Annex I). Harms are rated on health and safety, data and privacy, availability, and financial impact; likelihood is rated directly; goals are called security requirements.")
+                            : root.new-project-methodology == 2
+                            ? @tr("For software services and cloud systems. One service-impact scale and a direct likelihood rating: the lightest method, good for a first pass.")
+                            : @tr("For vehicles and their parts (ISO/SAE 21434, UN R155). Damage is rated on safety, financial, operational and privacy impact; feasibility is worked out from attack potential.");
+                        color: Theme.graphite;
+                        font-size: Theme.font-label;
+                        wrap: word-wrap;
                     }
                     Text { text: (root.standalone-mode ? "Standalone project. " : "Logged in as " + root.user + ". ") + root.engine-text; color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-medium; overflow: elide; }
                 }
@@ -1423,7 +1452,7 @@ in property <string> redo-label;
                     enabled: root.in-project && root.editing && root.can-undo;
                     clicked => { root.undo(); }
                     Tooltip {
-                        Text { text: root.undo-tip(); color: #FFFFFF; font-size: 12px; }
+                        Text { text: root.undo-tip(); color: #FFFFFF; font-size: Theme.font-label; }
                     }
                 }
                 Button {
@@ -1432,7 +1461,7 @@ in property <string> redo-label;
                     enabled: root.in-project && root.editing && root.can-redo;
                     clicked => { root.redo(); }
                     Tooltip {
-                        Text { text: root.redo-tip(); color: #FFFFFF; font-size: 12px; }
+                        Text { text: root.redo-tip(); color: #FFFFFF; font-size: Theme.font-label; }
                     }
                 }
                 Text {
@@ -1561,7 +1590,7 @@ in property <string> redo-label;
                         padding: 20px;
                         spacing: 16px;
                         PageTitle { title: @tr("Overview"); subtitle: @tr("The project at a glance: what is analysed, how risky it is, and what is still open."); icon: @image-url("icons/layout-dashboard.svg"); }
-                        DescriptionFor { items: root.descriptions; kind: "project"; label: @tr("Project notes"); editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "project"; label: @tr("Project notes"); editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         HorizontalLayout {
                             vertical-stretch: 0;
                             spacing: 10px;
@@ -1590,7 +1619,7 @@ in property <string> redo-label;
                             Panel {
                                 horizontal-stretch: 1;
                                 SectionTitle { text: @tr("Problems"); }
-                                Text { text: root.ov-errors + " blocking, " + root.ov-warnings + " warnings"; color: root.ov-errors > 0 ? Theme.high : Theme.ink; font-size: 14px; }
+                                Text { text: root.ov-errors + " blocking, " + root.ov-warnings + " warnings"; color: root.ov-errors > 0 ? Theme.high : Theme.ink; font-size: Theme.font-body + 1px; }
                                 Button { text: @tr("Show problems"); icon: @image-url("icons/circle-alert.svg"); clicked => { root.show-page(Pages.problems); } }
                             }
                         }
@@ -1609,7 +1638,7 @@ in property <string> redo-label;
                             title: @tr("Assets");
                             subtitle: @tr("What must be protected, and which security properties matter.");
                             icon: @image-url("icons/box.svg");
-                            Button { text: @tr("New asset"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("asset"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
+                            Button { text: @tr("New asset"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("asset"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } } }
                         }
                         DataTable {
                             label: @tr("Assets");
@@ -1647,7 +1676,7 @@ in property <string> redo-label;
                         width: root.side-width;
                         SectionTitle { text: @tr("Asset") + " · " + root.asset-id; }
                         NameEditor { focus-requested <=> root.focus-name; name: root.asset-name; editable: root.editing; renamed(t) => { root.rename-asset(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "asset"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Component");
                             ComboBox {
@@ -1662,7 +1691,11 @@ in property <string> redo-label;
                         CheckList { items: root.asset-properties; editable: root.editing; toggled(i, on) => { root.toggle-asset-property(i, on); } }
                         SectionTitle { text: @tr("Threat scenarios on this asset"); }
                         LinkList { items: root.asset-threats; clicked(i) => { root.asset-threat-clicked(i); } }
-                        Text { text: root.asset-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        // Reached through the threats above; link one by adding a threat with +.
+                        SectionTitle { text: @tr("{} it can lead to", root.damage-plural); }
+                        LinkList { items: root.asset-damages; clicked(i) => { root.asset-damage-clicked(i); } }
+                        if root.editing: Button { text: @tr("Add threat scenario"); icon: @image-url("icons/plus.svg"); clicked => { root.add-child-asset(root.asset-selected); } }
+                        Text { text: root.asset-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove asset"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-asset(); } }
                     }
@@ -1679,7 +1712,7 @@ in property <string> redo-label;
                             title: root.damage-plural;
                             subtitle: @tr("What could go wrong, rated per impact category.");
                             icon: @image-url("icons/triangle-alert.svg");
-                            Button { text: @tr("New ") + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("damage"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
+                            Button { text: @tr("New ") + root.damage-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("damage"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } } }
                         }
                         DataTable {
                             label: root.damage-plural;
@@ -1716,7 +1749,7 @@ in property <string> redo-label;
                         width: root.side-width;
                         SectionTitle { text: root.damage-singular + " · " + root.damage-id; }
                         NameEditor { focus-requested <=> root.focus-name; name: root.damage-name; editable: root.editing; renamed(t) => { root.rename-damage(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "damage"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Impact rating"); }
                         for f[fi] in root.damage-impacts: Field {
                             label: f.label;
@@ -1724,7 +1757,10 @@ in property <string> redo-label;
                         }
                         SectionTitle { text: @tr("Threat scenarios leading here"); }
                         LinkList { items: root.damage-threats; clicked(i) => { root.damage-threat-clicked(i); } }
-                        Text { text: root.damage-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        SectionTitle { text: @tr("Assets at stake"); }
+                        LinkList { items: root.damage-assets; clicked(i) => { root.damage-asset-clicked(i); } }
+                        if root.editing: Button { text: @tr("Add threat scenario"); icon: @image-url("icons/plus.svg"); clicked => { root.add-child-damage(root.damage-selected); } }
+                        Text { text: root.damage-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove damage scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-damage(); } }
                     }
@@ -1739,9 +1775,9 @@ in property <string> redo-label;
                         spacing: 10px;
                         PageTitle {
                             title: @tr("Threat scenarios");
-                            subtitle: @tr("How an attacker could harm an asset, with STRIDE and UN R155 Annex 5.");
+                            subtitle: @tr("How an attacker could harm an asset.");
                             icon: @image-url("icons/swords.svg");
-                            Button { text: @tr("New threat scenario"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("threat"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
+                            Button { text: @tr("New threat scenario"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("threat"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } } }
                         }
                         DataTable {
                             label: @tr("Threat scenarios");
@@ -1796,16 +1832,19 @@ in property <string> redo-label;
                             width: root.side-width + 12px;
                             SectionTitle { text: @tr("Threat scenario") + " · " + root.td-id; }
                             NameEditor { focus-requested <=> root.focus-name; name: root.td-name; editable: root.editing; renamed(t) => { root.rename-threat(t); } }
-                            DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
-                            Text { text: @tr("On asset ") + root.td-asset; color: Theme.graphite; font-size: 12px; }
+                            DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                            Field {
+                                label: @tr("Asset");
+                                LinkList { items: [{ label: root.td-asset }]; clicked(i) => { root.threat-asset-clicked(); } }
+                            }
                             HorizontalLayout {
                                 spacing: 8px;
                                 Swatch { tone: root.td-inherent-tone; y: 4px; }
-                                Text { text: @tr("Before controls: ") + (root.td-inherent == "" ? "not rated" : root.td-inherent); color: Theme.ink; font-size: 13px; }
+                                Text { text: @tr("Before controls: ") + (root.td-inherent == "" ? "not rated" : root.td-inherent); color: Theme.ink; font-size: Theme.font-body; }
                                 Swatch { tone: root.td-residual-tone; y: 4px; }
-                                Text { text: @tr("After: ") + (root.td-residual == "" ? "not rated" : root.td-residual); color: Theme.ink; font-size: 13px; }
+                                Text { text: @tr("After: ") + (root.td-residual == "" ? "not rated" : root.td-residual); color: Theme.ink; font-size: Theme.font-body; }
                             }
-                            for line in root.td-why: Text { text: line; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                            for line in root.td-why: Text { text: line; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
                             Field {
                                 label: @tr("Category");
                                 Choice { options: root.threat-categories; index: root.td-category; editable: root.editing; label: @tr("Category"); picked(i) => { root.set-threat-category(i); } }
@@ -1815,7 +1854,7 @@ in property <string> redo-label;
                             SectionTitle { text: @tr("Catalog references"); }
                             for r[ri] in root.td-refs: HorizontalLayout {
                                 spacing: 6px;
-                                Text { text: r; color: Theme.ink; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                Text { text: r; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; }
                                 Button { text: @tr("Remove"); enabled: root.editing; clicked => { root.remove-catalog-ref(ri); } }
                             }
                             if root.editing: Choice { options: root.catalog-schemes; index: root.new-ref-scheme; label: @tr("Catalog"); picked(i) => { root.new-ref-scheme = i; } }
@@ -1837,8 +1876,8 @@ in property <string> redo-label;
                                 label: @tr("Direct feasibility rating (concept phase; an attack tree overrides it)");
                                 Choice { options: root.feasibility-options; index: root.td-feasibility; editable: root.editing; label: @tr("Direct feasibility"); picked(i) => { root.set-threat-feasibility(i); } }
                             }
-                            if root.td-feasibility-text != "": Text { text: @tr("Feasibility the engine uses: ") + root.td-feasibility-text; color: Theme.graphite; font-size: 12px; }
-                            Text { text: root.td-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                            if root.td-feasibility-text != "": Text { text: @tr("Feasibility the engine uses: ") + root.td-feasibility-text; color: Theme.graphite; font-size: Theme.font-label; }
+                            Text { text: root.td-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                             Button { text: @tr("Remove threat scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-threat(); } }
                         }
                     }
@@ -1853,7 +1892,7 @@ in property <string> redo-label;
                         HorizontalLayout {
                             spacing: 6px;
                             SectionTitle { text: @tr("Attack trees"); vertical-alignment: center; horizontal-stretch: 1; }
-                            Button { text: @tr("New"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("tree"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
+                            Button { text: @tr("New"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("tree"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } } }
                         }
                         DataTable {
                             label: @tr("Attack trees");
@@ -1889,7 +1928,7 @@ in property <string> redo-label;
                             if root.has-tree: Button { horizontal-stretch: 1; text: @tr("Suggest steps"); icon: @image-url("icons/workflow.svg"); enabled: root.editing; accessible-description: @tr("Synthesize ghost attack-tree steps with Aegis-Core Gear 1"); clicked => { root.suggest-tree-nodes(); } }
                         }
                         if root.has-tree: Button { text: @tr("Export SVG"); icon: @image-url("icons/image.svg"); clicked => { root.export-svg(); } }
-                        DescriptionFor { items: root.descriptions; kind: "tree"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "tree"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         // Legend.
                         VerticalLayout {
                             spacing: 4px;
@@ -1936,7 +1975,7 @@ in property <string> redo-label;
                                         ? "This project has no attack trees yet. Create one with New, or from a threat scenario."
                                         : "Choose an attack tree on the left.";
                                     color: Theme.graphite;
-                                    font-size: 14px;
+                                    font-size: Theme.font-body + 1px;
                                     font-weight: Theme.weight-medium;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
@@ -1997,7 +2036,7 @@ in property <string> redo-label;
                                         background: s.selected ? Theme.wash : Theme.sheet;
                                         border-width: 1px;
                                         border-color: s.selected ? Theme.accent : Theme.rule;
-                                        border-radius: 2px;
+                                        border-radius: Theme.radius-control;
                                         VerticalLayout {
                                             padding: 8px;
                                             spacing: 4px;
@@ -2060,7 +2099,7 @@ in property <string> redo-label;
                                 }
                                 if root.inspector-needs-review: HorizontalLayout {
                                     spacing: 8px;
-                                    Text { text: @tr("This rating was copied from the library and has not been reviewed."); color: Theme.ink; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
+                                    Text { text: @tr("This rating was copied from the library and has not been reviewed."); color: Theme.ink; font-size: Theme.font-label; wrap: word-wrap; horizontal-stretch: 1; }
                                     Button { text: @tr("Reviewed"); enabled: root.editing; accessible-description: @tr("Confirm this rating after checking it"); clicked => { root.mark-reviewed(); } }
                                 }
                                 if root.evaluated-text != "": HorizontalLayout {
@@ -2185,25 +2224,25 @@ in property <string> redo-label;
                                     if root.effective-text != "": Text {
                                         text: @tr("The engine uses: ") + root.effective-text;
                                         color: Theme.graphite;
-                                        font-size: 12px;
+                                        font-size: Theme.font-label;
                                     }
                                     if root.has-attack-potential: VerticalLayout {
                                         spacing: 8px;
                                         SectionTitle { text: @tr("Attack potential"); }
                                         if root.potential-text != "": Text {
                                             text: root.potential-text + " from the five factors";
-                                            font-size: 13px;
+                                            font-size: Theme.font-body;
                                             color: Theme.ink;
                                         }
                                         if root.potential-text == "": Text {
                                             text: @tr("Rate all five factors to calculate it. Until then the rating above is used.");
-                                            font-size: 12px;
+                                            font-size: Theme.font-label;
                                             color: Theme.graphite;
                                             wrap: word-wrap;
                                         }
                                         for f[fi] in root.factors: VerticalLayout {
                                             spacing: 2px;
-                                            Text { text: f.label; font-size: 12px; color: Theme.graphite; }
+                                            Text { text: f.label; font-size: Theme.font-label; color: Theme.graphite; }
                                             Choice {
                                                 options: f.options;
                                                 index: f.selected;
@@ -2215,14 +2254,14 @@ in property <string> redo-label;
                                     }
                                     Rectangle { height: 1px; background: Theme.rule; }
                                     SectionTitle { text: @tr("Security controls on this step"); }
-                                    if root.step-residual-text != "": Text { text: @tr("After controls: ") + root.step-residual-text; color: Theme.ink; font-size: 13px; }
-                                    if root.mitigations.length == 0: Text { text: @tr("None."); color: Theme.graphite; font-size: 12px; }
+                                    if root.step-residual-text != "": Text { text: @tr("After controls: ") + root.step-residual-text; color: Theme.ink; font-size: Theme.font-body; }
+                                    if root.mitigations.length == 0: Text { text: @tr("None."); color: Theme.graphite; font-size: Theme.font-label; }
                                     for mi[mx] in root.mitigations: VerticalLayout {
                                         spacing: 2px;
-                                        Text { text: mi.name; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                                        Text { text: mi.name; color: Theme.ink; font-size: Theme.font-body; wrap: word-wrap; }
                                         HorizontalLayout {
                                             spacing: 6px;
-                                            Text { text: @tr("caps at"); color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
+                                            Text { text: @tr("caps at"); color: Theme.graphite; font-size: Theme.font-label; vertical-alignment: center; }
                                             Choice { horizontal-stretch: 1; options: root.feasibility-levels; index: mi.level; editable: root.editing; label: @tr("Cap"); picked(i) => { root.set-mitigation(mx, i); } }
                                             Button { text: @tr("Detach"); enabled: root.editing; clicked => { root.detach-control(mx); } }
                                         }
@@ -2233,12 +2272,12 @@ in property <string> redo-label;
                                         Choice { options: root.attach-names; index: root.attach-control-index; label: @tr("Control"); picked(i) => { root.attach-control-index = i; } }
                                         HorizontalLayout {
                                             spacing: 6px;
-                                            Text { text: @tr("caps at"); color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
+                                            Text { text: @tr("caps at"); color: Theme.graphite; font-size: Theme.font-label; vertical-alignment: center; }
                                             Choice { horizontal-stretch: 1; options: root.feasibility-levels; index: root.attach-level-index; label: @tr("Cap"); picked(i) => { root.attach-level-index = i; } }
                                             Button { text: @tr("Attach"); icon: @image-url("icons/link.svg"); clicked => { root.attach-control(root.attach-control-index, root.attach-level-index); } }
                                         }
                                     }
-                                    if root.editing && root.attach-names.length == 0 && root.mitigations.length == 0: Text { text: @tr("Add controls on the Security controls page to attach them here."); color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                                    if root.editing && root.attach-names.length == 0 && root.mitigations.length == 0: Text { text: @tr("Add controls on the Security controls page to attach them here."); color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
                                 }
                                 }
                             }
@@ -2267,19 +2306,19 @@ in property <string> redo-label;
                     if root.has-threat-detail: Panel {
                         width: min(360px, root.side-width);
                         Text { text: root.td-id + " · " + root.td-name; font-size: 16px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
-                        DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "threat"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         HorizontalLayout {
                             spacing: 8px;
                             Swatch { tone: root.td-inherent-tone; y: 4px; }
-                            Text { text: @tr("Before controls: ") + (root.td-inherent == "" ? "not rated" : root.td-inherent); color: Theme.ink; font-size: 13px; }
+                            Text { text: @tr("Before controls: ") + (root.td-inherent == "" ? "not rated" : root.td-inherent); color: Theme.ink; font-size: Theme.font-body; }
                         }
                         HorizontalLayout {
                             spacing: 8px;
                             Swatch { tone: root.td-residual-tone; y: 4px; }
-                            Text { text: @tr("After controls: ") + (root.td-residual == "" ? "not rated" : root.td-residual); color: Theme.ink; font-size: 13px; }
+                            Text { text: @tr("After controls: ") + (root.td-residual == "" ? "not rated" : root.td-residual); color: Theme.ink; font-size: Theme.font-body; }
                         }
                         SectionTitle { text: @tr("Why?"); }
-                        for line in root.td-why: Text { text: line; color: Theme.ink; font-size: 12px; wrap: word-wrap; }
+                        for line in root.td-why: Text { text: line; color: Theme.ink; font-size: Theme.font-label; wrap: word-wrap; }
                         Field {
                             label: @tr("Treatment decision");
                             Choice { options: root.treatment-options; index: root.td-treatment; editable: root.editing; label: @tr("Treatment"); picked(i) => { root.set-treatment(i); } }
@@ -2308,7 +2347,7 @@ in property <string> redo-label;
                             title: @tr("Security controls");
                             subtitle: @tr("Measures that make attack steps harder. Attach them to steps on the Attack trees page.");
                             icon: @image-url("icons/shield-check.svg");
-                            Button { text: @tr("New control"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("control"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
+                            Button { text: @tr("New control"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("control"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } } }
                         }
                         DataTable {
                             label: @tr("Security controls");
@@ -2345,12 +2384,12 @@ in property <string> redo-label;
                         width: root.side-width;
                         SectionTitle { text: @tr("Security control") + " · " + root.control-id; }
                         NameEditor { focus-requested <=> root.focus-name; name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Attached to"); }
                         LinkList { items: root.control-steps; empty-text: @tr("No attack step yet."); clicked(i) => { root.control-step-clicked(i); } }
                         SectionTitle { text: @tr("Part of goals"); }
                         LinkList { items: root.control-goals; clicked(i) => { root.control-goal-clicked(i); } }
-                        Text { text: root.control-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Text { text: root.control-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove control"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-control(); } }
                     }
@@ -2367,8 +2406,8 @@ in property <string> redo-label;
                             title: @tr("Goals and claims");
                             subtitle: @tr("Goals back a Reduce decision with controls; claims back Retain and Share.");
                             icon: @image-url("icons/target.svg");
-                            Button { text: @tr("New ") + root.goal-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("goal"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
-                            Button { text: @tr("New claim"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("claim"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } } }
+                            Button { text: @tr("New ") + root.goal-singular; icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("goal"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } } }
+                            Button { text: @tr("New claim"); icon: @image-url("icons/plus.svg"); enabled: root.editing; clicked => { root.begin-draft("claim"); } if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } } }
                         }
                         SectionTitle { text: root.goal-plural; }
                         DataTable {
@@ -2431,7 +2470,7 @@ in property <string> redo-label;
                         if root.has-goal && root.draft-kind == "": Panel {
                             SectionTitle { text: root.goal-singular + " · " + root.goal-id; }
                             NameEditor { focus-requested <=> root.focus-name; name: root.goal-name; editable: root.editing; renamed(t) => { root.rename-goal(t); } }
-                            DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                            DescriptionFor { items: root.descriptions; kind: "goal"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Controls that realize it"); }
                             CheckList { items: root.goal-controls; editable: root.editing; empty-text: @tr("Add security controls first."); toggled(i, on) => { root.toggle-goal-control(i, on); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
@@ -2441,7 +2480,7 @@ in property <string> redo-label;
                         if root.has-claim && root.draft-kind == "": Panel {
                             SectionTitle { text: @tr("Cybersecurity claim") + " · " + root.claim-id; }
                             NameEditor { focus-requested <=> root.focus-name; name: root.claim-name; editable: root.editing; renamed(t) => { root.rename-claim(t); } }
-                            DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                            DescriptionFor { items: root.descriptions; kind: "claim"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                             SectionTitle { text: @tr("Threat scenarios"); }
                             LinkList { items: root.claim-threats; clicked(i) => { root.claim-threat-clicked(i); } }
                             Button { text: @tr("Remove claim"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-claim(); } }
@@ -2455,7 +2494,7 @@ in property <string> redo-label;
                     padding: 20px;
                     spacing: 10px;
                     PageTitle { title: @tr("Problems"); subtitle: @tr("Completeness and consistency checks. Blocking problems stop a risk from being computed or a treatment from being complete."); icon: @image-url("icons/circle-alert.svg"); }
-                    if root.problems.length == 0: Text { text: @tr("No problems. The analysis is complete and consistent."); color: Theme.ink; font-size: 14px; }
+                    if root.problems.length == 0: Text { text: @tr("No problems. The analysis is complete and consistent."); color: Theme.ink; font-size: Theme.font-body + 1px; }
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
@@ -2472,9 +2511,9 @@ in property <string> redo-label;
                                     padding: 8px;
                                     spacing: 10px;
                                     Image { source: @image-url("icons/circle-alert.svg"); width: 16px; height: 16px; colorize: p.error ? Theme.high : Theme.medium; }
-                                    Text { text: p.error ? "Blocking" : "Warning"; width: 70px; color: p.error ? Theme.high : Theme.medium; font-size: 12px; font-weight: 600; }
-                                    Text { text: p.text; color: Theme.ink; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
-                                    Text { text: @tr("Go to"); color: Theme.accent; font-size: 12px; }
+                                    Text { text: p.error ? "Blocking" : "Warning"; width: 70px; color: p.error ? Theme.high : Theme.medium; font-size: Theme.font-label; font-weight: 600; }
+                                    Text { text: p.text; color: Theme.ink; font-size: Theme.font-body; wrap: word-wrap; horizontal-stretch: 1; }
+                                    Text { text: @tr("Go to"); color: Theme.accent; font-size: Theme.font-label; }
                                 }
                                 problem-area := TouchArea { clicked => { root.problem-clicked(pi); } }
                             }
@@ -2511,15 +2550,15 @@ in property <string> redo-label;
                     if root.comparing: Panel {
                         horizontal-stretch: 3;
                         SectionTitle { text: @tr("Comparison"); }
-                        Text { text: root.compare-summary; color: Theme.ink; font-size: 14px; wrap: word-wrap; }
+                        Text { text: root.compare-summary; color: Theme.ink; font-size: Theme.font-body + 1px; wrap: word-wrap; }
                         ScrollView {
                             vertical-stretch: 1;
                             VerticalLayout {
                                 spacing: 4px;
                                 for d in root.diff-lines: HorizontalLayout {
                                     spacing: 8px;
-                                    Text { text: d.kind; width: 70px; font-size: 12px; font-weight: 600; color: d.kind == "Removed" ? Theme.high : (d.kind == "Risk" ? Theme.accent : Theme.ink); }
-                                    Text { text: d.text; font-size: 13px; color: Theme.ink; wrap: word-wrap; horizontal-stretch: 1; }
+                                    Text { text: d.kind; width: 70px; font-size: Theme.font-label; font-weight: 600; color: d.kind == "Removed" ? Theme.high : (d.kind == "Risk" ? Theme.accent : Theme.ink); }
+                                    Text { text: d.text; font-size: Theme.font-body; color: Theme.ink; wrap: word-wrap; horizontal-stretch: 1; }
                                 }
                             }
                         }
@@ -2563,7 +2602,7 @@ in property <string> redo-label;
                                 Button { text: @tr("Risk register (CSV)"); icon: @image-url("icons/sheet.svg"); clicked => { root.export-csv(); } }
                                 Button { text: @tr("Attack tree on the canvas (SVG)"); icon: @image-url("icons/image.svg"); enabled: root.has-tree; clicked => { root.export-svg(); } }
                             }
-                            if root.last-export != "": Text { text: @tr("Last saved: ") + root.last-export; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                            if root.last-export != "": Text { text: @tr("Last saved: ") + root.last-export; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
                         }
                         Panel {
                             SectionTitle { text: @tr("Figures"); }
@@ -2616,7 +2655,7 @@ in property <string> redo-label;
                                     clicked => { root.clear-excel-preview(); }
                                 }
                             }
-                            if root.excel-summary != "": Text { text: root.excel-summary; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                            if root.excel-summary != "": Text { text: root.excel-summary; color: Theme.ink; font-size: Theme.font-body; wrap: word-wrap; }
                             if root.excel-unmapped-rows.length > 0: DataTable {
                                 label: @tr("Unmapped rows");
                                 columns: [{ title: @tr("Row"), width: 70px, min-width: 70px }, { title: @tr("Reason"), horizontal-stretch: 3 }];
@@ -2626,7 +2665,7 @@ in property <string> redo-label;
                         Text {
                             text: @tr("The TARA report has an executive summary and the full work product: assets, damage scenarios, threat scenarios, attack trees as diagrams, the risk register with treatment, controls, goals and claims, and the open problems. The PDF has the watermark and page numbers on every page. The HTML version opens in a browser, where you can also print it.");
                             color: Theme.graphite;
-                            font-size: 13px;
+                            font-size: Theme.font-body;
                             wrap: word-wrap;
                         }
                         Rectangle { vertical-stretch: 1; }
@@ -2648,7 +2687,7 @@ in property <string> redo-label;
                                 text: root.item-tab == 0 ? @tr("New component") : root.item-tab == 1 ? @tr("New interface") : root.item-tab == 2 ? @tr("New data flow") : @tr("New trust boundary");
                                 icon: @image-url("icons/plus.svg");
                                 enabled: root.editing;
-                                if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: 12px; } }
+                                if !root.editing: Tooltip { Text { text: root.new-reason; color: #FFFFFF; font-size: Theme.font-label; } }
                                 clicked => { root.begin-draft(root.item-tab == 0 ? "component" : root.item-tab == 1 ? "interface" : root.item-tab == 2 ? "data-flow" : "trust-boundary"); }
                             }
                         }
@@ -2815,7 +2854,7 @@ in property <string> redo-label;
                         width: root.side-width;
                         SectionTitle { text: @tr("Component") + " · " + root.component-id; }
                         NameEditor { focus-requested <=> root.focus-name; name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Parent");
                             ComboBox {
@@ -2830,7 +2869,7 @@ in property <string> redo-label;
                         LinkList { items: root.component-interfaces; clicked(i) => { root.item-tab = 1; } }
                         SectionTitle { text: @tr("Assets"); }
                         LinkList { items: root.component-assets; clicked(i) => { root.show-page(Pages.assets); } }
-                        Text { text: root.component-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Text { text: root.component-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-component(); } }
                     }
@@ -2838,7 +2877,7 @@ in property <string> redo-label;
                         width: root.side-width;
                         SectionTitle { text: @tr("Interface") + " · " + root.interface-id; }
                         NameEditor { focus-requested <=> root.focus-name; name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Kind");
                             ComboBox {
@@ -2849,7 +2888,7 @@ in property <string> redo-label;
                                 selected(v) => { root.set-interface-kind(self.current-index); }
                             }
                         }
-                        Text { text: root.interface-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Text { text: root.interface-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove interface"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-interface(); } }
                     }
@@ -2857,7 +2896,7 @@ in property <string> redo-label;
                         width: root.side-width;
                         SectionTitle { text: @tr("Data flow") + " · " + root.data-flow-id; }
                         NameEditor { focus-requested <=> root.focus-name; name: root.data-flow-name; editable: root.editing; renamed(t) => { root.rename-data-flow(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "data-flow"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "data-flow"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         Field {
                             label: @tr("Interface");
                             ComboBox {
@@ -2868,7 +2907,7 @@ in property <string> redo-label;
                                 selected(v) => { root.set-data-flow-interface(self.current-index); }
                             }
                         }
-                        Text { text: root.data-flow-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Text { text: root.data-flow-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove data flow"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-data-flow(); } }
                     }
@@ -2876,10 +2915,10 @@ in property <string> redo-label;
                         width: root.side-width;
                         SectionTitle { text: @tr("Trust boundary") + " · " + root.trust-boundary-id; }
                         NameEditor { focus-requested <=> root.focus-name; name: root.trust-boundary-name; editable: root.editing; renamed(t) => { root.rename-trust-boundary(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "trust-boundary"; editable: root.editing; edit-requested(i, label, t) => { root.description-index = i; root.description-title = label; root.description-draft = t; root.description-open = true; } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        DescriptionFor { items: root.descriptions; kind: "trust-boundary"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
                         SectionTitle { text: @tr("Components"); }
                         CheckList { items: root.trust-boundary-members; editable: root.editing; toggled(i, on) => { root.toggle-trust-boundary-member(i, on); } }
-                        Text { text: root.trust-boundary-changed; color: Theme.graphite; font-size: 11px; wrap: word-wrap; }
+                        Text { text: root.trust-boundary-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove trust boundary"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-trust-boundary(); } }
                     }
@@ -2918,13 +2957,13 @@ in property <string> redo-label;
                                     text: root.password-login-on ? "Password login is on. People can log in with a user name and password as well as with the company account." : "Password login is off. Everyone logs in with the company account.";
                                     color: Theme.ink;
                                     wrap: word-wrap;
-                                    font-size: 13px;
+                                    font-size: Theme.font-body;
                                 }
                                 if !root.company-login-available: Text {
                                     text: @tr("This server has no company login, so password login cannot be turned off.");
                                     color: Theme.graphite;
                                     wrap: word-wrap;
-                                    font-size: 12px;
+                                    font-size: Theme.font-label;
                                 }
                                 Button {
                                     text: root.password-login-on ? "Turn password login off" : "Turn password login on";
@@ -2987,14 +3026,14 @@ in property <string> redo-label;
                                 rows: root.event-rows;
                                 selected: -1;
                             }
-                            if root.events-text != "": Text { text: root.events-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
+                            if root.events-text != "": Text { text: root.events-text; color: Theme.graphite; wrap: word-wrap; font-size: Theme.font-body; }
                         }
                         if root.admin-tab == 2: VerticalLayout {
                             spacing: 8px;
                             if !root.is-password: Text { text: @tr("Sessions are managed by the company identity provider."); color: Theme.graphite; wrap: word-wrap; }
                             if root.is-password: HorizontalLayout {
                                 spacing: 6px;
-                                Text { text: @tr("Open password sessions, newest first. Ending one logs that device out at its next request."); color: Theme.graphite; wrap: word-wrap; font-size: 13px; horizontal-stretch: 1; }
+                                Text { text: @tr("Open password sessions, newest first. Ending one logs that device out at its next request."); color: Theme.graphite; wrap: word-wrap; font-size: Theme.font-body; horizontal-stretch: 1; }
                                 Button { text: @tr("Refresh"); icon: @image-url("icons/refresh-cw.svg"); clicked => { root.refresh-sessions(); } }
                             }
                             if root.is-password: DataTable {
@@ -3005,7 +3044,7 @@ in property <string> redo-label;
                                 picked(i) => { root.pick-session(i); }
                             }
                             if root.is-password && root.session-selected >= 0: Button { text: @tr("End this session"); icon: @image-url("icons/log-out.svg"); clicked => { root.confirm("revoke-session", "End this session? That device is logged out at its next request."); } }
-                            if root.is-password && root.sessions-text != "": Text { text: root.sessions-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
+                            if root.is-password && root.sessions-text != "": Text { text: root.sessions-text; color: Theme.graphite; wrap: word-wrap; font-size: Theme.font-body; }
                         }
                         if root.admin-tab == 3: VerticalLayout {
                             spacing: 8px;
@@ -3055,7 +3094,7 @@ in property <string> redo-label;
                                     clicked => { root.confirm-named("remove-member", "Remove " + root.selected-member-name + " from '" + root.project-name + "'?", "This cannot be undone from this session.", "Remove"); }
                                 }
                             }
-                            if root.memberships-text != "": Text { text: root.memberships-text; color: Theme.graphite; wrap: word-wrap; font-size: 13px; }
+                            if root.memberships-text != "": Text { text: root.memberships-text; color: Theme.graphite; wrap: word-wrap; font-size: Theme.font-body; }
                         }
                     }
                     Panel {
@@ -3064,11 +3103,11 @@ in property <string> redo-label;
                         Button { text: @tr("Check the audit chain"); icon: @image-url("icons/list-checks.svg"); clicked => { root.verify-audit(); } }
                         Button { text: @tr("Break the edit lock"); icon: @image-url("icons/unlink.svg"); enabled: root.band-kind == 1; clicked => { root.confirm("break-lock", "Break the edit lock? The other editor's unsaved changes are lost."); } }
                         Button { text: @tr("Delete project"); icon: @image-url("icons/trash-2.svg"); clicked => { root.confirm("delete-project", "Delete this project, its history and its baselines? This cannot be undone."); } }
-                        if root.admin-text != "": Text { text: root.admin-text; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                        if root.admin-text != "": Text { text: root.admin-text; color: Theme.ink; font-size: Theme.font-body; wrap: word-wrap; }
                         SectionTitle { text: @tr("License"); }
-                        Text { text: root.license-text; color: Theme.ink; font-size: 13px; wrap: word-wrap; }
+                        Text { text: root.license-text; color: Theme.ink; font-size: Theme.font-body; wrap: word-wrap; }
                         SectionTitle { text: @tr("Server"); }
-                        Text { text: root.engine-text; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                        Text { text: root.engine-text; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                     }
                 }
@@ -3094,14 +3133,14 @@ in property <string> redo-label;
                 Text {
                     text: root.engine-text;
                     color: Theme.graphite;
-                    font-size: 12px;
+                    font-size: Theme.font-label;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     overflow: elide;
                 }
                 Image { source: @image-url("icons/circle-user-round.svg"); width: 14px; height: 14px; y: 6px; colorize: Theme.graphite; }
-                Text { text: root.user; color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
-                Text { text: @tr("CPU renderer"); color: Theme.graphite; font-size: 12px; vertical-alignment: center; }
+                Text { text: root.user; color: Theme.graphite; font-size: Theme.font-label; vertical-alignment: center; }
+                Text { text: root.gpu-renderer ? @tr("GPU renderer") : @tr("CPU renderer"); color: Theme.graphite; font-size: Theme.font-label; vertical-alignment: center; }
             }
         }
     }
@@ -3121,7 +3160,7 @@ in property <string> redo-label;
             background: n.severity == 2 ? (Theme.dark ? #2E1512 : #FDECEA) : (n.severity == 1 ? (Theme.dark ? #2E230E : #FFF4D6) : Theme.panel);
             border-width: 1px;
             border-color: n.severity == 2 ? Theme.high : (n.severity == 1 ? Theme.medium : Theme.rule);
-            border-radius: 2px;
+            border-radius: Theme.radius-control;
             height: notice-text.preferred-height + 20px;
             accessible-role: text;
             accessible-label: n.text;
@@ -3139,7 +3178,7 @@ in property <string> redo-label;
                     text: n.text;
                     wrap: word-wrap;
                     color: Theme.ink;
-                    font-size: 13px;
+                    font-size: Theme.font-body;
                     horizontal-stretch: 1;
                 }
                 if n.action != 0: Button {
@@ -3174,12 +3213,15 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             TouchArea {}
             prompt-column := VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
-                Text { text: root.prompt-title; font-size: 18px; font-weight: 700; color: Theme.ink; }
+                Text { text: root.prompt-title; font-size: Theme.font-h1; font-weight: 700; color: Theme.ink; }
                 SectionTitle { text: root.prompt-label; }
                 prompt-edit := LineEdit {
                     text <=> root.prompt-text;
@@ -3213,13 +3255,16 @@ in property <string> redo-label;
                 background: Theme.panel;
                 border-width: 1px;
                 border-color: Theme.rule;
-                border-radius: 2px;
+                border-radius: Theme.radius-panel;
+                drop-shadow-blur: 24px;
+                drop-shadow-offset-y: 8px;
+                drop-shadow-color: #00000059;
                 TouchArea {}
                 confirm-column := VerticalLayout {
                     padding: 20px;
                     spacing: 14px;
-                    if root.confirm-title != "": Text { text: root.confirm-title; font-size: 18px; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
-                    if root.confirm-text != "": Text { text: root.confirm-text; font-size: 15px; color: Theme.ink; wrap: word-wrap; }
+                    if root.confirm-title != "": Text { text: root.confirm-title; font-size: Theme.font-h1; font-weight: 700; color: Theme.ink; wrap: word-wrap; }
+                    if root.confirm-text != "": Text { text: root.confirm-text; font-size: Theme.font-h2; color: Theme.ink; wrap: word-wrap; }
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: end;
@@ -3235,58 +3280,6 @@ in property <string> redo-label;
         }
     }
 
-    if root.description-open: Rectangle {
-        background: #000000A0;
-        FocusScope {
-            // The text box keeps Tab for itself, so the keys that leave it are
-            // fixed: the save shortcut saves, Escape cancels.
-            key-pressed(event) => {
-                if (event.text == Key.Escape) {
-                    root.description-open = false;
-                    return accept;
-                }
-                if (event.text == Key.Return && event.modifiers.control) {
-                    root.set-description(root.description-index, root.description-draft);
-                    root.description-open = false;
-                    return accept;
-                }
-                reject
-            }
-            Rectangle {
-                width: min(parent.width - 48px, 640px);
-                height: min(parent.height - 48px, 440px);
-                background: Theme.panel;
-                border-width: 1px;
-                border-color: Theme.rule;
-                border-radius: 2px;
-                VerticalLayout {
-                    padding: 20px;
-                    spacing: 10px;
-                    Text { text: root.description-title; font-size: 18px; font-weight: 700; color: Theme.ink; }
-                    Text {
-                        text: @tr("Plain text. {0} saves, Escape cancels.", root.save-description-label);
-                        color: Theme.graphite;
-                        font-size: 12px;
-                        wrap: word-wrap;
-                    }
-                    description-edit := TextEdit {
-                        vertical-stretch: 1;
-                        text <=> root.description-draft;
-                        wrap: word-wrap;
-                        accessible-label: root.description-title;
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: end;
-                        Button { text: @tr("Cancel"); clicked => { root.description-open = false; } }
-                        Button { text: @tr("Save"); primary: true; clicked => { root.set-description(root.description-index, root.description-draft); root.description-open = false; } }
-                    }
-                }
-            }
-            init => { description-edit.focus(); }
-        }
-    }
-
     if root.outline-open: Rectangle {
         background: #000000A0;
         Rectangle {
@@ -3295,22 +3288,25 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
-                Text { text: @tr("Edit the attack tree"); font-size: 18px; font-weight: 700; color: Theme.ink; }
+                Text { text: @tr("Edit the attack tree"); font-size: Theme.font-h1; font-weight: 700; color: Theme.ink; }
                 Text {
                     text: @tr("One node per line; indent a child under its parent. Start a gate with OR, AND or SEQ (sequential AND); a step with - or nothing. Lines with the same text are the same node, which is how a step is shared. Nodes that keep their text keep their ratings and controls.");
                     color: Theme.graphite;
-                    font-size: 12px;
+                    font-size: Theme.font-label;
                     wrap: word-wrap;
                 }
                 TextEdit {
                     vertical-stretch: 1;
                     text <=> root.outline-draft;
                     font-family: root.mono-font-family;
-                    font-size: 13px;
+                    font-size: Theme.font-body;
                     wrap: no-wrap;
                 }
                 HorizontalLayout {
@@ -3331,11 +3327,14 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
-                Text { text: @tr("Attack tree library"); font-size: 18px; font-weight: 700; color: Theme.ink; }
+                Text { text: @tr("Attack tree library"); font-size: Theme.font-h1; font-weight: 700; color: Theme.ink; }
                 HorizontalLayout {
                     spacing: 8px;
                     lib-search := LineEdit {
@@ -3353,7 +3352,7 @@ in property <string> redo-label;
                     }
                     Button { text: @tr("Clear"); enabled: root.library-filter != ""; clicked => { root.library-clear-filters(); } }
                 }
-                Text { visible: root.library-filter != ""; text: @tr("Narrowed by ") + root.library-filter; color: Theme.graphite; font-size: 12px; wrap: word-wrap; }
+                Text { visible: root.library-filter != ""; text: @tr("Narrowed by ") + root.library-filter; color: Theme.graphite; font-size: Theme.font-label; wrap: word-wrap; }
                 HorizontalLayout {
                     spacing: 12px;
                     vertical-stretch: 1;
@@ -3374,7 +3373,7 @@ in property <string> redo-label;
                             width: parent.width - 16px;
                             text: root.library-preview == "" ? "Pick an item to see it here." : root.library-preview;
                             font-family: root.mono-font-family;
-                            font-size: 12px;
+                            font-size: Theme.font-label;
                             color: Theme.ink;
                             wrap: word-wrap;
                             accessible-role: AccessibleRole.text;
@@ -3401,7 +3400,7 @@ in property <string> redo-label;
                             x: 8px; y: 8px;
                             width: parent.width - 16px;
                             text: root.catalog-preview == "" ? "Pick a catalog to see its source and terms." : root.catalog-preview;
-                            font-size: 12px;
+                            font-size: Theme.font-label;
                             color: Theme.ink;
                             wrap: word-wrap;
                             accessible-role: AccessibleRole.text;
@@ -3424,7 +3423,7 @@ in property <string> redo-label;
                     visible: (root.library-mode == 1 && !root.library-can-gate) || (root.library-mode == 2 && !root.library-can-leaf);
                     text: root.library-mode == 1 ? "Select a gate of the tree on the canvas first." : "Select a step (not the root) of the tree on the canvas first.";
                     color: Theme.graphite;
-                    font-size: 12px;
+                    font-size: Theme.font-label;
                 }
                 HorizontalLayout {
                     spacing: 8px;
@@ -3450,11 +3449,14 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 2px;
+            border-radius: Theme.radius-panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #00000059;
             pw-column := VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
-                Text { text: @tr("Change your password"); font-size: 18px; font-weight: 700; color: Theme.ink; }
+                Text { text: @tr("Change your password"); font-size: Theme.font-h1; font-weight: 700; color: Theme.ink; }
                 Field { label: @tr("Current password"); LineEdit { input-type: password; text <=> root.pw-current; accessible-label: @tr("Current password"); } }
                 Field { label: @tr("New password (at least 10 characters)"); LineEdit { input-type: password; text <=> root.pw-new; accessible-label: @tr("New password"); } }
                 Field { label: @tr("New password again"); LineEdit { input-type: password; text <=> root.pw-repeat; accessible-label: @tr("New password again"); } }
@@ -3508,7 +3510,10 @@ in property <string> redo-label;
                 background: Theme.panel;
                 border-width: 1px;
                 border-color: Theme.rule;
-                border-radius: 2px;
+                border-radius: Theme.radius-panel;
+                drop-shadow-blur: 24px;
+                drop-shadow-offset-y: 8px;
+                drop-shadow-color: #00000059;
                 TouchArea {}
                 VerticalLayout {
                     padding: 16px;
@@ -3529,7 +3534,7 @@ in property <string> redo-label;
                         picked(i) => { root.palette-pick(i); }
                     }
                     if root.palette-shortcuts-open: VerticalLayout {
-                        Text { text: @tr("Keyboard shortcuts"); font-size: 18px; font-weight: 700; color: Theme.ink; }
+                        Text { text: @tr("Keyboard shortcuts"); font-size: Theme.font-h1; font-weight: 700; color: Theme.ink; }
                         DataTable {
                             label: @tr("Keyboard shortcuts");
                             columns: [{ title: @tr("Action"), horizontal-stretch: 2 }, { title: @tr("Shortcut"), width: 140px, min-width: 140px }];
@@ -3561,7 +3566,7 @@ in property <string> redo-label;
             background: Theme.panel;
             border-width: 1px;
             border-color: Theme.rule;
-            border-radius: 3px;
+            border-radius: Theme.radius-panel;
             clip: true;
             VerticalLayout {
                 spacing: 0px;
@@ -3584,7 +3589,7 @@ in property <string> redo-label;
                     Text {
                         text: @tr("This application uses the Slint toolkit under the Slint Royalty-free License 2.0. Icons by Lucide (ISC license). Third-party licenses are listed in the release notices.");
                         color: Theme.graphite;
-                        font-size: 12px;
+                        font-size: Theme.font-label;
                         wrap: word-wrap;
                     }
                     Button { text: @tr("Close"); clicked => { root.show-about = false; } }

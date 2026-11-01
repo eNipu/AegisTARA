@@ -423,11 +423,7 @@ msgstr "最も高いリスク"
 msgid "History"
 msgstr "履歴"
 
-msgid "How an attacker could harm an asset, with STRIDE and UN R155 Annex 5."
-msgstr "STRIDE と UN R155 Annex 5 に基づき、攻撃者がどのように資産に害を及ぼすかです。"
 
-msgid "ISO/SAE 21434 · UN R155"
-msgstr "ISO/SAE 21434 · UN R155"
 
 msgid "Impact"
 msgstr "影響"
@@ -483,8 +479,6 @@ msgstr "ログイン"
 msgid "Measures that make attack steps harder. Attach them to steps on the Attack trees page."
 msgstr "攻撃ステップを難しくする対策です。「攻撃ツリー」ページでステップに添付します。"
 
-msgid "Methodology"
-msgstr "手法"
 
 msgid "Move down"
 msgstr "下へ移動"
@@ -558,8 +552,6 @@ msgstr "OK"
 msgid "OR"
 msgstr "OR"
 
-msgid "On asset "
-msgstr "On asset "
 
 msgid "One node per line; indent a child under its parent. Start a gate with OR, AND or SEQ (sequential AND); a step with - or nothing. Lines with the same text are the same node, which is how a step is shared. Nodes that keep their text keep their ratings and controls."
 msgstr "1行に1ノード。子は親の下に字下げします。ゲートは OR、AND、SEQ（順次AND）で始め、ステップは - または何も付けずに始めます。同じテキストの行は同じノードになり、ステップが共有されます。テキストを保ったノードは評価と対策を保ちます。"
@@ -594,8 +586,6 @@ msgstr "目標の一部"
 msgid "Password"
 msgstr "パスワード"
 
-msgid "Plain text. {0} saves, Escape cancels."
-msgstr "プレーンテキスト。{0} で保存、Escape でキャンセル。"
 
 msgid "Preview"
 msgstr "プレビュー"
@@ -1301,3 +1291,72 @@ msgstr "攻撃ツリーを追加:"
 
 msgid "Add goal for"
 msgstr "目標を追加:"
+
+msgid "Add a description. {0} or leaving the box saves."
+msgstr "説明を入力します。{0} またはボックスを離れると保存されます。"
+
+msgid "Add threat scenario"
+msgstr "脅威シナリオを追加"
+
+msgid "Add translation"
+msgstr "翻訳を追加"
+
+msgid "Assessment method"
+msgstr "評価手法"
+
+msgid "Assets at stake"
+msgstr "影響を受ける資産"
+
+msgid "EU Cyber Resilience Act · connected products"
+msgstr "EU サイバーレジリエンス法 · コネクテッド製品"
+
+msgid "For products with digital elements sold in the EU (CRA Annex I). Harms are rated on health and safety, data and privacy, availability, and financial impact; likelihood is rated directly; goals are called security requirements."
+msgstr "EU で販売されるデジタル要素を持つ製品向け (CRA 附属書 I)。損害は健康と安全、データとプライバシー、可用性、財務への影響で評価し、発生可能性は直接評価します。目標はセキュリティ要件と呼ばれます。"
+
+msgid "For software services and cloud systems. One service-impact scale and a direct likelihood rating: the lightest method, good for a first pass."
+msgstr "ソフトウェアサービスとクラウドシステム向け。サービス影響の尺度が一つと、発生可能性の直接評価だけの最も軽い手法で、最初の分析に向いています。"
+
+msgid "For vehicles and their parts (ISO/SAE 21434, UN R155). Damage is rated on safety, financial, operational and privacy impact; feasibility is worked out from attack potential."
+msgstr "車両とその部品向け (ISO/SAE 21434、UN R155)。損害は安全、財務、運用、プライバシーへの影響で評価し、実現可能性は攻撃ポテンシャルから求めます。"
+
+msgid "GPU renderer"
+msgstr "GPU レンダラー"
+
+msgid "How an attacker could harm an asset."
+msgstr "攻撃者がどのように資産に害を及ぼすかです。"
+
+msgid "ISO/SAE 21434 · EU CRA · STRIDE"
+msgstr "ISO/SAE 21434 · EU CRA · STRIDE"
+
+msgid "ISO/SAE 21434 · road vehicles"
+msgstr "ISO/SAE 21434 · 道路車両"
+
+msgid "New project: name it and pick the assessment method."
+msgstr "新しいプロジェクト: 名前を付けて評価手法を選びます。"
+
+msgid "None yet."
+msgstr "まだありません。"
+
+msgid "Open, duplicate or remove"
+msgstr "開く、複製、削除"
+
+msgid "STRIDE · software and cloud services"
+msgstr "STRIDE · ソフトウェアとクラウドサービス"
+
+msgid "none yet"
+msgstr "まだありません"
+
+msgid "{} it can lead to"
+msgstr "つながりうる{}"
+
+msgid "Cut"
+msgstr "切り取り"
+
+msgid "Copy"
+msgstr "コピー"
+
+msgid "Paste"
+msgstr "貼り付け"
+
+msgid "Select all"
+msgstr "すべて選択"

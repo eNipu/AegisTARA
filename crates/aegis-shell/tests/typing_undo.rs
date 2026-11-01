@@ -175,20 +175,14 @@ async fn undo_scrolls_the_restored_row_into_view_in_a_long_list() {
     let frame = app.frame();
     common::save(&frame, "undo-scroll-long-list");
 
-    // The selected row is drawn in the accent blue; some of it is on screen
-    // inside the list (left of the inspector, below the header).
-    let blue = |r: u8, g: u8, b: u8| b > 150 && b > r.saturating_add(60) && g < 160;
-    let mut count = 0;
-    for y in 330..frame.height.min(830) {
-        for x in 240..880 {
-            let i = ((y * frame.width + x) * 3) as usize;
-            if blue(frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]) {
-                count += 1;
-            }
-        }
-    }
+    // The selected row is drawn in the selection colour (Theme.selection, light
+    // or dark); some of it is on screen inside the list (left of the
+    // inspector, below the header).
+    let h = frame.height.min(830) - 330;
+    let count = frame.count_color(240, 330, 640, h, [0xF9, 0xDD, 0xD4])
+        + frame.count_color(240, 330, 640, h, [0x3A, 0x1E, 0x16]);
     assert!(
         count > 2000,
-        "the selected row is not in view ({count} blue pixels)"
+        "the selected row is not in view ({count} selection-coloured pixels)"
     );
 }
