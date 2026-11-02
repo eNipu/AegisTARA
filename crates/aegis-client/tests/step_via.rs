@@ -184,3 +184,24 @@ fn a_components_list_includes_steps_through_its_interfaces() {
     assert_eq!(only.len(), 1);
     assert_eq!(only[0].step, "Open JTAG");
 }
+
+#[test]
+fn an_outline_edit_that_moves_a_step_keeps_its_through_and_attack_type() {
+    let mut fx = fixture();
+    run(&mut fx.ws, Edit::SetStepVia { tree: fx.tree, node: fx.flash, via: Some(ItemRef::Component(fx.ecu)) });
+    run(&mut fx.ws, Edit::SetStepAttackType { tree: fx.tree, node: fx.flash, attack_type: Some(1) });
+    // Same steps, other order, one renamed neighbour.
+    run(
+        &mut fx.ws,
+        Edit::ReplaceTree {
+            tree: fx.tree,
+            outline: "OR Goal\n  - Open JTAG port\n  - Flash firmware\n".into(),
+        },
+    );
+    let p = fx.ws.project();
+    let t_idx = p.attack_tree_idx(&fx.tree).expect("tree");
+    let tree = p.attack_tree(t_idx).expect("t");
+    let n = tree.iter().find(|(_, _, n)| n.label() == "Flash firmware").map(|(i, _, _)| i).expect("step");
+    assert_eq!(p.step_via(t_idx, n), Some(ItemRef::Component(fx.ecu)));
+    assert!(p.step_attack_type(t_idx, n).is_some());
+}
