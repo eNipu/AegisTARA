@@ -281,14 +281,15 @@ pub use id::{
     TrustBoundaryIdx, VisualPrefix, format_visual_id,
 };
 pub use item::{
-    Component, DataFlow, Interface, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS, TrustBoundary,
+    Component, DataFlow, Interface, ItemRef, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS,
+    TrustBoundary,
 };
 pub use lint::{LintCode, LintFinding, LintSeverity};
 pub use methodology::{
-    AttackPotential, AttackPotentialDef, CatalogRef, CatalogScheme, CatalogSchemeDef,
+    AttackPotential, AttackPotentialDef, AttackType, CatalogRef, CatalogScheme, CatalogSchemeDef,
     CatalogSyntax, ElementNameDef, ElementNamesDef, FactorContribution, FactorDef, FactorLevel,
     FactorLevelDef, FeasibilityFactor, FeasibilityLevel, ImpactCategory, ImpactCategoryDef,
-    InterfaceKind, Level, LevelDef, MAX_FACTOR_POINTS, MAX_FEASIBILITY_FACTORS,
+    InterfaceKind, Level, LevelDef, MAX_ATTACK_TYPES, MAX_FACTOR_POINTS, MAX_FEASIBILITY_FACTORS,
     MAX_INTERFACE_KINDS, MAX_PACK_TRANSLATIONS, MIN_FEASIBILITY_FACTORS, Methodology,
     MethodologyDef, PackTranslationDef, PotentialBand, PotentialBandDef, Property, PropertyDef,
     RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,

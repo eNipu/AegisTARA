@@ -56,10 +56,11 @@ use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
     NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
 };
+use crate::item::ItemRef;
 use crate::methodology::{
-    CatalogRef, CatalogScheme, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
-    InterfaceKind, Level, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_PROPERTIES,
-    Methodology, Property, ThreatCategory,
+    AttackType, CatalogRef, CatalogScheme, FactorLevel, FeasibilityFactor, FeasibilityLevel,
+    ImpactCategory, InterfaceKind, Level, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES,
+    MAX_PROPERTIES, Methodology, Property, ThreatCategory,
 };
 use crate::provenance::{Provenance, ProvenanceSource};
 use crate::tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, WireNodeParts};
@@ -579,6 +580,56 @@ impl<'de> Deserialize<'de> for InterfaceKindKey {
     }
 }
 
+/// An attack type key, resolved as it is read.
+pub(super) struct AttackTypeKey(pub(super) AttackType);
+
+impl<'de> Deserialize<'de> for AttackTypeKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .attack_type(s)
+                .map(AttackTypeKey)
+                .ok_or_else(|| unknown_key(VocabKind::AttackType, s))
+        })
+        .deserialize(d)
+    }
+}
+
+/// A "through" item on the wire: `{"component": id}` or `{"interface": id}`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ItemWire {
+    Component(WireId<ComponentId>),
+    Interface(WireId<InterfaceId>),
+}
+
+impl ItemWire {
+    pub(super) fn unwrap_item(self) -> ItemRef {
+        match self {
+            ItemWire::Component(id) => ItemRef::Component(id.0),
+            ItemWire::Interface(id) => ItemRef::Interface(id.0),
+        }
+    }
+}
+
+/// The writing side of [`ItemWire`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ItemView {
+    Component(Text<ComponentId>),
+    Interface(Text<InterfaceId>),
+}
+
+impl ItemView {
+    pub(super) fn of(item: ItemRef) -> Self {
+        match item {
+            ItemRef::Component(id) => ItemView::Component(Text(id)),
+            ItemRef::Interface(id) => ItemView::Interface(Text(id)),
+        }
+    }
+}
+
 /// A property set given as keys: at most 64 (the most properties a
 /// methodology declares), none repeated, each resolved as it is read into
 /// one 8-byte [`PropertySet`]. Within the list a cap or a repeat is
@@ -856,6 +907,56 @@ impl<'de> Deserialize<'de> for StepMitigations {
             }
         }
         d.deserialize_map(V)
+    }
+}
+
+/// Per-step values across an attack tree given as an object from step
+/// `NodeId` to a value: at most 32 entries ([`MAX_ATTACK_TREE_NODES`]), no
+/// node ID repeated, never empty (omit the field instead). `what` names the
+/// field in the empty-object error.
+pub(super) struct StepValues<V>(pub(super) Vec<(NodeId, V)>);
+
+impl<V> Default for StepValues<V> {
+    fn default() -> Self {
+        StepValues(Vec::new())
+    }
+}
+
+impl<'de, V: Deserialize<'de>> Deserialize<'de> for StepValues<V> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Vis<V>(PhantomData<V>);
+        impl<'de, V: Deserialize<'de>> Visitor<'de> for Vis<V> {
+            type Value = StepValues<V>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of per-step values by node")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<StepValues<V>, A::Error> {
+                let mut out = Vec::new();
+                let mut seen: Vec<NodeId> = Vec::new();
+                while let Some(node) = map.next_key_seed(WithStr::new(|s: &str| {
+                    if out.len() >= MAX_ATTACK_TREE_NODES {
+                        return Err(Fault::Limit(Limit::ATTACK_TREE_NODES));
+                    }
+                    if !is_canonical_uuid(s) {
+                        return Err(Fault::InvalidId);
+                    }
+                    NodeId::from_str(s).map_err(|_| Fault::InvalidId)
+                }))? {
+                    if seen.contains(&node) {
+                        return Err(raise(Fault::Duplicate));
+                    }
+                    seen.push(node);
+                    out.push((node, map.next_value()?));
+                }
+                if out.is_empty() {
+                    return Err(de::Error::custom(
+                        "per-step values must be omitted when empty",
+                    ));
+                }
+                Ok(StepValues(out))
+            }
+        }
+        d.deserialize_map(Vis(PhantomData))
     }
 }
 
@@ -1587,6 +1688,10 @@ pub(super) struct TreeWire {
     pub(super) step_factors: StepFactors,
     #[serde(default)]
     pub(super) step_mitigations: StepMitigations,
+    #[serde(default)]
+    pub(super) step_via: StepValues<ItemWire>,
+    #[serde(default)]
+    pub(super) step_attack_type: StepValues<AttackTypeKey>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -1893,6 +1998,22 @@ pub(super) enum OpWire {
         node: WireId<NodeId>,
         #[serde(deserialize_with = "Option::deserialize")]
         level: Option<FeasibilityLevelKey>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetStepVia {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        via: Option<ItemWire>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetStepAttackType {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        attack_type: Option<AttackTypeKey>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
@@ -2605,6 +2726,64 @@ impl Serialize for StepMitigationsForNode<'_> {
                 &Required(self.project.security_control_id(mt.control()).map(Text)),
                 &Required(m.feasibility_level_key(mt.feasibility())),
             )?;
+        }
+        map.end()
+    }
+}
+
+/// A stored attack tree's step "through" items in arena order, steps
+/// without one left out, as an object mapping node ID to `{"component":
+/// id}` or `{"interface": id}`. O(V).
+pub(super) struct StepViaByNode<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) tree_idx: TreeIdx,
+    pub(super) tree: &'a AttackTree,
+}
+
+impl StepViaByNode<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.tree
+            .iter()
+            .all(|(n, _, _)| self.project.step_via(self.tree_idx, n).is_none())
+    }
+}
+
+impl Serialize for StepViaByNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(None)?;
+        for (node_idx, node_id, _) in self.tree.iter() {
+            if let Some(item) = self.project.step_via(self.tree_idx, node_idx) {
+                map.serialize_entry(&Text(node_id), &ItemView::of(item))?;
+            }
+        }
+        map.end()
+    }
+}
+
+/// A stored attack tree's step attack types in arena order, steps without
+/// one left out, as an object mapping node ID to the attack type key. O(V).
+pub(super) struct StepAttackTypeByNode<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) tree_idx: TreeIdx,
+    pub(super) tree: &'a AttackTree,
+}
+
+impl StepAttackTypeByNode<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.tree
+            .iter()
+            .all(|(n, _, _)| self.project.step_attack_type(self.tree_idx, n).is_none())
+    }
+}
+
+impl Serialize for StepAttackTypeByNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let m = self.project.methodology();
+        let mut map = s.serialize_map(None)?;
+        for (node_idx, node_id, _) in self.tree.iter() {
+            if let Some(t) = self.project.step_attack_type(self.tree_idx, node_idx) {
+                map.serialize_entry(&Text(node_id), &Required(m.attack_type_key(t)))?;
+            }
         }
         map.end()
     }

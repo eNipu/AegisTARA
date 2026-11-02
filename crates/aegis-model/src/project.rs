@@ -24,12 +24,13 @@ use crate::id::{
     TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
-    Component, DataFlow, Interface, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS, TrustBoundary,
+    Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
+    MAX_TRUST_BOUNDARY_MEMBERS, TrustBoundary,
 };
 use crate::lint::{LintCode, LintFinding};
 use crate::methodology::{
-    AttackPotential, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
-    InterfaceKind, Level, Methodology, Property, RiskLevel, ThreatCategory,
+    AttackPotential, AttackType, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel,
+    ImpactCategory, InterfaceKind, Level, Methodology, Property, RiskLevel, ThreatCategory,
 };
 use crate::op::Op;
 use crate::paths::{AttackPath, ChokePoint};
@@ -178,6 +179,10 @@ struct TreeEntry {
     step_feasibility: Vec<Option<FeasibilityLevel>>,
     step_factors: Vec<Box<[Option<FactorLevel>]>>,
     step_mitigations: Vec<Box<[StepMitigation]>>,
+    /// Per node: the component or interface the step goes through (CFG-01).
+    step_via: Vec<Option<ItemIdx>>,
+    /// Per node: the pack-defined attack type of the step (CFG-02).
+    step_attack_type: Vec<Option<AttackType>>,
     provenance: Provenance,
 }
 
@@ -2833,6 +2838,70 @@ impl Project {
             .get(tree)
             .and_then(|e| e.step_mitigations.get(node.index()))
             .map_or(&[], Box::as_ref)
+    }
+
+    /// The component or interface the step `node` of `tree` goes through, if
+    /// any (CFG-01). O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ComponentId, GateKind, ItemRef, Methodology, Node, NodeId, Op, Project,
+    /// #     Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let ecu = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: ecu, name: "ADAS ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let (tree_id, step) = (TreeId::new_v7(), NodeId::new_v7());
+    /// let tree = AttackTree::new(step, Node::step("Flash firmware"))?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepVia {
+    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(ecu)),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let tree_idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
+    /// let root = project.attack_tree(tree_idx).ok_or("missing")?.root();
+    /// assert_eq!(project.step_via(tree_idx, root), Some(ItemRef::Component(ecu)));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn step_via(&self, tree: TreeIdx, node: NodeIdx) -> Option<ItemRef> {
+        let via = self.trees.get(tree)?.step_via.get(node.index()).copied()?;
+        self.item_ref(via)
+    }
+
+    /// The attack type of the step `node` of `tree`, if any (CFG-02). O(1).
+    #[must_use]
+    pub fn step_attack_type(&self, tree: TreeIdx, node: NodeIdx) -> Option<AttackType> {
+        self.trees
+            .get(tree)?
+            .step_attack_type
+            .get(node.index())
+            .copied()
+            .flatten()
+    }
+
+    /// Every step that goes through `item` itself (a component's list does
+    /// not include steps through its interfaces), in tree then node order.
+    /// O(total nodes).
+    pub fn steps_via(&self, item: ItemRef) -> impl Iterator<Item = (TreeIdx, NodeIdx)> + '_ {
+        let want = self.item_idx(item).ok();
+        self.trees
+            .iter()
+            .filter(move |_| want.is_some())
+            .flat_map(move |(t, _, e)| {
+                e.step_via
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, v)| **v == want)
+                    .filter_map(move |(i, _)| Some((t, NodeIdx::try_from_usize(i)?)))
+            })
     }
 
     /// Returns the residual feasibility of `node` in `tree` — the minimum of
@@ -5716,6 +5785,15 @@ impl Project {
             Op::SetStepFeasibility {
                 tree, node, level, ..
             } => self.check_set_step_feasibility(*tree, *node, *level)?,
+            Op::SetStepVia {
+                tree, node, via, ..
+            } => self.check_set_step_via(*tree, *node, *via)?,
+            Op::SetStepAttackType {
+                tree,
+                node,
+                attack_type,
+                ..
+            } => self.check_set_step_attack_type(*tree, *node, *attack_type)?,
             Op::SetStepFactor {
                 tree,
                 node,
@@ -6119,6 +6197,18 @@ impl Project {
                 level,
                 provenance,
             } => self.commit_set_step_feasibility(tree, node, level, provenance),
+            Op::SetStepVia {
+                tree,
+                node,
+                via,
+                provenance,
+            } => self.commit_set_step_via(tree, node, via, provenance),
+            Op::SetStepAttackType {
+                tree,
+                node,
+                attack_type,
+                provenance,
+            } => self.commit_set_step_attack_type(tree, node, attack_type, provenance),
             Op::SetStepFactor {
                 tree,
                 node,
@@ -6562,6 +6652,34 @@ impl Project {
         self.controls.id(idx)
     }
 
+    /// The public form of a stored "through" item, if it is live.
+    fn item_ref(&self, idx: Option<ItemIdx>) -> Option<ItemRef> {
+        match idx? {
+            ItemIdx::Component(c) => self.components.id(c).map(ItemRef::Component),
+            ItemIdx::Interface(i) => self.interfaces.id(i).map(ItemRef::Interface),
+        }
+    }
+
+    /// The index form of a public "through" item, if it is live.
+    fn item_idx(&self, item: ItemRef) -> Result<ItemIdx, ModelError> {
+        Ok(match item {
+            ItemRef::Component(id) => ItemIdx::Component(self.live_component(id)?.0),
+            ItemRef::Interface(id) => ItemIdx::Interface(self.live_interface(id)?.0),
+        })
+    }
+
+    /// How many attack steps go through `item` itself, not through its
+    /// interfaces. A scan over all step slots, O(total nodes).
+    fn count_steps_via(&self, item: ItemIdx) -> u32 {
+        let n = self
+            .trees
+            .iter()
+            .flat_map(|(_, _, e)| e.step_via.iter())
+            .filter(|v| **v == Some(item))
+            .count();
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }
+
     /// The public ID of a linked cybersecurity goal, if any.
     fn goal_key(&self, idx: Option<GoalIdx>) -> Option<GoalId> {
         idx.and_then(|i| self.goals.id(i))
@@ -6721,7 +6839,12 @@ impl Project {
             || entry
                 .step_mitigations
                 .get(idx.index())
-                .is_some_and(|m| !m.is_empty());
+                .is_some_and(|m| !m.is_empty())
+            || entry.step_via.get(idx.index()).is_some_and(Option::is_some)
+            || entry
+                .step_attack_type
+                .get(idx.index())
+                .is_some_and(Option::is_some);
         if rated {
             return Err(ModelError::NodeIsRated(id));
         }
@@ -6787,6 +6910,8 @@ impl Project {
         entry.step_feasibility.insert(at.index(), None);
         entry.step_factors.insert(at.index(), Box::default());
         entry.step_mitigations.insert(at.index(), Box::default());
+        entry.step_via.insert(at.index(), None);
+        entry.step_attack_type.insert(at.index(), None);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::RemoveTreeNode {
             tree,
@@ -6810,6 +6935,8 @@ impl Project {
         entry.step_feasibility.remove(idx.index());
         entry.step_factors.remove(idx.index());
         entry.step_mitigations.remove(idx.index());
+        entry.step_via.remove(idx.index());
+        entry.step_attack_type.remove(idx.index());
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         let parent = entry
             .tree
@@ -7472,6 +7599,45 @@ impl Project {
         Ok(())
     }
 
+    /// The tree and the step slot of `node`, or why it is not a step.
+    fn step_slot(&self, tree: TreeId, node: NodeId) -> Result<NodeIdx, ModelError> {
+        let (_, entry) = self.live_tree(tree)?;
+        let node_idx = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
+            return Err(ModelError::NotAStep { tree, node });
+        }
+        Ok(node_idx)
+    }
+
+    fn check_set_step_via(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        via: Option<ItemRef>,
+    ) -> Result<(), ModelError> {
+        self.step_slot(tree, node)?;
+        if let Some(item) = via {
+            self.item_idx(item)?;
+        }
+        Ok(())
+    }
+
+    fn check_set_step_attack_type(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        attack_type: Option<AttackType>,
+    ) -> Result<(), ModelError> {
+        self.step_slot(tree, node)?;
+        if let Some(t) = attack_type {
+            self.methodology.check_attack_type(t)?;
+        }
+        Ok(())
+    }
+
     fn check_set_step_factor(
         &self,
         tree: TreeId,
@@ -7547,6 +7713,18 @@ impl Project {
             .count();
         if factors > 0 {
             return Err(ModelError::AttackTreeHasFactors { tree: id, factors });
+        }
+        let links = entry
+            .step_via
+            .iter()
+            .zip(&entry.step_attack_type)
+            .filter(|(v, t)| v.is_some() || t.is_some())
+            .count();
+        if links > 0 {
+            return Err(ModelError::AttackTreeHasStepLinks {
+                tree: id,
+                steps: links,
+            });
         }
         let mitigations: usize = entry.step_mitigations.iter().map(|m| m.len()).sum();
         if mitigations > 0 {
@@ -7883,6 +8061,13 @@ impl Project {
                 assets,
             });
         }
+        let steps = self.count_steps_via(ItemIdx::Component(idx));
+        if steps > 0 {
+            return Err(ModelError::ComponentHasSteps {
+                component: id,
+                steps,
+            });
+        }
         Ok(())
     }
 
@@ -7917,6 +8102,13 @@ impl Project {
             return Err(ModelError::InterfaceInUse {
                 interface: id,
                 flows,
+            });
+        }
+        let steps = self.count_steps_via(ItemIdx::Interface(idx));
+        if steps > 0 {
+            return Err(ModelError::InterfaceHasSteps {
+                interface: id,
+                steps,
             });
         }
         Ok(())
@@ -8470,11 +8662,14 @@ impl Project {
         }
         let step_factors = vec![Box::default(); tree.len()];
         let step_mitigations = vec![Box::default(); tree.len()];
+        let (step_via, step_attack_type) = (vec![None; tree.len()], vec![None; tree.len()]);
         let entry = TreeEntry {
             tree,
             step_feasibility: slots,
             step_factors,
             step_mitigations,
+            step_via,
+            step_attack_type,
             provenance,
         };
         self.trees
@@ -8508,6 +8703,59 @@ impl Project {
             tree,
             node,
             level,
+            provenance,
+        })
+    }
+
+    fn commit_set_step_via(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        via: Option<ItemRef>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let new = via.map(|item| self.item_idx(item)).transpose()?;
+        let entry = self.tree_mut(tree)?;
+        let node_idx = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let slot = entry
+            .step_via
+            .get_mut(node_idx.index())
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let old = std::mem::replace(slot, new);
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        Ok(Op::SetStepVia {
+            tree,
+            node,
+            via: self.item_ref(old),
+            provenance,
+        })
+    }
+
+    fn commit_set_step_attack_type(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        attack_type: Option<AttackType>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let entry = self.tree_mut(tree)?;
+        let node_idx = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let slot = entry
+            .step_attack_type
+            .get_mut(node_idx.index())
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let attack_type = std::mem::replace(slot, attack_type);
+        let provenance = std::mem::replace(&mut entry.provenance, provenance);
+        Ok(Op::SetStepAttackType {
+            tree,
+            node,
+            attack_type,
             provenance,
         })
     }
@@ -9562,6 +9810,12 @@ impl Project {
         x.tree == y.tree
             && x.step_feasibility == y.step_feasibility
             && x.step_factors == y.step_factors
+            && x.step_attack_type == y.step_attack_type
+            && x.step_via.len() == y.step_via.len()
+            && x.step_via
+                .iter()
+                .zip(&y.step_via)
+                .all(|(a, b)| self.item_ref(*a) == other.item_ref(*b))
             && x.provenance == y.provenance
             && x.step_mitigations.len() == y.step_mitigations.len()
             && x.step_mitigations
@@ -9981,6 +10235,27 @@ impl Project {
                     "tree {id} has {} mitigation slots",
                     entry.step_mitigations.len()
                 ));
+            }
+            if entry.step_via.len() != entry.tree.len()
+                || entry.step_attack_type.len() != entry.tree.len()
+            {
+                return Err(format!("tree {id} has the wrong number of via slots"));
+            }
+            for ((_, node_id, node), (&via, &attack_type)) in entry
+                .tree
+                .iter()
+                .zip(entry.step_via.iter().zip(&entry.step_attack_type))
+            {
+                if matches!(node, Node::Gate { .. }) && (via.is_some() || attack_type.is_some()) {
+                    return Err(format!("tree {id} gate {node_id} has a via or attack type"));
+                }
+                if via.is_some() && self.item_ref(via).is_none() {
+                    return Err(format!("tree {id} node {node_id} goes via a dead item"));
+                }
+                if let Some(t) = attack_type {
+                    m.check_attack_type(t)
+                        .map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
+                }
             }
             entry
                 .tree
@@ -10503,6 +10778,10 @@ impl ProjectEvalCache {
             | Op::RemoveBoundaryComponent { .. }
             | Op::RemoveTrustBoundary { .. }
             | Op::SetAssetComponent { .. } => {}
+
+            // Via and attack type do not change any rating yet (job 123 adds
+            // the settings that read them and must mark the step dirty here).
+            Op::SetStepVia { .. } | Op::SetStepAttackType { .. } => {}
 
             Op::AddDamageScenario { .. } | Op::RemoveDamageScenario { .. } => {
                 self.damage_threats
