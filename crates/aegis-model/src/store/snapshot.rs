@@ -1011,7 +1011,7 @@ impl Project {
                     })?;
                 }
             }
-            for (node, via) in tr.step_via.0 {
+            for (node, via) in tr.step_via.into_iter().flat_map(|v| v.0) {
                 project.apply(Op::SetStepVia {
                     tree: id,
                     node,
@@ -1019,7 +1019,7 @@ impl Project {
                     provenance: provenance.clone(),
                 })?;
             }
-            for (node, attack_type) in tr.step_attack_type.0 {
+            for (node, attack_type) in tr.step_attack_type.into_iter().flat_map(|v| v.0) {
                 project.apply(Op::SetStepAttackType {
                     tree: id,
                     node,

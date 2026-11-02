@@ -508,7 +508,16 @@ fn ops_generator_covers_every_op_and_most_errors() {
         let stats = coverage(&m);
         let share = stats.ok as f64 / (stats.ok + stats.failed) as f64;
         assert!((0.25..0.9).contains(&share), "valid share {share}");
-        assert_eq!(stats.ok_kinds.len(), 37, "{:?}", stats.ok_kinds);
+        // The second pack declares no interface kinds, so it has no
+        // interface to add or remove.
+        let kinds = if m.interface_kind_count() > 0 { 43 } else { 41 };
+        assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
+        for kind in ["SetStepVia", "SetStepAttackType"] {
+            assert!(stats.ok_kinds.contains(kind), "{kind} never succeeded");
+        }
+        for error in ["UnknownComponent", "NotAStep"] {
+            assert!(stats.errors.contains(error), "{error} never raised");
+        }
         assert!(stats.errors.len() >= 38, "{:?}", stats.errors);
         eprintln!(
             "{}: ok {} failed {} errors {:?}",

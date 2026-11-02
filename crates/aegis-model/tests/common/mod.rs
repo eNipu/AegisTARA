@@ -12,12 +12,13 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, AttackPotentialDef, AttackTree, CatalogRef, CatalogScheme, CatalogSchemeDef,
-    CatalogSyntax, ClaimId, ControlId, DamageId, FactorDef, FactorLevel, FactorLevelDef,
-    FeasibilityFactor, FeasibilityLevel, GateKind, GoalId, ImpactCategory, ImpactCategoryDef,
-    Level, LevelDef, Methodology, MethodologyDef, Node, NodeId, Op, PotentialBandDef, Project,
-    Property, PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment,
-    SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    AssetId, AttackPotentialDef, AttackTree, AttackType, CatalogRef, CatalogScheme,
+    CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ControlId, DamageId, FactorDef,
+    FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel, GateKind, GoalId,
+    ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef, Methodology,
+    MethodologyDef, Node, NodeId, Op, PotentialBandDef, Project, Property, PropertyDef,
+    PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment, SegmentDef,
+    ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -471,6 +472,14 @@ pub fn claim_id(n: u64) -> ClaimId {
     ClaimId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn component_id(n: u64) -> ComponentId {
+    ComponentId::from_uuid(v7(n)).expect("v7")
+}
+
+pub fn interface_id(n: u64) -> InterfaceId {
+    InterfaceId::from_uuid(v7(n)).expect("v7")
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -538,7 +547,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..48,
+        0u8..54,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -564,6 +573,9 @@ pub fn seeds() -> impl Strategy<Value = Vec<Seed>> {
 pub struct Gen {
     m: Arc<Methodology>,
     wide: Methodology,
+    /// The built-in methodology, for attack types and interface kinds when
+    /// `m` declares none (they are then out of range for `m`).
+    foreign: Arc<Methodology>,
     next: u64,
 }
 
@@ -582,6 +594,7 @@ impl Gen {
         Gen {
             m,
             wide: wide(),
+            foreign: builtin(),
             next: 0,
         }
     }
@@ -654,6 +667,63 @@ impl Gen {
             Some(id) if !sel.is_multiple_of(8) => id,
             _ => control_id(self.fresh()),
         }
+    }
+
+    fn component(&mut self, p: &Project, sel: u16) -> ComponentId {
+        let existing: Vec<_> = p.components().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => component_id(self.fresh()),
+        }
+    }
+
+    fn interface(&mut self, p: &Project, sel: u16) -> InterfaceId {
+        let existing: Vec<_> = p.interfaces().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => interface_id(self.fresh()),
+        }
+    }
+
+    /// A component or an interface, mostly live ones.
+    fn item(&mut self, p: &Project, sel: u16, pick: u16) -> ItemRef {
+        if pick % 2 == 0 {
+            ItemRef::Component(self.component(p, sel))
+        } else {
+            ItemRef::Interface(self.interface(p, sel))
+        }
+    }
+
+    /// An attack type, mostly one the methodology declares.
+    fn attack_type(&self, sel: u16) -> AttackType {
+        let m = if self.m.attack_type_count() > 0 {
+            &self.m
+        } else {
+            &self.foreign
+        };
+        m.attack_types()
+            .nth(usize::from(sel) % m.attack_type_count())
+            .expect("attack type")
+    }
+
+    /// A tree and a node in it: mostly a step, sometimes the root or a
+    /// stranger.
+    fn step_node(&mut self, p: &Project, tree_sel: u16, node_sel: u16) -> (TreeId, NodeId) {
+        let tree = self.tree(p, tree_sel);
+        let node = match p.attack_tree_idx(&tree).and_then(|idx| p.attack_tree(idx)) {
+            Some(_) if node_sel.is_multiple_of(8) => node_id(self.fresh()),
+            Some(t) if node_sel % 8 == 1 => t.id_of(t.root()).expect("root"),
+            Some(t) => {
+                let steps: Vec<_> = t
+                    .iter()
+                    .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                    .map(|(_, id, _)| id)
+                    .collect();
+                nth(steps, node_sel / 8).unwrap_or_else(|| node_id(self.fresh()))
+            }
+            None => node_id(self.fresh()),
+        };
+        (tree, node)
     }
 
     fn goal(&mut self, p: &Project, sel: u16) -> GoalId {
@@ -1279,11 +1349,67 @@ impl Gen {
                 goal: (!s.b.is_multiple_of(4)).then(|| self.goal(p, s.b)),
                 provenance,
             },
-            _ => Op::SetThreatClaim {
+            47 => Op::SetThreatClaim {
                 threat: self.threat(p, s.a),
                 claim: (!s.b.is_multiple_of(4)).then(|| self.claim(p, s.b)),
                 provenance,
             },
+            48 => Op::AddComponent {
+                id: if s.a.is_multiple_of(16) {
+                    self.component(p, s.b)
+                } else {
+                    component_id(self.fresh())
+                },
+                name: self.name(s.c),
+                parent: None,
+                provenance,
+            },
+            49 => {
+                let m = if self.m.interface_kind_count() > 0 {
+                    &self.m
+                } else {
+                    &self.foreign
+                };
+                let kind = m
+                    .interface_kinds()
+                    .nth(usize::from(s.c) % m.interface_kind_count())
+                    .expect("interface kind");
+                Op::AddInterface {
+                    id: if s.a.is_multiple_of(16) {
+                        self.interface(p, s.b)
+                    } else {
+                        interface_id(self.fresh())
+                    },
+                    name: self.name(s.c),
+                    component: self.component(p, s.b),
+                    kind,
+                    provenance,
+                }
+            }
+            50 => Op::RemoveComponent {
+                id: self.component(p, s.a),
+            },
+            51 => Op::RemoveInterface {
+                id: self.interface(p, s.a),
+            },
+            52 => {
+                let (tree, node) = self.step_node(p, s.a, s.b);
+                Op::SetStepVia {
+                    tree,
+                    node,
+                    via: (!s.c.is_multiple_of(5)).then(|| self.item(p, s.c, s.bits as u16)),
+                    provenance,
+                }
+            }
+            _ => {
+                let (tree, node) = self.step_node(p, s.a, s.b);
+                Op::SetStepAttackType {
+                    tree,
+                    node,
+                    attack_type: (!s.c.is_multiple_of(5)).then(|| self.attack_type(s.c)),
+                    provenance,
+                }
+            }
         }
     }
 }
@@ -1634,8 +1760,18 @@ pub fn describe(p: &Project) -> Vec<String> {
                     .collect::<Vec<_>>()
             })
             .collect();
+        let links: Vec<_> = tree
+            .iter()
+            .map(|(n_idx, _, _)| {
+                (
+                    p.step_via(idx, n_idx),
+                    p.step_attack_type(idx, n_idx)
+                        .and_then(|t| m.attack_type_key(t)),
+                )
+            })
+            .collect();
         out.push(format!(
-            "tree {id} {nodes:?} {feas:?} {factors:?} {mits:?} {:?}",
+            "tree {id} {nodes:?} {feas:?} {factors:?} {mits:?} {links:?} {:?}",
             p.attack_tree_provenance(idx),
         ));
     }
@@ -2252,6 +2388,53 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: Provenance::default(),
         },
     );
+    // A step goes through a component; the component stays while it does.
+    let ecu = component_id(9_001);
+    ok(
+        &mut p,
+        Op::AddComponent {
+            id: ecu,
+            name: "Pump controller".into(),
+            parent: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepVia {
+            tree,
+            node: s1,
+            via: Some(ItemRef::Component(ecu)),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepAttackType {
+            tree,
+            node: s1,
+            attack_type: None,
+            provenance: p_ai.clone(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveComponent { id: ecu },
+        &aegis_model::ModelError::ComponentHasSteps {
+            component: ecu,
+            steps: 1,
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetStepVia {
+            tree,
+            node: s1,
+            via: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, Op::RemoveComponent { id: ecu });
     rejects(
         &mut p,
         Op::RemoveSecurityControl { id: ctrl },
