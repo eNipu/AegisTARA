@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::wire::{
     self, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, GateKindWire, HeaderView, HeaderWire,
-    Ids, ImpactsInOrder, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys,
+    Ids, ImpactsInOrder, ItemView, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys,
     ProvenanceView, RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, TargetView,
     Text,
 };
@@ -233,6 +233,20 @@ enum OpView<'a> {
         tree: Text<TreeId>,
         node: Text<NodeId>,
         level: Option<Required<&'a str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetStepVia {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        via: Option<ItemView>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetStepAttackType {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        attack_type: Option<Required<&'a str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
@@ -792,6 +806,28 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             tree: Text(*tree),
             node: Text(*node),
             level: level.map(|l| Required(m.feasibility_level_key(l))),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetStepVia {
+            tree,
+            node,
+            via,
+            provenance,
+        } => OpView::SetStepVia {
+            tree: Text(*tree),
+            node: Text(*node),
+            via: via.map(ItemView::of),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetStepAttackType {
+            tree,
+            node,
+            attack_type,
+            provenance,
+        } => OpView::SetStepAttackType {
+            tree: Text(*tree),
+            node: Text(*node),
+            attack_type: attack_type.map(|t| Required(m.attack_type_key(t))),
             provenance: ProvenanceView::of(provenance),
         },
         Op::SetStepFactor {
@@ -1395,6 +1431,28 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             tree: tree.0,
             node: node.0,
             level: level.map(|l| l.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetStepVia {
+            tree,
+            node,
+            via,
+            provenance,
+        } => Op::SetStepVia {
+            tree: tree.0,
+            node: node.0,
+            via: via.map(wire::ItemWire::unwrap_item),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetStepAttackType {
+            tree,
+            node,
+            attack_type,
+            provenance,
+        } => Op::SetStepAttackType {
+            tree: tree.0,
+            node: node.0,
+            attack_type: attack_type.map(|t| t.0),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepFactor {

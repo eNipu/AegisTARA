@@ -40,6 +40,8 @@ pub const MAX_THREAT_CATEGORIES: usize = 64;
 pub const MAX_CATALOG_SCHEMES: usize = 16;
 /// Most interface kinds a methodology may declare for the item definition.
 pub const MAX_INTERFACE_KINDS: usize = 32;
+/// Most attack types a methodology may declare for attack steps (CFG-02).
+pub const MAX_ATTACK_TYPES: usize = 32;
 /// Most per-language translations a methodology pack may declare.
 pub const MAX_PACK_TRANSLATIONS: usize = 16;
 /// Fewest factors an `attack_potential` scheme may declare.
@@ -205,6 +207,8 @@ pub struct PackTranslationDef {
     pub factor_levels: BTreeMap<Arc<str>, Arc<str>>,
     /// Localized interface kind labels, keyed by interface kind key.
     pub interface_kinds: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized attack type labels, keyed by attack type key.
+    pub attack_types: BTreeMap<Arc<str>, Arc<str>>,
 }
 
 /// Pack-defined display names for the model's element types and the
@@ -250,6 +254,8 @@ pub struct ElementNamesDef {
     pub feasibility: Arc<str>,
     /// Pack-defined interface kinds for the item definition, 0 to 32 (ARC-02, Decision D15).
     pub interface_kinds: Vec<LevelDef>,
+    /// Pack-defined attack types for attack steps, 0 to 32 (CFG-02, Decision D26).
+    pub attack_types: Vec<LevelDef>,
     /// Optional per-language translations of pack labels and element names (L10N-07).
     pub translations: BTreeMap<Arc<str>, PackTranslationDef>,
 }
@@ -303,6 +309,7 @@ impl Default for ElementNamesDef {
             cybersecurity_claim: ElementNameDef::new("Cybersecurity claim", "Cybersecurity claims"),
             feasibility: Arc::from("Attack feasibility"),
             interface_kinds: Vec::new(),
+            attack_types: Vec::new(),
             translations: BTreeMap::new(),
         }
     }
@@ -718,6 +725,22 @@ vocab_index! {
     InterfaceKind
 }
 
+vocab_index! {
+    /// Index of an attack type in a [`Methodology`]: what kind of attack an
+    /// attack step is (firmware modification, debug access, ...). 1 byte.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.attack_type("firmware-modification").map(|k| k.index()), Some(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    AttackType
+}
+
 /// One validated score band in a [`Methodology`]'s attack potential scheme.
 ///
 /// ```
@@ -1075,6 +1098,14 @@ impl FactorLevel {
 }
 
 #[cfg(test)]
+impl AttackType {
+    /// Wraps a raw position, for tests.
+    pub(crate) fn new(i: u8) -> Self {
+        AttackType(i)
+    }
+}
+
+#[cfg(test)]
 impl InterfaceKind {
     /// Wraps a raw position, for tests.
     pub(crate) fn new(i: u8) -> Self {
@@ -1164,6 +1195,8 @@ pub struct Methodology {
     element_names: ElementNamesDef,
     interface_kinds: Vec<Entry>,
     interface_by_key: BTreeMap<Arc<str>, u8>,
+    attack_types: Vec<Entry>,
+    attack_by_key: BTreeMap<Arc<str>, u8>,
     translations: BTreeMap<Arc<str>, PackTranslationDef>,
     impact_categories: Vec<CategoryData>,
     impact_by_key: BTreeMap<Arc<str>, u8>,
@@ -1349,6 +1382,7 @@ impl Methodology {
         };
         Self::check_element_names(&def.element_names)?;
         let interface_kinds = Self::build_interface_kinds(&def.element_names.interface_kinds)?;
+        let attack_types = Self::build_attack_types(&def.element_names.attack_types)?;
         Self::check_translations(&def.element_names.translations)?;
         let translations = def.element_names.translations.clone();
 
@@ -1359,6 +1393,8 @@ impl Methodology {
             element_names: def.element_names,
             interface_kinds: interface_kinds.items,
             interface_by_key: interface_kinds.by_key,
+            attack_types: attack_types.items,
+            attack_by_key: attack_types.by_key,
             translations,
             impact_categories: impacts.items,
             impact_by_key: impacts.by_key,
@@ -1423,6 +1459,26 @@ impl Methodology {
         Ok(Vocab { items: out, by_key })
     }
 
+    fn build_attack_types(defs: &[LevelDef]) -> Result<Vocab<Entry>, MethodologyError> {
+        check_count(defs.len(), 0, MAX_ATTACK_TYPES, || {
+            MethodologyError::TooManyAttackTypes {
+                max: MAX_ATTACK_TYPES,
+            }
+        })?;
+        let mut by_key = BTreeMap::new();
+        let mut out = Vec::with_capacity(defs.len());
+        for (pos, l) in defs.iter().enumerate() {
+            out.push(add_entry(
+                &l.key,
+                &l.label,
+                pos,
+                &mut by_key,
+                MethodologyError::DuplicateAttackType,
+            )?);
+        }
+        Ok(Vocab { items: out, by_key })
+    }
+
     fn check_translations(
         translations: &BTreeMap<Arc<str>, PackTranslationDef>,
     ) -> Result<(), MethodologyError> {
@@ -1450,6 +1506,7 @@ impl Methodology {
                 &tr.feasibility_factors,
                 &tr.factor_levels,
                 &tr.interface_kinds,
+                &tr.attack_types,
             ] {
                 for (k, v) in maps {
                     check_key(k)?;
@@ -3011,6 +3068,48 @@ impl Methodology {
         self.interface_kinds.get(kind.index()).map(|e| &*e.label)
     }
 
+    // -- Attack types (CFG-02, Decision D26) ----------------------------------
+
+    /// Iterates the attack types in declaration order. Empty for a pack that
+    /// declares none. Time O(1) per item.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.attack_types().count() >= 10);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn attack_types(&self) -> impl ExactSizeIterator<Item = AttackType> + use<> {
+        index_range(self.attack_types.len()).map(AttackType)
+    }
+
+    /// Returns the number of declared attack types. Time O(1).
+    #[must_use]
+    pub fn attack_type_count(&self) -> usize {
+        self.attack_types.len()
+    }
+
+    /// Resolves an attack type key in O(log K), K <= 32.
+    #[must_use]
+    pub fn attack_type(&self, key: &str) -> Option<AttackType> {
+        self.attack_by_key.get(key).copied().map(AttackType)
+    }
+
+    /// Returns an attack type's key, or `None` if out of range. Time O(1).
+    #[must_use]
+    pub fn attack_type_key(&self, kind: AttackType) -> Option<&str> {
+        self.attack_types.get(kind.index()).map(|e| &*e.key)
+    }
+
+    /// Returns an attack type's display label, or `None` if out of range. Time O(1).
+    #[must_use]
+    pub fn attack_type_label(&self, kind: AttackType) -> Option<&str> {
+        self.attack_types.get(kind.index()).map(|e| &*e.label)
+    }
+
     // -- Translations (L10N-07) -----------------------------------------------
 
     /// Returns all per-language translation tables declared by this pack. Time O(1).
@@ -3206,6 +3305,29 @@ impl Methodology {
             return Some(lbl);
         }
         Some(&entry.label)
+    }
+
+    /// Returns an attack type's localized label for `lang`, falling back to
+    /// [`Self::attack_type_label`].
+    #[must_use]
+    pub fn attack_type_label_for_lang(&self, kind: AttackType, lang: &str) -> Option<&str> {
+        let entry = self.attack_types.get(kind.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.attack_types.get(&entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&entry.label)
+    }
+
+    /// Checks that an attack type is declared in this methodology. Time O(1).
+    pub(crate) fn check_attack_type(&self, kind: AttackType) -> Result<(), ModelError> {
+        if kind.index() < self.attack_types.len() {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownAttackType(kind))
+        }
     }
 
     /// Checks that an interface kind is declared in this methodology. Time O(1).
@@ -4448,6 +4570,8 @@ mod tests {
         assert_eq!(size_of::<CatalogScheme>(), 1);
         assert_eq!(size_of::<InterfaceKind>(), 1);
         assert_eq!(InterfaceKind::new(3).index(), 3);
+        assert_eq!(size_of::<AttackType>(), 1);
+        assert_eq!(AttackType::new(3).index(), 3);
         assert_eq!(size_of::<PropertySet>(), 8);
         assert!(size_of::<CatalogRef>() <= 12, "{}", size_of::<CatalogRef>());
     }

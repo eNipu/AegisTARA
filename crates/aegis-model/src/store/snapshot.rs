@@ -9,8 +9,8 @@ use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
     self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
     NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
-    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, TargetView, Text,
-    VisualDisplay,
+    StepAttackTypeByNode, StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode,
+    StepViaByNode, TargetView, Text, VisualDisplay,
 };
 use crate::error::StoreError;
 use crate::id::{
@@ -244,6 +244,10 @@ struct TreeView<'a> {
     step_factors: StepFactorsByNode<'a>,
     #[serde(skip_serializing_if = "StepMitigationsByNode::is_empty")]
     step_mitigations: StepMitigationsByNode<'a>,
+    #[serde(skip_serializing_if = "StepViaByNode::is_empty")]
+    step_via: StepViaByNode<'a>,
+    #[serde(skip_serializing_if = "StepAttackTypeByNode::is_empty")]
+    step_attack_type: StepAttackTypeByNode<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -461,6 +465,16 @@ impl Serialize for Trees<'_> {
                         tree,
                     },
                     step_mitigations: StepMitigationsByNode {
+                        project: p,
+                        tree_idx,
+                        tree,
+                    },
+                    step_via: StepViaByNode {
+                        project: p,
+                        tree_idx,
+                        tree,
+                    },
+                    step_attack_type: StepAttackTypeByNode {
                         project: p,
                         tree_idx,
                         tree,
@@ -996,6 +1010,22 @@ impl Project {
                         provenance: provenance.clone(),
                     })?;
                 }
+            }
+            for (node, via) in tr.step_via.0 {
+                project.apply(Op::SetStepVia {
+                    tree: id,
+                    node,
+                    via: Some(via.unwrap_item()),
+                    provenance: provenance.clone(),
+                })?;
+            }
+            for (node, attack_type) in tr.step_attack_type.0 {
+                project.apply(Op::SetStepAttackType {
+                    tree: id,
+                    node,
+                    attack_type: Some(attack_type.0),
+                    provenance: provenance.clone(),
+                })?;
             }
             let own: Vec<_> = marks.iter().filter(|(t, _)| *t == id).copied().collect();
             for (tree, node) in own {

@@ -9,8 +9,8 @@ use crate::id::{
     NodeIdx, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::methodology::{
-    CatalogRef, CatalogScheme, CatalogSyntax, FactorLevel, FeasibilityFactor, FeasibilityLevel,
-    ImpactCategory, InterfaceKind, Level, Property, RiskLevel, ThreatCategory,
+    AttackType, CatalogRef, CatalogScheme, CatalogSyntax, FactorLevel, FeasibilityFactor,
+    FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Property, RiskLevel, ThreatCategory,
 };
 use crate::store::{Limit, VocabKind};
 
@@ -513,6 +513,9 @@ pub enum ModelError {
     /// The interface kind index is not in the project's methodology.
     #[error("interface kind index {} is not in the methodology", .0.index())]
     UnknownInterfaceKind(InterfaceKind),
+    /// The attack type index is not in the project's methodology.
+    #[error("attack type index {} is not in the methodology", .0.index())]
+    UnknownAttackType(AttackType),
     /// Setting `parent` on `component` would create a cycle in the component hierarchy.
     #[error("setting component {parent} as parent of {component} would create a cycle")]
     ComponentCycle {
@@ -560,6 +563,22 @@ pub enum ModelError {
         component: ComponentId,
         /// How many trust boundaries contain it.
         boundaries: u32,
+    },
+    /// The component cannot be removed while attack steps still go through it.
+    #[error("component {component} has {steps} step(s) going through it")]
+    ComponentHasSteps {
+        /// The component.
+        component: ComponentId,
+        /// How many steps go through it.
+        steps: u32,
+    },
+    /// The interface cannot be removed while attack steps still go through it.
+    #[error("interface {interface} has {steps} step(s) going through it")]
+    InterfaceHasSteps {
+        /// The interface.
+        interface: InterfaceId,
+        /// How many steps go through it.
+        steps: u32,
     },
     /// The component cannot be removed while assets are still bound to it.
     #[error("component {component} is bound to {assets} asset(s)")]
@@ -678,6 +697,15 @@ pub enum ModelError {
         tree: TreeId,
         /// How many threats reference it.
         threats: u32,
+    },
+    /// The attack tree cannot be removed while steps in it still have a
+    /// "through" item or an attack type; clear them first.
+    #[error("attack tree {tree} still has {steps} step(s) with a through item or attack type")]
+    AttackTreeHasStepLinks {
+        /// The attack tree.
+        tree: TreeId,
+        /// How many steps have one.
+        steps: usize,
     },
     /// The attack tree cannot be removed while it still has security control
     /// mitigations attached to its steps; clear the mitigations first.
@@ -1293,6 +1321,15 @@ pub enum MethodologyError {
     /// Two interface kinds share a key.
     #[error("interface kind key {0:?} is declared twice")]
     DuplicateInterfaceKind(Arc<str>),
+    /// More than `max` attack types are declared.
+    #[error("more than {max} attack types")]
+    TooManyAttackTypes {
+        /// The limit.
+        max: usize,
+    },
+    /// Two attack types share a key.
+    #[error("attack type key {0:?} is declared twice")]
+    DuplicateAttackType(Arc<str>),
     /// More than `max` language translations are declared in a pack.
     #[error("more than {max} pack translations")]
     TooManyTranslations {

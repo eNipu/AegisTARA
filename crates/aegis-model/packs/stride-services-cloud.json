@@ -258,6 +258,44 @@
           ]
         }
       }
-    ]
+    ],
+    "attack_types": [
+      {
+        "key": "network-exposure",
+        "label": "Network exposure"
+      },
+      {
+        "key": "credential-theft",
+        "label": "Credential theft"
+      },
+      {
+        "key": "injection",
+        "label": "Injection"
+      },
+      {
+        "key": "misconfiguration",
+        "label": "Misconfiguration"
+      },
+      {
+        "key": "supply-chain",
+        "label": "Supply chain"
+      },
+      {
+        "key": "physical-access",
+        "label": "Physical access"
+      }
+    ],
+    "translations": {
+      "ja": {
+        "attack_types": {
+          "credential-theft": "認証情報の窃取",
+          "injection": "インジェクション",
+          "misconfiguration": "設定不備",
+          "network-exposure": "ネットワーク露出",
+          "physical-access": "物理アクセス",
+          "supply-chain": "サプライチェーン"
+        }
+      }
+    }
   }
 }
