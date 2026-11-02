@@ -17,8 +17,8 @@ use std::sync::Arc;
 use aegis_canvas::{LayoutConfig, NodeKind, NodeStyle, Scene, Tone};
 use aegis_model::{
     AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementRef,
-    FeasibilityLevel, GateKind, GoalId, InterfaceId, Methodology, NodeId, NodeIdx, SuggestionId,
-    ThreatId, TreeId, TrustBoundaryId,
+    FeasibilityLevel, GateKind, GoalId, InterfaceId, ItemRef, Methodology, NodeId, NodeIdx,
+    Project, SuggestionId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
 };
 
 use aegis_proto as pb;
@@ -656,6 +656,98 @@ pub struct FactorView {
     pub selected: Option<usize>,
 }
 
+/// One thing a step can go through: a component, or an interface of one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThroughChoice {
+    /// The component or interface.
+    pub item: ItemRef,
+    /// Its name.
+    pub label: String,
+    /// Interfaces are shown indented under their component.
+    pub indent: bool,
+}
+
+/// One step that goes through a component or an interface (CFG-01).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepThrough {
+    /// The tree.
+    pub tree: TreeId,
+    /// Short visual ID of the tree.
+    pub tree_visual_id: String,
+    /// The step.
+    pub node: NodeId,
+    /// The step's label.
+    pub step: String,
+    /// What it goes through, "ADAS ECU / JTAG".
+    pub through: String,
+    /// Its attack type label, if any.
+    pub attack_type: Option<String>,
+    /// Its inherent feasibility label, if rated.
+    pub inherent: Option<String>,
+}
+
+/// "ADAS ECU" for a component, "ADAS ECU / JTAG" for an interface.
+#[must_use]
+pub fn through_label(project: &Project, item: ItemRef) -> String {
+    match item {
+        ItemRef::Component(id) => project
+            .component_idx(&id)
+            .and_then(|i| project.component(i))
+            .map(|c| c.name().to_owned())
+            .unwrap_or_default(),
+        ItemRef::Interface(id) => project
+            .interface_idx(&id)
+            .and_then(|i| project.interface(i))
+            .map(|i| {
+                let owner = project.component(i.component()).map_or("", |c| c.name());
+                format!("{owner} / {}", i.name())
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// The steps that go through a component (including through its interfaces)
+/// or through an interface, in tree then node order. Time O(total nodes).
+#[must_use]
+pub fn steps_through(project: &Project, item: ItemRef) -> Vec<StepThrough> {
+    let m = project.methodology();
+    let mut items = vec![item];
+    if let ItemRef::Component(id) = item
+        && let Some(c_idx) = project.component_idx(&id)
+    {
+        items.extend(
+            project
+                .interfaces()
+                .filter(|(_, _, i)| i.component() == c_idx)
+                .map(|(_, iid, _)| ItemRef::Interface(iid)),
+        );
+    }
+    let mut rows: Vec<(TreeIdx, NodeIdx, ItemRef)> = items
+        .iter()
+        .flat_map(|it| project.steps_via(*it).map(move |(t, n)| (t, n, *it)))
+        .collect();
+    rows.sort_by_key(|(t, n, _)| (t.index(), n.index()));
+    rows.into_iter()
+        .filter_map(|(t, n, it)| {
+            let tree = project.attack_tree(t)?;
+            Some(StepThrough {
+                tree: project.attack_tree_id(t)?,
+                tree_visual_id: project.attack_tree_visual_id(t).unwrap_or_default(),
+                node: tree.id_of(n)?,
+                step: tree.get(n)?.label().to_owned(),
+                through: through_label(project, it),
+                attack_type: project
+                    .step_attack_type(t, n)
+                    .and_then(|a| m.attack_type_label(a))
+                    .map(str::to_owned),
+                inherent: project
+                    .effective_step_feasibility(t, n)
+                    .map(|l| level_label(m, l)),
+            })
+        })
+        .collect()
+}
+
 /// The details panel for the selected node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Inspector {
@@ -685,6 +777,15 @@ pub struct Inspector {
     pub evaluated: Option<String>,
     /// Explain-why lines for gates: the rule and the deciding child.
     pub why: Vec<String>,
+    /// What the step can go through: components, each followed by its
+    /// interfaces (steps only).
+    pub through_options: Vec<ThroughChoice>,
+    /// The chosen item's position in `through_options`.
+    pub through: Option<usize>,
+    /// The pack's attack types (steps only).
+    pub attack_types: Vec<Choice>,
+    /// The chosen attack type's position in `attack_types`.
+    pub attack_type: Option<usize>,
     /// Controls attached to this step (steps only).
     pub mitigations: Vec<MitigationView>,
     /// Controls that can still be attached (steps only).
@@ -1072,6 +1173,42 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         (Vec::new(), Vec::new(), None)
     };
 
+    let mut through_options = Vec::new();
+    if is_step {
+        for (c_idx, c_id, c) in project.components() {
+            through_options.push(ThroughChoice {
+                item: ItemRef::Component(c_id),
+                label: c.name().to_owned(),
+                indent: false,
+            });
+            through_options.extend(
+                project
+                    .interfaces()
+                    .filter(|(_, _, i)| i.component() == c_idx)
+                    .map(|(_, i_id, i)| ThroughChoice {
+                        item: ItemRef::Interface(i_id),
+                        label: i.name().to_owned(),
+                        indent: true,
+                    }),
+            );
+        }
+    }
+    let through = project
+        .step_via(tree_idx, idx)
+        .and_then(|v| through_options.iter().position(|o| o.item == v));
+    let attack_types: Vec<Choice> = if is_step {
+        m.attack_types()
+            .map(|a| Choice {
+                label: m.attack_type_label(a).unwrap_or("?").to_owned(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let attack_type = project
+        .step_attack_type(tree_idx, idx)
+        .and_then(|a| m.attack_types().position(|x| x == a));
+
     let is_root = idx == tree.root();
     let gate_index = match node.gate_kind() {
         Some(GateKind::Or) | None => 0,
@@ -1108,6 +1245,10 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         factors,
         evaluated: value.map(|v| level_label(m, v)),
         why,
+        through_options,
+        through,
+        attack_types,
+        attack_type,
         mitigations,
         attachable,
         residual,
