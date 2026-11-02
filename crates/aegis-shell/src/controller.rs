@@ -284,6 +284,33 @@ fn after_none(i: i32) -> Option<usize> {
     pos(i).and_then(|i| i.checked_sub(1))
 }
 
+/// What a filtered picker lists for `query`: "None" first, then the options
+/// whose `labels` contain it (case-insensitive), as the labels to show and
+/// their positions in the picker's model. With no query the model's own
+/// rows (indented interfaces) are listed. `labels` has no "None" entry.
+fn filter_options(
+    model_rows: &ModelRc<SharedString>,
+    labels: &[String],
+    query: &str,
+) -> (Vec<SharedString>, Vec<i32>) {
+    use slint::Model as _;
+    let none = model_rows.row_data(0).unwrap_or_default();
+    let mut shown = vec![none];
+    let mut at = vec![0];
+    let q = query.trim().to_lowercase();
+    for (i, label) in labels.iter().enumerate() {
+        let position = i32::try_from(i + 1).unwrap_or(i32::MAX);
+        if q.is_empty() {
+            shown.push(model_rows.row_data(i + 1).unwrap_or_else(|| s(label)));
+            at.push(position);
+        } else if label.to_lowercase().contains(&q) {
+            shown.push(s(label));
+            at.push(position);
+        }
+    }
+    (shown, at)
+}
+
 fn with_none(first: &str, rest: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
     let mut v = vec![s(first)];
     v.extend(rest.into_iter().map(|x| s(&x)));
@@ -1522,6 +1549,36 @@ impl Controller {
         });
         on!(on_set_rating, |c, index| c.set_rating(index));
         on!(on_set_through, |c, index| c.set_through(index));
+        on!(on_filter_through, |c, query| {
+            let labels = c.with_project(|p| {
+                p.inspector.as_ref().map(|i| {
+                    i.through_options
+                        .iter()
+                        .map(|o| o.full.clone())
+                        .collect::<Vec<_>>()
+                })
+            });
+            if let (Some(labels), Some(w)) = (labels, c.window.upgrade()) {
+                let (shown, at) = filter_options(&w.get_through_options(), &labels, &query);
+                w.set_through_shown(model(shown));
+                w.set_through_shown_at(model(at));
+            }
+        });
+        on!(on_filter_attack_type, |c, query| {
+            let labels = c.with_project(|p| {
+                p.inspector.as_ref().map(|i| {
+                    i.attack_types
+                        .iter()
+                        .map(|a| a.label.clone())
+                        .collect::<Vec<_>>()
+                })
+            });
+            if let (Some(labels), Some(w)) = (labels, c.window.upgrade()) {
+                let (shown, at) = filter_options(&w.get_attack_type_options(), &labels, &query);
+                w.set_attack_type_shown(model(shown));
+                w.set_attack_type_shown_at(model(at));
+            }
+        });
         on!(on_steps_open, |c, i| {
             let target = c
                 .window
