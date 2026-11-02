@@ -26,7 +26,7 @@ use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use super::{
     AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ElementNameDef, ElementNamesDef,
-    FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, MAX_CATALOG_SCHEMES,
+    FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, MAX_ATTACK_TYPES, MAX_CATALOG_SCHEMES,
     MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_INTERFACE_KINDS, MAX_LEVELS,
     MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
     Methodology, MethodologyDef, PackTranslationDef, PotentialBandDef, PropertyDef, SegmentDef,
@@ -70,6 +70,7 @@ pack_caps! {
     CatalogSchemesCap = MAX_CATALOG_SCHEMES, Limit::CATALOG_SCHEMES;
     SegmentsCap = MAX_SEGMENTS, Limit::CATALOG_SEGMENTS;
     InterfaceKindsCap = MAX_INTERFACE_KINDS, Limit::INTERFACE_KINDS;
+    AttackTypesCap = MAX_ATTACK_TYPES, Limit::ATTACK_TYPES;
     PackTranslationsCap = MAX_PACK_TRANSLATIONS, Limit::PACK_TRANSLATIONS;
 }
 
@@ -148,6 +149,8 @@ struct DefWire {
     element_names: Option<Object<ElementNamesWire>>,
     #[serde(default)]
     interface_kinds: Option<BoundedVec<Object<EntryWire>, InterfaceKindsCap>>,
+    #[serde(default)]
+    attack_types: Option<BoundedVec<Object<EntryWire>, AttackTypesCap>>,
     impact_categories: BoundedVec<Object<ImpactCategoryWire>, ImpactCategoriesCap>,
     feasibility_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
     risk_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
@@ -223,6 +226,8 @@ struct PackTranslationWire {
     factor_levels: BoundedKeyMap<Label, FactorLevelsMapCap>,
     #[serde(default)]
     interface_kinds: BoundedKeyMap<Label, InterfaceKindsCap>,
+    #[serde(default)]
+    attack_types: BoundedKeyMap<Label, AttackTypesCap>,
 }
 
 /// A level or a property: a key and a label.
@@ -384,6 +389,7 @@ impl From<ElementNamesWire> for ElementNamesDef {
                 .map_or(def.cybersecurity_claim, |Object(n)| n.into()),
             feasibility: w.feasibility.map_or(def.feasibility, |l| l.0),
             interface_kinds: Vec::new(),
+            attack_types: Vec::new(),
             translations: BTreeMap::new(),
         }
     }
@@ -408,6 +414,7 @@ impl From<PackTranslationWire> for PackTranslationDef {
             feasibility_factors: unwrap_label_map(w.feasibility_factors),
             factor_levels: unwrap_label_map(w.factor_levels),
             interface_kinds: unwrap_label_map(w.interface_kinds),
+            attack_types: unwrap_label_map(w.attack_types),
         }
     }
 }
@@ -425,6 +432,9 @@ impl From<DefWire> for MethodologyDef {
             .map_or_else(ElementNamesDef::default, |Object(names)| names.into());
         if let Some(kinds) = w.interface_kinds {
             element_names.interface_kinds = kinds.0.into_iter().map(entry).collect();
+        }
+        if let Some(types) = w.attack_types {
+            element_names.attack_types = types.0.into_iter().map(entry).collect();
         }
         if let Some(translations) = w.translations {
             element_names.translations = translations
@@ -544,7 +554,7 @@ impl Serialize for View<'_, Vec<Arc<str>>> {
 impl Serialize for View<'_, MethodologyDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("methodology", 13)?;
+        let mut st = s.serialize_struct("methodology", 14)?;
         st.serialize_field("key", &*d.key)?;
         st.serialize_field("version", &*d.version)?;
         st.serialize_field("label", &*d.label)?;
@@ -569,6 +579,14 @@ impl Serialize for View<'_, MethodologyDef> {
             st.serialize_field(
                 "interface_kinds",
                 &View(d.element_names.interface_kinds.as_slice()),
+            )?;
+        }
+        if d.element_names.attack_types.is_empty() {
+            st.skip_field("attack_types")?;
+        } else {
+            st.serialize_field(
+                "attack_types",
+                &View(d.element_names.attack_types.as_slice()),
             )?;
         }
         if d.element_names.translations.is_empty() {
@@ -640,7 +658,7 @@ impl Serialize for View<'_, BTreeMap<Arc<str>, Arc<str>>> {
 impl Serialize for View<'_, PackTranslationDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let tr = self.0;
-        let mut st = s.serialize_struct("pack_translation", 12)?;
+        let mut st = s.serialize_struct("pack_translation", 13)?;
         match &tr.label {
             Some(lbl) => st.serialize_field("label", &**lbl)?,
             None => st.skip_field("label")?,
@@ -698,6 +716,11 @@ impl Serialize for View<'_, PackTranslationDef> {
             st.skip_field("interface_kinds")?;
         } else {
             st.serialize_field("interface_kinds", &View(&tr.interface_kinds))?;
+        }
+        if tr.attack_types.is_empty() {
+            st.skip_field("attack_types")?;
+        } else {
+            st.serialize_field("attack_types", &View(&tr.attack_types))?;
         }
         st.end()
     }

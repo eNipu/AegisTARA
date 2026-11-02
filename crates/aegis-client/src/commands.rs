@@ -14,8 +14,8 @@
 
 use aegis_model::{
     AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GateKind, GoalId,
-    InterfaceId, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId, TreeId,
-    TrustBoundaryId,
+    InterfaceId, ItemRef, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
+    TreeId, TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, parse_outline};
@@ -74,6 +74,24 @@ pub enum Edit {
         node: NodeId,
         /// Position in the feasibility levels, or `None` for unrated.
         level: Option<usize>,
+    },
+    /// Sets or clears what a step goes through (CFG-01).
+    SetStepVia {
+        /// Tree.
+        tree: TreeId,
+        /// Step node.
+        node: NodeId,
+        /// A component or an interface, or `None` for nothing.
+        via: Option<ItemRef>,
+    },
+    /// Sets or clears the attack type of a step (CFG-02).
+    SetStepAttackType {
+        /// Tree.
+        tree: TreeId,
+        /// Step node.
+        node: NodeId,
+        /// Position in the methodology's attack types, or `None`.
+        attack_type: Option<usize>,
     },
     /// Sets or clears one attack potential factor of a step.
     SetStepFactor {
@@ -767,6 +785,22 @@ pub enum EditError {
     Library(String),
 }
 
+/// Ops that clear the "through" of every step that goes through `item`
+/// itself (a component's interfaces are not included).
+pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) -> Vec<Op> {
+    project
+        .steps_via(item)
+        .filter_map(|(t_idx, n_idx)| {
+            Some(Op::SetStepVia {
+                tree: project.attack_tree_id(t_idx)?,
+                node: project.attack_tree(t_idx)?.id_of(n_idx)?,
+                via: None,
+                provenance: p.clone(),
+            })
+        })
+        .collect()
+}
+
 /// An element with a description cannot be removed, so every removal in an
 /// edit is preceded by an op that clears its description. The edit is one
 /// undo step, and undo brings back the element and then its text.
@@ -925,6 +959,24 @@ impl Edit {
                 tree: *tree,
                 node: *node,
                 level: feasibility(project, *level)?,
+                provenance: p,
+            }],
+            Edit::SetStepVia { tree, node, via } => vec![Op::SetStepVia {
+                tree: *tree,
+                node: *node,
+                via: *via,
+                provenance: p,
+            }],
+            Edit::SetStepAttackType {
+                tree,
+                node,
+                attack_type,
+            } => vec![Op::SetStepAttackType {
+                tree: *tree,
+                node: *node,
+                attack_type: attack_type
+                    .map(|i| m.attack_types().nth(i).ok_or(EditError::UnknownChoice))
+                    .transpose()?,
                 provenance: p,
             }],
             Edit::SetStepFactor {
@@ -1097,6 +1149,14 @@ impl Edit {
             Edit::RemoveComponent { component } => {
                 let c_idx = project.component_idx(component).ok_or(EditError::Missing)?;
                 let mut ops = Vec::new();
+                // Steps that go through the component or its interfaces lose
+                // their "through" first (CFG-01).
+                ops.extend(clear_via_ops(project, ItemRef::Component(*component), &p));
+                for (_, iface_id, iface) in project.interfaces() {
+                    if iface.component() == c_idx {
+                        ops.extend(clear_via_ops(project, ItemRef::Interface(iface_id), &p));
+                    }
+                }
                 for (_, child_id, child) in project.components() {
                     if child.parent() == Some(c_idx) {
                         ops.push(Op::SetComponentParent {
@@ -1179,15 +1239,17 @@ impl Edit {
             }],
             Edit::RemoveInterface { interface } => {
                 let i_idx = project.interface_idx(interface).ok_or(EditError::Missing)?;
-                let mut ops: Vec<Op> = project
-                    .data_flows()
-                    .filter(|(_, _, df)| df.interface() == Some(i_idx))
-                    .map(|(_, df_id, _)| Op::SetDataFlowInterface {
-                        id: df_id,
-                        interface: None,
-                        provenance: p.clone(),
-                    })
-                    .collect();
+                let mut ops = clear_via_ops(project, ItemRef::Interface(*interface), &p);
+                ops.extend(
+                    project
+                        .data_flows()
+                        .filter(|(_, _, df)| df.interface() == Some(i_idx))
+                        .map(|(_, df_id, _)| Op::SetDataFlowInterface {
+                            id: df_id,
+                            interface: None,
+                            provenance: p.clone(),
+                        }),
+                );
                 ops.push(Op::RemoveInterface { id: *interface });
                 ops
             }

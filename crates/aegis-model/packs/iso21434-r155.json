@@ -515,6 +515,48 @@
         "label": "USB"
       }
     ],
+    "attack_types": [
+      {
+        "key": "firmware-modification",
+        "label": "Firmware modification"
+      },
+      {
+        "key": "bootloader-exploit",
+        "label": "Bootloader exploit"
+      },
+      {
+        "key": "debug-access",
+        "label": "Debug access"
+      },
+      {
+        "key": "physical-tampering",
+        "label": "Physical tampering"
+      },
+      {
+        "key": "flash-read-out",
+        "label": "Flash read-out"
+      },
+      {
+        "key": "diagnostic-access",
+        "label": "Diagnostic access"
+      },
+      {
+        "key": "local-bus-injection",
+        "label": "Local bus injection"
+      },
+      {
+        "key": "remote-network",
+        "label": "Remote network"
+      },
+      {
+        "key": "wireless-proximity",
+        "label": "Wireless proximity"
+      },
+      {
+        "key": "side-channel",
+        "label": "Side channel"
+      }
+    ],
     "translations": {
       "ja": {
         "label": "ISO/SAE 21434 + UN R155",
@@ -646,6 +688,18 @@
           "ethernet": "Ethernet",
           "usb": "USB",
           "wireless": "無線"
+        },
+        "attack_types": {
+          "bootloader-exploit": "ブートローダの脆弱性悪用",
+          "debug-access": "デバッグアクセス",
+          "diagnostic-access": "診断アクセス",
+          "firmware-modification": "ファームウェア改ざん",
+          "flash-read-out": "フラッシュ読み出し",
+          "local-bus-injection": "ローカルバス注入",
+          "physical-tampering": "物理的改ざん",
+          "remote-network": "リモートネットワーク",
+          "side-channel": "サイドチャネル",
+          "wireless-proximity": "近接無線"
         }
       }
     }

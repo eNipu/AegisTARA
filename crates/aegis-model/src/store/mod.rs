@@ -54,9 +54,9 @@ pub use op_log::{LoggedOp, OpCodec, OpLogReader, OpLogWriter};
 use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS};
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::{
-    MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES, MAX_INTERFACE_KINDS,
-    MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN,
-    MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
+    MAX_ATTACK_TYPES, MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES,
+    MAX_INTERFACE_KINDS, MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS, MAX_PACK_TRANSLATIONS,
+    MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
 };
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_ATTACK_TREE_NODES;
@@ -331,6 +331,12 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A pack declares more than [`MAX_ATTACK_TYPES`](crate::MAX_ATTACK_TYPES)
+    /// attack types.
+    AttackTypes {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A pack declares more than [`MAX_PACK_TRANSLATIONS`](crate::MAX_PACK_TRANSLATIONS)
     /// language translations.
     PackTranslations {
@@ -418,6 +424,9 @@ impl Limit {
     pub(crate) const INTERFACE_KINDS: Limit = Limit::InterfaceKinds {
         max: MAX_INTERFACE_KINDS,
     };
+    pub(crate) const ATTACK_TYPES: Limit = Limit::AttackTypes {
+        max: MAX_ATTACK_TYPES,
+    };
     pub(crate) const PACK_TRANSLATIONS: Limit = Limit::PackTranslations {
         max: MAX_PACK_TRANSLATIONS,
     };
@@ -477,6 +486,9 @@ impl fmt::Display for Limit {
             Limit::InterfaceKinds { max } => {
                 write!(f, "more than {max} interface kinds")
             }
+            Limit::AttackTypes { max } => {
+                write!(f, "more than {max} attack types")
+            }
             Limit::PackTranslations { max } => {
                 write!(f, "more than {max} pack translations")
             }
@@ -513,6 +525,8 @@ pub enum VocabKind {
     CatalogScheme,
     /// An item definition interface kind.
     InterfaceKind,
+    /// An attack step attack type.
+    AttackType,
 }
 
 impl fmt::Display for VocabKind {
@@ -527,6 +541,7 @@ impl fmt::Display for VocabKind {
             VocabKind::ThreatCategory => "threat category",
             VocabKind::CatalogScheme => "catalog scheme",
             VocabKind::InterfaceKind => "interface kind",
+            VocabKind::AttackType => "attack type",
         })
     }
 }

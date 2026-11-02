@@ -39,6 +39,8 @@ pub struct NodeAccess {
     pub parent_label: Option<String>,
     /// The annotation shown on the node, for example `13 · High`.
     pub score: Option<String>,
+    /// What the step goes through, if set.
+    pub via: Option<String>,
     /// On the deciding path.
     pub critical: bool,
     /// How many other gates reach it through a shared edge.
@@ -91,6 +93,7 @@ pub fn describe(scene: &Scene, v: u32) -> Option<NodeAccess> {
         parent,
         parent_label: parent.map(|p| scene.label(p).to_owned()),
         score: style.and_then(|s| s.score.clone()),
+        via: style.and_then(|s| s.via.clone()),
         critical: style.is_some_and(|s| s.critical),
         shared_from: scene.shared_in(v),
     })
@@ -137,6 +140,9 @@ pub fn sentence(a: &NodeAccess, selected: bool) -> String {
     }
     if let Some(score) = &a.score {
         out.push_str(&format!(" Rating {score}."));
+    }
+    if let Some(via) = &a.via {
+        out.push_str(&format!(" Goes through {via}."));
     }
     if a.critical {
         out.push_str(" On the deciding path.");

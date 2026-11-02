@@ -72,6 +72,8 @@ pub struct NodeStyle {
     pub critical: bool,
     /// The node is a ghost proposal from a suggestion branch (FND-05).
     pub ghost: bool,
+    /// What a step goes through, `ADAS ECU / JTAG`, shown as a chip (CFG-01).
+    pub via: Option<String>,
 }
 
 /// A connection between two nodes.
