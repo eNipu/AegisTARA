@@ -9,9 +9,10 @@ use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
     ThreatId, TreeId, TrustBoundaryId,
 };
+use crate::item::ItemRef;
 use crate::methodology::{
-    CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory, InterfaceKind,
-    Level, ThreatCategory,
+    AttackType, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
+    InterfaceKind, Level, ThreatCategory,
 };
 use crate::provenance::Provenance;
 use crate::tree::{AttackTree, GateKind, Node};
@@ -59,6 +60,8 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `AddAttackTree` | `RemoveAttackTree` | O(log n + V + E) |
 /// | `SetStepFeasibility` | the same with the old level and provenance | O(log n + log V) |
 /// | `SetStepFactor` | the same with the old level and provenance | O(log n + log V + F) |
+/// | `SetStepVia` | the same with the old item and provenance | O(log n + log V) |
+/// | `SetStepAttackType` | the same with the old attack type and provenance | O(log n + log V) |
 /// | `SetThreatFeasibility` | the same with the old level and provenance | O(log n) |
 /// | `SetThreatAttackTree` | the same with the old tree and provenance | O(log n) |
 /// | `SetRiskTreatment` | the same with the old treatment and provenance | O(log n) |
@@ -428,6 +431,31 @@ pub enum Op {
         /// The new factor rating, or `None` for unrated.
         level: Option<FactorLevel>,
         /// Provenance of the step factor change.
+        provenance: Provenance,
+    },
+    /// Sets or clears (`None`) the component or interface one attack step
+    /// goes through (CFG-01). Steps only; a gate is rejected with
+    /// [`ModelError::NotAStep`](crate::ModelError::NotAStep).
+    SetStepVia {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// Existing step node in `tree`.
+        node: NodeId,
+        /// The live component or interface, or `None` for nothing.
+        via: Option<ItemRef>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Sets or clears (`None`) the pack-defined attack type of one attack
+    /// step (CFG-02). Steps only.
+    SetStepAttackType {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// Existing step node in `tree`.
+        node: NodeId,
+        /// The attack type in the project's methodology, or `None`.
+        attack_type: Option<AttackType>,
+        /// Provenance of the change.
         provenance: Provenance,
     },
     /// Sets or clears (`None` = unrated) the direct feasibility rating of a
@@ -811,6 +839,8 @@ impl Op {
             | Self::AddAttackTree { provenance, .. }
             | Self::SetStepFeasibility { provenance, .. }
             | Self::SetStepFactor { provenance, .. }
+            | Self::SetStepVia { provenance, .. }
+            | Self::SetStepAttackType { provenance, .. }
             | Self::SetThreatFeasibility { provenance, .. }
             | Self::SetThreatAttackTree { provenance, .. }
             | Self::SetRiskTreatment { provenance, .. }
@@ -901,6 +931,8 @@ impl Op {
             | Self::AddAttackTree { provenance, .. }
             | Self::SetStepFeasibility { provenance, .. }
             | Self::SetStepFactor { provenance, .. }
+            | Self::SetStepVia { provenance, .. }
+            | Self::SetStepAttackType { provenance, .. }
             | Self::SetThreatFeasibility { provenance, .. }
             | Self::SetThreatAttackTree { provenance, .. }
             | Self::SetRiskTreatment { provenance, .. }

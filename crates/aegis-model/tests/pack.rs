@@ -399,3 +399,11 @@ fn pack_writer_keeps_non_ascii_raw_and_escapes_controls() {
     assert!(text.contains(r#""label": "Médical 😀 \"q\" \\ \u0001\n","#));
     assert_eq!(MethodologyDef::read_pack(text.as_bytes()).ok(), Some(def));
 }
+
+#[test]
+fn a_pack_without_attack_types_loads_with_none() {
+    let m = Methodology::read_pack(TINY.as_bytes()).expect("valid");
+    assert_eq!(m.attack_type_count(), 0);
+    assert_eq!(m.attack_types().count(), 0);
+    assert_eq!(m.attack_type("firmware-modification"), None);
+}

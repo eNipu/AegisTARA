@@ -400,6 +400,8 @@ pub struct ComponentDetail {
     pub interfaces: Vec<LinkRow>,
     /// Assets bound to this component.
     pub assets: Vec<LinkRow>,
+    /// Steps that go through this component or its interfaces (CFG-01).
+    pub steps: Vec<crate::view::StepThrough>,
     /// Provenance text.
     pub changed: String,
 }
@@ -438,6 +440,8 @@ pub struct InterfaceDetail {
     pub kind: usize,
     /// Data flows using this interface.
     pub flows: Vec<LinkRow>,
+    /// Steps that go through this interface (CFG-01).
+    pub steps: Vec<crate::view::StepThrough>,
     /// Provenance text.
     pub changed: String,
 }
@@ -582,6 +586,7 @@ pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDeta
         true
     };
     Some(ComponentDetail {
+        steps: crate::view::steps_through(project, aegis_model::ItemRef::Component(id)),
         id,
         visual_id: project.component_visual_id(idx).unwrap_or_default(),
         name: c.name().to_owned(),
@@ -650,6 +655,7 @@ pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDeta
     let idx = project.interface_idx(&id)?;
     let i = project.interface(idx)?;
     Some(InterfaceDetail {
+        steps: crate::view::steps_through(project, aegis_model::ItemRef::Interface(id)),
         id,
         visual_id: project.interface_visual_id(idx).unwrap_or_default(),
         name: i.name().to_owned(),

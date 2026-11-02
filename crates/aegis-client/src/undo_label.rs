@@ -21,6 +21,8 @@ pub struct Label {
     others: usize,
     /// How many threat scenarios the edit unlinked a damage scenario from.
     unlinked: usize,
+    /// How many steps a removal took the "through" item from (CFG-01).
+    lost_via: usize,
     /// The element the edit is about, to show after an undo or redo.
     target: Option<Selection>,
     /// For a bulk edit (UI-04), how many elements it changed; 0 otherwise.
@@ -37,6 +39,7 @@ impl Label {
             name: None,
             others: 0,
             unlinked: 0,
+            lost_via: 0,
             target: None,
             count,
         }
@@ -85,6 +88,7 @@ impl Label {
     pub fn with_more(mut self, steps: usize) -> Label {
         self.others += steps;
         self.unlinked = 0;
+        self.lost_via = 0;
         self
     }
 
@@ -130,6 +134,10 @@ impl Label {
 
     /// UI-10.10: one line saying what else the edit changed.
     fn extra(&self) -> String {
+        if self.lost_via > 0 {
+            let n = self.lost_via;
+            return format!(" and {n} step{} lost their 'through'", plural(n));
+        }
         match (self.unlinked, self.others) {
             (0, 0) => String::new(),
             (0, n) => format!(" and {n} other change{}", plural(n)),
@@ -180,6 +188,13 @@ pub fn describe(ops: &[Op], project: &Project) -> Label {
         name,
         others: ops.len().saturating_sub(1),
         unlinked,
+        lost_via: if verb == "remove" {
+            ops.iter()
+                .filter(|op| matches!(op, Op::SetStepVia { via: None, .. }))
+                .count()
+        } else {
+            0
+        },
         target: ops.get(main).and_then(target_of),
         count: 0,
     }
@@ -218,6 +233,8 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::SetStepFeasibility { tree, node, .. }
         | Op::SetStepFactor { tree, node, .. }
         | Op::SetStepMitigation { tree, node, .. }
+        | Op::SetStepVia { tree, node, .. }
+        | Op::SetStepAttackType { tree, node, .. }
         | Op::SetReviewMark { tree, node, .. }
         | Op::LinkTreeNode {
             tree, child: node, ..
@@ -333,6 +350,8 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::RemoveTreeNode { .. } => ("remove", "attack tree node", None),
         Op::UnlinkTreeNode { .. } => ("unlink", "attack tree node", None),
         Op::RenameTreeNode { .. } => ("rename", "attack tree node", None),
+        Op::SetStepVia { .. } => ("change", "what a step goes through in attack tree", None),
+        Op::SetStepAttackType { .. } => ("change", "attack type of a step in attack tree", None),
         Op::LinkTreeNode { .. }
         | Op::SetTreeNodeGate { .. }
         | Op::SetReviewMark { .. }

@@ -150,7 +150,8 @@ fn mwis_mask(ranks: &[usize], weights: &[usize], rank_bound: usize) -> Vec<bool>
     keep
 }
 
-/// Ops that clear the rating, factors and controls of one step.
+/// Ops that clear the rating, factors, controls, through item and attack type
+/// of one step.
 pub(crate) fn clear_step_ops(
     project: &Project,
     tree: TreeId,
@@ -205,6 +206,22 @@ pub(crate) fn clear_step_ops(
                 provenance: p.clone(),
             });
         }
+    }
+    if project.step_via(t_idx, idx).is_some() {
+        ops.push(Op::SetStepVia {
+            tree,
+            node,
+            via: None,
+            provenance: p.clone(),
+        });
+    }
+    if project.step_attack_type(t_idx, idx).is_some() {
+        ops.push(Op::SetStepAttackType {
+            tree,
+            node,
+            attack_type: None,
+            provenance: p.clone(),
+        });
     }
     ops
 }
@@ -263,6 +280,22 @@ pub(crate) fn transfer_step_ops(
                 provenance: p.clone(),
             });
         }
+    }
+    if let Some(via) = project.step_via(t_idx, idx) {
+        ops.push(Op::SetStepVia {
+            tree,
+            node: to_node,
+            via: Some(via),
+            provenance: p.clone(),
+        });
+    }
+    if let Some(attack_type) = project.step_attack_type(t_idx, idx) {
+        ops.push(Op::SetStepAttackType {
+            tree,
+            node: to_node,
+            attack_type: Some(attack_type),
+            provenance: p.clone(),
+        });
     }
     if project.review_marked(tree, from_node) {
         ops.push(Op::SetReviewMark {

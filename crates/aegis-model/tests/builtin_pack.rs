@@ -94,6 +94,19 @@ fn s(text: &str) -> Arc<str> {
     Arc::from(text)
 }
 
+const ATTACK_TYPES: [(&str, &str); 10] = [
+    ("firmware-modification", "Firmware modification"),
+    ("bootloader-exploit", "Bootloader exploit"),
+    ("debug-access", "Debug access"),
+    ("physical-tampering", "Physical tampering"),
+    ("flash-read-out", "Flash read-out"),
+    ("diagnostic-access", "Diagnostic access"),
+    ("local-bus-injection", "Local bus injection"),
+    ("remote-network", "Remote network"),
+    ("wireless-proximity", "Wireless proximity"),
+    ("side-channel", "Side channel"),
+];
+
 fn ja_translation() -> PackTranslationDef {
     PackTranslationDef {
         label: Some(s("ISO/SAE 21434 + UN R155")),
@@ -144,6 +157,7 @@ fn ja_translation() -> PackTranslationDef {
             },
             feasibility: s("攻撃実現可能性"),
             interface_kinds: Vec::new(),
+            attack_types: Vec::new(),
             translations: BTreeMap::new(),
         }),
         impact_categories: BTreeMap::from([
@@ -226,6 +240,18 @@ fn ja_translation() -> PackTranslationDef {
             (s("cellular"), s("セルラー")),
             (s("usb"), s("USB")),
         ]),
+        attack_types: BTreeMap::from([
+            (s("firmware-modification"), s("ファームウェア改ざん")),
+            (s("bootloader-exploit"), s("ブートローダの脆弱性悪用")),
+            (s("debug-access"), s("デバッグアクセス")),
+            (s("physical-tampering"), s("物理的改ざん")),
+            (s("flash-read-out"), s("フラッシュ読み出し")),
+            (s("diagnostic-access"), s("診断アクセス")),
+            (s("local-bus-injection"), s("ローカルバス注入")),
+            (s("remote-network"), s("リモートネットワーク")),
+            (s("wireless-proximity"), s("近接無線")),
+            (s("side-channel"), s("サイドチャネル")),
+        ]),
     }
 }
 
@@ -262,6 +288,13 @@ fn expected() -> MethodologyDef {
                     label: s("USB"),
                 },
             ],
+            attack_types: ATTACK_TYPES
+                .iter()
+                .map(|&(key, label)| LevelDef {
+                    key: s(key),
+                    label: s(label),
+                })
+                .collect(),
             translations: BTreeMap::from([(s("ja"), ja_translation())]),
             ..ElementNamesDef::default()
         },

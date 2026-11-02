@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::id::{ComponentIdx, InterfaceIdx};
+use crate::id::{ComponentId, ComponentIdx, InterfaceId, InterfaceIdx};
 use crate::methodology::InterfaceKind;
 use crate::provenance::Provenance;
 
@@ -22,6 +22,30 @@ pub const MAX_COMPONENT_DEPTH: usize = 16;
 /// assert_eq!(aegis_model::MAX_TRUST_BOUNDARY_MEMBERS, 64);
 /// ```
 pub const MAX_TRUST_BOUNDARY_MEMBERS: usize = 64;
+
+/// What an attack step goes through: a component or one of its interfaces
+/// (CFG-01). Public, ID form. A step can go through nothing else, so this is
+/// not [`ElementRef`](crate::ElementRef).
+///
+/// ```
+/// use aegis_model::{ComponentId, InterfaceId, ItemRef};
+///
+/// assert!(ItemRef::Component(ComponentId::new_v7()) < ItemRef::Interface(InterfaceId::new_v7()));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ItemRef {
+    /// A component of the item definition.
+    Component(ComponentId),
+    /// An interface of a component.
+    Interface(InterfaceId),
+}
+
+/// [`ItemRef`] in the arena index form kept inside a project. 8 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ItemIdx {
+    Component(ComponentIdx),
+    Interface(InterfaceIdx),
+}
 
 /// A system component (ECU, subsystem, or external actor) in the item
 /// definition of a [`Project`](crate::Project) (ARC-02).

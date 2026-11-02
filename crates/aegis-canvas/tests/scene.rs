@@ -15,6 +15,7 @@ fn styled(tree: &aegis_model::AttackTree) -> Scene {
         tone: Tone::from_level(i.index() % 5, 5),
         critical: false,
         ghost: false,
+        via: None,
     })
 }
 
@@ -304,6 +305,7 @@ fn ghost_nodes_render_with_dashed_accent_edges_and_boxes() {
         tone: Tone::High,
         critical: false,
         ghost: i.index() == 3,
+        via: None,
     });
     let view = Viewport::new(Size::new(1600.0, 700.0));
     let list = render(&scene, &view, &RenderOptions::default());
@@ -335,4 +337,24 @@ fn ghost_nodes_render_with_dashed_accent_edges_and_boxes() {
 
     let svg = scene_to_svg(&scene, &SvgOptions::light(), &RenderOptions::default());
     assert!(svg.contains("ghost · step"));
+}
+
+#[test]
+fn a_via_chip_is_drawn_on_a_step_and_named_for_screen_readers() {
+    let tree = aegis_model::AttackTree::new(
+        aegis_model::NodeId::new_v7(),
+        aegis_model::Node::step("Flash firmware"),
+    )
+    .expect("tree");
+    let scene = Scene::from_tree(&tree, LayoutConfig::default(), |_| NodeStyle {
+        score: Some("High".into()),
+        via: Some("ADAS ECU / JTAG".into()),
+        ..NodeStyle::default()
+    });
+    let view = Viewport::new(Size::new(800.0, 400.0));
+    let list = render(&scene, &view, &RenderOptions::default());
+    let text = format!("{list:?}");
+    assert!(text.contains("\u{27f6} ADAS ECU"), "{text}");
+    let a = aegis_canvas::access::describe(&scene, 0).expect("node");
+    assert_eq!(a.via.as_deref(), Some("ADAS ECU / JTAG"));
 }

@@ -507,6 +507,7 @@ classDiagram
         -step_feasibility: Vec~Option_FeasibilityLevel~
         -step_factors: Vec~Box_Slice_Option_FactorLevel~~
         -step_mitigations: Vec~Box_Slice_StepMitigation~~
+        -step_links: Option~Box_StepLinks~
         -provenance: Provenance
         -step_attack_potential(m: &Methodology, idx: NodeIdx) Option~AttackPotential~
         -effective_step_feasibility(m: &Methodology, idx: NodeIdx) Option~FeasibilityLevel~
@@ -2038,3 +2039,28 @@ element; the user retries.
 Project content (item definition, trace links, external references,
 descriptions) stays in the op log and snapshot like every other element, so
 baselines, diff and audit cover it with no new table.
+
+
+## Step "through" item and attack type (job 122, CFG-01, CFG-02)
+
+An attack step can name the one component or interface it goes through
+(`Op::SetStepVia`, `ItemRef`) and one pack-defined attack type
+(`Op::SetStepAttackType`, `AttackType`, from the optional `attack_types`
+list of a pack, labels per language like `interface_kinds`). Both are stored
+per tree in `TreeEntry::step_links`, a lazily allocated block with one slot
+per node: a tree that uses neither costs 8 bytes, and the block is dropped
+again when the last value is cleared, so equal trees compare equal. Both ops
+reject gates (`NotAStep`) and return their exact inverse.
+
+- `RemoveComponent` / `RemoveInterface` are rejected while a step goes
+  through them (`ComponentHasSteps`, `InterfaceHasSteps`; a scan over the step
+  slots). Removing a step or a tree that still has a through item or type is
+  rejected too (`NodeIsRated`, `AttackTreeHasStepLinks`) so that the inverse
+  of the removal stays exact. The client's removals clear these first
+  (`clear_via_ops`, `clear_step_ops`), in one undo step.
+- Snapshot: per tree, `step_via` (node to `{"component": id}` or
+  `{"interface": id}`) and `step_attack_type` (node to key), both omitted when
+  empty. Op log: `SetStepVia`, `SetStepAttackType`.
+- Nothing reads them for evaluation yet. Job 123 (settings with rules) must
+  mark a step dirty in the incremental cache when either changes (the arm
+  next to `Op::SetStepMitigation` in `ProjectEvalCache`).
