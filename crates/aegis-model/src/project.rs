@@ -242,9 +242,9 @@ impl TreeEntry {
         i: usize,
         value: Option<T>,
         field: fn(&mut StepLinks) -> &mut Vec<Option<T>>,
-    ) -> Option<Option<T>> {
+    ) -> Option<T> {
         if self.step_links.is_none() && value.is_none() {
-            return (i < self.tree.len()).then_some(None);
+            return None;
         }
         let len = self.tree.len();
         let links = self.step_links.get_or_insert_with(|| {
@@ -253,12 +253,13 @@ impl TreeEntry {
                 attack_type: vec![None; len],
             })
         });
-        let slot = field(links).get_mut(i)?;
-        let old = std::mem::replace(slot, value);
+        let old = field(links)
+            .get_mut(i)
+            .and_then(|slot| std::mem::replace(slot, value));
         if links.is_empty() {
             self.step_links = None;
         }
-        Some(old)
+        old
     }
 
     fn insert_links(&mut self, i: usize) {
@@ -8788,9 +8789,7 @@ impl Project {
             .tree
             .idx_of(&node)
             .ok_or(ModelError::UnknownTreeNode { tree, node })?;
-        let old = entry
-            .set_link(node_idx.index(), new, |l| &mut l.via)
-            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let old = entry.set_link(node_idx.index(), new, |l| &mut l.via);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepVia {
             tree,
@@ -8812,9 +8811,7 @@ impl Project {
             .tree
             .idx_of(&node)
             .ok_or(ModelError::UnknownTreeNode { tree, node })?;
-        let attack_type = entry
-            .set_link(node_idx.index(), attack_type, |l| &mut l.attack_type)
-            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let attack_type = entry.set_link(node_idx.index(), attack_type, |l| &mut l.attack_type);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepAttackType {
             tree,
@@ -10274,6 +10271,38 @@ impl Project {
         ))
     }
 
+    /// The "through" items and attack types of one tree, for
+    /// `tree_invariants` (tests only).
+    #[cfg(test)]
+    fn check_step_links(
+        &self,
+        id: TreeId,
+        entry: &TreeEntry,
+        m: &Methodology,
+    ) -> Result<(), String> {
+        if let Some(links) = &entry.step_links
+            && (links.via.len() != entry.tree.len()
+                || links.attack_type.len() != entry.tree.len()
+                || links.is_empty())
+        {
+            return Err(format!("tree {id} has malformed via slots"));
+        }
+        for (i, (_, node_id, node)) in entry.tree.iter().enumerate() {
+            let (via, attack_type) = (entry.via_at(i), entry.attack_type_at(i));
+            if matches!(node, Node::Gate { .. }) && (via.is_some() || attack_type.is_some()) {
+                return Err(format!("tree {id} gate {node_id} has a via or attack type"));
+            }
+            if via.is_some() && self.item_ref(via).is_none() {
+                return Err(format!("tree {id} node {node_id} goes via a dead item"));
+            }
+            if let Some(t) = attack_type {
+                m.check_attack_type(t)
+                    .map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn tree_invariants(&self) -> Result<Vec<u32>, String> {
         let m = &*self.methodology;
@@ -10298,26 +10327,7 @@ impl Project {
                     entry.step_mitigations.len()
                 ));
             }
-            if let Some(links) = &entry.step_links
-                && (links.via.len() != entry.tree.len()
-                    || links.attack_type.len() != entry.tree.len()
-                    || links.is_empty())
-            {
-                return Err(format!("tree {id} has malformed via slots"));
-            }
-            for (i, (_, node_id, node)) in entry.tree.iter().enumerate() {
-                let (via, attack_type) = (entry.via_at(i), entry.attack_type_at(i));
-                if matches!(node, Node::Gate { .. }) && (via.is_some() || attack_type.is_some()) {
-                    return Err(format!("tree {id} gate {node_id} has a via or attack type"));
-                }
-                if via.is_some() && self.item_ref(via).is_none() {
-                    return Err(format!("tree {id} node {node_id} goes via a dead item"));
-                }
-                if let Some(t) = attack_type {
-                    m.check_attack_type(t)
-                        .map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
-                }
-            }
+            self.check_step_links(id, entry, m)?;
             entry
                 .tree
                 .topological_order()
@@ -10798,6 +10808,10 @@ impl ProjectEvalCache {
             | Op::SetProjectLanguages { .. }
             | Op::SetReviewMark { .. }
             | Op::RenameTreeNode { .. }
+            // Via and attack type change no rating yet. Job 123 adds the
+            // settings that read them and must mark the step dirty here.
+            | Op::SetStepVia { .. }
+            | Op::SetStepAttackType { .. }
             | Op::AddAsset { .. }
             | Op::RenameAsset { .. }
             | Op::SetAssetProperties { .. }
@@ -10839,10 +10853,6 @@ impl ProjectEvalCache {
             | Op::RemoveBoundaryComponent { .. }
             | Op::RemoveTrustBoundary { .. }
             | Op::SetAssetComponent { .. } => {}
-
-            // Via and attack type do not change any rating yet (job 123 adds
-            // the settings that read them and must mark the step dirty here).
-            Op::SetStepVia { .. } | Op::SetStepAttackType { .. } => {}
 
             Op::AddDamageScenario { .. } | Op::RemoveDamageScenario { .. } => {
                 self.damage_threats
