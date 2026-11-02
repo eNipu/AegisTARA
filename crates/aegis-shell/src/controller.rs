@@ -1522,6 +1522,27 @@ impl Controller {
         });
         on!(on_set_rating, |c, index| c.set_rating(index));
         on!(on_set_through, |c, index| c.set_through(index));
+        on!(on_steps_open, |c, i| {
+            let target = c
+                .window
+                .upgrade()
+                .map(|w| w.get_item_tab())
+                .and_then(|tab| {
+                    c.with_project(|p| {
+                        let d = &p.data;
+                        let steps = if tab == 1 {
+                            &d.interface.as_ref()?.steps
+                        } else {
+                            &d.component.as_ref()?.steps
+                        };
+                        let st = steps.get(pos(i)?)?;
+                        Some(Selection::TreeNode(st.tree, st.node))
+                    })
+                });
+            if let Some(sel) = target {
+                c.select(sel, true);
+            }
+        });
         on!(on_set_attack_type, |c, index| c.set_attack_type(index));
         on!(on_set_factor, |c, factor, index| c
             .set_factor(factor, index));
@@ -3088,6 +3109,7 @@ impl Controller {
             ));
             w.set_component_interfaces(links(&c.interfaces));
             w.set_component_assets(links(&c.assets));
+            w.set_component_steps_count(i32::try_from(c.steps.len()).unwrap_or(0));
             w.set_component_changed(s(&c.changed));
         } else {
             w.set_component_id(s(""));
@@ -3125,10 +3147,33 @@ impl Controller {
             w.set_interface_component(s(&i.component_name));
             w.set_interface_kind(i32::try_from(i.kind).unwrap_or(0));
             w.set_interface_flows(links(&i.flows));
+            w.set_interface_steps_count(i32::try_from(i.steps.len()).unwrap_or(0));
             w.set_interface_changed(s(&i.changed));
         } else {
             w.set_interface_id(s(""));
         }
+        // The "Steps through this" list follows the tab it was opened from.
+        let none: Vec<aegis_client::view::StepThrough> = Vec::new();
+        let (title, steps) = if w.get_item_tab() == 1 {
+            d.interface.as_ref().map(|i| (i.name.as_str(), &i.steps))
+        } else {
+            d.component.as_ref().map(|c| (c.name.as_str(), &c.steps))
+        }
+        .unwrap_or(("", &none));
+        w.set_steps_title(s(&format!("{} · {title}", w.get_steps_heading())));
+        w.set_steps_rows(rows(
+            steps
+                .iter()
+                .map(|st| {
+                    vec![
+                        st.tree_visual_id.clone(),
+                        st.step.clone(),
+                        st.attack_type.clone().unwrap_or_default(),
+                        st.inherent.clone().unwrap_or_default(),
+                    ]
+                })
+                .collect(),
+        ));
         let mut list: Vec<Vec<String>> = d
             .data_flows
             .iter()

@@ -1414,3 +1414,24 @@ msgstr "⟦Cléár séléctíón␣␣⟧"
 
 msgid "Set treatment"
 msgstr "⟦Sét tréátmént␣␣⟧"
+
+msgid "Through"
+msgstr "⟦Thróúgh␣␣⟧"
+
+msgid "Attack type"
+msgstr "⟦Áttáck typé␣␣⟧"
+
+msgid "Steps through this"
+msgstr "⟦Stéps thróúgh thís␣␣⟧"
+
+msgid "Show"
+msgstr "⟦Shów␣␣⟧"
+
+msgid "Hide the steps panel"
+msgstr "⟦Hídé thé stéps pánél␣␣⟧"
+
+msgid "Step"
+msgstr "⟦Stép␣␣⟧"
+
+msgid "Inherent"
+msgstr "⟦Ínhérént␣␣⟧"
