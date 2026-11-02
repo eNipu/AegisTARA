@@ -687,7 +687,7 @@ impl Gen {
 
     /// A component or an interface, mostly live ones.
     fn item(&mut self, p: &Project, sel: u16, pick: u16) -> ItemRef {
-        if pick % 2 == 0 {
+        if pick.is_multiple_of(2) {
             ItemRef::Component(self.component(p, sel))
         } else {
             ItemRef::Interface(self.interface(p, sel))
