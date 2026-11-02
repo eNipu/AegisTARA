@@ -637,6 +637,12 @@ in property <string> redo-label;
     in-out property <string> new-node-label;
     in-out property <int> new-node-kind: 0;
     in property <[string]> level-options;
+    // What the selected step goes through, and its attack type (CFG-01, CFG-02).
+    // Entry 0 is "None"; interfaces are indented under their component.
+    in property <[string]> through-options;
+    in property <int> through-index;
+    in property <[string]> attack-type-options;
+    in property <int> attack-type-index;
     in property <int> rating-index;
     in property <string> effective-text;
     in property <string> potential-text;
@@ -928,6 +934,8 @@ in property <string> redo-label;
     callback detach-control(int);
     callback select-threat-of-tree();
     callback set-rating(int);
+    callback set-through(int);
+    callback set-attack-type(int);
     callback set-factor(int, int);
     callback canvas-down(length, length);
     callback canvas-move(length, length);
@@ -2507,6 +2515,25 @@ in property <string> redo-label;
                                         editable: root.editing;
                                         label: root.feasibility-label;
                                         picked(i) => { root.set-rating(i); }
+                                    }
+                                    SectionTitle { text: @tr("Through"); }
+                                    Choice {
+                                        options: root.through-options;
+                                        index: root.through-index;
+                                        editable: root.editing;
+                                        label: @tr("Through");
+                                        picked(i) => { root.set-through(i); }
+                                    }
+                                    if root.attack-type-options.length > 1: VerticalLayout {
+                                        spacing: 8px;
+                                        SectionTitle { text: @tr("Attack type"); }
+                                        Choice {
+                                            options: root.attack-type-options;
+                                            index: root.attack-type-index;
+                                            editable: root.editing;
+                                            label: @tr("Attack type");
+                                            picked(i) => { root.set-attack-type(i); }
+                                        }
                                     }
                                     if root.effective-text != "": Text {
                                         text: @tr("The engine uses: ") + root.effective-text;
