@@ -1521,6 +1521,8 @@ impl Controller {
             }
         });
         on!(on_set_rating, |c, index| c.set_rating(index));
+        on!(on_set_through, |c, index| c.set_through(index));
+        on!(on_set_attack_type, |c, index| c.set_attack_type(index));
         on!(on_set_factor, |c, factor, index| c
             .set_factor(factor, index));
 
@@ -2347,6 +2349,32 @@ impl Controller {
                 tree,
                 node,
                 level: after_none(index),
+            });
+        }
+    }
+
+    fn set_through(&self, index: i32) {
+        let target = self.with_project(|p| {
+            p.inspector.as_ref().map(|i| {
+                let via = pos(index)
+                    .and_then(|x| x.checked_sub(1))
+                    .and_then(|x| i.through_options.get(x))
+                    .map(|o| o.item);
+                (i.tree, i.node, via)
+            })
+        });
+        if let Some((tree, node, via)) = target {
+            self.edit(Edit::SetStepVia { tree, node, via });
+        }
+    }
+
+    fn set_attack_type(&self, index: i32) {
+        let target = self.with_project(|p| p.inspector.as_ref().map(|i| (i.tree, i.node)));
+        if let Some((tree, node)) = target {
+            self.edit(Edit::SetStepAttackType {
+                tree,
+                node,
+                attack_type: after_none(index),
             });
         }
     }
@@ -3776,6 +3804,25 @@ impl Controller {
                         i.levels.iter().map(|c| c.label.clone()),
                     ));
                     w.set_rating_index(i.rating.map_or(0, |r| i32::try_from(r + 1).unwrap_or(0)));
+                    w.set_through_options(with_none(
+                        "None",
+                        i.through_options.iter().map(|o| {
+                            if o.indent {
+                                format!("    \u{21b3} {}", o.label)
+                            } else {
+                                o.label.clone()
+                            }
+                        }),
+                    ));
+                    w.set_through_index(i.through.map_or(0, |r| i32::try_from(r + 1).unwrap_or(0)));
+                    w.set_attack_type_options(with_none(
+                        "None",
+                        i.attack_types.iter().map(|c| c.label.clone()),
+                    ));
+                    w.set_attack_type_index(
+                        i.attack_type
+                            .map_or(0, |r| i32::try_from(r + 1).unwrap_or(0)),
+                    );
                     w.set_effective_text(s(i.effective.as_deref().unwrap_or("")));
                     w.set_potential_text(s(i.potential.as_deref().unwrap_or("")));
                     w.set_evaluated_text(s(i.evaluated.as_deref().unwrap_or("")));

@@ -16,6 +16,7 @@ fn scene() -> Scene {
         tone: Tone::Medium,
         critical: i.index() == 4,
         ghost: false,
+        via: None,
     })
 }
 

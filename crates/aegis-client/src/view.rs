@@ -949,6 +949,7 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
                 tone: g.feasibility.map_or(Tone::Unrated, |l| level_tone(m, l)),
                 critical: false,
                 ghost: true,
+                via: None,
             };
         }
         let value = evaluation.and_then(|e| e.get(idx).copied());
@@ -968,6 +969,9 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
             tone: value.map_or(Tone::Unrated, |v| level_tone(m, v)),
             critical: false,
             ghost: false,
+            via: project
+                .step_via(tree_idx, idx)
+                .map(|item| through_label(project, item)),
         }
     };
     let layout_tree = ghost_overlay.as_ref().map_or(tree, |(pt, _)| pt);

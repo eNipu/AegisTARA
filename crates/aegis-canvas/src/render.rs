@@ -182,9 +182,30 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
             align: Align::Start,
         });
     }
+    // The via chip takes the kind's place on a step and is cut first when
+    // the node is narrow (the score keeps its room).
+    let chip = style
+        .and_then(|s| s.via.as_deref())
+        .filter(|_| !ghost)
+        .map(|via| {
+            let score_chars = style
+                .and_then(|s| s.score.as_deref())
+                .map_or(0, |s| s.chars().count());
+            let room =
+                chars_that_fit(world.size.w - 26.0, FONT_SMALL).saturating_sub(score_chars + 2);
+            let text = format!("\u{27f6} {via}");
+            if text.chars().count() <= room {
+                text
+            } else {
+                let cut: String = text.chars().take(room.saturating_sub(1)).collect();
+                format!("{cut}\u{2026}")
+            }
+        });
     items.push(Item::Text {
         at: Point::new(rect.right() - 10.0 * z, base),
-        text: if ghost {
+        text: if let Some(chip) = chip {
+            chip
+        } else if ghost {
             format!("ghost · {}", kind_label(scene.kind(v)))
         } else {
             kind_label(scene.kind(v)).to_owned()
