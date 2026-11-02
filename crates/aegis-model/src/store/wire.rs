@@ -916,12 +916,6 @@ impl<'de> Deserialize<'de> for StepMitigations {
 /// field in the empty-object error.
 pub(super) struct StepValues<V>(pub(super) Vec<(NodeId, V)>);
 
-impl<V> Default for StepValues<V> {
-    fn default() -> Self {
-        StepValues(Vec::new())
-    }
-}
-
 impl<'de, V: Deserialize<'de>> Deserialize<'de> for StepValues<V> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct Vis<V>(PhantomData<V>);
@@ -1688,10 +1682,11 @@ pub(super) struct TreeWire {
     pub(super) step_factors: StepFactors,
     #[serde(default)]
     pub(super) step_mitigations: StepMitigations,
-    #[serde(default)]
-    pub(super) step_via: StepValues<ItemWire>,
-    #[serde(default)]
-    pub(super) step_attack_type: StepValues<AttackTypeKey>,
+    // Boxed: a snapshot holds every `TreeWire` at once, and most have none.
+    #[serde(default, deserialize_with = "some")]
+    pub(super) step_via: Option<Box<StepValues<ItemWire>>>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) step_attack_type: Option<Box<StepValues<AttackTypeKey>>>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
