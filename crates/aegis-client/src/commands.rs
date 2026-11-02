@@ -14,8 +14,8 @@
 
 use aegis_model::{
     AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GateKind, GoalId,
-    InterfaceId, ItemRef, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId, TreeId,
-    TrustBoundaryId,
+    InterfaceId, ItemRef, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
+    TreeId, TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, parse_outline};
@@ -1240,14 +1240,16 @@ impl Edit {
             Edit::RemoveInterface { interface } => {
                 let i_idx = project.interface_idx(interface).ok_or(EditError::Missing)?;
                 let mut ops = clear_via_ops(project, ItemRef::Interface(*interface), &p);
-                ops.extend(project
-                    .data_flows()
-                    .filter(|(_, _, df)| df.interface() == Some(i_idx))
-                    .map(|(_, df_id, _)| Op::SetDataFlowInterface {
-                        id: df_id,
-                        interface: None,
-                        provenance: p.clone(),
-                    }));
+                ops.extend(
+                    project
+                        .data_flows()
+                        .filter(|(_, _, df)| df.interface() == Some(i_idx))
+                        .map(|(_, df_id, _)| Op::SetDataFlowInterface {
+                            id: df_id,
+                            interface: None,
+                            provenance: p.clone(),
+                        }),
+                );
                 ops.push(Op::RemoveInterface { id: *interface });
                 ops
             }
