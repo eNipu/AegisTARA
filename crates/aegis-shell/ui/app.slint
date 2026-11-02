@@ -516,6 +516,16 @@ in property <string> redo-label;
     in property <int> component-parent: 0;
     in property <[LinkItem]> component-interfaces;
     in property <[LinkItem]> component-assets;
+    in property <int> component-steps-count;
+    in property <int> interface-steps-count;
+    // The "Steps through this" list in the bottom slot (CFG-01).
+    in-out property <bool> steps-shown: false;
+    in property <[[StandardListViewItem]]> steps-rows;
+    in property <string> steps-title;
+    in property <string> steps-heading: @tr("Steps through this");
+    in-out property <int> steps-selected: -1;
+    callback steps-open(int);
+    changed history-shown => { if (root.history-shown) { root.steps-shown = false; } }
     in property <string> component-changed;
     in property <[[StandardListViewItem]]> interface-rows;
     in property <int> interface-selected: -1;
@@ -3199,6 +3209,11 @@ in property <string> redo-label;
                         LinkList { items: root.component-interfaces; clicked(i) => { root.item-tab = 1; } }
                         SectionTitle { text: @tr("Assets"); }
                         LinkList { items: root.component-assets; clicked(i) => { root.show-page(Pages.assets); } }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: @tr("Steps through this") + " (" + root.component-steps-count + ")"; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; }
+                            Button { text: @tr("Show") + " ▸"; accessible-label: @tr("Steps through this"); enabled: root.component-steps-count > 0; clicked => { root.history-shown = false; root.steps-selected = -1; root.steps-shown = true; } }
+                        }
                         Text { text: root.component-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                         Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-component(); } }
@@ -3217,6 +3232,11 @@ in property <string> redo-label;
                                 accessible-label: @tr("Kind");
                                 selected(v) => { root.set-interface-kind(self.current-index); }
                             }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: @tr("Steps through this") + " (" + root.interface-steps-count + ")"; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; }
+                            Button { text: @tr("Show") + " ▸"; accessible-label: @tr("Steps through this"); enabled: root.interface-steps-count > 0; clicked => { root.history-shown = false; root.steps-selected = -1; root.steps-shown = true; } }
                         }
                         Text { text: root.interface-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
@@ -3489,6 +3509,31 @@ in property <string> redo-label;
                             clicked => { root.history-go-back(root.history-edit-selected); }
                         }
                     }
+                }
+            }
+        }
+
+        // ---- steps through an item, in the bottom slot (CFG-01) ----
+        if root.steps-shown: HSplitter { moved(d) => { root.drag-bottom(root.bottom-height, d); } released => { root.panels-resized(); } }
+        if root.steps-shown: Rectangle {
+            height: root.bottom-height;
+            background: Theme.panel;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    SectionTitle { text: root.steps-title; vertical-alignment: center; horizontal-stretch: 1; }
+                    Button { icon: @image-url("icons/x.svg"); accessible-label: @tr("Hide the steps panel"); clicked => { root.steps-shown = false; } }
+                }
+                DataTable {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    label: @tr("Steps through this");
+                    columns: [{ title: @tr("Attack tree"), horizontal-stretch: 1 }, { title: @tr("Step"), horizontal-stretch: 3 }, { title: @tr("Attack type"), horizontal-stretch: 2 }, { title: @tr("Inherent"), horizontal-stretch: 1 }];
+                    rows: root.steps-rows;
+                    selected: root.steps-selected;
+                    picked(i) => { root.steps-selected = i; root.steps-open(i); }
                 }
             }
         }

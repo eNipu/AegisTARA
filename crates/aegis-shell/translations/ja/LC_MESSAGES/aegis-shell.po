@@ -1414,3 +1414,24 @@ msgstr "選択を解除"
 
 msgid "Set treatment"
 msgstr "対応方針を設定"
+
+msgid "Through"
+msgstr "経由"
+
+msgid "Attack type"
+msgstr "攻撃タイプ"
+
+msgid "Steps through this"
+msgstr "この要素を経由するステップ"
+
+msgid "Show"
+msgstr "表示"
+
+msgid "Hide the steps panel"
+msgstr "ステップパネルを閉じる"
+
+msgid "Step"
+msgstr "ステップ"
+
+msgid "Inherent"
+msgstr "固有値"
