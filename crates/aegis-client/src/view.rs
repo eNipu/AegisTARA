@@ -663,6 +663,8 @@ pub struct ThroughChoice {
     pub item: ItemRef,
     /// Its name.
     pub label: String,
+    /// "ADAS ECU" or "ADAS ECU / JTAG": what a filter matches and lists.
+    pub full: String,
     /// Interfaces are shown indented under their component.
     pub indent: bool,
 }
@@ -1183,6 +1185,7 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
             through_options.push(ThroughChoice {
                 item: ItemRef::Component(c_id),
                 label: c.name().to_owned(),
+                full: c.name().to_owned(),
                 indent: false,
             });
             through_options.extend(
@@ -1192,6 +1195,7 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
                     .map(|(_, i_id, i)| ThroughChoice {
                         item: ItemRef::Interface(i_id),
                         label: i.name().to_owned(),
+                        full: format!("{} / {}", c.name(), i.name()),
                         indent: true,
                     }),
             );
