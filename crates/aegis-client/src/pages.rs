@@ -1141,6 +1141,67 @@ fn explain_risk(
     )]
 }
 
+/// Settings that cap the step deciding a threat's residual feasibility, each
+/// with its source, deciding one first (CFG-05). Empty when nothing caps it.
+/// Time O(depth + rules on the step).
+fn ceiling_lines(ws: &Workspace, id: ThreatId) -> Vec<String> {
+    /// Ceilings written out; the step inspector lists all of them.
+    const SHOWN: usize = 3;
+    let project = ws.project();
+    let m = project.methodology();
+    let Some(tree_idx) = project
+        .threat_scenario_idx(&id)
+        .and_then(|i| project.threat_scenario(i))
+        .and_then(aegis_model::ThreatScenario::attack_tree)
+    else {
+        return Vec::new();
+    };
+    let (Some(tree), Some(tree_id), Ok(eval)) = (
+        project.attack_tree(tree_idx),
+        project.attack_tree_id(tree_idx),
+        ws.cache().evaluate_residual_threat(project, id),
+    ) else {
+        return Vec::new();
+    };
+    let Some(step) = eval.why_path(tree.root()).last() else {
+        return Vec::new();
+    };
+    let (Some(inherent), Some(residual)) = (
+        project.effective_step_feasibility(tree_idx, step),
+        project.residual_step_feasibility(tree_idx, step),
+    ) else {
+        return Vec::new();
+    };
+    let (Some(node), true) = (tree.id_of(step), residual < inherent) else {
+        return Vec::new();
+    };
+    // Only ceilings below the rating cap anything.
+    let mut ceilings = project.step_ceilings(tree_idx, step);
+    ceilings.retain(|c| c.feasibility() < inherent);
+    let mut lines: Vec<String> = ceilings
+        .iter()
+        .take(SHOWN)
+        .filter_map(|c| {
+            let name = project.security_control(c.control())?.name();
+            let from = match c.source() {
+                aegis_model::CeilingSource::ControlRule { target, .. } => {
+                    format!(" (from {})", crate::view::through_label(project, target))
+                }
+                aegis_model::CeilingSource::StepMitigation => " (on this step)".to_owned(),
+            };
+            Some(format!(
+                "Step \"{}\" is capped at {} by {name}{from}.",
+                node_label(project, tree_id, node),
+                feasibility_label(m, c.feasibility()),
+            ))
+        })
+        .collect();
+    if ceilings.len() > SHOWN {
+        lines.push(format!("and {} more on that step.", ceilings.len() - SHOWN));
+    }
+    lines
+}
+
 /// The selected threat's details. Time O(damage + trees + goals + claims).
 #[must_use]
 pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
@@ -1160,6 +1221,7 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
         ws.cache().evaluate_residual_risk(project, id),
         "Risk after controls",
     ));
+    why.extend(ceiling_lines(ws, id));
     if t.attack_tree().is_some() && t.direct_feasibility().is_some() {
         why.push(
             "The attack tree decides the feasibility; the direct rating is kept but not used."
@@ -2109,6 +2171,18 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::StepSettingsIncomplete { tree, node } => {
+            let s = Selection::Tree(tree);
+            (
+                format!(
+                    "Step \"{}\" in {} {} needs both a Through item and an Attack type, or no security setting can apply to it.",
+                    node_label(project, tree, node),
+                    m.element_names().attack_tree.singular.to_lowercase(),
+                    q(s)
+                ),
+                s,
+            )
+        }
         L::SecurityControlUnused { control } => {
             let s = Selection::Control(control);
             (
@@ -2591,11 +2665,60 @@ pub fn comparison(
         p,
         Selection::Tree(id)
     ));
-    entity!(
-        "Security control",
-        diff.security_controls(),
-        |p: &Project, id| cited(p, Selection::Control(id))
-    );
+    {
+        let set = diff.security_controls();
+        for id in set.added() {
+            push(
+                "Added",
+                format!(
+                    "Security control {}",
+                    cited(current, Selection::Control(*id))
+                ),
+            );
+        }
+        for id in set.removed() {
+            push(
+                "Removed",
+                format!("Security control {}", cited(base, Selection::Control(*id))),
+            );
+        }
+        for id in set.modified() {
+            let what = cited(current, Selection::Control(*id));
+            // Applied items and rules are the settings; a rename shows neither.
+            let state = |p: &Project| {
+                p.security_control_idx(id).and_then(|i| {
+                    let c = p.security_control(i)?;
+                    Some((p.control_targets(i).collect::<Vec<_>>(), c.rules().to_vec()))
+                })
+            };
+            let detail = match (state(base), state(current)) {
+                (Some((bt, br)), Some((ct, cr))) => {
+                    let mut parts = Vec::new();
+                    if bt != ct {
+                        parts.push(if ct.len() == bt.len() {
+                            "applied items changed".to_owned()
+                        } else {
+                            format!("applied to {} (was {})", ct.len(), bt.len())
+                        });
+                    }
+                    if br != cr {
+                        parts.push(if cr.len() == br.len() {
+                            "rule ceilings changed".to_owned()
+                        } else {
+                            format!("{} rule(s) (was {})", cr.len(), br.len())
+                        });
+                    }
+                    if parts.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", parts.join(", "))
+                    }
+                }
+                _ => String::new(),
+            };
+            push("Changed", format!("Security control {what}{detail}"));
+        }
+    }
     entity!("Goal", diff.cybersecurity_goals(), |p: &Project, id| cited(
         p,
         Selection::Goal(id)
