@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, ComponentId, DataFlowId, ElementRef, GateKind, InterfaceId, Methodology,
-    Node, NodeId, Op, Project, Provenance, TreeId, TrustBoundaryId,
+    AssetId, AttackTree, ComponentId, ControlId, DataFlowId, ElementRef, GateKind, InterfaceId,
+    Methodology, Node, NodeId, Op, Project, Provenance, TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -196,6 +196,27 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
         text: text(""),
         provenance: who(),
     });
+    let ctrl = ControlId::new_v7();
+    let at = m.attack_types().next().expect("attack type");
+    let low = m.feasibility_level("low").expect("low");
+    go(Op::AddSecurityControl {
+        id: ctrl,
+        name: name("JTAG disabled"),
+        provenance: who(),
+    });
+    go(Op::SetControlRule {
+        control: ctrl,
+        attack_type: at,
+        ceiling: Some(low),
+        provenance: who(),
+    });
+    go(Op::SetControlRule {
+        control: ctrl,
+        attack_type: at,
+        ceiling: None,
+        provenance: who(),
+    });
+    go(Op::RemoveSecurityControl { id: ctrl });
 
     // Attack tree nodes.
     let t = AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree");

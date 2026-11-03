@@ -584,7 +584,42 @@ pub enum Edit {
         /// New name.
         name: String,
     },
-    /// Removes a control, detaching it from steps and goals first.
+    /// Applies a security control to a component or an interface (CFG-03).
+    ApplyControl {
+        /// The control.
+        control: ControlId,
+        /// The component or interface.
+        target: ItemRef,
+    },
+    /// Unapplies a security control from a component or an interface (CFG-03).
+    UnapplyControl {
+        /// The control.
+        control: ControlId,
+        /// The component or interface.
+        target: ItemRef,
+    },
+    /// Sets or clears a control's attack-type feasibility ceiling rule (CFG-03).
+    SetControlRule {
+        /// The control.
+        control: ControlId,
+        /// Position in the methodology's attack types.
+        attack_type: usize,
+        /// Position in the methodology's feasibility levels, or `None` to remove.
+        level: Option<usize>,
+    },
+    /// Creates a custom security control with initial rules and applies it to
+    /// `target` in one undo step (CFG-03, CFG-05).
+    AddCustomSetting {
+        /// New control ID.
+        id: ControlId,
+        /// Control name.
+        name: String,
+        /// Target component or interface.
+        target: ItemRef,
+        /// `(attack_type_position, feasibility_level_position)` rules.
+        rules: Vec<(usize, usize)>,
+    },
+    /// Removes a control, detaching it from steps, targets, rules, and goals first.
     RemoveControl {
         /// The control.
         control: ControlId,
@@ -797,6 +832,18 @@ pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) ->
                 via: None,
                 provenance: p.clone(),
             })
+        })
+        .collect()
+}
+
+/// Ops that unapply every security control applied directly to `target`.
+fn unapply_target_ops(project: &Project, target: ItemRef, p: &Provenance) -> Vec<Op> {
+    project
+        .controls_applied_to(target)
+        .map(|(_, control, _)| Op::UnapplyControl {
+            control,
+            target,
+            provenance: p.clone(),
         })
         .collect()
 }
@@ -1150,11 +1197,22 @@ impl Edit {
                 let c_idx = project.component_idx(component).ok_or(EditError::Missing)?;
                 let mut ops = Vec::new();
                 // Steps that go through the component or its interfaces lose
-                // their "through" first (CFG-01).
+                // their "through" first (CFG-01), and applied settings are
+                // unapplied (CFG-03).
                 ops.extend(clear_via_ops(project, ItemRef::Component(*component), &p));
+                ops.extend(unapply_target_ops(
+                    project,
+                    ItemRef::Component(*component),
+                    &p,
+                ));
                 for (_, iface_id, iface) in project.interfaces() {
                     if iface.component() == c_idx {
                         ops.extend(clear_via_ops(project, ItemRef::Interface(iface_id), &p));
+                        ops.extend(unapply_target_ops(
+                            project,
+                            ItemRef::Interface(iface_id),
+                            &p,
+                        ));
                     }
                 }
                 for (_, child_id, child) in project.components() {
@@ -1240,6 +1298,11 @@ impl Edit {
             Edit::RemoveInterface { interface } => {
                 let i_idx = project.interface_idx(interface).ok_or(EditError::Missing)?;
                 let mut ops = clear_via_ops(project, ItemRef::Interface(*interface), &p);
+                ops.extend(unapply_target_ops(
+                    project,
+                    ItemRef::Interface(*interface),
+                    &p,
+                ));
                 ops.extend(
                     project
                         .data_flows()
@@ -1770,11 +1833,82 @@ impl Edit {
                 name: name(n)?,
                 provenance: p,
             }],
+            Edit::ApplyControl { control, target } => vec![Op::ApplyControl {
+                control: *control,
+                target: *target,
+                provenance: p,
+            }],
+            Edit::UnapplyControl { control, target } => vec![Op::UnapplyControl {
+                control: *control,
+                target: *target,
+                provenance: p,
+            }],
+            Edit::SetControlRule {
+                control,
+                attack_type,
+                level,
+            } => vec![Op::SetControlRule {
+                control: *control,
+                attack_type: m
+                    .attack_types()
+                    .nth(*attack_type)
+                    .ok_or(EditError::UnknownChoice)?,
+                ceiling: feasibility(project, *level)?,
+                provenance: p,
+            }],
+            Edit::AddCustomSetting {
+                id,
+                name: n,
+                target,
+                rules,
+            } => {
+                let n = name(n)?;
+                let mut ops = vec![Op::AddSecurityControl {
+                    id: *id,
+                    name: n,
+                    provenance: p.clone(),
+                }];
+                for &(at_pos, lvl_pos) in rules {
+                    let attack_type = m
+                        .attack_types()
+                        .nth(at_pos)
+                        .ok_or(EditError::UnknownChoice)?;
+                    let lvl = feasibility(project, Some(lvl_pos))?;
+                    ops.push(Op::SetControlRule {
+                        control: *id,
+                        attack_type,
+                        ceiling: lvl,
+                        provenance: p.clone(),
+                    });
+                }
+                ops.push(Op::ApplyControl {
+                    control: *id,
+                    target: *target,
+                    provenance: p,
+                });
+                ops
+            }
             Edit::RemoveControl { control } => {
                 let c_idx = project
                     .security_control_idx(control)
                     .ok_or(EditError::Missing)?;
+                let ctrl = project.security_control(c_idx).ok_or(EditError::Missing)?;
                 let mut ops = Vec::new();
+                for target in project.control_targets(c_idx) {
+                    ops.push(Op::UnapplyControl {
+                        control: *control,
+                        target,
+                        provenance: p.clone(),
+                    });
+                }
+                for rule in ctrl.rules() {
+                    ops.push(Op::SetControlRule {
+                        control: *control,
+                        attack_type: rule.attack_type(),
+                        ceiling: None,
+                        provenance: p.clone(),
+                    });
+                }
                 for (t_idx, tree_id, tree) in project.attack_trees() {
                     for (n_idx, node_id, _) in tree.iter() {
                         if project
@@ -1995,11 +2129,20 @@ impl Edit {
                     .security_control_idx(source)
                     .and_then(|x| project.security_control(x))
                     .ok_or(EditError::Missing)?;
-                vec![Op::AddSecurityControl {
+                let mut ops = vec![Op::AddSecurityControl {
                     id: *id,
                     name: name(&copy_name(c.name(), suffix))?,
-                    provenance: p,
-                }]
+                    provenance: p.clone(),
+                }];
+                for rule in c.rules() {
+                    ops.push(Op::SetControlRule {
+                        control: *id,
+                        attack_type: rule.attack_type(),
+                        ceiling: Some(rule.ceiling()),
+                        provenance: p.clone(),
+                    });
+                }
+                ops
             }
             Edit::DuplicateGoal { id, source, suffix } => {
                 let g = project
