@@ -790,6 +790,7 @@ classDiagram
         AttackTreeStepUnrated(tree: TreeId, node: NodeId) Error
         AttackTreeStepIncompleteFactors(tree: TreeId, node: NodeId)
         RedundantStepFeasibility(tree: TreeId, node: NodeId)
+        StepSettingsIncomplete(tree: TreeId, node: NodeId)
         SecurityControlUnused(control: ControlId)
         CybersecurityGoalWithoutControls(goal: GoalId)
         CybersecurityGoalUnlinked(goal: GoalId)
@@ -2132,15 +2133,17 @@ in one undo step (`RemoveComponent`, `RemoveInterface`, `RemoveControl`), and
 
 **Lints**: `SecurityControlUnused` fires only when a control has no step
 mitigations, no goal link and no targets. `ReduceTreatmentWithoutControls`
-accepts a step ceiling from a rule as well as a manual mitigation. There is
-no "step without via" finding yet (see the backlog line `123b-settings-gaps`).
+accepts a step ceiling from a rule as well as a manual mitigation.
+`StepSettingsIncomplete` flags a step with an attack type but no through item
+(or the reverse) while any control carries rules.
 
 **Store**: snapshot controls carry `targets` (a list of `{"component": id}` or
 `{"interface": id}`) and `rules` (attack type key to feasibility key), both
 omitted when empty, so v1 fixtures load unchanged. The op log has
 `ApplyControl`, `UnapplyControl` and `SetControlRule`. Decode caps are
-`Limit::ControlTargets` and `Limit::ControlRules`. The version diff does not
-report targets or rules yet (also `123b`).
+`Limit::ControlTargets` and `Limit::ControlRules`. The version diff compares
+targets and rules, so a changed setting is a modified control; the client's
+comparison line says which of the two changed.
 
 **Client and shell**: `Edit::ApplyControl`, `Edit::UnapplyControl`,
 `Edit::SetControlRule` and `Edit::AddCustomSetting` (one batch: add control,
