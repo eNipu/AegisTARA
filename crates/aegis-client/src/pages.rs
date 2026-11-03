@@ -41,6 +41,8 @@ pub struct Vocabulary {
     pub catalog_schemes: Vec<String>,
     /// Interface kinds for item definition (job 074).
     pub interface_kinds: Vec<String>,
+    /// Attack types for steps and security control rules (CFG-02, CFG-03).
+    pub attack_types: Vec<String>,
     /// Treatment decisions, as [`TREATMENTS`] orders them.
     pub treatments: Vec<String>,
     /// Methodology-defined singular/plural labels for the core element types
@@ -125,6 +127,14 @@ pub fn vocabulary_for_lang(m: &Methodology, lang: &str) -> Vocabulary {
             .interface_kinds()
             .map(|k| {
                 m.interface_kind_label_for_lang(k, lang)
+                    .unwrap_or("?")
+                    .to_owned()
+            })
+            .collect(),
+        attack_types: m
+            .attack_types()
+            .map(|a| {
+                m.attack_type_label_for_lang(a, lang)
                     .unwrap_or("?")
                     .to_owned()
             })
@@ -383,6 +393,35 @@ pub struct ComponentRow {
     pub assets: usize,
 }
 
+/// One security setting applied to a component or an interface (CFG-03).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingRow {
+    /// The security control.
+    pub id: ControlId,
+    /// Short visual ID (`SC00`, `SC01`, ...).
+    pub visual_id: String,
+    /// Control name.
+    pub name: String,
+    /// One-line summary of its rules, e.g. `Debug access → Very low`.
+    pub rules: String,
+    /// On an interface: `true` when this setting comes from the owning
+    /// component and is shown dimmed (CFG-03, D26).
+    pub inherited: bool,
+    /// Owning component name when `inherited` is true.
+    pub from_component: String,
+}
+
+/// One rule of a security control: attack type -> feasibility ceiling (CFG-03).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlRuleView {
+    /// Position in the methodology's attack types.
+    pub attack_type: usize,
+    /// Attack type label.
+    pub label: String,
+    /// Position in the methodology's feasibility levels, or `None` when not set.
+    pub level: Option<usize>,
+}
+
 /// The selected component.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComponentDetail {
@@ -400,6 +439,10 @@ pub struct ComponentDetail {
     pub interfaces: Vec<LinkRow>,
     /// Assets bound to this component.
     pub assets: Vec<LinkRow>,
+    /// Security settings applied to this component (CFG-03).
+    pub settings: Vec<SettingRow>,
+    /// Controls in the project that can be applied to this component.
+    pub available_controls: Vec<Choice<ControlId>>,
     /// Steps that go through this component or its interfaces (CFG-01).
     pub steps: Vec<crate::view::StepThrough>,
     /// Provenance text.
@@ -440,6 +483,11 @@ pub struct InterfaceDetail {
     pub kind: usize,
     /// Data flows using this interface.
     pub flows: Vec<LinkRow>,
+    /// Security settings on this interface (own first, then inherited from
+    /// the owning component with `inherited = true`; CFG-03, D26).
+    pub settings: Vec<SettingRow>,
+    /// Controls in the project that can be applied directly to this interface.
+    pub available_controls: Vec<Choice<ControlId>>,
     /// Steps that go through this interface (CFG-01).
     pub steps: Vec<crate::view::StepThrough>,
     /// Provenance text.
@@ -566,6 +614,54 @@ pub fn component_rows(ws: &Workspace) -> Vec<ComponentRow> {
         .collect()
 }
 
+fn format_control_rules(project: &Project, c: &aegis_model::SecurityControl) -> String {
+    let m = project.methodology();
+    if c.rules().is_empty() {
+        return "No rules yet".to_owned();
+    }
+    c.rules()
+        .iter()
+        .map(|rule| {
+            format!(
+                "{} \u{2192} {}",
+                m.attack_type_label(rule.attack_type()).unwrap_or("?"),
+                feasibility_label(m, rule.ceiling())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn setting_row(
+    project: &Project,
+    c_idx: aegis_model::ControlIdx,
+    inherited: bool,
+    from_component: &str,
+) -> Option<SettingRow> {
+    let id = project.security_control_id(c_idx)?;
+    let c = project.security_control(c_idx)?;
+    Some(SettingRow {
+        id,
+        visual_id: project.security_control_visual_id(c_idx).unwrap_or_default(),
+        name: c.name().to_owned(),
+        rules: format_control_rules(project, c),
+        inherited,
+        from_component: from_component.to_owned(),
+    })
+}
+
+fn available_controls_for(project: &Project, target: aegis_model::ItemRef) -> Vec<Choice<ControlId>> {
+    project
+        .security_controls()
+        .filter(|(c_idx, _, _)| !project.control_targets(*c_idx).any(|t| t == target))
+        .map(|(c_idx, cid, c)| Choice {
+            id: cid,
+            visual_id: project.security_control_visual_id(c_idx).unwrap_or_default(),
+            name: c.name().to_owned(),
+        })
+        .collect()
+}
+
 /// The selected component's details.
 #[must_use]
 pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDetail> {
@@ -585,8 +681,13 @@ pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDeta
         }
         true
     };
+    let target = aegis_model::ItemRef::Component(id);
+    let settings = project
+        .controls_applied_to(target)
+        .filter_map(|(c_idx, _, _)| setting_row(project, c_idx, false, ""))
+        .collect();
     Some(ComponentDetail {
-        steps: crate::view::steps_through(project, aegis_model::ItemRef::Component(id)),
+        steps: crate::view::steps_through(project, target),
         id,
         visual_id: project.component_visual_id(idx).unwrap_or_default(),
         name: c.name().to_owned(),
@@ -620,6 +721,8 @@ pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDeta
                 target: Selection::Asset(aid),
             })
             .collect(),
+        settings,
+        available_controls: available_controls_for(project, target),
         changed: changed_text(c.provenance()),
     })
 }
@@ -654,15 +757,33 @@ pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDeta
     let m = project.methodology();
     let idx = project.interface_idx(&id)?;
     let i = project.interface(idx)?;
+    let component = project.component_id(i.component())?;
+    let component_name = project
+        .component(i.component())
+        .map_or_else(String::new, |c| c.name().to_owned());
+    let target = aegis_model::ItemRef::Interface(id);
+    let direct_indices: Vec<aegis_model::ControlIdx> = project
+        .controls_applied_to(target)
+        .map(|(c_idx, _, _)| c_idx)
+        .collect();
+    let mut settings: Vec<SettingRow> = direct_indices
+        .iter()
+        .filter_map(|&c_idx| setting_row(project, c_idx, false, ""))
+        .collect();
+    for (c_idx, _, _) in project.controls_applied_to(aegis_model::ItemRef::Component(component)) {
+        if !direct_indices.contains(&c_idx)
+            && let Some(row) = setting_row(project, c_idx, true, &component_name)
+        {
+            settings.push(row);
+        }
+    }
     Some(InterfaceDetail {
-        steps: crate::view::steps_through(project, aegis_model::ItemRef::Interface(id)),
+        steps: crate::view::steps_through(project, target),
         id,
         visual_id: project.interface_visual_id(idx).unwrap_or_default(),
         name: i.name().to_owned(),
-        component: project.component_id(i.component())?,
-        component_name: project
-            .component(i.component())
-            .map_or_else(String::new, |c| c.name().to_owned()),
+        component,
+        component_name,
         kind: m.interface_kinds().position(|k| k == i.kind()).unwrap_or(0),
         flows: project
             .data_flows()
@@ -678,6 +799,8 @@ pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDeta
                 target: Selection::DataFlow(df_id),
             })
             .collect(),
+        settings,
+        available_controls: available_controls_for(project, target),
         changed: changed_text(i.provenance()),
     })
 }
@@ -1317,6 +1440,10 @@ pub struct ControlDetail {
     pub visual_id: String,
     /// Name.
     pub name: String,
+    /// Components and interfaces this control is applied to (CFG-03).
+    pub targets: Vec<LinkRow>,
+    /// Attack-type feasibility ceiling rules (CFG-03).
+    pub rules: Vec<ControlRuleView>,
     /// Where it is attached: step, tree and the cap.
     pub steps: Vec<LinkRow>,
     /// Goals that list it.
@@ -1332,18 +1459,20 @@ fn control_uses(project: &Project, c_idx: aegis_model::ControlIdx) -> Vec<LinkRo
         let title = tree.get(tree.root()).map_or("", |n| n.label());
         let tree_vis = project.attack_tree_visual_id(t_idx).unwrap_or_default();
         for (n_idx, _, node) in tree.iter() {
-            for s in project.step_mitigations(t_idx, n_idx) {
-                if s.control() == c_idx {
-                    out.push(LinkRow {
-                        visual_id: tree_vis.clone(),
-                        label: node.label().to_owned(),
-                        detail: format!(
-                            "in \"{title}\", caps feasibility at {}",
-                            feasibility_label(m, s.feasibility())
-                        ),
-                        target: Selection::Tree(tree_id),
-                    });
-                }
+            if let Some(s) = project
+                .step_ceilings(t_idx, n_idx)
+                .into_iter()
+                .find(|s| s.control() == c_idx)
+            {
+                out.push(LinkRow {
+                    visual_id: tree_vis.clone(),
+                    label: node.label().to_owned(),
+                    detail: format!(
+                        "in \"{title}\", caps feasibility at {}",
+                        feasibility_label(m, s.feasibility())
+                    ),
+                    target: Selection::Tree(tree_id),
+                });
             }
         }
     }
@@ -1357,8 +1486,12 @@ pub fn control_rows(ws: &Workspace) -> Vec<ControlRow> {
     let mut steps = std::collections::HashMap::new();
     for (t_idx, _, tree) in project.attack_trees() {
         for (n_idx, _, _) in tree.iter() {
-            for s in project.step_mitigations(t_idx, n_idx) {
-                *steps.entry(s.control()).or_insert(0usize) += 1;
+            let mut seen = Vec::new();
+            for s in project.step_ceilings(t_idx, n_idx) {
+                if !seen.contains(&s.control()) {
+                    seen.push(s.control());
+                    *steps.entry(s.control()).or_insert(0usize) += 1;
+                }
             }
         }
     }
@@ -1384,12 +1517,52 @@ pub fn control_rows(ws: &Workspace) -> Vec<ControlRow> {
 #[must_use]
 pub fn control_detail(ws: &Workspace, id: ControlId) -> Option<ControlDetail> {
     let project = ws.project();
+    let m = project.methodology();
     let idx = project.security_control_idx(&id)?;
     let c = project.security_control(idx)?;
+    let targets = project
+        .control_targets(idx)
+        .filter_map(|target| match target {
+            aegis_model::ItemRef::Component(cid) => {
+                let c_idx = project.component_idx(&cid)?;
+                let comp = project.component(c_idx)?;
+                Some(LinkRow {
+                    visual_id: project.component_visual_id(c_idx).unwrap_or_default(),
+                    label: comp.name().to_owned(),
+                    detail: "Component".to_owned(),
+                    target: Selection::Component(cid),
+                })
+            }
+            aegis_model::ItemRef::Interface(iid) => {
+                let i_idx = project.interface_idx(&iid)?;
+                let iface = project.interface(i_idx)?;
+                let owner = project
+                    .component(iface.component())
+                    .map_or("?", |comp| comp.name());
+                Some(LinkRow {
+                    visual_id: project.interface_visual_id(i_idx).unwrap_or_default(),
+                    label: format!("{owner} / {}", iface.name()),
+                    detail: "Interface".to_owned(),
+                    target: Selection::Interface(iid),
+                })
+            }
+        })
+        .collect();
+    let rules = m
+        .attack_types()
+        .enumerate()
+        .map(|(pos, at)| ControlRuleView {
+            attack_type: pos,
+            label: m.attack_type_label(at).unwrap_or("?").to_owned(),
+            level: c.rule_for(at).and_then(|l| feasibility_position(m, l)),
+        })
+        .collect();
     Some(ControlDetail {
         id,
         visual_id: project.security_control_visual_id(idx).unwrap_or_default(),
         name: c.name().to_owned(),
+        targets,
+        rules,
         steps: control_uses(project, idx),
         goals: project
             .cybersecurity_goals()

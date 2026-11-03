@@ -74,6 +74,9 @@ pub struct NodeStyle {
     pub ghost: bool,
     /// What a step goes through, `ADAS ECU / JTAG`, shown as a chip (CFG-01).
     pub via: Option<String>,
+    /// What caps a step's feasibility, `Secure boot on ADAS ECU`, shown as a
+    /// shield badge and spoken to screen readers (CFG-04).
+    pub capped: Option<String>,
 }
 
 /// A connection between two nodes.

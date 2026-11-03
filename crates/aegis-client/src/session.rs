@@ -2650,21 +2650,28 @@ impl<P: CredentialProvider> Actor<P> {
         if ops.is_empty() {
             return true;
         }
+        let setting_snap = (origin == Origin::Edit)
+            .then(|| setting_toast_before(&open.ws, &ops))
+            .flatten();
         match open.ws.apply_labeled(ops, origin, label) {
             Ok(()) => {
                 open.cached_scene = None;
                 open.cached_lint_count = None;
-                // UI-10.9: a removal happens at once; the toast says what was
-                // removed and offers the way back.
-                let removed = (origin == Origin::Edit)
-                    .then(|| {
-                        open.ws
-                            .undo_label()
-                            .filter(|l| l.is_removal() || l.is_bulk())
-                            .map(Label::past)
-                    })
-                    .flatten();
-                if let Some(text) = removed {
+                let toast = if let Some(snap) = setting_snap {
+                    Some(setting_toast_after(&open.ws, snap))
+                } else {
+                    // UI-10.9: a removal happens at once; the toast says what was
+                    // removed and offers the way back.
+                    (origin == Origin::Edit)
+                        .then(|| {
+                            open.ws
+                                .undo_label()
+                                .filter(|l| l.is_removal() || l.is_bulk())
+                                .map(Label::past)
+                        })
+                        .flatten()
+                };
+                if let Some(text) = toast {
                     self.notice_with(Severity::Info, text, Some(NoticeAction::Undo));
                 }
                 self.pump();
@@ -3353,5 +3360,160 @@ fn settings_view(s: &pb::ServerSettings) -> ServerSettingsView {
     ServerSettingsView {
         password_login_enabled: s.password_login_enabled,
         company_login_available: s.company_login_available,
+    }
+}
+
+struct SettingSnapshot {
+    lead: String,
+    control: aegis_model::ControlId,
+    risks: Vec<(aegis_model::ThreatId, Option<aegis_model::RiskLevel>)>,
+}
+
+fn setting_toast_before(ws: &Workspace, ops: &[aegis_model::Op]) -> Option<SettingSnapshot> {
+    use aegis_model::Op;
+    if ops.iter().any(|op| {
+        matches!(
+            op,
+            Op::RemoveComponent { .. }
+                | Op::RemoveInterface { .. }
+                | Op::RemoveSecurityControl { .. }
+        )
+    }) {
+        return None;
+    }
+    let project = ws.project();
+    let cname_of = |id: aegis_model::ControlId| -> Option<String> {
+        project
+            .security_control_idx(&id)
+            .and_then(|i| project.security_control(i))
+            .map(|c| c.name().to_owned())
+            .or_else(|| {
+                ops.iter().find_map(|op| match op {
+                    Op::AddSecurityControl { id: cid, name, .. } if *cid == id => {
+                        Some(name.to_string())
+                    }
+                    _ => None,
+                })
+            })
+    };
+    let (lead, control) = if let Some(Op::ApplyControl {
+        control, target, ..
+    }) = ops.iter().find(|op| matches!(op, Op::ApplyControl { .. }))
+    {
+        (
+            format!(
+                "Applied '{}' to {}",
+                cname_of(*control)?,
+                crate::view::through_label(project, *target)
+            ),
+            *control,
+        )
+    } else if let Some(Op::UnapplyControl {
+        control, target, ..
+    }) = ops
+        .iter()
+        .find(|op| matches!(op, Op::UnapplyControl { .. }))
+    {
+        (
+            format!(
+                "Removed '{}' from {}",
+                cname_of(*control)?,
+                crate::view::through_label(project, *target)
+            ),
+            *control,
+        )
+    } else if let Some(Op::SetControlRule { control, .. }) = ops
+        .iter()
+        .find(|op| matches!(op, Op::SetControlRule { .. }))
+    {
+        (format!("Updated rules of '{}'", cname_of(*control)?), *control)
+    } else {
+        return None;
+    };
+    let risks = project
+        .threat_scenarios()
+        .map(|(_, tid, _)| {
+            (
+                tid,
+                ws.cache()
+                    .evaluate_residual_risk(project, tid)
+                    .ok()
+                    .and_then(aegis_model::ThreatRisk::max_risk),
+            )
+        })
+        .collect();
+    Some(SettingSnapshot {
+        lead,
+        control,
+        risks,
+    })
+}
+
+fn setting_toast_after(ws: &Workspace, snap: SettingSnapshot) -> String {
+    let project = ws.project();
+    let m = project.methodology();
+    let c_idx = project.security_control_idx(&snap.control);
+    let mut capped = 0usize;
+    for (t_idx, _, tree) in project.attack_trees() {
+        for (n_idx, _, _) in tree.iter() {
+            if project
+                .effective_step_feasibility(t_idx, n_idx)
+                .zip(project.residual_step_feasibility(t_idx, n_idx))
+                .is_some_and(|(inh, res)| res < inh)
+                && c_idx.is_none_or(|cid| {
+                    project
+                        .step_ceilings(t_idx, n_idx)
+                        .iter()
+                        .any(|c| c.control() == cid)
+                })
+            {
+                capped += 1;
+            }
+        }
+    }
+    let mut moved = Vec::new();
+    for (tid, before_r) in snap.risks {
+        let after_r = ws
+            .cache()
+            .evaluate_residual_risk(project, tid)
+            .ok()
+            .and_then(aegis_model::ThreatRisk::max_risk);
+        if before_r != after_r {
+            let vis = project
+                .threat_scenario_idx(&tid)
+                .and_then(|i| project.threat_scenario_visual_id(i))
+                .unwrap_or_default();
+            let b_txt = before_r
+                .and_then(|l| m.risk_level_label(l))
+                .unwrap_or("unrated");
+            let a_txt = after_r
+                .and_then(|l| m.risk_level_label(l))
+                .unwrap_or("unrated");
+            let lowered = before_r.zip(after_r).is_some_and(|(b, a)| a < b);
+            moved.push((vis, b_txt, a_txt, lowered));
+        }
+    }
+    let step_word = if capped == 1 { "step" } else { "steps" };
+    if moved.is_empty() {
+        format!("{}: {capped} {step_word} capped, no risk moved", snap.lead)
+    } else {
+        let n = moved.len();
+        let risk_word = if n == 1 { "risk" } else { "risks" };
+        let dir = if moved.iter().all(|m| m.3) {
+            "lowered"
+        } else if moved.iter().all(|m| !m.3) {
+            "raised"
+        } else {
+            "moved"
+        };
+        let details = moved
+            .iter()
+            .map(|(vis, b, a, _)| format!("{vis} {b} \u{2192} {a}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{}: {capped} {step_word} capped, {n} {risk_word} {dir} ({details})",
+            snap.lead
+        )
     }
 }
