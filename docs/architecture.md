@@ -2061,6 +2061,45 @@ reject gates (`NotAStep`) and return their exact inverse.
 - Snapshot: per tree, `step_via` (node to `{"component": id}` or
   `{"interface": id}`) and `step_attack_type` (node to key), both omitted when
   empty. Op log: `SetStepVia`, `SetStepAttackType`.
-- Nothing reads them for evaluation yet. Job 123 (settings with rules) must
-  mark a step dirty in the incremental cache when either changes (the arm
-  next to `Op::SetStepMitigation` in `ProjectEvalCache`).
+- `ProjectEvalCache::update` marks a step dirty when either `SetStepVia` or
+  `SetStepAttackType` changes, because applied control rules depend on both.
+
+## Security settings on components and interfaces (job 123, CFG-03 to CFG-05, CFG-08; D26)
+
+A `SecurityControl` can be applied as a security setting to components and
+interfaces (`Op::ApplyControl`, `Op::UnapplyControl`, `ItemRef`, up to
+`MAX_CONTROL_TARGETS = 64` per control) and can carry feasibility ceiling
+rules by attack type (`Op::SetControlRule`, `AttackType -> Option<FeasibilityLevel>`,
+up to `MAX_CONTROL_RULES = 16` per control). Both lists are kept sorted on
+`SecurityControl` so two projects that applied the same targets or rules in
+different orders compare equal.
+
+- **Residual step feasibility** is derived and never stored:
+  $$\text{residual}(s) = \min\!\big(\text{inherent}(s),\; \text{manual mitigations}(s),\; \text{matching control ceilings}(s)\big)$$
+  A control's rule for attack type $t$ caps step $s$ when $s$ has attack type
+  $t$ and $s$'s `via` item is either:
+  - `ItemRef::Component(c)` and the control is applied to `Component(c)` (a
+    control applied only to an interface of `c` does **not** cap steps via `c`
+    as a whole), or
+  - `ItemRef::Interface(i)` and the control is applied to `Interface(i)` or to
+    `i`'s owning `Component(c)`.
+- **Explain-why (`Project::step_ceilings`)**: returns every `StepCeiling`
+  (`control`, `feasibility`, `source: Option<ItemRef>` where `None` is a
+  manual step mitigation and `Some(target)` is an applied setting) that applies
+  to a step, sorted with the lowest (deciding) feasibility ceiling first.
+- **Incremental cache (`ProjectEvalCache::update`)**: `SetStepVia` and
+  `SetStepAttackType` mark the single step dirty; `ApplyControl`,
+  `UnapplyControl` and `SetControlRule` mark every step whose `via` item can be
+  reached by the control dirty (`mark_control_steps_dirty`).
+- **Exact inverses and removal guards**: `RemoveComponent` and
+  `RemoveInterface` reject while any control is applied to them
+  (`ComponentHasControls`, `InterfaceHasControls`); `RemoveControl` rejects
+  while applied to any target (`ControlInUse`) or while it still has rules
+  (`ControlHasRules`). The client's removal batches unapply controls and clear
+  rules first in one undo step.
+- **Lints**: `SecurityControlUnused` counts a control as used when it mitigates
+  a step, is in a goal, or is applied to a component or interface.
+  `ReduceTreatmentWithoutControls` accepts a reduce-treated threat when any
+  step of its tree is capped by a manual mitigation or an applied setting.
+  `StepWithoutVia` warns when a project has applied settings with rules and a
+  rated step has no `via` item or no `attack_type`.
