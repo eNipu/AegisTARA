@@ -788,6 +788,7 @@ export component Choice inherits VerticalLayout {
     in property <int> index;
     in property <bool> editable: true;
     in property <string> label;
+    in-out property <bool> has-focus: false;
     callback picked(int);
     public function focus-box() { box.focus(); }
 
@@ -797,6 +798,7 @@ export component Choice inherits VerticalLayout {
         enabled: root.editable;
         accessible-label: root.label;
         selected(v) => { root.picked(self.current-index); }
+        changed has-focus => { root.has-focus = self.has-focus; }
     }
     changed index => { box.current-index = root.index; }
     changed options => { box.current-index = root.index; }
@@ -1690,6 +1692,8 @@ export component SettingsSection inherits VerticalLayout {
     in property <[string]> ceiling-options;
     in property <bool> editable: true;
     in-out property <int> pick-index: 0;
+    // Whether the "Add setting" list has the keyboard (read by tests).
+    in-out property <bool> pick-focused;
     in-out property <bool> drafting-custom: false;
     in-out property <string> custom-name: "";
     callback apply-control(int);
@@ -1758,6 +1762,7 @@ export component SettingsSection inherits VerticalLayout {
             index: root.pick-index;
             editable: root.editable;
             label: @tr("Add setting");
+            has-focus <=> root.pick-focused;
             picked(i) => { root.pick-index = i; }
         }
         Button {
@@ -1791,7 +1796,13 @@ export component SettingsSection inherits VerticalLayout {
             }
         }
         SectionTitle { text: @tr("Rules"); }
-        RulesTable {
+        if root.custom-rules.length == 0: Text {
+            text: @tr("No attack types here, so a setting has no rules.");
+            color: Theme.graphite;
+            font-size: Theme.font-label;
+            wrap: word-wrap;
+        }
+        if root.custom-rules.length > 0: RulesTable {
             rules: root.custom-rules;
             ceiling-options: root.ceiling-options;
             editable: root.editable;
