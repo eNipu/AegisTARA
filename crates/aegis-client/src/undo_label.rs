@@ -370,9 +370,7 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::RenameSecurityControl { id, .. } => ("rename", "security control", control(id)),
         Op::ApplyControl { control: c, .. } => ("apply", "security control", control(c)),
         Op::UnapplyControl { control: c, .. } => ("unapply", "security control", control(c)),
-        Op::SetControlRule { control: c, .. } => {
-            ("change", "rule of security control", control(c))
-        }
+        Op::SetControlRule { control: c, .. } => ("change", "rule of security control", control(c)),
         Op::RemoveSecurityControl { id } => ("remove", "security control", control(id)),
         Op::AddCybersecurityGoal { name, .. } => ("add", "cybersecurity goal", some(name)),
         Op::RenameCybersecurityGoal { id, .. } => ("rename", "cybersecurity goal", goal(id)),

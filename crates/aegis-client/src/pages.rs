@@ -642,7 +642,9 @@ fn setting_row(
     let c = project.security_control(c_idx)?;
     Some(SettingRow {
         id,
-        visual_id: project.security_control_visual_id(c_idx).unwrap_or_default(),
+        visual_id: project
+            .security_control_visual_id(c_idx)
+            .unwrap_or_default(),
         name: c.name().to_owned(),
         rules: format_control_rules(project, c),
         inherited,
@@ -650,13 +652,18 @@ fn setting_row(
     })
 }
 
-fn available_controls_for(project: &Project, target: aegis_model::ItemRef) -> Vec<Choice<ControlId>> {
+fn available_controls_for(
+    project: &Project,
+    target: aegis_model::ItemRef,
+) -> Vec<Choice<ControlId>> {
     project
         .security_controls()
         .filter(|(c_idx, _, _)| !project.control_targets(*c_idx).any(|t| t == target))
         .map(|(c_idx, cid, c)| Choice {
             id: cid,
-            visual_id: project.security_control_visual_id(c_idx).unwrap_or_default(),
+            visual_id: project
+                .security_control_visual_id(c_idx)
+                .unwrap_or_default(),
             name: c.name().to_owned(),
         })
         .collect()
