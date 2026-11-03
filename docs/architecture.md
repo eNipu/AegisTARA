@@ -516,9 +516,20 @@ classDiagram
 
     class SecurityControl {
         -name: Arc~str~
+        -targets: Vec~ItemIdx~
+        -rules: Vec~ControlRule~
         -provenance: Provenance
         +name() &str
+        +rules() &[ControlRule]
+        +rule_for(attack_type: AttackType) Option~FeasibilityLevel~
         +provenance() &Provenance
+    }
+
+    class ControlRule {
+        -attack_type: AttackType
+        -ceiling: FeasibilityLevel
+        +attack_type() AttackType
+        +ceiling() FeasibilityLevel
     }
 
     class StepMitigation {
@@ -575,6 +586,7 @@ classDiagram
     Arena o-- CybersecurityClaim
     TreeEntry *-- AttackTree
     TreeEntry *-- StepMitigation
+    SecurityControl *-- ControlRule
 ```
 
 ---
@@ -2066,40 +2078,78 @@ reject gates (`NotAStep`) and return their exact inverse.
 
 ## Security settings on components and interfaces (job 123, CFG-03 to CFG-05, CFG-08; D26)
 
-A `SecurityControl` can be applied as a security setting to components and
-interfaces (`Op::ApplyControl`, `Op::UnapplyControl`, `ItemRef`, up to
-`MAX_CONTROL_TARGETS = 64` per control) and can carry feasibility ceiling
-rules by attack type (`Op::SetControlRule`, `AttackType -> Option<FeasibilityLevel>`,
-up to `MAX_CONTROL_RULES = 16` per control). Both lists are kept sorted on
-`SecurityControl` so two projects that applied the same targets or rules in
-different orders compare equal.
+A setting is a `SecurityControl` that is applied to components and interfaces
+and carries feasibility ceilings per attack type. No new entity was added; the
+control gained two sorted lists (`control.rs`):
 
-- **Residual step feasibility** is derived and never stored:
-  $$\text{residual}(s) = \min\!\big(\text{inherent}(s),\; \text{manual mitigations}(s),\; \text{matching control ceilings}(s)\big)$$
-  A control's rule for attack type $t$ caps step $s$ when $s$ has attack type
-  $t$ and $s$'s `via` item is either:
-  - `ItemRef::Component(c)` and the control is applied to `Component(c)` (a
-    control applied only to an interface of `c` does **not** cap steps via `c`
-    as a whole), or
-  - `ItemRef::Interface(i)` and the control is applied to `Interface(i)` or to
-    `i`'s owning `Component(c)`.
-- **Explain-why (`Project::step_ceilings`)**: returns every `StepCeiling`
-  (`control`, `feasibility`, `source: Option<ItemRef>` where `None` is a
-  manual step mitigation and `Some(target)` is an applied setting) that applies
-  to a step, sorted with the lowest (deciding) feasibility ceiling first.
-- **Incremental cache (`ProjectEvalCache::update`)**: `SetStepVia` and
-  `SetStepAttackType` mark the single step dirty; `ApplyControl`,
-  `UnapplyControl` and `SetControlRule` mark every step whose `via` item can be
-  reached by the control dirty (`mark_control_steps_dirty`).
-- **Exact inverses and removal guards**: `RemoveComponent` and
-  `RemoveInterface` reject while any control is applied to them
-  (`ComponentHasControls`, `InterfaceHasControls`); `RemoveControl` rejects
-  while applied to any target (`ControlInUse`) or while it still has rules
-  (`ControlHasRules`). The client's removal batches unapply controls and clear
-  rules first in one undo step.
-- **Lints**: `SecurityControlUnused` counts a control as used when it mitigates
-  a step, is in a goal, or is applied to a component or interface.
-  `ReduceTreatmentWithoutControls` accepts a reduce-treated threat when any
-  step of its tree is capped by a manual mitigation or an applied setting.
-  `StepWithoutVia` warns when a project has applied settings with rules and a
-  rated step has no `via` item or no `attack_type`.
+- `targets: Vec<ItemIdx>` (`Op::ApplyControl`, `Op::UnapplyControl`, up to
+  `MAX_CONTROL_TARGETS = 64`; `DuplicateControlTarget`, `ControlTargetNotLinked`,
+  `TooManyControlTargets`).
+- `rules: Vec<ControlRule>` (`ControlRule { attack_type, ceiling }`,
+  `Op::SetControlRule { control, attack_type, ceiling: Option<_> }`, `None`
+  removes the rule, up to `MAX_CONTROL_RULES = 16`, `TooManyControlRules`).
+
+Both lists are kept sorted, so two projects reached by different op orders
+compare equal, and both inverses are exact (the old value, or the opposite op).
+
+**Residual step feasibility** is derived and never stored:
+
+$$\text{residual}(s) = \min\big(\text{inherent}(s),\ \text{manual mitigations}(s),\ \text{rule ceilings}(s)\big)$$
+
+A rule of control $c$ for attack type $t$ caps step $s$ when $s$ has attack
+type $t$ and $c$ is applied to the step's `via` item, or, when `via` is an
+interface, to the component that owns it. Settings do not flow to child
+components, and a control applied only to an interface does not cap steps
+that go through its component as a whole. `Project::residual_step_feasibility`
+is a minimum over at most 16 mitigations plus the rules of the controls on
+two items.
+
+**Explain-why**: `Project::step_ceilings(tree, node)` returns every
+`StepCeiling` (`control()`, `control_id()`, `feasibility()`, `source()`) with
+the deciding (lowest) one first. `source()` is a `CeilingSource`:
+`StepMitigation` (attached to the step itself) or
+`ControlRule { target, attack_type }` (which item the setting is applied to
+and which attack type matched). Names are looked up by the client, never
+stored in the model (R6).
+
+**Incremental cache** (`ProjectEvalCache::update`): `SetStepVia` and
+`SetStepAttackType` mark the one step dirty (the two arms that were no-ops
+in job 122, now next to `SetStepMitigation`). `ApplyControl` and
+`UnapplyControl` call `update_control_target`, which marks the steps whose
+via is the target, or an interface of the target. `SetControlRule` calls
+`update_control_rule`, which marks the steps with that attack type reached by
+the control. Cost is O(steps with a via) per op, and a property test checks
+that the cache agrees with a full evaluation.
+
+**Removal guards** keep every inverse exact (the 122 pattern):
+`RemoveComponent` and `RemoveInterface` are rejected while a control is applied
+to them (`ComponentHasControls`, `InterfaceHasControls`);
+`RemoveSecurityControl` is rejected while it has targets or rules
+(`SecurityControlHasTargets`, `SecurityControlHasRules`) as well as while
+steps or goals use it. The client's remove batches unapply and clear first,
+in one undo step (`RemoveComponent`, `RemoveInterface`, `RemoveControl`), and
+`DuplicateControl` copies rules but not targets.
+
+**Lints**: `SecurityControlUnused` fires only when a control has no step
+mitigations, no goal link and no targets. `ReduceTreatmentWithoutControls`
+accepts a step ceiling from a rule as well as a manual mitigation. There is
+no "step without via" finding yet (see the backlog line `123b-settings-gaps`).
+
+**Store**: snapshot controls carry `targets` (a list of `{"component": id}` or
+`{"interface": id}`) and `rules` (attack type key to feasibility key), both
+omitted when empty, so v1 fixtures load unchanged. The op log has
+`ApplyControl`, `UnapplyControl` and `SetControlRule`. Decode caps are
+`Limit::ControlTargets` and `Limit::ControlRules`. The version diff does not
+report targets or rules yet (also `123b`).
+
+**Client and shell**: `Edit::ApplyControl`, `Edit::UnapplyControl`,
+`Edit::SetControlRule` and `Edit::AddCustomSetting` (one batch: add control,
+rules, apply). `ComponentDetail` and `InterfaceDetail` list `settings`
+(`SettingRow`; `inherited` is true on an interface for a setting applied to
+its component) and `available_controls`; `ControlDetail` has `targets` and
+`rules`; the step `Inspector` has `ceilings`; canvas nodes carry
+`NodeStyle::capped` (shield badge) and `NodeAccess::capped` (spoken as
+"Capped by ..."). The undo toast after a settings edit counts the capped steps
+and names the risks whose level moved. The shell adds `SettingsSection` and
+`RulesTable` in `widgets.slint`: a custom setting is an inline draft with a
+rules table, never a modal.
