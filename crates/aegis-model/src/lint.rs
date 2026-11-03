@@ -212,6 +212,15 @@ pub enum LintCode {
         /// The step node whose direct feasibility rating is shadowed.
         node: NodeId,
     },
+    /// A step has an attack type but no "through" item, or a "through" item
+    /// but no attack type, while some security control carries rules. Such a
+    /// step can never match a rule, so a setting cannot cap it (CFG-02).
+    StepSettingsIncomplete {
+        /// The attack tree containing the step.
+        tree: TreeId,
+        /// The step missing its "through" item or its attack type.
+        node: NodeId,
+    },
     /// A security control in the project is not attached to any attack step.
     SecurityControlUnused {
         /// The unused security control.
@@ -277,6 +286,7 @@ impl LintCode {
             | Self::AttackTreeStepIncompleteFactors { .. }
             | Self::RedundantStepFeasibility { .. }
             | Self::SecurityControlUnused { .. }
+            | Self::StepSettingsIncomplete { .. }
             | Self::ReduceTreatmentWithoutGoal { .. }
             | Self::RetainOrShareTreatmentWithoutClaim { .. }
             | Self::GoalOnNonReduceThreat { .. }
@@ -296,6 +306,8 @@ impl LintCode {
 }
 
 impl fmt::Display for LintCode {
+    // One arm per lint code, so the length follows the number of codes.
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AssetWithoutThreats { asset } => {
@@ -354,6 +366,12 @@ impl fmt::Display for LintCode {
                 f,
                 "attack tree {tree} step {node} has a direct feasibility rating shadowed by its attack potential factors"
             ),
+            Self::StepSettingsIncomplete { tree, node } => {
+                write!(
+                    f,
+                    "attack tree {tree} step {node} lacks a through item or an attack type"
+                )
+            }
             Self::SecurityControlUnused { control } => write!(
                 f,
                 "security control {control} is not attached to any attack step"

@@ -797,6 +797,164 @@ fn lints_count_applied_controls_and_active_rule_ceilings() {
     assert!(!after_rule.contains(&LintCode::ReduceTreatmentWithoutControls { threat }));
 }
 
+/// A step with an attack type but no through item (or the reverse) can never
+/// match a rule, so it is flagged, but only once some control carries rules.
+#[test]
+fn a_step_with_only_a_through_item_or_only_a_type_is_flagged_when_rules_exist() {
+    let mut fx = reach_fixture();
+    let ctrl = ControlId::new_v7();
+    let incomplete = |p: &Project| -> Vec<NodeId> {
+        p.lint()
+            .into_iter()
+            .filter_map(|f| match f.code() {
+                LintCode::StepSettingsIncomplete { node, .. } => Some(node),
+                _ => None,
+            })
+            .collect()
+    };
+    let set_type = |p: &mut Project, tree, node, attack_type| {
+        p.apply(Op::SetStepAttackType {
+            tree,
+            node,
+            attack_type,
+            provenance: Provenance::default(),
+        })
+        .expect("type");
+    };
+    let set_via = |p: &mut Project, tree, node, via| {
+        p.apply(Op::SetStepVia {
+            tree,
+            node,
+            via,
+            provenance: Provenance::default(),
+        })
+        .expect("via");
+    };
+
+    // No control has rules yet: a half-filled step is not a problem.
+    set_type(&mut fx.project, fx.tree, fx.s_jtag, None);
+    assert!(incomplete(&fx.project).is_empty());
+
+    for op in [
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: "Debug lock".into(),
+            provenance: Provenance::default(),
+        },
+        Op::SetControlRule {
+            control: ctrl,
+            attack_type: fx.t_debug,
+            ceiling: Some(fx.f_low),
+            provenance: Provenance::default(),
+        },
+    ] {
+        fx.project.apply(op).expect("control");
+    }
+    // A through item without a type: flagged, and only that step.
+    assert_eq!(incomplete(&fx.project), vec![fx.s_jtag]);
+
+    // A type without a through item: flagged too.
+    set_via(&mut fx.project, fx.tree, fx.s_can, None);
+    let mut flagged = incomplete(&fx.project);
+    flagged.sort();
+    let mut want = vec![fx.s_jtag, fx.s_can];
+    want.sort();
+    assert_eq!(flagged, want);
+
+    // Neither set is simply an unfilled step; both set is complete.
+    set_via(&mut fx.project, fx.tree, fx.s_jtag, None);
+    set_type(&mut fx.project, fx.tree, fx.s_can, None);
+    assert!(incomplete(&fx.project).is_empty());
+    set_via(
+        &mut fx.project,
+        fx.tree,
+        fx.s_jtag,
+        Some(ItemRef::Interface(fx.jtag)),
+    );
+    set_type(&mut fx.project, fx.tree, fx.s_jtag, Some(fx.t_debug));
+    assert!(incomplete(&fx.project).is_empty());
+}
+
+/// The version diff reports a control as changed when it is applied to or
+/// removed from an item or when a rule changes, whatever order the settings
+/// were made in.
+#[test]
+fn the_diff_reports_applied_targets_and_rule_changes() {
+    let fx = reach_fixture();
+    let mut base = fx.project.clone();
+    let ctrl = ControlId::new_v7();
+    let add = Op::AddSecurityControl {
+        id: ctrl,
+        name: "Debug lock".into(),
+        provenance: Provenance::default(),
+    };
+    base.apply(add.clone()).expect("add");
+    let apply = |c: ControlId, i: ItemRef| Op::ApplyControl {
+        control: c,
+        target: i,
+        provenance: Provenance::default(),
+    };
+    let rule = |level| Op::SetControlRule {
+        control: ctrl,
+        attack_type: fx.t_debug,
+        ceiling: level,
+        provenance: Provenance::default(),
+    };
+
+    let mut applied = base.clone();
+    applied
+        .apply(apply(ctrl, ItemRef::Interface(fx.jtag)))
+        .expect("apply");
+    assert_eq!(
+        base.diff(&applied)
+            .expect("diff")
+            .security_controls()
+            .modified(),
+        [ctrl]
+    );
+
+    let mut ruled = base.clone();
+    ruled.apply(rule(Some(fx.f_low))).expect("rule");
+    assert_eq!(
+        base.diff(&ruled)
+            .expect("diff")
+            .security_controls()
+            .modified(),
+        [ctrl]
+    );
+
+    // A different ceiling on the same rule is a change too.
+    let mut ruled_lower = base.clone();
+    ruled_lower.apply(rule(Some(fx.f_very_low))).expect("rule");
+    assert_eq!(
+        ruled
+            .diff(&ruled_lower)
+            .expect("diff")
+            .security_controls()
+            .modified(),
+        [ctrl]
+    );
+
+    // Same settings made in another order: nothing to report.
+    let (mut one, mut two) = (base.clone(), base.clone());
+    for op in [
+        apply(ctrl, ItemRef::Interface(fx.jtag)),
+        apply(ctrl, ItemRef::Component(fx.ecu)),
+        rule(Some(fx.f_low)),
+    ] {
+        one.apply(op).expect("one");
+    }
+    for op in [
+        rule(Some(fx.f_low)),
+        apply(ctrl, ItemRef::Component(fx.ecu)),
+        apply(ctrl, ItemRef::Interface(fx.jtag)),
+    ] {
+        two.apply(op).expect("two");
+    }
+    let diff = one.diff(&two).expect("diff");
+    assert!(diff.security_controls().is_empty());
+}
+
 #[test]
 fn snapshot_and_op_log_round_trip_and_omit_when_empty() {
     let mut fx = reach_fixture();

@@ -15,7 +15,8 @@ use aegis_client::report::{ReportContext, report_html, risk_register_csv, tree_s
 use aegis_client::view::{Selection, UiState, inspector, shown_tree};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ClaimId, ControlId, DamageId, GoalId, Methodology, NodeId, Project, ThreatId, TreeId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, GoalId, ItemRef, Methodology, NodeId,
+    Project, ThreatId, TreeId,
 };
 
 struct Tara {
@@ -1106,4 +1107,127 @@ fn a_batch_edit_is_one_undo_step_and_one_redo() {
     ]);
     assert!(try_apply(&mut t.ws, &bad).is_err());
     assert_eq!(t.ws.project().threat_scenario_count(), 2, "nothing changed");
+}
+
+/// The step that decides the residual feasibility, with a component setting
+/// and a manual mitigation on it: the threat inspector names both, deciding
+/// ceiling first (CFG-05), and the version diff says what changed on the
+/// control.
+#[test]
+fn the_threat_inspector_and_the_diff_show_the_settings_on_the_deciding_step() {
+    let mut t = tara();
+    let (ecu, setting) = (ComponentId::new_v7(), ControlId::new_v7());
+    let step = {
+        let p = t.ws.project();
+        let tree = p
+            .attack_tree(p.attack_tree_idx(&t.tree).expect("tree"))
+            .expect("t");
+        tree.iter()
+            .find(|(_, _, n)| n.label().starts_with("Open"))
+            .map(|(_, id, _)| id)
+            .expect("step")
+    };
+    apply(
+        &mut t.ws,
+        &Edit::AddComponent {
+            id: ecu,
+            name: "Brake ECU".into(),
+            parent: None,
+        },
+    );
+    // Medium by the manual mitigation, Low by the setting; the other path of
+    // the tree stays at Very low, so this step decides the tree.
+    apply(
+        &mut t.ws,
+        &Edit::SetStepMitigation {
+            tree: t.tree,
+            node: step,
+            control: t.control,
+            level: Some(2),
+        },
+    );
+    apply(
+        &mut t.ws,
+        &Edit::SetStepVia {
+            tree: t.tree,
+            node: step,
+            via: Some(ItemRef::Component(ecu)),
+        },
+    );
+    apply(
+        &mut t.ws,
+        &Edit::SetStepAttackType {
+            tree: t.tree,
+            node: step,
+            attack_type: Some(0),
+        },
+    );
+    let before = t.ws.project().clone();
+    let none = threat_detail(&t.ws, t.threat).expect("threat");
+    assert!(
+        !none.why.iter().any(|w| w.contains("capped at Low")),
+        "no setting yet: {:?}",
+        none.why
+    );
+    apply(
+        &mut t.ws,
+        &Edit::AddCustomSetting {
+            id: setting,
+            name: "Diagnostics locked".into(),
+            target: ItemRef::Component(ecu),
+            rules: vec![(0, 1)],
+        },
+    );
+    let d = threat_detail(&t.ws, t.threat).expect("threat");
+    let capped: Vec<&String> = d
+        .why
+        .iter()
+        .filter(|w| w.contains("is capped at"))
+        .collect();
+    assert_eq!(capped.len(), 2, "{:?}", d.why);
+    assert!(
+        capped[0].contains("Open diagnostic session")
+            && capped[0].contains("Low by Diagnostics locked (from Brake ECU)"),
+        "deciding ceiling first: {}",
+        capped[0]
+    );
+    assert!(
+        capped[1].contains("Medium by Authenticated diagnostics (on this step)"),
+        "{}",
+        capped[1]
+    );
+
+    // Version diff: a new control is added; an existing one that gained a
+    // target and a rule says so.
+    apply(
+        &mut t.ws,
+        &Edit::ApplyControl {
+            control: t.control,
+            target: ItemRef::Component(ecu),
+        },
+    );
+    apply(
+        &mut t.ws,
+        &Edit::SetControlRule {
+            control: t.control,
+            attack_type: 1,
+            level: Some(0),
+        },
+    );
+    let c = comparison(&before, "B1", t.ws.project()).expect("compare");
+    assert!(
+        c.lines
+            .iter()
+            .any(|l| l.kind == "Added" && l.text.contains("Diagnostics locked")),
+        "{:?}",
+        c.lines
+    );
+    assert!(
+        c.lines.iter().any(|l| l.kind == "Changed"
+            && l.text.contains("Authenticated diagnostics")
+            && l.text.contains("applied to 1 (was 0)")
+            && l.text.contains("1 rule(s) (was 0)")),
+        "{:?}",
+        c.lines
+    );
 }

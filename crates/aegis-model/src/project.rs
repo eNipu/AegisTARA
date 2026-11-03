@@ -5401,6 +5401,7 @@ impl Project {
             }));
         }
         let factor_count = self.methodology.feasibility_factor_count();
+        let any_rules = self.controls.iter().any(|(_, _, c)| !c.rules().is_empty());
         for (idx, id, entry) in self.trees.iter() {
             if self.refs.trees.get(idx.index()).copied().unwrap_or(0) == 0 {
                 findings.push(LintFinding::new(LintCode::AttackTreeUnlinked { tree: id }));
@@ -5421,6 +5422,15 @@ impl Project {
                             .is_none()
                         {
                             findings.push(LintFinding::new(LintCode::AttackTreeStepUnrated {
+                                tree: id,
+                                node: node_id,
+                            }));
+                        }
+                        if any_rules
+                            && entry.via_at(node_idx.index()).is_some()
+                                != entry.attack_type_at(node_idx.index()).is_some()
+                        {
+                            findings.push(LintFinding::new(LintCode::StepSettingsIncomplete {
                                 tree: id,
                                 node: node_id,
                             }));
