@@ -50,7 +50,10 @@ use serde::ser::{self, Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use super::{Limit, MAX_KEY_BYTES, VocabKind};
 use crate::asset::PropertySet;
-use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment, StepMitigation};
+use crate::control::{
+    MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
+    StepMitigation,
+};
 use crate::error::{PackError, StoreError};
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
@@ -1691,6 +1694,119 @@ pub(super) struct TreeWire {
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
+/// Applied targets of a security control in a snapshot: at most 64
+/// entries ([`MAX_CONTROL_TARGETS`]), no target repeated, never empty
+/// (omit `targets` instead).
+#[derive(Default)]
+pub(super) struct ControlTargetsWire(pub(super) Vec<ItemRef>);
+
+impl<'de> Deserialize<'de> for ControlTargetsWire {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = ControlTargetsWire;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a list of control target items")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<ControlTargetsWire, A::Error> {
+                let mut out: Vec<ItemRef> = Vec::new();
+                while let Some(item) = seq.next_element::<ItemWire>()? {
+                    if out.len() >= MAX_CONTROL_TARGETS {
+                        return Err(raise(Fault::Limit(Limit::CONTROL_TARGETS)));
+                    }
+                    let target = item.unwrap_item();
+                    if out.contains(&target) {
+                        return Err(raise(Fault::Duplicate));
+                    }
+                    out.push(target);
+                }
+                if out.is_empty() {
+                    return Err(de::Error::custom(
+                        "control targets must be omitted when empty",
+                    ));
+                }
+                Ok(ControlTargetsWire(out))
+            }
+        }
+        d.deserialize_seq(V)
+    }
+}
+
+/// Control rules given as an object from attack type key to feasibility
+/// level key: at most 16 entries ([`MAX_CONTROL_RULES`]), no attack type
+/// repeated, each pair resolved as it is read.
+#[derive(Default)]
+pub(super) struct ControlRulesWire(pub(super) Vec<(AttackType, FeasibilityLevel)>);
+
+impl<'de> Deserialize<'de> for ControlRulesWire {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = ControlRulesWire;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object of control rules")
+            }
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<ControlRulesWire, A::Error> {
+                let m = context().map_err(raise)?;
+                let mut out = Vec::new();
+                let mut seen = 0u64;
+                let mut count = 0usize;
+                let mut pending = None;
+                while let Some(attack_type) = map.next_key_seed(WithStr::new(|s: &str| {
+                    check_key_len(s)?;
+                    Ok(note_unknown(
+                        m.attack_type(s),
+                        VocabKind::AttackType,
+                        s,
+                        &mut pending,
+                    ))
+                }))? {
+                    count += 1;
+                    if count > MAX_CONTROL_RULES {
+                        return Err(raise(Fault::Limit(Limit::CONTROL_RULES)));
+                    }
+                    if let Some(t) = attack_type {
+                        let bit = u32::try_from(t.index())
+                            .ok()
+                            .and_then(|i| 1u64.checked_shl(i))
+                            .unwrap_or(0);
+                        if bit == 0 || seen & bit != 0 {
+                            return Err(raise(Fault::Duplicate));
+                        }
+                        seen |= bit;
+                    }
+                    let level = map.next_value_seed(WithStr::new(|s: &str| {
+                        check_key_len(s)?;
+                        Ok(note_unknown(
+                            m.feasibility_level(s),
+                            VocabKind::FeasibilityLevel,
+                            s,
+                            &mut pending,
+                        ))
+                    }))?;
+                    if let (Some(t), Some(l)) = (attack_type, level) {
+                        out.push((t, l));
+                    }
+                }
+                match pending {
+                    Some(fault) => Err(raise(fault)),
+                    None if count == 0 => Err(de::Error::custom(
+                        "control rules must be omitted when empty",
+                    )),
+                    None => Ok(ControlRulesWire(out)),
+                }
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
 /// A snapshot security control.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1699,6 +1815,10 @@ pub(super) struct ControlWire {
     #[serde(default, deserialize_with = "some")]
     pub(super) visual_id: Option<WireVisual<ControlVisual>>,
     pub(super) name: Name,
+    #[serde(default)]
+    pub(super) targets: ControlTargetsWire,
+    #[serde(default)]
+    pub(super) rules: ControlRulesWire,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -2060,6 +2180,26 @@ pub(super) enum OpWire {
     RemoveSecurityControl {
         id: WireId<ControlId>,
     },
+    ApplyControl {
+        control: WireId<ControlId>,
+        target: ItemWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnapplyControl {
+        control: WireId<ControlId>,
+        target: ItemWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetControlRule {
+        control: WireId<ControlId>,
+        attack_type: AttackTypeKey,
+        #[serde(deserialize_with = "Option::deserialize")]
+        ceiling: Option<FeasibilityLevelKey>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetStepMitigation {
         tree: WireId<TreeId>,
         node: WireId<NodeId>,
@@ -2280,6 +2420,8 @@ pub(super) struct KeyOrder {
     catalog_schemes: Vec<CatalogScheme>,
     /// Feasibility factors sorted by key.
     feasibility_factors: Vec<FeasibilityFactor>,
+    /// Attack types sorted by key.
+    attack_types: Vec<AttackType>,
 }
 
 impl KeyOrder {
@@ -2298,12 +2440,15 @@ impl KeyOrder {
         catalog_schemes.sort_by_key(|&s| m.catalog_scheme_key(s));
         let mut feasibility_factors: Vec<FeasibilityFactor> = m.feasibility_factors().collect();
         feasibility_factors.sort_by_key(|&f| m.feasibility_factor_key(f));
+        let mut attack_types: Vec<AttackType> = m.attack_types().collect();
+        attack_types.sort_by_key(|&t| m.attack_type_key(t));
         KeyOrder {
             property_rank,
             properties,
             impact_categories,
             catalog_schemes,
             feasibility_factors,
+            attack_types,
         }
     }
 
@@ -2779,6 +2924,65 @@ impl Serialize for StepAttackTypeByNode<'_> {
             if let Some(t) = self.project.step_attack_type(self.tree_idx, node_idx) {
                 map.serialize_entry(&Text(node_id), &Required(m.attack_type_key(t)))?;
             }
+        }
+        map.end()
+    }
+}
+
+/// A stored security control's applied targets in canonical `ItemRef`
+/// order (`Component` before `Interface`, then by ID). O(T).
+pub(super) struct ControlTargetsByItem<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) control: &'a crate::control::SecurityControl,
+}
+
+impl ControlTargetsByItem<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.control.targets.is_empty()
+    }
+}
+
+impl Serialize for ControlTargetsByItem<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.control
+                .targets
+                .iter()
+                .map(|&t| Required(self.project.item_ref(Some(t)).map(ItemView::of))),
+        )
+    }
+}
+
+/// A stored security control's rules in attack-type key order, as an object
+/// mapping attack-type key to feasibility-level key. O(A + R).
+pub(super) struct ControlRulesByKey<'a> {
+    pub(super) m: &'a Methodology,
+    pub(super) order: &'a KeyOrder,
+    pub(super) control: &'a crate::control::SecurityControl,
+}
+
+impl ControlRulesByKey<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.control.rules().is_empty()
+    }
+}
+
+impl Serialize for ControlRulesByKey<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let rules = self.control.rules();
+        let mut map = s.serialize_map(Some(rules.len()))?;
+        let mut written = 0usize;
+        for &t in &self.order.attack_types {
+            if let Some(level) = self.control.rule_for(t) {
+                map.serialize_entry(
+                    &Required(self.m.attack_type_key(t)),
+                    &Required(self.m.feasibility_level_key(level)),
+                )?;
+                written += 1;
+            }
+        }
+        if written != rules.len() {
+            return Err(ser::Error::custom("control rule not in the methodology"));
         }
         map.end()
     }

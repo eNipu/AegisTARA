@@ -3,6 +3,7 @@
 //!
 //! Built and mutated only through [`Project::apply`](crate::Project::apply).
 
+use std::fmt;
 use std::sync::Arc;
 
 use crate::id::{ComponentId, ComponentIdx, InterfaceId, InterfaceIdx};
@@ -23,14 +24,16 @@ pub const MAX_COMPONENT_DEPTH: usize = 16;
 /// ```
 pub const MAX_TRUST_BOUNDARY_MEMBERS: usize = 64;
 
-/// What an attack step goes through: a component or one of its interfaces
-/// (CFG-01). Public, ID form. A step can go through nothing else, so this is
-/// not [`ElementRef`](crate::ElementRef).
+/// What an attack step goes through or a security control setting targets:
+/// a component or one of its interfaces (CFG-01, CFG-03). Public, ID form.
+/// A step can go through nothing else, so this is not [`ElementRef`](crate::ElementRef).
 ///
 /// ```
 /// use aegis_model::{ComponentId, InterfaceId, ItemRef};
 ///
-/// assert!(ItemRef::Component(ComponentId::new_v7()) < ItemRef::Interface(InterfaceId::new_v7()));
+/// let c = ComponentId::new_v7();
+/// assert!(ItemRef::Component(c) < ItemRef::Interface(InterfaceId::new_v7()));
+/// assert_eq!(ItemRef::Component(c).to_string(), format!("component {c}"));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ItemRef {
@@ -38,6 +41,15 @@ pub enum ItemRef {
     Component(ComponentId),
     /// An interface of a component.
     Interface(InterfaceId),
+}
+
+impl fmt::Display for ItemRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Component(id) => write!(f, "component {id}"),
+            Self::Interface(id) => write!(f, "interface {id}"),
+        }
+    }
 }
 
 /// [`ItemRef`] in the arena index form kept inside a project. 8 bytes.

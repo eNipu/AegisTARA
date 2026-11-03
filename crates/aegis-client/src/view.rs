@@ -790,6 +790,9 @@ pub struct Inspector {
     pub attack_type: Option<usize>,
     /// Controls attached to this step (steps only).
     pub mitigations: Vec<MitigationView>,
+    /// Explain-why ceilings on this step, deciding one first, e.g.
+    /// `JTAG disabled (from ADAS ECU): Very low` (steps only, CFG-04).
+    pub ceilings: Vec<String>,
     /// Controls that can still be attached (steps only).
     pub attachable: Vec<(ControlId, String)>,
     /// The step's feasibility after controls, if they change it.
@@ -952,10 +955,30 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
                 critical: false,
                 ghost: true,
                 via: None,
+                capped: None,
             };
         }
         let value = evaluation.and_then(|e| e.get(idx).copied());
         let is_step = tree.get(idx).is_some_and(|n| n.gate_kind().is_none());
+        let capped = if is_step
+            && project
+                .effective_step_feasibility(tree_idx, idx)
+                .zip(project.residual_step_feasibility(tree_idx, idx))
+                .is_some_and(|(inh, res)| res < inh)
+        {
+            project
+                .step_ceilings(tree_idx, idx)
+                .into_iter()
+                .find_map(|c| match c.source() {
+                    aegis_model::CeilingSource::ControlRule { target, .. } => {
+                        let name = project.security_control(c.control())?.name();
+                        Some(format!("{name} on {}", through_label(project, target)))
+                    }
+                    aegis_model::CeilingSource::StepMitigation => None,
+                })
+        } else {
+            None
+        };
         let score = if is_step {
             let potential = project.step_attack_potential(tree_idx, idx);
             match (potential, value) {
@@ -974,6 +997,7 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
             via: project
                 .step_via(tree_idx, idx)
                 .map(|item| through_label(project, item)),
+            capped,
         }
     };
     let layout_tree = ghost_overlay.as_ref().map_or(tree, |(pt, _)| pt);
@@ -1137,7 +1161,7 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         }
     }
 
-    let (mitigations, attachable, residual) = if is_step {
+    let (mitigations, ceilings, attachable, residual) = if is_step {
         let attached = project.step_mitigations(tree_idx, idx);
         let mitigations: Vec<MitigationView> = attached
             .iter()
@@ -1159,6 +1183,22 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
                 })
             })
             .collect();
+        let ceilings: Vec<String> = project
+            .step_ceilings(tree_idx, idx)
+            .into_iter()
+            .filter_map(|c| {
+                let name = project.security_control(c.control())?.name();
+                let lvl = level_label(m, c.feasibility());
+                Some(match c.source() {
+                    aegis_model::CeilingSource::ControlRule { target, .. } => {
+                        format!("{name} (from {}): {lvl}", through_label(project, target))
+                    }
+                    aegis_model::CeilingSource::StepMitigation => {
+                        format!("{name} (on this step): {lvl}")
+                    }
+                })
+            })
+            .collect();
         let attachable = project
             .security_controls()
             .filter(|(c_idx, _, _)| !attached.iter().any(|s| s.control() == *c_idx))
@@ -1174,9 +1214,9 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         let residual = after
             .filter(|a| Some(*a) != inherent)
             .map(|l| level_label(m, l));
-        (mitigations, attachable, residual)
+        (mitigations, ceilings, attachable, residual)
     } else {
-        (Vec::new(), Vec::new(), None)
+        (Vec::new(), Vec::new(), Vec::new(), None)
     };
 
     let mut through_options = Vec::new();
@@ -1258,6 +1298,7 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         attack_types,
         attack_type,
         mitigations,
+        ceilings,
         attachable,
         residual,
         needs_review: project.review_marked(tree_id, node_id),

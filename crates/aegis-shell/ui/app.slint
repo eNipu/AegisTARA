@@ -10,12 +10,12 @@ import { Theme } from "theme.slint";
 import { AccessNode, Canvas, DrawItem } from "canvas.slint";
 import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectLanguages, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
-    CountItem, DiffItem, ProblemItem, SuggestionItem, Marks, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
-    LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm, Splitter, HSplitter,
+    CountItem, DiffItem, ProblemItem, SuggestionItem, SettingItem, ControlRuleItem, Marks, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
+    LinkList, CheckList, RulesTable, SettingsSection, Tile, Bars, FieldError, DangerButton, DraftForm, Splitter, HSplitter,
     Button, LineEdit, TextEdit, ComboBox, FilterPicker, CheckBox, Switch
 } from "widgets.slint";
 
-export { Marks, ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
+export { Marks, ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem, SettingItem, ControlRuleItem }
 
 // Page numbers, in the order of aegis_client::view::Page::ALL.
 global Pages {
@@ -494,6 +494,9 @@ in property <string> redo-label;
     in property <[string]> treatment-options;
     in property <[string]> catalog-schemes;
     in property <[string]> interface-kinds;
+    in property <string> no-ceiling-label: @tr("No ceiling");
+    in property <string> security-settings-heading: @tr("Security settings");
+    in property <[string]> ceiling-options;
 
     // ---- overview ----
     in property <[CountItem]> ov-counts;
@@ -516,6 +519,15 @@ in property <string> redo-label;
     in property <int> component-parent: 0;
     in property <[LinkItem]> component-interfaces;
     in property <[LinkItem]> component-assets;
+    in property <[SettingItem]> component-settings;
+    in property <[string]> component-available-controls;
+    in property <[SettingItem]> interface-settings;
+    in property <[string]> interface-available-controls;
+    in property <[ControlRuleItem]> custom-setting-rules;
+    in-out property <bool> component-drafting-custom: false;
+    in-out property <string> component-custom-name: "";
+    in-out property <bool> interface-drafting-custom: false;
+    in-out property <string> interface-custom-name: "";
     in property <int> component-steps-count;
     in property <int> interface-steps-count;
     // The "Steps through this" list in the bottom slot (CFG-01).
@@ -675,6 +687,7 @@ in property <string> redo-label;
     in property <[SuggestionItem]> suggestion-rows;
     in property <[string]> attach-names;
     in property <string> step-residual-text;
+    in property <[string]> step-ceilings;
     in-out property <int> attach-control-index: 0;
     in-out property <int> attach-level-index: 0;
     // Where the canvas is in the window, for tests that click on nodes.
@@ -710,6 +723,8 @@ in property <string> redo-label;
     in property <bool> has-control;
     in property <string> control-id;
     in property <string> control-name;
+    in property <[LinkItem]> control-targets;
+    in property <[ControlRuleItem]> control-rules;
     in property <[LinkItem]> control-steps;
     in property <[LinkItem]> control-goals;
     in property <string> control-changed;
@@ -875,11 +890,22 @@ in property <string> redo-label;
     callback rename-component(string);
     callback set-component-parent(int);
     callback remove-component();
+    callback apply-control-to-component(int);
+    callback unapply-control-from-component(int);
+    callback open-component-setting(int);
+    callback begin-component-custom-setting();
+    callback create-component-custom-setting(string);
     callback pick-interface(int);
     callback add-interface(string, int, int);
     callback rename-interface(string);
     callback set-interface-kind(int);
     callback remove-interface();
+    callback apply-control-to-interface(int);
+    callback unapply-control-from-interface(int);
+    callback open-interface-setting(int);
+    callback begin-interface-custom-setting();
+    callback create-interface-custom-setting(string);
+    callback set-custom-setting-rule(int, int);
     callback pick-data-flow(int);
     callback add-data-flow(string, int, int);
     callback rename-data-flow(string);
@@ -971,6 +997,8 @@ in property <string> redo-label;
     callback add-control(string);
     callback rename-control(string);
     callback remove-control();
+    callback control-target-clicked(int);
+    callback set-control-rule(int, int);
     callback control-step-clicked(int);
     callback control-goal-clicked(int);
     callback pick-goal(int);
@@ -2600,6 +2628,11 @@ in property <string> redo-label;
                                     Rectangle { height: 1px; background: Theme.rule; }
                                     SectionTitle { text: @tr("Security controls on this step"); }
                                     if root.step-residual-text != "": Text { text: @tr("After controls: ") + root.step-residual-text; color: Theme.ink; font-size: Theme.font-body; }
+                                    if root.step-ceilings.length > 0: VerticalLayout {
+                                        spacing: 2px;
+                                        SectionTitle { text: @tr("capped by"); }
+                                        for c in root.step-ceilings: Text { text: c; color: Theme.ink; font-size: Theme.font-label; wrap: word-wrap; }
+                                    }
                                     if root.mitigations.length == 0: Text { text: @tr("None."); color: Theme.graphite; font-size: Theme.font-label; }
                                     for mi[mx] in root.mitigations: VerticalLayout {
                                         spacing: 2px;
@@ -2739,16 +2772,34 @@ in property <string> redo-label;
                     }
                     if root.has-control && root.draft-kind != "control": Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Security control") + " · " + root.control-id; }
-                        NameEditor { focus-requested <=> root.focus-name; name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
-                        SectionTitle { text: @tr("Attached to"); }
-                        LinkList { items: root.control-steps; empty-text: @tr("No attack step yet."); clicked(i) => { root.control-step-clicked(i); } }
-                        SectionTitle { text: @tr("Part of goals"); }
-                        LinkList { items: root.control-goals; clicked(i) => { root.control-goal-clicked(i); } }
-                        Text { text: root.control-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
-                        Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove control"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-control(); } }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: 8px;
+                                SectionTitle { text: @tr("Security control") + " · " + root.control-id; }
+                                NameEditor { focus-requested <=> root.focus-name; name: root.control-name; editable: root.editing; renamed(t) => { root.rename-control(t); } }
+                                DescriptionFor { items: root.descriptions; kind: "control"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                                SectionTitle { text: @tr("Applied to"); }
+                                LinkList { items: root.control-targets; empty-text: @tr("None."); clicked(i) => { root.control-target-clicked(i); } }
+                                if root.control-rules.length > 0: VerticalLayout {
+                                    spacing: 4px;
+                                    SectionTitle { text: @tr("Rules"); }
+                                    RulesTable {
+                                        rules: root.control-rules;
+                                        ceiling-options: root.ceiling-options;
+                                        editable: root.editing;
+                                        set-rule(idx, lvl) => { root.set-control-rule(idx, lvl); }
+                                    }
+                                }
+                                SectionTitle { text: @tr("Attached to"); }
+                                LinkList { items: root.control-steps; empty-text: @tr("No attack step yet."); clicked(i) => { root.control-step-clicked(i); } }
+                                SectionTitle { text: @tr("Part of goals"); }
+                                LinkList { items: root.control-goals; clicked(i) => { root.control-goal-clicked(i); } }
+                                Text { text: root.control-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
+                                Rectangle { vertical-stretch: 1; }
+                                Button { text: @tr("Remove control"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-control(); } }
+                            }
+                        }
                     }
                 }
 
@@ -3213,55 +3264,99 @@ in property <string> redo-label;
                     }
                     if root.item-tab == 0 && root.has-component && root.draft-kind == "": Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Component") + " · " + root.component-id; }
-                        NameEditor { focus-requested <=> root.focus-name; name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
-                        Field {
-                            label: @tr("Parent");
-                            ComboBox {
-                                model: root.component-parent-options;
-                                current-index: root.component-parent;
-                                enabled: root.editing;
-                                accessible-label: @tr("Parent");
-                                selected(v) => { root.set-component-parent(self.current-index); }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: 8px;
+                                SectionTitle { text: @tr("Component") + " · " + root.component-id; }
+                                NameEditor { focus-requested <=> root.focus-name; name: root.component-name; editable: root.editing; renamed(t) => { root.rename-component(t); } }
+                                DescriptionFor { items: root.descriptions; kind: "component"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                                Field {
+                                    label: @tr("Parent");
+                                    ComboBox {
+                                        model: root.component-parent-options;
+                                        current-index: root.component-parent;
+                                        enabled: root.editing;
+                                        accessible-label: @tr("Parent");
+                                        selected(v) => { root.set-component-parent(self.current-index); }
+                                    }
+                                }
+                                SettingsSection {
+                                    settings: root.component-settings;
+                                    available-controls: root.component-available-controls;
+                                    custom-rules: root.custom-setting-rules;
+                                    ceiling-options: root.ceiling-options;
+                                    editable: root.editing;
+                                    drafting-custom <=> root.component-drafting-custom;
+                                    custom-name <=> root.component-custom-name;
+                                    apply-control(i) => { root.apply-control-to-component(i); }
+                                    unapply-control(i) => { root.unapply-control-from-component(i); }
+                                    open-setting(i) => { root.open-component-setting(i); }
+                                    begin-custom => { root.begin-component-custom-setting(); }
+                                    set-custom-rule(idx, lvl) => { root.set-custom-setting-rule(idx, lvl); }
+                                    create-custom(name) => { root.create-component-custom-setting(name); }
+                                    cancel-custom => { root.component-drafting-custom = false; }
+                                }
+                                SectionTitle { text: @tr("Interfaces"); }
+                                LinkList { items: root.component-interfaces; clicked(i) => { root.item-tab = 1; } }
+                                SectionTitle { text: @tr("Assets"); }
+                                LinkList { items: root.component-assets; clicked(i) => { root.show-page(Pages.assets); } }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { text: @tr("Steps through this") + " (" + root.component-steps-count + ")"; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button { text: @tr("Show") + " ▸"; accessible-label: @tr("Steps through this"); enabled: root.component-steps-count > 0; clicked => { root.history-shown = false; root.steps-selected = -1; root.steps-shown = true; } }
+                                }
+                                Text { text: root.component-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
+                                Rectangle { vertical-stretch: 1; }
+                                Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-component(); } }
                             }
                         }
-                        SectionTitle { text: @tr("Interfaces"); }
-                        LinkList { items: root.component-interfaces; clicked(i) => { root.item-tab = 1; } }
-                        SectionTitle { text: @tr("Assets"); }
-                        LinkList { items: root.component-assets; clicked(i) => { root.show-page(Pages.assets); } }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text { text: @tr("Steps through this") + " (" + root.component-steps-count + ")"; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; }
-                            Button { text: @tr("Show") + " ▸"; accessible-label: @tr("Steps through this"); enabled: root.component-steps-count > 0; clicked => { root.history-shown = false; root.steps-selected = -1; root.steps-shown = true; } }
-                        }
-                        Text { text: root.component-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
-                        Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove component"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-component(); } }
                     }
                     if root.item-tab == 1 && root.has-interface && root.draft-kind == "": Panel {
                         width: root.side-width;
-                        SectionTitle { text: @tr("Interface") + " · " + root.interface-id; }
-                        NameEditor { focus-requested <=> root.focus-name; name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
-                        DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
-                        Field {
-                            label: @tr("Kind");
-                            ComboBox {
-                                model: root.interface-kinds;
-                                current-index: root.interface-kind;
-                                enabled: root.editing;
-                                accessible-label: @tr("Kind");
-                                selected(v) => { root.set-interface-kind(self.current-index); }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: 8px;
+                                SectionTitle { text: @tr("Interface") + " · " + root.interface-id; }
+                                NameEditor { focus-requested <=> root.focus-name; name: root.interface-name; editable: root.editing; renamed(t) => { root.rename-interface(t); } }
+                                DescriptionFor { items: root.descriptions; kind: "interface"; editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                                Field {
+                                    label: @tr("Kind");
+                                    ComboBox {
+                                        model: root.interface-kinds;
+                                        current-index: root.interface-kind;
+                                        enabled: root.editing;
+                                        accessible-label: @tr("Kind");
+                                        selected(v) => { root.set-interface-kind(self.current-index); }
+                                    }
+                                }
+                                SettingsSection {
+                                    settings: root.interface-settings;
+                                    available-controls: root.interface-available-controls;
+                                    custom-rules: root.custom-setting-rules;
+                                    ceiling-options: root.ceiling-options;
+                                    editable: root.editing;
+                                    drafting-custom <=> root.interface-drafting-custom;
+                                    custom-name <=> root.interface-custom-name;
+                                    apply-control(i) => { root.apply-control-to-interface(i); }
+                                    unapply-control(i) => { root.unapply-control-from-interface(i); }
+                                    open-setting(i) => { root.open-interface-setting(i); }
+                                    begin-custom => { root.begin-interface-custom-setting(); }
+                                    set-custom-rule(idx, lvl) => { root.set-custom-setting-rule(idx, lvl); }
+                                    create-custom(name) => { root.create-interface-custom-setting(name); }
+                                    cancel-custom => { root.interface-drafting-custom = false; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { text: @tr("Steps through this") + " (" + root.interface-steps-count + ")"; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button { text: @tr("Show") + " ▸"; accessible-label: @tr("Steps through this"); enabled: root.interface-steps-count > 0; clicked => { root.history-shown = false; root.steps-selected = -1; root.steps-shown = true; } }
+                                }
+                                Text { text: root.interface-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
+                                Rectangle { vertical-stretch: 1; }
+                                Button { text: @tr("Remove interface"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-interface(); } }
                             }
                         }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text { text: @tr("Steps through this") + " (" + root.interface-steps-count + ")"; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; }
-                            Button { text: @tr("Show") + " ▸"; accessible-label: @tr("Steps through this"); enabled: root.interface-steps-count > 0; clicked => { root.history-shown = false; root.steps-selected = -1; root.steps-shown = true; } }
-                        }
-                        Text { text: root.interface-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
-                        Rectangle { vertical-stretch: 1; }
-                        Button { text: @tr("Remove interface"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-interface(); } }
                     }
                     if root.item-tab == 2 && root.has-data-flow && root.draft-kind == "": Panel {
                         width: root.side-width;

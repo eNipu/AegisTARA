@@ -5,9 +5,10 @@
 use std::sync::Arc;
 
 use aegis_client::commands::Edit;
-use aegis_client::view::steps_through;
+use aegis_client::pages::{component_detail, control_detail, interface_detail};
+use aegis_client::view::{UiState, inspector, steps_through, tree_scene};
 use aegis_client::workspace::{Origin, Workspace};
-use aegis_model::{ComponentId, InterfaceId, ItemRef, Methodology, NodeId, TreeId};
+use aegis_model::{ComponentId, ControlId, InterfaceId, ItemRef, Methodology, NodeId, TreeId};
 
 struct Fx {
     ws: Workspace,
@@ -222,4 +223,75 @@ fn an_outline_edit_that_moves_a_step_keeps_its_through_and_attack_type() {
         .expect("step");
     assert_eq!(p.step_via(t_idx, n), Some(ItemRef::Component(fx.ecu)));
     assert!(p.step_attack_type(t_idx, n).is_some());
+}
+
+#[test]
+fn custom_setting_caps_matching_steps_and_shows_inherited_on_interface() {
+    let mut fx = fixture();
+    run(
+        &mut fx.ws,
+        Edit::SetStepFeasibility {
+            tree: fx.tree,
+            node: fx.jtag_step,
+            level: Some(3), // high
+        },
+    );
+    run(
+        &mut fx.ws,
+        Edit::SetStepVia {
+            tree: fx.tree,
+            node: fx.jtag_step,
+            via: Some(ItemRef::Interface(fx.jtag)),
+        },
+    );
+    run(
+        &mut fx.ws,
+        Edit::SetStepAttackType {
+            tree: fx.tree,
+            node: fx.jtag_step,
+            attack_type: Some(0),
+        },
+    );
+    let ctrl = ControlId::new_v7();
+    let before = fx.ws.project().clone();
+    run(
+        &mut fx.ws,
+        Edit::AddCustomSetting {
+            id: ctrl,
+            name: "JTAG disabled".into(),
+            target: ItemRef::Component(fx.ecu),
+            rules: vec![(0, 0)], // attack_type 0 -> very-low (0)
+        },
+    );
+    let comp = component_detail(&fx.ws, fx.ecu).expect("comp");
+    assert_eq!(comp.settings.len(), 1);
+    assert!(!comp.settings[0].inherited);
+    let iface = interface_detail(&fx.ws, fx.jtag).expect("iface");
+    assert_eq!(iface.settings.len(), 1);
+    assert!(iface.settings[0].inherited);
+    assert_eq!(iface.settings[0].from_component, "ADAS ECU");
+    let cd = control_detail(&fx.ws, ctrl).expect("control");
+    assert_eq!(cd.targets.len(), 1);
+    assert_eq!(cd.rules[0].level, Some(0));
+    let ui = UiState {
+        selected_tree: Some(fx.tree),
+        selected_node: Some(fx.jtag_step),
+        ..Default::default()
+    };
+    let ins = inspector(&fx.ws, &ui).expect("inspector");
+    assert_eq!(
+        ins.ceilings,
+        vec!["JTAG disabled (from ADAS ECU): Very low".to_owned()]
+    );
+    let scene = tree_scene(&fx.ws, fx.tree, true).expect("scene");
+    let jtag_v = (0..u32::try_from(scene.len()).expect("len"))
+        .find(|&v| scene.label(v) == "Open JTAG")
+        .expect("vertex");
+    assert_eq!(
+        scene.style(jtag_v).and_then(|s| s.capped.as_deref()),
+        Some("JTAG disabled on ADAS ECU")
+    );
+    // One undo step reverses AddCustomSetting (AddSecurityControl + SetControlRule + ApplyControl).
+    fx.ws.undo().expect("undo custom setting");
+    assert!(fx.ws.project() == &before);
 }
