@@ -12,7 +12,7 @@ import {
     DescriptionItem, DescriptionBox, TranslationEditor, ProjectLanguages, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem,
     CountItem, DiffItem, ProblemItem, SuggestionItem, Marks, Choice, DataTable, SectionTitle, PageTitle, SplashHeader, Panel, Swatch,
     LinkList, CheckList, Tile, Bars, FieldError, DangerButton, DraftForm, Splitter, HSplitter,
-    Button, LineEdit, TextEdit, ComboBox, CheckBox, Switch
+    Button, LineEdit, TextEdit, ComboBox, FilterPicker, CheckBox, Switch
 } from "widgets.slint";
 
 export { Marks, ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, ThreatItem, FactorItem, NoticeItem, LinkItem, CheckItem, MitigationItem, CountItem, DiffItem, ProblemItem, SuggestionItem }
@@ -653,6 +653,17 @@ in property <string> redo-label;
     in property <int> through-index;
     in property <[string]> attack-type-options;
     in property <int> attack-type-index;
+    // What the pickers list while the user types (the controller filters).
+    in property <[string]> through-shown;
+    in property <[int]> through-shown-at;
+    in property <[string]> attack-type-shown;
+    in property <[int]> attack-type-shown-at;
+    callback filter-through(string);
+    callback filter-attack-type(string);
+    in-out property <bool> through-focused;
+    in-out property <bool> attack-type-focused;
+    in-out property <bool> through-open;
+    in-out property <bool> attack-type-open;
     in property <int> rating-index;
     in property <string> effective-text;
     in property <string> potential-text;
@@ -2527,21 +2538,31 @@ in property <string> redo-label;
                                         picked(i) => { root.set-rating(i); }
                                     }
                                     SectionTitle { text: @tr("Through"); }
-                                    Choice {
-                                        options: root.through-options;
-                                        index: root.through-index;
-                                        editable: root.editing;
+                                    through-picker := FilterPicker {
+                                        model: root.through-options;
+                                        current-index: root.through-index;
+                                        enabled: root.editing;
                                         label: @tr("Through");
+                                        shown: root.through-shown;
+                                        shown-at: root.through-shown-at;
+                                        has-focus <=> root.through-focused;
+                                        open <=> root.through-open;
+                                        filter-changed(q) => { root.filter-through(q); }
                                         picked(i) => { root.set-through(i); }
                                     }
                                     if root.attack-type-options.length > 1: VerticalLayout {
                                         spacing: 8px;
                                         SectionTitle { text: @tr("Attack type"); }
-                                        Choice {
-                                            options: root.attack-type-options;
-                                            index: root.attack-type-index;
-                                            editable: root.editing;
+                                        attack-type-picker := FilterPicker {
+                                            model: root.attack-type-options;
+                                            current-index: root.attack-type-index;
+                                            enabled: root.editing;
                                             label: @tr("Attack type");
+                                            shown: root.attack-type-shown;
+                                            shown-at: root.attack-type-shown-at;
+                                            has-focus <=> root.attack-type-focused;
+                                            open <=> root.attack-type-open;
+                                            filter-changed(q) => { root.filter-attack-type(q); }
                                             picked(i) => { root.set-attack-type(i); }
                                         }
                                     }
