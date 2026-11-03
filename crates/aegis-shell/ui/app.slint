@@ -525,6 +525,8 @@ in property <string> redo-label;
     in property <[string]> interface-available-controls;
     in property <[ControlRuleItem]> custom-setting-rules;
     in-out property <bool> component-drafting-custom: false;
+    in-out property <bool> component-pick-focused: false;
+    in-out property <int> component-pick-index: 0;
     in-out property <string> component-custom-name: "";
     in-out property <bool> interface-drafting-custom: false;
     in-out property <string> interface-custom-name: "";
@@ -3288,6 +3290,8 @@ in property <string> redo-label;
                                     ceiling-options: root.ceiling-options;
                                     editable: root.editing;
                                     drafting-custom <=> root.component-drafting-custom;
+                                    pick-focused <=> root.component-pick-focused;
+                                    pick-index <=> root.component-pick-index;
                                     custom-name <=> root.component-custom-name;
                                     apply-control(i) => { root.apply-control-to-component(i); }
                                     unapply-control(i) => { root.unapply-control-from-component(i); }
