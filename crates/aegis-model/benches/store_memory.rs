@@ -46,34 +46,41 @@
 //! about 35% headroom for allocator and `std` changes, rounded up to 0.1.
 //! A kept gate is capped at `SERVER_BUDGET` (3x, engineering standards
 //! section 2), and the bench fails if a case that loads has a kept gate
-//! above it:
+//! above it. Measured again on 2026-11-04 (Rust 1.99.1, arm64 macOS) after
+//! the bench had been failing since the item definition model (an asset's
+//! component binding), human-readable visual IDs and the step via and
+//! control settings fields were added; only the gates that failed were
+//! raised, by the same rule:
 //!
 //! | Case | Peak measured / gate | Kept measured / gate | What dominates |
 //! |---|---|---|---|
-//! | typical | 1.03 / 1.4 | 0.83 / 1.2 | the project |
-//! | short property keys | 0.54 / 0.8 | 0.38 / 0.6 | the project; 64 keys become one 8-byte set |
-//! | short impact keys | 0.76 / 1.1 | 0.54 / 0.8 | the project |
+//! | typical | 1.30 / 1.4 | 0.93 / 1.2 | the project |
+//! | short property keys | 0.83 / 1.2 | 0.46 / 0.6 | the project; 64 keys become one 8-byte set |
+//! | short impact keys | 0.93 / 1.1 | 0.59 / 0.8 | the project |
 //! | unknown keys (all three) | 0.02 / 0.1 | 0.00 / 0.1 | the read buffer: the load fails inside the first entity |
-//! | long names | 1.08 / 1.5 | 1.04 / 1.5 | the names, moved into the project |
+//! | long names | 1.16 / 1.5 | 1.06 / 1.5 | the names, moved into the project |
 //! | one huge string | 1.02 / 1.4 | 0.00 / 0.1 | the parser's string buffer, which grows by doubling |
-//! | minimal entities (mixed kinds) | 2.08 / 2.9 | 1.68 / 2.3 | the project's fixed per-entity cost (arena slot, ID map, counts) |
-//! | attack trees | 2.77 / 3.4 | 1.95 / 2.4 | the trees' node arenas, ID maps, and step ratings |
-//! | assets only, built-in / max vocabulary | 2.31 / 2.41, gates 3.2 / 3.3 | 1.68 / 1.78, gates 2.3 / 2.2 | the project's fixed per-asset cost; the empty count row is 16 bytes whatever the methodology |
-//! | damages only, built-in / max vocabulary | 2.73 / 3.53, gates 3.7 / 4.8 | 1.85 / 2.65, gates 2.5 / 3.0 | the project: per damage scenario, one rating slot per impact category |
-//! | threats only, built-in / max vocabulary | 1.91 / 1.93, gates 2.6 / 2.6 | 1.10 / 1.12, gates 1.5 / 1.6 | the project |
-//! | targeted narrow, built-in / max vocabulary | 2.53 / 2.57, gates 3.5 / 3.5 | 1.72 / 1.76, gates 2.4 / 2.4 | the project: per asset and threat, the fixed cost plus one 8-byte count entry |
-//! | targeted wide, max vocabulary | 1.57 / 2.2 | 1.36 / 1.9 | the project: per asset, a 64-entry count row (512 bytes) |
+//! | minimal entities (mixed kinds) | 2.75 / 2.9 | 1.94 / 2.3 | the project's fixed per-entity cost (arena slot, ID map, counts, visual ID) |
+//! | attack trees | 3.52 / 4.8 | 2.40 / 3.0 | the trees' node arenas, ID maps, and step ratings |
+//! | assets only, built-in / max vocabulary | 3.50 / 3.62, gates 4.8 / 4.9 | 2.00 / 2.09, gates 2.3 / 2.2 | the project's fixed per-asset cost; the empty count row is 16 bytes whatever the methodology |
+//! | damages only, built-in / max vocabulary | 3.46 / 4.26, gates 3.7 / 4.8 | 2.04 / 2.84, gates 2.5 / 3.0 | the project: per damage scenario, one rating slot per impact category |
+//! | threats only, built-in / max vocabulary | 2.83 / 2.85, gates 3.9 / 3.9 | 1.38 / 1.40, gates 1.5 / 1.6 | the project |
+//! | targeted narrow, built-in / max vocabulary | 3.63 / 3.67, gates 5.0 / 5.0 | 2.16 / 2.20, gates 2.4 / 2.4 | the project: per asset and threat, the fixed cost plus one 8-byte count entry |
+//! | targeted wide, max vocabulary | 1.85 / 2.2 | 1.47 / 1.9 | the project: per asset, a 64-entry count row (512 bytes) |
 //!
-//! The decoder's own share is the peak minus kept: at most about 0.9x the
-//! file in every case. The rest is the project, which any project of that
-//! many entities needs. Only `damages_only_max` peaks above 3x while
-//! loading, from its dense impact slots; the budget limits the open
-//! project (kept), so that peak is gated but not held to 3x (ADR 0010).
+//! The decoder's own share is the peak minus kept: up to about 1.5x the file
+//! in the dense shapes. The rest is the project, which any project of that
+//! many entities needs. Nine of the dense shapes peak above 3x while loading
+//! (the attack tree, asset, damage, threat and targeted cases); the budget
+//! limits the open project (kept), so those peaks are gated but not held to
+//! 3x (ADR 0010). `damages_only_max` keeps 2.84x of the 3x budget, so it has
+//! the least room left.
 //!
 //! Run: `cargo bench --bench store_memory` (also runs under
-//! `cargo test --benches`). The profiler runs in testing mode, so it never
-//! writes `dhat-heap.json`. Fails if a case's peak or kept factor exceeds
-//! its gate. `STORE_MEMORY_CASE=<name>` runs one case.
+//! `cargo test --benches`). Neither CI nor `scripts/ci.sh` runs it, so run it
+//! after changing what a stored entity holds. The profiler runs in testing
+//! mode, so it never writes `dhat-heap.json`. Fails if a case's peak or kept
+//! factor exceeds its gate. `STORE_MEMORY_CASE=<name>` runs one case.
 
 #![forbid(unsafe_code)]
 
@@ -410,7 +417,7 @@ fn cases() -> Vec<Case> {
                 )
             }),
             loads: true,
-            max_factor: 0.8,
+            max_factor: 1.2,
             max_kept: 0.6,
         },
         Case {
@@ -524,15 +531,15 @@ fn cases() -> Vec<Case> {
                 )
             }),
             loads: true,
-            max_factor: 3.4,
-            max_kept: 2.4,
+            max_factor: 4.8,
+            max_kept: 3.0,
         },
     ];
     let builtin = store_kit::methodology();
     // (name, methodology, kind, peak gate, kept gate)
     for (name, m, kind, max_factor, max_kept) in [
-        ("assets_only_builtin", &builtin, "assets", 3.2, 2.3),
-        ("assets_only_max", &short, "assets", 3.3, 2.2),
+        ("assets_only_builtin", &builtin, "assets", 4.8, 2.3),
+        ("assets_only_max", &short, "assets", 4.9, 2.2),
         (
             "damages_only_builtin",
             &builtin,
@@ -545,10 +552,10 @@ fn cases() -> Vec<Case> {
             "threats_only_builtin",
             &builtin,
             "threat_scenarios",
-            2.6,
+            3.9,
             1.5,
         ),
-        ("threats_only_max", &short, "threat_scenarios", 2.6, 1.6),
+        ("threats_only_max", &short, "threat_scenarios", 3.9, 1.6),
     ] {
         cases.push(Case {
             name,
@@ -566,10 +573,10 @@ fn cases() -> Vec<Case> {
             "targeted_narrow_builtin",
             &builtin,
             first(&builtin),
-            3.5,
+            5.0,
             2.4,
         ),
-        ("targeted_narrow_max", &short, first(&short), 3.5, 2.4),
+        ("targeted_narrow_max", &short, first(&short), 5.0, 2.4),
         ("targeted_wide_max", &short, all, 2.2, 1.9),
     ] {
         cases.push(Case {
