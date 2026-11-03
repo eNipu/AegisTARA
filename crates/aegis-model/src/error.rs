@@ -8,6 +8,7 @@ use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
     NodeIdx, ThreatId, TreeId, TrustBoundaryId,
 };
+use crate::item::ItemRef;
 use crate::methodology::{
     AttackType, CatalogRef, CatalogScheme, CatalogSyntax, FactorLevel, FeasibilityFactor,
     FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Property, RiskLevel, ThreatCategory,
@@ -580,6 +581,22 @@ pub enum ModelError {
         /// How many steps go through it.
         steps: u32,
     },
+    /// The component cannot be removed while security controls are still applied to it.
+    #[error("component {component} has {controls} security control(s) applied")]
+    ComponentHasControls {
+        /// The component.
+        component: ComponentId,
+        /// How many security controls are applied to it.
+        controls: u32,
+    },
+    /// The interface cannot be removed while security controls are still applied to it.
+    #[error("interface {interface} has {controls} security control(s) applied")]
+    InterfaceHasControls {
+        /// The interface.
+        interface: InterfaceId,
+        /// How many security controls are applied to it.
+        controls: u32,
+    },
     /// The component cannot be removed while assets are still bound to it.
     #[error("component {component} is bound to {assets} asset(s)")]
     ComponentHasAssets {
@@ -742,6 +759,79 @@ pub enum ModelError {
         control: ControlId,
         /// How many cybersecurity goals link to it.
         goals: u32,
+    },
+    /// The security control cannot be removed while it is still applied to
+    /// components or interfaces; unapply it first.
+    #[error("security control {control} is applied to {targets} target(s)")]
+    SecurityControlHasTargets {
+        /// The security control.
+        control: ControlId,
+        /// How many components and interfaces it is applied to.
+        targets: usize,
+    },
+    /// The security control cannot be removed while it still carries control
+    /// rules; clear the rules first.
+    #[error("security control {control} still has {rules} control rule(s)")]
+    SecurityControlHasRules {
+        /// The security control.
+        control: ControlId,
+        /// How many control rules it carries.
+        rules: usize,
+    },
+    /// The security control is already applied to this target, or a snapshot
+    /// lists it twice.
+    #[error("security control {control} is already applied to {target}")]
+    DuplicateControlTarget {
+        /// The security control.
+        control: ControlId,
+        /// The component or interface.
+        target: ItemRef,
+    },
+    /// The security control is not applied to this target.
+    #[error("security control {control} is not applied to {target}")]
+    ControlTargetNotLinked {
+        /// The security control.
+        control: ControlId,
+        /// The component or interface.
+        target: ItemRef,
+    },
+    /// A security control may be applied to at most `max` targets.
+    ///
+    /// ```
+    /// use aegis_model::{ControlId, ModelError, MAX_CONTROL_TARGETS};
+    ///
+    /// let control = ControlId::new_v7();
+    /// let err = ModelError::TooManyControlTargets { control, max: MAX_CONTROL_TARGETS };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     format!("security control {control} would be applied to more than 64 targets"),
+    /// );
+    /// ```
+    #[error("security control {control} would be applied to more than {max} targets")]
+    TooManyControlTargets {
+        /// The security control.
+        control: ControlId,
+        /// The limit.
+        max: usize,
+    },
+    /// A security control may carry at most `max` control rules.
+    ///
+    /// ```
+    /// use aegis_model::{ControlId, ModelError, MAX_CONTROL_RULES};
+    ///
+    /// let control = ControlId::new_v7();
+    /// let err = ModelError::TooManyControlRules { control, max: MAX_CONTROL_RULES };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     format!("security control {control} would have more than 16 control rules"),
+    /// );
+    /// ```
+    #[error("security control {control} would have more than {max} control rules")]
+    TooManyControlRules {
+        /// The security control.
+        control: ControlId,
+        /// The limit.
+        max: usize,
     },
     /// The cybersecurity goal cannot be removed: `threats` threat scenarios
     /// reference it.

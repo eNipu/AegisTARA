@@ -547,7 +547,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..54,
+        0u8..57,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -687,7 +687,8 @@ impl Gen {
 
     /// A component or an interface, mostly live ones.
     fn item(&mut self, p: &Project, sel: u16, pick: u16) -> ItemRef {
-        if pick.is_multiple_of(2) {
+        let can_interface = self.m.interface_kind_count() > 0 || pick.is_multiple_of(8);
+        if pick.is_multiple_of(2) || !can_interface {
             ItemRef::Component(self.component(p, sel))
         } else {
             ItemRef::Interface(self.interface(p, sel))
@@ -1276,11 +1277,15 @@ impl Gen {
                 }
             }
             38 => {
-                let controls = if s.bits.is_multiple_of(64) {
+                let mut controls: Vec<_> = if s.bits.is_multiple_of(64) {
                     (0..17).map(|_| control_id(self.fresh())).collect()
                 } else {
                     s.list.iter().map(|&x| self.control(p, x)).collect()
                 };
+                if !s.b.is_multiple_of(4) {
+                    let mut seen = std::collections::BTreeSet::new();
+                    controls.retain(|c| seen.insert(*c));
+                }
                 Op::AddCybersecurityGoal {
                     id: if s.a.is_multiple_of(12) {
                         self.goal(p, s.b)
@@ -1303,7 +1308,15 @@ impl Gen {
                 provenance,
             },
             41 => {
-                let goal = self.goal(p, s.a);
+                let with_controls: Vec<_> = p
+                    .cybersecurity_goals()
+                    .filter(|(_, _, g)| !g.controls().is_empty())
+                    .map(|(_, id, _)| id)
+                    .collect();
+                let goal = match nth(with_controls, s.a) {
+                    Some(id) if !s.c.is_multiple_of(8) => id,
+                    _ => self.goal(p, s.a),
+                };
                 let linked: Vec<_> = p
                     .cybersecurity_goal_idx(&goal)
                     .and_then(|g| p.cybersecurity_goal(g))
@@ -1315,7 +1328,7 @@ impl Gen {
                     })
                     .unwrap_or_default();
                 let control = match nth(linked, s.b) {
-                    Some(c) if !s.c.is_multiple_of(3) => c,
+                    Some(c) if !s.b.is_multiple_of(8) => c,
                     _ => self.control(p, s.b),
                 };
                 Op::UnlinkGoalControl {
@@ -1365,25 +1378,38 @@ impl Gen {
                 provenance,
             },
             49 => {
-                let m = if self.m.interface_kind_count() > 0 {
-                    &self.m
+                if self.m.interface_kind_count() == 0 && !s.c.is_multiple_of(4) {
+                    Op::AddComponent {
+                        id: if s.a.is_multiple_of(16) {
+                            self.component(p, s.b)
+                        } else {
+                            component_id(self.fresh())
+                        },
+                        name: self.name(s.c),
+                        parent: None,
+                        provenance,
+                    }
                 } else {
-                    &self.foreign
-                };
-                let kind = m
-                    .interface_kinds()
-                    .nth(usize::from(s.c) % m.interface_kind_count())
-                    .expect("interface kind");
-                Op::AddInterface {
-                    id: if s.a.is_multiple_of(16) {
-                        self.interface(p, s.b)
+                    let m = if self.m.interface_kind_count() > 0 {
+                        &self.m
                     } else {
-                        interface_id(self.fresh())
-                    },
-                    name: self.name(s.c),
-                    component: self.component(p, s.b),
-                    kind,
-                    provenance,
+                        &self.foreign
+                    };
+                    let kind = m
+                        .interface_kinds()
+                        .nth(usize::from(s.c) % m.interface_kind_count())
+                        .expect("interface kind");
+                    Op::AddInterface {
+                        id: if s.a.is_multiple_of(16) {
+                            self.interface(p, s.b)
+                        } else {
+                            interface_id(self.fresh())
+                        },
+                        name: self.name(s.c),
+                        component: self.component(p, s.b),
+                        kind,
+                        provenance,
+                    }
                 }
             }
             50 => Op::RemoveComponent {
@@ -1401,13 +1427,63 @@ impl Gen {
                     provenance,
                 }
             }
-            _ => {
+            53 => {
                 let (tree, node) = self.step_node(p, s.a, s.b);
+                let some = if self.m.attack_type_count() > 0 {
+                    !s.c.is_multiple_of(5)
+                } else {
+                    s.c.is_multiple_of(4)
+                };
                 Op::SetStepAttackType {
                     tree,
                     node,
-                    attack_type: (!s.c.is_multiple_of(5)).then(|| self.attack_type(s.c)),
+                    attack_type: some.then(|| self.attack_type(s.c)),
                     provenance,
+                }
+            }
+            54 => Op::ApplyControl {
+                control: self.control(p, s.a),
+                target: self.item(p, s.b, s.c),
+                provenance,
+            },
+            55 => {
+                let with_targets: Vec<_> = p
+                    .security_controls()
+                    .filter(|(_, _, c)| c.target_count() > 0)
+                    .map(|(_, id, _)| id)
+                    .collect();
+                let control = match nth(with_targets, s.a) {
+                    Some(id) if !s.c.is_multiple_of(3) => id,
+                    _ => self.control(p, s.a),
+                };
+                let applied: Vec<_> = p
+                    .security_control_idx(&control)
+                    .map(|idx| p.control_targets(idx).collect())
+                    .unwrap_or_default();
+                let target = match nth(applied, s.b) {
+                    Some(t) if !s.c.is_multiple_of(3) => t,
+                    _ => self.item(p, s.b, s.c),
+                };
+                Op::UnapplyControl {
+                    control,
+                    target,
+                    provenance,
+                }
+            }
+            _ => {
+                if self.m.attack_type_count() == 0 && !s.c.is_multiple_of(4) {
+                    Op::ApplyControl {
+                        control: self.control(p, s.a),
+                        target: self.item(p, s.b, s.c),
+                        provenance,
+                    }
+                } else {
+                    Op::SetControlRule {
+                        control: self.control(p, s.a),
+                        attack_type: self.attack_type(s.b),
+                        ceiling: (!s.c.is_multiple_of(4)).then(|| self.feasibility_level(s.c)),
+                        provenance,
+                    }
                 }
             }
         }
@@ -1775,8 +1851,25 @@ pub fn describe(p: &Project) -> Vec<String> {
             p.attack_tree_provenance(idx),
         ));
     }
-    for (_, id, c) in p.security_controls() {
-        out.push(format!("control {id} {:?} {:?}", c.name(), c.provenance()));
+    for (idx, id, c) in p.security_controls() {
+        let targets: Vec<_> = p.control_targets(idx).collect();
+        let mut rules: Vec<_> = c
+            .rules()
+            .iter()
+            .filter_map(|r| {
+                Some(format!(
+                    "{}={}",
+                    m.attack_type_key(r.attack_type())?,
+                    m.feasibility_level_key(r.ceiling())?
+                ))
+            })
+            .collect();
+        rules.sort_unstable();
+        out.push(format!(
+            "control {id} {:?} targets {targets:?} rules {rules:?} {:?}",
+            c.name(),
+            c.provenance()
+        ));
     }
     for (_, id, g) in p.cybersecurity_goals() {
         let controls: Vec<_> = g
@@ -2431,6 +2524,30 @@ pub fn second_every_op(m: Arc<Methodology>) {
             tree,
             node: s1,
             via: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::ApplyControl {
+            control: ctrl,
+            target: ItemRef::Component(ecu),
+            provenance: p_human.clone(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveComponent { id: ecu },
+        &aegis_model::ModelError::ComponentHasControls {
+            component: ecu,
+            controls: 1,
+        },
+    );
+    ok(
+        &mut p,
+        Op::UnapplyControl {
+            control: ctrl,
+            target: ItemRef::Component(ecu),
             provenance: Provenance::default(),
         },
     );
