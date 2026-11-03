@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use super::MAX_PROJECT_FILE_BYTES;
 use super::wire::{
-    self, CappedReader, CatalogRefsByKey, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView,
-    NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
-    StepAttackTypeByNode, StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode,
-    StepViaByNode, TargetView, Text, VisualDisplay,
+    self, CappedReader, CatalogRefsByKey, ControlRulesByKey, ControlTargetsByItem, FORMAT_VERSION,
+    ImpactsByKey, KeyOrder, MethodologyView, NodesView, PropertyKeys, ProvenanceView, Required,
+    RiskTreatmentWire, SnapshotWire, StepAttackTypeByNode, StepFactorsByNode,
+    StepFeasibilityByNode, StepMitigationsByNode, StepViaByNode, TargetView, Text, VisualDisplay,
 };
 use crate::error::StoreError;
 use crate::id::{
@@ -67,7 +67,7 @@ struct Assets<'a>(Ctx<'a>);
 struct Damages<'a>(Ctx<'a>);
 struct Threats<'a>(Ctx<'a>);
 struct Trees<'a>(Ctx<'a>);
-struct Controls<'a>(&'a Project);
+struct Controls<'a>(Ctx<'a>);
 struct Goals<'a>(&'a Project);
 struct Claims<'a>(&'a Project);
 struct Components<'a>(&'a Project);
@@ -145,7 +145,7 @@ impl Trees<'_> {
 
 impl Controls<'_> {
     fn is_empty(&self) -> bool {
-        self.0.security_control_count() == 0
+        self.0.p.security_control_count() == 0
     }
 }
 
@@ -258,6 +258,10 @@ struct ControlView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
+    #[serde(skip_serializing_if = "ControlTargetsByItem::is_empty")]
+    targets: ControlTargetsByItem<'a>,
+    #[serde(skip_serializing_if = "ControlRulesByKey::is_empty")]
+    rules: ControlRulesByKey<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -489,7 +493,7 @@ impl Serialize for Trees<'_> {
 
 impl Serialize for Controls<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let p = self.0;
+        let Ctx { p, m, order } = self.0;
         s.collect_seq(
             p.security_controls()
                 .enumerate()
@@ -501,6 +505,15 @@ impl Serialize for Controls<'_> {
                         pos,
                     ),
                     name: c.name(),
+                    targets: ControlTargetsByItem {
+                        project: p,
+                        control: c,
+                    },
+                    rules: ControlRulesByKey {
+                        m,
+                        order,
+                        control: c,
+                    },
                     provenance: ProvenanceView::of(c.provenance()),
                 }),
         )
@@ -737,7 +750,7 @@ impl Project {
             damage_scenarios: Damages(ctx),
             threat_scenarios: Threats(ctx),
             attack_trees: Trees(ctx),
-            security_controls: Controls(self),
+            security_controls: Controls(ctx),
             cybersecurity_goals: Goals(self),
             cybersecurity_claims: Claims(self),
             components: Components(self),
@@ -943,13 +956,29 @@ impl Project {
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, c) in snapshot.security_controls.into_iter().enumerate() {
             let vis = claim_visual(c.visual_id, pos, &mut used, &mut next_vis)?;
+            let provenance = wire::unwrap_provenance(c.provenance);
             let id = c.id.0;
             project.apply(Op::AddSecurityControl {
                 id,
                 name: c.name.0,
-                provenance: wire::unwrap_provenance(c.provenance),
+                provenance: provenance.clone(),
             })?;
             project.set_control_loaded_visual(&id, vis, next_vis);
+            for target in c.targets.0 {
+                project.apply(Op::ApplyControl {
+                    control: id,
+                    target,
+                    provenance: provenance.clone(),
+                })?;
+            }
+            for (attack_type, ceiling) in c.rules.0 {
+                project.apply(Op::SetControlRule {
+                    control: id,
+                    attack_type,
+                    ceiling: Some(ceiling),
+                    provenance: provenance.clone(),
+                })?;
+            }
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, g) in snapshot.cybersecurity_goals.into_iter().enumerate() {

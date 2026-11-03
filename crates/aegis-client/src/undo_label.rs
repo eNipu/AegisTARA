@@ -79,7 +79,7 @@ impl Label {
     /// are the edits that get an undo toast instead of a confirmation.
     #[must_use]
     pub fn is_removal(&self) -> bool {
-        matches!(self.verb, "remove" | "unlink")
+        matches!(self.verb, "remove" | "unlink" | "unapply")
     }
 
     /// This edit and `steps` more edits done with it, as one: "add asset
@@ -103,8 +103,10 @@ impl Label {
     pub fn past(&self) -> String {
         let past = match self.verb {
             "add" => "added",
+            "apply" => "applied",
             "remove" => "removed",
             "rename" => "renamed",
+            "unapply" => "unapplied",
             "unlink" => "unlinked",
             "rate" => "rated",
             _ => "changed",
@@ -245,6 +247,11 @@ fn target_of(op: &Op) -> Option<Selection> {
         Op::AddSecurityControl { id, .. }
         | Op::RenameSecurityControl { id, .. }
         | Op::RemoveSecurityControl { id } => Selection::Control(*id),
+        Op::SetControlRule { control, .. } => Selection::Control(*control),
+        Op::ApplyControl { target, .. } | Op::UnapplyControl { target, .. } => match target {
+            aegis_model::ItemRef::Component(id) => Selection::Component(*id),
+            aegis_model::ItemRef::Interface(id) => Selection::Interface(*id),
+        },
         Op::AddCybersecurityGoal { id, .. }
         | Op::RenameCybersecurityGoal { id, .. }
         | Op::RemoveCybersecurityGoal { id } => Selection::Goal(*id),
@@ -361,6 +368,9 @@ fn parts(op: &Op, p: &Project) -> Parts {
 
         Op::AddSecurityControl { name, .. } => ("add", "security control", some(name)),
         Op::RenameSecurityControl { id, .. } => ("rename", "security control", control(id)),
+        Op::ApplyControl { control: c, .. } => ("apply", "security control", control(c)),
+        Op::UnapplyControl { control: c, .. } => ("unapply", "security control", control(c)),
+        Op::SetControlRule { control: c, .. } => ("change", "rule of security control", control(c)),
         Op::RemoveSecurityControl { id } => ("remove", "security control", control(id)),
         Op::AddCybersecurityGoal { name, .. } => ("add", "cybersecurity goal", some(name)),
         Op::RenameCybersecurityGoal { id, .. } => ("rename", "cybersecurity goal", goal(id)),

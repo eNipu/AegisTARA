@@ -31,16 +31,16 @@ use aegis_client::state::{
 use aegis_client::view::{AdminAction, DraftKind, Page, RiskView, Selection};
 use aegis_model::library::LibraryPack;
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ItemRef,
+    NodeId, ThreatId, TreeId, TrustBoundaryId,
 };
 use slint::{ComponentHandle, ModelRc, SharedString, StandardListViewItem, VecModel};
 
 use crate::adapter::{bucket, draw_items, draw_layers};
 use crate::{
-    AccessNode, AppWindow, CheckItem, CountItem, DescriptionItem, DiffItem, FactorItem, LinkItem,
-    Marks, MitigationItem, NoticeItem, ProblemItem, ProjectItem, ProjectLanguages, SuggestionItem,
-    ThreatItem, TranslationItem,
+    AccessNode, AppWindow, CheckItem, ControlRuleItem, CountItem, DescriptionItem, DiffItem,
+    FactorItem, LinkItem, Marks, MitigationItem, NoticeItem, ProblemItem, ProjectItem,
+    ProjectLanguages, SettingItem, SuggestionItem, ThreatItem, TranslationItem,
 };
 
 /// Pixels the pointer must move before a press becomes a drag.
@@ -72,6 +72,8 @@ struct State {
     /// Elements picked together in the tables with bulk edit (UI-04), by ID
     /// so a table that re-sorts keeps the right ones.
     marks: HashSet<Selection>,
+    /// Draft rules (attack-type index -> ceiling index) for a custom setting.
+    custom_rules: Vec<Option<usize>>,
 }
 
 /// A table that takes bulk edits (UI-04).
@@ -334,6 +336,29 @@ fn links(items: &[aegis_client::pages::LinkRow]) -> ModelRc<LinkItem> {
     )
 }
 
+fn settings(items: &[aegis_client::pages::SettingRow]) -> ModelRc<SettingItem> {
+    model(
+        items
+            .iter()
+            .map(|r| SettingItem {
+                label: s(&format!("{} \u{b7} {}", r.visual_id, r.name)),
+                rules: s(&r.rules),
+                inherited: r.inherited,
+                from_component: s(&r.from_component),
+            })
+            .collect(),
+    )
+}
+
+fn choice_labels<Id>(items: &[aegis_client::pages::Choice<Id>]) -> ModelRc<SharedString> {
+    model(
+        items
+            .iter()
+            .map(|x| s(&format!("{} \u{b7} {}", x.visual_id, x.name)))
+            .collect(),
+    )
+}
+
 /// The five assignable per-project role keys, least to most capable (job 058, ADR 0061).
 const ROLE_KEYS: [&str; 5] = [
     "viewer",
@@ -410,6 +435,7 @@ impl Controller {
                 membership: None,
                 figure: None,
                 marks: HashSet::new(),
+                custom_rules: Vec::new(),
             }),
             library: RefCell::new(LibraryView::new(Arc::new(LibraryPack::builtin_demo()))),
             palette: RefCell::new(Vec::new()),
@@ -839,6 +865,55 @@ impl Controller {
                 c.edit(Edit::RemoveComponent { component });
             }
         });
+        on!(on_apply_control_to_component, |c, i| {
+            let pair = c.with_project(|p| {
+                let d = p.data.component.as_ref()?;
+                Some((d.id, d.available_controls.get(pos(i)?)?.id))
+            });
+            if let Some((comp, control)) = pair {
+                c.edit(Edit::ApplyControl {
+                    control,
+                    target: ItemRef::Component(comp),
+                });
+            }
+        });
+        on!(on_unapply_control_from_component, |c, i| {
+            let pair = c.with_project(|p| {
+                let d = p.data.component.as_ref()?;
+                let row = d.settings.get(pos(i)?)?;
+                (!row.inherited).then_some((d.id, row.id))
+            });
+            if let Some((comp, control)) = pair {
+                c.edit(Edit::UnapplyControl {
+                    control,
+                    target: ItemRef::Component(comp),
+                });
+            }
+        });
+        on!(on_open_component_setting, |c, i| {
+            let ctrl = c.with_project(|p| {
+                p.data
+                    .component
+                    .as_ref()?
+                    .settings
+                    .get(pos(i)?)
+                    .map(|r| r.id)
+            });
+            if let Some(ctrl) = ctrl {
+                c.select(Selection::Control(ctrl), true);
+            }
+        });
+        on!(on_begin_component_custom_setting, |c| {
+            c.reset_custom_rules();
+            if let Some(w) = c.window.upgrade() {
+                w.set_component_drafting_custom(true);
+            }
+        });
+        on!(on_create_component_custom_setting, |c, name| {
+            if let Some(comp) = c.selected_component() {
+                c.create_custom_setting(name.to_string(), ItemRef::Component(comp));
+            }
+        });
         on!(on_pick_interface, |c, i| {
             if let Some(id) = c.with_project(|p| p.data.interfaces.get(pos(i)?).map(|x| x.id)) {
                 c.select(Selection::Interface(id), false);
@@ -871,6 +946,64 @@ impl Controller {
         on!(on_remove_interface, |c| {
             if let Some(interface) = c.selected_interface() {
                 c.edit(Edit::RemoveInterface { interface });
+            }
+        });
+        on!(on_apply_control_to_interface, |c, i| {
+            let pair = c.with_project(|p| {
+                let d = p.data.interface.as_ref()?;
+                Some((d.id, d.available_controls.get(pos(i)?)?.id))
+            });
+            if let Some((iface, control)) = pair {
+                c.edit(Edit::ApplyControl {
+                    control,
+                    target: ItemRef::Interface(iface),
+                });
+            }
+        });
+        on!(on_unapply_control_from_interface, |c, i| {
+            let pair = c.with_project(|p| {
+                let d = p.data.interface.as_ref()?;
+                let row = d.settings.get(pos(i)?)?;
+                (!row.inherited).then_some((d.id, row.id))
+            });
+            if let Some((iface, control)) = pair {
+                c.edit(Edit::UnapplyControl {
+                    control,
+                    target: ItemRef::Interface(iface),
+                });
+            }
+        });
+        on!(on_open_interface_setting, |c, i| {
+            let target = c.with_project(|p| {
+                let d = p.data.interface.as_ref()?;
+                let row = d.settings.get(pos(i)?)?;
+                Some(if row.inherited {
+                    Selection::Component(d.component)
+                } else {
+                    Selection::Control(row.id)
+                })
+            });
+            if let Some(target) = target {
+                c.select(target, true);
+            }
+        });
+        on!(on_begin_interface_custom_setting, |c| {
+            c.reset_custom_rules();
+            if let Some(w) = c.window.upgrade() {
+                w.set_interface_drafting_custom(true);
+            }
+        });
+        on!(on_create_interface_custom_setting, |c, name| {
+            if let Some(iface) = c.selected_interface() {
+                c.create_custom_setting(name.to_string(), ItemRef::Interface(iface));
+            }
+        });
+        on!(on_set_custom_setting_rule, |c, idx, lvl| {
+            if let Some(idx) = pos(idx) {
+                if let Some(slot) = c.state.borrow_mut().custom_rules.get_mut(idx) {
+                    *slot = after_none(lvl);
+                }
+                c.push_custom_rules();
             }
         });
         on!(on_pick_data_flow, |c, i| {
@@ -1629,6 +1762,28 @@ impl Controller {
                 c.edit(Edit::RemoveControl { control });
             }
         );
+        on!(on_control_target_clicked, |c, i| {
+            let t = c.with_project(|p| {
+                p.data
+                    .control
+                    .as_ref()?
+                    .targets
+                    .get(pos(i)?)
+                    .map(|l| l.target)
+            });
+            if let Some(t) = t {
+                c.select(t, true);
+            }
+        });
+        on!(on_set_control_rule, |c, idx, lvl| {
+            if let (Some(control), Some(attack_type)) = (c.selected_control(), pos(idx)) {
+                c.edit(Edit::SetControlRule {
+                    control,
+                    attack_type,
+                    level: after_none(lvl),
+                });
+            }
+        });
         on!(on_control_step_clicked, |c, i| {
             let t = c.with_project(|p| {
                 p.data
@@ -2967,6 +3122,62 @@ impl Controller {
         w.set_treatment_options(with_none("Not decided", v.treatments.iter().cloned()));
         w.set_catalog_schemes(model(v.catalog_schemes.iter().map(|x| s(x)).collect()));
         w.set_interface_kinds(model(v.interface_kinds.iter().map(|x| s(x)).collect()));
+        w.set_ceiling_options(with_none(
+            w.get_no_ceiling_label().as_str(),
+            v.feasibility.iter().cloned(),
+        ));
+        self.reset_custom_rules();
+    }
+
+    fn reset_custom_rules(&self) {
+        let len = self
+            .with_project(|p| Some(p.vocab.attack_types.len()))
+            .unwrap_or(0);
+        self.state.borrow_mut().custom_rules = vec![None; len];
+        self.push_custom_rules();
+    }
+
+    fn push_custom_rules(&self) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let Some(labels) = self.with_project(|p| Some(p.vocab.attack_types.clone())) else {
+            return;
+        };
+        let rules = self.state.borrow().custom_rules.clone();
+        w.set_custom_setting_rules(model(
+            labels
+                .iter()
+                .zip(rules.into_iter().chain(std::iter::repeat(None)))
+                .map(|(label, lvl)| ControlRuleItem {
+                    label: s(label),
+                    level: lvl.map_or(0, |l| i32::try_from(l + 1).unwrap_or(0)),
+                })
+                .collect(),
+        ));
+    }
+
+    fn create_custom_setting(&self, name: String, target: ItemRef) {
+        let rules: Vec<(usize, usize)> = self
+            .state
+            .borrow()
+            .custom_rules
+            .iter()
+            .enumerate()
+            .filter_map(|(at, lvl)| Some((at, (*lvl)?)))
+            .collect();
+        if let Some(w) = self.window.upgrade() {
+            w.set_component_drafting_custom(false);
+            w.set_component_custom_name(s(""));
+            w.set_interface_drafting_custom(false);
+            w.set_interface_custom_name(s(""));
+        }
+        self.edit(Edit::AddCustomSetting {
+            id: ControlId::new_v7(),
+            name,
+            target,
+            rules,
+        });
     }
 
     fn apply_threats(&self, w: &AppWindow, p: &ProjectView) {
@@ -3166,10 +3377,13 @@ impl Controller {
             ));
             w.set_component_interfaces(links(&c.interfaces));
             w.set_component_assets(links(&c.assets));
+            w.set_component_settings(settings(&c.settings));
+            w.set_component_available_controls(choice_labels(&c.available_controls));
             w.set_component_steps_count(i32::try_from(c.steps.len()).unwrap_or(0));
             w.set_component_changed(s(&c.changed));
         } else {
             w.set_component_id(s(""));
+            w.set_component_drafting_custom(false);
         }
         let mut list: Vec<Vec<String>> = d
             .interfaces
@@ -3204,10 +3418,13 @@ impl Controller {
             w.set_interface_component(s(&i.component_name));
             w.set_interface_kind(i32::try_from(i.kind).unwrap_or(0));
             w.set_interface_flows(links(&i.flows));
+            w.set_interface_settings(settings(&i.settings));
+            w.set_interface_available_controls(choice_labels(&i.available_controls));
             w.set_interface_steps_count(i32::try_from(i.steps.len()).unwrap_or(0));
             w.set_interface_changed(s(&i.changed));
         } else {
             w.set_interface_id(s(""));
+            w.set_interface_drafting_custom(false);
         }
         // The "Steps through this" list follows the tab it was opened from.
         let none: Vec<aegis_client::view::StepThrough> = Vec::new();
@@ -3526,6 +3743,16 @@ impl Controller {
         if let Some(c) = &d.control {
             w.set_control_id(s(&c.visual_id));
             w.set_control_name(s(&c.name));
+            w.set_control_targets(links(&c.targets));
+            w.set_control_rules(model(
+                c.rules
+                    .iter()
+                    .map(|r| ControlRuleItem {
+                        label: s(&r.label),
+                        level: r.level.map_or(0, |l| i32::try_from(l + 1).unwrap_or(0)),
+                    })
+                    .collect(),
+            ));
             w.set_control_steps(links(&c.steps));
             w.set_control_goals(links(&c.goals));
             w.set_control_changed(s(&c.changed));
@@ -3958,6 +4185,7 @@ impl Controller {
                     if pos(w.get_attach_control_index()).is_none_or(|x| x >= i.attachable.len()) {
                         w.set_attach_control_index(0);
                     }
+                    w.set_step_ceilings(model(i.ceilings.iter().map(|l| s(l)).collect()));
                     w.set_step_residual_text(s(i.residual.as_deref().unwrap_or("")));
                 }
                 None => {

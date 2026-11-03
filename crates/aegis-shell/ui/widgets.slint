@@ -101,6 +101,19 @@ export struct SuggestionItem {
     selected: bool,
 }
 
+export struct SettingItem {
+    label: string,
+    rules: string,
+    inherited: bool,
+    from-component: string,
+}
+
+export struct ControlRuleItem {
+    label: string,
+    // 0 = No ceiling, 1.. = feasibility levels
+    level: int,
+}
+
 // ---- Controls ----
 // The window draws its own buttons, fields and boxes from the Theme tokens
 // instead of the platform style's, so the dark and light themes look like one
@@ -1638,5 +1651,164 @@ export component Bars inherits VerticalLayout {
             }
         }
         Text { text: item.count; width: 32px; font-size: Theme.font-label; font-weight: Theme.weight-bold; color: Theme.ink; horizontal-alignment: right; }
+    }
+}
+
+// Attack-type -> feasibility-ceiling rules table for a security setting (CFG-04).
+export component RulesTable inherits VerticalLayout {
+    in property <[ControlRuleItem]> rules;
+    in property <[string]> ceiling-options;
+    in property <bool> editable: true;
+    callback set-rule(int, int);
+    spacing: 4px;
+    HorizontalLayout {
+        spacing: 6px;
+        Text { text: @tr("Attack type"); color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-semibold; horizontal-stretch: 1; }
+        Text { text: @tr("At most"); color: Theme.graphite; font-size: Theme.font-label; font-weight: Theme.weight-semibold; width: 132px; }
+    }
+    for rule[idx] in root.rules: HorizontalLayout {
+        spacing: 6px;
+        Text { text: rule.label; color: Theme.ink; font-size: Theme.font-body; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        Choice {
+            width: 132px;
+            options: root.ceiling-options;
+            index: rule.level;
+            editable: root.editable;
+            label: rule.label;
+            picked(lvl) => { root.set-rule(idx, lvl); }
+        }
+    }
+}
+
+// Security settings section in the component and interface inspectors (CFG-03 to CFG-05).
+// Settings from the owning component appear dimmed on its interfaces; custom settings
+// open an inline draft with a rules table (no modal).
+export component SettingsSection inherits VerticalLayout {
+    in property <[SettingItem]> settings;
+    in property <[string]> available-controls;
+    in property <[ControlRuleItem]> custom-rules;
+    in property <[string]> ceiling-options;
+    in property <bool> editable: true;
+    in-out property <int> pick-index: 0;
+    in-out property <bool> drafting-custom: false;
+    in-out property <string> custom-name: "";
+    callback apply-control(int);
+    callback unapply-control(int);
+    callback open-setting(int);
+    callback begin-custom();
+    callback set-custom-rule(int, int);
+    callback create-custom(string);
+    callback cancel-custom();
+    spacing: 6px;
+    SectionTitle { text: @tr("Security settings"); }
+    if root.settings.length == 0 && !root.drafting-custom: Text {
+        text: @tr("None.");
+        color: Theme.graphite;
+        font-size: Theme.font-label;
+    }
+    for item[i] in root.settings: Rectangle {
+        background: open-area.has-hover ? Theme.wash : transparent;
+        border-radius: Theme.radius-control;
+        opacity: item.inherited ? Theme.disabled-opacity : 1.0;
+        VerticalLayout {
+            padding: 4px;
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 6px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 24px;
+                    accessible-role: button;
+                    accessible-label: item.label;
+                    accessible-action-default => { root.open-setting(i); }
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: item.inherited ? (item.label + " · " + @tr("From") + " " + item.from-component + " (" + @tr("applies here too") + ")") : item.label;
+                        color: item.inherited ? Theme.graphite : Theme.accent;
+                        font-size: Theme.font-body;
+                        font-weight: Theme.weight-semibold;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    open-area := TouchArea {
+                        clicked => { root.open-setting(i); }
+                    }
+                }
+                if !item.inherited && root.editable: Button {
+                    text: @tr("Remove");
+                    ghost: true;
+                    enabled: root.editable;
+                    clicked => { root.unapply-control(i); }
+                }
+            }
+            Text {
+                text: item.rules;
+                color: Theme.graphite;
+                font-size: Theme.font-label;
+                wrap: word-wrap;
+            }
+        }
+    }
+    if root.editable && root.available-controls.length > 0 && !root.drafting-custom: HorizontalLayout {
+        spacing: 6px;
+        Choice {
+            horizontal-stretch: 1;
+            options: root.available-controls;
+            index: root.pick-index;
+            editable: root.editable;
+            label: @tr("Add setting");
+            picked(i) => { root.pick-index = i; }
+        }
+        Button {
+            text: @tr("Add setting");
+            enabled: root.editable;
+            clicked => { root.apply-control(root.pick-index); }
+        }
+    }
+    if root.editable && !root.drafting-custom: Button {
+        text: @tr("Custom setting");
+        icon: @image-url("icons/plus.svg");
+        enabled: root.editable;
+        clicked => { root.custom-name = ""; root.begin-custom(); }
+    }
+    if root.editable && root.drafting-custom: VerticalLayout {
+        spacing: 6px;
+        SectionTitle { text: @tr("Custom setting"); }
+        FocusScope {
+            min-height: custom-edit.preferred-height;
+            capture-key-pressed(event) => {
+                if (event.text == Key.Escape) { root.cancel-custom(); return accept; }
+                reject
+            }
+            custom-edit := LineEdit {
+                width: parent.width;
+                text <=> root.custom-name;
+                placeholder-text: @tr("Control name");
+                accessible-label: @tr("Custom setting");
+                accepted(t) => { if (t != "") { root.create-custom(t); } }
+                init => { self.focus(); }
+            }
+        }
+        SectionTitle { text: @tr("Rules"); }
+        RulesTable {
+            rules: root.custom-rules;
+            ceiling-options: root.ceiling-options;
+            editable: root.editable;
+            set-rule(idx, lvl) => { root.set-custom-rule(idx, lvl); }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Button {
+                text: @tr("Create");
+                primary: true;
+                enabled: root.custom-name != "";
+                clicked => { root.create-custom(root.custom-name); }
+            }
+            Button {
+                text: @tr("Cancel");
+                clicked => { root.cancel-custom(); }
+            }
+        }
     }
 }

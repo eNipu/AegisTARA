@@ -16,6 +16,7 @@ fn styled(tree: &aegis_model::AttackTree) -> Scene {
         critical: false,
         ghost: false,
         via: None,
+        capped: None,
     })
 }
 
@@ -306,6 +307,7 @@ fn ghost_nodes_render_with_dashed_accent_edges_and_boxes() {
         critical: false,
         ghost: i.index() == 3,
         via: None,
+        capped: None,
     });
     let view = Viewport::new(Size::new(1600.0, 700.0));
     let list = render(&scene, &view, &RenderOptions::default());
@@ -357,4 +359,30 @@ fn a_via_chip_is_drawn_on_a_step_and_named_for_screen_readers() {
     assert!(text.contains("\u{27f6} ADAS ECU"), "{text}");
     let a = aegis_canvas::access::describe(&scene, 0).expect("node");
     assert_eq!(a.via.as_deref(), Some("ADAS ECU / JTAG"));
+}
+
+#[test]
+fn a_capped_step_draws_a_shield_badge_and_says_who_capped_it() {
+    let tree = aegis_model::AttackTree::new(
+        aegis_model::NodeId::new_v7(),
+        aegis_model::Node::step("Read flash via JTAG"),
+    )
+    .expect("tree");
+    let scene = Scene::from_tree(&tree, LayoutConfig::default(), |_| NodeStyle {
+        score: Some("Very low".into()),
+        via: Some("ADAS ECU / JTAG".into()),
+        capped: Some("JTAG disabled on ADAS ECU".into()),
+        ..NodeStyle::default()
+    });
+    let view = Viewport::new(Size::new(800.0, 400.0));
+    let list = render(&scene, &view, &RenderOptions::default());
+    let text = format!("{list:?}");
+    assert!(text.contains("Very low \u{1f6e1}"), "{text}");
+    let a = aegis_canvas::access::describe(&scene, 0).expect("node");
+    assert_eq!(a.capped.as_deref(), Some("JTAG disabled on ADAS ECU"));
+    let spoken = aegis_canvas::access::sentence(&a, false);
+    assert!(
+        spoken.contains("Capped by JTAG disabled on ADAS ECU."),
+        "{spoken}"
+    );
 }

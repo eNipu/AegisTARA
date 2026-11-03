@@ -69,6 +69,9 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `AddSecurityControl` | `RemoveSecurityControl` | O(log n) |
 /// | `RenameSecurityControl` | the same with the old name and provenance | O(log n) |
 /// | `RemoveSecurityControl` | `AddSecurityControl` with the old fields and provenance | O(log n) |
+/// | `ApplyControl` | `UnapplyControl` with the old control provenance | O(log n + t) |
+/// | `UnapplyControl` | `ApplyControl` with the old control provenance | O(log n + t) |
+/// | `SetControlRule` | the same with the old ceiling and control provenance | O(log n + r) |
 /// | `SetStepMitigation` | the same with the old feasibility and provenance | O(log n + log V + m) |
 /// | `AddCybersecurityGoal` | `RemoveCybersecurityGoal` | O(m log n + m log m) |
 /// | `RenameCybersecurityGoal` | the same with the old name and provenance | O(log n) |
@@ -518,10 +521,48 @@ pub enum Op {
         /// Provenance of the rename.
         provenance: Provenance,
     },
-    /// Removes a security control that is not attached to any attack step.
+    /// Removes a security control that is not attached to any attack step,
+    /// linked by any goal, applied to any component or interface, or carrying
+    /// any control rules.
     RemoveSecurityControl {
         /// Existing security control.
         id: ControlId,
+    },
+    /// Applies a [`SecurityControl`](crate::SecurityControl) as a setting to a
+    /// component or interface (CFG-03, D26). A control may be applied to at
+    /// most [`MAX_CONTROL_TARGETS`](crate::MAX_CONTROL_TARGETS) targets.
+    ApplyControl {
+        /// Existing security control.
+        control: ControlId,
+        /// Existing component or interface not yet targeted by `control`.
+        target: ItemRef,
+        /// Provenance of applying the control.
+        provenance: Provenance,
+    },
+    /// Removes a [`SecurityControl`](crate::SecurityControl) from a component
+    /// or interface it is currently applied to (CFG-03, D26).
+    UnapplyControl {
+        /// Existing security control.
+        control: ControlId,
+        /// A component or interface currently targeted by `control`.
+        target: ItemRef,
+        /// Provenance of unapplying the control.
+        provenance: Provenance,
+    },
+    /// Sets, updates, or clears (`None`) the residual feasibility ceiling a
+    /// [`SecurityControl`](crate::SecurityControl) imposes on attack steps of
+    /// `attack_type` going through any of its targets (CFG-03, D26). A control
+    /// may carry at most [`MAX_CONTROL_RULES`](crate::MAX_CONTROL_RULES) rules.
+    SetControlRule {
+        /// Existing security control.
+        control: ControlId,
+        /// Valid attack type in the project's methodology.
+        attack_type: AttackType,
+        /// Residual feasibility ceiling for `attack_type`, or `None` to remove
+        /// the rule.
+        ceiling: Option<FeasibilityLevel>,
+        /// Provenance of the rule change.
+        provenance: Provenance,
     },
     /// Attaches, updates, or detaches (`None`) a [`SecurityControl`](crate::SecurityControl)
     /// mitigation on one step node in an attack tree.
@@ -846,6 +887,9 @@ impl Op {
             | Self::SetRiskTreatment { provenance, .. }
             | Self::AddSecurityControl { provenance, .. }
             | Self::RenameSecurityControl { provenance, .. }
+            | Self::ApplyControl { provenance, .. }
+            | Self::UnapplyControl { provenance, .. }
+            | Self::SetControlRule { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }
@@ -938,6 +982,9 @@ impl Op {
             | Self::SetRiskTreatment { provenance, .. }
             | Self::AddSecurityControl { provenance, .. }
             | Self::RenameSecurityControl { provenance, .. }
+            | Self::ApplyControl { provenance, .. }
+            | Self::UnapplyControl { provenance, .. }
+            | Self::SetControlRule { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }

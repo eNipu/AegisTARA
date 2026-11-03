@@ -508,12 +508,23 @@ fn ops_generator_covers_every_op_and_most_errors() {
         let stats = coverage(&m);
         let share = stats.ok as f64 / (stats.ok + stats.failed) as f64;
         assert!((0.25..0.9).contains(&share), "valid share {share}");
-        // The second pack declares no interface kinds, so it has no
-        // interface to add or remove.
-        let kinds = if m.interface_kind_count() > 0 { 43 } else { 41 };
+        // The second pack declares no interface kinds or attack types, so it
+        // has no interface to add or remove and no control rule to set.
+        let kinds = if m.interface_kind_count() > 0 { 46 } else { 43 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
-        for kind in ["SetStepVia", "SetStepAttackType"] {
+        for kind in [
+            "SetStepVia",
+            "SetStepAttackType",
+            "ApplyControl",
+            "UnapplyControl",
+        ] {
             assert!(stats.ok_kinds.contains(kind), "{kind} never succeeded");
+        }
+        if m.attack_type_count() > 0 {
+            assert!(
+                stats.ok_kinds.contains("SetControlRule"),
+                "SetControlRule never succeeded"
+            );
         }
         for error in ["UnknownComponent", "NotAStep"] {
             assert!(stats.errors.contains(error), "{error} never raised");

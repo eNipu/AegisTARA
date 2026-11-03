@@ -294,6 +294,25 @@ enum OpView<'a> {
     RemoveSecurityControl {
         id: Text<ControlId>,
     },
+    ApplyControl {
+        control: Text<ControlId>,
+        target: ItemView,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnapplyControl {
+        control: Text<ControlId>,
+        target: ItemView,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetControlRule {
+        control: Text<ControlId>,
+        attack_type: Required<&'a str>,
+        ceiling: Option<Required<&'a str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetStepMitigation {
         tree: Text<TreeId>,
         node: Text<NodeId>,
@@ -890,6 +909,35 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveSecurityControl { id } => OpView::RemoveSecurityControl { id: Text(*id) },
+        Op::ApplyControl {
+            control,
+            target,
+            provenance,
+        } => OpView::ApplyControl {
+            control: Text(*control),
+            target: ItemView::of(*target),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnapplyControl {
+            control,
+            target,
+            provenance,
+        } => OpView::UnapplyControl {
+            control: Text(*control),
+            target: ItemView::of(*target),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetControlRule {
+            control,
+            attack_type,
+            ceiling,
+            provenance,
+        } => OpView::SetControlRule {
+            control: Text(*control),
+            attack_type: Required(m.attack_type_key(*attack_type)),
+            ceiling: ceiling.map(|l| Required(m.feasibility_level_key(l))),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::SetStepMitigation {
             tree,
             node,
@@ -1518,6 +1566,35 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveSecurityControl { id } => Op::RemoveSecurityControl { id: id.0 },
+        OpWire::ApplyControl {
+            control,
+            target,
+            provenance,
+        } => Op::ApplyControl {
+            control: control.0,
+            target: target.unwrap_item(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnapplyControl {
+            control,
+            target,
+            provenance,
+        } => Op::UnapplyControl {
+            control: control.0,
+            target: target.unwrap_item(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetControlRule {
+            control,
+            attack_type,
+            ceiling,
+            provenance,
+        } => Op::SetControlRule {
+            control: control.0,
+            attack_type: attack_type.0,
+            ceiling: ceiling.map(|l| l.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::SetStepMitigation {
             tree,
             node,

@@ -41,6 +41,8 @@ pub struct NodeAccess {
     pub score: Option<String>,
     /// What the step goes through, if set.
     pub via: Option<String>,
+    /// What caps the step's feasibility, if capped (CFG-04).
+    pub capped: Option<String>,
     /// On the deciding path.
     pub critical: bool,
     /// How many other gates reach it through a shared edge.
@@ -94,6 +96,7 @@ pub fn describe(scene: &Scene, v: u32) -> Option<NodeAccess> {
         parent_label: parent.map(|p| scene.label(p).to_owned()),
         score: style.and_then(|s| s.score.clone()),
         via: style.and_then(|s| s.via.clone()),
+        capped: style.and_then(|s| s.capped.clone()),
         critical: style.is_some_and(|s| s.critical),
         shared_from: scene.shared_in(v),
     })
@@ -143,6 +146,9 @@ pub fn sentence(a: &NodeAccess, selected: bool) -> String {
     }
     if let Some(via) = &a.via {
         out.push_str(&format!(" Goes through {via}."));
+    }
+    if let Some(capped) = &a.capped {
+        out.push_str(&format!(" Capped by {capped}."));
     }
     if a.critical {
         out.push_str(" On the deciding path.");

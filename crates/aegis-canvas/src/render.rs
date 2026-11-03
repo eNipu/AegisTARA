@@ -172,13 +172,28 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
         });
     }
     let base = rect.origin.y + (world.size.h - 8.0) * z;
+    let capped = style.and_then(|s| s.capped.as_deref()).is_some() && !ghost;
     if let Some(score) = style.and_then(|s| s.score.as_deref()) {
+        let text = if capped {
+            format!("{score} \u{1f6e1}")
+        } else {
+            score.to_owned()
+        };
         items.push(Item::Text {
             at: Point::new(text_left, base),
-            text: score.to_owned(),
+            text,
             size: FONT * z,
             bold: true,
             paint: if ghost { Paint::Accent } else { Paint::Ink },
+            align: Align::Start,
+        });
+    } else if capped {
+        items.push(Item::Text {
+            at: Point::new(text_left, base),
+            text: "\u{1f6e1}".to_owned(),
+            size: FONT * z,
+            bold: true,
+            paint: Paint::Ink,
             align: Align::Start,
         });
     }
@@ -190,7 +205,8 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
         .map(|via| {
             let score_chars = style
                 .and_then(|s| s.score.as_deref())
-                .map_or(0, |s| s.chars().count());
+                .map_or(0, |s| s.chars().count())
+                + usize::from(capped) * 2;
             let room =
                 chars_that_fit(world.size.w - 26.0, FONT_SMALL).saturating_sub(score_chars + 2);
             let text = format!("\u{27f6} {via}");

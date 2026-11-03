@@ -1435,3 +1435,30 @@ msgstr "⟦Stép␣␣⟧"
 
 msgid "Inherent"
 msgstr "⟦Ínhérént␣␣⟧"
+
+msgid "Security settings"
+msgstr "⟦Sécúríty séttíngs␣␣⟧"
+
+msgid "Add setting"
+msgstr "⟦Ádd séttíng␣␣⟧"
+
+msgid "Custom setting"
+msgstr "⟦Cústóm séttíng␣␣⟧"
+
+msgid "Applied to"
+msgstr "⟦Ápplíéd tó␣␣⟧"
+
+msgid "applies here too"
+msgstr "⟦ápplíés héré tóó␣␣⟧"
+
+msgid "Rules"
+msgstr "⟦Rúlés␣␣⟧"
+
+msgid "At most"
+msgstr "⟦Át móst␣␣⟧"
+
+msgid "capped by"
+msgstr "⟦cáppéd by␣␣⟧"
+
+msgid "No ceiling"
+msgstr "⟦Nó céílíng␣␣⟧"

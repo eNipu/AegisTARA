@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
-    CybersecurityClaim, CybersecurityGoal, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
-    SecurityControl, StepMitigation,
+    CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, MAX_CONTROL_RULES,
+    MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl,
+    StepCeiling, StepMitigation,
 };
 use crate::damage::DamageScenario;
 use crate::description::{
@@ -296,19 +297,6 @@ impl TreeEntry {
         m.resolve_attack_potential_feasibility(row)
             .or_else(|| self.step_feasibility.get(idx.index()).copied().flatten())
     }
-
-    fn residual_step_feasibility(&self, m: &Methodology, idx: NodeIdx) -> Option<FeasibilityLevel> {
-        let inh = self.effective_step_feasibility(m, idx)?;
-        let mitigations = self
-            .step_mitigations
-            .get(idx.index())
-            .map_or(&[][..], Box::as_ref);
-        Some(
-            mitigations
-                .iter()
-                .fold(inh, |acc, m| acc.min(m.feasibility)),
-        )
-    }
 }
 
 /// One counted property on one asset: how many live threats on that asset
@@ -370,8 +358,12 @@ struct RefCounts {
     component_boundaries: Vec<u32>,
     /// Per component slot: how many live assets are bound to it.
     component_assets: Vec<u32>,
+    /// Per component slot: how many live security controls are applied to it.
+    component_controls: Vec<u32>,
     /// Per interface slot: how many live data flows reference it.
     interfaces: Vec<u32>,
+    /// Per interface slot: how many live security controls are applied to it.
+    interface_controls: Vec<u32>,
 }
 
 /// Adds 1 to (or, with `up == false`, takes 1 from) `v[i]` if it exists.
@@ -1585,6 +1577,83 @@ impl Project {
         &self,
     ) -> impl Iterator<Item = (ControlIdx, ControlId, &SecurityControl)> {
         self.controls.iter()
+    }
+
+    /// Iterates the items (components and interfaces) to which `control` is
+    /// directly applied (CFG-03, D26), in canonical [`ItemRef`] order.
+    /// Returns an empty iterator if `control` is out of range or tombstoned.
+    ///
+    /// Time O(1) per item, space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, ControlId, ItemRef, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let ecu = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: ecu, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "HSM".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::ApplyControl {
+    ///     control: ctrl, target: ItemRef::Component(ecu), provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&ctrl).ok_or("missing")?;
+    /// let targets: Vec<_> = project.control_targets(idx).collect();
+    /// assert_eq!(targets, [ItemRef::Component(ecu)]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn control_targets(&self, control: ControlIdx) -> impl Iterator<Item = ItemRef> + '_ {
+        self.controls
+            .get(control)
+            .map_or(&[][..], |c| c.targets.as_slice())
+            .iter()
+            .filter_map(|&t| self.item_ref(Some(t)))
+    }
+
+    /// Iterates live security controls directly applied to `item` (does not
+    /// include controls applied to an interface's owning component), in
+    /// deterministic `ControlId` order (CFG-03, D26).
+    ///
+    /// Time O(C * log t) where `C` is the number of live controls and
+    /// `t <= 64` is the number of targets on each control, space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, ControlId, ItemRef, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let ecu = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: ecu, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "HSM".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::ApplyControl {
+    ///     control: ctrl, target: ItemRef::Component(ecu), provenance: Provenance::default(),
+    /// })?;
+    /// let applied: Vec<_> = project
+    ///     .controls_applied_to(ItemRef::Component(ecu))
+    ///     .map(|(_, id, _)| id)
+    ///     .collect();
+    /// assert_eq!(applied, [ctrl]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn controls_applied_to(
+        &self,
+        item: ItemRef,
+    ) -> impl Iterator<Item = (ControlIdx, ControlId, &SecurityControl)> + '_ {
+        let want = self.item_idx(item).ok();
+        self.controls
+            .iter()
+            .filter(move |(_, _, c)| want.is_some_and(|w| c.targets.contains(&w)))
     }
 
     // -- Cybersecurity goals -----------------------------------------------------
@@ -2986,13 +3055,18 @@ impl Project {
     }
 
     /// Returns the residual feasibility of `node` in `tree` — the minimum of
-    /// its inherent [`effective_step_feasibility`](Self::effective_step_feasibility)
-    /// and all attached [`step_mitigations`](Self::step_mitigations) — or
-    /// `None` if `tree` or `node` is invalid, `node` is a gate, or the step
-    /// has no inherent feasibility rating.
+    /// its inherent [`effective_step_feasibility`](Self::effective_step_feasibility),
+    /// all attached [`step_mitigations`](Self::step_mitigations), and every
+    /// matching [`ControlRule`] of every [`SecurityControl`] applied to the
+    /// step's [`step_via`](Self::step_via) item or (when `via` is an
+    /// interface) to its owning component (CFG-05, D26) — or `None` if `tree`
+    /// or `node` is invalid, `node` is a gate, or the step has no inherent
+    /// feasibility rating.
     ///
-    /// Time O(F + m) where `F <= 16` is the number of attack potential factors
-    /// and `m <= 16` is the number of mitigations on `node`, space O(1).
+    /// Time O(F + m + C) where `F <= 16` is the number of attack potential
+    /// factors, `m <= 16` is the number of mitigations on `node`, and `C` is
+    /// the number of live controls when the step's `via` (or its component)
+    /// has applied controls (O(F + m) otherwise). Space O(1).
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -3032,9 +3106,222 @@ impl Project {
         tree: TreeIdx,
         node: NodeIdx,
     ) -> Option<FeasibilityLevel> {
-        self.trees
-            .get(tree)?
-            .residual_step_feasibility(&self.methodology, node)
+        let entry = self.trees.get(tree)?;
+        self.entry_residual_step_feasibility(entry, node)
+    }
+
+    /// Returns every active feasibility ceiling on step `node` in `tree` —
+    /// both manual [`step_mitigations`](Self::step_mitigations) and matching
+    /// [`ControlRule`]s from controls applied to the step's
+    /// [`step_via`](Self::step_via) item or its owning component — ordered
+    /// with the deciding (lowest-feasibility) ceiling first (CFG-05, D26).
+    ///
+    /// Ties on [`StepCeiling::feasibility`] are broken deterministically by
+    /// `(control_id, source)`. Returns an empty `Vec` if `tree` or `node` is
+    /// invalid or `node` is a gate.
+    ///
+    /// Time O(m + C + k log k) where `m <= 16` is the number of manual
+    /// mitigations, `C` is the number of live controls, and `k` is the number
+    /// of active ceilings on `node`. Space O(k).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, CeilingSource, ComponentId, ControlId, ItemRef, Methodology, Node,
+    /// #     NodeId, Op, Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let (low, med, high) = (
+    ///     m.feasibility_level("low").ok_or("no level")?,
+    ///     m.feasibility_level("medium").ok_or("no level")?,
+    ///     m.feasibility_level("high").ok_or("no level")?,
+    /// );
+    /// let spoof = m.attack_types().next().ok_or("no attack type")?;
+    /// let ecu = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: ecu, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "SecOC".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetControlRule {
+    ///     control: ctrl, attack_type: spoof, ceiling: Some(low), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::ApplyControl {
+    ///     control: ctrl, target: ItemRef::Component(ecu), provenance: Provenance::default(),
+    /// })?;
+    /// let step = NodeId::new_v7();
+    /// let tree_id = TreeId::new_v7();
+    /// let tree = AttackTree::new(step, Node::step("Inject frame"))?;
+    /// let root = tree.root();
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepVia {
+    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(ecu)), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepAttackType {
+    ///     tree: tree_id, node: step, attack_type: Some(spoof), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepMitigation {
+    ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(med), provenance: Provenance::default(),
+    /// })?;
+    /// let tree_idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
+    /// let ceilings = project.step_ceilings(tree_idx, root);
+    /// assert_eq!(ceilings.len(), 2);
+    /// assert_eq!(ceilings[0].feasibility(), low);
+    /// assert_eq!(
+    ///     ceilings[0].source(),
+    ///     CeilingSource::ControlRule { target: ItemRef::Component(ecu), attack_type: spoof },
+    /// );
+    /// assert_eq!(ceilings[1].feasibility(), med);
+    /// assert_eq!(ceilings[1].source(), CeilingSource::StepMitigation);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn step_ceilings(&self, tree: TreeIdx, node: NodeIdx) -> Vec<StepCeiling> {
+        let Some(entry) = self.trees.get(tree) else {
+            return Vec::new();
+        };
+        if !matches!(entry.tree.get(node), Some(Node::Step { .. })) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if let Some(mitigations) = entry.step_mitigations.get(node.index()) {
+            for m in mitigations {
+                if let Some(control_id) = self.control_key(m.control) {
+                    out.push(StepCeiling {
+                        control: m.control,
+                        control_id,
+                        feasibility: m.feasibility,
+                        source: CeilingSource::StepMitigation,
+                    });
+                }
+            }
+        }
+        if let (Some(via), Some(attack_type)) = (
+            entry.via_at(node.index()),
+            entry.attack_type_at(node.index()),
+        ) {
+            let owner = self.item_owner_component(via);
+            if self.item_control_count(via) > 0
+                || owner.is_some_and(|o| self.item_control_count(o) > 0)
+            {
+                let via_ref = self.item_ref(Some(via));
+                let owner_ref = owner.and_then(|o| self.item_ref(Some(o)));
+                for (ctrl_idx, ctrl_id, ctrl) in self.controls.iter() {
+                    let Some(feasibility) = ctrl.rule_for(attack_type) else {
+                        continue;
+                    };
+                    if let Some(target) = via_ref.filter(|_| ctrl.targets.contains(&via)) {
+                        out.push(StepCeiling {
+                            control: ctrl_idx,
+                            control_id: ctrl_id,
+                            feasibility,
+                            source: CeilingSource::ControlRule {
+                                target,
+                                attack_type,
+                            },
+                        });
+                    }
+                    if let (Some(o_idx), Some(target)) = (owner, owner_ref)
+                        && ctrl.targets.contains(&o_idx)
+                    {
+                        out.push(StepCeiling {
+                            control: ctrl_idx,
+                            control_id: ctrl_id,
+                            feasibility,
+                            source: CeilingSource::ControlRule {
+                                target,
+                                attack_type,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+        out.sort_unstable_by_key(|c| (c.feasibility, c.control_id, c.source));
+        out
+    }
+
+    fn item_owner_component(&self, item: ItemIdx) -> Option<ItemIdx> {
+        match item {
+            ItemIdx::Component(_) => None,
+            ItemIdx::Interface(i) => self
+                .interfaces
+                .get(i)
+                .map(|iface| ItemIdx::Component(iface.component)),
+        }
+    }
+
+    fn item_control_count(&self, item: ItemIdx) -> u32 {
+        match item {
+            ItemIdx::Component(c) => self
+                .refs
+                .component_controls
+                .get(c.index())
+                .copied()
+                .unwrap_or(0),
+            ItemIdx::Interface(i) => self
+                .refs
+                .interface_controls
+                .get(i.index())
+                .copied()
+                .unwrap_or(0),
+        }
+    }
+
+    fn entry_step_has_rule_ceiling(&self, entry: &TreeEntry, step_pos: usize) -> bool {
+        let (Some(via), Some(attack_type)) =
+            (entry.via_at(step_pos), entry.attack_type_at(step_pos))
+        else {
+            return false;
+        };
+        let owner = self.item_owner_component(via);
+        if self.item_control_count(via) == 0
+            && owner.is_none_or(|o| self.item_control_count(o) == 0)
+        {
+            return false;
+        }
+        self.controls.iter().any(|(_, _, ctrl)| {
+            (ctrl.targets.contains(&via) || owner.is_some_and(|o| ctrl.targets.contains(&o)))
+                && ctrl.rule_for(attack_type).is_some()
+        })
+    }
+
+    fn entry_residual_step_feasibility(
+        &self,
+        entry: &TreeEntry,
+        idx: NodeIdx,
+    ) -> Option<FeasibilityLevel> {
+        let mut res = entry.effective_step_feasibility(&self.methodology, idx)?;
+        if let Some(mitigations) = entry.step_mitigations.get(idx.index()) {
+            for m in mitigations {
+                res = res.min(m.feasibility);
+            }
+        }
+        if let (Some(via), Some(attack_type)) =
+            (entry.via_at(idx.index()), entry.attack_type_at(idx.index()))
+        {
+            let owner = self.item_owner_component(via);
+            if self.item_control_count(via) > 0
+                || owner.is_some_and(|o| self.item_control_count(o) > 0)
+            {
+                for (_, _, ctrl) in self.controls.iter() {
+                    if (ctrl.targets.contains(&via)
+                        || owner.is_some_and(|o| ctrl.targets.contains(&o)))
+                        && let Some(ceiling) = ctrl.rule_for(attack_type)
+                    {
+                        res = res.min(ceiling);
+                    }
+                }
+            }
+        }
+        Some(res)
     }
 
     /// Evaluates attack tree `id` bottom-up using
@@ -3294,7 +3581,7 @@ impl Project {
     ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
         let (_, entry) = self.live_tree(id)?;
         evaluate(&entry.tree, &MaxMin::<FeasibilityLevel>::new(), |idx| {
-            entry.residual_step_feasibility(&self.methodology, idx)
+            self.entry_residual_step_feasibility(entry, idx)
         })
     }
 
@@ -4436,7 +4723,7 @@ impl Project {
         let domain = MaxMin::<FeasibilityLevel>::new();
         let mut cache = TreeEvalCache::new(&entry.tree, &domain, |idx| {
             if residual {
-                entry.residual_step_feasibility(&self.methodology, idx)
+                self.entry_residual_step_feasibility(entry, idx)
             } else {
                 entry.effective_step_feasibility(&self.methodology, idx)
             }
@@ -4457,7 +4744,7 @@ impl Project {
                     if idx == step_idx {
                         Some(to_step)
                     } else if residual {
-                        entry.residual_step_feasibility(&self.methodology, idx)
+                        self.entry_residual_step_feasibility(entry, idx)
                     } else {
                         entry.effective_step_feasibility(&self.methodology, idx)
                     }
@@ -4467,7 +4754,7 @@ impl Project {
                     if idx == step_idx {
                         Some(from_step)
                     } else if residual {
-                        entry.residual_step_feasibility(&self.methodology, idx)
+                        self.entry_residual_step_feasibility(entry, idx)
                     } else {
                         entry.effective_step_feasibility(&self.methodology, idx)
                     }
@@ -5053,7 +5340,11 @@ impl Project {
                     let has_mitigations = threat
                         .attack_tree()
                         .and_then(|t_idx| self.trees.get(t_idx))
-                        .is_some_and(|entry| entry.step_mitigations.iter().any(|m| !m.is_empty()));
+                        .is_some_and(|entry| {
+                            entry.step_mitigations.iter().any(|m| !m.is_empty())
+                                || (0..entry.tree.len())
+                                    .any(|i| self.entry_step_has_rule_ceiling(entry, i))
+                        });
                     if !has_mitigations {
                         findings.push(LintFinding::new(LintCode::ReduceTreatmentWithoutControls {
                             threat: id,
@@ -5166,8 +5457,10 @@ impl Project {
     }
 
     fn lint_controls(&self, findings: &mut Vec<LintFinding>) {
-        for (idx, id, _control) in self.controls.iter() {
-            if self.refs.controls.get(idx.index()).copied().unwrap_or(0) == 0 {
+        for (idx, id, control) in self.controls.iter() {
+            if self.refs.controls.get(idx.index()).copied().unwrap_or(0) == 0
+                && control.targets.is_empty()
+            {
                 findings.push(LintFinding::new(LintCode::SecurityControlUnused {
                     control: id,
                 }));
@@ -5322,7 +5615,9 @@ impl Project {
             self.same_asset(x, other, y)
         });
         let damage_scenarios = diff_arena(&self.damages, &other.damages, |x, y| x == y);
-        let security_controls = diff_arena(&self.controls, &other.controls, |x, y| x == y);
+        let security_controls = diff_arena(&self.controls, &other.controls, |x, y| {
+            self.same_control(x, other, y)
+        });
         let cybersecurity_goals = diff_arena(&self.goals, &other.goals, |x, y| {
             self.same_goal(x, other, y)
         });
@@ -5465,7 +5760,8 @@ impl Project {
                         };
                         curr_iter.next();
                         if self.is_threat_affected(
-                            id_a, t_a, assets, damages, threats, trees, controls, goals, claims,
+                            other, id_a, t_a, assets, damages, threats, trees, controls, goals,
+                            claims,
                         ) {
                             let (inh_a, res_a) = self.threat_risk_snapshots(id_a);
                             let (inh_b, res_b) = other.threat_risk_snapshots(id_a);
@@ -5504,6 +5800,7 @@ impl Project {
     #[allow(clippy::too_many_arguments)]
     fn is_threat_affected(
         &self,
+        other: &Self,
         id: ThreatId,
         t: &ThreatScenario,
         assets: &EntityDiff<AssetId>,
@@ -5539,16 +5836,7 @@ impl Project {
             {
                 return true;
             }
-            if !controls.modified().is_empty()
-                && self.trees.get(tree_idx).is_some_and(|entry| {
-                    entry
-                        .step_mitigations
-                        .iter()
-                        .flat_map(|ms| ms.iter())
-                        .filter_map(|m| self.controls.id(m.control))
-                        .any(|c| controls.modified().binary_search(&c).is_ok())
-                })
-            {
+            if !controls.is_empty() && self.tree_affected_by_controls(other, tree_idx, controls) {
                 return true;
             }
         }
@@ -5578,6 +5866,53 @@ impl Project {
             return true;
         }
         false
+    }
+
+    fn tree_affected_by_controls(
+        &self,
+        other: &Self,
+        tree_idx: TreeIdx,
+        controls: &EntityDiff<ControlId>,
+    ) -> bool {
+        let Some(entry) = self.trees.get(tree_idx) else {
+            return false;
+        };
+        if !controls.modified().is_empty()
+            && entry
+                .step_mitigations
+                .iter()
+                .flat_map(|ms| ms.iter())
+                .filter_map(|m| self.controls.id(m.control))
+                .any(|c| controls.modified().binary_search(&c).is_ok())
+        {
+            return true;
+        }
+        for (_, via) in entry.vias() {
+            if self.item_affected_by_controls(via, &[controls.removed(), controls.modified()]) {
+                return true;
+            }
+            if let Some(via_ref) = self.item_ref(Some(via))
+                && let Ok(other_via) = other.item_idx(via_ref)
+                && other
+                    .item_affected_by_controls(other_via, &[controls.added(), controls.modified()])
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn item_affected_by_controls(&self, via: ItemIdx, lists: &[&[ControlId]]) -> bool {
+        let owner = self.item_owner_component(via);
+        if self.item_control_count(via) == 0
+            && owner.is_none_or(|o| self.item_control_count(o) == 0)
+        {
+            return false;
+        }
+        self.controls.iter().any(|(_, id, ctrl)| {
+            (ctrl.targets.contains(&via) || owner.is_some_and(|o| ctrl.targets.contains(&o)))
+                && lists.iter().any(|list| list.binary_search(&id).is_ok())
+        })
     }
 
     fn threat_risk_snapshots(&self, id: ThreatId) -> (Option<RiskSnapshot>, Option<RiskSnapshot>) {
@@ -5902,6 +6237,18 @@ impl Project {
                 check_name(EntityKind::SecurityControl, name)?;
             }
             Op::RemoveSecurityControl { id } => return self.check_remove_control(*id),
+            Op::ApplyControl {
+                control, target, ..
+            } => self.check_control_target(*control, *target, true)?,
+            Op::UnapplyControl {
+                control, target, ..
+            } => self.check_control_target(*control, *target, false)?,
+            Op::SetControlRule {
+                control,
+                attack_type,
+                ceiling,
+                ..
+            } => self.check_set_control_rule(*control, *attack_type, *ceiling)?,
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -6324,6 +6671,22 @@ impl Project {
                 provenance,
             } => self.commit_rename_control(id, name, provenance),
             Op::RemoveSecurityControl { id } => self.commit_remove_control(id),
+            Op::ApplyControl {
+                control,
+                target,
+                provenance,
+            } => self.commit_control_target(control, target, provenance, true),
+            Op::UnapplyControl {
+                control,
+                target,
+                provenance,
+            } => self.commit_control_target(control, target, provenance, false),
+            Op::SetControlRule {
+                control,
+                attack_type,
+                ceiling,
+                provenance,
+            } => self.commit_set_control_rule(control, attack_type, ceiling, provenance),
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -6734,7 +7097,7 @@ impl Project {
     }
 
     /// The public form of a stored "through" item, if it is live.
-    fn item_ref(&self, idx: Option<ItemIdx>) -> Option<ItemRef> {
+    pub(crate) fn item_ref(&self, idx: Option<ItemIdx>) -> Option<ItemRef> {
         match idx? {
             ItemIdx::Component(c) => self.components.id(c).map(ItemRef::Component),
             ItemIdx::Interface(i) => self.interfaces.id(i).map(ItemRef::Interface),
@@ -7826,6 +8189,64 @@ impl Project {
         Ok(())
     }
 
+    fn find_control_target(&self, c: &SecurityControl, target: ItemRef) -> Result<usize, usize> {
+        c.targets
+            .binary_search_by(|&t| self.item_ref(Some(t)).cmp(&Some(target)))
+    }
+
+    fn check_control_target(
+        &self,
+        control: ControlId,
+        target: ItemRef,
+        apply: bool,
+    ) -> Result<(), ModelError> {
+        let idx = self.live_control(control)?;
+        let c = self
+            .controls
+            .get(idx)
+            .ok_or(ModelError::UnknownSecurityControl(control))?;
+        self.item_idx(target)?;
+        match (apply, self.find_control_target(c, target).is_ok()) {
+            (true, true) => Err(ModelError::DuplicateControlTarget { control, target }),
+            (true, false) if c.targets.len() >= MAX_CONTROL_TARGETS => {
+                Err(ModelError::TooManyControlTargets {
+                    control,
+                    max: MAX_CONTROL_TARGETS,
+                })
+            }
+            (false, false) => Err(ModelError::ControlTargetNotLinked { control, target }),
+            _ => Ok(()),
+        }
+    }
+
+    fn check_set_control_rule(
+        &self,
+        control: ControlId,
+        attack_type: AttackType,
+        ceiling: Option<FeasibilityLevel>,
+    ) -> Result<(), ModelError> {
+        let idx = self.live_control(control)?;
+        let c = self
+            .controls
+            .get(idx)
+            .ok_or(ModelError::UnknownSecurityControl(control))?;
+        self.methodology.check_attack_type(attack_type)?;
+        if let Some(level) = ceiling {
+            self.methodology.check_feasibility_level(level)?;
+            if c.rules
+                .binary_search_by_key(&attack_type, |r| r.attack_type)
+                .is_err()
+                && c.rules.len() >= MAX_CONTROL_RULES
+            {
+                return Err(ModelError::TooManyControlRules {
+                    control,
+                    max: MAX_CONTROL_RULES,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn check_remove_control(&self, id: ControlId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Control(id), EntityKind::SecurityControl)?;
         let idx = self.live_control(id)?;
@@ -7841,6 +8262,22 @@ impl Project {
             .unwrap_or(0);
         if goals > 0 {
             return Err(ModelError::SecurityControlInGoal { control: id, goals });
+        }
+        let c = self
+            .controls
+            .get(idx)
+            .ok_or(ModelError::UnknownSecurityControl(id))?;
+        if !c.targets.is_empty() {
+            return Err(ModelError::SecurityControlHasTargets {
+                control: id,
+                targets: c.targets.len(),
+            });
+        }
+        if !c.rules.is_empty() {
+            return Err(ModelError::SecurityControlHasRules {
+                control: id,
+                rules: c.rules.len(),
+            });
         }
         Ok(())
     }
@@ -8139,6 +8576,13 @@ impl Project {
                 steps,
             });
         }
+        let controls = self.refs.component_controls.get(pos).copied().unwrap_or(0);
+        if controls > 0 {
+            return Err(ModelError::ComponentHasControls {
+                component: id,
+                controls,
+            });
+        }
         Ok(())
     }
 
@@ -8180,6 +8624,18 @@ impl Project {
             return Err(ModelError::InterfaceHasSteps {
                 interface: id,
                 steps,
+            });
+        }
+        let controls = self
+            .refs
+            .interface_controls
+            .get(idx.index())
+            .copied()
+            .unwrap_or(0);
+        if controls > 0 {
+            return Err(ModelError::InterfaceHasControls {
+                interface: id,
+                controls,
             });
         }
         Ok(())
@@ -8961,7 +9417,12 @@ impl Project {
         name: Arc<str>,
         provenance: Provenance,
     ) -> Result<Op, ModelError> {
-        let control = SecurityControl { name, provenance };
+        let control = SecurityControl {
+            name,
+            targets: Vec::new(),
+            rules: Vec::new(),
+            provenance,
+        };
         self.controls.push(id, control, self.slot_limit).ok_or(
             ModelError::ProjectCapacityExceeded {
                 kind: EntityKind::SecurityControl,
@@ -8970,6 +9431,99 @@ impl Project {
         self.refs.controls.push(0);
         self.refs.control_goals.push(0);
         Ok(Op::RemoveSecurityControl { id })
+    }
+
+    fn bump_item_controls(&mut self, item: ItemIdx, up: bool) {
+        match item {
+            ItemIdx::Component(c) => {
+                bump(&mut self.refs.component_controls, Some(c.index()), up);
+            }
+            ItemIdx::Interface(i) => {
+                bump(&mut self.refs.interface_controls, Some(i.index()), up);
+            }
+        }
+    }
+
+    fn commit_control_target(
+        &mut self,
+        control: ControlId,
+        target: ItemRef,
+        provenance: Provenance,
+        apply: bool,
+    ) -> Result<Op, ModelError> {
+        let idx = self.control_index(control)?;
+        let t_idx = self.item_idx(target)?;
+        let c = self
+            .controls
+            .get(idx)
+            .ok_or(ModelError::UnknownSecurityControl(control))?;
+        let found = self.find_control_target(c, target);
+        let c = self
+            .controls
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownSecurityControl(control))?;
+        match (apply, found) {
+            (true, Err(pos)) => {
+                c.targets.insert(pos, t_idx);
+                let provenance = std::mem::replace(&mut c.provenance, provenance);
+                self.bump_item_controls(t_idx, true);
+                Ok(Op::UnapplyControl {
+                    control,
+                    target,
+                    provenance,
+                })
+            }
+            (false, Ok(pos)) => {
+                c.targets.remove(pos);
+                let provenance = std::mem::replace(&mut c.provenance, provenance);
+                self.bump_item_controls(t_idx, false);
+                Ok(Op::ApplyControl {
+                    control,
+                    target,
+                    provenance,
+                })
+            }
+            (true, Ok(_)) => Err(ModelError::DuplicateControlTarget { control, target }),
+            (false, Err(_)) => Err(ModelError::ControlTargetNotLinked { control, target }),
+        }
+    }
+
+    fn commit_set_control_rule(
+        &mut self,
+        control: ControlId,
+        attack_type: AttackType,
+        ceiling: Option<FeasibilityLevel>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let c = self.control_mut(control)?;
+        let found = c
+            .rules
+            .binary_search_by_key(&attack_type, |r| r.attack_type);
+        let old = match (ceiling, found) {
+            (Some(new_c), Ok(pos)) => {
+                let old_c = std::mem::replace(&mut c.rules[pos].ceiling, new_c);
+                Some(old_c)
+            }
+            (Some(new_c), Err(pos)) => {
+                c.rules.insert(
+                    pos,
+                    ControlRule {
+                        attack_type,
+                        ceiling: new_c,
+                    },
+                );
+                None
+            }
+            (None, Ok(pos)) => Some(c.rules.remove(pos).ceiling),
+            (None, Err(_)) => None,
+        };
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::SetControlRule {
+            control,
+            attack_type,
+            ceiling: old,
+            provenance,
+        })
     }
 
     fn commit_rename_control(
@@ -9333,6 +9887,7 @@ impl Project {
         self.refs.component_flows.push(0);
         self.refs.component_boundaries.push(0);
         self.refs.component_assets.push(0);
+        self.refs.component_controls.push(0);
         if let Some(p_idx) = parent_idx {
             bump(&mut self.refs.component_children, Some(p_idx.index()), true);
         }
@@ -9445,6 +10000,7 @@ impl Project {
             },
         )?;
         self.refs.interfaces.push(0);
+        self.refs.interface_controls.push(0);
         bump(
             &mut self.refs.component_interfaces,
             Some(comp_idx.index()),
@@ -9825,7 +10381,7 @@ impl PartialEq for Project {
             && self
                 .security_controls()
                 .zip(other.security_controls())
-                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_control(x, other, y))
             && self
                 .cybersecurity_claims()
                 .zip(other.cybersecurity_claims())
@@ -9937,6 +10493,19 @@ impl Project {
                 .all(|(&a, &b)| self.component_key(a) == other.component_key(b))
     }
 
+    /// Compares two controls from two projects by content, with applied target
+    /// items resolved to public IDs. O(t + r).
+    fn same_control(&self, x: &SecurityControl, other: &Project, y: &SecurityControl) -> bool {
+        x.name == y.name
+            && x.rules == y.rules
+            && x.provenance == y.provenance
+            && x.targets.len() == y.targets.len()
+            && x.targets
+                .iter()
+                .zip(&y.targets)
+                .all(|(&a, &b)| self.item_ref(Some(a)) == other.item_ref(Some(b)))
+    }
+
     /// Compares two goals from two projects by content, with control
     /// references resolved to public IDs. O(c).
     fn same_goal(&self, x: &CybersecurityGoal, other: &Project, y: &CybersecurityGoal) -> bool {
@@ -9984,7 +10553,8 @@ impl Project {
         arena_invariants("interface", &self.interfaces)?;
         arena_invariants("data_flow", &self.data_flows)?;
         arena_invariants("trust_boundary", &self.trust_boundaries)?;
-        let (control_goals, component_assets) = self.entity_invariants()?;
+        let (control_goals, component_assets, component_controls, interface_controls) =
+            self.entity_invariants()?;
         let (
             component_children,
             component_interfaces,
@@ -10008,7 +10578,9 @@ impl Project {
             component_flows,
             component_boundaries,
             component_assets,
+            component_controls,
             interfaces,
+            interface_controls,
         };
         self.refs_invariants(&want)
     }
@@ -10109,9 +10681,12 @@ impl Project {
     }
 
     #[cfg(test)]
-    fn entity_invariants(&self) -> Result<(Vec<u32>, Vec<u32>), String> {
+    #[allow(clippy::type_complexity)]
+    fn entity_invariants(&self) -> Result<(Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>), String> {
         let m = &*self.methodology;
         let mut component_assets = vec![0u32; self.components.slot_count()];
+        let mut component_controls = vec![0u32; self.components.slot_count()];
+        let mut interface_controls = vec![0u32; self.interfaces.slot_count()];
 
         for (_, id, a) in self.assets() {
             check_name(EntityKind::Asset, &a.name).map_err(|e| format!("asset {id}: {e}"))?;
@@ -10143,9 +10718,12 @@ impl Project {
             }
         }
         for (_, id, c) in self.security_controls() {
-            check_name(EntityKind::SecurityControl, &c.name)
-                .map_err(|e| format!("control {id}: {e}"))?;
-            check_provenance(&c.provenance).map_err(|e| format!("control {id}: {e}"))?;
+            self.check_security_control_invariants(
+                id,
+                c,
+                &mut component_controls,
+                &mut interface_controls,
+            )?;
         }
         let mut control_goals = vec![0u32; self.controls.slot_count()];
         for (_, id, g) in self.cybersecurity_goals() {
@@ -10171,7 +10749,59 @@ impl Project {
                 .map_err(|e| format!("claim {id}: {e}"))?;
             check_provenance(&c.provenance).map_err(|e| format!("claim {id}: {e}"))?;
         }
-        Ok((control_goals, component_assets))
+        Ok((
+            control_goals,
+            component_assets,
+            component_controls,
+            interface_controls,
+        ))
+    }
+
+    #[cfg(test)]
+    fn check_security_control_invariants(
+        &self,
+        id: ControlId,
+        c: &SecurityControl,
+        component_controls: &mut [u32],
+        interface_controls: &mut [u32],
+    ) -> Result<(), String> {
+        let m = &*self.methodology;
+        check_name(EntityKind::SecurityControl, &c.name)
+            .map_err(|e| format!("control {id}: {e}"))?;
+        check_provenance(&c.provenance).map_err(|e| format!("control {id}: {e}"))?;
+        if c.targets.len() > MAX_CONTROL_TARGETS {
+            return Err(format!("control {id} has too many targets"));
+        }
+        let target_refs: Vec<_> = c.targets.iter().map(|&t| self.item_ref(Some(t))).collect();
+        if target_refs.iter().any(Option::is_none) {
+            return Err(format!("control {id} targets a dead item slot"));
+        }
+        if !target_refs.windows(2).all(|w| w[0] < w[1]) {
+            return Err(format!("control {id} targets not sorted and unique"));
+        }
+        for &t in &c.targets {
+            match t {
+                ItemIdx::Component(comp) => bump(component_controls, Some(comp.index()), true),
+                ItemIdx::Interface(iface) => bump(interface_controls, Some(iface.index()), true),
+            }
+        }
+        if c.rules.len() > MAX_CONTROL_RULES {
+            return Err(format!("control {id} has too many rules"));
+        }
+        if !c
+            .rules
+            .windows(2)
+            .all(|w| w[0].attack_type < w[1].attack_type)
+        {
+            return Err(format!("control {id} rules not sorted and unique"));
+        }
+        for r in &c.rules {
+            m.check_attack_type(r.attack_type)
+                .map_err(|e| format!("control {id}: {e}"))?;
+            m.check_feasibility_level(r.ceiling)
+                .map_err(|e| format!("control {id}: {e}"))?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -10808,10 +11438,6 @@ impl ProjectEvalCache {
             | Op::SetProjectLanguages { .. }
             | Op::SetReviewMark { .. }
             | Op::RenameTreeNode { .. }
-            // Via and attack type change no rating yet. Job 123 adds the
-            // settings that read them and must mark the step dirty here.
-            | Op::SetStepVia { .. }
-            | Op::SetStepAttackType { .. }
             | Op::AddAsset { .. }
             | Op::RenameAsset { .. }
             | Op::SetAssetProperties { .. }
@@ -10859,10 +11485,7 @@ impl ProjectEvalCache {
                     .resize_with(project.damages.slot_count(), Vec::new);
             }
 
-            Op::SetImpact { id, .. } => {
-                self.update_damage_impact(project, *id);
-            }
-
+            Op::SetImpact { id, .. } => self.update_damage_impact(project, *id),
             Op::AddAttackTree { id, .. } | Op::RemoveAttackTree { id } => {
                 if let Some(tree_idx) = project.attack_tree_idx(id) {
                     self.update_tree_added(project, tree_idx);
@@ -10870,21 +11493,27 @@ impl ProjectEvalCache {
                     self.update_tree_removed(project);
                 }
             }
-
             Op::AddTreeNode { tree, .. }
             | Op::RemoveTreeNode { tree, .. }
             | Op::LinkTreeNode { tree, .. }
             | Op::UnlinkTreeNode { tree, .. }
             | Op::SetTreeNodeGate { tree, .. } => self.update_tree_structure(project, *tree),
-
             Op::SetStepFeasibility { tree, node, .. } | Op::SetStepFactor { tree, node, .. } => {
                 self.update_step(project, *tree, *node, true);
             }
-
-            Op::SetStepMitigation { tree, node, .. } => {
+            Op::SetStepMitigation { tree, node, .. }
+            | Op::SetStepVia { tree, node, .. }
+            | Op::SetStepAttackType { tree, node, .. } => {
                 self.update_step(project, *tree, *node, false);
             }
-
+            Op::ApplyControl { target, .. } | Op::UnapplyControl { target, .. } => {
+                self.update_control_target(project, *target);
+            }
+            Op::SetControlRule {
+                control,
+                attack_type,
+                ..
+            } => self.update_control_rule(project, *control, *attack_type),
             Op::AddThreatScenario { id, .. } | Op::RemoveThreatScenario { id } => {
                 if let Some(threat_idx) = project.threat_scenario_idx(id) {
                     self.update_threat_added(project, threat_idx, *id);
@@ -10892,15 +11521,10 @@ impl ProjectEvalCache {
                     self.update_threat_removed(project);
                 }
             }
-
             Op::SetThreatFeasibility { threat, .. } => {
                 self.update_threat_feasibility(project, *threat);
             }
-
-            Op::SetThreatAttackTree { threat, .. } => {
-                self.update_threat_tree(project, *threat);
-            }
-
+            Op::SetThreatAttackTree { threat, .. } => self.update_threat_tree(project, *threat),
             Op::LinkDamage { threat, .. } | Op::UnlinkDamage { threat, .. } => {
                 self.update_threat_damages(project, *threat);
             }
@@ -11363,7 +11987,7 @@ impl ProjectEvalCache {
             entry.effective_step_feasibility(&project.methodology, idx)
         });
         let residual = TreeEvalCache::new(&entry.tree, &domain, |idx| {
-            entry.residual_step_feasibility(&project.methodology, idx)
+            project.entry_residual_step_feasibility(entry, idx)
         });
         CachedTreeEval { inherent, residual }
     }
@@ -11481,9 +12105,62 @@ impl ProjectEvalCache {
             return;
         };
         if include_inherent {
-            self.update_tree_mode(project, tree_idx, entry, node_idx, false);
+            self.update_tree_mode(project, tree_idx, entry, &[node_idx], false);
         }
-        self.update_tree_mode(project, tree_idx, entry, node_idx, true);
+        self.update_tree_mode(project, tree_idx, entry, &[node_idx], true);
+    }
+
+    fn update_control_target(&mut self, project: &Project, target: ItemRef) {
+        let Ok(target_idx) = project.item_idx(target) else {
+            return;
+        };
+        for (tree_idx, _, entry) in project.trees.iter() {
+            let dirty: Vec<NodeIdx> = entry
+                .vias()
+                .filter(|&(i, via)| {
+                    entry.attack_type_at(i).is_some()
+                        && (via == target_idx
+                            || project.item_owner_component(via) == Some(target_idx))
+                })
+                .filter_map(|(i, _)| NodeIdx::try_from_usize(i))
+                .collect();
+            if !dirty.is_empty() {
+                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+            }
+        }
+    }
+
+    fn update_control_rule(
+        &mut self,
+        project: &Project,
+        control: ControlId,
+        attack_type: AttackType,
+    ) {
+        let Some(ctrl_idx) = project.security_control_idx(&control) else {
+            return;
+        };
+        let Some(ctrl) = project.controls.get(ctrl_idx) else {
+            return;
+        };
+        if ctrl.targets.is_empty() {
+            return;
+        }
+        for (tree_idx, _, entry) in project.trees.iter() {
+            let dirty: Vec<NodeIdx> = entry
+                .vias()
+                .filter(|&(i, via)| {
+                    entry.attack_type_at(i) == Some(attack_type)
+                        && (ctrl.targets.contains(&via)
+                            || project
+                                .item_owner_component(via)
+                                .is_some_and(|o| ctrl.targets.contains(&o)))
+                })
+                .filter_map(|(i, _)| NodeIdx::try_from_usize(i))
+                .collect();
+            if !dirty.is_empty() {
+                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+            }
+        }
     }
 
     fn update_tree_mode(
@@ -11491,15 +12168,21 @@ impl ProjectEvalCache {
         project: &Project,
         tree_idx: TreeIdx,
         entry: &TreeEntry,
-        node_idx: NodeIdx,
+        node_indices: &[NodeIdx],
         residual: bool,
     ) {
         let domain = MaxMin::<FeasibilityLevel>::new();
-        let step_val = if residual {
-            entry.residual_step_feasibility(&project.methodology, node_idx)
-        } else {
-            entry.effective_step_feasibility(&project.methodology, node_idx)
-        };
+        let all_rated = node_indices.iter().all(|&node_idx| {
+            if residual {
+                project
+                    .entry_residual_step_feasibility(entry, node_idx)
+                    .is_some()
+            } else {
+                entry
+                    .effective_step_feasibility(&project.methodology, node_idx)
+                    .is_some()
+            }
+        });
         let mut touched = Vec::new();
 
         let Some(Some(cached_tree)) = self.trees.get_mut(tree_idx.index()) else {
@@ -11512,21 +12195,20 @@ impl ProjectEvalCache {
             &mut cached_tree.inherent
         };
 
-        let (full_rebuild, tree_changed) = if let (Some(_), Ok(tc)) = (step_val, tree_res.as_mut())
-        {
+        let (full_rebuild, tree_changed) = if let (true, Ok(tc)) = (all_rated, tree_res.as_mut()) {
             let res = if residual {
                 tc.recompute_steps_recording(
                     &entry.tree,
                     &domain,
-                    [node_idx],
-                    |i| entry.residual_step_feasibility(&project.methodology, i),
+                    node_indices.iter().copied(),
+                    |i| project.entry_residual_step_feasibility(entry, i),
                     &mut touched,
                 )
             } else {
                 tc.recompute_steps_recording(
                     &entry.tree,
                     &domain,
-                    [node_idx],
+                    node_indices.iter().copied(),
                     |i| entry.effective_step_feasibility(&project.methodology, i),
                     &mut touched,
                 )
@@ -11548,7 +12230,7 @@ impl ProjectEvalCache {
             self.recomputed_nodes = self.recomputed_nodes.saturating_add(n);
             *tree_res = if residual {
                 TreeEvalCache::new(&entry.tree, &domain, |i| {
-                    entry.residual_step_feasibility(&project.methodology, i)
+                    project.entry_residual_step_feasibility(entry, i)
                 })
             } else {
                 TreeEvalCache::new(&entry.tree, &domain, |i| {
