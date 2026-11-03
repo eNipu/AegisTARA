@@ -3452,6 +3452,9 @@ fn setting_toast_before(ws: &Workspace, ops: &[aegis_model::Op]) -> Option<Setti
     })
 }
 
+/// Risks named one by one in a settings toast; the rest are counted.
+const MAX_TOAST_RISKS: usize = 3;
+
 fn setting_toast_after(ws: &Workspace, snap: SettingSnapshot) -> String {
     let project = ws.project();
     let m = project.methodology();
@@ -3482,10 +3485,14 @@ fn setting_toast_after(ws: &Workspace, snap: SettingSnapshot) -> String {
             .ok()
             .and_then(aegis_model::ThreatRisk::max_risk);
         if before_r != after_r {
-            let vis = project
-                .threat_scenario_idx(&tid)
+            let idx = project.threat_scenario_idx(&tid);
+            let vis = idx
                 .and_then(|i| project.threat_scenario_visual_id(i))
                 .unwrap_or_default();
+            let name = idx
+                .and_then(|i| project.threat_scenario(i))
+                .map_or("", aegis_model::ThreatScenario::name)
+                .to_owned();
             let b_txt = before_r
                 .and_then(|l| m.risk_level_label(l))
                 .unwrap_or("unrated");
@@ -3493,7 +3500,7 @@ fn setting_toast_after(ws: &Workspace, snap: SettingSnapshot) -> String {
                 .and_then(|l| m.risk_level_label(l))
                 .unwrap_or("unrated");
             let lowered = before_r.zip(after_r).is_some_and(|(b, a)| a < b);
-            moved.push((vis, b_txt, a_txt, lowered));
+            moved.push((format!("{vis} '{name}'"), b_txt, a_txt, lowered));
         }
     }
     let step_word = if capped == 1 { "step" } else { "steps" };
@@ -3509,11 +3516,16 @@ fn setting_toast_after(ws: &Workspace, snap: SettingSnapshot) -> String {
         } else {
             "moved"
         };
-        let details = moved
+        // A big change can move many risks: name the first few.
+        let mut details = moved
             .iter()
-            .map(|(vis, b, a, _)| format!("{vis} {b} \u{2192} {a}"))
+            .take(MAX_TOAST_RISKS)
+            .map(|(who, b, a, _)| format!("{who} {b} \u{2192} {a}"))
             .collect::<Vec<_>>()
             .join(", ");
+        if n > MAX_TOAST_RISKS {
+            details.push_str(&format!(", and {} more", n - MAX_TOAST_RISKS));
+        }
         format!(
             "{}: {capped} {step_word} capped, {n} {risk_word} {dir} ({details})",
             snap.lead

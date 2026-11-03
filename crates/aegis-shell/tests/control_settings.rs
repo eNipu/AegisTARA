@@ -10,7 +10,7 @@ mod common;
 use aegis_client::commands::{Command, Edit};
 use aegis_client::state::{Mode, NoticeAction, SyncView};
 use aegis_client::view::{Page, Selection};
-use aegis_model::{ComponentId, InterfaceId};
+use aegis_model::{ComponentId, ControlId, InterfaceId, ItemRef};
 use common::{App, TestServer, node_position, press_chord, press_key, save, type_text};
 use slint::Model;
 use slint::platform::Key;
@@ -179,7 +179,7 @@ async fn apply_custom_setting_see_inherited_dimmed_toast_shield_and_japanese() {
         assert!(
             undo_notice.text.contains("1 step capped")
                 && undo_notice.text.contains("1 risk lowered")
-                && undo_notice.text.contains("T00"),
+                && undo_notice.text.contains("T00 '"),
             "unexpected toast: {}",
             undo_notice.text
         );
@@ -306,6 +306,35 @@ async fn apply_custom_setting_see_inherited_dimmed_toast_shield_and_japanese() {
 async fn a_read_only_user_cannot_apply_or_edit_settings() {
     let server = TestServer::start().await;
     let (editor, ecu, _) = app_with_step_via_interface(&server).await;
+    // One setting already applied (with a rule), one waiting to be applied.
+    let (applied, spare) = (ControlId::new_v7(), ControlId::new_v7());
+    for (id, name) in [(applied, "JTAG locked"), (spare, "Secure boot")] {
+        edit(
+            &editor,
+            Edit::AddControl {
+                id,
+                name: name.into(),
+            },
+        )
+        .await;
+    }
+    edit(
+        &editor,
+        Edit::ApplyControl {
+            control: applied,
+            target: ItemRef::Component(ecu),
+        },
+    )
+    .await;
+    edit(
+        &editor,
+        Edit::SetControlRule {
+            control: applied,
+            attack_type: 2,
+            level: Some(0),
+        },
+    )
+    .await;
     let id = editor
         .session
         .view()
@@ -334,8 +363,13 @@ async fn a_read_only_user_cannot_apply_or_edit_settings() {
         .await;
     reader.controller.apply_latest();
     reader.frame();
+    assert_eq!(reader.window.get_component_settings().row_count(), 1);
+    assert!(reader.window.get_component_available_controls().row_count() >= 1);
 
     let before = seq(&reader);
+    let editor_before = seq(&editor);
+    // Custom draft, apply an existing setting, unapply one, change a rule:
+    // each is refused the same way, and nothing reaches the server.
     reader.window.invoke_begin_component_custom_setting();
     reader
         .window
@@ -345,8 +379,117 @@ async fn a_read_only_user_cannot_apply_or_edit_settings() {
             vm.notices.iter().any(|n| n.text.contains("Edit"))
         })
         .await;
+    reader.window.invoke_apply_control_to_component(0);
+    reader.window.invoke_unapply_control_from_component(0);
+    reader.send(Command::Select {
+        selection: Selection::Control(applied),
+        navigate: true,
+    });
+    reader
+        .until("control selected", |vm| {
+            vm.project
+                .as_ref()
+                .is_some_and(|p| p.data.control.as_ref().is_some_and(|c| c.id == applied))
+        })
+        .await;
+    reader.controller.apply_latest();
+    reader.window.invoke_set_control_rule(2, 3);
+    // Let any (wrongly) sent edit reach the server and come back.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    reader.frame();
     assert_eq!(seq(&reader), before);
+    assert_eq!(seq(&editor), editor_before);
+    let rules = reader
+        .session
+        .view()
+        .project
+        .as_ref()
+        .and_then(|p| p.data.control.as_ref().map(|c| c.rules.clone()))
+        .expect("control");
+    // Every attack type is listed; only the editor's rule has a ceiling.
+    assert_eq!(rules.iter().filter(|r| r.level.is_some()).count(), 1);
+    assert_eq!(rules[2].level, Some(0), "the rule must be unchanged");
     drop(reader);
     drop(editor);
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_existing_setting_is_applied_with_the_keyboard_alone() {
+    let server = TestServer::start().await;
+    let (app, ecu, _) = app_with_step_via_interface(&server).await;
+    for name in ["Secure boot", "Debug lock"] {
+        edit(
+            &app,
+            Edit::AddControl {
+                id: ControlId::new_v7(),
+                name: name.into(),
+            },
+        )
+        .await;
+    }
+    app.send(Command::Select {
+        selection: Selection::Component(ecu),
+        navigate: true,
+    });
+    app.until("component selected", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.data.component.as_ref().is_some_and(|c| c.id == ecu))
+    })
+    .await;
+    app.controller.apply_latest();
+    app.frame();
+    let available = app.window.get_component_available_controls();
+    // The sample project brings its own controls; the picker lists them all.
+    assert!(available.row_count() >= 3);
+    let second = available.row_data(1).expect("second").to_string();
+
+    // Tab to the "Add setting" list, Down picks the second entry, Tab moves to
+    // the button, Return applies it.
+    for _ in 0..80 {
+        if app.window.get_component_pick_focused() {
+            break;
+        }
+        press_key(&app, Key::Tab, false);
+        app.frame();
+    }
+    assert!(
+        app.window.get_component_pick_focused(),
+        "Tab never reached the Add setting list"
+    );
+    press_key(&app, Key::DownArrow, false);
+    app.frame();
+    assert_eq!(app.window.get_component_pick_index(), 1);
+    press_key(&app, Key::Tab, false);
+    app.frame();
+    assert!(!app.window.get_component_pick_focused());
+    press_key(&app, Key::Return, false);
+    app.until("setting applied", |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.sync == SyncView::Synced
+                && p.data
+                    .component
+                    .as_ref()
+                    .is_some_and(|c| c.settings.len() == 1)
+        })
+    })
+    .await;
+    let name = app
+        .session
+        .view()
+        .project
+        .as_ref()
+        .and_then(|p| {
+            p.data
+                .component
+                .as_ref()
+                .map(|c| c.settings[0].name.clone())
+        })
+        .expect("setting");
+    assert!(
+        second.contains(&name),
+        "{name} was not the second entry {second}"
+    );
     server.stop().await;
 }
