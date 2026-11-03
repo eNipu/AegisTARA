@@ -4,8 +4,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::ControlIdx;
-use crate::methodology::FeasibilityLevel;
+use crate::id::{ControlId, ControlIdx};
+use crate::item::{ItemIdx, ItemRef};
+use crate::methodology::{AttackType, FeasibilityLevel};
 use crate::provenance::Provenance;
 
 /// Maximum number of [`StepMitigation`]s attached to one attack step.
@@ -18,12 +19,260 @@ pub const MAX_STEP_MITIGATIONS: usize = 16;
 /// ```
 pub const MAX_GOAL_CONTROLS: usize = 16;
 
+/// Maximum number of components and interfaces a [`SecurityControl`] may be
+/// applied to via [`Op::ApplyControl`](crate::Op::ApplyControl) (CFG-03, D26).
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_CONTROL_TARGETS, 64);
+/// ```
+pub const MAX_CONTROL_TARGETS: usize = 64;
+
+/// Maximum number of [`ControlRule`]s a [`SecurityControl`] may carry via
+/// [`Op::SetControlRule`](crate::Op::SetControlRule) (CFG-03, D26).
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_CONTROL_RULES, 16);
+/// ```
+pub const MAX_CONTROL_RULES: usize = 16;
+
+/// One rule on a [`SecurityControl`] mapping an [`AttackType`] to a residual
+/// [`FeasibilityLevel`] ceiling (CFG-03, D26).
+///
+/// 2 bytes, `Copy`.
+///
+/// ```
+/// use std::sync::Arc;
+/// use aegis_model::{ControlId, ControlRule, Methodology, Op, Project, Provenance};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Arc::new(Methodology::iso21434_r155()?);
+/// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+/// let vlow = m.feasibility_level("very-low").ok_or("no very-low")?;
+/// let mut project = Project::new(m);
+/// let id = ControlId::new_v7();
+/// project.apply(Op::AddSecurityControl {
+///     id,
+///     name: "JTAG disabled".into(),
+///     provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::SetControlRule {
+///     control: id,
+///     attack_type: phys,
+///     ceiling: Some(vlow),
+///     provenance: Provenance::default(),
+/// })?;
+/// let idx = project.security_control_idx(&id).ok_or("missing")?;
+/// let c = project.security_control(idx).ok_or("missing")?;
+/// assert_eq!(c.rules(), &[ControlRule::new(phys, vlow)]);
+/// assert_eq!(c.rules()[0].attack_type(), phys);
+/// assert_eq!(c.rules()[0].ceiling(), vlow);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ControlRule {
+    pub(crate) attack_type: AttackType,
+    pub(crate) ceiling: FeasibilityLevel,
+}
+
+impl ControlRule {
+    /// Creates a rule mapping `attack_type` to `ceiling`. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ControlRule, Methodology};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+    /// let low = m.feasibility_level("low").ok_or("no low")?;
+    /// let r = ControlRule::new(phys, low);
+    /// assert_eq!(r.attack_type(), phys);
+    /// assert_eq!(r.ceiling(), low);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn new(attack_type: AttackType, ceiling: FeasibilityLevel) -> Self {
+        Self {
+            attack_type,
+            ceiling,
+        }
+    }
+
+    /// Returns the [`AttackType`] matched by this rule. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::{ControlRule, Methodology};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+    /// let low = m.feasibility_level("low").ok_or("no low")?;
+    /// assert_eq!(ControlRule::new(phys, low).attack_type(), phys);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn attack_type(&self) -> AttackType {
+        self.attack_type
+    }
+
+    /// Returns the [`FeasibilityLevel`] ceiling imposed by this rule. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::{ControlRule, Methodology};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+    /// let low = m.feasibility_level("low").ok_or("no low")?;
+    /// assert_eq!(ControlRule::new(phys, low).ceiling(), low);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn ceiling(&self) -> FeasibilityLevel {
+        self.ceiling
+    }
+}
+
+/// How a [`StepCeiling`] reaches an attack step (CFG-05, D26).
+///
+/// ```
+/// use aegis_model::{CeilingSource, ComponentId, ItemRef, Methodology};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Methodology::iso21434_r155()?;
+/// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+/// let comp = ItemRef::Component(ComponentId::new_v7());
+/// assert!(CeilingSource::StepMitigation < CeilingSource::ControlRule {
+///     target: comp,
+///     attack_type: phys,
+/// });
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CeilingSource {
+    /// Attached directly to the step via
+    /// [`Op::SetStepMitigation`](crate::Op::SetStepMitigation).
+    StepMitigation,
+    /// Derived from a [`ControlRule`] on a [`SecurityControl`] applied to
+    /// `target` (the step's `via` element or its owning component).
+    ControlRule {
+        /// The component or interface where the control is applied.
+        target: ItemRef,
+        /// The step's [`AttackType`] matched by the rule.
+        attack_type: AttackType,
+    },
+}
+
+/// One feasibility ceiling acting on an attack step, returned by
+/// [`Project::step_ceilings`](crate::Project::step_ceilings) with the deciding
+/// (lowest) ceiling first (CFG-04, CFG-05, D26).
+///
+/// Holds only typed IDs, arena indices, and methodology scale levels, never
+/// user-supplied names (rule R6).
+///
+/// ```
+/// use std::sync::Arc;
+/// use aegis_model::{
+///     AttackTree, CeilingSource, ComponentId, ControlId, ItemRef, Methodology, Node, NodeId, Op,
+///     Project, Provenance, TreeId,
+/// };
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let m = Arc::new(Methodology::iso21434_r155()?);
+/// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+/// let (vlow, high) = (
+///     m.feasibility_level("very-low").ok_or("no very-low")?,
+///     m.feasibility_level("high").ok_or("no high")?,
+/// );
+/// let mut project = Project::new(m);
+/// let comp = ComponentId::new_v7();
+/// let ctrl = ControlId::new_v7();
+/// let (tree_id, step) = (TreeId::new_v7(), NodeId::new_v7());
+/// project.apply(Op::AddComponent {
+///     id: comp, name: "ADAS ECU".into(), parent: None, provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::AddSecurityControl {
+///     id: ctrl, name: "JTAG disabled".into(), provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::ApplyControl {
+///     control: ctrl, target: ItemRef::Component(comp), provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::SetControlRule {
+///     control: ctrl, attack_type: phys, ceiling: Some(vlow), provenance: Provenance::default(),
+/// })?;
+/// let tree = AttackTree::new(step, Node::step("Dump flash"))?;
+/// let root_idx = tree.root();
+/// project.apply(Op::AddAttackTree {
+///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::SetStepVia {
+///     tree: tree_id, node: step, via: Some(ItemRef::Component(comp)),
+///     provenance: Provenance::default(),
+/// })?;
+/// project.apply(Op::SetStepAttackType {
+///     tree: tree_id, node: step, attack_type: Some(phys), provenance: Provenance::default(),
+/// })?;
+/// let t_idx = project.attack_tree_idx(&tree_id).ok_or("no tree")?;
+/// let ceilings = project.step_ceilings(t_idx, root_idx);
+/// assert_eq!(ceilings.len(), 1);
+/// assert_eq!(ceilings[0].control_id(), ctrl);
+/// assert_eq!(ceilings[0].feasibility(), vlow);
+/// assert_eq!(
+///     ceilings[0].source(),
+///     CeilingSource::ControlRule { target: ItemRef::Component(comp), attack_type: phys },
+/// );
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepCeiling {
+    pub(crate) control: ControlIdx,
+    pub(crate) control_id: ControlId,
+    pub(crate) feasibility: FeasibilityLevel,
+    pub(crate) source: CeilingSource,
+}
+
+impl StepCeiling {
+    /// Returns the arena index of the [`SecurityControl`] imposing this ceiling.
+    /// Time O(1).
+    #[must_use]
+    pub const fn control(&self) -> ControlIdx {
+        self.control
+    }
+
+    /// Returns the stable [`ControlId`] of the [`SecurityControl`] imposing this
+    /// ceiling. Time O(1).
+    #[must_use]
+    pub const fn control_id(&self) -> ControlId {
+        self.control_id
+    }
+
+    /// Returns the [`FeasibilityLevel`] ceiling imposed on the step. Time O(1).
+    #[must_use]
+    pub const fn feasibility(&self) -> FeasibilityLevel {
+        self.feasibility
+    }
+
+    /// Returns how this ceiling reaches the step. Time O(1).
+    #[must_use]
+    pub const fn source(&self) -> CeilingSource {
+        self.source
+    }
+}
+
 /// A security control (countermeasure or safeguard) in a
 /// [`Project`](crate::Project).
 ///
-/// A control is named once at the project level and can be attached to any
-/// number of attack steps across the project's attack trees via
-/// [`Op::SetStepMitigation`](crate::Op::SetStepMitigation) to cap those steps'
+/// A control is named once at the project level and can be attached directly
+/// to attack steps via [`Op::SetStepMitigation`](crate::Op::SetStepMitigation)
+/// or applied as a setting to components and interfaces via
+/// [`Op::ApplyControl`](crate::Op::ApplyControl) with rules set via
+/// [`Op::SetControlRule`](crate::Op::SetControlRule) to cap matching steps'
 /// residual feasibility.
 ///
 /// Built and changed only through [`Project::apply`](crate::Project::apply).
@@ -50,6 +299,8 @@ pub const MAX_GOAL_CONTROLS: usize = 16;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecurityControl {
     pub(crate) name: Arc<str>,
+    pub(crate) targets: Vec<ItemIdx>,
+    pub(crate) rules: Vec<ControlRule>,
     pub(crate) provenance: Provenance,
 }
 
@@ -77,6 +328,112 @@ impl SecurityControl {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the control's [`ControlRule`]s, sorted by [`AttackType`]. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+    /// let low = m.feasibility_level("low").ok_or("no low")?;
+    /// let mut project = Project::new(m);
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id,
+    ///     name: "JTAG disabled".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetControlRule {
+    ///     control: id,
+    ///     attack_type: phys,
+    ///     ceiling: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("missing")?;
+    /// let c = project.security_control(idx).ok_or("missing")?;
+    /// assert_eq!(c.rules().len(), 1);
+    /// assert_eq!(c.rule_for(phys), Some(low));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn rules(&self) -> &[ControlRule] {
+        &self.rules
+    }
+
+    /// Looks up the [`FeasibilityLevel`] ceiling for `attack_type`, if this
+    /// control defines one. Time $O(\log k)$ where $k \le 16$.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+    /// let net = m.attack_type("remote-network").ok_or("no remote-network")?;
+    /// let low = m.feasibility_level("low").ok_or("no low")?;
+    /// let mut project = Project::new(m);
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id,
+    ///     name: "JTAG disabled".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetControlRule {
+    ///     control: id,
+    ///     attack_type: phys,
+    ///     ceiling: Some(low),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("missing")?;
+    /// let c = project.security_control(idx).ok_or("missing")?;
+    /// assert_eq!(c.rule_for(phys), Some(low));
+    /// assert_eq!(c.rule_for(net), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn rule_for(&self, attack_type: AttackType) -> Option<FeasibilityLevel> {
+        self.rules
+            .binary_search_by_key(&attack_type, |r| r.attack_type)
+            .ok()
+            .map(|i| self.rules[i].ceiling)
+    }
+
+    /// Returns the number of components and interfaces this control is applied
+    /// to. Use [`Project::control_targets`](crate::Project::control_targets) to
+    /// iterate over their [`ItemRef`]s. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ComponentId, ControlId, ItemRef, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let comp = ComponentId::new_v7();
+    /// let ctrl = ControlId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: comp, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "Secure boot".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::ApplyControl {
+    ///     control: ctrl, target: ItemRef::Component(comp), provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&ctrl).ok_or("missing")?;
+    /// assert_eq!(project.security_control(idx).ok_or("missing")?.target_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn target_count(&self) -> usize {
+        self.targets.len()
     }
 
     /// Returns the provenance of the last [`Op`](crate::Op) that created or

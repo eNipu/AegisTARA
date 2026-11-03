@@ -51,7 +51,9 @@ use std::fmt;
 
 pub use op_log::{LoggedOp, OpCodec, OpLogReader, OpLogWriter};
 
-use crate::control::{MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS};
+use crate::control::{
+    MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS,
+};
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::{
     MAX_ATTACK_TYPES, MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES,
@@ -270,6 +272,18 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A security control lists more than
+    /// [`MAX_CONTROL_TARGETS`](crate::MAX_CONTROL_TARGETS) applied targets.
+    ControlTargets {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A security control lists more than
+    /// [`MAX_CONTROL_RULES`](crate::MAX_CONTROL_RULES) rules.
+    ControlRules {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A trust boundary or op lists more than
     /// [`MAX_TRUST_BOUNDARY_MEMBERS`](crate::MAX_TRUST_BOUNDARY_MEMBERS) components.
     TrustBoundaryMembers {
@@ -395,6 +409,12 @@ impl Limit {
     pub(crate) const GOAL_CONTROLS: Limit = Limit::GoalControls {
         max: MAX_GOAL_CONTROLS,
     };
+    pub(crate) const CONTROL_TARGETS: Limit = Limit::ControlTargets {
+        max: MAX_CONTROL_TARGETS,
+    };
+    pub(crate) const CONTROL_RULES: Limit = Limit::ControlRules {
+        max: MAX_CONTROL_RULES,
+    };
     pub(crate) const TRUST_BOUNDARY_MEMBERS: Limit = Limit::TrustBoundaryMembers {
         max: MAX_TRUST_BOUNDARY_MEMBERS,
     };
@@ -464,6 +484,12 @@ impl fmt::Display for Limit {
             }
             Limit::GoalControls { max } => {
                 write!(f, "more than {max} goal controls")
+            }
+            Limit::ControlTargets { max } => {
+                write!(f, "more than {max} control targets")
+            }
+            Limit::ControlRules { max } => {
+                write!(f, "more than {max} control rules")
             }
             Limit::TrustBoundaryMembers { max } => {
                 write!(f, "more than {max} trust boundary members")
@@ -574,6 +600,8 @@ mod tests {
             Limit::STEP_FEASIBILITY,
             Limit::STEP_MITIGATIONS,
             Limit::GOAL_CONTROLS,
+            Limit::CONTROL_TARGETS,
+            Limit::CONTROL_RULES,
         ] {
             assert_ne!(l.to_string(), "");
         }

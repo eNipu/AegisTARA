@@ -351,6 +351,27 @@ fn caps_goal_controls() {
 }
 
 #[test]
+fn caps_control_targets() {
+    let want = Limit::ControlTargets { max: 64 };
+    let targets65: Vec<Value> = (0..65).map(|i| json!({"component": id(200 + i)})).collect();
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    s["security_controls"] = json!([{"id": id(10), "name": "c", "targets": targets65}]);
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+#[test]
+fn caps_control_rules() {
+    let want = Limit::ControlRules { max: 16 };
+    let rules17: serde_json::Map<String, Value> =
+        (0..17).map(|i| (format!("t{i}"), json!("low"))).collect();
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    s["security_controls"] = json!([{"id": id(10), "name": "c", "rules": rules17}]);
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+#[test]
 fn caps_step_factors() {
     let want = Limit::FeasibilityFactors { max: 16 };
     let factors17: serde_json::Map<String, Value> =
