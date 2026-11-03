@@ -1435,3 +1435,30 @@ msgstr "ステップ"
 
 msgid "Inherent"
 msgstr "固有値"
+
+msgid "Security settings"
+msgstr "セキュリティ設定"
+
+msgid "Add setting"
+msgstr "設定を追加"
+
+msgid "Custom setting"
+msgstr "カスタム設定"
+
+msgid "Applied to"
+msgstr "適用先"
+
+msgid "applies here too"
+msgstr "ここにも適用"
+
+msgid "Rules"
+msgstr "ルール"
+
+msgid "At most"
+msgstr "上限"
+
+msgid "capped by"
+msgstr "上限の理由"
+
+msgid "No ceiling"
+msgstr "上限なし"

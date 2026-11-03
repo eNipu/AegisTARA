@@ -3426,7 +3426,10 @@ fn setting_toast_before(ws: &Workspace, ops: &[aegis_model::Op]) -> Option<Setti
         .iter()
         .find(|op| matches!(op, Op::SetControlRule { .. }))
     {
-        (format!("Updated rules of '{}'", cname_of(*control)?), *control)
+        (
+            format!("Updated rules of '{}'", cname_of(*control)?),
+            *control,
+        )
     } else {
         return None;
     };
