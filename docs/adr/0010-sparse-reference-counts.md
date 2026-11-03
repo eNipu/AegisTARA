@@ -176,6 +176,38 @@ Notes:
   not held to 3x. Making the impact slots sparse would lower it; that is
   out of scope here.
 
+### Re-measured on 2026-11-04
+
+The numbers above are from job 011. Later jobs grew what an entity holds, and
+the bench was not run again (neither CI nor `scripts/ci.sh` runs it), so by
+job 122 eight gates were failing. Measured again on master (Rust 1.99.1,
+Apple Silicon), the cases that moved most, peak / kept:
+
+| Case | Job 011 | Now | Gates now (peak / kept) |
+|---|---|---|---|
+| `short_property_keys` | 0.54 / 0.38 | 0.83 / 0.46 | 1.2 / 0.6 |
+| `attack_trees` | 2.77 / 1.95 | 3.52 / 2.40 | 4.8 / 3.0 |
+| `assets_only_builtin` | 2.31 / 1.68 | 3.50 / 2.00 | 4.8 / 2.3 |
+| `assets_only_max` | 2.41 / 1.78 | 3.62 / 2.09 | 4.9 / 2.2 |
+| `threats_only_builtin` | 1.91 / 1.10 | 2.83 / 1.38 | 3.9 / 1.5 |
+| `threats_only_max` | 1.93 / 1.12 | 2.85 / 1.40 | 3.9 / 1.6 |
+| `targeted_narrow_builtin` | 2.53 / 1.72 | 3.63 / 2.16 | 5.0 / 2.4 |
+| `targeted_narrow_max` | 2.57 / 1.76 | 3.67 / 2.20 | 5.0 / 2.4 |
+| `damages_only_max` | 3.53 / 2.65 | 4.26 / 2.84 | 4.8 / 3.0 (unchanged) |
+
+Where it moved, by bisecting the commits: the item definition model (an
+asset's component binding) took `assets_only_builtin` from 2.68x to 3.18x peak
+and human-readable visual IDs from 3.18x to 3.50x; the step via and settings
+fields of jobs 122 and 123 add only 0.09x peak and 0.03x kept to
+`attack_trees`. The gates that failed were raised by the same rule (measured
+plus about 35%, kept capped at 3.0); the others are unchanged.
+
+The budget holds: kept is at most 2.84x (`damages_only_max`, which has about
+5% of the 3x budget left). The peak while loading is now above 3x in nine
+shapes, up to 4.26x; the decoder's share (peak minus kept) is up to about 1.5x
+the file, against about 0.6x in job 011. That share was not investigated
+further here.
+
 ### Time (AC5)
 
 `cargo bench --bench store` (divan medians, 100 samples), run on the same
