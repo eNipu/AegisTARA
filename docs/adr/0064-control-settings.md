@@ -46,8 +46,9 @@ the reason shown and one undo step per change.
    `SetStepVia` and `SetStepAttackType` mark the one step. `ApplyControl` and
    `UnapplyControl` mark the steps whose via is the target or an interface of
    it; `SetControlRule` marks the steps with that attack type that the control
-   reaches. Cost is O(steps with a via) per op. A property test compares the
-   cache with a full evaluation after shuffled ops.
+   reaches. Cost is O(steps with a via) per op. A property test applies the ops in
+   shuffled order, updating the cache after each, and compares the cache with a
+   full evaluation at the end.
 5. **Removal is rejected while referenced** (the 122 pattern) so inverses stay
    exact: `ComponentHasControls`, `InterfaceHasControls`,
    `SecurityControlHasTargets`, `SecurityControlHasRules`. The client's remove
@@ -65,12 +66,24 @@ the reason shown and one undo step per change.
 ## Consequences
 
 - A settings edit costs O(what changed) in the cache; nothing is stored twice.
+- Memory: `SecurityControl` grew from 24 to 72 bytes (two `Vec`s, no heap while
+  empty; measured with `size_of`), and each component and interface slot has a
+  4-byte control count. `benches/store_memory.rs` has no controls case, so the
+  gates do not see this; a project has tens to hundreds of controls, far below
+  what trees and assets cost.
 - `SecurityControlUnused` counts a control with targets as used, and
   `ReduceTreatmentWithoutControls` accepts a rule ceiling.
-- Known gaps, tracked as `123b-settings-gaps` in the backlog: no "step without
-  via" lint, the version diff does not show targets or rules, and the threat
-  and risk inspectors do not list ceilings yet (the step inspector and canvas
-  do).
+- `StepSettingsIncomplete` (a warning) flags a step that has an attack type
+  without a through item, or the reverse, but only while some control carries
+  rules: such a step can never match a rule. A step with neither is just
+  unfilled and is not flagged.
+- The version diff already compared targets (by public ID, in canonical order)
+  and rules, so a changed setting shows as a modified control; the client's
+  comparison line now says what changed (count of applied items, count of
+  rules, or that items or ceilings changed with the count the same).
+- The threat inspector's "why" lines name the settings (and manual
+  mitigations) that cap the step deciding the residual feasibility, deciding
+  one first, at most three, ceilings below the rating only.
 - Job 124 adds presets (a `kind` on the control and pack `control_kinds`); the
   rules are copied into the control, so a later pack version never changes a
   saved result.
