@@ -1465,3 +1465,12 @@ msgstr "上限なし"
 
 msgid "No attack types here, so a setting has no rules."
 msgstr "攻撃タイプがないため、設定にルールはありません。"
+
+msgid "Zoom out"
+msgstr "縮小"
+
+msgid "Zoom in"
+msgstr "拡大"
+
+msgid "Zoom size, {}"
+msgstr "ズーム倍率 {}"

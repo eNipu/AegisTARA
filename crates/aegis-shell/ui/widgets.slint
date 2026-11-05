@@ -852,6 +852,11 @@ export component DataTable inherits Rectangle {
 
     property <length> row-height: root.compact ? 28px : 32px;
     property <length> header-height: 28px;
+    // A column never squeezes below this; a table wider than its window
+    // scrolls sideways instead.
+    pure function col-min(column: TableColumn) -> length {
+        return column.width >= 1px ? max(column.min-width, column.width) : max(column.min-width, 120px);
+    }
     property <bool> has-actions: root.editable && (root.show-add || root.show-open || root.show-duplicate || root.show-remove);
     property <int> current-row: -1;
     property <bool> settling: true;
@@ -932,6 +937,13 @@ export component DataTable inherits Rectangle {
         }
     }
 
+    // Not drawn: only its width, the sum of the column minimums, is read.
+    probe := HorizontalLayout {
+        height: 0px;
+        visible: false;
+        for column in root.columns : Rectangle { min-width: root.col-min(column); }
+    }
+
     VerticalLayout {
         spacing: 0px;
         header := Rectangle {
@@ -939,11 +951,11 @@ export component DataTable inherits Rectangle {
             clip: true;
             background: Theme.panel;
             HorizontalLayout {
-                x: -scroll.content-x;
+                x: scroll.content-x;
                 width: max(scroll.visible-width, self.preferred-width);
                 for column[index] in root.columns : Rectangle {
                     horizontal-stretch: column.horizontal-stretch;
-                    min-width: max(column.min-width, column.width);
+                    min-width: root.col-min(column);
                     preferred-width: self.min-width;
                     max-width: (index < root.columns.length && column.width >= 1px) ? max(column.min-width, column.width) : 100000px;
                     Text {
@@ -969,7 +981,9 @@ export component DataTable inherits Rectangle {
 
         scroll := ListView {
             vertical-stretch: 1;
+            content-width: max(self.width, probe.min-width);
             for row[row-index] in root.rows : Rectangle {
+                width: scroll.content-width;
                 height: root.row-height;
                 clip: true;
                 background: (row-index == root.selected || root.marks.rows[row-index]) ? Theme.selection
@@ -979,6 +993,12 @@ export component DataTable inherits Rectangle {
                     x: 0px;
                     width: 3px;
                     background: Theme.accent;
+                }
+                // A thin line under every row, so neighbouring rows read as separate.
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.rule;
                 }
                 row-touch := TouchArea {
                     width: parent.width;
@@ -1002,7 +1022,7 @@ export component DataTable inherits Rectangle {
                     for cell[cell-index] in row : Rectangle {
                         clip: true;
                         horizontal-stretch: root.columns[cell-index].horizontal-stretch;
-                        min-width: max(root.columns[cell-index].min-width, root.columns[cell-index].width);
+                        min-width: root.col-min(root.columns[cell-index]);
                         preferred-width: self.min-width;
                         max-width: (cell-index < root.columns.length && root.columns[cell-index].width >= 1px) ? max(root.columns[cell-index].min-width, root.columns[cell-index].width) : 100000px;
                         Text {
@@ -1021,7 +1041,8 @@ export component DataTable inherits Rectangle {
                 }
                 // A draft row (an element being created) has no ID yet and no actions.
             if root.has-actions && row[0].text != "" && (row-index == root.selected || row-touch.has-hover): HorizontalLayout {
-                    x: parent.width - self.preferred-width - 8px;
+                    // Pinned to the visible right edge, so they stay reachable when the table is scrolled sideways.
+                    x: scroll.visible-width - scroll.content-x - self.preferred-width - 8px;
                     y: (parent.height - self.preferred-height) / 2;
                     spacing: 4px;
                     if root.show-add: Button {
