@@ -1005,3 +1005,47 @@ async fn visual_ids_are_shown_in_tables_inspector_and_command_palette() {
     drop(app);
     server.stop().await;
 }
+
+/// The zoom controls: a chosen size, and a step in or out from it.
+#[tokio::test(flavor = "current_thread")]
+async fn the_zoom_can_be_set_to_a_size_and_stepped() {
+    let server = TestServer::start().await;
+    let app = app_with_sample(&server, "alice").await;
+
+    app.window.invoke_zoom_to(50);
+    assert_eq!(app.window.get_zoom_text().as_str(), "50%");
+    app.window.invoke_zoom_to(200);
+    assert_eq!(app.window.get_zoom_text().as_str(), "200%");
+    app.window.invoke_zoom_step(-1);
+    assert_eq!(app.window.get_zoom_text().as_str(), "160%");
+    app.window.invoke_zoom_step(1);
+    assert_eq!(app.window.get_zoom_text().as_str(), "200%");
+    app.window.invoke_zoom_to(100);
+    app.frame();
+    save(&app.frame(), "zoom-controls");
+
+    // The percentage opens the list of sizes; picking 25% sets it.
+    app.headless.click(740.0, 805.0);
+    save(&app.frame(), "zoom-sizes");
+    app.frame();
+    {
+        use slint::ComponentHandle;
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let position = slint::LogicalPosition::new(730.0, 584.0);
+        let w = app.window.window();
+        w.dispatch_event(WindowEvent::PointerMoved { position });
+        app.frame();
+        w.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        app.frame();
+        w.dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    }
+    app.frame();
+    app.frame();
+    assert_eq!(app.window.get_zoom_text().as_str(), "25%");
+}
