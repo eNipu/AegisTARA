@@ -488,3 +488,27 @@ async fn a_draft_row_has_no_row_actions() {
     }
     assert!(action_colours(&app, 2) <= 2, "the draft row has no buttons");
 }
+
+/// The "more actions" menu is a short card under its row (three lines), not a
+/// column stretched to the bottom of the table.
+#[tokio::test(flavor = "current_thread")]
+async fn the_more_actions_menu_is_a_short_card() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    assets_page(&app).await;
+    add_assets(&app, &["ECU"]).await;
+    app.frame();
+
+    let (_, y) = row_point(&app, 0);
+    let x = app.window.get_table_x() + app.window.get_table_w() - 20.0;
+    click_row(&app, x, y);
+    app.frame();
+    let frame = app.frame();
+    common::save(&frame, "row-menu");
+
+    // Inside the menu card (about 100 px high) and well below it.
+    let mx = (x - 40.0) as u32;
+    let inside = frame.pixel(mx, (y + 70.0) as u32);
+    let below = frame.pixel(mx, (y + 300.0) as u32);
+    assert_ne!(inside, below, "the menu card ends below its last line");
+}

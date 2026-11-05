@@ -142,10 +142,12 @@ export component Button inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> primary;
     in property <bool> ghost;
+    // A line of a menu: ghost, but in the ordinary text colour, not the accent.
+    in property <bool> menu-item;
     out property <bool> has-focus: fs.has-focus;
     out property <bool> pressed: root.enabled && ta.pressed;
     callback clicked();
-    property <color> ink: root.primary ? #FFFFFF : (root.ghost ? Theme.accent : Theme.ink);
+    property <color> ink: root.primary ? #FFFFFF : (root.ghost && !root.menu-item ? Theme.accent : Theme.ink);
 
     min-width: max(28px, row.min-width);
     preferred-width: max(28px, row.preferred-width);
@@ -1096,6 +1098,7 @@ export component DataTable inherits Rectangle {
         x: parent.width - 156px - 8px;
         y: root.header-height + (root.menu-row + 1) * root.row-height - scroll.content-y;
         width: 156px;
+        height: menu-items.preferred-height;
         background: Theme.raised;
         border-width: 1px;
         border-color: Theme.line;
@@ -1103,23 +1106,26 @@ export component DataTable inherits Rectangle {
         drop-shadow-blur: 12px;
         drop-shadow-offset-y: 4px;
         drop-shadow-color: #00000040;
-        VerticalLayout {
+        menu-items := VerticalLayout {
             padding: 4px;
             spacing: 2px;
             if root.show-open: Button {
                 ghost: true;
+                menu-item: true;
                 text: @tr("Open");
                 accessible-label: @tr("Open {}", root.rows[root.menu-row][1].text);
                 clicked => { root.menu-open = false; root.open-row(root.menu-row); }
             }
             if root.show-duplicate: Button {
                 ghost: true;
+                menu-item: true;
                 text: @tr("Duplicate");
                 accessible-label: @tr("Duplicate {}", root.rows[root.menu-row][1].text);
                 clicked => { root.menu-open = false; root.duplicate-row(root.menu-row); }
             }
             if root.show-remove: Button {
                 ghost: true;
+                menu-item: true;
                 text: @tr("Remove");
                 accessible-label: @tr("Remove {}", root.rows[root.menu-row][1].text);
                 clicked => { root.menu-open = false; root.remove-row(root.menu-row); }

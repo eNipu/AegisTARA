@@ -98,7 +98,7 @@ pub const fn is_mac() -> bool {
 /// table; letters and digits keep their spelling.
 fn key_label(part: &str, mac: bool) -> &str {
     match (part, mac) {
-        ("Return", true) => "↩",
+        ("Return", true) => "Return",
         ("Return", false) => "Enter",
         (other, _) => other,
     }
@@ -345,14 +345,14 @@ mod tests {
             .iter()
             .find(|s| s.id == "save-description")
             .expect("save hint");
-        assert_eq!(format_label(save, true), "⌘↩");
+        assert_eq!(format_label(save, true), "⌘Return");
     }
 
     #[test]
     fn other_labels_never_use_a_mac_symbol() {
         for s in table() {
             let label = format_label(s, false);
-            for symbol in ['⌘', '⌥', '⇧', '⌃', '↩'] {
+            for symbol in ['⌘', '⌥', '⇧', '⌃'] {
                 assert!(!label.contains(symbol), "{}: {label}", s.id);
             }
             assert!(label.starts_with("Ctrl+"), "{}: {label}", s.id);
