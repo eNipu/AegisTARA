@@ -512,3 +512,34 @@ async fn the_more_actions_menu_is_a_short_card() {
     let below = frame.pixel(mx, (y + 300.0) as u32);
     assert_ne!(inside, below, "the menu card ends below its last line");
 }
+
+/// Rows are separated by a thin line, and a table wider than its window
+/// scrolls sideways instead of squeezing or clipping its columns.
+#[tokio::test(flavor = "current_thread")]
+async fn rows_have_a_separator_and_a_narrow_table_scrolls_sideways() {
+    let server = TestServer::start().await;
+    let mut app = editing_app(&server).await;
+    assets_page(&app).await;
+    add_assets(&app, &["ECU", "Gateway"]).await;
+    app.resize(760, 600);
+    app.frame();
+    app.frame();
+    let before = app.frame();
+    common::save(&before, "table-narrow");
+
+    // A wheel gesture sideways over the rows scrolls them and the header together.
+    use slint::ComponentHandle;
+    use slint::platform::WindowEvent;
+    let (x, y) = row_point(&app, 0);
+    app.window
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(x, y),
+            delta_x: -300.0,
+            delta_y: 0.0,
+        });
+    app.frame();
+    let after = app.frame();
+    common::save(&after, "table-narrow-scrolled");
+    assert_ne!(before.rgb, after.rgb, "the table scrolled sideways");
+}

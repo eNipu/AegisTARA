@@ -995,6 +995,8 @@ in property <string> redo-label;
     callback canvas-node-activated(int);
     callback fit();
     callback zoom-reset();
+    callback zoom-to(int);
+    callback zoom-step(int);
     callback pick-control(int);
     callback add-control(string);
     callback rename-control(string);
@@ -2241,11 +2243,45 @@ in property <string> redo-label;
                                 if !root.outline-editing: HorizontalLayout {
                                     x: 12px;
                                     y: parent.height - 44px;
-                                    width: 170px;
+                                    width: 290px;
                                     height: 32px;
                                     spacing: 6px;
                                     Button { text: @tr("Fit"); icon: @image-url("icons/maximize.svg"); clicked => { root.fit(); } }
-                                    Button { text: root.zoom-text; clicked => { root.zoom-reset(); } }
+                                    Button { text: "\u{2212}"; accessible-label: @tr("Zoom out"); clicked => { root.zoom-step(-1); } }
+                                    Rectangle {
+                                        width: 80px;
+                                        Button {
+                                            width: parent.width;
+                                            text: root.zoom-text;
+                                            accessible-label: @tr("Zoom size, {}", root.zoom-text);
+                                            clicked => { zoom-sizes.show(); }
+                                        }
+                                        zoom-sizes := PopupWindow {
+                                            x: 0px;
+                                            y: -self.height - 4px;
+                                            width: 96px;
+                                            height: 7 * 30px + 10px;
+                                            close-policy: close-on-click-outside;
+                                            Rectangle {
+                                                background: Theme.raised;
+                                                border-radius: Theme.radius-control;
+                                                border-width: 1px;
+                                                border-color: Theme.line;
+                                            }
+                                            VerticalLayout {
+                                                padding: 4px;
+                                                spacing: 2px;
+                                                for percent in [25, 50, 75, 100, 150, 200, 300]: Rectangle {
+                                                    height: 28px;
+                                                    border-radius: 4px;
+                                                    background: size-item.has-hover ? Theme.wash : transparent;
+                                                    Text { x: 8px; text: percent + "%"; color: Theme.ink; vertical-alignment: center; }
+                                                    size-item := TouchArea { clicked => { root.zoom-to(percent); zoom-sizes.close(); } }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Button { text: "+"; accessible-label: @tr("Zoom in"); clicked => { root.zoom-step(1); } }
                                 }
                             }
                         }

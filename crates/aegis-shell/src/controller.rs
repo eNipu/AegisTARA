@@ -2338,6 +2338,9 @@ impl Controller {
         on!(on_canvas_key, |c, text, shift| c.key(&text, shift));
         on!(on_fit, |c| c.fit());
         on!(on_zoom_reset, |c| c.reset_zoom());
+        on!(on_zoom_to, |c, percent| c.zoom_to(percent as f32 / 100.0));
+        on!(on_zoom_step, |c, direction| c
+            .zoom_centre(1.25f32.powi(direction)));
     }
 
     // ---- command palette (job 081) ------------------------------------
@@ -2703,9 +2706,14 @@ impl Controller {
     }
 
     fn reset_zoom(&self) {
+        self.zoom_to(1.0);
+    }
+
+    /// Sets the zoom to `target` (1.0 is 100%) around the middle of the canvas.
+    fn zoom_to(&self, target: f32) {
         let mut st = self.state.borrow_mut();
         let centre = Point::new(st.viewport.size.w / 2.0, st.viewport.size.h / 2.0);
-        let factor = 1.0 / st.viewport.zoom;
+        let factor = target / st.viewport.zoom;
         st.viewport.zoom_at(centre, factor);
         drop(st);
         self.redraw();

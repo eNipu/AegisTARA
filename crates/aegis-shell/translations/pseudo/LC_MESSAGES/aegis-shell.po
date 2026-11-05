@@ -1465,3 +1465,12 @@ msgstr "⟦Nó céílíng␣␣⟧"
 
 msgid "No attack types here, so a setting has no rules."
 msgstr "⟦Nó áttáck typés héré, só á séttíng hás nó rúlés.␣␣␣␣␣␣␣␣␣␣⟧"
+
+msgid "Zoom out"
+msgstr "⟦Zóóm óút␣␣␣␣⟧"
+
+msgid "Zoom in"
+msgstr "⟦Zóóm ín␣␣␣␣⟧"
+
+msgid "Zoom size, {}"
+msgstr "⟦Zóóm síze, {}␣␣␣␣␣⟧"
