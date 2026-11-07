@@ -675,6 +675,9 @@ in property <string> redo-label;
     in property <int> td-goal;
     in property <[string]> claim-names;
     in property <int> td-claim;
+// Scaling (FND-10): 0 not rated, 1 yes, 2 no; and the reasoning.
+in property <int> td-scales;
+in property <string> td-scaling-reason;
     in property <[[StandardListViewItem]]> risk-rows;
     in property <int> risk-selected: -1;
 
@@ -1007,6 +1010,8 @@ in property <string> redo-label;
     callback set-treatment(int);
     callback set-threat-goal(int);
     callback set-threat-claim(int);
+callback set-threat-scales(int);
+callback set-threat-scaling-reason(string);
     callback pick-risk(int);
     callback pick-tree(int);
     callback new-tree(string);
@@ -2093,7 +2098,7 @@ in property <string> redo-label;
                         }
                         DataTable {
                             label: @tr("Threat scenarios");
-                            columns: [{ title: @tr("ID"), width: 76px, min-width: 76px }, { title: @tr("Threat scenario"), horizontal-stretch: 3 }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Before"), horizontal-stretch: 1 }, { title: @tr("After"), horizontal-stretch: 1 }];
+                            columns: [{ title: @tr("ID"), width: 76px, min-width: 76px }, { title: @tr("Threat scenario"), horizontal-stretch: 3 }, { title: @tr("Asset"), horizontal-stretch: 2 }, { title: @tr("Scales"), width: 64px, min-width: 64px }, { title: @tr("Before"), horizontal-stretch: 1 }, { title: @tr("After"), horizontal-stretch: 1 }];
                             rows: root.threat-rows;
                             marks: root.threat-marks;
                             mark-click(i, shift) => { root.mark-click("threat", i, shift); }
@@ -2214,6 +2219,18 @@ in property <string> redo-label;
                             Field {
                                 label: @tr("Cybersecurity claim (for Retain and Share)");
                                 Choice { options: root.claim-names; index: root.td-claim; editable: root.editing; label: @tr("Claim"); picked(i) => { root.set-threat-claim(i); } }
+                            }
+                            Field {
+                                label: @tr("Scales to many vehicles");
+                                Choice { options: [@tr("Not rated"), @tr("Yes"), @tr("No")]; index: root.td-scales; editable: root.editing; label: @tr("Scales"); picked(i) => { root.set-threat-scales(i); } }
+                            }
+                            DescriptionBox {
+                                label: @tr("Why it scales or not");
+                                text: root.td-scaling-reason;
+                                editable: root.editing;
+                                save-label: root.save-description-label;
+                                placeholder: @tr("One attack tool works on every car, or each car needs physical access. {0} or leaving the box saves.", root.save-description-label);
+                                save(t) => { root.set-threat-scaling-reason(t); }
                             }
                             Text { text: root.td-changed; color: Theme.graphite; font-size: Theme.font-caption; wrap: word-wrap; }
                             Button { text: @tr("Remove threat scenario"); icon: @image-url("icons/trash-2.svg"); enabled: root.editing; clicked => { root.remove-threat(); } }

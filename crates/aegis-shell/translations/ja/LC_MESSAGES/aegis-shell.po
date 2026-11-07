@@ -1513,3 +1513,21 @@ msgstr "ブロック {} 件"
 
 msgid "{} warnings"
 msgstr "警告 {} 件"
+
+msgid "Scales"
+msgstr "スケール"
+
+msgid "Scales to many vehicles"
+msgstr "多数の車両へのスケール"
+
+msgid "Not rated"
+msgstr "未評価"
+
+msgid "No"
+msgstr "いいえ"
+
+msgid "Why it scales or not"
+msgstr "スケールするかどうかの根拠"
+
+msgid "One attack tool works on every car, or each car needs physical access. {0} or leaving the box saves."
+msgstr "1つの攻撃ツールで全車両に通用するか、車両ごとに物理アクセスが必要か。{0} またはボックスを離れると保存されます。"

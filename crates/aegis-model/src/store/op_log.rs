@@ -376,6 +376,13 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetThreatScaling {
+        threat: Text<ThreatId>,
+        scales: Option<bool>,
+        reason: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddComponent {
         id: Text<ComponentId>,
         name: &'a str,
@@ -494,6 +501,7 @@ fn within_caps(op: &Op) -> bool {
     let name_ok = |name: &str| name.len() <= MAX_NAME_BYTES;
     match op {
         Op::SetDescription { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
+        Op::SetThreatScaling { reason, .. } => reason.len() <= MAX_DESCRIPTION_BYTES,
         Op::SetDescriptionTranslation { lang, text, .. } => {
             lang.len() <= crate::description::MAX_LANG_TAG_BYTES
                 && text.len() <= MAX_DESCRIPTION_BYTES
@@ -1025,6 +1033,17 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         } => OpView::SetThreatClaim {
             threat: Text(*threat),
             claim: claim.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetThreatScaling {
+            threat,
+            scales,
+            reason,
+            provenance,
+        } => OpView::SetThreatScaling {
+            threat: Text(*threat),
+            scales: *scales,
+            reason,
             provenance: ProvenanceView::of(provenance),
         },
         Op::AddComponent {
@@ -1682,6 +1701,17 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::SetThreatClaim {
             threat: threat.0,
             claim: claim.map(|cl| cl.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetThreatScaling {
+            threat,
+            scales,
+            reason,
+            provenance,
+        } => Op::SetThreatScaling {
+            threat: threat.0,
+            scales,
+            reason: reason.0,
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::AddComponent {

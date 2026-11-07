@@ -1097,6 +1097,11 @@ pub struct ThreatDetail {
     pub claim: Option<ClaimId>,
     /// Every claim.
     pub claims: Vec<Choice<ClaimId>>,
+    /// Whether the attack scales to many vehicles (FND-10); `None` is not
+    /// rated.
+    pub scales: Option<bool>,
+    /// Why it scales or not; empty when not given.
+    pub scaling_reason: String,
     /// The feasibility the engine uses (from the tree, else direct).
     pub feasibility: Option<String>,
     /// Residual feasibility (after controls).
@@ -1312,6 +1317,8 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
                 name: c.name().to_owned(),
             })
             .collect(),
+        scales: t.scales(),
+        scaling_reason: t.scaling_reason().to_owned(),
         feasibility,
         residual_feasibility,
         inherent,

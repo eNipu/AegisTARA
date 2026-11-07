@@ -547,7 +547,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..57,
+        0u8..58,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -1470,6 +1470,21 @@ impl Gen {
                     provenance,
                 }
             }
+            56 => Op::SetThreatScaling {
+                threat: self.threat(p, s.a),
+                scales: match s.b % 3 {
+                    0 => None,
+                    1 => Some(true),
+                    _ => Some(false),
+                },
+                reason: match s.c % 16 {
+                    0 => "bad\u{0}text".into(),
+                    1 => "x".repeat(aegis_model::MAX_DESCRIPTION_CHARS + 1).into(),
+                    2 => "".into(),
+                    n => format!("one key opens every car {n}").into(),
+                },
+                provenance,
+            },
             _ => {
                 if self.m.attack_type_count() == 0 && !s.c.is_multiple_of(4) {
                     Op::ApplyControl {
@@ -2272,6 +2287,15 @@ pub fn second_every_op(m: Arc<Methodology>) {
         Op::SetThreatClaim {
             threat: sniff,
             claim: Some(claim),
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatScaling {
+            threat: sniff,
+            scales: Some(true),
+            reason: "One sniffer reads every car on the road".into(),
             provenance: p_human.clone(),
         },
     );
