@@ -35,3 +35,6 @@ tools/deny-fixtures/**/target/
 # Deployment secrets (deploy/compose.yaml)
 deploy/.env
 deploy/license.aegis
+
+# CycloneDX SBOMs (cargo cyclonedx, the CI sbom job)
+*.cdx.json
