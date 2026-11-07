@@ -82,6 +82,9 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; via slint > accesskit_unix (Linux accessibility over D-Bus), no safe upgrade" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; via slint > accesskit_unix, no safe upgrade" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; via slint > accesskit_unix, no safe upgrade" },
+    # Reviewed 2026-11-07: a notice, not a vulnerability; pin-utils is the
+    # `pin_mut!` macro only. Slint 1.18.1 and spin_on 0.1.1 are the latest.
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils unmaintained; via slint > spin_on (slint-macros, skia renderer), no safe upgrade" },
 ]
 
 [bans]

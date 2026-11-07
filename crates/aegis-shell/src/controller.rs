@@ -286,6 +286,23 @@ fn after_none(i: i32) -> Option<usize> {
     pos(i).and_then(|i| i.checked_sub(1))
 }
 
+/// Position `i` of the bulk impact list, which holds per category "not
+/// rated" and then its levels, as (category, level); `levels` gives each
+/// category's level count.
+fn impact_choice(
+    levels: impl IntoIterator<Item = usize>,
+    i: usize,
+) -> Option<(usize, Option<usize>)> {
+    let mut at = i;
+    for (category, n) in levels.into_iter().enumerate() {
+        if at <= n {
+            return Some((category, at.checked_sub(1)));
+        }
+        at -= n + 1;
+    }
+    None
+}
+
 /// What a filtered picker lists for `query`: "None" first, then the options
 /// whose `labels` contain it (case-insensitive), as the labels to show and
 /// their positions in the picker's model. With no query the model's own
@@ -514,6 +531,104 @@ impl Controller {
             range,
         );
         self.push_marks();
+    }
+
+    /// Select all (Control or Command with A) in a bulk-edit table picks
+    /// every row of it (UI-04).
+    fn mark_all(&self, table: &str) {
+        let (Some(table), Some(w)) = (Table::from_key(table), self.window.upgrade()) else {
+            return;
+        };
+        if !w.get_editing() {
+            return;
+        }
+        let Some(order) = self.with_project(|p| Some(table.order(p))) else {
+            return;
+        };
+        let mut st = self.state.borrow_mut();
+        st.marks.clear();
+        st.marks.extend(order);
+        drop(st);
+        self.push_marks();
+    }
+
+    /// A choice in the bar of a bulk-edit table goes to every picked row as
+    /// one batch (UI-04): an asset property to add (`which` 1) or remove
+    /// (2), an impact rating, or a threat's goal (1) or claim (2), "None"
+    /// first. Rows that already have the value are left out of the batch.
+    fn bulk_pick(&self, table: &str, which: i32, choice: i32) {
+        let (Some(table), Some(i)) = (Table::from_key(table), pos(choice)) else {
+            return;
+        };
+        let marked = self.marked(table);
+        let items: Vec<Edit> = match table {
+            Table::Asset => {
+                let on = which == 1;
+                marked
+                    .into_iter()
+                    .filter_map(|s| match s {
+                        Selection::Asset(asset) => Some(Edit::SetAssetProperty {
+                            asset,
+                            property: i,
+                            on,
+                        }),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            Table::Damage => {
+                let Some((category, level)) = self.with_project(|p| {
+                    impact_choice(p.vocab.impact_categories.iter().map(|c| c.levels.len()), i)
+                }) else {
+                    return;
+                };
+                marked
+                    .into_iter()
+                    .filter_map(|s| match s {
+                        Selection::Damage(damage) => Some(Edit::SetImpact {
+                            damage,
+                            category,
+                            level,
+                        }),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            Table::Threat => {
+                let threats = marked.into_iter().filter_map(|s| match s {
+                    Selection::Threat(threat) => Some(threat),
+                    _ => None,
+                });
+                let picked = after_none(choice);
+                let Some(edits) = self.with_project(|p| {
+                    let d = &p.data;
+                    Some(if which == 1 {
+                        let goal = match picked {
+                            Some(g) => Some(d.goals.get(g)?.id),
+                            None => None,
+                        };
+                        threats
+                            .map(|threat| Edit::SetThreatGoal { threat, goal })
+                            .collect()
+                    } else {
+                        let claim = match picked {
+                            Some(c) => Some(d.claims.get(c)?.id),
+                            None => None,
+                        };
+                        threats
+                            .map(|threat| Edit::SetThreatClaim { threat, claim })
+                            .collect()
+                    })
+                }) else {
+                    return;
+                };
+                edits
+            }
+            Table::Control | Table::Risk => return,
+        };
+        if !items.is_empty() {
+            self.edit(Edit::Batch(items));
+        }
     }
 
     fn clear_marks(&self) {
@@ -2020,6 +2135,9 @@ impl Controller {
         on!(on_mark_click, |c, table, i, range| c
             .mark_click(&table, i, range));
         on!(on_clear_marks, |c| c.clear_marks());
+        on!(on_mark_all, |c, table| c.mark_all(&table));
+        on!(on_bulk_pick, |c, table, which, i| c
+            .bulk_pick(&table, which, i));
         on!(on_remove_marked, |c, table| c.remove_marked(&table));
         on!(on_treat_marked, |c, i| c.treat_marked(i));
 
@@ -3128,6 +3246,16 @@ impl Controller {
         w.set_feasibility_options(with_none("Not rated", v.feasibility.iter().cloned()));
         w.set_feasibility_levels(model(v.feasibility.iter().map(|x| s(x)).collect()));
         w.set_treatment_options(with_none("Not decided", v.treatments.iter().cloned()));
+        w.set_impact_bulk_options(model(
+            v.impact_categories
+                .iter()
+                .flat_map(|c| {
+                    std::iter::once(format!("{}: Not rated", c.label))
+                        .chain(c.levels.iter().map(|l| format!("{}: {l}", c.label)))
+                })
+                .map(|x| s(&x))
+                .collect(),
+        ));
         w.set_catalog_schemes(model(v.catalog_schemes.iter().map(|x| s(x)).collect()));
         w.set_interface_kinds(model(v.interface_kinds.iter().map(|x| s(x)).collect()));
         w.set_ceiling_options(with_none(
@@ -3788,6 +3916,15 @@ impl Controller {
             w.get_draft_row_goal().to_string(),
         );
         w.set_goal_rows(rows(list));
+        let pick = |visual_id: &str, name: &str| format!("{visual_id} \u{b7} {name}");
+        w.set_bulk_goal_options(with_none(
+            "None",
+            d.goals.iter().map(|g| pick(&g.visual_id, &g.name)),
+        ));
+        w.set_bulk_claim_options(with_none(
+            "None",
+            d.claims.iter().map(|c| pick(&c.visual_id, &c.name)),
+        ));
         w.set_goal_selected(draft_at.unwrap_or_else(|| {
             index_of(d.goals.iter().map(|g| g.id), d.goal.as_ref().map(|g| g.id))
         }));
@@ -4345,4 +4482,22 @@ fn history_preview(edits: &[aegis_client::state::EditRow], row: usize) -> String
         "Going back here undoes {n} {changes} as one step: {}{more}. Redo brings them back.",
         list.join("; ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::impact_choice;
+
+    /// The bulk impact list holds per category "not rated", then its levels.
+    #[test]
+    fn impact_choice_maps_list_positions_to_category_and_level() {
+        let levels = [4, 2];
+        let at = |i| impact_choice(levels, i);
+        assert_eq!(at(0), Some((0, None)));
+        assert_eq!(at(1), Some((0, Some(0))));
+        assert_eq!(at(4), Some((0, Some(3))));
+        assert_eq!(at(5), Some((1, None)));
+        assert_eq!(at(7), Some((1, Some(1))));
+        assert_eq!(at(8), None);
+    }
 }

@@ -2687,6 +2687,14 @@ impl<P: CredentialProvider> Actor<P> {
     /// Applies one edit as the user; true if it was applied.
     fn edit(&mut self, edit: &Edit) -> bool {
         let (user, now) = (self.config.user.clone(), (self.config.clock_ms)());
+        // A bulk edit counts only the elements it changes (UI-04).
+        let pruned = matches!(edit, Edit::Batch(_))
+            .then(|| {
+                let open = self.open.as_ref()?;
+                Some(edit.clone().changing(open.ws.project()))
+            })
+            .flatten();
+        let edit = pruned.as_ref().unwrap_or(edit);
         let created = edit.created();
         let applied = self.apply_edit_as(
             |project| edit.to_ops(project, &user, now).map_err(|e| e.to_string()),
@@ -3259,6 +3267,9 @@ fn page_data(open: &Open) -> PageData {
         Page::Threats | Page::Risks => {
             if ui.page == Page::Threats {
                 d.assets = pages::asset_rows(ws);
+                // The goal and claim choices of the bulk bar (UI-04).
+                d.goals = pages::goal_rows(ws);
+                d.claims = pages::claim_rows(ws);
             } else {
                 d.risks = pages::risk_rows(ws);
             }

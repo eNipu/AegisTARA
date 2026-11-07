@@ -1415,6 +1415,21 @@ msgstr "⟦Cléár séléctíón␣␣⟧"
 msgid "Set treatment"
 msgstr "⟦Sét tréátmént␣␣⟧"
 
+msgid "Add property"
+msgstr "⟦Ádd própérty␣␣⟧"
+
+msgid "Remove property"
+msgstr "⟦Rémóvé própérty␣␣⟧"
+
+msgid "Set impact"
+msgstr "⟦Sét ímpáct␣␣⟧"
+
+msgid "Set goal"
+msgstr "⟦Sét góál␣␣⟧"
+
+msgid "Set claim"
+msgstr "⟦Sét cláím␣␣⟧"
+
 msgid "Through"
 msgstr "⟦Thróúgh␣␣⟧"
 

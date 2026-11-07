@@ -403,6 +403,8 @@ export component ComboBox inherits Rectangle {
     in property <[string]> model;
     in-out property <int> current-index: 0;
     out property <string> current-value: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
+    // Shown dimmed while nothing is chosen (a command drop-down in a bar).
+    in property <string> placeholder;
     in property <bool> enabled: true;
     out property <bool> has-focus: fs.has-focus;
     callback selected(string);
@@ -439,8 +441,8 @@ export component ComboBox inherits Rectangle {
         padding-right: 8px;
         spacing: 6px;
         Text {
-            text: root.current-value;
-            color: Theme.ink;
+            text: root.current-value != "" ? root.current-value : root.placeholder;
+            color: root.current-value != "" ? Theme.ink : Theme.graphite;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -791,11 +793,16 @@ export component Choice inherits VerticalLayout {
     in property <bool> editable: true;
     in property <string> label;
     in-out property <bool> has-focus: false;
+    // Shown while nothing is chosen.
+    in property <string> placeholder;
     callback picked(int);
     public function focus-box() { box.focus(); }
+    // Shows `index` again, for a drop-down that is a command, not a value.
+    public function reset() { box.current-index = root.index; }
 
     box := ComboBox {
         model: root.options;
+        placeholder: root.placeholder;
         current-index: root.index;
         enabled: root.editable;
         accessible-label: root.label;
@@ -833,15 +840,24 @@ export component DataTable inherits Rectangle {
     // them by element ID, so a table that re-sorts keeps the right rows. The
     // bar below the rows shows only for an editing user and two or more rows.
     in property <Marks> marks;
-    // Optional drop-down in the bar (the risk table's treatment).
+    // Whether the table takes bulk edits: select all (Control or Command
+    // with A) picks every row and shift with an arrow extends the picks
+    // from the selected row.
+    in property <bool> bulk: false;
+    // Optional drop-downs in the bar (the risk table's treatment; an asset
+    // property to add or remove; an impact rating; a threat's goal or claim).
     in property <[string]> bulk-choices;
     in property <string> bulk-choice-label;
+    in property <[string]> bulk-choices-2;
+    in property <string> bulk-choice-2-label;
     callback picked(int);
     callback activated(int);
     callback mark-click(int, bool);
+    callback mark-all();
     callback clear-marks();
     callback remove-marked();
     callback bulk-choice(int);
+    callback bulk-choice-2(int);
     callback add-child(int);
     callback open-row(int);
     callback duplicate-row(int);
@@ -889,6 +905,18 @@ export component DataTable inherits Rectangle {
         root.set-current-row(max(0, min(root.rows.length - 1, target)));
     }
 
+    // Shift+arrow: moves the cursor one row and picks every row from the
+    // selected one to it. With no row selected the first press selects one.
+    public function extend-by(delta: int) {
+        if (root.rows.length == 0) { return; }
+        let from = root.current-row < 0 ? root.selected : root.current-row;
+        let target = max(0, min(root.rows.length - 1, from + delta));
+        if (root.selected < 0) { root.set-current-row(target); return; }
+        root.current-row = target;
+        root.bring-into-view(target);
+        root.mark-click(target, true);
+    }
+
     public function bring-into-view(index: int) {
         if (index < 0 || index >= root.rows.length) { return; }
         let y = scroll.content-y + index * root.row-height;
@@ -921,7 +949,10 @@ export component DataTable inherits Rectangle {
         accessible-role: AccessibleRole.table;
         accessible-label: root.label;
         key-pressed(event) => {
-            if (event.text == Key.UpArrow) { root.move-by(-1); return accept; }
+            if (root.bulk && root.editable && event.modifiers.shift && event.text == Key.UpArrow) { root.extend-by(-1); return accept; }
+            else if (root.bulk && root.editable && event.modifiers.shift && event.text == Key.DownArrow) { root.extend-by(1); return accept; }
+            else if (root.bulk && root.editable && event.modifiers.control && (event.text == "a" || event.text == "A")) { root.mark-all(); return accept; }
+            else if (event.text == Key.UpArrow) { root.move-by(-1); return accept; }
             else if (event.text == Key.DownArrow) { root.move-by(1); return accept; }
             else if (event.text == Key.Home) { if (root.marks.count > 0) { root.clear-marks(); } root.set-current-row(0); return accept; }
             else if (event.text == Key.End) { if (root.marks.count > 0) { root.clear-marks(); } root.set-current-row(root.rows.length - 1); return accept; }
@@ -1069,40 +1100,60 @@ export component DataTable inherits Rectangle {
         }
 
         if root.bulk-bar: Rectangle {
-            height: 40px;
+            // One row for the count and the buttons; the drop-downs, when the
+            // table has any, get a row of their own so a narrow window still
+            // shows every control.
+            property <bool> has-choices: root.bulk-choices.length > 0 || root.bulk-choices-2.length > 0;
+            height: self.has-choices ? 80px : 40px;
             background: Theme.panel;
             accessible-role: AccessibleRole.groupbox;
             accessible-label: @tr("{} selected", root.marks.count);
             Rectangle { y: 0px; width: parent.width; height: 1px; background: Theme.rule; }
-            HorizontalLayout {
+            VerticalLayout {
                 padding-left: 12px;
                 padding-right: 8px;
                 padding-top: 6px;
                 padding-bottom: 6px;
-                spacing: 8px;
-                Text {
-                    text: @tr("{} selected", root.marks.count);
-                    color: Theme.ink;
-                    font-weight: Theme.weight-semibold;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("{} selected", root.marks.count);
+                        color: Theme.ink;
+                        font-weight: Theme.weight-semibold;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    if root.show-remove: Button {
+                        text: @tr("Remove selected");
+                        accessible-label: @tr("Remove {} selected", root.marks.count);
+                        clicked => { root.remove-marked(); }
+                    }
+                    Button {
+                        ghost: true;
+                        text: @tr("Clear selection");
+                        clicked => { root.clear-marks(); }
+                    }
                 }
-                if root.bulk-choices.length > 0: Choice {
-                    options: root.bulk-choices;
-                    index: -1;
-                    label: root.bulk-choice-label;
-                    picked(i) => { root.bulk-choice(i); }
-                }
-                if root.show-remove: Button {
-                    text: @tr("Remove selected");
-                    accessible-label: @tr("Remove {} selected", root.marks.count);
-                    clicked => { root.remove-marked(); }
-                }
-                Button {
-                    ghost: true;
-                    text: @tr("Clear selection");
-                    clicked => { root.clear-marks(); }
+                if parent.has-choices: HorizontalLayout {
+                    spacing: 8px;
+                    // Commands, not values: each shows its label until picked
+                    // and goes back to it afterwards.
+                    if root.bulk-choices.length > 0: Choice {
+                        options: root.bulk-choices;
+                        index: -1;
+                        label: root.bulk-choice-label;
+                        placeholder: root.bulk-choice-label;
+                        picked(i) => { root.bulk-choice(i); self.reset(); }
+                    }
+                    if root.bulk-choices-2.length > 0: Choice {
+                        options: root.bulk-choices-2;
+                        index: -1;
+                        label: root.bulk-choice-2-label;
+                        placeholder: root.bulk-choice-2-label;
+                        picked(i) => { root.bulk-choice-2(i); self.reset(); }
+                    }
                 }
             }
         }
