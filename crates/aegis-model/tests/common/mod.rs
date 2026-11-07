@@ -2648,6 +2648,20 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: Provenance::default(),
         },
     );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: sniff },
+        &aegis_model::ModelError::ThreatHasScaling { threat: sniff },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatScaling {
+            threat: sniff,
+            scales: None,
+            reason: "".into(),
+            provenance: Provenance::default(),
+        },
+    );
     ok(&mut p, Op::RemoveCybersecurityClaim { id: claim });
     ok(&mut p, Op::RemoveAttackTree { id: tree });
     ok(
