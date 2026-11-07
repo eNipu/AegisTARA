@@ -1617,6 +1617,14 @@ impl Edit {
                         provenance: p.clone(),
                     });
                 }
+                if t.scales().is_some() || !t.scaling_reason().is_empty() {
+                    ops.push(Op::SetThreatScaling {
+                        threat: *threat,
+                        scales: None,
+                        reason: "".into(),
+                        provenance: p.clone(),
+                    });
+                }
                 ops.push(Op::RemoveThreatScenario { id: *threat });
                 ops
             }

@@ -7957,6 +7957,9 @@ impl Project {
                 .ok_or(ModelError::UnknownThreatScenario(id))?;
             return Err(ModelError::ThreatHasClaim { threat: id, claim });
         }
+        if t.scales.is_some() || !t.scaling_reason.is_empty() {
+            return Err(ModelError::ThreatHasScaling { threat: id });
+        }
         Ok(())
     }
 
