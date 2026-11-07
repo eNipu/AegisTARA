@@ -230,6 +230,10 @@ struct ThreatView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     claim: Option<Required<Text<ClaimId>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    scales: Option<bool>,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    scaling_reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
 
@@ -437,6 +441,8 @@ impl Serialize for Threats<'_> {
                 claim: t
                     .claim()
                     .map(|idx| Required(p.cybersecurity_claim_id(idx).map(Text))),
+                scales: t.scales(),
+                scaling_reason: t.scaling_reason(),
                 provenance: ProvenanceView::of(t.provenance()),
             }
         }))
@@ -1135,6 +1141,8 @@ fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(
     let treatment = t.treatment.map(Into::into);
     let goal = t.goal.map(|w| w.0);
     let claim = t.claim.map(|w| w.0);
+    let scales = t.scales;
+    let scaling_reason = t.scaling_reason.map(|w| w.0);
     project.apply(Op::AddThreatScenario {
         id,
         name: t.name.0,
@@ -1176,6 +1184,14 @@ fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(
         project.apply(Op::SetThreatClaim {
             threat: id,
             claim: Some(claim),
+            provenance: provenance.clone(),
+        })?;
+    }
+    if scales.is_some() || scaling_reason.is_some() {
+        project.apply(Op::SetThreatScaling {
+            threat: id,
+            scales,
+            reason: scaling_reason.unwrap_or_else(|| Arc::from("")),
             provenance,
         })?;
     }

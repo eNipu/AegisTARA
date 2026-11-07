@@ -510,7 +510,7 @@ fn ops_generator_covers_every_op_and_most_errors() {
         assert!((0.25..0.9).contains(&share), "valid share {share}");
         // The second pack declares no interface kinds or attack types, so it
         // has no interface to add or remove and no control rule to set.
-        let kinds = if m.interface_kind_count() > 0 { 46 } else { 43 };
+        let kinds = if m.interface_kind_count() > 0 { 47 } else { 44 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",

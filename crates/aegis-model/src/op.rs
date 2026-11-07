@@ -83,6 +83,7 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `RemoveCybersecurityClaim` | `AddCybersecurityClaim` with the old fields and provenance | O(log n) |
 /// | `SetThreatGoal` | the same with the old goal and provenance | O(log n) |
 /// | `SetThreatClaim` | the same with the old claim and provenance | O(log n) |
+/// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
 ///
 /// ```
 /// use std::sync::Arc;
@@ -667,6 +668,20 @@ pub enum Op {
         /// Provenance of linking or unlinking the cybersecurity claim.
         provenance: Provenance,
     },
+    /// Rates whether a threat scenario scales to many vehicles (FND-10):
+    /// `Some(true)`, `Some(false)`, or `None` for not rated, with a reasoning
+    /// text (plain text, at most [`MAX_DESCRIPTION_CHARS`](crate::MAX_DESCRIPTION_CHARS)
+    /// chars, may be empty).
+    SetThreatScaling {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// Whether it scales, or `None` for not rated.
+        scales: Option<bool>,
+        /// Why it scales or not.
+        reason: Arc<str>,
+        /// Provenance of the rating.
+        provenance: Provenance,
+    },
     /// Adds a component to the item definition.
     AddComponent {
         /// Unused component ID.
@@ -899,6 +914,7 @@ impl Op {
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
+            | Self::SetThreatScaling { provenance, .. }
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }
@@ -994,6 +1010,7 @@ impl Op {
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
+            | Self::SetThreatScaling { provenance, .. }
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }

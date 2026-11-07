@@ -1406,6 +1406,7 @@ export component DescriptionBox inherits VerticalLayout {
     in property <bool> editable;
     // The save shortcut as the keyboard shows it (for the hint).
     in property <string> save-label;
+    in property <string> placeholder: @tr("Add a description. {0} or leaving the box saves.", root.save-label);
     callback save(string);
     spacing: 4px;
     SectionTitle { text: root.label; }
@@ -1439,7 +1440,7 @@ export component DescriptionBox inherits VerticalLayout {
             text: root.text;
             wrap: word-wrap;
             font-size: Theme.font-body;
-            placeholder-text: @tr("Add a description. {0} or leaving the box saves.", root.save-label);
+            placeholder-text: root.placeholder;
             accessible-label: root.label;
             changed has-focus => { if (!self.has-focus) { parent.commit(); } }
         }

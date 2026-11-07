@@ -1669,6 +1669,10 @@ pub(super) struct ThreatWire {
     #[serde(default, deserialize_with = "some")]
     pub(super) claim: Option<WireId<ClaimId>>,
     #[serde(default, deserialize_with = "some")]
+    pub(super) scales: Option<bool>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) scaling_reason: Option<DescriptionText>,
+    #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
@@ -2263,6 +2267,14 @@ pub(super) enum OpWire {
         threat: WireId<ThreatId>,
         #[serde(deserialize_with = "Option::deserialize")]
         claim: Option<WireId<ClaimId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetThreatScaling {
+        threat: WireId<ThreatId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        scales: Option<bool>,
+        reason: DescriptionText,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

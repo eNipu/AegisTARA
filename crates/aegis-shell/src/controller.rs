@@ -1727,6 +1727,32 @@ impl Controller {
                 c.edit(Edit::SetThreatClaim { threat, claim });
             }
         });
+        on!(on_set_threat_scales, |c, i| {
+            let scales = match i {
+                1 => Some(true),
+                2 => Some(false),
+                _ => None,
+            };
+            let reason =
+                c.with_project(|p| p.data.threat.as_ref().map(|d| d.scaling_reason.clone()));
+            if let (Some(threat), Some(reason)) = (c.selected_threat(), reason) {
+                c.edit(Edit::SetThreatScaling {
+                    threat,
+                    scales,
+                    reason,
+                });
+            }
+        });
+        on!(on_set_threat_scaling_reason, |c, reason| {
+            let scales = c.with_project(|p| p.data.threat.as_ref().map(|d| d.scales));
+            if let (Some(threat), Some(scales)) = (c.selected_threat(), scales) {
+                c.edit(Edit::SetThreatScaling {
+                    threat,
+                    scales,
+                    reason: reason.to_string(),
+                });
+            }
+        });
         on!(on_pick_risk, |c, i| {
             if let Some(id) = c.with_project(|p| p.data.risks.get(pos(i)?).map(|r| r.id)) {
                 c.select(Selection::Threat(id), false);
@@ -3515,6 +3541,12 @@ impl Controller {
                     t.visual_id.clone(),
                     t.name.clone(),
                     t.asset.clone(),
+                    match t.scales {
+                        Some(true) => "Yes",
+                        Some(false) => "No",
+                        None => "",
+                    }
+                    .to_owned(),
                     risk_text(t.inherent.as_ref()),
                     risk_text(t.residual.as_ref()),
                 ]
@@ -3523,7 +3555,7 @@ impl Controller {
         let draft_at = push_draft_row(
             &mut list,
             p.draft == Some(DraftKind::Threat),
-            5,
+            6,
             w.get_draft_row_threat().to_string(),
         );
         w.set_threat_rows(rows(list));
@@ -3590,6 +3622,12 @@ impl Controller {
             d.claim
                 .and_then(|g| d.claims.iter().position(|x| x.id == g)),
         ));
+        w.set_td_scales(match d.scales {
+            None => 0,
+            Some(true) => 1,
+            Some(false) => 2,
+        });
+        w.set_td_scaling_reason(s(&d.scaling_reason));
     }
 
     #[allow(clippy::too_many_lines)]

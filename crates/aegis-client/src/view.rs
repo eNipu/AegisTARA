@@ -64,6 +64,9 @@ pub struct ThreatRow {
     pub residual: Option<RiskView>,
     /// Whether an attack tree is attached.
     pub has_tree: bool,
+    /// Whether the attack scales to many vehicles (FND-10); `None` is not
+    /// rated.
+    pub scales: Option<bool>,
 }
 
 /// A page of the open project: the steps of the TARA flow (ISO/SAE 21434
@@ -1028,6 +1031,7 @@ pub fn threat_rows(ws: &Workspace) -> Vec<ThreatRow> {
                 inherent: risk(ws.cache().evaluate_risk(project, id)),
                 residual: risk(ws.cache().evaluate_residual_risk(project, id)),
                 has_tree: threat.attack_tree().is_some(),
+                scales: threat.scales(),
             }
         })
         .collect()

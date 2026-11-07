@@ -12,8 +12,8 @@ use crate::control::{
 };
 use crate::damage::DamageScenario;
 use crate::description::{
-    Described, ElementRef, MAX_DESCRIPTION_TOTAL_BYTES, MAX_DESCRIPTION_TRANSLATIONS, Translation,
-    check_lang, check_text,
+    Described, ElementRef, MAX_DESCRIPTION_CHARS, MAX_DESCRIPTION_TOTAL_BYTES,
+    MAX_DESCRIPTION_TRANSLATIONS, Translation, check_lang, check_text,
 };
 use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 use crate::error::{EntityKind, ModelError};
@@ -6299,6 +6299,10 @@ impl Project {
             Op::SetThreatClaim { threat, claim, .. } => {
                 self.check_set_threat_claim(*threat, *claim)?;
             }
+            Op::SetThreatScaling { threat, reason, .. } => {
+                self.live_threat(*threat)?;
+                check_text(reason, MAX_DESCRIPTION_CHARS)?;
+            }
             Op::AddComponent {
                 id,
                 name,
@@ -6747,6 +6751,12 @@ impl Project {
                 claim,
                 provenance,
             } => self.commit_set_threat_claim(threat, claim, provenance),
+            Op::SetThreatScaling {
+                threat,
+                scales,
+                reason,
+                provenance,
+            } => self.commit_set_threat_scaling(threat, scales, reason, provenance),
             Op::AddComponent {
                 id,
                 name,
@@ -9063,6 +9073,8 @@ impl Project {
             treatment: None,
             goal: None,
             claim: None,
+            scales: None,
+            scaling_reason: Arc::from(""),
             provenance,
         };
         let violates = self.methodology.violates(category);
@@ -9871,6 +9883,26 @@ impl Project {
             threat,
             claim: old_claim,
             provenance,
+        })
+    }
+
+    fn commit_set_threat_scaling(
+        &mut self,
+        threat: ThreatId,
+        scales: Option<bool>,
+        reason: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.threat_index(threat)?;
+        let t = self
+            .threats
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownThreatScenario(threat))?;
+        Ok(Op::SetThreatScaling {
+            threat,
+            scales: std::mem::replace(&mut t.scales, scales),
+            reason: std::mem::replace(&mut t.scaling_reason, reason),
+            provenance: std::mem::replace(&mut t.provenance, provenance),
         })
     }
 
@@ -11460,6 +11492,7 @@ impl ProjectEvalCache {
             | Op::SetRiskTreatment { .. }
             | Op::SetThreatGoal { .. }
             | Op::SetThreatClaim { .. }
+            | Op::SetThreatScaling { .. }
             | Op::AddSecurityControl { .. }
             | Op::RenameSecurityControl { .. }
             | Op::RemoveSecurityControl { .. }

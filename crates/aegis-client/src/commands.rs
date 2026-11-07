@@ -417,6 +417,16 @@ pub enum Edit {
         /// The claim, or `None`.
         claim: Option<ClaimId>,
     },
+    /// Rates whether a threat scales to many vehicles (FND-10), with the
+    /// reasoning; `None` is not rated.
+    SetThreatScaling {
+        /// The threat.
+        threat: ThreatId,
+        /// Whether it scales, or `None`.
+        scales: Option<bool>,
+        /// Why; may be empty.
+        reason: String,
+    },
     /// Removes a threat scenario, clearing what blocks the removal first
     /// (tree link, ratings, treatment, goal, claim).
     RemoveThreat {
@@ -1556,6 +1566,16 @@ impl Edit {
                 claim: *claim,
                 provenance: p,
             }],
+            Edit::SetThreatScaling {
+                threat,
+                scales,
+                reason,
+            } => vec![Op::SetThreatScaling {
+                threat: *threat,
+                scales: *scales,
+                reason: reason.trim().into(),
+                provenance: p,
+            }],
             Edit::RemoveThreat { threat } => {
                 let t = project
                     .threat_scenario_idx(threat)
@@ -2234,6 +2254,12 @@ impl Edit {
             Edit::SetThreatClaim { threat: id, claim } => threat(id).is_some_and(|t| {
                 t.claim().and_then(|c| project.cybersecurity_claim_id(c)) == *claim
             }),
+            Edit::SetThreatScaling {
+                threat: id,
+                scales,
+                reason,
+            } => threat(id)
+                .is_some_and(|t| t.scales() == *scales && t.scaling_reason() == reason.trim()),
             _ => false,
         }
     }
@@ -2278,6 +2304,7 @@ impl Edit {
             Edit::SetImpact { .. } => ("rate", "damage scenarios"),
             Edit::SetThreatGoal { .. } => ("set goal of", "threat scenarios"),
             Edit::SetThreatClaim { .. } => ("set claim of", "threat scenarios"),
+            Edit::SetThreatScaling { .. } => ("set scaling of", "threat scenarios"),
             _ => ("change", "items"),
         };
         Some(Label::bulk(verb, noun, items.len()))
