@@ -17,6 +17,9 @@ name: CI
 on:
   push:
     branches: [master]
+    # A release tag runs every job, and the sbom job keeps the release's SBOM
+    # (docs/release-checklist.md, NFR-05).
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -168,6 +171,38 @@ jobs:
           persist-credentials: false
       - name: deploy/verify-image.sh
         run: deploy/verify-image.sh
+
+  # CycloneDX SBOM for each shipped binary (aegis-shell, aegis-server,
+  # aegis-license), for the EU Cyber Resilience Act (NFR-05, SECURITY.md).
+  # `--target all` lists the dependencies of every platform, so one SBOM
+  # covers the macOS, Windows and Linux builds. Run it locally with the same
+  # command; the files are ignored by git.
+  sbom:
+    name: SBOM
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-cyclonedx@0.5.9
+          fallback: none
+      - name: cargo cyclonedx
+        run: |
+          cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target all
+          ls crates/*/*.cdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-${{ github.ref_name }}
+          path: crates/*/*.cdx.json
+          if-no-files-found: error
+          retention-days: 90
 
   msrv:
     name: MSRV cargo check
