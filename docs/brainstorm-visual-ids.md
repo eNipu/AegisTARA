@@ -47,6 +47,7 @@ example:
 | Shared fragment (planned, D29, job 142; also an attack tree) | `TT` | `TT00` |
 | Misuse case (planned, job 148) | `MU` | `MU00` |
 | Party (planned, job 145) | `P` | `P00` |
+| Function (planned, job 160) | `F` | `F00` |
 
 Attack tree nodes (`NodeId` — gates and steps inside a tree) remain unnumbered:
 a tree can hold up to 4,096 nodes (`FND-03`), and users cite the tree (`AT00`)

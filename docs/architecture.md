@@ -1966,6 +1966,18 @@ classDiagram
         id: RequirementId
         name: String
         description: Text
+        allocated_to: Vec~Allocation~
+    }
+    class Allocation {
+        <<enum>>
+        Item
+        Component(ComponentIdx)
+    }
+    class Function {
+        id: FunctionId
+        name: String
+        description: Text
+        implemented_by: Vec~ComponentIdx~
     }
     class Verification {
         id: VerificationId
@@ -1987,7 +1999,16 @@ classDiagram
     CybersecurityGoal "1" <-- "*" Requirement : refines
     Requirement "1" <-- "*" Verification : verifies
     SecurityControl ..> Requirement : implements
+    Requirement --> "*" Allocation : allocated to
+    Function --> "*" Component : implemented by
 ```
+
+ISO/SAE 21434 Figure 3 check (2026-11-07,
+[design/reference-ui-review.md](design/reference-ui-review.md) section 8):
+`Function` (ARC-06, job 160) and `Requirement::allocated_to` (TRC-06, job 077)
+close the two missing links, and `ThreatScenario.goal` becomes a sorted
+`goals` list (FND-14, job 161). The snapshot writes the old single `goal`
+field when there is exactly one, so v1 fixtures and their files stay equal.
 
 A link is suspect when its `from` element changed after `confirmed_seq`
 (the op sequence number at confirmation). Suspect state is derived (D10),
