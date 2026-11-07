@@ -28,7 +28,7 @@ use aegis_client::session::Session;
 use aegis_client::state::{
     ConnectionView, Mode, NoticeAction, NumbersCheck, ProjectView, Severity, SyncView, ViewModel,
 };
-use aegis_client::view::{AdminAction, DraftKind, Page, RiskView, Selection};
+use aegis_client::view::{AdminAction, DraftKind, Page, PageGroup, RiskView, Selection};
 use aegis_model::library::LibraryPack;
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ItemRef,
@@ -72,8 +72,85 @@ struct State {
     /// Elements picked together in the tables with bulk edit (UI-04), by ID
     /// so a table that re-sorts keeps the right ones.
     marks: HashSet<Selection>,
+    /// Where the user was, for back and forward (job 130).
+    places: Places,
     /// Draft rules (attack-type index -> ceiling index) for a custom setting.
     custom_rules: Vec<Option<usize>>,
+}
+
+/// A place in the project: a page and the element selected on it.
+type Place = (Page, Option<Selection>);
+
+/// The places visited, for back and forward (job 130, UI-17). Kept by
+/// element ID, so an element that is gone is simply not selected again.
+#[derive(Default)]
+struct Places {
+    back: Vec<Place>,
+    forward: Vec<Place>,
+    /// Where the user is now.
+    now: Option<Place>,
+    /// The place back or forward is going to: reaching it is not a new visit.
+    going: Option<Place>,
+}
+
+/// Places kept in each direction; the oldest drop off.
+const MAX_PLACES: usize = 100;
+
+impl Places {
+    /// Notes that the user is at `at`. A change of place that back or
+    /// forward did not ask for is a visit: it can be gone back to, and it
+    /// ends the forward list.
+    fn visit(&mut self, at: Place) {
+        if self.now == Some(at) {
+            return;
+        }
+        if self.going.take() != Some(at)
+            && let Some(was) = self.now
+        {
+            self.back.push(was);
+            if self.back.len() > MAX_PLACES {
+                self.back.remove(0);
+            }
+            self.forward.clear();
+        }
+        self.now = Some(at);
+    }
+
+    /// The place to go back to (`back` true) or forward to, if any.
+    fn step(&mut self, back: bool) -> Option<Place> {
+        let now = self.now?;
+        let (from, to) = if back {
+            (&mut self.back, &mut self.forward)
+        } else {
+            (&mut self.forward, &mut self.back)
+        };
+        let target = from.pop()?;
+        to.push(now);
+        if to.len() > MAX_PLACES {
+            to.remove(0);
+        }
+        self.going = Some(target);
+        Some(target)
+    }
+}
+
+/// The element selected on the page the user is on, for the pages whose
+/// selection back and forward restore.
+fn current_place(p: &ProjectView) -> Place {
+    let d = &p.data;
+    let selection = match p.page {
+        Page::Assets => d.asset.as_ref().map(|x| Selection::Asset(x.id)),
+        Page::Damage => d.damage.as_ref().map(|x| Selection::Damage(x.id)),
+        Page::Threats | Page::Risks => d.threat.as_ref().map(|x| Selection::Threat(x.id)),
+        Page::Controls => d.control.as_ref().map(|x| Selection::Control(x.id)),
+        Page::Goals => d
+            .goal
+            .as_ref()
+            .map(|x| Selection::Goal(x.id))
+            .or_else(|| d.claim.as_ref().map(|x| Selection::Claim(x.id))),
+        _ => None,
+    };
+    (p.page, selection)
 }
 
 /// A table that takes bulk edits (UI-04).
@@ -209,6 +286,9 @@ pub struct Hooks {
     /// height in logical pixels (`0` for a right panel that follows the
     /// window).
     pub panels_resized: Option<PanelSizes>,
+    /// The sidebar groups the user closed, by key, after one opens or
+    /// closes (UI-13), to remember them in the settings.
+    pub nav_groups_changed: Option<Box<dyn Fn(Vec<String>)>>,
 }
 
 /// Owns the window-side state and the session handle.
@@ -284,6 +364,45 @@ fn pos(i: i32) -> Option<usize> {
 /// A dropdown position where 0 means "none" and the rest are the list.
 fn after_none(i: i32) -> Option<usize> {
     pos(i).and_then(|i| i.checked_sub(1))
+}
+
+/// The keys of the sidebar groups that `open` marks closed, in group order.
+fn closed_group_keys(open: &[bool]) -> Vec<String> {
+    PageGroup::ALL
+        .iter()
+        .zip(open)
+        .filter(|(_, o)| !**o)
+        .map(|(g, _)| g.key().to_owned())
+        .collect()
+}
+
+/// The open flags of the sidebar groups for the closed keys of the settings.
+#[must_use]
+pub fn open_groups(closed: &[String]) -> Vec<bool> {
+    PageGroup::ALL
+        .iter()
+        .map(|g| !closed.iter().any(|k| k == g.key()))
+        .collect()
+}
+
+/// Per sidebar group, the sum of its pages' counts (`counts` is per page,
+/// in `Page::ALL` order); only the phases of the analysis have one.
+fn group_counts(counts: &[Option<usize>]) -> Vec<Option<usize>> {
+    PageGroup::ALL
+        .iter()
+        .map(|g| {
+            g.is_phase()
+                .then(|| {
+                    Page::ALL
+                        .iter()
+                        .zip(counts)
+                        .filter(|(p, _)| p.group() == Some(*g))
+                        .filter_map(|(_, c)| *c)
+                        .reduce(|a, b| a + b)
+                })
+                .flatten()
+        })
+        .collect()
 }
 
 /// Position `i` of the bulk impact list, which holds per category "not
@@ -452,6 +571,7 @@ impl Controller {
                 membership: None,
                 figure: None,
                 marks: HashSet::new(),
+                places: Places::default(),
                 custom_rules: Vec::new(),
             }),
             library: RefCell::new(LibraryView::new(Arc::new(LibraryPack::builtin_demo()))),
@@ -531,6 +651,39 @@ impl Controller {
             range,
         );
         self.push_marks();
+    }
+
+    /// Goes to the place before (`back` true) or after the current one.
+    fn go(&self, back: bool) {
+        let Some((page, selection)) = self.state.borrow_mut().places.step(back) else {
+            return;
+        };
+        // Select first, on whatever page, then show the page: one change of
+        // place, so the history sees exactly the target.
+        if let Some(selection) = selection {
+            self.send(Command::Select {
+                selection,
+                navigate: false,
+            });
+        }
+        self.send(Command::ShowPage(page));
+    }
+
+    /// Opens or closes sidebar group `g` (UI-13) and reports the closed ones.
+    fn toggle_nav_group(&self, g: i32) {
+        let (Some(w), Some(g)) = (self.window.upgrade(), pos(g)) else {
+            return;
+        };
+        let mut open: Vec<bool> = slint::Model::iter(&w.get_nav_group_open()).collect();
+        let Some(flag) = open.get_mut(g) else {
+            return;
+        };
+        *flag = !*flag;
+        let closed = closed_group_keys(&open);
+        w.set_nav_group_open(model(open));
+        if let Some(hook) = &self.hooks.nav_groups_changed {
+            hook(closed);
+        }
     }
 
     /// Select all (Control or Command with A) in a bulk-edit table picks
@@ -928,6 +1081,9 @@ impl Controller {
                 hook(i);
             }
         });
+        on!(on_toggle_nav_group, |c, g| c.toggle_nav_group(g));
+        on!(on_go_back, |c| c.go(true));
+        on!(on_go_forward, |c| c.go(false));
         on!(on_panels_resized, |c| {
             if let (Some(hook), Some(w)) = (&c.hooks.panels_resized, c.window.upgrade()) {
                 hook(w.get_left_size(), w.get_right_size(), w.get_bottom_size());
@@ -2529,6 +2685,8 @@ impl Controller {
         match id {
             "undo" => self.send(Command::Undo),
             "redo" => self.send(Command::Redo),
+            "back" => self.go(true),
+            "forward" => self.go(false),
             "begin-edit" => self.send(Command::BeginEdit),
             "end-edit" => self.send(Command::EndEdit),
             "palette" => {
@@ -3174,11 +3332,28 @@ impl Controller {
         w.set_show_residual(project.show_residual);
         w.set_is_empty(project.is_empty);
         w.set_page(i32::try_from(project.page.index()).unwrap_or(0));
+        {
+            let mut st = self.state.borrow_mut();
+            st.places.visit(current_place(project));
+            w.set_can_go_back(!st.places.back.is_empty());
+            w.set_can_go_forward(!st.places.forward.is_empty());
+        }
+        w.set_saved_text(s(&project
+            .saved_ms
+            .map_or_else(String::new, aegis_client::time::time_ms)));
+        w.set_problem_errors(i32::try_from(project.problem_counts.0).unwrap_or(i32::MAX));
+        w.set_problem_warnings(i32::try_from(project.problem_counts.1).unwrap_or(i32::MAX));
         if prev_proj.is_none_or(|old| old.nav_counts != project.nav_counts) {
             w.set_nav_counts(model(
                 project
                     .nav_counts
                     .iter()
+                    .map(|c| c.map_or_else(SharedString::new, |n| s(&n.to_string())))
+                    .collect(),
+            ));
+            w.set_nav_group_counts(model(
+                group_counts(&project.nav_counts)
+                    .into_iter()
                     .map(|c| c.map_or_else(SharedString::new, |n| s(&n.to_string())))
                     .collect(),
             ));
@@ -4499,5 +4674,58 @@ mod tests {
         assert_eq!(at(5), Some((1, None)));
         assert_eq!(at(7), Some((1, Some(1))));
         assert_eq!(at(8), None);
+    }
+
+    /// Back and forward walk the visited places; a new visit ends the
+    /// forward list, and reaching the target of a step is not a visit.
+    #[test]
+    fn places_go_back_and_forward() {
+        use super::{MAX_PLACES, Places};
+        use aegis_client::view::Page;
+        let mut p = Places::default();
+        for page in [Page::Overview, Page::Assets, Page::Threats] {
+            p.visit((page, None));
+        }
+        assert_eq!(p.step(true), Some((Page::Assets, None)));
+        p.visit((Page::Assets, None));
+        assert_eq!(p.back, [(Page::Overview, None)]);
+        assert_eq!(p.forward, [(Page::Threats, None)]);
+        assert_eq!(p.step(false), Some((Page::Threats, None)));
+        p.visit((Page::Threats, None));
+        assert_eq!(p.step(true), Some((Page::Assets, None)));
+        p.visit((Page::Assets, None));
+        // A new visit ends the forward list.
+        p.visit((Page::Risks, None));
+        assert!(p.forward.is_empty());
+        assert_eq!(p.step(false), None);
+        // The oldest places drop off.
+        for _ in 0..(MAX_PLACES * 2) {
+            p.visit((Page::Overview, None));
+            p.visit((Page::Assets, None));
+        }
+        assert_eq!(p.back.len(), MAX_PLACES);
+    }
+
+    /// Closed groups round-trip through their settings keys, and a closed
+    /// phase shows the sum of its pages' counts.
+    #[test]
+    fn nav_groups_round_trip_and_sum_their_pages() {
+        use super::{closed_group_keys, group_counts, open_groups};
+        use aegis_client::view::{Page, PageGroup};
+        let mut open = vec![true; PageGroup::ALL.len()];
+        open[PageGroup::AssetsThreats.index()] = false;
+        let keys = closed_group_keys(&open);
+        assert_eq!(keys, ["assets-threats"]);
+        assert_eq!(open_groups(&keys), open);
+        assert_eq!(open_groups(&["unknown".to_owned()]), vec![true; 7]);
+
+        let mut counts = vec![None; Page::ALL.len()];
+        counts[Page::Assets.index()] = Some(2);
+        counts[Page::Threats.index()] = Some(3);
+        counts[Page::Problems.index()] = Some(9);
+        let sums = group_counts(&counts);
+        assert_eq!(sums[PageGroup::AssetsThreats.index()], Some(5));
+        assert_eq!(sums[PageGroup::Impact.index()], None);
+        assert_eq!(sums[PageGroup::Project.index()], None, "not a phase");
     }
 }

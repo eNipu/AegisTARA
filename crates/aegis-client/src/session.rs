@@ -315,9 +315,13 @@ struct Open {
     /// Cached laid-out scene for `(tree_id, show_residual)`, invalidated on
     /// workspace edits/undo/redo.
     cached_scene: Option<(aegis_model::TreeId, bool, Arc<aegis_canvas::Scene>)>,
-    /// Cached problem count for the sidebar badge, invalidated on workspace
-    /// edits/undo/redo.
-    cached_lint_count: Option<usize>,
+    /// Cached problem counts (blocking, warnings) for the sidebar badge and
+    /// the status bar, invalidated on workspace edits/undo/redo.
+    cached_lint_count: Option<(usize, usize)>,
+    /// When the last edit reached the server (job 130), and whether edits
+    /// were waiting at the last view, to notice the moment they are all in.
+    saved_ms: Option<u64>,
+    had_pending: bool,
     /// Figures attached to the project or its elements (job 073).
     figures: Vec<FigureAttachment>,
     /// Current dry-run preview of an Excel TARA import (job 080).
@@ -1535,6 +1539,8 @@ impl<P: CredentialProvider> Actor<P> {
                     risks_again: false,
                     cached_scene: None,
                     cached_lint_count: None,
+                    saved_ms: None,
+                    had_pending: false,
                     figures: Vec::new(),
                     excel_preview: None,
                 });
@@ -3114,8 +3120,13 @@ impl<P: CredentialProvider> Actor<P> {
                 open.cached_scene = Some((tv.tree, tv.residual, Arc::clone(&tv.scene)));
             }
             if open.cached_lint_count.is_none() {
-                open.cached_lint_count = Some(open.ws.project().lint().len());
+                open.cached_lint_count = Some(lint_counts(open.ws.project()));
             }
+            let pending = open.ws.pending_batches() > 0;
+            if open.had_pending && !pending && !open.resyncing {
+                open.saved_ms = Some((self.config.clock_ms)());
+            }
+            open.had_pending = pending;
             let selected_node = tree.as_ref().and_then(|t| t.selected);
             let suggestions = crate::suggest::suggestion_rows(&open.ws);
             let selected_suggestion = open.ui.selected_node.and_then(|nid| {
@@ -3142,6 +3153,8 @@ impl<P: CredentialProvider> Actor<P> {
                 history: open.history.clone(),
                 last_export: open.last_export.clone(),
                 nav_counts: nav_counts(open),
+                problem_counts: open.cached_lint_count.unwrap_or_default(),
+                saved_ms: open.saved_ms,
                 suggestions,
                 selected_suggestion,
                 figures: open.figures.clone(),
@@ -3304,6 +3317,16 @@ fn page_data(open: &Open) -> PageData {
     d
 }
 
+/// Blocking problems and warnings. Time O(project).
+fn lint_counts(p: &Project) -> (usize, usize) {
+    let findings = p.lint();
+    let errors = findings
+        .iter()
+        .filter(|f| f.severity() == aegis_model::LintSeverity::Error)
+        .count();
+    (errors, findings.len() - errors)
+}
+
 /// The sidebar counts. Time O(project) for the lint; the rest O(1).
 fn nav_counts(open: &Open) -> Vec<Option<usize>> {
     let p = open.ws.project();
@@ -3323,7 +3346,10 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
             Page::Trees => Some(p.attack_tree_count()),
             Page::Controls => Some(p.security_control_count()),
             Page::Goals => Some(p.cybersecurity_goal_count() + p.cybersecurity_claim_count()),
-            Page::Problems => Some(open.cached_lint_count.unwrap_or_else(|| p.lint().len())),
+            Page::Problems => Some(
+                open.cached_lint_count
+                    .map_or_else(|| p.lint().len(), |(e, w)| e + w),
+            ),
             Page::Versions => Some(open.baselines.len()).filter(|n| *n > 0),
             _ => None,
         })

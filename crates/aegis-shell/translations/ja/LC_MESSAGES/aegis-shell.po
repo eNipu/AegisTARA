@@ -1489,3 +1489,27 @@ msgstr "拡大"
 
 msgid "Zoom size, {}"
 msgstr "ズーム倍率 {}"
+
+msgid "Assets and threats"
+msgstr "資産と脅威"
+
+msgid "Risk and treatment"
+msgstr "リスクと対応"
+
+msgid "Outputs"
+msgstr "成果物"
+
+msgid "Back"
+msgstr "戻る"
+
+msgid "Forward"
+msgstr "進む"
+
+msgid "Saved {}"
+msgstr "保存済み {}"
+
+msgid "{} blocking"
+msgstr "ブロック {} 件"
+
+msgid "{} warnings"
+msgstr "警告 {} 件"

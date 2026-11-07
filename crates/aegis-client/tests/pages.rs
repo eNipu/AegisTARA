@@ -1238,6 +1238,83 @@ fn try_apply_labeled(ws: &mut Workspace, edit: &Edit) {
         .expect("applies");
 }
 
+/// Job 122c: a step's through item and attack type reach the report (a step
+/// table under the tree) and the XLSX workbook (an "Attack steps" sheet with
+/// every step), so a client reads which ratings depend on which part.
+#[test]
+fn through_and_attack_type_reach_the_report_and_the_workbook() {
+    let mut t = tara();
+    let ecu = ComponentId::new_v7();
+    let step = {
+        let p = t.ws.project();
+        let tree = p
+            .attack_tree(p.attack_tree_idx(&t.tree).expect("tree"))
+            .expect("t");
+        tree.iter()
+            .find(|(_, _, n)| n.label().starts_with("Open"))
+            .map(|(_, id, _)| id)
+            .expect("step")
+    };
+    let html_before = report_html(&t.ws, &context(false));
+    assert!(!html_before.contains(">Through<"), "no table without links");
+    apply(
+        &mut t.ws,
+        &Edit::AddComponent {
+            id: ecu,
+            name: "Gateway ECU".into(),
+            parent: None,
+        },
+    );
+    for edit in [
+        Edit::SetStepVia {
+            tree: t.tree,
+            node: step,
+            via: Some(ItemRef::Component(ecu)),
+        },
+        Edit::SetStepAttackType {
+            tree: t.tree,
+            node: step,
+            attack_type: Some(0),
+        },
+    ] {
+        apply(&mut t.ws, &edit);
+    }
+    let kind = {
+        let m = t.ws.project().methodology();
+        let first = m
+            .attack_types()
+            .next()
+            .expect("the ISO pack has attack types");
+        m.attack_type_label(first).expect("label").to_owned()
+    };
+
+    let steps = aegis_client::view::tree_steps(
+        t.ws.project(),
+        t.ws.project().attack_tree_idx(&t.tree).expect("tree"),
+    );
+    assert_eq!(steps.len(), 3, "every leaf step: {steps:?}");
+    let open = steps
+        .iter()
+        .find(|s| s.step.starts_with("Open"))
+        .expect("step");
+    assert_eq!(open.through.as_deref(), Some("Gateway ECU"));
+    assert_eq!(open.attack_type.as_deref(), Some(kind.as_str()));
+    assert!(steps.iter().filter(|s| s.through.is_none()).count() == 2);
+
+    let html = report_html(&t.ws, &context(false));
+    assert!(html.contains(">Through<"), "step table header");
+    assert!(html.contains("Gateway ECU") && html.contains(&kind));
+
+    let xlsx = aegis_client::report::report_workbook_xlsx(&t.ws);
+    let text = String::from_utf8_lossy(&xlsx);
+    assert!(text.contains("Attack steps"), "sheet");
+    assert!(text.contains("Gateway ECU") && text.contains(&kind));
+    assert!(
+        text.contains("Remote via telematics"),
+        "every step is listed"
+    );
+}
+
 /// The step that decides the residual feasibility, with a component setting
 /// and a manual mitigation on it: the threat inspector names both, deciding
 /// ceiling first (CFG-05), and the version diff says what changed on the

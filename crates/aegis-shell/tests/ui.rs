@@ -77,7 +77,7 @@ async fn app_with_sample(server: &TestServer, user: &str) -> App {
 
 /// Opens the attack trees page and lets the canvas take its place.
 async fn show_trees(app: &App) {
-    app.window.invoke_show_page(4);
+    app.window.invoke_show_page(Page::Trees.index() as i32);
     app.until("trees page", |vm| {
         vm.project.as_ref().is_some_and(|p| p.page == Page::Trees)
     })

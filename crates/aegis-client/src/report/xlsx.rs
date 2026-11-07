@@ -565,6 +565,36 @@ pub fn report_workbook_xlsx_with_figures(
         rows: trees,
     });
 
+    // Attack steps, with what each goes through and its attack type (122c).
+    let mut steps = vec![vec![
+        "Tree ID".to_owned(),
+        "Attack tree".to_owned(),
+        "Attack step".to_owned(),
+        names.feasibility.to_string(),
+        "Through".to_owned(),
+        "Attack type".to_owned(),
+    ]];
+    let project = ws.project();
+    for t in pages::tree_rows(ws) {
+        let Some(idx) = project.attack_tree_idx(&t.id) else {
+            continue;
+        };
+        for s in crate::view::tree_steps(project, idx) {
+            steps.push(vec![
+                t.visual_id.clone(),
+                t.title.clone(),
+                s.step,
+                s.feasibility.unwrap_or_default(),
+                s.through.unwrap_or_default(),
+                s.attack_type.unwrap_or_default(),
+            ]);
+        }
+    }
+    sheets.push(Sheet {
+        name: "Attack steps".to_owned(),
+        rows: steps,
+    });
+
     // Controls.
     let mut controls = vec![vec![
         "ID".to_owned(),
