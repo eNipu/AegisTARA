@@ -160,7 +160,7 @@ async fn a_user_logs_in_with_a_password_and_out_again() {
 
     // The administration page shows the event log in words, a filter, and
     // the license facts (this test server runs without a license).
-    window.invoke_show_page(12);
+    window.invoke_show_page(aegis_client::view::Page::Admin.index() as i32);
     until(&headless, &launcher, "events", || {
         window.get_event_rows().row_count() >= 2
     })
@@ -300,7 +300,7 @@ async fn the_password_form_disappears_when_an_admin_turns_it_off() {
     .await;
     window.invoke_create_project("Gateway".into());
     until(&headless, &launcher, "project", || window.get_has_project()).await;
-    window.invoke_show_page(12);
+    window.invoke_show_page(aegis_client::view::Page::Admin.index() as i32);
     until(&headless, &launcher, "settings loaded", || {
         window.get_settings_known() && window.get_password_login_on()
     })

@@ -120,6 +120,8 @@ pub struct Settings {
     /// Height of the bottom panel (the history) in logical pixels; `0` is
     /// the default (UI-02).
     pub bottom_panel: u32,
+    /// The sidebar groups the user closed, by `PageGroup` key (UI-13).
+    pub collapsed_groups: Vec<String>,
 }
 
 /// How the window picks light or dark (UI-07.5).
@@ -334,6 +336,7 @@ mod tests {
             left_panel: 240,
             right_panel: 420,
             bottom_panel: 0,
+            collapsed_groups: vec!["assets-threats".into()],
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);
