@@ -72,8 +72,85 @@ struct State {
     /// Elements picked together in the tables with bulk edit (UI-04), by ID
     /// so a table that re-sorts keeps the right ones.
     marks: HashSet<Selection>,
+    /// Where the user was, for back and forward (job 130).
+    places: Places,
     /// Draft rules (attack-type index -> ceiling index) for a custom setting.
     custom_rules: Vec<Option<usize>>,
+}
+
+/// A place in the project: a page and the element selected on it.
+type Place = (Page, Option<Selection>);
+
+/// The places visited, for back and forward (job 130, UI-17). Kept by
+/// element ID, so an element that is gone is simply not selected again.
+#[derive(Default)]
+struct Places {
+    back: Vec<Place>,
+    forward: Vec<Place>,
+    /// Where the user is now.
+    now: Option<Place>,
+    /// The place back or forward is going to: reaching it is not a new visit.
+    going: Option<Place>,
+}
+
+/// Places kept in each direction; the oldest drop off.
+const MAX_PLACES: usize = 100;
+
+impl Places {
+    /// Notes that the user is at `at`. A change of place that back or
+    /// forward did not ask for is a visit: it can be gone back to, and it
+    /// ends the forward list.
+    fn visit(&mut self, at: Place) {
+        if self.now == Some(at) {
+            return;
+        }
+        if self.going.take() != Some(at)
+            && let Some(was) = self.now
+        {
+            self.back.push(was);
+            if self.back.len() > MAX_PLACES {
+                self.back.remove(0);
+            }
+            self.forward.clear();
+        }
+        self.now = Some(at);
+    }
+
+    /// The place to go back to (`back` true) or forward to, if any.
+    fn step(&mut self, back: bool) -> Option<Place> {
+        let now = self.now?;
+        let (from, to) = if back {
+            (&mut self.back, &mut self.forward)
+        } else {
+            (&mut self.forward, &mut self.back)
+        };
+        let target = from.pop()?;
+        to.push(now);
+        if to.len() > MAX_PLACES {
+            to.remove(0);
+        }
+        self.going = Some(target);
+        Some(target)
+    }
+}
+
+/// The element selected on the page the user is on, for the pages whose
+/// selection back and forward restore.
+fn current_place(p: &ProjectView) -> Place {
+    let d = &p.data;
+    let selection = match p.page {
+        Page::Assets => d.asset.as_ref().map(|x| Selection::Asset(x.id)),
+        Page::Damage => d.damage.as_ref().map(|x| Selection::Damage(x.id)),
+        Page::Threats | Page::Risks => d.threat.as_ref().map(|x| Selection::Threat(x.id)),
+        Page::Controls => d.control.as_ref().map(|x| Selection::Control(x.id)),
+        Page::Goals => d
+            .goal
+            .as_ref()
+            .map(|x| Selection::Goal(x.id))
+            .or_else(|| d.claim.as_ref().map(|x| Selection::Claim(x.id))),
+        _ => None,
+    };
+    (p.page, selection)
 }
 
 /// A table that takes bulk edits (UI-04).
@@ -494,6 +571,7 @@ impl Controller {
                 membership: None,
                 figure: None,
                 marks: HashSet::new(),
+                places: Places::default(),
                 custom_rules: Vec::new(),
             }),
             library: RefCell::new(LibraryView::new(Arc::new(LibraryPack::builtin_demo()))),
@@ -573,6 +651,22 @@ impl Controller {
             range,
         );
         self.push_marks();
+    }
+
+    /// Goes to the place before (`back` true) or after the current one.
+    fn go(&self, back: bool) {
+        let Some((page, selection)) = self.state.borrow_mut().places.step(back) else {
+            return;
+        };
+        // Select first, on whatever page, then show the page: one change of
+        // place, so the history sees exactly the target.
+        if let Some(selection) = selection {
+            self.send(Command::Select {
+                selection,
+                navigate: false,
+            });
+        }
+        self.send(Command::ShowPage(page));
     }
 
     /// Opens or closes sidebar group `g` (UI-13) and reports the closed ones.
@@ -988,6 +1082,8 @@ impl Controller {
             }
         });
         on!(on_toggle_nav_group, |c, g| c.toggle_nav_group(g));
+        on!(on_go_back, |c| c.go(true));
+        on!(on_go_forward, |c| c.go(false));
         on!(on_panels_resized, |c| {
             if let (Some(hook), Some(w)) = (&c.hooks.panels_resized, c.window.upgrade()) {
                 hook(w.get_left_size(), w.get_right_size(), w.get_bottom_size());
@@ -2589,6 +2685,8 @@ impl Controller {
         match id {
             "undo" => self.send(Command::Undo),
             "redo" => self.send(Command::Redo),
+            "back" => self.go(true),
+            "forward" => self.go(false),
             "begin-edit" => self.send(Command::BeginEdit),
             "end-edit" => self.send(Command::EndEdit),
             "palette" => {
@@ -3234,6 +3332,17 @@ impl Controller {
         w.set_show_residual(project.show_residual);
         w.set_is_empty(project.is_empty);
         w.set_page(i32::try_from(project.page.index()).unwrap_or(0));
+        {
+            let mut st = self.state.borrow_mut();
+            st.places.visit(current_place(project));
+            w.set_can_go_back(!st.places.back.is_empty());
+            w.set_can_go_forward(!st.places.forward.is_empty());
+        }
+        w.set_saved_text(s(&project
+            .saved_ms
+            .map_or_else(String::new, aegis_client::time::time_ms)));
+        w.set_problem_errors(i32::try_from(project.problem_counts.0).unwrap_or(i32::MAX));
+        w.set_problem_warnings(i32::try_from(project.problem_counts.1).unwrap_or(i32::MAX));
         if prev_proj.is_none_or(|old| old.nav_counts != project.nav_counts) {
             w.set_nav_counts(model(
                 project
@@ -4565,6 +4674,36 @@ mod tests {
         assert_eq!(at(5), Some((1, None)));
         assert_eq!(at(7), Some((1, Some(1))));
         assert_eq!(at(8), None);
+    }
+
+    /// Back and forward walk the visited places; a new visit ends the
+    /// forward list, and reaching the target of a step is not a visit.
+    #[test]
+    fn places_go_back_and_forward() {
+        use super::{MAX_PLACES, Places};
+        use aegis_client::view::Page;
+        let mut p = Places::default();
+        for page in [Page::Overview, Page::Assets, Page::Threats] {
+            p.visit((page, None));
+        }
+        assert_eq!(p.step(true), Some((Page::Assets, None)));
+        p.visit((Page::Assets, None));
+        assert_eq!(p.back, [(Page::Overview, None)]);
+        assert_eq!(p.forward, [(Page::Threats, None)]);
+        assert_eq!(p.step(false), Some((Page::Threats, None)));
+        p.visit((Page::Threats, None));
+        assert_eq!(p.step(true), Some((Page::Assets, None)));
+        p.visit((Page::Assets, None));
+        // A new visit ends the forward list.
+        p.visit((Page::Risks, None));
+        assert!(p.forward.is_empty());
+        assert_eq!(p.step(false), None);
+        // The oldest places drop off.
+        for _ in 0..(MAX_PLACES * 2) {
+            p.visit((Page::Overview, None));
+            p.visit((Page::Assets, None));
+        }
+        assert_eq!(p.back.len(), MAX_PLACES);
     }
 
     /// Closed groups round-trip through their settings keys, and a closed

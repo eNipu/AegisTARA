@@ -479,6 +479,17 @@ in property <string> redo-label;
     in property <keys> goals-keys;
     in property <keys> problems-keys;
     in property <keys> item-keys;
+    // Back and forward over selections across pages (job 130, UI-17).
+    in property <keys> back-keys;
+    in property <keys> forward-keys;
+    in property <bool> can-go-back;
+    in property <bool> can-go-forward;
+    // Status bar: when the last edit was saved, and the problem counts.
+    in property <string> saved-text;
+    in property <int> problem-errors;
+    in property <int> problem-warnings;
+    // Problems page filter: 0 all, 1 blocking only, 2 warnings only.
+    in-out property <int> problem-filter;
     // System font families applied by platform.rs (UI-07.7). The UI family is
     // bound to `default-font-family` below; the monospace family is used by
     // identifier and detail surfaces.
@@ -957,6 +968,8 @@ in property <string> redo-label;
     callback toggle-trust-boundary-member(int, bool);
     callback remove-trust-boundary();
     callback toggle-nav-group(int);
+    callback go-back();
+    callback go-forward();
     callback mark-click(string, int, bool);
     callback mark-all(string);
     callback bulk-pick(string, int, int);
@@ -1247,10 +1260,13 @@ in property <string> redo-label;
         Menu {
             title: @tr("View");
             MenuItem { title: @tr("Command palette…"); icon: @image-url("icons/keyboard.svg"); shortcut: root.palette-keys; enabled: root.in-project; activated => { root.open-palette(); } }
+            MenuItem { title: @tr("Back"); icon: @image-url("icons/arrow-left.svg"); shortcut: root.back-keys; enabled: root.in-project && root.can-go-back; activated => { root.go-back(); } }
+            MenuItem { title: @tr("Forward"); icon: @image-url("icons/arrow-right.svg"); shortcut: root.forward-keys; enabled: root.in-project && root.can-go-forward; activated => { root.go-forward(); } }
+            MenuSeparator {}
             MenuItem { title: @tr("Overview"); icon: @image-url("icons/layout-dashboard.svg"); shortcut: root.overview-keys; enabled: root.in-project; activated => { root.show-page(Pages.overview); } }
             MenuItem { title: @tr("Item definition"); icon: @image-url("icons/network.svg"); shortcut: root.item-keys; enabled: root.in-project; activated => { root.show-page(Pages.item); } }
-            MenuItem { title: @tr("Assets"); icon: @image-url("icons/box.svg"); shortcut: root.assets-keys; enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
             MenuItem { title: @tr("Damage scenarios"); icon: @image-url("icons/triangle-alert.svg"); shortcut: root.damage-keys; enabled: root.in-project; activated => { root.show-page(Pages.damage); } }
+            MenuItem { title: @tr("Assets"); icon: @image-url("icons/box.svg"); shortcut: root.assets-keys; enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
             MenuItem { title: @tr("Threat scenarios"); icon: @image-url("icons/swords.svg"); shortcut: root.threats-keys; enabled: root.in-project; activated => { root.show-page(Pages.threats); } }
             MenuItem { title: @tr("Attack trees"); icon: @image-url("icons/network.svg"); shortcut: root.trees-keys; enabled: root.in-project; activated => { root.show-page(Pages.trees); } }
             MenuItem { title: @tr("Risks and treatment"); icon: @image-url("icons/gauge.svg"); shortcut: root.risks-keys; enabled: root.in-project; activated => { root.show-page(Pages.risks); } }
@@ -3034,12 +3050,21 @@ in property <string> redo-label;
                     spacing: 10px;
                     PageTitle { title: @tr("Problems"); subtitle: @tr("Completeness and consistency checks. Blocking problems stop a risk from being computed or a treatment from being complete."); icon: @image-url("icons/circle-alert.svg"); }
                     if root.problems.length == 0: Text { text: @tr("No problems. The analysis is complete and consistent."); color: Theme.ink; font-size: Theme.font-body + 1px; }
+                    if root.problems.length > 0: HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Button { text: @tr("All"); ghost: root.problem-filter != 0; clicked => { root.problem-filter = 0; } }
+                        Button { text: @tr("{} blocking", root.problem-errors); ghost: root.problem-filter != 1; clicked => { root.problem-filter = 1; } }
+                        Button { text: @tr("{} warnings", root.problem-warnings); ghost: root.problem-filter != 2; clicked => { root.problem-filter = 2; } }
+                    }
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
                             spacing: 4px;
                             for p[pi] in root.problems: Rectangle {
-                                min-height: 36px;
+                                visible: root.problem-filter == 0 || (root.problem-filter == 1) == p.error;
+                                min-height: self.visible ? 36px : 0px;
+                                max-height: self.visible ? 100000px : 0px;
                                 background: problem-area.has-hover ? Theme.wash : Theme.panel;
                                 border-width: 1px;
                                 border-color: Theme.rule;
@@ -3810,6 +3835,36 @@ in property <string> redo-label;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     overflow: elide;
+                }
+                if root.in-project && root.saved-text != "": Text {
+                    text: @tr("Saved {}", root.saved-text);
+                    color: Theme.graphite;
+                    font-size: Theme.font-label;
+                    vertical-alignment: center;
+                }
+                // Problem counts; each opens Problems showing only that kind.
+                if root.in-project: HorizontalLayout {
+                    spacing: 10px;
+                    for kind in [
+                        { n: root.problem-errors, filter: 1, label: @tr("{} blocking", root.problem-errors) },
+                        { n: root.problem-warnings, filter: 2, label: @tr("{} warnings", root.problem-warnings) },
+                    ]: Rectangle {
+                        accessible-role: button;
+                        accessible-label: kind.label;
+                        accessible-action-default => { root.problem-filter = kind.filter; root.show-page(Pages.problems); }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Image {
+                                source: @image-url("icons/circle-alert.svg");
+                                width: 13px;
+                                height: 13px;
+                                y: 6.5px;
+                                colorize: kind.n == 0 ? Theme.graphite : (kind.filter == 1 ? Theme.high : Theme.medium);
+                            }
+                            Text { text: kind.n; color: Theme.graphite; font-size: Theme.font-label; vertical-alignment: center; }
+                        }
+                        TouchArea { clicked => { root.problem-filter = kind.filter; root.show-page(Pages.problems); } }
+                    }
                 }
                 Image { source: @image-url("icons/circle-user-round.svg"); width: 14px; height: 14px; y: 6px; colorize: Theme.graphite; }
                 Text { text: root.user; color: Theme.graphite; font-size: Theme.font-label; vertical-alignment: center; }

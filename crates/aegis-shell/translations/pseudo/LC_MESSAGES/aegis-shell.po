@@ -1498,3 +1498,18 @@ msgstr "⟦Rísk ánd tréátmént␣␣⟧"
 
 msgid "Outputs"
 msgstr "⟦Óútpúts␣␣⟧"
+
+msgid "Back"
+msgstr "⟦Báck␣␣⟧"
+
+msgid "Forward"
+msgstr "⟦Fórwárd␣␣⟧"
+
+msgid "Saved {}"
+msgstr "⟦Sávéd {}␣␣⟧"
+
+msgid "{} blocking"
+msgstr "⟦{} blóckíng␣␣⟧"
+
+msgid "{} warnings"
+msgstr "⟦{} wárníngs␣␣⟧"
