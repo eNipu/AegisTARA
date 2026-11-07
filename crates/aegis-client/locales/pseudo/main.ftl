@@ -10,6 +10,8 @@ descriptions = ⟦Déscrîptîôns␣⟧
 
 section-executive-summary = ⟦1. Éxécûtîvé sûmmârý␣⟧
 section-item-definition = ⟦Îtém défînîtîôn␣⟧
+item-description = ⟦Déscrîptîôn ôf thé îtém␣⟧
+item-scope = ⟦Scôpé ôf thé ânâlýsîs␣⟧
 section-figures = ⟦Fîgûrés␣⟧
 section-risks = ⟦6. Rîsk régîstér ând tréâtmént␣⟧
 section-problems = ⟦9. Ôpén prôbléms␣⟧

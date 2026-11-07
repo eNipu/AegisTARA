@@ -1538,6 +1538,8 @@ pub(super) enum TargetWire {
     Interface { id: WireId<InterfaceId> },
     DataFlow { id: WireId<DataFlowId> },
     TrustBoundary { id: WireId<TrustBoundaryId> },
+    ItemDescription,
+    ItemScope,
 }
 
 impl TargetWire {
@@ -1556,6 +1558,8 @@ impl TargetWire {
             Self::Interface { id } => E::Interface(id.0),
             Self::DataFlow { id } => E::DataFlow(id.0),
             Self::TrustBoundary { id } => E::TrustBoundary(id.0),
+            Self::ItemDescription => E::ItemDescription,
+            Self::ItemScope => E::ItemScope,
         }
     }
 }
@@ -1576,6 +1580,8 @@ pub(super) enum TargetView {
     Interface { id: Text<InterfaceId> },
     DataFlow { id: Text<DataFlowId> },
     TrustBoundary { id: Text<TrustBoundaryId> },
+    ItemDescription,
+    ItemScope,
 }
 
 impl From<crate::description::ElementRef> for TargetView {
@@ -1594,6 +1600,8 @@ impl From<crate::description::ElementRef> for TargetView {
             E::Interface(id) => Self::Interface { id: Text(id) },
             E::DataFlow(id) => Self::DataFlow { id: Text(id) },
             E::TrustBoundary(id) => Self::TrustBoundary { id: Text(id) },
+            E::ItemDescription => Self::ItemDescription,
+            E::ItemScope => Self::ItemScope,
         }
     }
 }

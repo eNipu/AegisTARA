@@ -2870,7 +2870,7 @@ impl Project {
     #[must_use]
     pub fn visual_id(&self, target: ElementRef) -> Option<String> {
         match target {
-            ElementRef::Project => None,
+            ElementRef::Project | ElementRef::ItemDescription | ElementRef::ItemScope => None,
             ElementRef::Asset(id) => self
                 .asset_idx(&id)
                 .and_then(|idx| self.asset_visual_id(idx)),
@@ -5691,6 +5691,7 @@ impl Project {
             trust_boundaries,
             risk_deltas,
             notes_changed: false,
+            item_text_changed: false,
             languages_changed: self.languages() != other.languages(),
         };
         self.merge_description_changes(other, &mut diff);
@@ -5716,6 +5717,9 @@ impl Project {
         for target in changed {
             match target {
                 ElementRef::Project => diff.notes_changed = true,
+                ElementRef::ItemDescription | ElementRef::ItemScope => {
+                    diff.item_text_changed = true;
+                }
                 ElementRef::Asset(id) => assets.push(id),
                 ElementRef::Damage(id) => damages.push(id),
                 ElementRef::Threat(id) => threats.push(id),
@@ -7516,7 +7520,7 @@ impl Project {
     /// the project itself).
     fn live_target(&self, target: ElementRef) -> Result<(), ModelError> {
         match target {
-            ElementRef::Project => Ok(()),
+            ElementRef::Project | ElementRef::ItemDescription | ElementRef::ItemScope => Ok(()),
             ElementRef::Asset(id) => self.live_asset(id).map(|_| ()),
             ElementRef::Damage(id) => self.live_damage(id).map(|_| ()),
             ElementRef::Threat(id) => self.live_threat(id).map(|_| ()),

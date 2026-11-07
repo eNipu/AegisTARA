@@ -1561,3 +1561,15 @@ msgstr "この実現可能性の根拠"
 
 msgid "The reason for the rating, for a reviewer. {0} or leaving the box saves."
 msgstr "レビュー担当者向けの評価の根拠。{0} またはボックスを離れると保存されます。"
+
+msgid "Description and scope"
+msgstr "説明と範囲"
+
+msgid "What the item is and does, and what this analysis covers and leaves out."
+msgstr "アイテムの内容と機能、およびこの分析の対象と対象外。"
+
+msgid "Item description"
+msgstr "アイテムの説明"
+
+msgid "Scope"
+msgstr "範囲"

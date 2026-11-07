@@ -607,14 +607,27 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         b.push(risk_rows_block(&catalog, &top));
     }
 
-    // ---- item definition (ARC-02, job 074) ----
-    if sections.item_definition
-        && (project.component_count() > 0
-            || project.interface_count() > 0
-            || project.data_flow_count() > 0
-            || project.trust_boundary_count() > 0)
-    {
+    // ---- item definition (ARC-02, job 074; description and scope ARC-05) ----
+    let item_description = description_of(ws, ElementRef::ItemDescription, lang);
+    let item_scope = description_of(ws, ElementRef::ItemScope, lang);
+    let item_elements = project.component_count() > 0
+        || project.interface_count() > 0
+        || project.data_flow_count() > 0
+        || project.trust_boundary_count() > 0;
+    let item_text = item_description.is_some() || item_scope.is_some();
+    if sections.item_definition && (item_elements || item_text) {
         b.push(Heading(2, catalog.tr("section-item-definition")));
+        for (key, text) in [
+            ("item-description", &item_description),
+            ("item-scope", &item_scope),
+        ] {
+            if let Some(text) = text {
+                b.push(Heading(3, catalog.tr(key)));
+                desc_blocks(&mut b, text);
+            }
+        }
+    }
+    if sections.item_definition && item_elements {
         b.push(Heading(3, names.component.plural.to_string()));
         let comp_rows = pages::component_rows(ws);
         b.push(table(

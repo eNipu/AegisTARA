@@ -9,6 +9,8 @@ descriptions = 説明
 
 section-executive-summary = 1. エグゼクティブサマリー
 section-item-definition = アイテム定義
+item-description = アイテムの説明
+item-scope = 分析の範囲
 section-figures = 図表
 section-risks = 6. リスクレジスタと対応
 section-problems = 9. 未解決の問題

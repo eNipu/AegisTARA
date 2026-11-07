@@ -185,6 +185,10 @@ pub fn validate_target(target: &str) -> Result<String, FigureError> {
     if trimmed == "project" {
         return Ok(String::new());
     }
+    // The item definition's description and scope (ARC-05) have no ID.
+    if matches!(trimmed, "item_description" | "item_scope") {
+        return Ok(trimmed.to_owned());
+    }
     let Some((kind, id_str)) = trimmed.split_once(':') else {
         return Err(FigureError::InvalidTarget(
             "target must be empty or <kind>:<uuid>",

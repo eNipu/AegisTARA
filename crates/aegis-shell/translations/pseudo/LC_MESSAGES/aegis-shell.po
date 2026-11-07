@@ -1561,3 +1561,15 @@ msgstr "⟦Why thís féásíbílíty␣␣⟧"
 
 msgid "The reason for the rating, for a reviewer. {0} or leaving the box saves."
 msgstr "⟦Thé réásón fór thé rátíng, fór á révíéwér. {0} ór léávíng thé bóx sávés.␣␣⟧"
+
+msgid "Description and scope"
+msgstr "⟦Déscríptíón ánd scópé␣␣⟧"
+
+msgid "What the item is and does, and what this analysis covers and leaves out."
+msgstr "⟦Whát thé ítém ís ánd dóés, ánd whát thís ánálysís cóvérs ánd léávés óút.␣␣⟧"
+
+msgid "Item description"
+msgstr "⟦Ítém déscríptíón␣␣⟧"
+
+msgid "Scope"
+msgstr "⟦Scópé␣␣⟧"
