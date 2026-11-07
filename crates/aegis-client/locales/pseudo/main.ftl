@@ -52,6 +52,9 @@ treatment = ⟦Tréâtmént␣⟧
 goal-or-claim = ⟦Gôâl ôr clâîm␣⟧
 control = ⟦Côntrôl␣⟧
 attack-steps = ⟦Âttâck stéps␣⟧
+attack-step = ⟦Âttâck stép␣⟧
+through = ⟦Thrôûgh␣⟧
+attack-type = ⟦Âttâck týpé␣⟧
 
 tree-summary = ⟦{ $nodes } nôdés. Féâsîbîlîtý ât thé rôôt: { $feasibility }. { $threats_plural }: { $threats }.␣⟧
 tree-caption = ⟦Âttâck tréé␣⟧

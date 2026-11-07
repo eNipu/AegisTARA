@@ -100,6 +100,8 @@ fn key_label(part: &str, mac: bool) -> &str {
     match (part, mac) {
         ("Return", true) => "Return",
         ("Return", false) => "Enter",
+        ("LeftArrow", _) => "←",
+        ("RightArrow", _) => "→",
         (other, _) => other,
     }
 }
@@ -156,7 +158,7 @@ pub fn slint_keys(s: &Shortcut) -> Keys {
 /// The shortcuts, in cheat-sheet order.
 #[must_use]
 pub fn table() -> &'static [Shortcut] {
-    const TABLE: [Shortcut; 17] = [
+    const TABLE: [Shortcut; 19] = [
         Shortcut::new("palette", "Command palette", "General", &["Control", "K"]),
         Shortcut::new("undo", "Undo", "Editing", &["Control", "Z"]),
         Shortcut::new("redo", "Redo", "Editing", &["Control", "Shift", "Z"])
@@ -195,6 +197,11 @@ pub fn table() -> &'static [Shortcut] {
         Shortcut::new("goals", "Goals and claims", "View", &["Control", "8"]),
         Shortcut::new("problems", "Problems", "View", &["Control", "9"]),
         Shortcut::new("item", "Item definition", "View", &["Control", "0"]),
+        // The platform conventions: Command with brackets on macOS, Alt with
+        // the arrows elsewhere (job 130, UI-17).
+        Shortcut::new("back", "Back", "View", &["Control", "["]).off_mac(&["Alt", "LeftArrow"]),
+        Shortcut::new("forward", "Forward", "View", &["Control", "]"])
+            .off_mac(&["Alt", "RightArrow"]),
     ];
     &TABLE
 }
@@ -220,6 +227,8 @@ pub fn install(window: &AppWindow) {
     window.set_goals_keys(keys_for("goals"));
     window.set_problems_keys(keys_for("problems"));
     window.set_item_keys(keys_for("item"));
+    window.set_back_keys(keys_for("back"));
+    window.set_forward_keys(keys_for("forward"));
     window.set_save_description_label(keys_for_label("save-description").into());
     window.set_undo_shortcut(keys_for_label("undo").into());
     window.set_redo_shortcut(keys_for_label("redo").into());
@@ -355,7 +364,11 @@ mod tests {
             for symbol in ['⌘', '⌥', '⇧', '⌃'] {
                 assert!(!label.contains(symbol), "{}: {label}", s.id);
             }
-            assert!(label.starts_with("Ctrl+"), "{}: {label}", s.id);
+            assert!(
+                label.starts_with("Ctrl+") || label.starts_with("Alt+"),
+                "{}: {label}",
+                s.id
+            );
         }
         assert_eq!(format_label(&table()[2], false), "Ctrl+Y");
         assert_eq!(format_label(&table()[2], true), "⇧⌘Z");

@@ -464,6 +464,10 @@ pub struct ProjectView {
     /// Per page in `Page::ALL` order: a count for the sidebar, if the page
     /// has one (entities, open problems).
     pub nav_counts: Vec<Option<usize>>,
+    /// Blocking problems and warnings, for the status bar (job 130).
+    pub problem_counts: (usize, usize),
+    /// When the last edit reached the server in this session, if one did.
+    pub saved_ms: Option<u64>,
     /// Pending AI or catalog suggestion items for the open project (job 089).
     pub suggestions: Vec<SuggestionRow>,
     /// Position of the selected suggestion in `suggestions` when a ghost node

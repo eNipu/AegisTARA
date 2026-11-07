@@ -169,6 +169,9 @@ impl Launcher {
             if s.bottom_panel > 0 {
                 window.set_bottom_size(s.bottom_panel as f32);
             }
+            window.set_nav_group_open(slint::ModelRc::new(slint::VecModel::from(
+                crate::controller::open_groups(&s.collapsed_groups),
+            )));
             let language = s.language().code().to_owned();
             // The bundled gettext catalogs are selected after the first
             // component exists (the window is created before this runs).
@@ -188,6 +191,7 @@ impl Launcher {
         let w5 = weak.clone();
         let w_appearance = weak.clone();
         let w_panels = weak.clone();
+        let w_groups = weak.clone();
         let w6 = weak.clone();
         let w7 = weak.clone();
         let w8 = weak.clone();
@@ -258,6 +262,12 @@ impl Launcher {
                     s.right_panel = right.round() as u32;
                     s.bottom_panel = bottom.round() as u32;
                     drop(s);
+                    l.save_settings();
+                }
+            })),
+            nav_groups_changed: Some(Box::new(move |closed| {
+                if let Some(l) = w_groups.upgrade() {
+                    l.settings.borrow_mut().collapsed_groups = closed;
                     l.save_settings();
                 }
             })),
