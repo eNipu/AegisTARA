@@ -39,6 +39,8 @@ pub struct DamageScenario {
     pub(crate) name: Arc<str>,
     /// One slot per impact category, in category order.
     pub(crate) impacts: Box<[Option<Level>]>,
+    /// Why the impact is rated as it is (FND-09); empty when not given.
+    pub(crate) impact_rationale: Arc<str>,
     pub(crate) provenance: Provenance,
 }
 
@@ -66,6 +68,14 @@ impl DamageScenario {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Why the impact is rated as it is (FND-09), set with
+    /// [`Op::SetImpactRationale`](crate::Op::SetImpactRationale); empty when
+    /// not given. Time O(1).
+    #[must_use]
+    pub fn impact_rationale(&self) -> &str {
+        &self.impact_rationale
     }
 
     /// Returns the rating for one category: `None` if unrated or if the
@@ -163,6 +173,7 @@ mod tests {
         let d = DamageScenario {
             name: "d".into(),
             impacts: vec![Some(l(0)), None, Some(l(2))].into_boxed_slice(),
+            impact_rationale: "".into(),
             provenance: Provenance::default(),
         };
         let all: Vec<_> = d.impacts().collect();

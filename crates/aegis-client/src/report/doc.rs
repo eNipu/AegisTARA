@@ -765,12 +765,17 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         b.push(Heading(2, format!("3. {}", names.damage_scenario.plural)));
         let mut headers: Vec<String> = vec![names.damage_scenario.singular.to_string()];
         headers.extend(vocab.impact_categories.iter().map(|c| c.label.clone()));
+        headers.push(catalog.tr("rationale"));
         headers.push(catalog.tr("threats"));
         b.push(table(
             &headers,
             pages::damage_rows(ws)
                 .into_iter()
                 .map(|d| {
+                    let rationale = project
+                        .damage_scenario_idx(&d.id)
+                        .and_then(|i| project.damage_scenario(i))
+                        .map_or_else(String::new, |x| x.impact_rationale().to_owned());
                     let mut row = vec![format!("{} · {}", d.visual_id, d.name)];
                     for (i, level) in d.impacts.iter().enumerate() {
                         row.push(
@@ -782,6 +787,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                                 .unwrap_or_default(),
                         );
                     }
+                    row.push(rationale);
                     row.push(d.threats.to_string());
                     row
                 })
@@ -839,6 +845,19 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                             .clone()
                             .unwrap_or_else(|| catalog.tr("not-rated")),
                     ],
+                    vec![
+                        catalog.tr("feasibility-rationale"),
+                        t.feasibility_rationale.clone(),
+                    ],
+                    vec![
+                        catalog.tr("scales"),
+                        match t.scales {
+                            Some(true) => catalog.tr("yes"),
+                            Some(false) => catalog.tr("no"),
+                            None => catalog.tr("not-rated"),
+                        },
+                    ],
+                    vec![catalog.tr("scaling-reason"), t.scaling_reason.clone()],
                     vec![
                         catalog.tr("risk-before-controls"),
                         risk_text(t.inherent.as_ref()),

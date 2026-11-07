@@ -945,6 +945,8 @@ pub struct DamageDetail {
     /// The assets those threats target, each once, in asset order.
     pub assets: Vec<LinkRow>,
     /// Provenance text.
+    /// Why the impact is rated as it is (FND-09); empty when not given.
+    pub impact_rationale: String,
     pub changed: String,
 }
 
@@ -1028,6 +1030,7 @@ pub fn damage_detail(ws: &Workspace, id: DamageId) -> Option<DamageDetail> {
                 target: Selection::Asset(aid),
             })
             .collect(),
+        impact_rationale: d.impact_rationale().to_owned(),
         changed: changed_text(d.provenance()),
     })
 }
@@ -1102,6 +1105,8 @@ pub struct ThreatDetail {
     pub scales: Option<bool>,
     /// Why it scales or not; empty when not given.
     pub scaling_reason: String,
+    /// Why the direct feasibility is rated as it is (FND-09).
+    pub feasibility_rationale: String,
     /// The feasibility the engine uses (from the tree, else direct).
     pub feasibility: Option<String>,
     /// Residual feasibility (after controls).
@@ -1319,6 +1324,7 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
             .collect(),
         scales: t.scales(),
         scaling_reason: t.scaling_reason().to_owned(),
+        feasibility_rationale: t.feasibility_rationale().to_owned(),
         feasibility,
         residual_feasibility,
         inherent,
@@ -1980,6 +1986,28 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 format!(
                     "{} {} has no impact rating.",
                     m.element_names().damage_scenario.singular,
+                    q(s)
+                ),
+                s,
+            )
+        }
+        L::ImpactWithoutRationale { damage } => {
+            let s = Selection::Damage(damage);
+            (
+                format!(
+                    "{} {} has an impact rating without a rationale.",
+                    m.element_names().damage_scenario.singular,
+                    q(s)
+                ),
+                s,
+            )
+        }
+        L::FeasibilityWithoutRationale { threat } => {
+            let s = Selection::Threat(threat);
+            (
+                format!(
+                    "{} {} has a feasibility rating without a rationale.",
+                    m.element_names().threat_scenario.singular,
                     q(s)
                 ),
                 s,

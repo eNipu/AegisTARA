@@ -1552,3 +1552,12 @@ msgstr "⟦Nót á válíd éxpréssíón.␣␣⟧"
 
 msgid "The expression is too large."
 msgstr "⟦Thé éxpréssíón ís tóó lárgé.␣␣⟧"
+
+msgid "Why this impact"
+msgstr "⟦Why thís ímpáct␣␣⟧"
+
+msgid "Why this feasibility"
+msgstr "⟦Why thís féásíbílíty␣␣⟧"
+
+msgid "The reason for the rating, for a reviewer. {0} or leaving the box saves."
+msgstr "⟦Thé réásón fór thé rátíng, fór á révíéwér. {0} ór léávíng thé bóx sávés.␣␣⟧"

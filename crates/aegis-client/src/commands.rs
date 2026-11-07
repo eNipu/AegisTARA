@@ -427,6 +427,20 @@ pub enum Edit {
         /// Why; may be empty.
         reason: String,
     },
+    /// Sets why a damage scenario's impact is rated as it is (FND-09).
+    SetImpactRationale {
+        /// The damage scenario.
+        damage: DamageId,
+        /// The rationale; empty clears it.
+        text: String,
+    },
+    /// Sets why a threat's direct feasibility is rated as it is (FND-09).
+    SetFeasibilityRationale {
+        /// The threat.
+        threat: ThreatId,
+        /// The rationale; empty clears it.
+        text: String,
+    },
     /// Removes a threat scenario, clearing what blocks the removal first
     /// (tree link, ratings, treatment, goal, claim).
     RemoveThreat {
@@ -1440,6 +1454,16 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
+                if project
+                    .damage_scenario(d_idx)
+                    .is_some_and(|d| !d.impact_rationale().is_empty())
+                {
+                    ops.push(Op::SetImpactRationale {
+                        damage: *damage,
+                        text: "".into(),
+                        provenance: p.clone(),
+                    });
+                }
                 ops.push(Op::RemoveDamageScenario { id: *damage });
                 ops
             }
@@ -1566,6 +1590,16 @@ impl Edit {
                 claim: *claim,
                 provenance: p,
             }],
+            Edit::SetImpactRationale { damage, text } => vec![Op::SetImpactRationale {
+                damage: *damage,
+                text: text.trim().into(),
+                provenance: p,
+            }],
+            Edit::SetFeasibilityRationale { threat, text } => vec![Op::SetFeasibilityRationale {
+                threat: *threat,
+                text: text.trim().into(),
+                provenance: p,
+            }],
             Edit::SetThreatScaling {
                 threat,
                 scales,
@@ -1614,6 +1648,13 @@ impl Edit {
                     ops.push(Op::SetThreatClaim {
                         threat: *threat,
                         claim: None,
+                        provenance: p.clone(),
+                    });
+                }
+                if !t.feasibility_rationale().is_empty() {
+                    ops.push(Op::SetFeasibilityRationale {
+                        threat: *threat,
+                        text: "".into(),
                         provenance: p.clone(),
                     });
                 }
@@ -2268,6 +2309,13 @@ impl Edit {
                 reason,
             } => threat(id)
                 .is_some_and(|t| t.scales() == *scales && t.scaling_reason() == reason.trim()),
+            Edit::SetFeasibilityRationale { threat: id, text } => {
+                threat(id).is_some_and(|t| t.feasibility_rationale() == text.trim())
+            }
+            Edit::SetImpactRationale { damage, text } => project
+                .damage_scenario_idx(damage)
+                .and_then(|i| project.damage_scenario(i))
+                .is_some_and(|d| d.impact_rationale() == text.trim()),
             _ => false,
         }
     }

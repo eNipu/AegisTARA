@@ -54,6 +54,11 @@ attack-steps = 攻撃ステップ
 attack-step = 攻撃ステップ
 through = 経由
 attack-type = 攻撃タイプ
+rationale = 根拠
+feasibility-rationale = 実現可能性の根拠
+scales = スケール
+scaling-reason = スケーラビリティの根拠
+no = なし
 
 tree-summary = { $nodes } ノード。ルートの攻撃可能性: { $feasibility }。{ $threats_plural }: { $threats }。
 tree-caption = 攻撃ツリー

@@ -108,6 +108,7 @@ pub const MAX_KEY_LEN: usize = 64;
 ///         violates: vec!["integrity".into()],
 ///     }],
 ///     catalog_schemes: vec![],
+///     require_rationale: false,
 ///     attack_potential: None,
 /// };
 /// let m = Methodology::new(def)?;
@@ -146,6 +147,10 @@ pub struct MethodologyDef {
     /// steps and threats use the plain direct-rating scale in
     /// [`feasibility_levels`](Self::feasibility_levels) (DOM-02).
     pub attack_potential: Option<AttackPotentialDef>,
+    /// The pack asks for a rationale next to each impact and direct
+    /// feasibility rating (FND-09): a rating without one is a lint warning.
+    /// Off unless the pack sets `"require_rationale": true`.
+    pub require_rationale: bool,
 }
 
 /// Singular and plural display names for one element kind in a [`MethodologyDef`].
@@ -1213,6 +1218,7 @@ pub struct Methodology {
     factors: Vec<FactorData>,
     factor_by_key: BTreeMap<Arc<str>, u8>,
     potential_bands: Vec<PotentialBand>,
+    require_rationale: bool,
     /// Every declared property.
     all_properties: PropertySet,
 }
@@ -1343,6 +1349,7 @@ impl Methodology {
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
+    ///     require_rationale: false,
     ///     attack_potential: None,
     /// };
     /// assert_eq!(Methodology::new(def), Err(MethodologyError::InvalidKey("Not-A-Key".into())));
@@ -1411,6 +1418,7 @@ impl Methodology {
             factors: factors.items,
             factor_by_key: factors.by_key,
             potential_bands,
+            require_rationale: def.require_rationale,
             all_properties,
         })
     }
@@ -1924,6 +1932,14 @@ impl Methodology {
     #[must_use]
     pub fn has_attack_potential(&self) -> bool {
         !self.factors.is_empty()
+    }
+
+    /// Whether the pack asks for a rationale next to each impact and direct
+    /// feasibility rating (FND-09); the lint then warns about ratings
+    /// without one. Off in the built-in packs. Time O(1).
+    #[must_use]
+    pub const fn requires_rationale(&self) -> bool {
+        self.require_rationale
     }
 
     // -- Impact categories and levels --------------------------------------
@@ -3595,6 +3611,7 @@ mod tests {
             impact_categories: vec![category("harm", 3), category("cost", 2)],
             feasibility_levels: vec![level("f0"), level("f1"), level("f2")],
             risk_levels: vec![level("r0"), level("r1")],
+            require_rationale: false,
             attack_potential: None,
             properties: vec![entry_def("c"), entry_def("i"), entry_def("a")],
             threat_categories: vec![threat("leak", &["c"]), threat("wipe", &["i", "a"])],

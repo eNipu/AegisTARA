@@ -420,6 +420,7 @@ mod tests {
                     label: "High".into(),
                 },
             ],
+            require_rationale: false,
             attack_potential: None,
             properties: vec![PropertyDef {
                 key: "i".into(),

@@ -1759,6 +1759,23 @@ impl Controller {
                 });
             }
         });
+        on!(on_set_feasibility_rationale, |c, text| {
+            if let Some(threat) = c.selected_threat() {
+                c.edit(Edit::SetFeasibilityRationale {
+                    threat,
+                    text: text.to_string(),
+                });
+            }
+        });
+        on!(on_set_impact_rationale, |c, text| {
+            let damage = c.with_project(|p| p.data.damage.as_ref().map(|d| d.id));
+            if let Some(damage) = damage {
+                c.edit(Edit::SetImpactRationale {
+                    damage,
+                    text: text.to_string(),
+                });
+            }
+        });
         on!(on_set_threat_scaling_reason, |c, reason| {
             let scales = c.with_project(|p| p.data.threat.as_ref().map(|d| d.scales));
             if let (Some(threat), Some(scales)) = (c.selected_threat(), scales) {
@@ -3659,6 +3676,7 @@ impl Controller {
             Some(false) => 2,
         });
         w.set_td_scaling_reason(s(&d.scaling_reason));
+        w.set_td_feasibility_rationale(s(&d.feasibility_rationale));
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4030,6 +4048,7 @@ impl Controller {
         if let Some(x) = &d.damage {
             w.set_damage_id(s(&x.visual_id));
             w.set_damage_name(s(&x.name));
+            w.set_damage_impact_rationale(s(&x.impact_rationale));
             w.set_damage_impacts(model(
                 x.impacts
                     .iter()

@@ -1643,6 +1643,8 @@ pub(super) struct DamageWire {
     pub(super) name: Name,
     pub(super) impacts: Impacts,
     #[serde(default, deserialize_with = "some")]
+    pub(super) impact_rationale: Option<DescriptionText>,
+    #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
@@ -1672,6 +1674,8 @@ pub(super) struct ThreatWire {
     pub(super) scales: Option<bool>,
     #[serde(default, deserialize_with = "some")]
     pub(super) scaling_reason: Option<DescriptionText>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) feasibility_rationale: Option<DescriptionText>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -2275,6 +2279,18 @@ pub(super) enum OpWire {
         #[serde(deserialize_with = "Option::deserialize")]
         scales: Option<bool>,
         reason: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetImpactRationale {
+        damage: WireId<DamageId>,
+        text: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetFeasibilityRationale {
+        threat: WireId<ThreatId>,
+        text: DescriptionText,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

@@ -84,6 +84,8 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `SetThreatGoal` | the same with the old goal and provenance | O(log n) |
 /// | `SetThreatClaim` | the same with the old claim and provenance | O(log n) |
 /// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
+/// | `SetImpactRationale` | the same with the old text and provenance | O(log n + r) |
+/// | `SetFeasibilityRationale` | the same with the old text and provenance | O(log n + r) |
 ///
 /// ```
 /// use std::sync::Arc;
@@ -668,6 +670,28 @@ pub enum Op {
         /// Provenance of linking or unlinking the cybersecurity claim.
         provenance: Provenance,
     },
+    /// Sets why a damage scenario's impact is rated as it is (FND-09):
+    /// plain text, at most [`MAX_DESCRIPTION_CHARS`](crate::MAX_DESCRIPTION_CHARS)
+    /// chars; empty clears it.
+    SetImpactRationale {
+        /// Existing damage scenario.
+        damage: DamageId,
+        /// The rationale.
+        text: Arc<str>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Sets why a threat scenario's feasibility is rated as it is (FND-09):
+    /// plain text, at most [`MAX_DESCRIPTION_CHARS`](crate::MAX_DESCRIPTION_CHARS)
+    /// chars; empty clears it.
+    SetFeasibilityRationale {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// The rationale.
+        text: Arc<str>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
     /// Rates whether a threat scenario scales to many vehicles (FND-10):
     /// `Some(true)`, `Some(false)`, or `None` for not rated, with a reasoning
     /// text (plain text, at most [`MAX_DESCRIPTION_CHARS`](crate::MAX_DESCRIPTION_CHARS)
@@ -915,6 +939,8 @@ impl Op {
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }
+            | Self::SetImpactRationale { provenance, .. }
+            | Self::SetFeasibilityRationale { provenance, .. }
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }
@@ -1011,6 +1037,8 @@ impl Op {
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }
+            | Self::SetImpactRationale { provenance, .. }
+            | Self::SetFeasibilityRationale { provenance, .. }
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }

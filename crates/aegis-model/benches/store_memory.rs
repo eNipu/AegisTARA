@@ -189,6 +189,7 @@ fn short_keys() -> Arc<Methodology> {
             })
             .collect(),
         catalog_schemes: vec![],
+        require_rationale: false,
         attack_potential: None,
     };
     match Methodology::new(def) {

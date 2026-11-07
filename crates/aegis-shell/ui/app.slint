@@ -650,6 +650,10 @@ in property <string> redo-label;
     in property <bool> has-damage;
     in property <string> damage-id;
     in property <string> damage-name;
+// Why the impact is rated as it is (FND-09).
+in property <string> damage-impact-rationale;
+// Why the direct feasibility is rated as it is (FND-09).
+in property <string> td-feasibility-rationale;
     in property <[FactorItem]> damage-impacts;
     in property <[LinkItem]> damage-threats;
     in property <[LinkItem]> damage-assets;
@@ -1028,6 +1032,8 @@ in property <string> td-scaling-reason;
     callback set-threat-goal(int);
     callback set-threat-claim(int);
 callback set-threat-scales(int);
+callback set-impact-rationale(string);
+callback set-feasibility-rationale(string);
 callback set-threat-scaling-reason(string);
     callback pick-risk(int);
     callback pick-tree(int);
@@ -2103,6 +2109,14 @@ callback set-threat-scaling-reason(string);
                                 label: f.label;
                                 Choice { options: f.options; index: f.selected; editable: root.editing; label: f.label; picked(i) => { root.set-impact(fi, i); } }
                             }
+                            DescriptionBox {
+                                label: @tr("Why this impact");
+                                text: root.damage-impact-rationale;
+                                editable: root.editing;
+                                save-label: root.save-description-label;
+                                placeholder: @tr("The reason for the rating, for a reviewer. {0} or leaving the box saves.", root.save-description-label);
+                                save(t) => { root.set-impact-rationale(t); }
+                            }
                             SectionTitle { text: @tr("Threat scenarios leading here"); }
                             LinkList { items: root.damage-threats; clicked(i) => { root.damage-threat-clicked(i); } }
                             SectionTitle { text: @tr("Assets at stake"); }
@@ -2238,6 +2252,14 @@ callback set-threat-scaling-reason(string);
                                     Choice { options: root.feasibility-options; index: root.td-feasibility; editable: root.editing; label: @tr("Direct feasibility"); picked(i) => { root.set-threat-feasibility(i); } }
                                 }
                                 if root.td-feasibility-text != "": Text { text: @tr("Feasibility the engine uses: ") + root.td-feasibility-text; color: Theme.graphite; font-size: Theme.font-label; }
+                                DescriptionBox {
+                                    label: @tr("Why this feasibility");
+                                    text: root.td-feasibility-rationale;
+                                    editable: root.editing;
+                                    save-label: root.save-description-label;
+                                    placeholder: @tr("The reason for the rating, for a reviewer. {0} or leaving the box saves.", root.save-description-label);
+                                    save(t) => { root.set-feasibility-rationale(t); }
+                                }
                                 Field {
                                     label: @tr("Treatment decision");
                                     Choice { options: root.treatment-options; index: root.td-treatment; editable: root.editing; label: @tr("Treatment"); picked(i) => { root.set-treatment(i); } }

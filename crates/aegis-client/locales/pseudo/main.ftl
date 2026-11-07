@@ -55,6 +55,11 @@ attack-steps = ⟦Âttâck stéps␣⟧
 attack-step = ⟦Âttâck stép␣⟧
 through = ⟦Thrôûgh␣⟧
 attack-type = ⟦Âttâck týpé␣⟧
+rationale = ⟦Râtîônâlé␣⟧
+feasibility-rationale = ⟦Féâsîbîlîtý râtîônâlé␣⟧
+scales = ⟦Scâlés␣⟧
+scaling-reason = ⟦Scâlîng réâsôn␣⟧
+no = ⟦nô␣⟧
 
 tree-summary = ⟦{ $nodes } nôdés. Féâsîbîlîtý ât thé rôôt: { $feasibility }. { $threats_plural }: { $threats }.␣⟧
 tree-caption = ⟦Âttâck tréé␣⟧

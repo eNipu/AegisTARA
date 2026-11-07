@@ -907,6 +907,20 @@ pub enum ModelError {
         /// The threat scenario.
         threat: ThreatId,
     },
+    /// The threat scenario cannot be removed while it still has a
+    /// feasibility rationale (FND-09); clear it first.
+    #[error("threat scenario {threat} still has a feasibility rationale")]
+    ThreatHasRationale {
+        /// The threat scenario.
+        threat: ThreatId,
+    },
+    /// The damage scenario cannot be removed while it still has an impact
+    /// rationale (FND-09); clear it first.
+    #[error("damage scenario {damage} still has an impact rationale")]
+    DamageHasRationale {
+        /// The damage scenario.
+        damage: DamageId,
+    },
     /// The threat scenario has no linked attack tree to evaluate.
     #[error("threat scenario {0} has no linked attack tree")]
     NoAttackTree(ThreatId),
@@ -1126,6 +1140,7 @@ pub enum ModelError {
 ///     properties: vec![],
 ///     threat_categories: vec![],
 ///     catalog_schemes: vec![],
+///     require_rationale: false,
 ///     attack_potential: None,
 /// };
 /// assert_eq!(Methodology::new(def), Err(MethodologyError::NoImpactCategory));
@@ -1154,6 +1169,7 @@ pub enum MethodologyError {
     ///     properties: vec![],
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
+    ///     require_rationale: false,
     ///     attack_potential: None,
     /// };
     /// let kept = format!("{}...", "K".repeat(61));
