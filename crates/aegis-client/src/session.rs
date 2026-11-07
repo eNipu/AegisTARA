@@ -3346,7 +3346,7 @@ fn page_data(open: &Open) -> PageData {
             d.claim = ui.selected_claim.and_then(|id| pages::claim_detail(ws, id));
         }
         Page::Problems => d.problems = pages::problems(ws),
-        Page::Versions | Page::History | Page::Reports | Page::Admin => {}
+        Page::Versions | Page::History | Page::Reports | Page::Admin | Page::Scope => {}
     }
     d
 }

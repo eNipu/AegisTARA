@@ -576,3 +576,54 @@ fn excel_import_round_trips_workbook_previews_unmapped_rows_and_applies_with_imp
     assert!(imported_ws.project().assets().count() >= preview.assets_to_add);
     assert!(imported_ws.project().threat_scenarios().count() >= preview.threats_to_add);
 }
+
+#[test]
+fn the_item_description_and_scope_reach_the_report_in_en_and_ja() {
+    use aegis_model::{ElementRef, Op, Provenance};
+    let mut ws = workspace();
+    let p = Provenance::default;
+    ws.apply(
+        vec![
+            Op::SetDescription {
+                target: ElementRef::ItemDescription,
+                text: "A brake-by-wire ECU.".into(),
+                provenance: p(),
+            },
+            Op::SetDescription {
+                target: ElementRef::ItemScope,
+                text: "The ECU and its firmware.".into(),
+                provenance: p(),
+            },
+            Op::SetProjectLanguages {
+                langs: vec![std::sync::Arc::from("ja")].into(),
+                provenance: p(),
+            },
+            Op::SetDescriptionTranslation {
+                target: ElementRef::ItemScope,
+                lang: "ja".into(),
+                text: "ECU とそのファームウェア。".into(),
+                provenance: p(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("applies");
+    let text = |doc: &aegis_client::report::ReportDoc| format!("{:?}", doc.blocks);
+    let en = text(&report_doc(&ws, &context()));
+    assert!(en.contains("Description of the item") && en.contains("A brake-by-wire ECU."));
+    assert!(en.contains("Scope of the analysis") && en.contains("The ECU and its firmware."));
+    let ja = text(&report_doc_with_options(
+        &ws,
+        &context(),
+        &ReportOptions {
+            profile: ReportProfile {
+                language: ReportLanguage::Japanese,
+                ..ReportProfile::default()
+            },
+            baseline_project: None,
+        },
+    ));
+    assert!(ja.contains("分析の範囲") && ja.contains("ECU とそのファームウェア。"));
+    // No translation: the source text stands in.
+    assert!(ja.contains("A brake-by-wire ECU."));
+}

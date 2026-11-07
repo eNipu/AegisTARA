@@ -21,18 +21,19 @@ export { Marks, ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, Threat
 global Pages {
     out property <int> overview: 0;
     out property <int> item: 1;
-    out property <int> damage: 2;
-    out property <int> assets: 3;
-    out property <int> threats: 4;
-    out property <int> trees: 5;
-    out property <int> risks: 6;
-    out property <int> controls: 7;
-    out property <int> goals: 8;
-    out property <int> reports: 9;
-    out property <int> problems: 10;
-    out property <int> versions: 11;
-    out property <int> history: 12;
-    out property <int> admin: 13;
+    out property <int> scope: 2;
+    out property <int> damage: 3;
+    out property <int> assets: 4;
+    out property <int> threats: 5;
+    out property <int> trees: 6;
+    out property <int> risks: 7;
+    out property <int> controls: 8;
+    out property <int> goals: 9;
+    out property <int> reports: 10;
+    out property <int> problems: 11;
+    out property <int> versions: 12;
+    out property <int> history: 13;
+    out property <int> admin: 14;
 }
 
 // One sidebar entry: its page is its position; `group` is its position in
@@ -525,6 +526,7 @@ in property <string> redo-label;
     property <[NavEntry]> nav-entries: [
         { label: @tr("Overview"), icon: @image-url("icons/layout-dashboard.svg"), group: -1 },
         { label: @tr("Item definition"), icon: @image-url("icons/network.svg"), group: 0 },
+        { label: @tr("Description and scope"), icon: @image-url("icons/file-text.svg"), group: 0 },
         { label: root.damage-plural, icon: @image-url("icons/triangle-alert.svg"), group: 1 },
         { label: @tr("Assets"), icon: @image-url("icons/box.svg"), group: 2 },
         { label: @tr("Threat scenarios"), icon: @image-url("icons/swords.svg"), group: 2 },
@@ -1294,6 +1296,7 @@ callback set-threat-scaling-reason(string);
             MenuSeparator {}
             MenuItem { title: @tr("Overview"); icon: @image-url("icons/layout-dashboard.svg"); shortcut: root.overview-keys; enabled: root.in-project; activated => { root.show-page(Pages.overview); } }
             MenuItem { title: @tr("Item definition"); icon: @image-url("icons/network.svg"); shortcut: root.item-keys; enabled: root.in-project; activated => { root.show-page(Pages.item); } }
+            MenuItem { title: @tr("Description and scope"); icon: @image-url("icons/file-text.svg"); enabled: root.in-project; activated => { root.show-page(Pages.scope); } }
             MenuItem { title: @tr("Damage scenarios"); icon: @image-url("icons/triangle-alert.svg"); shortcut: root.damage-keys; enabled: root.in-project; activated => { root.show-page(Pages.damage); } }
             MenuItem { title: @tr("Assets"); icon: @image-url("icons/box.svg"); shortcut: root.assets-keys; enabled: root.in-project; activated => { root.show-page(Pages.assets); } }
             MenuItem { title: @tr("Threat scenarios"); icon: @image-url("icons/swords.svg"); shortcut: root.threats-keys; enabled: root.in-project; activated => { root.show-page(Pages.threats); } }
@@ -1915,6 +1918,22 @@ callback set-threat-scaling-reason(string);
                 Rectangle {
                     vertical-stretch: 1;
                     background: Theme.sheet;
+
+                    // Description and scope of the item (ARC-05)
+                    if root.page == Pages.scope: ScrollView {
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+                            alignment: start;
+                            PageTitle {
+                                title: @tr("Description and scope");
+                                subtitle: @tr("What the item is and does, and what this analysis covers and leaves out.");
+                                icon: @image-url("icons/file-text.svg");
+                            }
+                            DescriptionFor { items: root.descriptions; kind: "item-description"; label: @tr("Item description"); editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                            DescriptionFor { items: root.descriptions; kind: "item-scope"; label: @tr("Scope"); editable: root.editing; save-label: root.save-description-label; save-requested(i, t) => { root.set-description(i, t); } translation-requested(i, l, t) => { root.set-description-translation(i, l, t); } translation-removed(i, l) => { root.remove-description-translation(i, l); } }
+                        }
+                    }
 
                     // Overview
                     if root.page == Pages.overview: ScrollView {
