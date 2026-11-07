@@ -1415,6 +1415,21 @@ msgstr "選択を解除"
 msgid "Set treatment"
 msgstr "対応方針を設定"
 
+msgid "Add property"
+msgstr "プロパティを追加"
+
+msgid "Remove property"
+msgstr "プロパティを削除"
+
+msgid "Set impact"
+msgstr "影響を設定"
+
+msgid "Set goal"
+msgstr "目標を設定"
+
+msgid "Set claim"
+msgstr "主張を設定"
+
 msgid "Through"
 msgstr "経由"
 

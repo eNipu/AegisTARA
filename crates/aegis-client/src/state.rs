@@ -262,11 +262,11 @@ pub struct PageData {
     pub controls: Vec<ControlRow>,
     /// The selected control.
     pub control: Option<ControlDetail>,
-    /// Goals page: goals.
+    /// Goals page: goals (and the goal choices of the threats page's bulk bar).
     pub goals: Vec<GoalRowOf<aegis_model::GoalId>>,
     /// The selected goal.
     pub goal: Option<GoalDetail<aegis_model::GoalId>>,
-    /// Goals page: claims.
+    /// Goals page: claims (and the claim choices of the threats page's bulk bar).
     pub claims: Vec<ClaimRow>,
     /// The selected claim.
     pub claim: Option<GoalDetail<aegis_model::ClaimId>>,

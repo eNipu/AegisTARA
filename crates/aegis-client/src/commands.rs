@@ -958,6 +958,9 @@ impl Edit {
         actor: &str,
         now_ms: u64,
     ) -> Result<Vec<Op>, EditError> {
+        if self.unchanged(project) {
+            return Ok(Vec::new());
+        }
         let m = project.methodology();
         let p = Provenance::human(actor, now_ms);
         let clearing = p.clone();
@@ -2171,6 +2174,93 @@ impl Edit {
         Ok(clear_descriptions_before_removal(project, ops, &clearing))
     }
 
+    /// Whether this edit sets a value to what it already is. Such an edit
+    /// sends no op, so nothing the user did not change reaches the op log
+    /// (UI principle 8), and a bulk edit counts only the elements it changes
+    /// (UI-04). An edit whose element or choice is missing is not unchanged:
+    /// `to_ops` reports that error.
+    fn unchanged(&self, project: &Project) -> bool {
+        let m = project.methodology();
+        let threat = |id: &ThreatId| {
+            project
+                .threat_scenario_idx(id)
+                .and_then(|i| project.threat_scenario(i))
+        };
+        match self {
+            Edit::SetAssetProperty {
+                asset,
+                property,
+                on,
+            } => {
+                let a = project.asset_idx(asset).and_then(|i| project.asset(i));
+                match (a, m.properties().nth(*property)) {
+                    (Some(a), Some(prop)) => a.properties().contains(prop) == *on,
+                    _ => false,
+                }
+            }
+            Edit::SetImpact {
+                damage,
+                category,
+                level,
+            } => {
+                let d = project
+                    .damage_scenario_idx(damage)
+                    .and_then(|i| project.damage_scenario(i));
+                let (Some(d), Some(cat)) = (d, m.impact_categories().nth(*category)) else {
+                    return false;
+                };
+                match level {
+                    None => d.impact(cat).is_none(),
+                    Some(i) => m
+                        .levels(cat)
+                        .nth(*i)
+                        .is_some_and(|want| d.impact(cat) == Some(want)),
+                }
+            }
+            Edit::SetTreatment {
+                threat: id,
+                treatment,
+            } => {
+                let Some(t) = threat(id) else { return false };
+                match treatment {
+                    None => t.treatment().is_none(),
+                    Some(i) => TREATMENTS
+                        .get(*i)
+                        .is_some_and(|want| t.treatment() == Some(*want)),
+                }
+            }
+            Edit::SetThreatGoal { threat: id, goal } => threat(id)
+                .is_some_and(|t| t.goal().and_then(|g| project.cybersecurity_goal_id(g)) == *goal),
+            Edit::SetThreatClaim { threat: id, claim } => threat(id).is_some_and(|t| {
+                t.claim().and_then(|c| project.cybersecurity_claim_id(c)) == *claim
+            }),
+            _ => false,
+        }
+    }
+
+    /// This edit with the parts of a batch that would change nothing left
+    /// out (see [`unchanged`](Self::unchanged)), so its undo label counts
+    /// only what changes: "change properties of 2 assets" when the third
+    /// already had the property. A batch left with one edit becomes that
+    /// edit, so it is named like any single change. Any other edit is
+    /// returned as it is.
+    #[must_use]
+    pub fn changing(self, project: &Project) -> Edit {
+        let Edit::Batch(items) = self else {
+            return self;
+        };
+        let mut items: Vec<Edit> = items
+            .into_iter()
+            .filter(|e| !e.unchanged(project))
+            .collect();
+        if items.len() == 1
+            && let Some(only) = items.pop()
+        {
+            return only;
+        }
+        Edit::Batch(items)
+    }
+
     /// The undo label of a bulk edit: "remove 3 assets" (UI-04).
     #[must_use]
     pub fn bulk_label(&self) -> Option<crate::undo_label::Label> {
@@ -2184,6 +2274,10 @@ impl Edit {
             Edit::RemoveThreat { .. } => ("remove", "threat scenarios"),
             Edit::RemoveControl { .. } => ("remove", "security controls"),
             Edit::SetTreatment { .. } => ("set treatment of", "threat scenarios"),
+            Edit::SetAssetProperty { .. } => ("change properties of", "assets"),
+            Edit::SetImpact { .. } => ("rate", "damage scenarios"),
+            Edit::SetThreatGoal { .. } => ("set goal of", "threat scenarios"),
+            Edit::SetThreatClaim { .. } => ("set claim of", "threat scenarios"),
             _ => ("change", "items"),
         };
         Some(Label::bulk(verb, noun, items.len()))

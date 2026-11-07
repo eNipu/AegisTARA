@@ -1109,6 +1109,135 @@ fn a_batch_edit_is_one_undo_step_and_one_redo() {
     assert_eq!(t.ws.project().threat_scenario_count(), 2, "nothing changed");
 }
 
+/// UI-04, second slice: setting asset properties, impact ratings and the goal
+/// or claim of several threats is one undo step each, and an element that
+/// already has the value is left out of the batch, its count and its label.
+#[test]
+fn bulk_field_edits_count_only_what_changes() {
+    let mut t = tara();
+    let vocab = pages::vocabulary(&Arc::new(Methodology::iso21434_r155().expect("builtin")));
+    let conf = pos(&vocab.properties, "Confidentiality");
+    let integrity = pos(&vocab.properties, "Integrity");
+    let (b, c) = (AssetId::new_v7(), AssetId::new_v7());
+    for (id, name, props) in [(b, "B", vec![integrity]), (c, "C", vec![conf])] {
+        apply(
+            &mut t.ws,
+            &Edit::AddAsset {
+                id,
+                name: name.into(),
+                properties: props,
+            },
+        );
+    }
+    let has_conf = |ws: &Workspace, id: &AssetId| {
+        let p = ws.project();
+        let prop = p.methodology().properties().nth(conf).expect("prop");
+        p.asset(p.asset_idx(id).expect("asset"))
+            .expect("asset")
+            .properties()
+            .contains(prop)
+    };
+
+    // C already has it: the batch changes two assets and says so.
+    let set = |asset| Edit::SetAssetProperty {
+        asset,
+        property: conf,
+        on: true,
+    };
+    let batch = Edit::Batch(vec![set(t.asset), set(b), set(c)]).changing(t.ws.project());
+    let Edit::Batch(items) = &batch else {
+        panic!("still a batch: {batch:?}");
+    };
+    assert_eq!(items.len(), 2);
+    let steps = t.ws.edits().count();
+    let ops = batch.to_ops(t.ws.project(), "mira", 1).expect("ops");
+    t.ws.apply_labeled(ops, Origin::Edit, batch.bulk_label())
+        .expect("applies");
+    assert_eq!(t.ws.edits().count(), steps + 1, "one step");
+    let label = t.ws.undo_label().expect("label");
+    assert_eq!(label.imperative(), "change properties of 2 assets");
+    assert_eq!(label.past(), "2 assets changed");
+    assert!([t.asset, b, c].iter().all(|a| has_conf(&t.ws, a)));
+    t.ws.undo().expect("one undo");
+    assert!(!has_conf(&t.ws, &t.asset) && !has_conf(&t.ws, &b) && has_conf(&t.ws, &c));
+
+    // A batch where nothing changes sends no op; one left becomes that edit.
+    let one = Edit::Batch(vec![set(t.asset), set(c)]).changing(t.ws.project());
+    assert_eq!(one, set(t.asset), "one item left is a single edit");
+    assert!(
+        set(c)
+            .to_ops(t.ws.project(), "mira", 1)
+            .expect("ops")
+            .is_empty()
+    );
+    let empty = Edit::Batch(vec![set(c), set(c)]).changing(t.ws.project());
+    assert_eq!(empty, Edit::Batch(Vec::new()));
+    assert!(
+        empty
+            .to_ops(t.ws.project(), "mira", 1)
+            .expect("ops")
+            .is_empty()
+    );
+
+    // Impact ratings: both damage scenarios rated in one step.
+    let d2 = DamageId::new_v7();
+    apply(
+        &mut t.ws,
+        &Edit::AddDamage {
+            id: d2,
+            name: "Second".into(),
+        },
+    );
+    let rate = |damage| Edit::SetImpact {
+        damage,
+        category: 0,
+        level: Some(0),
+    };
+    let batch = Edit::Batch(vec![rate(t.damage), rate(d2)]).changing(t.ws.project());
+    assert!(
+        matches!(&batch, Edit::Batch(v) if v.len() == 2),
+        "{batch:?}"
+    );
+    try_apply_labeled(&mut t.ws, &batch);
+    assert_eq!(
+        t.ws.undo_label().expect("label").imperative(),
+        "rate 2 damage scenarios"
+    );
+
+    // Goals and claims: a new goal on both threats; the claim one already
+    // has is left out, so setting it on both changes one threat.
+    let g2 = GoalId::new_v7();
+    apply(
+        &mut t.ws,
+        &Edit::AddGoal {
+            id: g2,
+            name: "Second goal".into(),
+        },
+    );
+    let goal = |threat| Edit::SetThreatGoal {
+        threat,
+        goal: Some(g2),
+    };
+    let batch = Edit::Batch(vec![goal(t.threat), goal(t.second)]).changing(t.ws.project());
+    try_apply_labeled(&mut t.ws, &batch);
+    assert_eq!(
+        t.ws.undo_label().expect("label").imperative(),
+        "set goal of 2 threat scenarios"
+    );
+    let claim = |threat| Edit::SetThreatClaim {
+        threat,
+        claim: Some(t.claim),
+    };
+    let batch = Edit::Batch(vec![claim(t.threat), claim(t.second)]).changing(t.ws.project());
+    assert_eq!(batch, claim(t.threat), "the second already has the claim");
+}
+
+fn try_apply_labeled(ws: &mut Workspace, edit: &Edit) {
+    let ops = edit.to_ops(ws.project(), "mira", 1).expect("ops");
+    ws.apply_labeled(ops, Origin::Edit, edit.bulk_label())
+        .expect("applies");
+}
+
 /// The step that decides the residual feasibility, with a component setting
 /// and a manual mitigation on it: the threat inspector names both, deciding
 /// ceiling first (CFG-05), and the version diff says what changed on the

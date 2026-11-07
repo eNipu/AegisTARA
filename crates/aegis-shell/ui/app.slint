@@ -722,6 +722,11 @@ in property <string> redo-label;
     in property <Marks> threat-marks;
     in property <Marks> control-marks;
     in property <Marks> risk-marks;
+    // Options of the bulk bar (UI-04): "Safety: Severe", ... and the goals
+    // and claims of the project, "None" first.
+    in property <[string]> impact-bulk-options;
+    in property <[string]> bulk-goal-options;
+    in property <[string]> bulk-claim-options;
     in property <bool> has-control;
     in property <string> control-id;
     in property <string> control-name;
@@ -919,6 +924,8 @@ in property <string> redo-label;
     callback toggle-trust-boundary-member(int, bool);
     callback remove-trust-boundary();
     callback mark-click(string, int, bool);
+    callback mark-all(string);
+    callback bulk-pick(string, int, int);
     callback clear-marks();
     callback remove-marked(string);
     callback treat-marked(int);
@@ -1855,6 +1862,14 @@ in property <string> redo-label;
                             mark-click(i, shift) => { root.mark-click("asset", i, shift); }
                             clear-marks => { root.clear-marks(); }
                             remove-marked => { root.remove-marked("asset"); }
+                            bulk: true;
+                            mark-all => { root.mark-all("asset"); }
+                            bulk-choices: root.property-labels;
+                            bulk-choice-label: @tr("Add property");
+                            bulk-choice(i) => { root.bulk-pick("asset", 1, i); }
+                            bulk-choices-2: root.property-labels;
+                            bulk-choice-2-label: @tr("Remove property");
+                            bulk-choice-2(i) => { root.bulk-pick("asset", 2, i); }
                             selected: root.asset-selected;
                             editable: root.editing;
                             show-add: true;
@@ -1933,6 +1948,11 @@ in property <string> redo-label;
                             mark-click(i, shift) => { root.mark-click("damage", i, shift); }
                             clear-marks => { root.clear-marks(); }
                             remove-marked => { root.remove-marked("damage"); }
+                            bulk: true;
+                            mark-all => { root.mark-all("damage"); }
+                            bulk-choices: root.impact-bulk-options;
+                            bulk-choice-label: @tr("Set impact");
+                            bulk-choice(i) => { root.bulk-pick("damage", 1, i); }
                             selected: root.damage-selected;
                             editable: root.editing;
                             show-add: true;
@@ -2002,6 +2022,14 @@ in property <string> redo-label;
                             mark-click(i, shift) => { root.mark-click("threat", i, shift); }
                             clear-marks => { root.clear-marks(); }
                             remove-marked => { root.remove-marked("threat"); }
+                            bulk: true;
+                            mark-all => { root.mark-all("threat"); }
+                            bulk-choices: root.bulk-goal-options;
+                            bulk-choice-label: @tr("Set goal");
+                            bulk-choice(i) => { root.bulk-pick("threat", 1, i); }
+                            bulk-choices-2: root.bulk-claim-options;
+                            bulk-choice-2-label: @tr("Set claim");
+                            bulk-choice-2(i) => { root.bulk-pick("threat", 2, i); }
                             selected: root.threat-selected;
                             editable: root.editing;
                             show-add: true;
@@ -2719,6 +2747,8 @@ in property <string> redo-label;
                             mark-click(i, shift) => { root.mark-click("risk", i, shift); }
                             clear-marks => { root.clear-marks(); }
                             remove-marked => { root.remove-marked("risk"); }
+                            bulk: true;
+                            mark-all => { root.mark-all("risk"); }
                             bulk-choices: root.treatment-options;
                             bulk-choice-label: @tr("Set treatment");
                             bulk-choice(i) => { root.treat-marked(i); }
@@ -2780,6 +2810,8 @@ in property <string> redo-label;
                             mark-click(i, shift) => { root.mark-click("control", i, shift); }
                             clear-marks => { root.clear-marks(); }
                             remove-marked => { root.remove-marked("control"); }
+                            bulk: true;
+                            mark-all => { root.mark-all("control"); }
                             selected: root.control-selected;
                             editable: root.editing;
                             show-add: true;
