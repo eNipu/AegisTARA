@@ -18,6 +18,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Library, item definition, traceability, report builder, ReqIF-first integrations and a built-in role table are decided (D14 to D19).
 - Extensions through data files, a public API and built-in connectors (D20). No vendor-hosted service for now; consultancy first in Japan (D21).
 - A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25). Systems group components in one project (one system per component), and settings are controls with pack-defined rules (D26).
+- Reference review (2026-11-07): applicability switches (conditions, assumptions, attacker profile) are ops and exclusions are derived with reasons (D27); a control has one status, Implemented, Planned or Off (D28); shared steps, shared fragments and bypass trees by reference inside a project (D29); pages grouped by TARA phase with one relation registry (D30); projects assembled from several TARA files stay in the backlog (D31).
 
 ---
 
@@ -206,8 +207,50 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Why:** one system per component gives each TARA a clear boundary, as an item definition has, and totals that add up; one project keeps undo, baselines, reports and Excel import whole with no server change. Cross-system attacks need no tree links: a step goes via a component of another system, whose settings cap it. Settings replace the consultant's hand re-rating, which helps every project, and pack data keeps the core methodology-neutral (D1, D24).
 - **Details:** [brainstorm-systems-config.md](brainstorm-systems-config.md), [design/systems-config.md](design/systems-config.md); jobs 119 to 126.
 
+## D27. Applicability: conditions, assumptions and an attacker profile switch elements off; the engine derives what is excluded and why
+
+- **Date:** 2026-11-07
+- **Status:** decided by the architect review ([design/reference-ui-review.md](design/reference-ui-review.md) sections 3.2 to 3.4); the owner can change it.
+- **Decision:** three new project elements decide which parts of the analysis apply. (1) **Conditions** (default pack name "Configuration"; a pack may say "TOE configuration" or "variant"), each present or not; assets, components, interfaces, threats, trees, steps, goals, claims and assumptions may need conditions, and an element is excluded while any condition it needs is off. (2) **Assumptions** that hold or not; while one holds, the steps and trees it names are excluded, and an assumption should lead to a claim (linter warning when it has none). (3) An **attacker profile** on the project: allowed values per attack potential factor, a threat scalability choice and later attacker types; a step whose rated value is not allowed is excluded, an unrated factor never excludes. Every switch is an op with an exact inverse, so history, baselines, the diff and the report cover show the variant. Exclusion is **derived, never stored** (D10): `Applicability` gives each element included or excluded with its list of reasons. Evaluation lifts the feasibility domain with one extra value, `Excluded`, never a made-up level: OR ignores excluded children, AND is excluded when any child is (that path cannot happen), and a threat whose root is excluded shows its risk as "not applicable" with the reason "every attack path excluded". Excluded components and interfaces take the steps that go via them (CFG-01) with them.
+- **Why:** consultants analyse variants (with and without the Ethernet interface, with the customer's assumptions or without) and today copy the project to do it. Reviewers need to see what was taken out and why, which a silent exclusion hides.
+- **Unchanged:** D26 systems are a view and never change a number; conditions are ops and do. D26 settings cap feasibility; conditions say whether a part exists. No number depends on the user's view.
+- **Details:** architecture III.6; requirements APL-01 to APL-08; jobs 133 to 139, 157.
+
+## D28. One control status: Implemented, Planned or Off
+
+- **Date:** 2026-11-07
+- **Status:** decided by the architect review (section 3.5); the owner can change it.
+- **Decision:** `ControlStatus` replaces the idea of two switches ("in the initial analysis", "in the residual analysis"). Implemented controls count in the initial and the residual numbers, Planned ones in the residual only, Off ones in neither. `Op::SetControlStatus` with an exact inverse. Old projects load every control as Planned, which is today's maths (initial = no controls, residual = all), so no saved number changes. The UI says "initial" and "residual" ("with implemented controls" / "after planned treatment").
+- **Why:** ISO/SAE 21434 rates the item as designed, which includes the controls already in it; two independent switches would allow a meaningless state.
+- **Details:** requirements CFG-10, CFG-11; job 140.
+
+## D29. Shared building blocks by reference inside a project
+
+- **Date:** 2026-11-07
+- **Status:** decided by the architect review (sections 3.13 to 3.15); the owner can change it.
+- **Decision:** three ways to reuse inside one project, all by reference: (1) a **shared step** rated once and used by leaf nodes of many trees; (2) a **shared fragment**, an attack tree with the fragment role whose root value feeds a node of another tree; fragments may use shared steps and other fragments, and a cycle is rejected with its path (Kahn's algorithm, ADR 0002, over the fragment graph); (3) an optional **bypass tree** (a fragment) on a security control, whose feasibility is the control's ceiling instead of the typed level. Fragments are evaluated before the trees that use them, once each, and explain-why steps into them. Making a block shared and unsharing it are one undo step each; unsharing copies the values back so inverses stay exact.
+- **Unchanged:** D14, the library inserts copies with an origin note. D26, no tree links across systems for attack paths ("via" does that); a block used by trees of two systems is shared like a damage scenario. ADR 0064, ceilings are derived and never stored.
+- **Why:** a consultant rates "read out the flash memory" once, not in twelve trees, and a reviewer checks it once. Today the same step is rated many times and drifts.
+- **Details:** architecture III.7; requirements BLK-01 to BLK-05; jobs 141 to 144.
+
+## D30. Pages grouped by TARA phase; one relation registry for every link
+
+- **Date:** 2026-11-07
+- **Status:** decided by the architect review (sections 2.1 and 2.5).
+- **Decision:** the sidebar, menu and command palette group pages by the five phases of ISO/SAE 21434 clause 15 (item definition first), then Outputs and Project, from one page table. Every link between element types is described once in a relation registry in `aegis-client` (from, to, label, cardinality, read function, link and unlink edits); the inspector, link chips, the multi-link picker, the traceability graph and matrix, find and report cross-references read it. Every table uses the same column kinds (ID, name, links, computed, rating, text).
+- **Why:** six new element types would otherwise add link code to five places each; one table keeps them modular and still linked.
+- **Details:** architecture III.9; requirements UI-13 to UI-19, NFR-12; jobs 127 to 131, 149, 150.
+
+## D31. Projects assembled from several TARA files stay in the backlog
+
+- **Date:** 2026-11-07
+- **Status:** backlog by the owner's request; needs a design session.
+- **Decision:** a project assembled from several TARA files (a supplier's ECU TARA, a platform team's gateway TARA), each of which stays a normal project its owner opens, edits, baselines and reports on alone, is not built now. The first slice to design is importing **external results** from a pinned baseline of another project; the second is a composite project of pinned member projects. D26 (systems inside one project) stays the answer for one team.
+- **Details:** [design/reference-ui-review.md](design/reference-ui-review.md) section 4; architecture III.10; requirements MTA-01 to MTA-04; jobs 158 and 159 under "Waiting for a design session".
+
 ## Open
 
 - Delete the four merged remote branches listed in D9.
 - Pick the first SSO provider when a customer order arrives (D10).
+- The questions for composite projects in [design/reference-ui-review.md](design/reference-ui-review.md) section 4 (D31).
 - The questions in [brainstorm-product-v2.md](brainstorm-product-v2.md) section 11: the first customer's ALM tool, and who translates.
