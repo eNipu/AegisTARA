@@ -688,6 +688,46 @@ pub struct StepThrough {
     pub inherent: Option<String>,
 }
 
+/// One attack step of a tree with what it goes through and its attack type
+/// (CFG-01, CFG-02), for reports and exports (job 122c).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepLink {
+    /// The step's label.
+    pub step: String,
+    /// Its inherent feasibility label, if rated.
+    pub feasibility: Option<String>,
+    /// What it goes through, "ADAS ECU / JTAG", if set.
+    pub through: Option<String>,
+    /// Its attack type label, if set.
+    pub attack_type: Option<String>,
+}
+
+/// The leaf steps of tree `tree`, in node order, with what each goes through
+/// and its attack type. Time O(nodes).
+#[must_use]
+pub fn tree_steps(project: &Project, tree: TreeIdx) -> Vec<StepLink> {
+    let m = project.methodology();
+    let Some(t) = project.attack_tree(tree) else {
+        return Vec::new();
+    };
+    t.iter()
+        .filter(|(_, _, node)| node.gate_kind().is_none())
+        .map(|(idx, _, node)| StepLink {
+            step: node.label().to_owned(),
+            feasibility: project
+                .effective_step_feasibility(tree, idx)
+                .map(|l| level_label(m, l)),
+            through: project
+                .step_via(tree, idx)
+                .map(|v| through_label(project, v)),
+            attack_type: project
+                .step_attack_type(tree, idx)
+                .and_then(|a| m.attack_type_label(a))
+                .map(str::to_owned),
+        })
+        .collect()
+}
+
 /// "ADAS ECU" for a component, "ADAS ECU / JTAG" for an interface.
 #[must_use]
 pub fn through_label(project: &Project, item: ItemRef) -> String {
