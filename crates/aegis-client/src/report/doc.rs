@@ -902,6 +902,33 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             {
                 b.push(Block::Preformatted(to_outline(tree)));
             }
+            // The steps that name what they go through or an attack type
+            // (job 122c), so a client reads which ratings depend on which
+            // part of the item.
+            let linked: Vec<Vec<String>> = project
+                .attack_tree_idx(&row.id)
+                .map(|i| crate::view::tree_steps(project, i))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.through.is_some() || s.attack_type.is_some())
+                .map(|s| {
+                    vec![
+                        s.step,
+                        s.through.unwrap_or_default(),
+                        s.attack_type.unwrap_or_default(),
+                    ]
+                })
+                .collect();
+            if !linked.is_empty() {
+                b.push(table(
+                    &[
+                        catalog.tr("attack-step"),
+                        catalog.tr("through"),
+                        catalog.tr("attack-type"),
+                    ],
+                    linked,
+                ));
+            }
             push_target_figures(&mut b, &profile.figures, ElementRef::Tree(row.id));
         }
     }

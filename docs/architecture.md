@@ -2318,6 +2318,11 @@ reject gates (`NotAStep`) and return their exact inverse.
   empty. Op log: `SetStepVia`, `SetStepAttackType`.
 - `ProjectEvalCache::update` marks a step dirty when either `SetStepVia` or
   `SetStepAttackType` changes, because applied control rules depend on both.
+- Outputs (job 122c): `aegis_client::view::tree_steps` lists a tree's leaf
+  steps with feasibility, through item and attack type. The report puts a
+  step table under each tree for the steps that name either; the XLSX
+  workbook has an "Attack steps" sheet with every step. The outline text does
+  not carry them yet (job 122d).
 
 ## Security settings on components and interfaces (job 123, CFG-03 to CFG-05, CFG-08; D26)
 

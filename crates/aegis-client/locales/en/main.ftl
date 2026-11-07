@@ -56,6 +56,9 @@ treatment = Treatment
 goal-or-claim = Goal or claim
 control = Control
 attack-steps = Attack steps
+attack-step = Attack step
+through = Through
+attack-type = Attack type
 
 # Attack trees.
 tree-summary = { $nodes } nodes. Feasibility at the root: { $feasibility }. { $threats_plural }: { $threats }.
