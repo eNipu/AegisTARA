@@ -5296,9 +5296,14 @@ impl Project {
     }
 
     fn lint_damages(&self, findings: &mut Vec<LintFinding>) {
+        let rationale = self.methodology.requires_rationale();
         for (idx, id, damage) in self.damages.iter() {
             if damage.impacts().all(|(_, level)| level.is_none()) {
                 findings.push(LintFinding::new(LintCode::DamageScenarioWithoutImpacts {
+                    damage: id,
+                }));
+            } else if rationale && damage.impact_rationale.trim().is_empty() {
+                findings.push(LintFinding::new(LintCode::ImpactWithoutRationale {
                     damage: id,
                 }));
             }
@@ -5311,7 +5316,16 @@ impl Project {
     }
 
     fn lint_threats(&self, findings: &mut Vec<LintFinding>) {
+        let rationale = self.methodology.requires_rationale();
         for (_idx, id, threat) in self.threats.iter() {
+            if rationale
+                && threat.direct_feasibility.is_some()
+                && threat.feasibility_rationale.trim().is_empty()
+            {
+                findings.push(LintFinding::new(LintCode::FeasibilityWithoutRationale {
+                    threat: id,
+                }));
+            }
             if threat.damages().is_empty() {
                 findings.push(LintFinding::new(LintCode::ThreatWithoutDamages {
                     threat: id,
@@ -6303,6 +6317,14 @@ impl Project {
                 self.live_threat(*threat)?;
                 check_text(reason, MAX_DESCRIPTION_CHARS)?;
             }
+            Op::SetImpactRationale { damage, text, .. } => {
+                self.live_damage(*damage)?;
+                check_text(text, MAX_DESCRIPTION_CHARS)?;
+            }
+            Op::SetFeasibilityRationale { threat, text, .. } => {
+                self.live_threat(*threat)?;
+                check_text(text, MAX_DESCRIPTION_CHARS)?;
+            }
             Op::AddComponent {
                 id,
                 name,
@@ -6757,6 +6779,38 @@ impl Project {
                 reason,
                 provenance,
             } => self.commit_set_threat_scaling(threat, scales, reason, provenance),
+            Op::SetImpactRationale {
+                damage,
+                text,
+                provenance,
+            } => {
+                let idx = self.damage_index(damage)?;
+                let d = self
+                    .damages
+                    .get_mut(idx)
+                    .ok_or(ModelError::UnknownDamageScenario(damage))?;
+                Ok(Op::SetImpactRationale {
+                    damage,
+                    text: std::mem::replace(&mut d.impact_rationale, text),
+                    provenance: std::mem::replace(&mut d.provenance, provenance),
+                })
+            }
+            Op::SetFeasibilityRationale {
+                threat,
+                text,
+                provenance,
+            } => {
+                let idx = self.threat_index(threat)?;
+                let t = self
+                    .threats
+                    .get_mut(idx)
+                    .ok_or(ModelError::UnknownThreatScenario(threat))?;
+                Ok(Op::SetFeasibilityRationale {
+                    threat,
+                    text: std::mem::replace(&mut t.feasibility_rationale, text),
+                    provenance: std::mem::replace(&mut t.provenance, provenance),
+                })
+            }
             Op::AddComponent {
                 id,
                 name,
@@ -7776,6 +7830,13 @@ impl Project {
     fn check_remove_damage(&self, id: DamageId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Damage(id), EntityKind::DamageScenario)?;
         let idx = self.live_damage(id)?;
+        if self
+            .damages
+            .get(idx)
+            .is_some_and(|d| !d.impact_rationale.is_empty())
+        {
+            return Err(ModelError::DamageHasRationale { damage: id });
+        }
         let threats = self.refs.damages.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::DamageScenarioInUse {
@@ -7959,6 +8020,9 @@ impl Project {
         }
         if t.scales.is_some() || !t.scaling_reason.is_empty() {
             return Err(ModelError::ThreatHasScaling { threat: id });
+        }
+        if !t.feasibility_rationale.is_empty() {
+            return Err(ModelError::ThreatHasRationale { threat: id });
         }
         Ok(())
     }
@@ -8961,6 +9025,7 @@ impl Project {
         let d = DamageScenario {
             name,
             impacts: slots.into_boxed_slice(),
+            impact_rationale: Arc::from(""),
             provenance,
         };
         self.damages
@@ -9078,6 +9143,7 @@ impl Project {
             claim: None,
             scales: None,
             scaling_reason: Arc::from(""),
+            feasibility_rationale: Arc::from(""),
             provenance,
         };
         let violates = self.methodology.violates(category);
@@ -11472,6 +11538,7 @@ impl ProjectEvalCache {
     /// # Ok(())
     /// # }
     /// ```
+    #[allow(clippy::too_many_lines)] // one arm per op kind
     pub fn update(&mut self, project: &Project, op: &Op) {
         if !self.arenas_compatible(project, op) {
             self.rebuild(project);
@@ -11496,6 +11563,8 @@ impl ProjectEvalCache {
             | Op::SetThreatGoal { .. }
             | Op::SetThreatClaim { .. }
             | Op::SetThreatScaling { .. }
+            | Op::SetImpactRationale { .. }
+            | Op::SetFeasibilityRationale { .. }
             | Op::AddSecurityControl { .. }
             | Op::RenameSecurityControl { .. }
             | Op::RemoveSecurityControl { .. }

@@ -59,6 +59,11 @@ attack-steps = Attack steps
 attack-step = Attack step
 through = Through
 attack-type = Attack type
+rationale = Rationale
+feasibility-rationale = Feasibility rationale
+scales = Scales
+scaling-reason = Scaling reason
+no = no
 
 # Attack trees.
 tree-summary = { $nodes } nodes. Feasibility at the root: { $feasibility }. { $threats_plural }: { $threats }.

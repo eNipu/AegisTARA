@@ -84,6 +84,9 @@ pub struct ThreatScenario {
     pub(crate) scales: Option<bool>,
     /// Why it scales or not; empty when not given.
     pub(crate) scaling_reason: Arc<str>,
+    /// Why the direct feasibility is rated as it is (FND-09); empty when
+    /// not given.
+    pub(crate) feasibility_rationale: Arc<str>,
     pub(crate) provenance: Provenance,
 }
 
@@ -429,6 +432,14 @@ impl ThreatScenario {
     #[must_use]
     pub fn scaling_reason(&self) -> &str {
         &self.scaling_reason
+    }
+
+    /// Why the feasibility is rated as it is (FND-09), set with
+    /// [`Op::SetFeasibilityRationale`](crate::Op::SetFeasibilityRationale);
+    /// empty when not given. Time O(1).
+    #[must_use]
+    pub fn feasibility_rationale(&self) -> &str {
+        &self.feasibility_rationale
     }
 
     /// Returns the provenance of the last creation or modification of this

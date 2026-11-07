@@ -477,7 +477,7 @@ fn check_diff_pair(
 fn coverage(m: &std::sync::Arc<aegis_model::Methodology>) -> Stats {
     let config = Config {
         failure_persistence: None,
-        ..Config::with_cases(256)
+        ..Config::with_cases(512)
     };
     let mut runner = TestRunner::new_with_rng(
         config,
@@ -507,10 +507,12 @@ fn ops_generator_covers_every_op_and_most_errors() {
     for m in [builtin(), second()] {
         let stats = coverage(&m);
         let share = stats.ok as f64 / (stats.ok + stats.failed) as f64;
-        assert!((0.25..0.9).contains(&share), "valid share {share}");
+        // Ops on threat scenarios fail while none exist, and more of them
+        // came with jobs 138 and 147; a fifth valid is still a real mix.
+        assert!((0.2..0.9).contains(&share), "valid share {share}");
         // The second pack declares no interface kinds or attack types, so it
         // has no interface to add or remove and no control rule to set.
-        let kinds = if m.interface_kind_count() > 0 { 47 } else { 44 };
+        let kinds = if m.interface_kind_count() > 0 { 49 } else { 46 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",

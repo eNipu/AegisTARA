@@ -1552,3 +1552,12 @@ msgstr "正規表現が正しくありません。"
 
 msgid "The expression is too large."
 msgstr "正規表現が大きすぎます。"
+
+msgid "Why this impact"
+msgstr "この影響度の根拠"
+
+msgid "Why this feasibility"
+msgstr "この実現可能性の根拠"
+
+msgid "The reason for the rating, for a reviewer. {0} or leaving the box saves."
+msgstr "レビュー担当者向けの評価の根拠。{0} またはボックスを離れると保存されます。"

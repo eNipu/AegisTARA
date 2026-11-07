@@ -205,6 +205,8 @@ struct DamageView<'a> {
     visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     impacts: ImpactsByKey<'a>,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    impact_rationale: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -233,6 +235,8 @@ struct ThreatView<'a> {
     scales: Option<bool>,
     #[serde(skip_serializing_if = "str::is_empty")]
     scaling_reason: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    feasibility_rationale: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -399,6 +403,7 @@ impl Serialize for Damages<'_> {
                         order,
                         damage: d,
                     },
+                    impact_rationale: d.impact_rationale(),
                     provenance: ProvenanceView::of(d.provenance()),
                 }),
         )
@@ -443,6 +448,7 @@ impl Serialize for Threats<'_> {
                     .map(|idx| Required(p.cybersecurity_claim_id(idx).map(Text))),
                 scales: t.scales(),
                 scaling_reason: t.scaling_reason(),
+                feasibility_rationale: t.feasibility_rationale(),
                 provenance: ProvenanceView::of(t.provenance()),
             }
         }))
@@ -951,12 +957,20 @@ impl Project {
         for (pos, d) in snapshot.damage_scenarios.into_iter().enumerate() {
             let vis = claim_visual(d.visual_id, pos, &mut used, &mut next_vis)?;
             let id = d.id.0;
+            let provenance = wire::unwrap_provenance(d.provenance);
             project.apply(Op::AddDamageScenario {
                 id,
                 name: d.name.0,
                 impacts: d.impacts.0,
-                provenance: wire::unwrap_provenance(d.provenance),
+                provenance: provenance.clone(),
             })?;
+            if let Some(text) = d.impact_rationale {
+                project.apply(Op::SetImpactRationale {
+                    damage: id,
+                    text: text.0,
+                    provenance,
+                })?;
+            }
             project.set_damage_loaded_visual(&id, vis, next_vis);
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
@@ -1143,6 +1157,7 @@ fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(
     let claim = t.claim.map(|w| w.0);
     let scales = t.scales;
     let scaling_reason = t.scaling_reason.map(|w| w.0);
+    let feasibility_rationale = t.feasibility_rationale.map(|w| w.0);
     project.apply(Op::AddThreatScenario {
         id,
         name: t.name.0,
@@ -1192,6 +1207,13 @@ fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(
             threat: id,
             scales,
             reason: scaling_reason.unwrap_or_else(|| Arc::from("")),
+            provenance: provenance.clone(),
+        })?;
+    }
+    if let Some(text) = feasibility_rationale {
+        project.apply(Op::SetFeasibilityRationale {
+            threat: id,
+            text,
             provenance,
         })?;
     }
