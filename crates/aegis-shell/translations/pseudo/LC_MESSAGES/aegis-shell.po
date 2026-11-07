@@ -1489,3 +1489,12 @@ msgstr "⟦Zóóm ín␣␣␣␣⟧"
 
 msgid "Zoom size, {}"
 msgstr "⟦Zóóm síze, {}␣␣␣␣␣⟧"
+
+msgid "Assets and threats"
+msgstr "⟦Ásséts ánd thréáts␣␣⟧"
+
+msgid "Risk and treatment"
+msgstr "⟦Rísk ánd tréátmént␣␣⟧"
+
+msgid "Outputs"
+msgstr "⟦Óútpúts␣␣⟧"

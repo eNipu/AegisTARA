@@ -28,7 +28,7 @@ use aegis_client::session::Session;
 use aegis_client::state::{
     ConnectionView, Mode, NoticeAction, NumbersCheck, ProjectView, Severity, SyncView, ViewModel,
 };
-use aegis_client::view::{AdminAction, DraftKind, Page, RiskView, Selection};
+use aegis_client::view::{AdminAction, DraftKind, Page, PageGroup, RiskView, Selection};
 use aegis_model::library::LibraryPack;
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ItemRef,
@@ -209,6 +209,9 @@ pub struct Hooks {
     /// height in logical pixels (`0` for a right panel that follows the
     /// window).
     pub panels_resized: Option<PanelSizes>,
+    /// The sidebar groups the user closed, by key, after one opens or
+    /// closes (UI-13), to remember them in the settings.
+    pub nav_groups_changed: Option<Box<dyn Fn(Vec<String>)>>,
 }
 
 /// Owns the window-side state and the session handle.
@@ -284,6 +287,45 @@ fn pos(i: i32) -> Option<usize> {
 /// A dropdown position where 0 means "none" and the rest are the list.
 fn after_none(i: i32) -> Option<usize> {
     pos(i).and_then(|i| i.checked_sub(1))
+}
+
+/// The keys of the sidebar groups that `open` marks closed, in group order.
+fn closed_group_keys(open: &[bool]) -> Vec<String> {
+    PageGroup::ALL
+        .iter()
+        .zip(open)
+        .filter(|(_, o)| !**o)
+        .map(|(g, _)| g.key().to_owned())
+        .collect()
+}
+
+/// The open flags of the sidebar groups for the closed keys of the settings.
+#[must_use]
+pub fn open_groups(closed: &[String]) -> Vec<bool> {
+    PageGroup::ALL
+        .iter()
+        .map(|g| !closed.iter().any(|k| k == g.key()))
+        .collect()
+}
+
+/// Per sidebar group, the sum of its pages' counts (`counts` is per page,
+/// in `Page::ALL` order); only the phases of the analysis have one.
+fn group_counts(counts: &[Option<usize>]) -> Vec<Option<usize>> {
+    PageGroup::ALL
+        .iter()
+        .map(|g| {
+            g.is_phase()
+                .then(|| {
+                    Page::ALL
+                        .iter()
+                        .zip(counts)
+                        .filter(|(p, _)| p.group() == Some(*g))
+                        .filter_map(|(_, c)| *c)
+                        .reduce(|a, b| a + b)
+                })
+                .flatten()
+        })
+        .collect()
 }
 
 /// Position `i` of the bulk impact list, which holds per category "not
@@ -531,6 +573,23 @@ impl Controller {
             range,
         );
         self.push_marks();
+    }
+
+    /// Opens or closes sidebar group `g` (UI-13) and reports the closed ones.
+    fn toggle_nav_group(&self, g: i32) {
+        let (Some(w), Some(g)) = (self.window.upgrade(), pos(g)) else {
+            return;
+        };
+        let mut open: Vec<bool> = slint::Model::iter(&w.get_nav_group_open()).collect();
+        let Some(flag) = open.get_mut(g) else {
+            return;
+        };
+        *flag = !*flag;
+        let closed = closed_group_keys(&open);
+        w.set_nav_group_open(model(open));
+        if let Some(hook) = &self.hooks.nav_groups_changed {
+            hook(closed);
+        }
     }
 
     /// Select all (Control or Command with A) in a bulk-edit table picks
@@ -928,6 +987,7 @@ impl Controller {
                 hook(i);
             }
         });
+        on!(on_toggle_nav_group, |c, g| c.toggle_nav_group(g));
         on!(on_panels_resized, |c| {
             if let (Some(hook), Some(w)) = (&c.hooks.panels_resized, c.window.upgrade()) {
                 hook(w.get_left_size(), w.get_right_size(), w.get_bottom_size());
@@ -3182,6 +3242,12 @@ impl Controller {
                     .map(|c| c.map_or_else(SharedString::new, |n| s(&n.to_string())))
                     .collect(),
             ));
+            w.set_nav_group_counts(model(
+                group_counts(&project.nav_counts)
+                    .into_iter()
+                    .map(|c| c.map_or_else(SharedString::new, |n| s(&n.to_string())))
+                    .collect(),
+            ));
         }
         if prev_proj.is_none_or(|old| !Arc::ptr_eq(&old.vocab, &project.vocab)) {
             self.apply_vocabulary(&w, project);
@@ -4499,5 +4565,28 @@ mod tests {
         assert_eq!(at(5), Some((1, None)));
         assert_eq!(at(7), Some((1, Some(1))));
         assert_eq!(at(8), None);
+    }
+
+    /// Closed groups round-trip through their settings keys, and a closed
+    /// phase shows the sum of its pages' counts.
+    #[test]
+    fn nav_groups_round_trip_and_sum_their_pages() {
+        use super::{closed_group_keys, group_counts, open_groups};
+        use aegis_client::view::{Page, PageGroup};
+        let mut open = vec![true; PageGroup::ALL.len()];
+        open[PageGroup::AssetsThreats.index()] = false;
+        let keys = closed_group_keys(&open);
+        assert_eq!(keys, ["assets-threats"]);
+        assert_eq!(open_groups(&keys), open);
+        assert_eq!(open_groups(&["unknown".to_owned()]), vec![true; 7]);
+
+        let mut counts = vec![None; Page::ALL.len()];
+        counts[Page::Assets.index()] = Some(2);
+        counts[Page::Threats.index()] = Some(3);
+        counts[Page::Problems.index()] = Some(9);
+        let sums = group_counts(&counts);
+        assert_eq!(sums[PageGroup::AssetsThreats.index()], Some(5));
+        assert_eq!(sums[PageGroup::Impact.index()], None);
+        assert_eq!(sums[PageGroup::Project.index()], None, "not a phase");
     }
 }

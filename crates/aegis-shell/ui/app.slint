@@ -20,19 +20,27 @@ export { Marks, ProjectLanguages, DrawItem, DescriptionItem, ProjectItem, Threat
 // Page numbers, in the order of aegis_client::view::Page::ALL.
 global Pages {
     out property <int> overview: 0;
-    out property <int> assets: 1;
+    out property <int> item: 1;
     out property <int> damage: 2;
-    out property <int> threats: 3;
-    out property <int> trees: 4;
-    out property <int> risks: 5;
-    out property <int> controls: 6;
-    out property <int> goals: 7;
-    out property <int> problems: 8;
-    out property <int> versions: 9;
-    out property <int> history: 10;
-    out property <int> reports: 11;
-    out property <int> admin: 12;
-    out property <int> item: 13;
+    out property <int> assets: 3;
+    out property <int> threats: 4;
+    out property <int> trees: 5;
+    out property <int> risks: 6;
+    out property <int> controls: 7;
+    out property <int> goals: 8;
+    out property <int> reports: 9;
+    out property <int> problems: 10;
+    out property <int> versions: 11;
+    out property <int> history: 12;
+    out property <int> admin: 13;
+}
+
+// One sidebar entry: its page is its position; `group` is its position in
+// aegis_client::view::PageGroup::ALL, or -1 for the overview (UI-13).
+struct NavEntry {
+    label: string,
+    icon: image,
+    group: int,
 }
 
 // A row with a label above a field.
@@ -482,6 +490,31 @@ in property <string> redo-label;
     default-font-size: Theme.font-body;
     // One entry per page: a count shown in the sidebar, or empty.
     in property <[string]> nav-counts;
+    // Sidebar groups (UI-13): open or closed, and the number of elements on
+    // a phase group's pages, shown while it is closed.
+    in property <[bool]> nav-group-open: [true, true, true, true, true, true, true];
+    in property <[string]> nav-group-counts;
+    property <[string]> nav-group-labels: [
+        @tr("Item definition"), @tr("Impact"), @tr("Assets and threats"), @tr("Attack feasibility"),
+        @tr("Risk and treatment"), @tr("Outputs"), @tr("Project"),
+    ];
+    // In the order of aegis_client::view::Page::ALL.
+    property <[NavEntry]> nav-entries: [
+        { label: @tr("Overview"), icon: @image-url("icons/layout-dashboard.svg"), group: -1 },
+        { label: @tr("Item definition"), icon: @image-url("icons/network.svg"), group: 0 },
+        { label: root.damage-plural, icon: @image-url("icons/triangle-alert.svg"), group: 1 },
+        { label: @tr("Assets"), icon: @image-url("icons/box.svg"), group: 2 },
+        { label: @tr("Threat scenarios"), icon: @image-url("icons/swords.svg"), group: 2 },
+        { label: @tr("Attack trees"), icon: @image-url("icons/network.svg"), group: 3 },
+        { label: @tr("Risks and treatment"), icon: @image-url("icons/gauge.svg"), group: 4 },
+        { label: @tr("Security controls"), icon: @image-url("icons/shield-check.svg"), group: 4 },
+        { label: @tr("Goals and claims"), icon: @image-url("icons/target.svg"), group: 4 },
+        { label: @tr("Reports"), icon: @image-url("icons/file-chart-column.svg"), group: 5 },
+        { label: @tr("Problems"), icon: @image-url("icons/circle-alert.svg"), group: 6 },
+        { label: @tr("Versions"), icon: @image-url("icons/git-compare.svg"), group: 6 },
+        { label: @tr("History"), icon: @image-url("icons/history.svg"), group: 6 },
+        { label: @tr("Administration"), icon: @image-url("icons/user-cog.svg"), group: 6 },
+    ];
 
     // ---- vocabulary ----
     in property <[string]> property-labels;
@@ -923,6 +956,7 @@ in property <string> redo-label;
     callback rename-trust-boundary(string);
     callback toggle-trust-boundary-member(int, bool);
     callback remove-trust-boundary();
+    callback toggle-nav-group(int);
     callback mark-click(string, int, bool);
     callback mark-all(string);
     callback bulk-pick(string, int, int);
@@ -1741,23 +1775,49 @@ in property <string> redo-label;
                     VerticalLayout {
                         padding-top: 8px;
                         padding-bottom: 8px;
-                        for item[i] in [
-                            { label: @tr("Overview"), icon: @image-url("icons/layout-dashboard.svg") },
-                            { label: @tr("Assets"), icon: @image-url("icons/box.svg") },
-                            { label: root.damage-plural, icon: @image-url("icons/triangle-alert.svg") },
-                            { label: @tr("Threat scenarios"), icon: @image-url("icons/swords.svg") },
-                            { label: @tr("Attack trees"), icon: @image-url("icons/network.svg") },
-                            { label: @tr("Risks and treatment"), icon: @image-url("icons/gauge.svg") },
-                            { label: @tr("Security controls"), icon: @image-url("icons/shield-check.svg") },
-                            { label: @tr("Goals and claims"), icon: @image-url("icons/target.svg") },
-                            { label: @tr("Problems"), icon: @image-url("icons/circle-alert.svg") },
-                            { label: @tr("Versions"), icon: @image-url("icons/git-compare.svg") },
-                            { label: @tr("History"), icon: @image-url("icons/history.svg") },
-                            { label: @tr("Reports"), icon: @image-url("icons/file-chart-column.svg") },
-                            { label: @tr("Administration"), icon: @image-url("icons/user-cog.svg") },
-                            { label: @tr("Item definition"), icon: @image-url("icons/network.svg") },
-                        ]: Rectangle {
-                            visible: i != Pages.admin || root.is-admin;
+                        for item[i] in root.nav-entries: VerticalLayout {
+                            // A group header above the first page of each group.
+                            if item.group >= 0 && (i == 0 || root.nav-entries[i - 1].group != item.group): group-header := Rectangle {
+                                property <bool> open: root.nav-group-open[item.group];
+                                height: 30px;
+                                accessible-role: button;
+                                accessible-label: root.nav-group-labels[item.group];
+                                accessible-expandable: true;
+                                accessible-expanded: self.open;
+                                accessible-action-default => { root.toggle-nav-group(item.group); }
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 10px;
+                                    padding-top: 8px;
+                                    spacing: 6px;
+                                    Image {
+                                        source: @image-url("icons/chevron-down.svg");
+                                        width: 12px;
+                                        height: 12px;
+                                        y: 4px;
+                                        colorize: Theme.graphite;
+                                        transform-rotation: group-header.open ? 0deg : -90deg;
+                                    }
+                                    Text {
+                                        text: root.nav-group-labels[item.group];
+                                        color: Theme.graphite;
+                                        font-size: Theme.font-label;
+                                        font-weight: Theme.weight-semibold;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                    }
+                                    if !group-header.open: Text {
+                                        text: root.nav-group-counts[item.group];
+                                        color: Theme.graphite;
+                                        font-size: Theme.font-label;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea { clicked => { root.toggle-nav-group(item.group); } }
+                            }
+                            Rectangle {
+                            visible: (i != Pages.admin || root.is-admin) && (item.group < 0 || root.nav-group-open[item.group]);
                             height: self.visible ? 36px : 0px;
                             background: root.page == i ? Theme.accent-wash : (nav-area.has-hover ? Theme.wash : transparent);
                             accessible-role: button;
@@ -1787,6 +1847,7 @@ in property <string> redo-label;
                                 }
                             }
                             nav-area := TouchArea { clicked => { root.show-page(i); } }
+                            }
                         }
                     }
                 }

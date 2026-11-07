@@ -101,24 +101,107 @@ pub enum Page {
     Item,
 }
 
+/// The group of pages a page sits in on the sidebar: the phases of
+/// ISO/SAE 21434 clause 15 in order, then outputs and the project (UI-13,
+/// D30). The overview has no group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PageGroup {
+    /// 1. Item definition.
+    ItemDefinition,
+    /// 2. Impact rating of damage scenarios.
+    Impact,
+    /// 3. Assets and threat scenarios.
+    AssetsThreats,
+    /// 4. Attack feasibility.
+    Feasibility,
+    /// 5. Risk determination and treatment.
+    Risk,
+    /// What the analysis produces.
+    Outputs,
+    /// Findings, versions, history and administration.
+    Project,
+}
+
+impl PageGroup {
+    /// Every group, in sidebar order.
+    pub const ALL: [PageGroup; 7] = [
+        PageGroup::ItemDefinition,
+        PageGroup::Impact,
+        PageGroup::AssetsThreats,
+        PageGroup::Feasibility,
+        PageGroup::Risk,
+        PageGroup::Outputs,
+        PageGroup::Project,
+    ];
+
+    /// Position in [`PageGroup::ALL`].
+    #[must_use]
+    pub fn index(self) -> usize {
+        PageGroup::ALL.iter().position(|g| *g == self).unwrap_or(0)
+    }
+
+    /// A stable name, for the settings file.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            PageGroup::ItemDefinition => "item-definition",
+            PageGroup::Impact => "impact",
+            PageGroup::AssetsThreats => "assets-threats",
+            PageGroup::Feasibility => "feasibility",
+            PageGroup::Risk => "risk",
+            PageGroup::Outputs => "outputs",
+            PageGroup::Project => "project",
+        }
+    }
+
+    /// The group with this key, if any.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<PageGroup> {
+        PageGroup::ALL.into_iter().find(|g| g.key() == key)
+    }
+
+    /// Whether it is a phase of the analysis, whose collapsed header shows
+    /// the number of elements on its pages.
+    #[must_use]
+    pub fn is_phase(self) -> bool {
+        !matches!(self, PageGroup::Outputs | PageGroup::Project)
+    }
+}
+
 impl Page {
-    /// Every page, in menu and sidebar order.
+    /// Every page, in menu and sidebar order: the analysis in the order of
+    /// its phases, item definition first (UI-13).
     pub const ALL: [Page; 14] = [
         Page::Overview,
-        Page::Assets,
+        Page::Item,
         Page::Damage,
+        Page::Assets,
         Page::Threats,
         Page::Trees,
         Page::Risks,
         Page::Controls,
         Page::Goals,
+        Page::Reports,
         Page::Problems,
         Page::Versions,
         Page::History,
-        Page::Reports,
         Page::Admin,
-        Page::Item,
     ];
+
+    /// The sidebar group, or `None` for the overview.
+    #[must_use]
+    pub fn group(self) -> Option<PageGroup> {
+        Some(match self {
+            Page::Overview => return None,
+            Page::Item => PageGroup::ItemDefinition,
+            Page::Damage => PageGroup::Impact,
+            Page::Assets | Page::Threats => PageGroup::AssetsThreats,
+            Page::Trees => PageGroup::Feasibility,
+            Page::Risks | Page::Controls | Page::Goals => PageGroup::Risk,
+            Page::Reports => PageGroup::Outputs,
+            Page::Problems | Page::Versions | Page::History | Page::Admin => PageGroup::Project,
+        })
+    }
 
     /// Position in [`Page::ALL`].
     #[must_use]
