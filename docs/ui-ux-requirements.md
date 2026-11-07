@@ -145,6 +145,8 @@ before and after.
 | UI-04.3 | With two or more rows picked, a bar under the table shows "N selected", **Remove selected** (not in the risk table) and **Clear selection**; Delete removes the picked rows. The risk table's bar has a treatment drop-down that sets every picked threat. | M |
 | UI-04.4 | A bulk change is one `Edit::Batch`: one undo step and one redo, named "remove 3 assets", with the undo toast "3 assets removed · Undo". No dialog. One refused item refuses the batch and changes nothing. | M |
 | UI-04.5 | A user who may not edit gets no bar, ctrl and shift clicks pick nothing, and a stale callback changes nothing. | M |
+| UI-04.6 | **⌘/Ctrl+A** in a bulk table picks every row; **shift+↑/↓** extends the picks from the selected row, which stays selected; a plain arrow or Escape goes back to one row. Read-only users pick nothing (job 084b). | S |
+| UI-04.7 | The bar sets a field on every picked row: add or remove an asset property, an impact rating ("Safety: Severe"), a threat's goal or claim ("None" first). The drop-downs are commands, shown with their label and reset after a pick, on a row of their own so a 900 px window shows every control. An element that already has the value is left out, so "change properties of 2 assets" counts only real changes, and a batch left with one change is named as that change (job 084b). | S |
 
 Not built: select-all, shift+arrow to extend, and bulk edit of other fields
 (asset properties, damage impacts); see the backlog.

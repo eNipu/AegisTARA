@@ -232,6 +232,10 @@ async fn a_read_only_user_gets_no_bulk_actions() {
     click(&app, 2, false, true);
     click(&app, 1, true, false);
     assert_eq!(picked(&app), [false; 3], "clicks pick nothing");
+    common::press_chord(&app, 'a', false);
+    press_shift(&app, Key::DownArrow);
+    app.window.invoke_mark_all("asset".into());
+    assert_eq!(picked(&app), [false; 3], "keys pick nothing");
     // A stale callback picks nothing and removes nothing either.
     app.window.invoke_mark_click("asset".into(), 1, true);
     app.window.invoke_mark_click("asset".into(), 2, false);
@@ -243,4 +247,180 @@ async fn a_read_only_user_gets_no_bulk_actions() {
     let vm = app.until("still", |_| true).await;
     assert_eq!(picked(&app), [false; 3]);
     assert_eq!(p(&vm).data.assets.len(), 3);
+}
+
+/// A key pressed with Shift held.
+fn press_shift(app: &App, key: Key) {
+    use slint::platform::WindowEvent;
+    let w = app.window.window();
+    let shift: slint::SharedString = Key::Shift.into();
+    let k: slint::SharedString = key.into();
+    w.dispatch_event(WindowEvent::KeyPressed {
+        text: shift.clone(),
+    });
+    w.dispatch_event(WindowEvent::KeyPressed { text: k.clone() });
+    w.dispatch_event(WindowEvent::KeyReleased { text: k });
+    w.dispatch_event(WindowEvent::KeyReleased { text: shift });
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn select_all_and_shift_arrows_pick_rows() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    assets_page(&app, &["A", "B", "C", "D"]).await;
+
+    click(&app, 1, false, false);
+    selected_is(&app, "B").await;
+    // ⌘/Ctrl+A picks every row; Escape goes back to one.
+    common::press_chord(&app, 'a', false);
+    assert_eq!(picked(&app), [true; 4]);
+    save(&app.frame(), "bulk-edit-select-all");
+    common::press_key(&app, Key::Escape, false);
+    assert_eq!(picked(&app), [false; 4]);
+
+    // Shift+arrow extends the picks from the selected row, and back.
+    press_shift(&app, Key::DownArrow);
+    assert_eq!(picked(&app), [false, true, true, false]);
+    press_shift(&app, Key::DownArrow);
+    assert_eq!(picked(&app), [false, true, true, true]);
+    press_shift(&app, Key::UpArrow);
+    assert_eq!(picked(&app), [false, true, true, false]);
+    // The selected row stays where the range started.
+    selected_is(&app, "B").await;
+    // A plain arrow goes back to one row.
+    common::press_key(&app, Key::DownArrow, false);
+    assert_eq!(picked(&app), [false; 4]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_bulk_property_change_is_one_undo_step_with_a_toast() {
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    assets_page(&app, &["A", "B", "C"]).await;
+    let first_property = |vm: &ViewModel| -> Vec<bool> {
+        p(vm).data.assets.iter().map(|a| a.properties[0]).collect()
+    };
+
+    click(&app, 0, false, false);
+    selected_is(&app, "A").await;
+    common::press_chord(&app, 'a', false);
+    assert_eq!(picked(&app), [true; 3]);
+    save(&app.frame(), "bulk-edit-property-bar");
+    // "Remove property" (the second drop-down), first property.
+    app.window.invoke_bulk_pick("asset".into(), 2, 0);
+    app.until("removed", |vm| {
+        first_property(vm) == [false; 3] && vm.notices.iter().any(|n| n.action.is_some())
+    })
+    .await;
+    let notices: Vec<_> = app.window.get_notices().iter().collect();
+    assert_eq!(notices[0].text, "3 assets changed");
+    assert_eq!(app.window.get_undo_label(), "change properties of 3 assets");
+
+    // Adding it back to every asset when one has it already changes two.
+    app.window.invoke_undo();
+    app.until("undone", |vm| first_property(vm) == [true; 3])
+        .await;
+    let vm = app.until("ids", |_| true).await;
+    let ids: Vec<_> = p(&vm).data.assets.iter().map(|a| a.id).collect();
+    for asset in &ids[1..] {
+        app.send(Command::Edit(Edit::SetAssetProperty {
+            asset: *asset,
+            property: 0,
+            on: false,
+        }));
+    }
+    app.until("B and C lost it", |vm| {
+        first_property(vm) == [true, false, false]
+    })
+    .await;
+    common::press_chord(&app, 'a', false);
+    app.window.invoke_bulk_pick("asset".into(), 1, 0);
+    app.until("added", |vm| first_property(vm) == [true; 3])
+        .await;
+    assert_eq!(app.window.get_undo_label(), "change properties of 2 assets");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bulk_impact_and_goal_are_one_undo_step_each() {
+    use aegis_model::{AssetId, DamageId, GoalId, ThreatId};
+    let server = TestServer::start().await;
+    let app = editing_app(&server).await;
+    let asset = AssetId::new_v7();
+    app.send(Command::Edit(Edit::AddAsset {
+        id: asset,
+        name: "Bus".into(),
+        properties: (0..6).collect(),
+    }));
+    for name in ["D1", "D2"] {
+        app.send(Command::Edit(Edit::AddDamage {
+            id: DamageId::new_v7(),
+            name: name.into(),
+        }));
+    }
+    for name in ["T1", "T2"] {
+        app.send(Command::Edit(Edit::AddThreat {
+            id: ThreatId::new_v7(),
+            name: name.into(),
+            asset,
+            category: 0,
+        }));
+    }
+    app.send(Command::Edit(Edit::AddGoal {
+        id: GoalId::new_v7(),
+        name: "G".into(),
+    }));
+    app.window.invoke_show_page(Page::Damage.index() as i32);
+    app.until("damage page", |vm| {
+        p(vm).page == Page::Damage && p(vm).data.damages.len() == 2
+    })
+    .await;
+
+    // The first level of the first category, after its "not rated".
+    app.window.invoke_mark_all("damage".into());
+    assert_eq!(app.window.get_damage_marks().count, 2);
+    app.window.invoke_bulk_pick("damage".into(), 1, 1);
+    app.until("rated", |vm| {
+        p(vm).data.damages.iter().all(|d| d.impacts[0] == Some(0))
+    })
+    .await;
+    assert_eq!(app.window.get_undo_label(), "rate 2 damage scenarios");
+    app.window.invoke_undo();
+    app.until("unrated", |vm| {
+        p(vm).data.damages.iter().all(|d| d.impacts[0].is_none())
+    })
+    .await;
+
+    // On the threats page the goal list starts with "None".
+    app.window.invoke_show_page(Page::Threats.index() as i32);
+    app.until("threats page", |vm| {
+        p(vm).page == Page::Threats && p(vm).threats.len() == 2 && p(vm).data.goals.len() == 1
+    })
+    .await;
+    app.frame();
+    app.window.invoke_mark_all("threat".into());
+    assert_eq!(app.window.get_threat_marks().count, 2);
+    app.frame();
+    save(&app.frame(), "bulk-edit-goal-bar");
+    app.window
+        .window()
+        .set_size(slint::PhysicalSize::new(900, 600));
+    app.frame();
+    save(&app.frame(), "bulk-edit-goal-bar-900x600");
+    let options: Vec<_> = app.window.get_bulk_goal_options().iter().collect();
+    assert_eq!(options.len(), 2, "{options:?}");
+    assert_eq!(options[0], "None");
+    app.window.invoke_bulk_pick("threat".into(), 1, 1);
+    app.until("goal set", |vm| {
+        p(vm).data.goals.first().is_some_and(|g| g.threats == 2)
+    })
+    .await;
+    assert_eq!(
+        app.window.get_undo_label(),
+        "set goal of 2 threat scenarios"
+    );
+    app.window.invoke_undo();
+    app.until("goal unset", |vm| {
+        p(vm).data.goals.first().is_some_and(|g| g.threats == 0)
+    })
+    .await;
 }
