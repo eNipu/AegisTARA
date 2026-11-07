@@ -28,6 +28,9 @@ tokio-stream.workspace = true
 tonic.workspace = true
 tonic-web.workspace = true
 tower = { workspace = true, features = ["timeout", "util"] }
+# Find in page (UI-16): linear-time regular expressions, MIT or Apache-2.0 (D5).
+regex = "1"
+
 tracing.workspace = true
 fluent-bundle.workspace = true
 unic-langid.workspace = true

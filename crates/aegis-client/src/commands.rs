@@ -2400,6 +2400,14 @@ pub enum Command {
     SetDraftInterfaceKind(usize),
     /// Show a page of the open project.
     ShowPage(crate::view::Page),
+    /// Filter the table rows of the page on screen (UI-16); an empty text
+    /// clears the filter. Showing another page clears it too.
+    SetFind {
+        /// The text as typed.
+        text: String,
+        /// The text is a regular expression.
+        regex: bool,
+    },
     /// Select an entity (and show the page it belongs to when `navigate`).
     Select {
         /// What to select.

@@ -318,6 +318,8 @@ struct Open {
     /// Cached problem counts (blocking, warnings) for the sidebar badge and
     /// the status bar, invalidated on workspace edits/undo/redo.
     cached_lint_count: Option<(usize, usize)>,
+    /// The find filter of the page on screen (UI-16).
+    find: Option<crate::find::Find>,
     /// When the last edit reached the server (job 130), and whether edits
     /// were waiting at the last view, to notice the moment they are all in.
     saved_ms: Option<u64>,
@@ -1539,6 +1541,7 @@ impl<P: CredentialProvider> Actor<P> {
                     risks_again: false,
                     cached_scene: None,
                     cached_lint_count: None,
+                    find: None,
                     saved_ms: None,
                     had_pending: false,
                     figures: Vec::new(),
@@ -2163,6 +2166,11 @@ impl<P: CredentialProvider> Actor<P> {
             Command::RejectSuggestion(index) => self.reject_suggestion(index),
             Command::RejectAllSuggestions => self.reject_all_suggestions(),
             Command::ShowPage(page) => self.show_page(page),
+            Command::SetFind { text, regex } => {
+                if let Some(open) = self.open.as_mut() {
+                    open.find = crate::find::Find::new(&text, regex);
+                }
+            }
             Command::Select {
                 selection,
                 navigate,
@@ -2930,6 +2938,7 @@ impl<P: CredentialProvider> Actor<P> {
         };
         if open.ui.page != page {
             open.ui.draft = None;
+            open.find = None;
         }
         open.ui.page = page;
         match page {
@@ -3111,6 +3120,19 @@ impl<P: CredentialProvider> Actor<P> {
             } else {
                 NumbersCheck::Checking
             };
+            let threat_counts = match (&open.find, open.ui.page) {
+                (Some(f), Page::Threats) => {
+                    let p = open.ws.project();
+                    Some(keep(&mut threats, |t| {
+                        f.hit(&[
+                            &t.visual_id,
+                            &t.name,
+                            described(p, aegis_model::ElementRef::Threat(t.id)),
+                        ])
+                    }))
+                }
+                _ => None,
+            };
             let selected_threat = open
                 .ui
                 .selected_threat
@@ -3136,7 +3158,18 @@ impl<P: CredentialProvider> Actor<P> {
                 let sid = ghosts.iter().find(|g| g.node_id == nid)?.suggestion_id;
                 suggestions.iter().position(|r| r.id == sid)
             });
-            let data = page_data(open);
+            let mut data = page_data(open);
+            let find = open.find.as_ref().map(|f| {
+                let (shown, total) = threat_counts
+                    .unwrap_or_else(|| find_rows(f, open.ws.project(), open.ui.page, &mut data));
+                crate::state::FindView {
+                    text: f.text().to_owned(),
+                    regex: f.is_regex(),
+                    error: f.error(),
+                    shown,
+                    total,
+                }
+            });
             let comparison = (open.ui.page == Page::Versions)
                 .then(|| {
                     open.compare.as_ref().and_then(|(name, base)| {
@@ -3155,6 +3188,7 @@ impl<P: CredentialProvider> Actor<P> {
                 nav_counts: nav_counts(open),
                 problem_counts: open.cached_lint_count.unwrap_or_default(),
                 saved_ms: open.saved_ms,
+                find,
                 suggestions,
                 selected_suggestion,
                 figures: open.figures.clone(),
@@ -3315,6 +3349,63 @@ fn page_data(open: &Open) -> PageData {
         Page::Versions | Page::History | Page::Reports | Page::Admin => {}
     }
     d
+}
+
+/// Keeps the rows `hit` accepts; returns (kept, before). Time O(rows).
+fn keep<T>(rows: &mut Vec<T>, hit: impl Fn(&T) -> bool) -> (usize, usize) {
+    let total = rows.len();
+    rows.retain(hit);
+    (rows.len(), total)
+}
+
+fn described(p: &Project, e: aegis_model::ElementRef) -> &str {
+    p.description(e).unwrap_or("")
+}
+
+/// Filters the table rows of `page` by visual ID, name and description
+/// (UI-16); lists that only feed choices are left alone. The Threats page
+/// is filtered by the caller. Returns (shown, total). Time O(rows + text).
+fn find_rows(f: &crate::find::Find, p: &Project, page: Page, d: &mut PageData) -> (usize, usize) {
+    use aegis_model::ElementRef as E;
+    let row = |v: &str, n: &str, e: E| f.hit(&[v, n, described(p, e)]);
+    let sum = |list: &[(usize, usize)]| list.iter().fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+    match page {
+        Page::Item => sum(&[
+            keep(&mut d.components, |r| {
+                row(&r.visual_id, &r.name, E::Component(r.id))
+            }),
+            keep(&mut d.interfaces, |r| {
+                row(&r.visual_id, &r.name, E::Interface(r.id))
+            }),
+            keep(&mut d.data_flows, |r| {
+                row(&r.visual_id, &r.name, E::DataFlow(r.id))
+            }),
+            keep(&mut d.trust_boundaries, |r| {
+                row(&r.visual_id, &r.name, E::TrustBoundary(r.id))
+            }),
+        ]),
+        Page::Assets => keep(&mut d.assets, |r| {
+            row(&r.visual_id, &r.name, E::Asset(r.id))
+        }),
+        Page::Damage => keep(&mut d.damages, |r| {
+            row(&r.visual_id, &r.name, E::Damage(r.id))
+        }),
+        Page::Risks => keep(&mut d.risks, |r| {
+            row(&r.visual_id, &r.threat, E::Threat(r.id))
+        }),
+        Page::Trees => keep(&mut d.trees, |r| row(&r.visual_id, &r.title, E::Tree(r.id))),
+        Page::Controls => keep(&mut d.controls, |r| {
+            row(&r.visual_id, &r.name, E::Control(r.id))
+        }),
+        Page::Goals => sum(&[
+            keep(&mut d.goals, |r| row(&r.visual_id, &r.name, E::Goal(r.id))),
+            keep(&mut d.claims, |r| {
+                row(&r.visual_id, &r.name, E::Claim(r.id))
+            }),
+        ]),
+        Page::Problems => keep(&mut d.problems, |r| f.hit(&[&r.visual_id, &r.text])),
+        _ => (0, 0),
+    }
 }
 
 /// Blocking problems and warnings. Time O(project).

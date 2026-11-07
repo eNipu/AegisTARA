@@ -201,6 +201,7 @@ dependencies = [
  "hyper-util",
  "krilla",
  "proptest",
+ "regex",
  "ring",
  "rustls",
  "rustls-pki-types",

@@ -1531,3 +1531,24 @@ msgstr "⟦Why ít scálés ór nót␣␣⟧"
 
 msgid "One attack tool works on every car, or each car needs physical access. {0} or leaving the box saves."
 msgstr "⟦Óné áttáck tóól wórks ón évéry cár, ór éách cár nééds physícál áccéss. {0} ór léávíng thé bóx sávés.␣␣⟧"
+
+msgid "Find in page"
+msgstr "⟦Fínd ín págé␣␣⟧"
+
+msgid "Find by ID, name or description"
+msgstr "⟦Fínd by ÍD, námé ór déscríptíón␣␣⟧"
+
+msgid "Regular expression"
+msgstr "⟦Régúlár éxpréssíón␣␣⟧"
+
+msgid "{} of {}"
+msgstr "⟦{} óf {}␣␣⟧"
+
+msgid "The search is too long."
+msgstr "⟦Thé séárch ís tóó lóng.␣␣⟧"
+
+msgid "Not a valid expression."
+msgstr "⟦Nót á válíd éxpréssíón.␣␣⟧"
+
+msgid "The expression is too large."
+msgstr "⟦Thé éxpréssíón ís tóó lárgé.␣␣⟧"

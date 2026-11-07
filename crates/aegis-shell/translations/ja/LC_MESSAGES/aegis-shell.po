@@ -1531,3 +1531,24 @@ msgstr "スケールするかどうかの根拠"
 
 msgid "One attack tool works on every car, or each car needs physical access. {0} or leaving the box saves."
 msgstr "1つの攻撃ツールで全車両に通用するか、車両ごとに物理アクセスが必要か。{0} またはボックスを離れると保存されます。"
+
+msgid "Find in page"
+msgstr "ページ内を検索"
+
+msgid "Find by ID, name or description"
+msgstr "ID、名前、説明で検索"
+
+msgid "Regular expression"
+msgstr "正規表現"
+
+msgid "{} of {}"
+msgstr "{} / {}"
+
+msgid "The search is too long."
+msgstr "検索文字列が長すぎます。"
+
+msgid "Not a valid expression."
+msgstr "正規表現が正しくありません。"
+
+msgid "The expression is too large."
+msgstr "正規表現が大きすぎます。"
