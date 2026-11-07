@@ -5,6 +5,11 @@
   inside one project) with a smaller model: each component is in at most one
   system and everything else follows its links, instead of a `system` field on
   every element. Kept as the record of the first idea.
+- Follow-up (2026-11-07): projects **assembled from several TARA files** that
+  each stay workable alone (supplier and platform TARAs feeding a vehicle
+  TARA) are a different need from systems inside one project; they are in the
+  backlog under D31 ([design/reference-ui-review.md](design/reference-ui-review.md)
+  section 4, jobs 158 and 159).
 - Date: 2026-10-30
 - Asked for: the app creates **one TARA per project**. A real item, for
   example a vehicle, is one project that holds several **system TARAs** —

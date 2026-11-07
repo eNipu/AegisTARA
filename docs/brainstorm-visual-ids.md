@@ -41,6 +41,13 @@ example:
 | Interface | `IF` | `IF00` |
 | Data flow | `DF` | `DF00` |
 | Trust boundary | `TB` | `TB00` |
+| Condition (planned, D27, job 133) | `CF` | `CF00` |
+| Assumption (planned, D27, job 136) | `AS` | `AS00` |
+| Shared step (planned, D29, job 141) | `L` | `L00` |
+| Shared fragment (planned, D29, job 142; also an attack tree) | `TT` | `TT00` |
+| Misuse case (planned, job 148) | `MU` | `MU00` |
+| Party (planned, job 145) | `P` | `P00` |
+| Function (planned, job 160) | `F` | `F00` |
 
 Attack tree nodes (`NodeId` — gates and steps inside a tree) remain unnumbered:
 a tree can hold up to 4,096 nodes (`FND-03`), and users cite the tree (`AT00`)

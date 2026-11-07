@@ -1936,6 +1936,12 @@ appears (the trigger is named in the table).
 | `aegis-client` | `reqif.rs` | ReqIF exchange (INT-01) | |
 | `aegis-shell` | `ui/` (panel slots, command palette, history panel, bulk edit) | UI-01 to UI-04 — **built**; bulk edit keeps the picked rows in `controller.rs` by element ID (`Table`, `click_marks`) and shows them through `Marks` on `DataTable` (job 084) | |
 | `aegis-model` | `methodology/` (extended) | Catalog packs with text (DOM-04) — **built** as `catalog_pack.rs` and `methodology/stride.rs`, ADR 0062 | |
+| `aegis-model` | `applicability.rs` | `Condition`, `Assumption`, `AttackFilter`, derived `Applicability` with reasons (APL-01 to APL-08, D27; III.6) | |
+| | `blocks.rs` | `SharedStep`, the fragment role and references, bypass trees (BLK-01 to BLK-05, D29; III.7) | |
+| | `party.rs` | `Party`, glossary terms, related documents, misuse cases: small project lists (FND-08, FND-11 to FND-13) | |
+| `aegis-client` | `relations.rs` | The relation registry (D30; III.9.2) | |
+| `aegis-server` | `review.rs` | Review notes outside the op log, hash-chained (REV-01 to REV-03) | |
+| `aegis-canvas` | `trace_graph.rs`, `minimap.rs` | Column traceability graph (TRC-05) and the canvas minimap (UI-19) | |
 
 Repository additions: `packs/catalogs/` (CAPEC, ATT&CK, EMB3D
 where licenses allow). The i18n, report, figure attachment, item definition, and
@@ -1960,6 +1966,18 @@ classDiagram
         id: RequirementId
         name: String
         description: Text
+        allocated_to: Vec~Allocation~
+    }
+    class Allocation {
+        <<enum>>
+        Item
+        Component(ComponentIdx)
+    }
+    class Function {
+        id: FunctionId
+        name: String
+        description: Text
+        implemented_by: Vec~ComponentIdx~
     }
     class Verification {
         id: VerificationId
@@ -1981,7 +1999,16 @@ classDiagram
     CybersecurityGoal "1" <-- "*" Requirement : refines
     Requirement "1" <-- "*" Verification : verifies
     SecurityControl ..> Requirement : implements
+    Requirement --> "*" Allocation : allocated to
+    Function --> "*" Component : implemented by
 ```
+
+ISO/SAE 21434 Figure 3 check (2026-11-07,
+[design/reference-ui-review.md](design/reference-ui-review.md) section 8):
+`Function` (ARC-06, job 160) and `Requirement::allocated_to` (TRC-06, job 077)
+close the two missing links, and `ThreatScenario.goal` becomes a sorted
+`goals` list (FND-14, job 161). The snapshot writes the old single `goal`
+field when there is exactly one, so v1 fixtures and their files stay equal.
 
 A link is suspect when its `from` element changed after `confirmed_seq`
 (the op sequence number at confirmation). Suspect state is derived (D10),
@@ -2038,6 +2065,135 @@ sequenceDiagram
 A failed push leaves the project unchanged and shows the error on the
 element; the user retries.
 
+## III.6 Applicability: conditions, assumptions, attacker profile (D27; jobs 133 to 139)
+
+Source: [design/reference-ui-review.md](design/reference-ui-review.md)
+sections 2.3, 2.4 and 3.2 to 3.4. Requirements APL-01 to APL-08.
+
+**Model (`aegis-model/src/applicability.rs`, new module).**
+
+```mermaid
+classDiagram
+    direction LR
+    class Condition {
+        name: Arc~str~
+        description: Text
+        present: bool
+        provenance: Provenance
+    }
+    class Assumption {
+        name: Arc~str~
+        description: Text
+        holds: bool
+        excludes_trees: Vec~TreeIdx~
+        excludes_steps: Vec~StepRef~
+        provenance: Provenance
+    }
+    class AttackFilter {
+        factors: BTreeMap~FactorKey_BTreeSet~ValueKey~~
+        scalability: ScaleFilter
+        attacker_types: Option~BTreeSet~AttackerTypeKey~~
+    }
+    class Applicability {
+        excluded: FixedBitSet per arena
+        reasons: BTreeMap~Excludable_SmallVec~Reason~~
+        +is_excluded(e) bool
+        +reasons(e) slice
+    }
+    class Reason {
+        <<enum>>
+        ConditionOff(ConditionIdx)
+        AssumptionHolds(AssumptionIdx)
+        OutsideProfile(FactorKey)
+        Scalability
+        ViaExcluded(ItemRef)
+        OwnerExcluded(Excludable)
+        AllPathsExcluded
+    }
+    CybersecurityClaim --> "*" Assumption : ensures
+    Condition <.. Applicability
+    Assumption <.. Applicability
+    AttackFilter <.. Applicability
+```
+
+- **Which conditions an element needs** is one sparse side table on
+  `Project`, `condition_links: BTreeMap<ElementRef, SmallVec<[ConditionIdx; 2]>>`
+  (the ADR 0010 pattern: most elements need none and pay nothing). Steps keep
+  theirs in the lazily allocated per-node block of `TreeEntry::step_links`
+  (the job 122 pattern), so `ElementRef` does not grow a step variant.
+- **Ops**, each with an exact inverse: `AddCondition`, `RenameCondition`,
+  `SetConditionPresent`, `RemoveCondition` (rejected while linked:
+  `ConditionInUse`), `NeedCondition { element, condition }`,
+  `UnneedCondition`, `NeedStepCondition`, `UnneedStepCondition`;
+  `AddAssumption`, `RenameAssumption`, `SetAssumptionHolds`,
+  `SetAssumptionExcludes` (whole sorted lists, inverse is the old lists),
+  `RemoveAssumption` (rejected while a claim names it), `LinkClaimAssumption`,
+  `UnlinkClaimAssumption`; `SetAttackFilter` (whole value, inverse the old
+  value); `SetThreatScaling { threat, scales: Option<bool> }`.
+- **Derivation** (`Applicability`, D10: never stored). Direct reasons first:
+  a condition off, an assumption that holds, a factor value outside the
+  profile, a scalability mismatch. Then propagation in a fixed order, each
+  edge adding `OwnerExcluded` or `ViaExcluded`: component → child components,
+  its interfaces, assets bound to it; asset → threats on it; component or
+  interface → steps that go via it (CFG-01); threat → its tree. Goals and
+  claims are excluded only by their own conditions; they are not dropped
+  because a threat that uses them is.
+- **Evaluation.** The attribute domain (ADR 0005, `AttributeDomain`) is lifted
+  by a wrapper `Applicable<D>` with one extra value `Excluded`: OR ignores
+  excluded children (all excluded gives `Excluded`), AND and SEQ give
+  `Excluded` when any child is. An excluded root makes the threat's risk
+  `NotApplicable` (a new variant beside the levels, never a level). Explain-why
+  records the reason at the step and `AllPathsExcluded` at the gate.
+- **Incremental cache** (ADR 0023). `SetConditionPresent` and
+  `SetAssumptionHolds` mark the elements and steps linked to that condition
+  or assumption, plus what they propagate to: O(linked + propagated).
+  `SetAttackFilter` rechecks every rated step, O(steps); it is a rare op, and
+  the bench gate is the same 5 ms edit budget at the large reference size
+  (A1). A property test applies switch ops in shuffled order and compares the
+  cache with a full evaluation.
+- **Lints**: `AssumptionWithoutClaim` (warning), `ConditionUnused` (info),
+  `ThreatAllPathsExcluded` (info, so a reviewer sees it), `ExcludedButTreated`
+  (info: an excluded threat still has a reduce treatment).
+- **Store**: snapshot `conditions`, `assumptions`, `condition_links`,
+  `attack_filter`, claim `assumptions`, threat `scales`, all omitted when empty
+  or default, so v1 fixtures load unchanged; decode caps `Limit::Conditions`,
+  `Limit::Assumptions`, `Limit::ConditionLinks`. Diff lines per op kind.
+- **Client**: `ExclusionRow { element, reasons }` for the inspector banner
+  (section 2.4 of the review), the `Excluded` row style, the page line
+  "N excluded", the undo toast count, the report's "Configuration and
+  assumptions" section and the cover line. Names are looked up by the client
+  (R6).
+
+## III.7 Shared building blocks (D29; jobs 141 to 144)
+
+Source: review sections 3.13 to 3.15. Requirements BLK-01 to BLK-05.
+
+| Part | Model | Ops (exact inverses) | Guards |
+|---|---|---|---|
+| Shared step | `SharedStep { name, description, feasibility, factors, via, attack_type, attacker_type, provenance }` arena; a node slot `shared: Option<SharedStepIdx>` in the `step_links` block | `AddSharedStep`, `RenameSharedStep`, the existing rating ops widened to take a shared step as target, `UseSharedStep { tree, node, step }`, `UnuseSharedStep` | a node that uses a shared step holds no ratings of its own (`NodeIsRated`); removing a used shared step is rejected (`SharedStepInUse`) |
+| Shared fragment | `TreeEntry::role: TreeRole { Threat, Fragment }`, fixed when the tree is added, so its visual ID prefix (`AT` or `TT`) never changes; a leaf node slot `fragment: Option<TreeIdx>` | the tree add op takes the role; `UseFragment { tree, node, fragment }`, `UnuseFragment` | the target must have role `Fragment`; a reference that would close a cycle is rejected with its path (`FragmentCycle`); a fragment used anywhere cannot be removed (`FragmentInUse`); caps: fragment references per tree, and fragment depth at most 8 so explain-why stays bounded |
+| Bypass tree | `SecurityControl::bypass: Option<TreeIdx>` (a fragment) | `SetControlBypass` | as for fragments |
+
+- **Evaluation order**: a topological order over the tree graph (tree → the
+  fragments it uses), fragments first, each once (A2). Cycles cannot exist,
+  because `UseFragment` and `SetControlBypass` run Kahn's check (ADR 0002) on
+  the small fragment graph before they apply.
+- **Cache**: a reverse index fragment → using nodes; a dirty fragment root
+  marks those nodes dirty, transitively. A shared step edit marks its using
+  nodes. Cost O(users).
+- **Bypass ceiling**: when the control counts (D28: Implemented in the initial
+  number, Implemented or Planned in the residual), its step mitigations take
+  the bypass tree's feasibility instead of their typed level; attack-type
+  rules (ADR 0064) keep their typed ceilings. `StepCeiling` gains
+  `bypass: Option<TreeIdx>` so explain-why says "bypass Medium".
+- **Client**: `Edit::MakeShared` (selection → a new shared step or a new
+  fragment tree plus the reference, one batch; an existing tree never changes
+  role), `Edit::Unshare` (copies values back, one batch), "Used in" rows from
+  the relation registry (III.9), the canvas reference badge and read-only
+  in-place expansion, the outline syntax `@L03` and `@TT02` (round trip).
+- **Unchanged**: library insert copies (D14); no cross-system tree links for
+  attack paths (D26).
+
 ## III.8 Planned database additions
 
 | Table | Holds | Caps |
@@ -2048,11 +2204,97 @@ element; the user retries.
 | `aegis_ai_audit` | user, project, feature, provider, model, refs, response, accepted, cost | retention by age and count, as for the event log |
 | `aegis_connector` | project, system, base URL, mapping, secret name | |
 | `aegis_report_profile` | project or company, name, profile JSON | |
+| `aegis_review_note` | project, element ID, op sequence written against, author, time, text, state, parent note, hash chain | notes per project and text length capped; standalone mode keeps them in a side file in the project folder |
 
 Project content (item definition, trace links, external references,
 descriptions) stays in the op log and snapshot like every other element, so
 baselines, diff and audit cover it with no new table.
 
+
+## III.9 Pages, relations and the element recipe (D30; jobs 127 to 131, 149, 150)
+
+Source: review sections 2.1, 2.2 and 2.5. Requirements UI-13 to UI-19, NFR-12.
+
+### III.9.1 Page table
+
+`aegis-client/src/view.rs`: `Page` gains `group() -> PageGroup`
+(`Overview, ItemDefinition, Impact, AssetsThreats, Feasibility, Risk, Outputs,
+Project`) and `layout() -> PageLayout` (`Table(&'static [ColumnSpec])`,
+`Canvas`, `Custom`). `Page::ALL` stays the one ordered list; the sidebar, the
+menu bar and the command palette read it. A pack may hide pages through an
+optional `pages` list (hidden pages keep their data). A `Table` page is a
+`ColumnSpec` list (`kind: Id | Name | Links(RelationKey) | Computed | Rating |
+Text`, label key, default width, visible by default), so most new pages need
+no new `.slint` layout: `ElementTablePage` in `app.slint` renders any of them
+on `DataTable`.
+
+### III.9.2 Relation registry
+
+`aegis-client/src/relations.rs` (new):
+
+```rust
+pub struct Relation {
+    pub key: RelationKey,            // stable, used in settings and report profiles
+    pub from: ElementKind,
+    pub to: ElementKind,
+    pub label: MsgKey,               // Fluent key, en and ja
+    pub many: bool,
+    pub read: fn(&Project, ElementRef) -> SmallVec<[ElementRef; 4]>,
+    pub link: Option<fn(ElementRef, ElementRef) -> Edit>,
+    pub unlink: Option<fn(ElementRef, ElementRef) -> Edit>,
+}
+pub static RELATIONS: &[Relation] = &[ /* one row per link type */ ];
+```
+
+- Reverse lookups ("used by") are a scan of `RELATIONS` plus `read`; the
+  table has tens of rows, so no index. Readers: inspector "Linked" sections,
+  `Links` columns, the multi-link picker (UI-15), the traceability graph and
+  matrix (TRC-04, TRC-05), find-in-page (UI-16) and report cross-references.
+- `ElementKind` mirrors `ElementRef` (`description.rs`) plus the new kinds
+  (condition, assumption, shared step, misuse case, party). Steps are
+  addressed as `(TreeId, NodeId)` where a relation needs them.
+- A test builds a sample project with one instance of every link kind and
+  checks that each is reachable through `RELATIONS` in both directions, so a
+  link added to the model without a registry row fails CI.
+
+### III.9.3 The element recipe
+
+Every new element type or link (jobs 132 to 159) is complete only when it has
+all of these, in the crate named. The backlog lines refer to this list
+instead of repeating it.
+
+| # | Part | Where |
+|---|---|---|
+| 1 | Struct, arena, typed index, visual ID prefix (FND-06) | `aegis-model` |
+| 2 | Ops with exact inverses; removal rejected while referenced, the client batch clears first | `op.rs`, `project.rs`, `error.rs` |
+| 3 | Snapshot fields omitted when empty, op log lines, decode caps; v1 fixtures load | `store/` |
+| 4 | Diff lines in canonical order | `diff.rs` |
+| 5 | Lint rules, if any | `lint.rs` |
+| 6 | Cache invalidation, if the element touches a number, with a shuffled-order property test | `eval.rs` |
+| 7 | Relation registry rows | `aegis-client/src/relations.rs` |
+| 8 | Page rows (`ColumnSpec`), inspector detail, `Edit` intents, undo label | `pages.rs`, `commands.rs`, `undo_label.rs` |
+| 9 | Draft creation, row actions, read-only behaviour (UI-08, UI-09) | `aegis-shell` |
+| 10 | Report section or column, XLSX sheet or column with the formula guard, Excel import mapping where it makes sense | `report/`, `excel.rs` |
+| 11 | `@tr` and Fluent keys in en and ja; pseudo-locale screenshot | `translations/`, `locales/` |
+| 12 | Headless screenshot of the page in light and dark | `aegis-shell` tests |
+
+## III.10 Composite projects from several TARA files (D31; backlog, design session)
+
+Not designed. Source: review section 4. Requirements MTA-01 to MTA-04.
+Constraints the design must keep:
+
+- Each member stays a normal project with its own op log, lease, undo
+  history, audit chain and baselines (D4, D23); a member opened alone looks
+  exactly as today.
+- A composite refers to a member by project identity and a **pinned
+  baseline** (ID and content hash), never to "latest"; updating the pin is an
+  op in the composite, with the member's diff shown first.
+- External results (MTA-01) are read-only elements in the composite carrying
+  the source project, source element, baseline hash and the values; a step
+  may use one like a shared step (III.7).
+- No number in a member changes because a composite uses it.
+- Standalone mode (D22): a member may be another project folder; the
+  composite stores a relative path plus the hash.
 
 ## Step "through" item and attack type (job 122, CFG-01, CFG-02)
 

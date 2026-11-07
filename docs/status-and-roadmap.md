@@ -186,6 +186,10 @@ flowchart TD
 - What a client running AegisTARA on its own server needs: the security findings closed, roles (D19, fixes SEC-02), bilingual content, catalog packs, the UI pass, CRA readiness of our product, the offline bundle, manuals and the security pack.
 - **Exit:** a client team installs the server from the offline bundle, imports the consultancy's project folder, and works with roles; the security review's High and Medium findings are closed.
 
+### Phase 5b — Reference review (jobs 127 to 157; added 2026-11-07)
+- From a screen-by-screen review of a commercial TARA tool ([design/reference-ui-review.md](design/reference-ui-review.md), decisions D27 to D31): pages grouped by TARA phase, one table convention and relation registry, find, conditions, assumptions and an attacker profile with derived exclusions and reasons, a three-value control status, shared steps, fragments and bypass trees, rationale and responsible parties, a traceability graph, review notes, a management summary. Projects assembled from several TARA files stay in the backlog (jobs 158, 159, design session).
+- **Exit:** a consultant analyses two variants of one ECU in one project by switching a condition, every excluded step shows why, a shared step rated once feeds several trees, and the customer's reviewer leaves notes on the saved version.
+
 ### Phase 6 — Traceability and integrations (jobs 075 to 079, 087, 094 to 096, 104)
 - Requirements and verification, trace links with suspect marking, traceability matrix, ReqIF, architecture diagram canvas, company library, Jira connector (Polarion and JAMA on order).
 - **Exit:** a goal goes out as a ReqIF requirement, comes back with its Polarion key, and the matrix shows full coverage.

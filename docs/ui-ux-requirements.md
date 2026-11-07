@@ -63,6 +63,10 @@ When a job breaks one, its UX review fails.
 8. **Nothing in the audit trail the user did not mean.** A half-made element
    is never sent to the server. This matters more in a TARA tool than in a
    notes app, because the op log is evidence for auditors.
+9. **Nothing disappears silently** (added 2026-11-07, D27). An element taken
+   out of the analysis by a condition, an assumption or the attacker profile
+   stays on its page, hatched, with its reasons one click away. A computed
+   value looks computed (shaded, never editable) and says where it comes from.
 
 ---
 
@@ -222,6 +226,26 @@ default for Enter; Escape cancels; focus starts in the first field or on Cancel.
 | UI-12.2 | A test lists the modal overlays in `app.slint` (the `*-open: Rectangle` overlays) against an allow list, so a new dialog fails the build until it is added to the list with a reason. | S |
 
 ---
+
+### UI-13 to UI-19 Process navigation, one table convention, find (S/M, jobs 127 to 131, 150, 152, 153)
+
+From the reference review, [design/reference-ui-review.md](design/reference-ui-review.md)
+sections 2 and 3 (D30). The sketches and the decisions are there; this table
+is what the UX review checks.
+
+| ID | Requirement |
+|---|---|
+| UI-13.1 | Page groups in this order: Overview; 1 Item definition (description and scope, architecture, configuration, assumptions); 2 Impact; 3 Assets and threats; 4 Attack feasibility (trees, shared building blocks, attacker profile); 5 Risk and treatment (risks, controls, goals and claims); Outputs; Project. One table feeds the sidebar, menus and palette |
+| UI-13.2 | A group header shows the sum of its counts and the worst problem badge of its pages; open or closed is remembered per user; arrow keys move between pages and Left/Right collapse and expand |
+| UI-14.1 | Column kinds `Id`, `Name`, `Links`, `Computed`, `Rating`, `Text` with one look each; a `Computed` header has a ƒ mark and its cells say "Computed. Open the inspector for why." |
+| UI-14.2 | Link chips show visual IDs, "+N" when they do not fit, names in the tooltip, open the target on click or Enter |
+| UI-14.3 | Excluded rows: diagonal hatch, 70 % text contrast, legible in light and dark, the reasons as the row's accessible description |
+| UI-15.1 | The multi-link picker opens under its field, filters as you type, toggles with Space, closes on Escape, and shows picked items as removable chips; no modal |
+| UI-16.1 | ⌘/Ctrl+F focuses the page's find field; the regular expression toggle is labelled ".*" with a tooltip; an invalid or too large expression shows an inline error and no results, never a dialog |
+| UI-17.1 | Back and forward restore page, selection and scroll; the status bar buttons for problem counts are reachable with Tab |
+| UI-18.1 | The process map boxes are buttons with the page name, count and completeness in their accessible name |
+| UI-19.1 | Detail levels never change layout positions, only node content, so the view does not jump while zooming; the minimap hides below one screen of content |
+
 
 ## 4. Every dialog today and what happens to it
 
