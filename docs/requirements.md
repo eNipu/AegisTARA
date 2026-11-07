@@ -53,6 +53,13 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | G47 | Elements carry internal UUIDs only, no human-readable visual ID (`A00`, `D00`, `T00`) | `aegis-model` IDs, `pages.rs`, `report/doc.rs`, `brainstorm-visual-ids.md` | Analysts and reviewers need short, stable IDs to cite in tables, cross-references and reports (FND-06, FND-07) | 118 |
 | G48 | One flat TARA per project; no way to model multiple systems in one project and evaluate or report on them together | `Project` in `aegis-model`, `brainstorm-multi-tara.md` | A vehicle or product holds several systems (Braking, ADAS, Gateway, Infotainment) linked by data flows that need one combined register and report (SYS-01 to SYS-06; D26) | 119 to 121 |
 | G49 | Controls have no type, no settings and no link to a component or interface; attack steps do not name what they go through; nothing connects an ECU or interface setting to the trees or the risk | `SecurityControl` in `control.rs` (name and provenance only); no item reference in `tree.rs`; `brainstorm-systems-config.md` section 3 | Consultants re-rate feasibility by hand when a setting changes, and reviewers cannot see which ratings depend on which setting (CFG-01 to CFG-09) | 122 to 126 |
+| G50 | No way to say which parts of the analysis apply: no variant conditions, no assumptions, no attacker profile; a variant means a copied project | `aegis-model` has no such types; `docs/design/reference-ui-review.md` sections 3.2 to 3.4 | Consultants analyse variants and the customer's assumptions; reviewers need to see what was excluded and why (APL-01 to APL-08; D27) | 133 to 139, 157 |
+| G51 | A control is either ignored (initial) or counted (residual); controls already in the design cannot count in the initial risk | `RiskTreatment`, ADR 0017 | ISO/SAE 21434 rates the item as designed (CFG-10, CFG-11; D28) | 140 |
+| G52 | The same attack step is rated again in every tree; no shared fragments; a control cannot carry a bypass analysis | ADR 0052 (library copies), `tree.rs` | Ratings drift between trees and reviewers check them many times (BLK-01 to BLK-05; D29) | 141 to 144 |
+| G53 | No responsible party on goals and claims, no rationale on ratings or threat × damage pairs, no threat scalability, no glossary, related documents or misuse cases | `control.rs`, `damage.rs`, `threat.rs` | Work products for a customer need who and why, not only what (FND-08 to FND-13) | 138, 145 to 148, 156 |
+| G54 | The sidebar is in build order (item definition last), tables differ page by page, links are built per page, no find in page | `view.rs` `Page::ALL`, `pages.rs` | Navigation should follow the TARA process and new element types should not add code in five places (UI-13 to UI-19, NFR-12; D30) | 127 to 131, 149, 150, 152, 153 |
+| G55 | No traceability graph, management summary or review notes | none | Managers and the customer's reviewers are the readers of a consultancy TARA (TRC-05, RPT-09, REV-01 to REV-03) | 151, 154, 155 |
+| G56 | A project cannot be assembled from several TARA files that each stay workable alone; results of a supplier's TARA cannot be brought in | `Project` is one file; D26 covers one team only | Supplier and platform TARAs feed vehicle TARAs (MTA-01 to MTA-04; D31) | 158, 159 (design session) |
 
 ---
 
@@ -79,6 +86,12 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | FND-05 | A suggestion branch holds proposed ops (from AI or the library) apart from the project until accepted; accept and reject are ops with provenance | M | 7 | 089 |
 | FND-06 | Every element carries a short, human-readable visual ID (type prefix + sequence number, for example `A00` for an asset, `D00` for a damage scenario, `T00` for a threat scenario) next to its internal ID; unique per project, stable across reloads, never reused after deletion; stored in the snapshot and op log so it round-trips (P4), and assigned deterministically to old fixtures on load | M | 5 | 118 |
 | FND-07 | The visual ID is shown wherever an element is named: a table column, the inspector title, cross-references, reports and the command palette search | S | 5 | 118 |
+| FND-08 | Parties (name, kind: us, customer, supplier, other) are a project list; goals and claims name one or more responsible parties; the linter warns on a share treatment whose claim names no other party | S | 5 | 145 |
+| FND-09 | Rationale text on damage scenario ratings, on threat feasibility and on each threat × damage pair, shown as a column and in the inspector, in reports and XLSX; the linter notes a rated element without rationale (info) | S | 5 | 146, 147 |
+| FND-10 | A threat scenario may say whether it scales (yes, no, not rated) with a reasoning text; it feeds the attacker profile (APL-05) | S | 5 | 138 |
+| FND-11 | A project glossary (term, description, translations), shown on a page and as a report section | C | 5 | 156 |
+| FND-12 | Related documents (title, document ID, version, link; an external reference once TRC-01 lands), shown on a page and as the report's referenced documents | S | 5 | 156 |
+| FND-13 | Misuse cases (name, description) linked N:M to threat scenarios; a pack may hide the page | C | 5 | 148 |
 
 ### 2.1a Domains beyond automotive (DOM)
 
@@ -125,6 +138,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | RPT-06 | Figures (architecture images, architecture canvas) and the traceability matrix are report sections | M | 4, 6 | 073, 075, 078 |
 | RPT-07 | Headless report generation from a command line tool for CI pipelines | C | 6 | 104 |
 | RPT-08 | DOCX export | C | later | none |
+| RPT-09 | Management summary page and report section: initial and residual risk, the highest residual risks, goals and claims per party, the configuration and attacker profile in effect, excluded elements by reason, open review notes | S | 5 | 155 |
 
 ### 2.5 Item definition and architecture (ARC)
 
@@ -134,6 +148,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | ARC-02 | Item definition elements: component, interface, data flow, trust boundary; assets bound to components; ops, store, diff, lint | M | 4 | 074 |
 | ARC-03 | Architecture diagram on the canvas (data-flow style), user-placed positions plus auto-layout, click-through to threats | S | 6 | 075 |
 | ARC-04 | Import from draw.io, SysML v2, ARXML | C | later | none |
+| ARC-05 | The item definition has a description and a scope text (with translations, FND-04) and figures, on its own page and in the report | S | 5 | 132 |
 
 ### 2.5a Systems and multi-TARA (SYS)
 
@@ -170,6 +185,48 @@ user; the engine derives the caps.
 | CFG-07 | The risk table, the control table, reports and XLSX show which settings reduce each risk ("reduced by", on the deciding path) and the settings of each component and interface | S | 5 | 125 |
 | CFG-08 | Custom settings: a control with no preset and user-written rules behaves exactly like a preset-based one; odd cases need no code change | M | 5 | 123 |
 | CFG-09 | Packs may declare presets that conflict; the linter warns when one component or interface has both (never blocks) | C | 5 | 126 |
+| CFG-10 | A security control has a status: Implemented (counts in the initial and residual numbers), Planned (residual only) or Off (neither); old projects load every control as Planned, so no saved number changes (D28) | M | 5 | 140 |
+| CFG-11 | The control table shows the status as a three-way control; the risk pages call the two numbers "initial" (with implemented controls) and "residual" (after planned treatment) | M | 5 | 140 |
+
+### 2.5c Applicability (APL)
+
+New 2026-11-07 (D27; [design/reference-ui-review.md](design/reference-ui-review.md)
+sections 2.3, 2.4, 3.2 to 3.4). Switches are ops; what is excluded is derived.
+
+| ID | Requirement | Pri | Phase | Job |
+|---|---|---|---|---|
+| APL-01 | Conditions (name, description, present or not; the pack names them, default "Configuration") on a project page; assets, components, interfaces, threats, trees, steps, goals, claims and assumptions may need conditions | M | 5 | 133, 135 |
+| APL-02 | An element is excluded while a condition it needs is off; exclusion propagates from components to their children, interfaces, bound assets and the steps that go via them, from assets to their threats, and from threats to their trees; evaluation treats an excluded step as `Excluded` (OR ignores it, AND is excluded with it) and an excluded root gives a "not applicable" risk; derived, never stored | M | 5 | 134 |
+| APL-03 | Pages with switches say in one line what switching does and how many elements are now excluded; excluded rows and canvas nodes are hatched; the undo toast after a switch counts excluded steps and names the risks that moved | M | 5 | 135 |
+| APL-04 | Assumptions (name, description, holds or not, conditions) exclude the steps and trees they name while they hold; claims name the assumptions they ensure; the linter warns on an assumption no claim ensures; "Create claim" from an assumption | M | 5 | 136 |
+| APL-05 | An attacker profile on the project: allowed values per attack potential factor and a threat scalability choice; a step with a rated factor value outside the profile is excluded (an unrated factor never excludes); a non-default profile is printed on the report cover and in the method section | S | 5 | 137 |
+| APL-06 | Every exclusion carries its reasons (condition off, assumption holds, outside the attacker profile, scalability, via excluded, owner excluded, every path excluded), shown in the inspector, as the canvas node's accessible name, in the report and in XLSX | M | 5 | 134, 135 |
+| APL-07 | Packs may define attacker types; a step carries at most one; the attacker profile can allow a subset | C | later | 139 |
+| APL-08 | Preview a switch (condition, assumption, control status, attacker profile) in a suggestion branch with the risk changes before applying it | C | later | 157 |
+
+### 2.5d Shared building blocks (BLK)
+
+New 2026-11-07 (D29; review sections 3.13 to 3.15).
+
+| ID | Requirement | Pri | Phase | Job |
+|---|---|---|---|---|
+| BLK-01 | Shared steps: a step with its ratings, via and attack type defined once and used by leaf nodes of many trees; the step inspector says where it is used; "Make shared" and "Unshare" are one undo step each | S | 5 | 141 |
+| BLK-02 | Shared fragments: an attack tree with the fragment role whose root value feeds a node of another tree; fragments may use shared steps and other fragments; a cycle is rejected with its path; a change in a fragment shows in every tree that uses it | S | 5 | 142 |
+| BLK-03 | On the canvas a reference node has a badge, expands in place read-only and opens its fragment; explain-why steps into the fragment | S | 5 | 142 |
+| BLK-04 | A security control may have a bypass tree (a fragment); while the control counts, its step mitigations take the bypass tree's feasibility instead of their typed level, named in explain-why | S | 5 | 143 |
+| BLK-05 | Shared blocks in outputs: report sections, XLSX sheets with "used in", the outline syntax `@L03` and `@TT02` with round trip, saving a fragment to the library | S | 5 | 144 |
+
+### 2.5e Composite projects (MTA)
+
+New 2026-11-07 (D31). **Backlog**: a design session decides these before any
+job starts. D26 stays the answer for one team.
+
+| ID | Requirement | Pri | Phase | Job |
+|---|---|---|---|---|
+| MTA-01 | Import external results (threat feasibility and factors, goals, claims) from a pinned baseline of another project or project folder, read-only, with the source shown; a step may use one like a shared step | C | later | 158 |
+| MTA-02 | A newer baseline of a source is announced with its diff; nothing changes until the user updates the pin (one op) | C | later | 158 |
+| MTA-03 | A composite project lists member projects, each pinned to a baseline, and shows them together with its own elements (boundary flows, vehicle-level damage scenarios); each member stays a normal project its owner opens, edits, baselines and reports on alone | C | later | 159 |
+| MTA-04 | Reports and exports of a composite name each member and its pinned baseline | C | later | 159 |
 
 ### 2.6 Traceability and integrations (TRC, INT)
 
@@ -179,6 +236,10 @@ user; the engine derives the caps.
 | TRC-02 | Generic trace links for relations the engine does not use; suspect marking when a source changes; linter lists suspect links | M | 6 | 076 |
 | TRC-03 | Requirement and verification elements linked to goals and controls | M | 6 | 077 |
 | TRC-04 | Traceability matrix page with coverage numbers, also a report section | M | 6 | 078 |
+| TRC-05 | Traceability graph: columns damage scenarios, threats, risks, goals and claims, controls, with a filter and an n/N count per column; selecting a box highlights its chain; follows the system view and baselines; exports as SVG and a report figure | S | 5 | 151 |
+| REV-01 | Review notes on any element: author, time, text, open or resolved, replies; kept outside the op log so a Reviewer adds them to the saved version without the edit lease; never change a number or a baseline | S | 5 | 154 |
+| REV-02 | A note records the op sequence it was written against and shows "changed since this note" when its element changed | S | 5 | 154 |
+| REV-03 | A notes filter in every table, the thread in the inspector, a Reviews page with open notes, open notes in a report on request | S | 5 | 154 |
 | INT-01 | ReqIF export and import of goals, requirements, controls and claims with stable identifiers | M | 6 | 079 |
 | INT-02 | Excel TARA import with a column mapping step and a dry-run preview | M | 4 | 080 |
 | INT-03 | Server-side connector framework: admin-set encrypted credentials, per-project field mapping, push and link, status pull, audit events, bounded queues and timeouts | S | 6 | 094 |
@@ -217,6 +278,13 @@ user; the engine derives the caps.
 | UI-10 | Visible undo and redo (top bar buttons naming the action, platform shortcuts, every op kind tested to undo exactly), then undo instead of confirmation: removals happen at once with an undo toast; errors inline, never in a dialog | M | 5 | 116 |
 | UI-11 | Editors in panels: description in the inspector, library in a panel slot next to the canvas, outline editor as a page mode, rename project and create baseline in place | S | 5 | 117 |
 | UI-12 | Dialog policy: a modal dialog only for irreversible actions, security tasks, file pickers and About, checked by a test with an allow list | M | all | every job |
+| UI-13 | The sidebar, menu and command palette group pages by TARA phase (item definition first, then impact, assets and threats, feasibility, risk and treatment, outputs, project) from one page table; groups collapse and show counts and problem badges; packs may hide pages (D30) | M | 5 | 127 |
+| UI-14 | One table convention: ID, name, link chips (visual IDs, click to open), computed cells (shaded, never editable), ratings, text; excluded rows hatched; a column chooser remembered per user (C); the attack tree page gets a table mode with initial and residual factors | M | 5 | 129, 152 |
+| UI-15 | A multi-link picker in the inspector for N:M links (type to filter, chips, keyboard only), used by conditions, assumptions, parties, misuse cases and damage links | M | 5 | 150 |
+| UI-16 | Find in page (⌘/Ctrl+F): filter by ID, name and description with an optional capped regular expression, "N of M", Escape clears; on the canvas it highlights nodes | S | 5 | 128 |
+| UI-17 | Back and forward over selections across pages (⌘[ ⌘] / Alt+← →); the status bar shows the last saved time and problem counts by severity, each opening Problems filtered | S | 5 | 130 |
+| UI-18 | The Overview starts with a process map: one box per page group with its count and a completeness mark from the linter, click to open; clause references are pack data | S | 5 | 131 |
+| UI-19 | Canvas detail levels tied to zoom (compact, factors, full with initial and residual), pinnable; a minimap for trees larger than the view | S | 5 | 153 |
 
 ### 2.9 AI (AI)
 
@@ -243,6 +311,7 @@ user; the engine derives the caps.
 | NFR-01 | Sovereignty: every feature works air gapped except live connectors and cloud AI providers, which are opt-in | M | all |
 | NFR-10 | Every feature names its business value; complexity without value is removed (P7, D23) | M | all |
 | NFR-11 | Development-only tools may use any license; nothing from them ships; `deny.toml` checks the shipped graph (D5) | M | 110 |
+| NFR-12 | Modularity: a new element type or link is added through the element recipe (architecture III.9.3) and one relation registry row; a test fails when a model link has no registry row (D30) | M | 5 | 149 |
 | NFR-02 | Engineering standards (D8) apply to every new part: caps (R3), bounded queues (R4), timeouts (R6), determinism (P4), no entity names in errors (R6) | M | all |
 | NFR-03 | All open SEC findings closed before the first customer deployment | M | 058, 060 to 063 |
 | NFR-04 | New dependencies pass D5 and `cargo-deny`; model weights and fonts get a license review | M | all |
