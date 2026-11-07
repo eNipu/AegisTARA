@@ -1902,3 +1902,71 @@ export component SettingsSection inherits VerticalLayout {
         }
     }
 }
+
+// Find in page (UI-16): a strip above a table page. The rows filter as the
+// text changes; ".*" makes the text a regular expression; "N of M" counts the
+// rows shown; Escape clears and closes. An invalid expression shows its error
+// inline and matches nothing.
+export component FindBar inherits Rectangle {
+    in-out property <string> text;
+    in-out property <bool> regex;
+    in property <string> count;
+    in property <string> error;
+    // Set by the find shortcut; the field takes the keyboard and clears it.
+    in-out property <bool> focus-requested;
+    callback find(string, bool);
+    callback closed();
+    function take-focus() {
+        if (root.focus-requested) {
+            root.focus-requested = false;
+            field.focus();
+            field.select-all();
+        }
+    }
+    init => { root.take-focus(); }
+    changed focus-requested => { root.take-focus(); }
+    background: Theme.panel;
+    height: 44px;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 8px;
+        FocusScope {
+            horizontal-stretch: 1;
+            focus-on-tab-navigation: false;
+            focus-on-click: false;
+            capture-key-pressed(event) => {
+                if (event.text == Key.Escape) { root.closed(); return accept; }
+                reject
+            }
+            field := LineEdit {
+                width: parent.width;
+                height: parent.height;
+                text <=> root.text;
+                placeholder-text: @tr("Find by ID, name or description");
+                accessible-label: @tr("Find in page");
+                edited(t) => { root.find(t, root.regex); }
+            }
+        }
+        Button {
+            text: ".*";
+            ghost: !root.regex;
+            accessible-label: @tr("Regular expression");
+            clicked => { root.regex = !root.regex; root.find(root.text, root.regex); }
+        }
+        Text {
+            text: root.error != "" ? root.error : root.count;
+            color: root.error != "" ? Theme.high : Theme.graphite;
+            font-size: Theme.font-label;
+            vertical-alignment: center;
+            min-width: 72px;
+        }
+        Button {
+            text: @tr("Close");
+            ghost: true;
+            clicked => { root.closed(); }
+        }
+    }
+}

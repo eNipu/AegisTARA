@@ -1084,6 +1084,22 @@ impl Controller {
         on!(on_toggle_nav_group, |c, g| c.toggle_nav_group(g));
         on!(on_go_back, |c| c.go(true));
         on!(on_go_forward, |c| c.go(false));
+        on!(on_set_find, |c, text, regex| {
+            c.send(Command::SetFind {
+                text: text.to_string(),
+                regex,
+            });
+        });
+        on!(on_close_find, |c| {
+            if let Some(w) = c.window.upgrade() {
+                w.set_find_open(false);
+                w.set_find_text(s(""));
+            }
+            c.send(Command::SetFind {
+                text: String::new(),
+                regex: false,
+            });
+        });
         on!(on_panels_resized, |c| {
             if let (Some(hook), Some(w)) = (&c.hooks.panels_resized, c.window.upgrade()) {
                 hook(w.get_left_size(), w.get_right_size(), w.get_bottom_size());
@@ -3368,6 +3384,21 @@ impl Controller {
             .saved_ms
             .map_or_else(String::new, aegis_client::time::time_ms)));
         w.set_problem_errors(i32::try_from(project.problem_counts.0).unwrap_or(i32::MAX));
+        // Find in page (UI-16): another page starts without a filter.
+        if prev_proj.is_some_and(|old| old.page != project.page) {
+            w.set_find_open(false);
+            w.set_find_text(s(""));
+        }
+        let find = project.find.as_ref();
+        let count = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
+        w.set_find_shown(find.map_or(0, |f| count(f.shown)));
+        w.set_find_total(find.map_or(0, |f| count(f.total)));
+        w.set_find_error(match find.and_then(|f| f.error) {
+            None => 0,
+            Some(aegis_client::find::FindError::TooLong) => 1,
+            Some(aegis_client::find::FindError::Invalid) => 2,
+            Some(aegis_client::find::FindError::TooLarge) => 3,
+        });
         w.set_problem_warnings(i32::try_from(project.problem_counts.1).unwrap_or(i32::MAX));
         if prev_proj.is_none_or(|old| old.nav_counts != project.nav_counts) {
             w.set_nav_counts(model(
