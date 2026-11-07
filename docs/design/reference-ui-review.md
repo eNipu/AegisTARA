@@ -639,3 +639,24 @@ Each job names its acceptance tests in the backlog line. Every job follows
 the element recipe in architecture III.9.3, so new types arrive complete
 (ops with inverses, store, diff, lint, pages, report, XLSX, Excel import,
 undo label, `@tr` and Fluent keys in en and ja).
+
+---
+
+## 8. Check against ISO/SAE 21434 Figure 3 (2026-11-07)
+
+Figure 3 of the standard ("Relationship between item, function, component and
+related terms") checked against the code in `aegis-model`.
+
+| Figure 3 link | Our model | Verdict | Closed by |
+|---|---|---|---|
+| item consists of component | project (or a D26 system) is the item; `Component.parent` | ✓ | |
+| item implements function(s) | none | ✗ | ARC-06, job 160 |
+| item contains asset | `Asset.component` | ✓ | |
+| cybersecurity property attribute of asset | `Asset.properties` | ✓ | |
+| threat scenario compromises property | `ThreatScenario.asset` and `category`; a category violating a property the asset lacks is rejected | ✓ | |
+| threat scenario realizes damage scenario | `ThreatScenario.damages`, one risk per pair | ✓ | |
+| damage scenario affects road user | impact levels per pack category (safety, financial, operational, privacy) | ✓ | |
+| goal associated with threat scenario | `ThreatScenario.goal`, at most one | ◐ | FND-14, job 161 |
+| goal protects asset; associated with item | derived through the threat and the project | ✓ | |
+| goal realized by requirement | planned (architecture III.3, job 077) | ◐ | TRC-03, job 077 |
+| requirement allocated to item, component | not even planned | ✗ | TRC-06, job 077 |

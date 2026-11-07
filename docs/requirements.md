@@ -60,6 +60,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | G54 | The sidebar is in build order (item definition last), tables differ page by page, links are built per page, no find in page | `view.rs` `Page::ALL`, `pages.rs` | Navigation should follow the TARA process and new element types should not add code in five places (UI-13 to UI-19, NFR-12; D30) | 127 to 131, 149, 150, 152, 153 |
 | G55 | No traceability graph, management summary or review notes | none | Managers and the customer's reviewers are the readers of a consultancy TARA (TRC-05, RPT-09, REV-01 to REV-03) | 151, 154, 155 |
 | G56 | A project cannot be assembled from several TARA files that each stay workable alone; results of a supplier's TARA cannot be brought in | `Project` is one file; D26 covers one team only | Supplier and platform TARAs feed vehicle TARAs (MTA-01 to MTA-04; D31) | 158, 159 (design session) |
+| G57 | Checked against ISO/SAE 21434 Figure 3 on 2026-11-07: no functions (item implements functions), a threat scenario links at most one goal, and the planned requirement has no allocation to the item or components | `item.rs` has no function type; `ThreatScenario.goal: Option<GoalIdx>`; architecture III.3 `Requirement` | Item definition (RQ-09-01) lists functions; a requirement must be allocated to the item or components; one threat may need several goals (ARC-06, FND-14, TRC-06) | 160, 161, 077 |
 
 ---
 
@@ -92,6 +93,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | FND-11 | A project glossary (term, description, translations), shown on a page and as a report section | C | 5 | 156 |
 | FND-12 | Related documents (title, document ID, version, link; an external reference once TRC-01 lands), shown on a page and as the report's referenced documents | S | 5 | 156 |
 | FND-13 | Misuse cases (name, description) linked N:M to threat scenarios; a pack may hide the page | C | 5 | 148 |
+| FND-14 | A threat scenario may link several cybersecurity goals (sorted, capped); old projects with one goal load unchanged; the goal lints read the list (ISO/SAE 21434 Figure 3) | S | 5 | 161 |
 
 ### 2.1a Domains beyond automotive (DOM)
 
@@ -149,6 +151,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | ARC-03 | Architecture diagram on the canvas (data-flow style), user-placed positions plus auto-layout, click-through to threats | S | 6 | 075 |
 | ARC-04 | Import from draw.io, SysML v2, ARXML | C | later | none |
 | ARC-05 | The item definition has a description and a scope text (with translations, FND-04) and figures, on its own page and in the report | S | 5 | 132 |
+| ARC-06 | Functions of the item (name, description), each implemented by one or more components; shown on the item definition page and in the report; the linter notes a function no component implements (ISO/SAE 21434 Figure 3, RQ-09-01) | S | 5 | 160 |
 
 ### 2.5a Systems and multi-TARA (SYS)
 
@@ -235,6 +238,7 @@ job starts. D26 stays the answer for one team.
 | TRC-01 | External references (system, key, URL, title, sync state) on every element | M | 6 | 076 |
 | TRC-02 | Generic trace links for relations the engine does not use; suspect marking when a source changes; linter lists suspect links | M | 6 | 076 |
 | TRC-03 | Requirement and verification elements linked to goals and controls | M | 6 | 077 |
+| TRC-06 | A cybersecurity requirement is allocated to the item, to one or more components, or both; the linter warns on a requirement allocated to nothing; the component inspector lists the requirements allocated to it (ISO/SAE 21434 Figure 3) | M | 6 | 077 |
 | TRC-04 | Traceability matrix page with coverage numbers, also a report section | M | 6 | 078 |
 | TRC-05 | Traceability graph: columns damage scenarios, threats, risks, goals and claims, controls, with a filter and an n/N count per column; selecting a box highlights its chain; follows the system view and baselines; exports as SVG and a report figure | S | 5 | 151 |
 | REV-01 | Review notes on any element: author, time, text, open or resolved, replies; kept outside the op log so a Reviewer adds them to the saved version without the edit lease; never change a number or a baseline | S | 5 | 154 |
