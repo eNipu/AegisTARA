@@ -49,6 +49,16 @@ pub fn format_ms(ms: u64) -> String {
     )
 }
 
+/// `19:30 UTC`, for the status bar's save time. Zero shows as empty.
+#[must_use]
+pub fn time_ms(ms: u64) -> String {
+    if ms == 0 {
+        return String::new();
+    }
+    let in_day = (ms / 1000) % 86_400;
+    format!("{:02}:{:02} UTC", in_day / 3600, (in_day % 3600) / 60)
+}
+
 /// `2026-10-25`, for file names.
 #[must_use]
 pub fn date_ms(ms: u64) -> String {
