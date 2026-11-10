@@ -332,7 +332,22 @@ fn file_order_does_not_matter() {
     let mut all = files(&p);
     assert!(all.len() > 3);
     all.reverse();
-    assert_eq!(read(&all, &m).expect("read"), p);
+    let back = read(&all, &m).expect("read");
+    assert_eq!(back, p);
+    assert_eq!(save(&back), save(&p));
+}
+
+#[test]
+fn many_trees_keep_their_visual_ids() {
+    let m = builtin();
+    let ops: Vec<Op> = (1..=105).map(add_tree).collect();
+    let p = project_with(&m, &ops);
+    let mut all = files(&p);
+    let back = read(&all, &m).expect("read");
+    assert_eq!(save(&back), save(&p));
+    all.reverse();
+    let back = read(&all, &m).expect("read reversed");
+    assert_eq!(save(&back), save(&p));
 }
 
 #[test]

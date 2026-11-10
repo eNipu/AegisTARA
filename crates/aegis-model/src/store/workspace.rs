@@ -2,12 +2,14 @@
 //! one per kind of element and one per attack tree, so a folder of them
 //! diffs well in git. Nothing here touches the disk.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::error::{StoreError, WorkspaceProblem};
+use crate::id::VisualPrefix;
 use crate::methodology::Methodology;
 use crate::project::Project;
 
@@ -173,6 +175,12 @@ fn lookup(path: &str) -> Option<(&'static str, &'static [&'static str])> {
     (!name.is_empty() && !name.contains('/')).then_some(("tree", &[TREES_KEY][..]))
 }
 
+/// The file name of a tree file without directory and extension.
+fn tree_stem(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.strip_suffix(".json").unwrap_or(name)
+}
+
 impl Project {
     /// Reads workspace files written by [`Project::to_workspace_files`]
     /// back into a project. The files may arrive in any order.
@@ -213,15 +221,14 @@ impl Project {
         I: IntoIterator<Item = (&'a str, &'a [u8])>,
     {
         let mut snapshot = Map::new();
-        let mut trees: Vec<(&str, Vec<Value>)> = Vec::new();
-        let mut seen: Vec<&str> = Vec::new();
+        let mut trees: Vec<(u32, &str, Vec<Value>)> = Vec::new();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
         for (path, bytes) in files {
             let bad_path = || StoreError::WorkspacePath { path: short(path) };
             let (kind, keys) = lookup(path).ok_or_else(bad_path)?;
-            if seen.contains(&path) {
+            if !seen.insert(path) {
                 return Err(bad_path());
             }
-            seen.push(path);
             let envelope = |problem| StoreError::WorkspaceEnvelope {
                 path: short(path),
                 problem,
@@ -232,7 +239,9 @@ impl Project {
             if obj.remove("format").as_ref().and_then(Value::as_str) != Some("aegis-workspace") {
                 return Err(envelope(WorkspaceProblem::Format));
             }
-            if obj.remove("version").as_ref().and_then(Value::as_u64) != Some(1) {
+            if obj.remove("version").as_ref().and_then(Value::as_u64)
+                != Some(u64::from(super::wire::FORMAT_VERSION))
+            {
                 return Err(envelope(WorkspaceProblem::Version));
             }
             if obj.remove("kind").as_ref().and_then(Value::as_str) != Some(kind) {
@@ -242,22 +251,35 @@ impl Project {
                 return Err(envelope(WorkspaceProblem::Json));
             }
             if kind == "tree" {
-                let Some(Value::Array(list)) = obj.remove(TREES_KEY) else {
+                let Some(Value::Array(mut list)) = obj.remove(TREES_KEY) else {
                     return Err(envelope(WorkspaceProblem::Json));
                 };
-                trees.push((path, list));
+                // The writer leaves out a tree's visual ID when it equals the
+                // tree's position, so the file name is the ID to fall back on.
+                let stem = tree_stem(path).to_uppercase();
+                let num = VisualPrefix::Tree.parse_num(&stem);
+                if num.is_some() {
+                    for tree in &mut list {
+                        if let Value::Object(t) = tree {
+                            t.entry("visual_id")
+                                .or_insert_with(|| Value::from(stem.as_str()));
+                        }
+                    }
+                }
+                trees.push((num.unwrap_or(u32::MAX), path, list));
             } else {
                 snapshot.append(&mut obj);
             }
         }
-        if !seen.contains(&"aegis.json") {
+        if !seen.contains("aegis.json") {
             return Err(StoreError::WorkspaceMissing {
                 path: "aegis.json".to_owned(),
             });
         }
         if !trees.is_empty() {
-            trees.sort_by(|a, b| a.0.cmp(b.0));
-            let joined = trees.into_iter().flat_map(|(_, list)| list).collect();
+            // By the number in the file name: `at100` comes after `at99`.
+            trees.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+            let joined = trees.into_iter().flat_map(|(_, _, list)| list).collect();
             snapshot.insert(TREES_KEY.to_owned(), Value::Array(joined));
         }
         // The writer leaves out empty lists; the snapshot requires these three.
@@ -267,7 +289,10 @@ impl Project {
                 .or_insert_with(|| Value::Array(Vec::new()));
         }
         snapshot.insert("format".to_owned(), Value::from("aegis-project"));
-        snapshot.insert("version".to_owned(), Value::from(1));
+        snapshot.insert(
+            "version".to_owned(),
+            Value::from(super::wire::FORMAT_VERSION),
+        );
         let bytes =
             serde_json::to_vec(&Value::Object(snapshot)).map_err(super::wire::encode_error)?;
         Project::load(bytes.as_slice(), methodology)
