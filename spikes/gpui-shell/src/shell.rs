@@ -1,13 +1,14 @@
 //! The `Shell` view: owns the dock area and lays out the panels.
 
+use aegis_model::AttackTree;
 use gpui::{
-    AppContext as _, Context, Entity, FocusHandle, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, px,
+    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Window,
+    div, px,
 };
 use gpui_component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
-use gpui_component::{ActiveTheme as _, v_flex};
 use std::rc::Rc;
 
+use crate::canvas_tab::AttackTreeTab;
 use crate::editor_tab::EditorTab;
 use crate::inspector::Inspector;
 use crate::project_tree::ProjectTree;
@@ -21,14 +22,12 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(tree_data: &AttackTree, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let selection = cx.new(|_| Selection::default());
         let (area, skin) = DockSkin::dock_area("shell", None, window, cx);
         let tree = cx.new(|cx| ProjectTree::new(selection.clone(), cx));
         let inspector = cx.new(|cx| Inspector::new(selection.clone(), cx));
-        let attack_tree = cx.new(|cx| AttackTreeTab {
-            focus_handle: cx.focus_handle(),
-        });
+        let attack_tree = cx.new(|cx| AttackTreeTab::new(tree_data, selection.clone(), cx));
         let editor = cx.new(|cx| EditorTab::new(window, cx));
         let center = DockLayout::tabs()
             .panel_view(panel_handle(attack_tree), cx)
@@ -54,23 +53,5 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().size_full().child(self.area.clone())
-    }
-}
-
-/// Placeholder for the canvas that slice 181b draws.
-pub struct AttackTreeTab {
-    focus_handle: FocusHandle,
-}
-
-dock_panel!(AttackTreeTab, "AttackTree", "Attack tree");
-
-impl Render for AttackTreeTab {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .child("Attack tree canvas: slice 181b")
     }
 }
