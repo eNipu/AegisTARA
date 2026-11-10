@@ -8,7 +8,8 @@ use std::sync::Arc;
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
-use crate::error::{StoreError, WorkspaceProblem};
+use super::{Limit, MAX_PROJECT_FILE_BYTES, MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES, wire};
+use crate::error::{ModelError, StoreError, WorkspaceProblem};
 use crate::id::VisualPrefix;
 use crate::methodology::Methodology;
 use crate::project::Project;
@@ -47,6 +48,11 @@ const LAYOUT: &[(&str, &str, &[&str])] = &[
 
 const TREES_KEY: &str = "attack_trees";
 
+/// The `version` of the workspace envelope. It is the workspace format's own
+/// number, not the snapshot's [`wire::FORMAT_VERSION`]: the two change
+/// independently.
+const WORKSPACE_VERSION: u32 = 1;
+
 /// The envelope followed by the held entries, in order.
 struct FileView<'a> {
     kind: &'a str,
@@ -58,7 +64,7 @@ impl Serialize for FileView<'_> {
         s.collect_map(
             [
                 ("format", &Value::from("aegis-workspace")),
-                ("version", &Value::from(1)),
+                ("version", &Value::from(WORKSPACE_VERSION)),
                 ("kind", &Value::from(self.kind)),
             ]
             .into_iter()
@@ -154,13 +160,37 @@ impl Project {
 /// Longest path put into an error.
 const MAX_PATH_IN_ERROR: usize = 256;
 
-/// The path cut to [`MAX_PATH_IN_ERROR`] bytes at a character boundary.
-fn short(path: &str) -> String {
-    let mut end = path.len().min(MAX_PATH_IN_ERROR);
-    while !path.is_char_boundary(end) {
-        end -= 1;
+/// `text` cut to `max` bytes at a character boundary, and short enough that
+/// its `Debug` form stays within `max` bytes too (escapes such as
+/// `\u{1}` are longer than the character).
+fn cut(text: &str, max: usize) -> String {
+    let (mut bytes, mut shown) = (0, 0);
+    let mut out = String::new();
+    for c in text.chars() {
+        bytes += c.len_utf8();
+        shown += c.escape_debug().count();
+        if bytes > max || shown > max {
+            break;
+        }
+        out.push(c);
     }
-    path[..end].to_owned()
+    out
+}
+
+fn short(path: &str) -> String {
+    cut(path, MAX_PATH_IN_ERROR)
+}
+
+/// Whether `path` obeys the path rules: not empty, relative, `/`-separated,
+/// no `.` or `..` segment, and only lower-case ASCII letters, digits, `-`,
+/// `.` and `/`.
+fn path_ok(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && path
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'/'))
+        && path.split('/').all(|seg| seg != "." && seg != "..")
 }
 
 /// The kind and snapshot keys a path holds, or `None` if the path is not
@@ -181,20 +211,120 @@ fn tree_stem(path: &str) -> &str {
     name.strip_suffix(".json").unwrap_or(name)
 }
 
+/// The fixed file that holds `key`, or `aegis.json`.
+fn file_of_key(key: &str) -> &'static str {
+    LAYOUT
+        .iter()
+        .find(|(_, _, keys)| keys.contains(&key))
+        .map_or("aegis.json", |&(path, _, _)| path)
+}
+
+/// The second tree file (in load order) whose text holds `id`, else the
+/// first, else `aegis.json`. `Project::load` meets the repeat in the second.
+fn tree_file_with(id: &str, trees: &[(&str, &[u8])]) -> String {
+    let needle = id.as_bytes();
+    let mut holders = trees
+        .iter()
+        .filter(|(_, bytes)| bytes.windows(needle.len()).any(|w| w == needle))
+        .map(|&(path, _)| path);
+    let first = holders.next();
+    holders
+        .next()
+        .or(first)
+        .map_or_else(|| "aegis.json".to_owned(), short)
+}
+
+/// The file `Project::load` refused, as well as the error tells.
+fn blame(err: &StoreError, trees: &[(&str, &[u8])]) -> String {
+    let StoreError::Model(model) = err else {
+        return "aegis.json".to_owned();
+    };
+    let key = match model {
+        ModelError::DuplicateAttackTree(id) => return tree_file_with(&id.to_string(), trees),
+        ModelError::DuplicateId(id) => return tree_file_with(&id.to_string(), trees),
+        ModelError::UnknownAsset(_)
+        | ModelError::UnknownDamageScenario(_)
+        | ModelError::DuplicateThreatScenario(_) => "threat_scenarios",
+        ModelError::DuplicateAsset(_) => "assets",
+        ModelError::DuplicateDamageScenario(_) => "damage_scenarios",
+        ModelError::DuplicateSecurityControl(_) => "security_controls",
+        ModelError::DuplicateCybersecurityGoal(_) => "cybersecurity_goals",
+        ModelError::DuplicateCybersecurityClaim(_) => "cybersecurity_claims",
+        ModelError::DuplicateComponent(_) => "components",
+        ModelError::DuplicateInterface(_) => "interfaces",
+        ModelError::DuplicateDataFlow(_) => "data_flows",
+        ModelError::DuplicateTrustBoundary(_) => "trust_boundaries",
+        _ => return "aegis.json".to_owned(),
+    };
+    file_of_key(key).to_owned()
+}
+
+/// A file that passed the cheap checks: path, bytes, kind, held keys.
+type Taken<'a> = (&'a str, &'a [u8], &'static str, &'static [&'static str]);
+
+/// Pass 1: the caps and the path rules, before any JSON is parsed. At most
+/// `MAX_WORKSPACE_FILES` files are kept, and `aegis.json` must be among them.
+fn take_files<'a, I>(files: I) -> Result<Vec<Taken<'a>>, StoreError>
+where
+    I: IntoIterator<Item = (&'a str, &'a [u8])>,
+{
+    let mut taken: Vec<Taken<'a>> = Vec::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut total: u64 = 0;
+    for (path, bytes) in files {
+        if taken.len() >= MAX_WORKSPACE_FILES {
+            return Err(StoreError::LimitExceeded(Limit::WORKSPACE_FILES));
+        }
+        let len = wire::to_u64(bytes.len());
+        if len > MAX_WORKSPACE_FILE_BYTES {
+            return Err(StoreError::LimitExceeded(Limit::WORKSPACE_FILE_BYTES));
+        }
+        total = total.saturating_add(len);
+        if total > MAX_PROJECT_FILE_BYTES {
+            return Err(StoreError::LimitExceeded(Limit::PROJECT_FILE));
+        }
+        let looked = path_ok(path).then(|| lookup(path)).flatten();
+        let Some((kind, keys)) = looked else {
+            return Err(StoreError::WorkspacePath { path: short(path) });
+        };
+        if !seen.insert(path) {
+            return Err(StoreError::WorkspaceDuplicatePath { path: short(path) });
+        }
+        taken.push((path, bytes, kind, keys));
+    }
+    if !seen.contains("aegis.json") {
+        return Err(StoreError::WorkspaceMissing {
+            path: "aegis.json".to_owned(),
+        });
+    }
+    Ok(taken)
+}
+
 impl Project {
     /// Reads workspace files written by [`Project::to_workspace_files`]
     /// back into a project. The files may arrive in any order.
     ///
-    /// Each file's envelope is checked, the held keys are joined into one
-    /// snapshot, and that goes through [`Project::load`], so every check
-    /// the snapshot reader makes still runs.
+    /// The count and sizes of the files are capped
+    /// ([`MAX_WORKSPACE_FILES`], [`MAX_WORKSPACE_FILE_BYTES`], and
+    /// [`MAX_PROJECT_FILE_BYTES`] for the sum) and every path is checked
+    /// before any JSON is parsed. Then each file's envelope is checked, the
+    /// held keys are joined into one snapshot, and that goes through
+    /// [`Project::load`], so every check the snapshot reader makes still
+    /// runs. A refusal returns no project.
     ///
     /// # Errors
     ///
-    /// [`StoreError::WorkspacePath`] for a path outside the layout or a
-    /// repeated path, [`StoreError::WorkspaceEnvelope`] for a bad envelope,
-    /// [`StoreError::WorkspaceMissing`] if `aegis.json` is absent. Any error
-    /// from [`Project::load`] is returned as it is.
+    /// [`StoreError::LimitExceeded`] over a cap. [`StoreError::WorkspacePath`]
+    /// for a path outside the layout or breaking a path rule,
+    /// [`StoreError::WorkspaceDuplicatePath`] for a repeated path,
+    /// [`StoreError::WorkspaceEnvelope`] for a bad envelope,
+    /// [`StoreError::WorkspaceUnknownField`] for a key the file's kind does
+    /// not hold, [`StoreError::WorkspaceTreeName`] for a tree file that is
+    /// not one tree named by its visual ID,
+    /// [`StoreError::WorkspaceMissing`] if `aegis.json` is absent,
+    /// [`StoreError::WorkspaceMethodology`] for another methodology key.
+    /// Any other error from [`Project::load`] comes back as
+    /// [`StoreError::InWorkspace`], naming the file when it can be told.
     ///
     /// O(n) in the total size of the files.
     ///
@@ -220,15 +350,12 @@ impl Project {
     where
         I: IntoIterator<Item = (&'a str, &'a [u8])>,
     {
+        let taken = take_files(files)?;
+
+        // Pass 2: parse each file.
         let mut snapshot = Map::new();
-        let mut trees: Vec<(u32, &str, Vec<Value>)> = Vec::new();
-        let mut seen: BTreeSet<&str> = BTreeSet::new();
-        for (path, bytes) in files {
-            let bad_path = || StoreError::WorkspacePath { path: short(path) };
-            let (kind, keys) = lookup(path).ok_or_else(bad_path)?;
-            if !seen.insert(path) {
-                return Err(bad_path());
-            }
+        let mut trees: Vec<(u32, &str, &[u8], Vec<Value>)> = Vec::new();
+        for (path, bytes, kind, keys) in taken {
             let envelope = |problem| StoreError::WorkspaceEnvelope {
                 path: short(path),
                 problem,
@@ -240,46 +367,50 @@ impl Project {
                 return Err(envelope(WorkspaceProblem::Format));
             }
             if obj.remove("version").as_ref().and_then(Value::as_u64)
-                != Some(u64::from(super::wire::FORMAT_VERSION))
+                != Some(u64::from(WORKSPACE_VERSION))
             {
                 return Err(envelope(WorkspaceProblem::Version));
             }
             if obj.remove("kind").as_ref().and_then(Value::as_str) != Some(kind) {
                 return Err(envelope(WorkspaceProblem::Kind));
             }
-            if obj.keys().any(|k| !keys.contains(&k.as_str())) {
-                return Err(envelope(WorkspaceProblem::Json));
+            if let Some(field) = obj.keys().find(|k| !keys.contains(&k.as_str())) {
+                return Err(StoreError::WorkspaceUnknownField {
+                    path: short(path),
+                    field: cut(field, super::MAX_KEY_BYTES),
+                });
             }
             if kind == "tree" {
+                let tree_name = || StoreError::WorkspaceTreeName { path: short(path) };
                 let Some(Value::Array(mut list)) = obj.remove(TREES_KEY) else {
                     return Err(envelope(WorkspaceProblem::Json));
                 };
                 // The writer leaves out a tree's visual ID when it equals the
                 // tree's position, so the file name is the ID to fall back on.
-                let stem = tree_stem(path).to_uppercase();
-                let num = VisualPrefix::Tree.parse_num(&stem);
-                if num.is_some() {
-                    for tree in &mut list {
-                        if let Value::Object(t) = tree {
-                            t.entry("visual_id")
-                                .or_insert_with(|| Value::from(stem.as_str()));
-                        }
+                let stem = tree_stem(path);
+                let Some(num) = VisualPrefix::Tree.parse_num(&stem.to_uppercase()) else {
+                    return Err(tree_name());
+                };
+                let [Value::Object(tree)] = list.as_mut_slice() else {
+                    return Err(tree_name());
+                };
+                match tree.get("visual_id") {
+                    None => {
+                        tree.insert("visual_id".to_owned(), Value::from(stem.to_uppercase()));
                     }
+                    Some(Value::String(v)) if v.to_lowercase() == stem => {}
+                    Some(_) => return Err(tree_name()),
                 }
-                trees.push((num.unwrap_or(u32::MAX), path, list));
+                trees.push((num, path, bytes, list));
             } else {
                 snapshot.append(&mut obj);
             }
         }
-        if !seen.contains("aegis.json") {
-            return Err(StoreError::WorkspaceMissing {
-                path: "aegis.json".to_owned(),
-            });
-        }
+        // By the number in the file name: `at100` comes after `at99`.
+        trees.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        let tree_files: Vec<(&str, &[u8])> = trees.iter().map(|t| (t.1, t.2)).collect();
         if !trees.is_empty() {
-            // By the number in the file name: `at100` comes after `at99`.
-            trees.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-            let joined = trees.into_iter().flat_map(|(_, _, list)| list).collect();
+            let joined = trees.into_iter().flat_map(|t| t.3).collect();
             snapshot.insert(TREES_KEY.to_owned(), Value::Array(joined));
         }
         // The writer leaves out empty lists; the snapshot requires these three.
@@ -289,12 +420,16 @@ impl Project {
                 .or_insert_with(|| Value::Array(Vec::new()));
         }
         snapshot.insert("format".to_owned(), Value::from("aegis-project"));
-        snapshot.insert(
-            "version".to_owned(),
-            Value::from(super::wire::FORMAT_VERSION),
-        );
-        let bytes =
-            serde_json::to_vec(&Value::Object(snapshot)).map_err(super::wire::encode_error)?;
-        Project::load(bytes.as_slice(), methodology)
+        snapshot.insert("version".to_owned(), Value::from(wire::FORMAT_VERSION));
+        let bytes = serde_json::to_vec(&Value::Object(snapshot)).map_err(wire::encode_error)?;
+        Project::load(bytes.as_slice(), methodology).map_err(|err| match err {
+            StoreError::MethodologyMismatch { .. } => StoreError::WorkspaceMethodology {
+                path: "aegis.json".to_owned(),
+            },
+            other => StoreError::InWorkspace {
+                path: blame(&other, &tree_files),
+                source: Box::new(other),
+            },
+        })
     }
 }

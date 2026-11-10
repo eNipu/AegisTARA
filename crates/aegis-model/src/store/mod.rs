@@ -151,6 +151,26 @@ pub const MAX_PACK_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// ```
 pub const MAX_LABEL_BYTES: usize = 4 * MAX_LABEL_CHARS;
 
+/// Largest number of files [`Project::from_workspace_files`](crate::Project::from_workspace_files)
+/// reads: 10,010. That is the ten fixed files plus one file per attack
+/// tree for up to 10,000 trees. The model has no cap on trees of its own;
+/// the 64 MiB total ([`MAX_PROJECT_FILE_BYTES`]) is the real bound, and a
+/// project with 2,000 threats has about 2,000 trees.
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_WORKSPACE_FILES, 10 + 10_000);
+/// ```
+pub const MAX_WORKSPACE_FILES: usize = 10 + 10_000;
+
+/// Largest single workspace file, in bytes: 16 MiB. The biggest file in a
+/// typical project (the threats file, 2,000 threats) is about 1 MB; the
+/// sum of all files is also held to [`MAX_PROJECT_FILE_BYTES`].
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_WORKSPACE_FILE_BYTES, 16 * 1024 * 1024);
+/// ```
+pub const MAX_WORKSPACE_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// A decode cap, carried by both
 /// [`StoreError::LimitExceeded`](crate::StoreError::LimitExceeded) (project
 /// snapshots and op logs) and
@@ -359,6 +379,16 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// More than [`MAX_WORKSPACE_FILES`] workspace files.
+    WorkspaceFiles {
+        /// The cap, in files.
+        max: usize,
+    },
+    /// A workspace file is larger than [`MAX_WORKSPACE_FILE_BYTES`].
+    WorkspaceFileBytes {
+        /// The cap, in bytes.
+        max: u64,
+    },
 }
 
 impl Limit {
@@ -452,6 +482,12 @@ impl Limit {
     pub(crate) const PACK_TRANSLATIONS: Limit = Limit::PackTranslations {
         max: MAX_PACK_TRANSLATIONS,
     };
+    pub(crate) const WORKSPACE_FILES: Limit = Limit::WorkspaceFiles {
+        max: MAX_WORKSPACE_FILES,
+    };
+    pub(crate) const WORKSPACE_FILE_BYTES: Limit = Limit::WorkspaceFileBytes {
+        max: MAX_WORKSPACE_FILE_BYTES,
+    };
 }
 
 impl fmt::Display for Limit {
@@ -519,6 +555,10 @@ impl fmt::Display for Limit {
             }
             Limit::PackTranslations { max } => {
                 write!(f, "more than {max} pack translations")
+            }
+            Limit::WorkspaceFiles { max } => write!(f, "more than {max} workspace files"),
+            Limit::WorkspaceFileBytes { max } => {
+                write!(f, "workspace file is larger than {max} bytes")
             }
         }
     }
