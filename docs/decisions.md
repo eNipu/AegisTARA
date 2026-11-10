@@ -319,6 +319,19 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Decision:** the factory is planner, builder, a script gate (`factory/verify.py`), one reviewer for code and security, then the owner. No agents run in parallel and there are no UI or UX review agents. A job is cut into slices of at most 400 changed lines; each has a self-contained build prompt that also works in another session or with another model. The model is chosen per slice by tier and risk. Lessons from failed gates, review findings and owner reworks go to `factory/lessons.md`; a change to the factory itself is proposed by `/factory retro` and applied only with the owner's yes.
 - **Details:** `.claude/skills/factory/SKILL.md`.
 
+## D42. One methodology per workspace, chosen when the project is created
+
+- **Date:** 2026-11-10
+- **Status:** steer from the owner.
+- **Decision:** a workspace uses exactly one methodology. It is chosen when the project is created and cannot be changed afterwards in v1. Mixing methodologies in one workspace is not allowed. Opening a workspace with a different methodology than its own is refused (job 162 already does this). Changing or converting the methodology later is not built until its cost and its interoperability are understood.
+- **Open:** whether a newer version of the same methodology may open an older workspace (today any version is accepted, ADR 0009).
+
+## D43. Every change goes through the business logic; lists are edited like a spreadsheet
+
+- **Date:** 2026-11-10
+- **Status:** steer from the owner. Sharpens D40.
+- **Decision:** adding, changing or deleting anything (an asset, a misuse case, a damage scenario, or a property of one) is done by the business logic in the model, which checks it and keeps the links between elements correct. The editor never writes to the files directly and never shows JSON. Lists are edited in a grid that behaves like a spreadsheet: add a row, delete a row, type in a cell, with no extra steps. The workspace files (job 162) are only what the business logic saves.
+
 ## Open
 
 - Delete the four merged remote branches listed in D9.

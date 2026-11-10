@@ -139,10 +139,10 @@ fit. Each figure is the median of 100 samples; fastest and slowest in brackets.
 
 ## Fuzz result
 
-Not run. `cargo fuzz` is not installed on this machine (`cargo fuzz --version`
-reports "no such command"), and this slice does not install it. The
-target builds on stable: `cargo check --locked --manifest-path
-crates/aegis-model/fuzz/Cargo.toml --bin workspace` passes.
+Run on 2026-11-10 with `crates/aegis-model/fuzz/run.sh 120 workspace` (stable
+toolchain, libFuzzer coverage, no sanitizer): 2,821,999 runs in 121 seconds,
+no crash and no property failure. `cargo-fuzz` is not needed for this; it
+only adds AddressSanitizer on nightly.
 
 The target is `fuzz/fuzz_targets/workspace.rs`. Its input is split on `0x00`
 into chunks; the text up to the first `\n` in each chunk is the path, and the
@@ -152,10 +152,7 @@ the project's workspace files read back to an equal project with equal
 (`fixture-sorted` and `fixture-reversed`, the four files of
 `tests/fixtures/project-v1.json` in two orders).
 
-To run it when `cargo-fuzz` is installed:
-`cargo +nightly fuzz run workspace corpus/workspace seeds/workspace -- -max_total_time=600`
-from `crates/aegis-model/fuzz`. The `run.sh` script in that folder does not
-list `workspace` yet.
+To run it again: `crates/aegis-model/fuzz/run.sh 600 workspace`.
 
 ## Left for later
 

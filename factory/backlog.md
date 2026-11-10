@@ -196,6 +196,8 @@ Later:
 - [ ] AI wave 1: damage scenario writer, threat suggestions with STRIDE and catalog citations, rating rationale text, report summary wording with a check that every number matches the engine (AI-07) (091-ai-wave-1)
 - [ ] Multilingual semantic search over the library and catalogs: a permissive multilingual embedding model run in the server after a D5 review, vectors in memory with a measured size limit, mixed with the n-gram score (AI-08, LIB-09) (092-semantic-search)
 - [ ] Translation of element text through the gateway into the content language fields, reviewed by the user before it is kept (AI-09) (093-ai-translation)
+- [ ] Workspace files on the `large` reference project: build a 100,000-node placeholder project in the benchmark kit, measure workspace write, read and peak memory against the 1.0 s open budget, and add the figures to ADR 0065 (follow-up to 162d)
+- [ ] Project creation: choose the methodology once when the project is created; no control to change it afterwards (D42)
 
 ## Waiting for a design session
 
