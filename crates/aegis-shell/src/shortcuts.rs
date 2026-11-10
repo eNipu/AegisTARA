@@ -158,7 +158,7 @@ pub fn slint_keys(s: &Shortcut) -> Keys {
 /// The shortcuts, in cheat-sheet order.
 #[must_use]
 pub fn table() -> &'static [Shortcut] {
-    const TABLE: [Shortcut; 19] = [
+    const TABLE: [Shortcut; 20] = [
         Shortcut::new("palette", "Command palette", "General", &["Control", "K"]),
         Shortcut::new("undo", "Undo", "Editing", &["Control", "Z"]),
         Shortcut::new("redo", "Redo", "Editing", &["Control", "Shift", "Z"])
@@ -181,6 +181,7 @@ pub fn table() -> &'static [Shortcut] {
             "Project",
             &["Control", "Shift", "N"],
         ),
+        Shortcut::new("find", "Find in page", "Editing", &["Control", "F"]),
         Shortcut::hint(
             "save-description",
             "Save the description",
@@ -229,6 +230,7 @@ pub fn install(window: &AppWindow) {
     window.set_item_keys(keys_for("item"));
     window.set_back_keys(keys_for("back"));
     window.set_forward_keys(keys_for("forward"));
+    window.set_find_keys(keys_for("find"));
     window.set_save_description_label(keys_for_label("save-description").into());
     window.set_undo_shortcut(keys_for_label("undo").into());
     window.set_redo_shortcut(keys_for_label("redo").into());

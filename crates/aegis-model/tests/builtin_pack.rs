@@ -365,6 +365,7 @@ fn expected() -> MethodologyDef {
                 required: 1,
             },
         }],
+        require_rationale: false,
         attack_potential: Some(AttackPotentialDef {
             factors: vec![
                 FactorDef {

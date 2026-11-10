@@ -607,14 +607,27 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         b.push(risk_rows_block(&catalog, &top));
     }
 
-    // ---- item definition (ARC-02, job 074) ----
-    if sections.item_definition
-        && (project.component_count() > 0
-            || project.interface_count() > 0
-            || project.data_flow_count() > 0
-            || project.trust_boundary_count() > 0)
-    {
+    // ---- item definition (ARC-02, job 074; description and scope ARC-05) ----
+    let item_description = description_of(ws, ElementRef::ItemDescription, lang);
+    let item_scope = description_of(ws, ElementRef::ItemScope, lang);
+    let item_elements = project.component_count() > 0
+        || project.interface_count() > 0
+        || project.data_flow_count() > 0
+        || project.trust_boundary_count() > 0;
+    let item_text = item_description.is_some() || item_scope.is_some();
+    if sections.item_definition && (item_elements || item_text) {
         b.push(Heading(2, catalog.tr("section-item-definition")));
+        for (key, text) in [
+            ("item-description", &item_description),
+            ("item-scope", &item_scope),
+        ] {
+            if let Some(text) = text {
+                b.push(Heading(3, catalog.tr(key)));
+                desc_blocks(&mut b, text);
+            }
+        }
+    }
+    if sections.item_definition && item_elements {
         b.push(Heading(3, names.component.plural.to_string()));
         let comp_rows = pages::component_rows(ws);
         b.push(table(
@@ -765,12 +778,17 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         b.push(Heading(2, format!("3. {}", names.damage_scenario.plural)));
         let mut headers: Vec<String> = vec![names.damage_scenario.singular.to_string()];
         headers.extend(vocab.impact_categories.iter().map(|c| c.label.clone()));
+        headers.push(catalog.tr("rationale"));
         headers.push(catalog.tr("threats"));
         b.push(table(
             &headers,
             pages::damage_rows(ws)
                 .into_iter()
                 .map(|d| {
+                    let rationale = project
+                        .damage_scenario_idx(&d.id)
+                        .and_then(|i| project.damage_scenario(i))
+                        .map_or_else(String::new, |x| x.impact_rationale().to_owned());
                     let mut row = vec![format!("{} · {}", d.visual_id, d.name)];
                     for (i, level) in d.impacts.iter().enumerate() {
                         row.push(
@@ -782,6 +800,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                                 .unwrap_or_default(),
                         );
                     }
+                    row.push(rationale);
                     row.push(d.threats.to_string());
                     row
                 })
@@ -839,6 +858,19 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                             .clone()
                             .unwrap_or_else(|| catalog.tr("not-rated")),
                     ],
+                    vec![
+                        catalog.tr("feasibility-rationale"),
+                        t.feasibility_rationale.clone(),
+                    ],
+                    vec![
+                        catalog.tr("scales"),
+                        match t.scales {
+                            Some(true) => catalog.tr("yes"),
+                            Some(false) => catalog.tr("no"),
+                            None => catalog.tr("not-rated"),
+                        },
+                    ],
+                    vec![catalog.tr("scaling-reason"), t.scaling_reason.clone()],
                     vec![
                         catalog.tr("risk-before-controls"),
                         risk_text(t.inherent.as_ref()),

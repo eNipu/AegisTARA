@@ -1513,3 +1513,63 @@ msgstr "ブロック {} 件"
 
 msgid "{} warnings"
 msgstr "警告 {} 件"
+
+msgid "Scales"
+msgstr "スケール"
+
+msgid "Scales to many vehicles"
+msgstr "多数の車両へのスケール"
+
+msgid "Not rated"
+msgstr "未評価"
+
+msgid "No"
+msgstr "いいえ"
+
+msgid "Why it scales or not"
+msgstr "スケールするかどうかの根拠"
+
+msgid "One attack tool works on every car, or each car needs physical access. {0} or leaving the box saves."
+msgstr "1つの攻撃ツールで全車両に通用するか、車両ごとに物理アクセスが必要か。{0} またはボックスを離れると保存されます。"
+
+msgid "Find in page"
+msgstr "ページ内を検索"
+
+msgid "Find by ID, name or description"
+msgstr "ID、名前、説明で検索"
+
+msgid "Regular expression"
+msgstr "正規表現"
+
+msgid "{} of {}"
+msgstr "{} / {}"
+
+msgid "The search is too long."
+msgstr "検索文字列が長すぎます。"
+
+msgid "Not a valid expression."
+msgstr "正規表現が正しくありません。"
+
+msgid "The expression is too large."
+msgstr "正規表現が大きすぎます。"
+
+msgid "Why this impact"
+msgstr "この影響度の根拠"
+
+msgid "Why this feasibility"
+msgstr "この実現可能性の根拠"
+
+msgid "The reason for the rating, for a reviewer. {0} or leaving the box saves."
+msgstr "レビュー担当者向けの評価の根拠。{0} またはボックスを離れると保存されます。"
+
+msgid "Description and scope"
+msgstr "説明と範囲"
+
+msgid "What the item is and does, and what this analysis covers and leaves out."
+msgstr "アイテムの内容と機能、およびこの分析の対象と対象外。"
+
+msgid "Item description"
+msgstr "アイテムの説明"
+
+msgid "Scope"
+msgstr "範囲"

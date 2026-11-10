@@ -1538,6 +1538,8 @@ pub(super) enum TargetWire {
     Interface { id: WireId<InterfaceId> },
     DataFlow { id: WireId<DataFlowId> },
     TrustBoundary { id: WireId<TrustBoundaryId> },
+    ItemDescription,
+    ItemScope,
 }
 
 impl TargetWire {
@@ -1556,6 +1558,8 @@ impl TargetWire {
             Self::Interface { id } => E::Interface(id.0),
             Self::DataFlow { id } => E::DataFlow(id.0),
             Self::TrustBoundary { id } => E::TrustBoundary(id.0),
+            Self::ItemDescription => E::ItemDescription,
+            Self::ItemScope => E::ItemScope,
         }
     }
 }
@@ -1576,6 +1580,8 @@ pub(super) enum TargetView {
     Interface { id: Text<InterfaceId> },
     DataFlow { id: Text<DataFlowId> },
     TrustBoundary { id: Text<TrustBoundaryId> },
+    ItemDescription,
+    ItemScope,
 }
 
 impl From<crate::description::ElementRef> for TargetView {
@@ -1594,6 +1600,8 @@ impl From<crate::description::ElementRef> for TargetView {
             E::Interface(id) => Self::Interface { id: Text(id) },
             E::DataFlow(id) => Self::DataFlow { id: Text(id) },
             E::TrustBoundary(id) => Self::TrustBoundary { id: Text(id) },
+            E::ItemDescription => Self::ItemDescription,
+            E::ItemScope => Self::ItemScope,
         }
     }
 }
@@ -1643,6 +1651,8 @@ pub(super) struct DamageWire {
     pub(super) name: Name,
     pub(super) impacts: Impacts,
     #[serde(default, deserialize_with = "some")]
+    pub(super) impact_rationale: Option<DescriptionText>,
+    #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
@@ -1668,6 +1678,12 @@ pub(super) struct ThreatWire {
     pub(super) goal: Option<WireId<GoalId>>,
     #[serde(default, deserialize_with = "some")]
     pub(super) claim: Option<WireId<ClaimId>>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) scales: Option<bool>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) scaling_reason: Option<DescriptionText>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) feasibility_rationale: Option<DescriptionText>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -2263,6 +2279,26 @@ pub(super) enum OpWire {
         threat: WireId<ThreatId>,
         #[serde(deserialize_with = "Option::deserialize")]
         claim: Option<WireId<ClaimId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetThreatScaling {
+        threat: WireId<ThreatId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        scales: Option<bool>,
+        reason: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetImpactRationale {
+        damage: WireId<DamageId>,
+        text: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetFeasibilityRationale {
+        threat: WireId<ThreatId>,
+        text: DescriptionText,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

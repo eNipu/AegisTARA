@@ -83,5 +83,20 @@ Run this list for every release build. Tick each line in the release notes.
       test client on this release is not offered it again. The installer
       passes `verify_download`.
 - [ ] SHA-256 sums are published next to the artifacts.
+- [ ] The tag's CI run has an `sbom-<tag>` artifact (job `SBOM`), and its
+      three CycloneDX files are published next to the artifacts (NFR-05).
+
+## Cyber Resilience Act (NFR-05)
+
+- [ ] The release notes state the end of the security support period
+      (`SECURITY.md`: five years from release, or the next major version
+      plus one year, whichever is later).
+- [ ] Private vulnerability reporting is on for the repository
+      (Settings → Code security), as `SECURITY.md` promises.
+- [ ] Every vulnerability fixed in this release is listed in the release
+      notes with its severity, and the reporter is credited.
+- [ ] Any actively exploited vulnerability fixed here was reported to the
+      CSIRT and ENISA within the CRA deadlines (24 hours, 72 hours,
+      14 days after the fix).
 - [ ] The release notes list the engine version (`ENGINE_VERSION`) and the
       oplog format version.

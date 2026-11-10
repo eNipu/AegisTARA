@@ -1513,3 +1513,63 @@ msgstr "⟦{} blóckíng␣␣⟧"
 
 msgid "{} warnings"
 msgstr "⟦{} wárníngs␣␣⟧"
+
+msgid "Scales"
+msgstr "⟦Scálés␣␣⟧"
+
+msgid "Scales to many vehicles"
+msgstr "⟦Scálés tó mány véhíclés␣␣⟧"
+
+msgid "Not rated"
+msgstr "⟦Nót rátéd␣␣⟧"
+
+msgid "No"
+msgstr "⟦Nó␣␣⟧"
+
+msgid "Why it scales or not"
+msgstr "⟦Why ít scálés ór nót␣␣⟧"
+
+msgid "One attack tool works on every car, or each car needs physical access. {0} or leaving the box saves."
+msgstr "⟦Óné áttáck tóól wórks ón évéry cár, ór éách cár nééds physícál áccéss. {0} ór léávíng thé bóx sávés.␣␣⟧"
+
+msgid "Find in page"
+msgstr "⟦Fínd ín págé␣␣⟧"
+
+msgid "Find by ID, name or description"
+msgstr "⟦Fínd by ÍD, námé ór déscríptíón␣␣⟧"
+
+msgid "Regular expression"
+msgstr "⟦Régúlár éxpréssíón␣␣⟧"
+
+msgid "{} of {}"
+msgstr "⟦{} óf {}␣␣⟧"
+
+msgid "The search is too long."
+msgstr "⟦Thé séárch ís tóó lóng.␣␣⟧"
+
+msgid "Not a valid expression."
+msgstr "⟦Nót á válíd éxpréssíón.␣␣⟧"
+
+msgid "The expression is too large."
+msgstr "⟦Thé éxpréssíón ís tóó lárgé.␣␣⟧"
+
+msgid "Why this impact"
+msgstr "⟦Why thís ímpáct␣␣⟧"
+
+msgid "Why this feasibility"
+msgstr "⟦Why thís féásíbílíty␣␣⟧"
+
+msgid "The reason for the rating, for a reviewer. {0} or leaving the box saves."
+msgstr "⟦Thé réásón fór thé rátíng, fór á révíéwér. {0} ór léávíng thé bóx sávés.␣␣⟧"
+
+msgid "Description and scope"
+msgstr "⟦Déscríptíón ánd scópé␣␣⟧"
+
+msgid "What the item is and does, and what this analysis covers and leaves out."
+msgstr "⟦Whát thé ítém ís ánd dóés, ánd whát thís ánálysís cóvérs ánd léávés óút.␣␣⟧"
+
+msgid "Item description"
+msgstr "⟦Ítém déscríptíón␣␣⟧"
+
+msgid "Scope"
+msgstr "⟦Scópé␣␣⟧"

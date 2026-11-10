@@ -649,6 +649,7 @@ fn maxed() -> Arc<Methodology> {
             })
             .collect(),
         risk_levels,
+        require_rationale: false,
         attack_potential: Some(AttackPotentialDef {
             factors: (0..16)
                 .map(|i| {
