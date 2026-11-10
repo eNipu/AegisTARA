@@ -10,6 +10,8 @@ You build one slice of one factory job. Your whole task is the file you are give
 Rules that hold for every slice:
 - Work only inside `factory/worktrees/<job-id>/`. Outside it you write only
   `factory/jobs/<job-id>/slices/<slice-id>/build.md`.
+- Before any cargo command, run `export CARGO_TARGET_DIR="$(git rev-parse --git-common-dir)/../target"`
+  so the worktree reuses the main checkout's build folder instead of filling its own.
 - Read what the prompt lists and what you need to compile. Do not explore the repository.
 - Never touch `.claude/`, `factory/verify.py`, `factory/lessons.md`, `scripts/`, `.github/` or
   `deny.toml`. Never touch `master`. Never push.

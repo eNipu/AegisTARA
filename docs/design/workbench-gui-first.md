@@ -104,6 +104,20 @@ What exists in the model: tree node ops, the library pack and its search, origin
 
 One canvas engine (`aegis-canvas`) draws the attack tree, the item diagram and the trace graph, with the same select, drag, connect, menu and zoom everywhere.
 
+## 5a. Icons and tooltips
+
+| Rule | Detail |
+|---|---|
+| Every menu item has an icon before its label | Also toolbar buttons, tabs, tree rows (one icon per element kind) and status bar items |
+| One icon family | A single permissively licensed set (license checked under D5), one stroke weight, drawn at 16 px; an element kind keeps the same icon everywhere |
+| Every icon has a tooltip | The name, one line that says what it does, and the shortcut: "Add existing — use a shared step that is already rated (⌘E)" |
+| A disabled item says why | "Make shared: select a step or a gate first" |
+| Icons never stand alone for meaning | Menus show icon and label. Icon-only buttons are allowed in toolbars, always with a tooltip and a name for screen readers |
+| Colour is not the icon's job | Icons are one colour; only rating badges carry colour |
+| Text is translated | Tooltip text goes through the same English and Japanese catalogs as labels (D13) |
+
+One table in the client core lists each command once: id, label, icon, tooltip, shortcut. Menus, the toolbar, the palette and the shortcut list all read it, so an icon or tooltip cannot be missing in one place and present in another. A test fails for a command with no icon or no tooltip.
+
 ## 6. Versions without git knowledge
 
 D32 keeps git as the history. For a customer it must be invisible and need no installation:
