@@ -1143,6 +1143,64 @@
       "decision": "APPROVE",
       "updated_at": "2026-11-01T13:10:00Z",
       "notes": "Built directly on master in four slices plus a gap-closing pass. All reviews PASS. Measured 5,000 rows: scroll frame 9.5 ms median (software renderer, headless). Follow-ups for a person: GPU feel at 5,000 rows, VoiceOver/NVDA, ja strings."
+    },
+    {
+      "id": "162-workspace-files",
+      "title": "Workspace files",
+      "branch": "factory/162-workspace-files",
+      "stage": "merged",
+      "slice": "162d",
+      "base": "449940aaf209f031fda226e71791f3f1476e3ee5",
+      "reviews": {
+        "slice": "162d",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "162a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 180
+        },
+        {
+          "slice": "162b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 2,
+          "review_tries": 2,
+          "lines": 241
+        },
+        {
+          "slice": "162c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 396
+        },
+        {
+          "slice": "162d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "haiku",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 4
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-10T17:45:58Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
