@@ -95,6 +95,7 @@ flowchart TB
 | `lint.rs` | `LintSeverity`, `LintCode` (25 variants: 4 `Error`, 21 `Warning`), `LintFinding` | Deterministic completeness and consistency linter over `Project` (including `AssetUnbound` and `BoundaryCrossingDataFlowWithoutThreat`; zero entity names in output, rule R6). |
 | `diff.rs` | `EntityDiff<Id>`, `RiskSnapshot`, `RiskChange`, `RiskDelta`, `ThreatRiskDelta`, `ProjectDiff` | Deterministic structural (across all 11 arenas) and inherent/residual risk delta comparison between two `Project` versions. |
 | `store/` | `OpLogWriter<W>`, `OpLogReader<R>`, `StoreError` | Key-based JSON snapshot (`aegis-project`) and JSON Lines append-only operation log (`aegis-oplog`) with decode-time size caps (rule R3). |
+| `store/workspace.rs` | `WorkspaceFile`, `MAX_WORKSPACE_FILES`, `MAX_WORKSPACE_FILE_BYTES` | A project as a folder of small JSON files (D32, ADR 0065): `to_workspace_files` and `from_workspace_files` do no disk I/O; the reader checks paths, layout and caps, then reuses `Project::load`. |
 | `error.rs` | `ModelError` | Structured error enum for all domain, graph, capacity, and validation failures. |
 
 ---

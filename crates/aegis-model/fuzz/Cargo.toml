@@ -9,6 +9,7 @@
 #   cargo +nightly fuzz run snapshot corpus/snapshot seeds/snapshot -- -max_total_time=60
 #   cargo +nightly fuzz run op_log corpus/op_log seeds/op_log -- -max_total_time=60
 #   cargo +nightly fuzz run pack corpus/pack seeds/pack -- -max_total_time=60
+#   cargo +nightly fuzz run workspace corpus/workspace seeds/workspace -- -max_total_time=60
 
 [package]
 name = "aegis-model-fuzz"
@@ -45,6 +46,13 @@ bench = false
 [[bin]]
 name = "pack"
 path = "fuzz_targets/pack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "workspace"
+path = "fuzz_targets/workspace.rs"
 test = false
 doc = false
 bench = false
