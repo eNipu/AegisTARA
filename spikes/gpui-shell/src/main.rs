@@ -26,16 +26,34 @@ macro_rules! dock_panel {
     };
 }
 
+mod args;
+mod canvas_tab;
 mod editor_tab;
 mod inspector;
+mod palette;
 mod project_tree;
+mod sample_tree;
 mod selection;
 mod shell;
 
 use gpui::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
 fn main() {
-    gpui_platform::application().run(|cx| {
+    let n = match args::parse_nodes(&std::env::args().collect::<Vec<_>>()) {
+        Ok(n) => n,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
+    let tree = match sample_tree::wide_tree(n, 4) {
+        Ok(tree) => tree,
+        Err(err) => {
+            eprintln!("could not build the sample tree: {err}");
+            std::process::exit(2);
+        }
+    };
+    gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         let options = WindowOptions {
@@ -47,7 +65,7 @@ fn main() {
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            let shell = cx.new(|cx| shell::Shell::new(window, cx));
+            let shell = cx.new(|cx| shell::Shell::new(&tree, window, cx));
             cx.new(|cx| gpui_component::Root::new(shell, window, cx))
         });
         if let Err(err) = opened {
