@@ -46,10 +46,12 @@
 mod op_log;
 mod snapshot;
 pub(crate) mod wire;
+mod workspace;
 
 use std::fmt;
 
 pub use op_log::{LoggedOp, OpCodec, OpLogReader, OpLogWriter};
+pub use workspace::WorkspaceFile;
 
 use crate::control::{
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS,
