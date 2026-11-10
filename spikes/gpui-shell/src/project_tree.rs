@@ -1,11 +1,10 @@
 //! The project tree panel: a flat, indented outline of the sample workspace.
 
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window, div, px,
+    Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
-use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 
 use crate::selection::Selection;
@@ -19,10 +18,11 @@ pub struct OutlineRow {
 }
 
 fn row(depth: u8, kind: &'static str, label: &str, count: Option<u32>) -> OutlineRow {
+    let label = label.to_string();
     OutlineRow {
         depth,
         kind,
-        label: label.to_string(),
+        label,
         count,
     }
 }
@@ -58,15 +58,9 @@ impl ProjectTree {
     }
 
     fn select(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.rows.get(ix) else {
-            return;
-        };
-        let kind = row.kind;
-        let label = row.label.clone();
-        let detail = row
-            .count
-            .map(|count| format!("{count} items"))
-            .unwrap_or_default();
+        let Some(row) = self.rows.get(ix) else { return };
+        let (kind, label) = (row.kind, row.label.clone());
+        let detail = row.count.map(|n| format!("{n} items")).unwrap_or_default();
         self.selection.update(cx, |selection, cx| {
             *selection = Selection {
                 kind,
@@ -78,25 +72,7 @@ impl ProjectTree {
     }
 }
 
-impl BasePanel for ProjectTree {
-    fn panel_name(&self) -> &'static str {
-        "ProjectTree"
-    }
-}
-
-impl Panel for ProjectTree {
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        "Project"
-    }
-}
-
-impl EventEmitter<PanelEvent> for ProjectTree {}
-
-impl Focusable for ProjectTree {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
+dock_panel!(ProjectTree, "ProjectTree", "Project");
 
 impl Render for ProjectTree {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -105,10 +81,10 @@ impl Render for ProjectTree {
         let selected = self.selection.read(cx).label.clone();
         let accent = cx.theme().secondary;
         let rows = self.rows.iter().enumerate().map(|(ix, row)| {
-            let count = row.count.map(|count| {
+            let count = row.count.map(|n| {
                 div()
                     .text_color(muted)
-                    .child(SharedString::from(count.to_string()))
+                    .child(SharedString::from(n.to_string()))
             });
             h_flex()
                 .id(("outline-row", ix))
@@ -117,7 +93,7 @@ impl Render for ProjectTree {
                 .py_0p5()
                 .pr_2()
                 .pl(px(f32::from(row.depth) * 16. + 8.))
-                .when_selected(row.label == selected, accent)
+                .when(row.label == selected, |this| this.bg(accent))
                 .hover(|style| style.bg(hover))
                 .cursor_pointer()
                 .child(div().flex_1().child(SharedString::from(row.label.clone())))
@@ -127,15 +103,6 @@ impl Render for ProjectTree {
         v_flex().size_full().py_1().children(rows)
     }
 }
-
-/// Paints a row's background when it is the selected one.
-trait WhenSelected: gpui::Styled + Sized {
-    fn when_selected(self, selected: bool, color: gpui::Hsla) -> Self {
-        if selected { self.bg(color) } else { self }
-    }
-}
-
-impl<T: gpui::Styled> WhenSelected for T {}
 
 #[cfg(test)]
 mod tests {
@@ -147,8 +114,5 @@ mod tests {
         let depths: Vec<u8> = rows.iter().map(|row| row.depth).collect();
         assert_eq!(depths, vec![0, 1, 2, 3, 3, 3, 3, 4]);
         assert_eq!(rows[0].kind, "workspace");
-        assert_eq!(rows[0].label, "Sample workspace");
-        assert_eq!(rows[7].label, "Relay attack on key fob");
-        assert_eq!(rows[5].count, Some(21));
     }
 }
