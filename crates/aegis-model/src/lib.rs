@@ -270,7 +270,9 @@ pub use description::{
     MAX_LANG_TAG_BYTES, MAX_NOTES_CHARS, Translation,
 };
 pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
-pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
+pub use error::{
+    EntityKind, MethodologyError, ModelError, PackError, StoreError, WorkspaceProblem,
+};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, TreeEvalCache,
     evaluate,

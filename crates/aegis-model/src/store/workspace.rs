@@ -2,10 +2,13 @@
 //! one per kind of element and one per attack tree, so a folder of them
 //! diffs well in git. Nothing here touches the disk.
 
-use serde::{Serialize, Serializer};
-use serde_json::Value;
+use std::sync::Arc;
 
-use crate::error::StoreError;
+use serde::{Serialize, Serializer};
+use serde_json::{Map, Value};
+
+use crate::error::{StoreError, WorkspaceProblem};
+use crate::methodology::Methodology;
 use crate::project::Project;
 
 /// One file of a project workspace: a path relative to the workspace
@@ -143,5 +146,130 @@ impl Project {
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
+    }
+}
+
+/// Longest path put into an error.
+const MAX_PATH_IN_ERROR: usize = 256;
+
+/// The path cut to [`MAX_PATH_IN_ERROR`] bytes at a character boundary.
+fn short(path: &str) -> String {
+    let mut end = path.len().min(MAX_PATH_IN_ERROR);
+    while !path.is_char_boundary(end) {
+        end -= 1;
+    }
+    path[..end].to_owned()
+}
+
+/// The kind and snapshot keys a path holds, or `None` if the path is not
+/// in the layout.
+fn lookup(path: &str) -> Option<(&'static str, &'static [&'static str])> {
+    if let Some(&(_, kind, keys)) = LAYOUT.iter().find(|(p, _, _)| *p == path) {
+        return Some((kind, keys));
+    }
+    let name = path
+        .strip_prefix("systems/main/trees/")?
+        .strip_suffix(".json")?;
+    (!name.is_empty() && !name.contains('/')).then_some(("tree", &[TREES_KEY][..]))
+}
+
+impl Project {
+    /// Reads workspace files written by [`Project::to_workspace_files`]
+    /// back into a project. The files may arrive in any order.
+    ///
+    /// Each file's envelope is checked, the held keys are joined into one
+    /// snapshot, and that goes through [`Project::load`], so every check
+    /// the snapshot reader makes still runs.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::WorkspacePath`] for a path outside the layout or a
+    /// repeated path, [`StoreError::WorkspaceEnvelope`] for a bad envelope,
+    /// [`StoreError::WorkspaceMissing`] if `aegis.json` is absent. Any error
+    /// from [`Project::load`] is returned as it is.
+    ///
+    /// O(n) in the total size of the files.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let project = Project::new(Arc::clone(&m));
+    /// let files = project.to_workspace_files()?;
+    /// let back = Project::from_workspace_files(
+    ///     files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())),
+    ///     m,
+    /// )?;
+    /// assert_eq!(back, project);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_workspace_files<'a, I>(
+        files: I,
+        methodology: Arc<Methodology>,
+    ) -> Result<Project, StoreError>
+    where
+        I: IntoIterator<Item = (&'a str, &'a [u8])>,
+    {
+        let mut snapshot = Map::new();
+        let mut trees: Vec<(&str, Vec<Value>)> = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
+        for (path, bytes) in files {
+            let bad_path = || StoreError::WorkspacePath { path: short(path) };
+            let (kind, keys) = lookup(path).ok_or_else(bad_path)?;
+            if seen.contains(&path) {
+                return Err(bad_path());
+            }
+            seen.push(path);
+            let envelope = |problem| StoreError::WorkspaceEnvelope {
+                path: short(path),
+                problem,
+            };
+            let Ok(Value::Object(mut obj)) = serde_json::from_slice::<Value>(bytes) else {
+                return Err(envelope(WorkspaceProblem::Json));
+            };
+            if obj.remove("format").as_ref().and_then(Value::as_str) != Some("aegis-workspace") {
+                return Err(envelope(WorkspaceProblem::Format));
+            }
+            if obj.remove("version").as_ref().and_then(Value::as_u64) != Some(1) {
+                return Err(envelope(WorkspaceProblem::Version));
+            }
+            if obj.remove("kind").as_ref().and_then(Value::as_str) != Some(kind) {
+                return Err(envelope(WorkspaceProblem::Kind));
+            }
+            if obj.keys().any(|k| !keys.contains(&k.as_str())) {
+                return Err(envelope(WorkspaceProblem::Json));
+            }
+            if kind == "tree" {
+                let Some(Value::Array(list)) = obj.remove(TREES_KEY) else {
+                    return Err(envelope(WorkspaceProblem::Json));
+                };
+                trees.push((path, list));
+            } else {
+                snapshot.append(&mut obj);
+            }
+        }
+        if !seen.contains(&"aegis.json") {
+            return Err(StoreError::WorkspaceMissing {
+                path: "aegis.json".to_owned(),
+            });
+        }
+        if !trees.is_empty() {
+            trees.sort_by(|a, b| a.0.cmp(b.0));
+            let joined = trees.into_iter().flat_map(|(_, list)| list).collect();
+            snapshot.insert(TREES_KEY.to_owned(), Value::Array(joined));
+        }
+        // The writer leaves out empty lists; the snapshot requires these three.
+        for key in ["assets", "damage_scenarios", "threat_scenarios"] {
+            snapshot
+                .entry(key)
+                .or_insert_with(|| Value::Array(Vec::new()));
+        }
+        snapshot.insert("format".to_owned(), Value::from("aegis-project"));
+        snapshot.insert("version".to_owned(), Value::from(1));
+        let bytes =
+            serde_json::to_vec(&Value::Object(snapshot)).map_err(super::wire::encode_error)?;
+        Project::load(bytes.as_slice(), methodology)
     }
 }
