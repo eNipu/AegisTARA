@@ -283,7 +283,10 @@ where
         if total > MAX_PROJECT_FILE_BYTES {
             return Err(StoreError::LimitExceeded(Limit::PROJECT_FILE));
         }
-        let looked = path_ok(path).then(|| lookup(path)).flatten();
+        let short_enough = path.len() <= MAX_PATH_IN_ERROR;
+        let looked = (short_enough && path_ok(path))
+            .then(|| lookup(path))
+            .flatten();
         let Some((kind, keys)) = looked else {
             return Err(StoreError::WorkspacePath { path: short(path) });
         };
