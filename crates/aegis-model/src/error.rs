@@ -1575,8 +1575,10 @@ pub enum StoreError {
     /// written.
     #[error("op cannot be encoded under this methodology")]
     UnencodableOp,
-    /// A workspace file has a path that is not in the workspace layout
-    /// (or repeats one already seen). The path is cut to 256 bytes.
+    /// A workspace file has a path that is not in the workspace layout,
+    /// or breaks a path rule (empty, a leading `/`, a `\\`, a `.` or `..`
+    /// segment, or a byte outside lower-case ASCII letters, digits, `-`,
+    /// `.` and `/`). The path is cut to 256 bytes.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -1594,6 +1596,114 @@ pub enum StoreError {
     WorkspacePath {
         /// The path, at most 256 bytes.
         path: String,
+    },
+    /// The same workspace path was given twice.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let files = [("aegis.json", &b"{}"[..]), ("aegis.json", &b"{}"[..])];
+    /// let err = Project::from_workspace_files(files, m).err();
+    /// assert!(matches!(err, Some(StoreError::WorkspaceDuplicatePath { path }) if path == "aegis.json"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("workspace file {path:?} is given twice")]
+    WorkspaceDuplicatePath {
+        /// The path, at most 256 bytes.
+        path: String,
+    },
+    /// A workspace file has a top-level key that is neither part of the
+    /// envelope nor one of the keys its kind holds.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let text = br#"{"format":"aegis-workspace","version":1,"kind":"workspace","extra":1}"#;
+    /// let files = [("aegis.json", &text[..])];
+    /// let err = Project::from_workspace_files(files, m).err();
+    /// assert!(matches!(err, Some(StoreError::WorkspaceUnknownField { field, .. }) if field == "extra"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("workspace file {path:?} has an unknown field {field:?}")]
+    WorkspaceUnknownField {
+        /// The path, at most 256 bytes.
+        path: String,
+        /// The key, at most 64 bytes.
+        field: String,
+    },
+    /// A tree file does not hold exactly one tree, or its file name is not
+    /// that tree's visual ID in lower case.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let head = br#"{"format":"aegis-workspace","version":1,"kind":"workspace"}"#;
+    /// let tree = br#"{"format":"aegis-workspace","version":1,"kind":"tree","attack_trees":[]}"#;
+    /// let files = [("aegis.json", &head[..]), ("systems/main/trees/at00.json", &tree[..])];
+    /// let err = Project::from_workspace_files(files, m).err();
+    /// assert!(matches!(err, Some(StoreError::WorkspaceTreeName { .. })));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("workspace tree file {path:?} does not hold one tree named by its visual ID")]
+    WorkspaceTreeName {
+        /// The path, at most 256 bytes.
+        path: String,
+    },
+    /// `aegis.json` names another methodology than the one supplied.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let text = br#"{"format":"aegis-workspace","version":1,"kind":"workspace",
+    ///     "methodology":{"key":"other","version":"1"}}"#;
+    /// let err = Project::from_workspace_files([("aegis.json", &text[..])], m).err();
+    /// assert!(matches!(err, Some(StoreError::WorkspaceMethodology { path }) if path == "aegis.json"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("workspace file {path:?} is for another methodology")]
+    WorkspaceMethodology {
+        /// The path, always `aegis.json`.
+        path: String,
+    },
+    /// The joined files were refused by [`Project::load`](crate::Project::load).
+    /// `path` is the file that supplied the data the error is about, or
+    /// `aegis.json` when that cannot be told.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let text = br#"{"format":"aegis-workspace","version":1,"kind":"workspace",
+    ///     "methodology":{"key":"iso21434-r155","version":"1"},"languages":[5]}"#;
+    /// let err = Project::from_workspace_files([("aegis.json", &text[..])], m).err();
+    /// assert!(matches!(err, Some(StoreError::InWorkspace { path, .. }) if path == "aegis.json"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("workspace file {path:?}: {source}")]
+    InWorkspace {
+        /// The path, at most 256 bytes.
+        path: String,
+        /// What `Project::load` reported.
+        source: Box<StoreError>,
     },
     /// A workspace file's envelope is wrong: see [`WorkspaceProblem`].
     ///
