@@ -1,143 +1,190 @@
 ---
 name: factory
-description: Run a feature through the AegisTARA software factory (spec, build, 4 parallel reviews, approve, merge). Use for /factory <feature>, /factory next, /factory approve <job-id>, /factory rework <job-id> <note>.
-argument-hint: <feature> | next | approve <job-id> | rework <job-id> <note>
+description: Run a feature through the AegisTARA software factory, one agent at a time (plan, build a small slice, script gate, one review, owner review, merge, learn). Use for /factory <feature>, /factory next, /factory plan <job-id>, /factory approve <slice-id>, /factory rework <slice-id> <note>, /factory resume <slice-id>, /factory retro.
+argument-hint: <feature> | next | plan <job-id> | approve <slice-id> | rework <slice-id> <note> | resume <slice-id> | retro
 disable-model-invocation: true
 ---
 
 # /factory
 
-You are the **orchestrator**. You run the loop, spawn every agent, and you are the
-**only** writer of `factory/board.json`. You never write code, specs, or reviews yourself.
+You are the **orchestrator**. You move files and start agents. You never write code, specs,
+prompts or reviews yourself, and you are the only writer of `factory/board.json` and
+`factory/lessons.md`.
 
 Arguments: `$ARGUMENTS`
+
+## Three rules
+
+1. **One agent at a time.** Never start two agents in one message. Never start an agent in
+   the background. Wait for each to finish before the next step.
+2. **Scripts before agents.** A check a script can do is never given to an agent. No reviewer
+   runs until `factory/verify.py` passes.
+3. **Agents get context only from files.** A spawn prompt is the job id, the slice id, the one
+   file to follow and the one file to write. Never paste conversation context into it.
 
 ## The loop
 
 ```
-feature → spec-writer → builder ◄──────────────┐
-                           │                    │ any CHANGES (max 2 reworks)
-          ┌────────┬───────┴─┬──────────┐       │
-       security    ux     ui-design    code     │
-          └────────┴────┬────┴──────────┘       │
-                  WAIT FOR ALL 4 ───────────────┘
-                        │ all PASS
-                     approver ── APPROVE → merge to master
-                              └─ ESCALATE → needs-human (/factory approve)
+backlog line
+   │
+ planner ──► spec.md + plan.json + prompts/<slice>.md        (open questions → owner)
+   │
+   ▼  for each slice, in order
+ builder ──► one commit + build.md
+   │
+ verify.py ─► gate.md        FAIL → builder once more → still FAIL → owner
+   │ PASS
+ reviewer ─► review.md       CHANGES → builder once more → gate → reviewer → still CHANGES → owner
+   │ PASS
+ OWNER reads review.md and the diff    /factory approve | /factory rework
+   │ approved
+ learn ────► lessons.md, board.json
+   │
+ next slice … last slice approved → merge
 ```
+
+Each agent ends its file with `NEXT: <role>`. Follow it when it names `builder`, `reviewer`,
+`planner` or `human`, within the limits above. This is how an agent hands work on: it says
+who is next, you start them.
 
 ## Files
 
 ```
-factory/board.json                        # you write it after every state change
-factory/backlog.md                        # "- [ ] feature" lines
-factory/jobs/<job-id>/spec.md             # spec-writer
-factory/jobs/<job-id>/build.md            # builder (one section per round)
-factory/jobs/<job-id>/round-N/review-{security,ux,ui,code}.md   # reviewers
-factory/jobs/<job-id>/rework.md           # you: the owner's answers and rework notes
-factory/jobs/<job-id>/decision.md         # approver
-factory/worktrees/<job-id>/               # builder's git worktree (gitignored)
+factory/board.json                          you write it after every state change
+factory/backlog.md                          "- [ ] feature" lines
+factory/lessons.md                          what the factory learned; you write it
+factory/verify.py                           the script gate
+factory/jobs/<job-id>/spec.md               planner
+factory/jobs/<job-id>/plan.json             planner: the slices
+factory/jobs/<job-id>/prompts/<slice>.md    planner: one self-contained build prompt per slice
+factory/jobs/<job-id>/slices/<slice>/build.md    builder
+factory/jobs/<job-id>/slices/<slice>/gate.md     verify.py
+factory/jobs/<job-id>/slices/<slice>/review.md   reviewer; also the owner's review packet
+factory/jobs/<job-id>/rework.md             you: the owner's answers and rework notes
+factory/worktrees/<job-id>/                 the job's git worktree (gitignored)
 ```
 
-Agents get context **only from files**. Every spawn prompt is just: the job id, the
-paths to read, and the one path to write. Never paste conversation context into a prompt.
+## Which model runs what
+
+Pass `model` on every spawn; it overrides the agent file.
+
+| Agent | Slice `tier` or `risk` | Model |
+|---|---|---|
+| planner | any | opus |
+| builder | `small` | haiku |
+| builder | `standard` | sonnet |
+| builder | `hard` | opus |
+| reviewer | `risk: normal` | sonnet; opus when the builder was sonnet and the slice is `hard` |
+| reviewer | `risk: high` | opus |
+
+- A builder that fails the gate twice on `small` or `standard` is not retried on a bigger
+  model automatically. Stop and tell the owner; they may say `/factory rework <slice> use opus`.
+- **Outside models** (DeepSeek, OpenRouter or any other): a build prompt is a complete task
+  on its own, so the owner can run `factory/jobs/<job-id>/prompts/<slice>.md` in any other
+  session or tool, inside `factory/worktrees/<job-id>/`, and then run `/factory resume <slice>`.
+  You never send a prompt to an outside service yourself. Only `small` and `standard` slices
+  with `risk: normal` may be built outside; the reviewer for those is always opus.
 
 ## board.json
 
+One entry per job, as before. `reviews` holds the current slice, `history` the finished ones.
+
 ```json
 { "jobs": [ {
-  "id": "003-rate-limiting", "title": "Rate limiting", "branch": "factory/003-rate-limiting",
-  "stage": "review", "round": 2,
-  "reviews": { "security": "CHANGES", "ux": "PASS", "ui": "pending", "code": "PASS" },
-  "history": [ { "security": "CHANGES", "ux": "PASS", "ui": "PASS", "code": "CHANGES" } ],
-  "decision": null, "updated": "2026-10-18T12:00:00Z"
+  "id": "162-workspace-files", "title": "Workspace files", "branch": "factory/162-workspace-files",
+  "stage": "review", "slice": "162b", "base": "<sha before this slice>",
+  "reviews": { "slice": "162b", "gate": "PASS", "review": "pending", "owner": "pending" },
+  "history": [ { "slice": "162a", "gate": "PASS", "review": "PASS", "owner": "PASS",
+                 "model": "sonnet", "gate_tries": 1, "review_tries": 1, "lines": 212 } ],
+  "decision": null, "updated": "2026-11-10T12:00:00Z"
 } ] }
 ```
-
-- `stage`: `spec` → `build` → `review` → `approve` → `merged` | `needs-human`.
-- `reviews`: verdicts of the current round (`pending` | `PASS` | `CHANGES`).
-- `history`: finished earlier rounds, oldest first. Push `reviews` here before starting a new round.
-- `decision`: `null` | `APPROVE` | `ESCALATE`.
+- `stage`: `spec` (planning) → `build` → `review` (gate and reviewer) → `approve` (waiting for
+  the owner) → `merged` | `needs-human`.
+- Values: `pending` | `PASS` | `CHANGES` | `FAIL`.
 - Rewrite the whole file each time (read, change one job, write). Update `updated`.
 
 ## Commands
 
-### `/factory <feature>`
-1. Job id: if the feature text ends with a planned id `(NNN-slug)` that is not yet in board.json,
-   use it (docs/requirements.md refers to jobs by these ids). Otherwise the next 3-digit number
-   after the highest id in board.json, plus a short kebab slug (`004-export-csv`). Create `factory/jobs/<job-id>/`. Add the job to board.json with `stage: spec`.
-2. Run **Steps 1–5** below.
+### `/factory <feature>` and `/factory next`
+`next` takes the first `- [ ]` line of `factory/backlog.md`. Job id: the planned id at the end
+of the line `(NNN-slug)` if it has one, else the next number after the highest in board.json
+plus a short slug. Then run **Plan**, then **Slice** for the first slice, and stop at the
+owner gate. When the job is `merged`, tick the backlog line.
 
-### `/factory next`
-Take the first `- [ ]` line in `factory/backlog.md`. Run it as `/factory <that text>`.
-When the job reaches `merged` or `needs-human`, change that line to `- [x] … (<job-id>)`.
-Empty backlog: say so and stop.
+### `/factory plan <job-id>`
+Run **Plan** only. Use it to get the prompts without building, for example to build outside.
 
-### `/factory approve <job-id>`
-Only for a job in `needs-human`. Run **Step 6 (merge)**. Any other stage: refuse and say why.
+### `/factory approve <slice-id>`
+Only when that slice is at the owner gate. Set `owner: PASS`, run **Learn**, then **Slice**
+for the next slice, or **Merge** after the last one.
 
-### `/factory rework <job-id> <note>`
-1. Append `## Rework <n>` + the note to `factory/jobs/<job-id>/rework.md`.
-2. Set `stage: build`, reset the rework counter for this job, and resume the builder
-   (Step 3, "resume" form) pointing it at `rework.md`. If the job was already merged,
-   the builder starts a fresh branch from master with the same name plus `-r<n>`.
-3. Continue with Step 4.
+### `/factory rework <slice-id> <note>`
+Append `## Rework <slice-id>` and the note to `rework.md`. Set `owner: CHANGES`. Run **Learn**
+(an owner rework is always a lesson). Start the builder on the same slice with the note, then
+the gate and the reviewer again.
+
+### `/factory resume <slice-id>`
+The slice was built outside the factory. Check the worktree has a new commit after `base`,
+then continue **Slice** from the gate.
+
+### `/factory retro`
+Read `factory/lessons.md` and the `history` of the last ten jobs. Report: slices per job, first
+try gate rate, first try review rate, owner rework rate, median lines per slice, by model.
+For each lesson marked `PROMOTE`, propose one concrete change as a diff: a new check in
+`factory/verify.py`, a line in an agent file, or a rule in a prompt template. **Show the diff
+and wait.** Apply it only when the owner says yes, then delete the lesson: it is now enforced.
 
 ## Steps
 
-**1. Spec.** Spawn `spec-writer`: "Job `<job-id>`. Feature: `<feature text>`. Write
-`factory/jobs/<job-id>/spec.md`." When it returns, check the file exists.
-If the spec has `## Open questions`, ask the user now (AskUserQuestion, the spec's default
-first and marked Recommended), before any build. Write the answers to `rework.md` under
-`## Answers`. The builder, reviewers, and approver all read it, so the job won't escalate
-later for questions you already answered.
+**Plan.** Add the job with `stage: spec`. Spawn `planner`: "Job `<job-id>`. Feature: `<text>`.
+Write `spec.md` (if missing), `plan.json` and `prompts/` in `factory/jobs/<job-id>/`."
+Check that `plan.json` parses and every slice has its prompt file. Open questions in the
+spec: ask the owner now (AskUserQuestion, the planner's recommendation first), write the
+answers to `rework.md` under `## Answers`, and have the planner update the prompts once.
 
-**2. Branch.** Create the worktree yourself (the builder works there so your checkout of
-master stays untouched):
-`git worktree add factory/worktrees/<job-id> -b factory/<job-id> master`.
-Set `stage: build`.
+**Slice.**
+1. First slice only: `git worktree add factory/worktrees/<job-id> -b factory/<job-id> master`.
+2. Record `base` = `git -C factory/worktrees/<job-id> rev-parse HEAD`. Set `stage: build`.
+3. Spawn `builder` with the model from the table: "Job `<job-id>`, slice `<slice-id>`. Follow
+   `factory/jobs/<job-id>/prompts/<slice-id>.md`. Write `slices/<slice-id>/build.md`."
+4. Gate: `python3 factory/verify.py <job-id> <slice-id> <base>`. Read the first line of
+   `gate.md`.
+   - `GATE: FAIL`, first time: spawn the builder again: "Slice `<slice-id>` failed the gate.
+     Read `slices/<slice-id>/gate.md`, fix, commit." Run the gate again.
+   - `GATE: FAIL`, second time: `needs-human`. Stop.
+5. Set `stage: review`. Spawn `reviewer` with the model from the table: "Job `<job-id>`,
+   slice `<slice-id>`, base `<base>`. Write `slices/<slice-id>/review.md`."
+   - `VERDICT: CHANGES` with `NEXT: builder`, first time: builder again with `review.md`,
+     then the gate, then the reviewer once more.
+   - `VERDICT: CHANGES` a second time, or `NEXT: planner`, or `NEXT: human`: `needs-human`.
+     Stop and say what the file asks.
+6. `VERDICT: PASS`: set `stage: approve`. **Stop.** Tell the owner, in five lines or fewer:
+   the slice id and title, the changed lines, the "For the owner" part of `review.md`, and
+   the two commands `/factory approve <slice-id>` and `/factory rework <slice-id> <note>`.
 
-**3. Build.**
-- First round: spawn `builder` **with the name `builder-<job-id>`**: "Job `<job-id>`. Worktree
-  `factory/worktrees/<job-id>`. Read `factory/jobs/<job-id>/spec.md`. Write `build.md`."
-- Later rounds: **resume the same builder** with `SendMessage` to `builder-<job-id>`:
-  "Round `<N>` reviews are in `factory/jobs/<job-id>/round-<N>/`. Address every CHANGES
-  item, commit, and append a `## Round <N+1>` section to build.md."
-  If that builder is gone (new session), spawn a fresh `builder-<job-id>` with the same
-  message plus the first-round paths.
-- Never resume the builder while a review round is still open.
+**Learn.** Run after the owner decides on a slice.
+- Push the slice into `history` with `model`, `gate_tries`, `review_tries` and `lines`.
+- A lesson is due when the gate failed, the reviewer said CHANGES, or the owner asked for a
+  rework. Take the reviewer's `## Lesson` line or the owner's note. Write the cause, not the
+  symptom, in one line. If `lessons.md` already has it, raise its `seen` count instead; at
+  `seen: 3` add `PROMOTE`.
+- Keep `lessons.md` at 25 lessons or fewer: drop the oldest with `seen: 1`.
+- Agents never edit `lessons.md`, their own agent files or `verify.py`. Only you write
+  lessons, and only the owner approves a change to the factory itself.
 
-**4. Review round N.** Set `stage: review`, `round: N`, all four `reviews` to `pending`.
-Create `factory/jobs/<job-id>/round-N/`. Spawn all four reviewers **in one message, in
-parallel**: `review-security`, `review-ux`, `review-ui`, `review-code`. Each gets: "Job
-`<job-id>`, round `<N>`, branch `factory/<job-id>`. Write
-`factory/jobs/<job-id>/round-<N>/review-<kind>.md`."
-- As each reviewer returns, read the first line of its file and set its chip
-  (`VERDICT: PASS` → `PASS`, anything else → `CHANGES`). Write board.json each time.
-- **WAIT FOR ALL:** the round is done only when all four files exist in `round-N/`.
-  A reviewer that returned without its file: respawn it once; still missing → `needs-human`.
-- All PASS → Step 5.
-- Any CHANGES and fewer than 2 reworks so far → push `reviews` to `history`, go to Step 3
-  (resume) with round N, then Step 4 with round N+1.
-- Any CHANGES after 2 reworks → `stage: needs-human`. Stop and tell the user.
-
-**5. Approve.** Set `stage: approve`. Spawn `approver`: "Job `<job-id>`. Write
-`factory/jobs/<job-id>/decision.md`." Read the first line:
-- `APPROVE` → Step 6.
-- `ESCALATE` (or anything else) → `stage: needs-human`, `decision: ESCALATE`. Stop and
-  tell the user to read decision.md and run `/factory approve <job-id>` or `/factory rework`.
-
-**6. Merge.**
+**Merge.** After the last slice is approved:
 ```
 git -C factory/worktrees/<job-id> status --porcelain     # must be empty
 git merge --no-ff factory/<job-id> -m "Merge factory/<job-id>: <title>"
 git worktree remove factory/worktrees/<job-id>
+git add factory/jobs/<job-id> factory/board.json factory/backlog.md factory/lessons.md
+git commit -m "Record factory job <job-id>"
 ```
-Merge conflict: `git merge --abort`, set `needs-human`, stop. On success set
-`stage: merged`, then commit the job folder and board on master:
-`git add factory/jobs/<job-id> factory/board.json factory/backlog.md && git commit -m "Record factory job <job-id>"`.
+Merge conflict: `git merge --abort`, `needs-human`, stop. Never push; the owner pushes and
+opens the pull request.
 
 ## Done
 
-End every command with one line: job id, final stage, and the next command the user may want.
+End every command with one line: job id, slice id, stage, and the next command.
 Dashboard: `cd factory && python3 -m http.server 8000` → http://localhost:8000/dashboard.html

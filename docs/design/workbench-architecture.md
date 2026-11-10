@@ -3,6 +3,7 @@
 - Date: 2026-11-10
 - Status: for agreement with the owner. No code changed. After agreement this is cut into requirements and jobs.
 - Builds on: [brainstorm-workbench-v2.md](../brainstorm-workbench-v2.md) (accepted direction), [decisions.md](../decisions.md) D1 to D31, [architecture.md](../architecture.md), [reference-ui-review.md](reference-ui-review.md).
+- Update: [workbench-gui-first.md](workbench-gui-first.md) (D40) replaces the "source view of every tab" idea: files are storage, the user works in grids, forms and a canvas.
 - Changes to the brainstorm: the file format is JSON, not TOML (section 7); scripts change a project through a scoped API, not by writing files (section 8).
 
 ## TLDR

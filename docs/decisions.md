@@ -19,7 +19,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Extensions through data files, a public API and built-in connectors (D20). No vendor-hosted service for now; consultancy first in Japan (D21).
 - A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25). Systems group components in one project (one system per component), and settings are controls with pack-defined rules (D26).
 - Reference review (2026-11-07): applicability switches (conditions, assumptions, attacker profile) are ops and exclusions are derived with reasons (D27); a control has one status, Implemented, Planned or Off (D28); shared steps, shared fragments and bypass trees by reference inside a project (D29); pages grouped by TARA phase with one relation registry (D30); projects assembled from several TARA files stay in the backlog (D31).
-- Workbench rethink (2026-11-10): a workspace is a folder of JSON files with git as the history (D32); three scope levels with one home per element kind (D33); one methodology per workspace and packs as pure data (D34); MITRE and R155 Annex 5 as catalogs (D35); one API with scopes (D36); a workbench UI with the toolkit decided by a spike (D37); Markdown item definitions and Typst reports (D38); templates by pinned reference (D39).
+- Workbench rethink (2026-11-10): a workspace is a folder of JSON files with git as the history (D32); three scope levels with one home per element kind (D33); one methodology per workspace and packs as pure data (D34); MITRE and R155 Annex 5 as catalogs (D35); one API with scopes (D36); a workbench UI with the toolkit decided by a spike (D37); Markdown item definitions and Typst reports (D38); templates by pinned reference (D39); GUI first, files are storage only (D40); a sequential factory with small slices and an owner gate (D41).
 
 ---
 
@@ -303,6 +303,21 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Date:** 2026-11-10
 - **Status:** agreed by the owner. Changes D14 for whole systems.
 - **Decision:** a system may extend a template (ECU, gateway, network device, sensor, backend) at a pinned version and stores only what differs. An update is a reviewed diff; detach copies everything in. Single fragments from the library are still copied with an origin note (D14).
+
+## D40. GUI first: files are the storage, never the interface
+
+- **Date:** 2026-11-10
+- **Status:** steer from the owner; details proposed in [design/workbench-gui-first.md](design/workbench-gui-first.md).
+- **Decision:** a customer's analyst never sees JSON, Markdown, file paths or git. Lists are edited in grids, single elements in forms, trees and the item structure on a canvas, item text in sections with light formatting, history as a plain-word Versions timeline backed by a git library inside the app. The source view is a developer option, off by default. Attack trees grow from a context menu, the keyboard and drag from the library: add a step, reference an existing shared step or fragment (D29), or copy from the library (D14).
+- **Not built:** a word processor, a free drawing tool, a query or formula language in the UI.
+- **Changes:** D38 (the Markdown file is storage; the user edits sections and a diagram), the "text twin" in the architecture document.
+
+## D41. The factory runs one agent at a time and stops for the owner after each small slice
+
+- **Date:** 2026-11-10
+- **Status:** asked for by the owner.
+- **Decision:** the factory is planner, builder, a script gate (`factory/verify.py`), one reviewer for code and security, then the owner. No agents run in parallel and there are no UI or UX review agents. A job is cut into slices of at most 400 changed lines; each has a self-contained build prompt that also works in another session or with another model. The model is chosen per slice by tier and risk. Lessons from failed gates, review findings and owner reworks go to `factory/lessons.md`; a change to the factory itself is proposed by `/factory retro` and applied only with the owner's yes.
+- **Details:** `.claude/skills/factory/SKILL.md`.
 
 ## Open
 
