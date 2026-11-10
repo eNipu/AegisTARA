@@ -33,7 +33,7 @@ Business value: this is the base for file history, per-system TARAs, templates a
 2. **Layout.** The file set for today's model (which has no systems yet) is:
 
    ```
-   aegis.json                       workspace facts: methodology key and version, languages, visual ID counters
+   aegis.json                       workspace facts: methodology key and version, languages
    descriptions.json                the descriptions side table
    review-marks.json                the review marks side table
    shared/damage.json

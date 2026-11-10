@@ -2,12 +2,12 @@
 
 - Date: 2026-11-10
 - Status: agreed direction (D32 to D39), cut into requirements and jobs. Nothing here is in `factory/backlog.md` yet; the owner moves lines there when a group should start.
-- Reads with: [workbench-architecture.md](workbench-architecture.md).
+- Reads with: [workbench-architecture.md](workbench-architecture.md) and [workbench-gui-first.md](workbench-gui-first.md), whose section 7 changes jobs 168, 187, 189 and 195 and adds 203 and 204.
 - Job numbers start at 162 (161 is the highest used). Sizes: S is a day or two, M is about a week, L is two weeks or more.
 
 ## TLDR
 
-- Eight groups, 41 jobs. Groups 1 to 4 are mostly model, store and API work and run under the current app.
+- Eight groups, 43 jobs. Groups 1 to 4 are mostly model, store and API work and run under the current app.
 - **Start with job 162** (workspace files in `aegis-model`). Its brief is [factory/jobs/162-workspace-files/spec.md](../../factory/jobs/162-workspace-files/spec.md).
 - Group 5 begins with the toolkit spike (job 181). No new screen work goes into Slint after job 182 starts.
 - Open backlog jobs are sorted into keep, split and drop in section 3.
@@ -138,6 +138,8 @@ Every job follows the element recipe in [architecture.md](../architecture.md) II
 | 189-table-tabs | WBX-07 (uses the open relation registry and table convention jobs) | L | 182 | Assets, threats and the risk register are edited in tabs |
 | 190-settings-layers | WBX-08 | M | 171, 172, 182 | The settings mock-up works on the sample; reset removes an override |
 | 191-bottom-dock | WBX-09 | M | 165, 185, 182 | A hand edit, a task proposal and a lint finding each appear and can be acted on |
+| 203-embedded-versions | A git library inside the app: save version, mark baseline, restore; license check; no git installation needed (D40) | M | 164 | A machine with no git saves, tags, compares and restores |
+| 204-guided-steps | New workspace, new system, new configuration, each three steps at most (D40) | M | 182, 200 | A new user creates a gateway system from a template without help |
 | 192-retire-slint | Remove `aegis-shell` and the Slint license exception | S | 187 to 191, 195 | The owner has done one real TARA in the new shell |
 
 ### Group 6: item definition and reports (D38)

@@ -1,0 +1,49 @@
+{
+  "job": "162-workspace-files",
+  "slices": [
+    {
+      "id": "162a",
+      "title": "Write a project as workspace files",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": ["crates/aegis-model/src/store/*", "crates/aegis-model/src/lib.rs", "crates/aegis-model/tests/*"],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": ["cargo test --locked -p aegis-model --test workspace"]
+    },
+    {
+      "id": "162b",
+      "title": "Read workspace files back into a project",
+      "tier": "standard",
+      "risk": "high",
+      "allow": ["crates/aegis-model/src/store/*", "crates/aegis-model/src/lib.rs", "crates/aegis-model/src/error.rs", "crates/aegis-model/tests/*"],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": ["cargo test --locked -p aegis-model --test workspace", "cargo test --locked -p aegis-model --test workspace_properties"]
+    },
+    {
+      "id": "162c",
+      "title": "Refuse bad workspace files, with caps",
+      "tier": "standard",
+      "risk": "high",
+      "allow": ["crates/aegis-model/src/store/*", "crates/aegis-model/src/lib.rs", "crates/aegis-model/src/error.rs", "crates/aegis-model/tests/*"],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": ["cargo test --locked -p aegis-model --test workspace_limits"]
+    },
+    {
+      "id": "162d",
+      "title": "Fuzz target, benchmark and decision record for workspace files",
+      "tier": "small",
+      "risk": "normal",
+      "allow": ["crates/aegis-model/fuzz/*", "crates/aegis-model/benches/*", "crates/aegis-model/Cargo.toml", "docs/adr/*", "docs/architecture.md"],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": [],
+      "checks": ["cargo bench --locked -p aegis-model --bench workspace -- --test"]
+    }
+  ]
+}
