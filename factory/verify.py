@@ -12,6 +12,7 @@ line is `GATE: PASS` or `GATE: FAIL`. Exit code 0 on pass, 1 on fail.
 """
 import fnmatch
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -29,8 +30,14 @@ def matches(path, globs):
     return any(fnmatch.fnmatch(path, g) for g in globs)
 
 
+# Every worktree builds into the main checkout's target/, so a new job reuses the
+# compiled dependencies instead of building them again into its own folder.
+# Safe because the factory never runs two builds at once.
+ENV = {**os.environ, "CARGO_TARGET_DIR": str(ROOT / "target")}
+
+
 def run(cmd, cwd, shell=False):
-    p = subprocess.run(cmd, cwd=cwd, shell=shell, capture_output=True, text=True)
+    p = subprocess.run(cmd, cwd=cwd, shell=shell, capture_output=True, text=True, env=ENV)
     return p.returncode, (p.stdout + p.stderr).strip()
 
 

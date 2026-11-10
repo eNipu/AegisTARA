@@ -128,6 +128,7 @@ Every job follows the element recipe in [architecture.md](../architecture.md) II
 | WBX-08 | Settings with layers: each value shows its source and can be reset |
 | WBX-09 | Problems, task output and changes in the bottom dock |
 | WBX-10 | Every action reachable by keyboard; light and dark themes from token files |
+| WBX-11 | One command table (id, label, icon, tooltip, shortcut) feeds menus, toolbar, palette and shortcut list; every menu item has an icon before its label and every icon a tooltip; a test fails on a command without either (job 182) |
 
 | Job | What | Size | Needs | Done when |
 |---|---|---|---|---|

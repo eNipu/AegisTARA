@@ -137,14 +137,16 @@ and wait.** Apply it only when the owner says yes, then delete the lesson: it is
 
 ## Steps
 
-**Plan.** Add the job with `stage: spec`. Spawn `planner`: "Job `<job-id>`. Feature: `<text>`.
+**Plan.** Add the job with `stage: spec`. If `plan.json` and a prompt for every slice already
+exist, skip the planner. Otherwise spawn `planner`: "Job `<job-id>`. Feature: `<text>`.
 Write `spec.md` (if missing), `plan.json` and `prompts/` in `factory/jobs/<job-id>/`."
 Check that `plan.json` parses and every slice has its prompt file. Open questions in the
 spec: ask the owner now (AskUserQuestion, the planner's recommendation first), write the
 answers to `rework.md` under `## Answers`, and have the planner update the prompts once.
 
 **Slice.**
-1. First slice only: `git worktree add factory/worktrees/<job-id> -b factory/<job-id> master`.
+1. First slice only: `git worktree add factory/worktrees/<job-id> -b factory/<job-id> HEAD`
+   (the branch the main checkout is on; the job merges back into it).
 2. Record `base` = `git -C factory/worktrees/<job-id> rev-parse HEAD`. Set `stage: build`.
 3. Spawn `builder` with the model from the table: "Job `<job-id>`, slice `<slice-id>`. Follow
    `factory/jobs/<job-id>/prompts/<slice-id>.md`. Write `slices/<slice-id>/build.md`."
