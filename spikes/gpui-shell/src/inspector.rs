@@ -1,10 +1,9 @@
 //! The inspector panel: shows what the project tree selected.
 
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Window, div, px,
+    Context, Entity, FocusHandle, IntoElement, ParentElement as _, Render, SharedString,
+    Styled as _, Subscription, Window, div, px,
 };
-use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 
 use crate::selection::Selection;
@@ -27,25 +26,7 @@ impl Inspector {
     }
 }
 
-impl BasePanel for Inspector {
-    fn panel_name(&self) -> &'static str {
-        "Inspector"
-    }
-}
-
-impl Panel for Inspector {
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        "Inspector"
-    }
-}
-
-impl EventEmitter<PanelEvent> for Inspector {}
-
-impl Focusable for Inspector {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
+dock_panel!(Inspector, "Inspector", "Inspector");
 
 impl Render for Inspector {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

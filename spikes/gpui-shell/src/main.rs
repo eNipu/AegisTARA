@@ -1,6 +1,30 @@
-//! Throwaway spike (job 181): one GPUI window with gpui-component's dock, a
-//! project tree, an inspector and a text editor tab. Never used by production
-//! crates (decision D8).
+//! Throwaway GPUI shell spike (job 181); never used by production crates (D8).
+
+/// Implements the dock panel traits for a view that has a `focus_handle` field.
+macro_rules! dock_panel {
+    ($ty:ty, $name:literal, $title:literal) => {
+        impl gpui_component::dock::BasePanel for $ty {
+            fn panel_name(&self) -> &'static str {
+                $name
+            }
+        }
+        impl gpui_component::dock::Panel for $ty {
+            fn title(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                $title
+            }
+        }
+        impl gpui::EventEmitter<gpui_component::dock::PanelEvent> for $ty {}
+        impl gpui::Focusable for $ty {
+            fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
+                self.focus_handle.clone()
+            }
+        }
+    };
+}
 
 mod editor_tab;
 mod inspector;

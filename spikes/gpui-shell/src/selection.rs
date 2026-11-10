@@ -1,7 +1,6 @@
 //! What the user has selected, shared between the project tree and the inspector.
 
-/// The current selection. The shell holds it as `Entity<Selection>`; panels
-/// update it and call `cx.notify()` so observers redraw.
+/// The current selection, held as `Entity<Selection>`; writers call `cx.notify()`.
 pub struct Selection {
     pub kind: &'static str,
     pub label: String,

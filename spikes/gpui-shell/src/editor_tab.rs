@@ -1,25 +1,19 @@
 //! The `Item definition` tab: a multi-line text editor with sample text.
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement as _, Render, Styled as _, Window,
+    AppContext as _, Context, Entity, FocusHandle, IntoElement, ParentElement as _, Render,
+    Styled as _, Window,
 };
-use gpui_component::dock::{BasePanel, Panel, PanelEvent};
 use gpui_component::input::{Editor, EditorState};
 use gpui_component::v_flex;
 
-/// `# Item definition` followed by numbered lines, `lines` lines in total.
+/// `# Item definition` then numbered lines, `lines` lines in total (at least one).
 pub fn sample_text(lines: usize) -> String {
-    let mut out = Vec::with_capacity(lines);
-    if lines > 0 {
-        out.push("# Item definition".to_string());
-    }
+    let mut text = String::from("# Item definition");
     for n in 2..=lines {
-        out.push(format!(
-            "Line {n}: the gateway routes CAN frames between domains."
-        ));
+        text += &format!("\nLine {n}: the gateway routes CAN frames between domains.");
     }
-    out.join("\n")
+    text
 }
 
 /// The `Item definition` panel.
@@ -38,25 +32,7 @@ impl EditorTab {
     }
 }
 
-impl BasePanel for EditorTab {
-    fn panel_name(&self) -> &'static str {
-        "ItemDefinition"
-    }
-}
-
-impl Panel for EditorTab {
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        "Item definition"
-    }
-}
-
-impl EventEmitter<PanelEvent> for EditorTab {}
-
-impl Focusable for EditorTab {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
+dock_panel!(EditorTab, "ItemDefinition", "Item definition");
 
 impl Render for EditorTab {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -74,10 +50,6 @@ mod tests {
     fn sample_text_has_2000_lines() {
         let text = sample_text(2000);
         assert_eq!(text.lines().count(), 2000);
-        assert!(text.starts_with("# Item definition\n"));
-        assert_eq!(
-            text.lines().nth(1),
-            Some("Line 2: the gateway routes CAN frames between domains.")
-        );
+        assert!(text.starts_with("# Item definition\nLine 2: the gateway"));
     }
 }
