@@ -158,7 +158,9 @@ fn total_size_cap() {
 #[test]
 fn path_rules() {
     let m = builtin();
+    let long = format!("shared/{}.json", "a".repeat(260));
     for path in [
+        long.as_str(),
         "",
         "/aegis.json",
         "systems\\main\\item.json",
