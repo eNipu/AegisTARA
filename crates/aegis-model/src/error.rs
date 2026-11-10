@@ -1575,9 +1575,89 @@ pub enum StoreError {
     /// written.
     #[error("op cannot be encoded under this methodology")]
     UnencodableOp,
+    /// A workspace file has a path that is not in the workspace layout
+    /// (or repeats one already seen). The path is cut to 256 bytes.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let files = [("notes.txt", &b"x"[..])];
+    /// let err = Project::from_workspace_files(files, m).err();
+    /// assert!(matches!(err, Some(StoreError::WorkspacePath { path }) if path == "notes.txt"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("unknown workspace file {path:?}")]
+    WorkspacePath {
+        /// The path, at most 256 bytes.
+        path: String,
+    },
+    /// A workspace file's envelope is wrong: see [`WorkspaceProblem`].
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError, WorkspaceProblem};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let files = [("aegis.json", &b"nope"[..])];
+    /// let err = Project::from_workspace_files(files, m).err();
+    /// assert!(matches!(
+    ///     err,
+    ///     Some(StoreError::WorkspaceEnvelope { problem: WorkspaceProblem::Json, .. })
+    /// ));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("workspace file {path:?}: {problem}")]
+    WorkspaceEnvelope {
+        /// The path of the file, at most 256 bytes.
+        path: String,
+        /// What is wrong with it.
+        problem: WorkspaceProblem,
+    },
+    /// A required workspace file is absent (`aegis.json`).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{Methodology, Project, StoreError};
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let err = Project::from_workspace_files(Vec::<(&str, &[u8])>::new(), m).err();
+    /// assert!(matches!(err, Some(StoreError::WorkspaceMissing { path }) if path == "aegis.json"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("workspace file {path:?} is missing")]
+    WorkspaceMissing {
+        /// The path of the missing file.
+        path: String,
+    },
     /// The decoded data broke a model rule (see [`ModelError`]).
     #[error("model rejected the data: {0}")]
     Model(#[from] ModelError),
+}
+
+/// What is wrong with the envelope of a workspace file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum WorkspaceProblem {
+    /// `format` is not `aegis-workspace`.
+    #[error("wrong format name")]
+    Format,
+    /// `version` is not 1.
+    #[error("unsupported version")]
+    Version,
+    /// `kind` is not the kind that belongs to the path.
+    #[error("kind does not match the path")]
+    Kind,
+    /// The bytes are not a JSON object of the expected shape.
+    #[error("not a JSON object of the expected shape")]
+    Json,
 }
 
 /// Errors from reading or writing a methodology pack:

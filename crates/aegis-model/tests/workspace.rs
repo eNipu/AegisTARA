@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackTree, DataFlowId, ElementRef, Methodology, Node, Op, Project, Provenance,
-    TrustBoundaryId, WorkspaceFile,
+    AttackTree, DataFlowId, ElementRef, Methodology, Node, Op, Project, Provenance, StoreError,
+    TrustBoundaryId, WorkspaceFile, WorkspaceProblem,
 };
 use common::{
     asset_id, builtin, component_id, interface_id, node_id, props, record_every_op, save, second,
@@ -84,18 +84,9 @@ fn check_keys(p: &Project, seen: &mut BTreeSet<String>) {
     }
 }
 
-#[test]
-fn layout_covers_every_snapshot_key() {
-    let mut seen = BTreeSet::new();
-    // The recorded ops end by tearing the project down, so check after
-    // every op and require that all keys were seen along the way.
-    let m = second();
-    let mut p = Project::new(Arc::clone(&m));
-    for op in record_every_op(Arc::clone(&m)) {
-        p.apply(op).expect("apply");
-        check_keys(&p, &mut seen);
-    }
-    // The recorded ops leave out interfaces, data flows and trust boundaries.
+/// Ops the recorded set leaves out (interfaces, data flows, trust
+/// boundaries) plus trees, marks, descriptions and languages.
+fn extra_ops() -> (Arc<Methodology>, Vec<Op>) {
     let m = builtin();
     let (c1, c2) = (component_id(1), component_id(2));
     let kind = m.interface_kinds().next().expect("interface kind");
@@ -146,6 +137,21 @@ fn layout_covers_every_snapshot_key() {
             provenance: Provenance::default(),
         },
     ];
+    (m, ops.into())
+}
+
+#[test]
+fn layout_covers_every_snapshot_key() {
+    let mut seen = BTreeSet::new();
+    // The recorded ops end by tearing the project down, so check after
+    // every op and require that all keys were seen along the way.
+    let m = second();
+    let mut p = Project::new(Arc::clone(&m));
+    for op in record_every_op(Arc::clone(&m)) {
+        p.apply(op).expect("apply");
+        check_keys(&p, &mut seen);
+    }
+    let (m, ops) = extra_ops();
     check_keys(&project_with(&m, &ops), &mut seen);
     for key in [
         "methodology",
@@ -253,4 +259,158 @@ fn every_file_starts_with_the_envelope() {
         );
         assert!(t.ends_with("}\n") && !t.ends_with("\n\n"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Reading back
+// ---------------------------------------------------------------------------
+
+fn read(files: &[WorkspaceFile], m: &Arc<Methodology>) -> Result<Project, aegis_model::StoreError> {
+    Project::from_workspace_files(
+        files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())),
+        Arc::clone(m),
+    )
+}
+
+fn assert_round_trip(p: &Project, m: &Arc<Methodology>) {
+    let back = read(&files(p), m).expect("read back");
+    assert_eq!(&back, p);
+    assert_eq!(save(&back), save(p));
+}
+
+fn replace(files: &mut [WorkspaceFile], path: &str, bytes: &[u8]) {
+    let f = files.iter_mut().find(|f| f.path == path).expect("file");
+    f.bytes = bytes.to_vec();
+}
+
+fn rewrite(files: &mut [WorkspaceFile], path: &str, edit: impl FnOnce(&mut Value)) {
+    let f = files.iter_mut().find(|f| f.path == path).expect("file");
+    let mut v = json(f);
+    edit(&mut v);
+    f.bytes = serde_json::to_vec(&v).expect("encode");
+}
+
+fn envelope_problem(err: Option<aegis_model::StoreError>, want_path: &str) -> WorkspaceProblem {
+    match err {
+        Some(StoreError::WorkspaceEnvelope { path, problem }) => {
+            assert_eq!(path, want_path);
+            problem
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn round_trip_fixture() {
+    let m = builtin();
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/project-v1.json"
+    ))
+    .expect("fixture");
+    let p = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("load");
+    assert_round_trip(&p, &m);
+    assert_eq!(save(&read(&files(&p), &m).expect("read")), save(&p));
+}
+
+#[test]
+fn round_trip_every_kind() {
+    let (m, ops) = extra_ops();
+    assert_round_trip(&project_with(&m, &ops), &m);
+    let m = second();
+    let mut p = Project::new(Arc::clone(&m));
+    for op in record_every_op(Arc::clone(&m)) {
+        p.apply(op).expect("apply");
+        assert_round_trip(&p, &m);
+    }
+}
+
+#[test]
+fn file_order_does_not_matter() {
+    let (m, ops) = extra_ops();
+    let p = project_with(&m, &ops);
+    let mut all = files(&p);
+    assert!(all.len() > 3);
+    all.reverse();
+    assert_eq!(read(&all, &m).expect("read"), p);
+}
+
+#[test]
+fn missing_workspace_file() {
+    let m = builtin();
+    let p = project_with(&m, &[add_asset(&m, 1, "ECU")]);
+    let all: Vec<_> = files(&p)
+        .into_iter()
+        .filter(|f| f.path != "aegis.json")
+        .collect();
+    let err = read(&all, &m).err();
+    assert!(matches!(err, Some(StoreError::WorkspaceMissing { path }) if path == "aegis.json"));
+}
+
+#[test]
+fn unknown_path() {
+    let m = builtin();
+    let mut all = files(&Project::new(Arc::clone(&m)));
+    all.push(WorkspaceFile {
+        path: "shared/other.json".into(),
+        bytes: b"{}".to_vec(),
+    });
+    let err = read(&all, &m).err();
+    assert!(matches!(err, Some(StoreError::WorkspacePath { path }) if path == "shared/other.json"));
+    // A long path is cut at a character boundary.
+    let long = "é".repeat(300);
+    all.last_mut().expect("file").path = long;
+    let Some(StoreError::WorkspacePath { path }) = read(&all, &m).err() else {
+        panic!("expected WorkspacePath");
+    };
+    assert_eq!(path.len(), 256);
+}
+
+#[test]
+fn wrong_format() {
+    let m = builtin();
+    let mut all = files(&Project::new(Arc::clone(&m)));
+    rewrite(&mut all, "aegis.json", |v| {
+        v["format"] = "aegis-project".into()
+    });
+    let err = read(&all, &m).err();
+    assert_eq!(
+        envelope_problem(err, "aegis.json"),
+        WorkspaceProblem::Format
+    );
+}
+
+#[test]
+fn newer_version() {
+    let m = builtin();
+    let mut all = files(&Project::new(Arc::clone(&m)));
+    rewrite(&mut all, "aegis.json", |v| v["version"] = 2.into());
+    let err = read(&all, &m).err();
+    assert_eq!(
+        envelope_problem(err, "aegis.json"),
+        WorkspaceProblem::Version
+    );
+}
+
+#[test]
+fn kind_does_not_match_path() {
+    let m = builtin();
+    let mut all = files(&project_with(&m, &[add_asset(&m, 1, "ECU")]));
+    rewrite(&mut all, "systems/main/assets.json", |v| {
+        v["kind"] = "threats".into()
+    });
+    let err = read(&all, &m).err();
+    assert_eq!(
+        envelope_problem(err, "systems/main/assets.json"),
+        WorkspaceProblem::Kind
+    );
+}
+
+#[test]
+fn not_json() {
+    let m = builtin();
+    let mut all = files(&Project::new(Arc::clone(&m)));
+    replace(&mut all, "aegis.json", b"{not json");
+    let err = read(&all, &m).err();
+    assert_eq!(envelope_problem(err, "aegis.json"), WorkspaceProblem::Json);
 }
