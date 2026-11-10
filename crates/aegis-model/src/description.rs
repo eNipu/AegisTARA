@@ -85,6 +85,12 @@ pub enum ElementRef {
     DataFlow(DataFlowId),
     /// An item-definition trust boundary.
     TrustBoundary(TrustBoundaryId),
+    /// The item definition's description: what the item is and does
+    /// (ARC-05).
+    ItemDescription,
+    /// The item definition's scope: what the analysis covers and leaves out
+    /// (ARC-05).
+    ItemScope,
 }
 
 impl ElementRef {
@@ -99,7 +105,7 @@ impl ElementRef {
     #[must_use]
     pub const fn max_chars(self) -> usize {
         match self {
-            Self::Project => MAX_NOTES_CHARS,
+            Self::Project | Self::ItemDescription | Self::ItemScope => MAX_NOTES_CHARS,
             _ => MAX_DESCRIPTION_CHARS,
         }
     }

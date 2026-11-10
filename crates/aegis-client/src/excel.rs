@@ -102,6 +102,10 @@ pub struct ExcelMapping {
     pub goal_col: Option<usize>,
     /// Column index for Cybersecurity claim statement.
     pub claim_col: Option<usize>,
+    /// Column index for whether the threat scales (yes, no, not rated).
+    pub scales_col: Option<usize>,
+    /// Column index for the reasoning behind the scaling rating.
+    pub scaling_reason_col: Option<usize>,
 }
 
 impl ExcelMapping {
@@ -183,6 +187,18 @@ impl ExcelMapping {
                 | "主張"
                 | "サイバーセキュリティ主張" => {
                     m.claim_col.get_or_insert(idx);
+                }
+                "scales" | "scalable" | "scalability" | "スケーラビリティ" | "拡張可能" =>
+                {
+                    m.scales_col.get_or_insert(idx);
+                }
+                "scaling reason"
+                | "scaling reasoning"
+                | "scalability reason"
+                | "scalability reasoning"
+                | "スケーラビリティの根拠"
+                | "スケーラビリティ根拠" => {
+                    m.scaling_reason_col.get_or_insert(idx);
                 }
                 _ => {}
             }
@@ -913,6 +929,17 @@ fn parse_feasibility(m: &Methodology, text: &str) -> Option<aegis_model::Feasibi
     None
 }
 
+/// Parses a scaling cell: `Some(Some(_))` for yes or no, `Some(None)` for
+/// "not rated", `None` when not recognized.
+fn parse_scales(text: &str) -> Option<Option<bool>> {
+    match text.trim().to_lowercase().as_str() {
+        "yes" | "y" | "true" | "scales" | "はい" | "あり" => Some(Some(true)),
+        "no" | "n" | "false" | "does not scale" | "いいえ" | "なし" => Some(Some(false)),
+        "not rated" | "-" | "未評価" => Some(None),
+        _ => None,
+    }
+}
+
 fn parse_treatment(text: &str) -> Option<RiskTreatment> {
     match text.trim().to_lowercase().as_str() {
         "avoid" | "回避" => Some(RiskTreatment::Avoid),
@@ -1029,6 +1056,8 @@ pub fn preview_import(
         let control_name = cell_at(row, effective_mapping.control_col);
         let raw_goal = cell_at(row, effective_mapping.goal_col);
         let raw_claim = cell_at(row, effective_mapping.claim_col);
+        let scales_text = cell_at(row, effective_mapping.scales_col);
+        let scaling_reason = cell_at(row, effective_mapping.scaling_reason_col);
 
         // Allow `Goal: ...` or `Claim: ...` in the goal column (as exported by
         // the Risk register sheet).
@@ -1115,14 +1144,21 @@ pub fn preview_import(
         let parsed_treatment = (!treat_text.is_empty())
             .then(|| parse_treatment(treat_text))
             .flatten();
+        let parsed_scales = (!scales_text.is_empty())
+            .then(|| parse_scales(scales_text))
+            .flatten();
         let invalid_value = if !threat_name.is_empty() && row_threat_cat.is_none() {
             Some("threat category is missing or not recognized")
         } else if !impact_text.is_empty() && damage_name.is_empty() {
             Some("impact rating requires a damage scenario")
-        } else if (!cat_text.is_empty() || !feas_text.is_empty() || !treat_text.is_empty())
+        } else if (!cat_text.is_empty()
+            || !feas_text.is_empty()
+            || !treat_text.is_empty()
+            || !scales_text.is_empty()
+            || !scaling_reason.is_empty())
             && threat_name.is_empty()
         {
-            Some("threat category, feasibility, and treatment require a threat scenario")
+            Some("threat category, feasibility, treatment, and scaling require a threat scenario")
         } else if !impact_text.is_empty() && parsed_impact.is_none() {
             Some("impact rating is not recognized")
         } else if !feas_text.is_empty()
@@ -1133,6 +1169,8 @@ pub fn preview_import(
             Some("feasibility rating is not recognized")
         } else if !treat_text.is_empty() && parsed_treatment.is_none() {
             Some("risk treatment is not recognized")
+        } else if !scales_text.is_empty() && parsed_scales.is_none() {
+            Some("scaling is not recognized (yes, no, or not rated)")
         } else if !props_text.is_empty() && !properties_are_known(m, props_text) {
             Some("one or more security properties are not recognized")
         } else {
@@ -1350,6 +1388,14 @@ pub fn preview_import(
                     provenance: prov.clone(),
                 });
             }
+            if parsed_scales.flatten().is_some() || !scaling_reason.is_empty() {
+                row_ops.push(Op::SetThreatScaling {
+                    threat: tid,
+                    scales: parsed_scales.flatten(),
+                    reason: scaling_reason.into(),
+                    provenance: prov.clone(),
+                });
+            }
         }
 
         // Apply against one simulation project; inverses roll back a rejected
@@ -1434,6 +1480,7 @@ pub fn preview_import(
                         | Op::LinkGoalControl { .. }
                         | Op::SetThreatGoal { .. }
                         | Op::SetThreatClaim { .. }
+                        | Op::SetThreatScaling { .. }
                 )
             })
             .count();
@@ -1512,6 +1559,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn scaling_columns_import_yes_no_and_not_rated() {
+        let m = std::sync::Arc::new(Methodology::iso21434_r155().expect("builtin"));
+        let project = Project::new(std::sync::Arc::clone(&m));
+        let row = |n: usize, threat: &str, scales: &str, why: &str| {
+            let cells = ["ECU", threat, scales, why];
+            (n, cells.map(str::to_owned).to_vec())
+        };
+        let wb = WorkbookData {
+            sheets: vec![SheetData {
+                name: "TARA".into(),
+                headers: ["Asset", "Threat scenario", "Scales", "Scaling reason"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                rows: vec![
+                    row(2, "Relay attack", "Yes", "Same kit on every car"),
+                    row(3, "Bench JTAG", "いいえ", "Needs the ECU on a bench"),
+                    row(4, "Fuzz CAN", "not rated", "Ask the supplier"),
+                    row(5, "Spoof GPS", "maybe", ""),
+                ],
+            }],
+        };
+        let preview =
+            preview_import(&project, &wb, &ExcelMapping::default(), "mira", 1).expect("preview");
+        let scaling: Vec<_> = preview
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::SetThreatScaling { scales, reason, .. } => Some((*scales, reason.to_string())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            scaling,
+            [
+                (Some(true), "Same kit on every car".to_owned()),
+                (Some(false), "Needs the ECU on a bench".to_owned()),
+                (None, "Ask the supplier".to_owned()),
+            ]
+        );
+        assert_eq!(preview.unmapped_rows.len(), 1);
+        assert_eq!(preview.unmapped_rows[0].row_number, 5);
+        assert!(preview.unmapped_rows[0].reason.contains("scaling"));
     }
 
     fn col_ref(mut n: usize) -> String {

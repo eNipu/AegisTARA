@@ -156,6 +156,8 @@ struct DefWire {
     risk_levels: BoundedVec<Object<EntryWire>, LevelsCap>,
     #[serde(default)]
     attack_potential: Option<Object<AttackPotentialWire>>,
+    #[serde(default)]
+    require_rationale: bool,
     properties: BoundedVec<Object<EntryWire>, PropertiesCap>,
     threat_categories: BoundedVec<Object<ThreatCategoryWire>, ThreatCategoriesCap>,
     catalog_schemes: BoundedVec<Object<CatalogSchemeWire>, CatalogSchemesCap>,
@@ -467,6 +469,7 @@ impl From<DefWire> for MethodologyDef {
             feasibility_levels: w.feasibility_levels.0.into_iter().map(entry).collect(),
             risk_levels: w.risk_levels.0.into_iter().map(entry).collect(),
             attack_potential: w.attack_potential.map(|Object(ap)| ap.into()),
+            require_rationale: w.require_rationale,
             properties: w
                 .properties
                 .0
@@ -554,7 +557,7 @@ impl Serialize for View<'_, Vec<Arc<str>>> {
 impl Serialize for View<'_, MethodologyDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("methodology", 14)?;
+        let mut st = s.serialize_struct("methodology", 15)?;
         st.serialize_field("key", &*d.key)?;
         st.serialize_field("version", &*d.version)?;
         st.serialize_field("label", &*d.label)?;
@@ -569,6 +572,11 @@ impl Serialize for View<'_, MethodologyDef> {
         match &d.attack_potential {
             Some(ap) => st.serialize_field("attack_potential", &View(ap))?,
             None => st.skip_field("attack_potential")?,
+        }
+        if d.require_rationale {
+            st.serialize_field("require_rationale", &true)?;
+        } else {
+            st.skip_field("require_rationale")?;
         }
         st.serialize_field("properties", &View(d.properties.as_slice()))?;
         st.serialize_field("threat_categories", &View(d.threat_categories.as_slice()))?;

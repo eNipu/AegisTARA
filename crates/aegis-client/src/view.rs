@@ -64,6 +64,9 @@ pub struct ThreatRow {
     pub residual: Option<RiskView>,
     /// Whether an attack tree is attached.
     pub has_tree: bool,
+    /// Whether the attack scales to many vehicles (FND-10); `None` is not
+    /// rated.
+    pub scales: Option<bool>,
 }
 
 /// A page of the open project: the steps of the TARA flow (ISO/SAE 21434
@@ -99,6 +102,8 @@ pub enum Page {
     Admin,
     /// Item definition: components, interfaces, data flows and trust boundaries (job 074).
     Item,
+    /// The item definition's description and scope texts (ARC-05).
+    Scope,
 }
 
 /// The group of pages a page sits in on the sidebar: the phases of
@@ -171,9 +176,10 @@ impl PageGroup {
 impl Page {
     /// Every page, in menu and sidebar order: the analysis in the order of
     /// its phases, item definition first (UI-13).
-    pub const ALL: [Page; 14] = [
+    pub const ALL: [Page; 15] = [
         Page::Overview,
         Page::Item,
+        Page::Scope,
         Page::Damage,
         Page::Assets,
         Page::Threats,
@@ -193,7 +199,7 @@ impl Page {
     pub fn group(self) -> Option<PageGroup> {
         Some(match self {
             Page::Overview => return None,
-            Page::Item => PageGroup::ItemDefinition,
+            Page::Item | Page::Scope => PageGroup::ItemDefinition,
             Page::Damage => PageGroup::Impact,
             Page::Assets | Page::Threats => PageGroup::AssetsThreats,
             Page::Trees => PageGroup::Feasibility,
@@ -233,6 +239,7 @@ impl Page {
             Page::Reports => "Reports",
             Page::Admin => "Administration",
             Page::Item => "Item definition",
+            Page::Scope => "Description and scope",
         }
     }
 }
@@ -495,6 +502,8 @@ pub fn element_ref_to_target(target: ElementRef) -> String {
         ElementRef::Control(id) => format!("control:{id}"),
         ElementRef::Goal(id) => format!("goal:{id}"),
         ElementRef::Claim(id) => format!("claim:{id}"),
+        ElementRef::ItemDescription => "item_description".to_owned(),
+        ElementRef::ItemScope => "item_scope".to_owned(),
     }
 }
 
@@ -503,8 +512,11 @@ pub fn element_ref_to_target(target: ElementRef) -> String {
 #[must_use]
 pub fn target_to_element_ref(target: &str) -> Option<ElementRef> {
     let trimmed = target.trim();
-    if trimmed.is_empty() || trimmed == "project" {
-        return Some(ElementRef::Project);
+    match trimmed {
+        "" | "project" => return Some(ElementRef::Project),
+        "item_description" => return Some(ElementRef::ItemDescription),
+        "item_scope" => return Some(ElementRef::ItemScope),
+        _ => {}
     }
     let (kind, uuid_str) = trimmed.split_once(':')?;
     match kind {
@@ -579,6 +591,10 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
     };
     match ui.page {
         Page::Overview => push("project", true, E::Project),
+        Page::Scope => {
+            push("item-description", true, E::ItemDescription);
+            push("item-scope", true, E::ItemScope);
+        }
         Page::Assets => {
             if let Some(id) = ui.selected_asset {
                 push("asset", project.asset_idx(&id).is_some(), E::Asset(id));
@@ -1028,6 +1044,7 @@ pub fn threat_rows(ws: &Workspace) -> Vec<ThreatRow> {
                 inherent: risk(ws.cache().evaluate_risk(project, id)),
                 residual: risk(ws.cache().evaluate_residual_risk(project, id)),
                 has_tree: threat.attack_tree().is_some(),
+                scales: threat.scales(),
             }
         })
         .collect()

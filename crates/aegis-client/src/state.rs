@@ -468,6 +468,8 @@ pub struct ProjectView {
     pub problem_counts: (usize, usize),
     /// When the last edit reached the server in this session, if one did.
     pub saved_ms: Option<u64>,
+    /// The find filter of the page on screen (UI-16), when one is set.
+    pub find: Option<FindView>,
     /// Pending AI or catalog suggestion items for the open project (job 089).
     pub suggestions: Vec<SuggestionRow>,
     /// Position of the selected suggestion in `suggestions` when a ghost node
@@ -616,4 +618,19 @@ mod tests {
         assert_eq!(at(105, State::Grace).map(|r| r.0), Some(Severity::Warning));
         assert_eq!(at(130, State::Expired).map(|r| r.0), Some(Severity::Error));
     }
+}
+
+/// The find filter as the window shows it (UI-16).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FindView {
+    /// The text as typed.
+    pub text: String,
+    /// The text is a regular expression.
+    pub regex: bool,
+    /// Why nothing can match (an invalid or oversized expression).
+    pub error: Option<crate::find::FindError>,
+    /// Rows shown on the page.
+    pub shown: usize,
+    /// Rows the page has without the filter.
+    pub total: usize,
 }

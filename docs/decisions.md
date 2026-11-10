@@ -19,6 +19,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - Extensions through data files, a public API and built-in connectors (D20). No vendor-hosted service for now; consultancy first in Japan (D21).
 - A standalone app with no server (D22). No live view: read-only users see a saved version (D23). EU CRA and other domains through packs (D24). Stay on Slint, with a GPU renderer and modeless editing (D25). Systems group components in one project (one system per component), and settings are controls with pack-defined rules (D26).
 - Reference review (2026-11-07): applicability switches (conditions, assumptions, attacker profile) are ops and exclusions are derived with reasons (D27); a control has one status, Implemented, Planned or Off (D28); shared steps, shared fragments and bypass trees by reference inside a project (D29); pages grouped by TARA phase with one relation registry (D30); projects assembled from several TARA files stay in the backlog (D31).
+- Workbench rethink (2026-11-10): a workspace is a folder of JSON files with git as the history (D32); three scope levels with one home per element kind (D33); one methodology per workspace and packs as pure data (D34); MITRE and R155 Annex 5 as catalogs (D35); one API with scopes (D36); a workbench UI with the toolkit decided by a spike (D37); Markdown item definitions and Typst reports (D38); templates by pinned reference (D39); GUI first, files are storage only (D40); a sequential factory with small slices and an owner gate (D41).
 
 ---
 
@@ -247,6 +248,76 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Status:** backlog by the owner's request; needs a design session.
 - **Decision:** a project assembled from several TARA files (a supplier's ECU TARA, a platform team's gateway TARA), each of which stays a normal project its owner opens, edits, baselines and reports on alone, is not built now. The first slice to design is importing **external results** from a pinned baseline of another project; the second is a composite project of pinned member projects. D26 (systems inside one project) stays the answer for one team.
 - **Details:** [design/reference-ui-review.md](design/reference-ui-review.md) section 4; architecture III.10; requirements MTA-01 to MTA-04; jobs 158 and 159 under "Waiting for a design session".
+
+## D32. A workspace is a folder of JSON files; git is the history in standalone mode
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner.
+- **Decision:** a project is saved as a folder: small JSON files with a `format`, `version` and `kind` envelope, one per system and element kind, one per attack tree, read by the existing strict, size-capped reader (ADR 0009, 0011). The item definition is Markdown. One bundle file (`.aegis`, the folder zipped with a manifest of hashes) is used for handover. In standalone mode the file history is git: a commit is a change, a tag is a baseline. Ops stay in memory for undo and validation. The single snapshot stays readable, and stays the format of server mode.
+- **Removed in standalone mode:** the saved op log, the audit hash chain, the baseline store, the History and Versions pages (ADR 0037, 0050).
+- **Not chosen:** TOML (a second reader for no gain), a binary format, SQLite.
+- **Details:** [design/workbench-architecture.md](design/workbench-architecture.md) section 7.
+
+## D33. Three scope levels; every element kind has one home
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner.
+- **Decision:** workspace (the product), system (one item with its own boundary), component. The ownership table in [design/workbench-architecture.md](design/workbench-architecture.md) section 3.2 says where each kind lives: damage scenarios, control definitions, goals, claims, requirements and shared steps at workspace level; item definition, conditions, assumptions, assets, misuse cases, threats and trees at system level. A control's status moves to its application in a system and resolves through layers (template, workspace, system, configuration). A workspace holds named configurations (sets of switches).
+- **Changes:** D26 (a system becomes a folder with its own settings; still no effect on numbers by view), D28 (status per application). **Replaces** D31: a workspace of system folders plus external results covers composite projects.
+
+## D34. One methodology per workspace; packs are data with four kinds of calculation
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner.
+- **Decision:** a workspace pins one methodology and version. A pack is data only: names, scales, factor ratings (factors, a combiner, bands), direct ratings, the tree rule, matrices, extra attributes on element kinds, a lint profile and report sections. CVSS is a built-in function a pack may select. No formulas or code in packs. Another methodology's TARA arrives as external results with a level mapping the user confirms.
+- **Out of scope:** quantitative models in money or probability.
+- **Details:** architecture document section 6.
+
+## D35. MITRE and UN R155 Annex 5 are catalogs, not methodologies
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner.
+- **Decision:** ATT&CK, CAPEC, CWE, EMB3D, D3FEND, R155 Annex 5, IEC 62443-3-3 and CRA Annex I are catalog packs, separate from methodology packs. Entries attach to attack steps, components, controls and requirements by ID and version. Cross-maps drive proposals, never automatic changes, and never a number.
+
+## D36. One API with scopes; scripts and AI propose
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner. Refines D20.
+- **Decision:** everything outside the app changes a project through the existing gRPC API with a scoped token: `read`, `propose` (ops land on a suggestion branch a person accepts) or `write` (ops applied, limited to named element kinds and systems). Scripts and AI default to `propose`. A task in the workspace declares its command and scope and gets a short-lived token. No interpreter is embedded and scripts do not edit project files.
+
+## D37. A workbench instead of pages; the shell toolkit is decided by a spike
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner. Changes D7, D25 and the navigation part of D30.
+- **Decision:** the app becomes a workbench: a project tree, tabs and splits, docks, a command palette, settings with layers. Pages become tabs; the relation registry stays. GPUI with gpui-component is the first candidate for the shell, decided by a spike on macOS, a Windows laptop and Windows over RDP. Zed's source may be read for ideas; code from its GPL crates is not copied (D5). The Slint shell ships until the new shell covers the consultancy's daily work, then it is removed.
+- **Accepted for now:** a weaker screen-reader path and no CPU-only rendering; revisit at the first customer deployment.
+
+## D38. Item definition in Markdown; reports through Typst
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner. Extends D15 and D17.
+- **Decision:** the item definition is a Markdown file whose fenced structure block declares components, functions, interfaces, flows and trust boundaries; the block is the model and the diagram is drawn from it by `aegis-canvas`. PDF output uses Typst templates with diagrams as SVG. No Mermaid.
+
+## D39. Whole-system templates by pinned reference
+
+- **Date:** 2026-11-10
+- **Status:** agreed by the owner. Changes D14 for whole systems.
+- **Decision:** a system may extend a template (ECU, gateway, network device, sensor, backend) at a pinned version and stores only what differs. An update is a reviewed diff; detach copies everything in. Single fragments from the library are still copied with an origin note (D14).
+
+## D40. GUI first: files are the storage, never the interface
+
+- **Date:** 2026-11-10
+- **Status:** steer from the owner; details proposed in [design/workbench-gui-first.md](design/workbench-gui-first.md).
+- **Decision:** a customer's analyst never sees JSON, Markdown, file paths or git. Lists are edited in grids, single elements in forms, trees and the item structure on a canvas, item text in sections with light formatting, history as a plain-word Versions timeline backed by a git library inside the app. The source view is a developer option, off by default. Attack trees grow from a context menu, the keyboard and drag from the library: add a step, reference an existing shared step or fragment (D29), or copy from the library (D14).
+- **Not built:** a word processor, a free drawing tool, a query or formula language in the UI.
+- **Changes:** D38 (the Markdown file is storage; the user edits sections and a diagram), the "text twin" in the architecture document.
+
+## D41. The factory runs one agent at a time and stops for the owner after each small slice
+
+- **Date:** 2026-11-10
+- **Status:** asked for by the owner.
+- **Decision:** the factory is planner, builder, a script gate (`factory/verify.py`), one reviewer for code and security, then the owner. No agents run in parallel and there are no UI or UX review agents. A job is cut into slices of at most 400 changed lines; each has a self-contained build prompt that also works in another session or with another model. The model is chosen per slice by tier and risk. Lessons from failed gates, review findings and owner reworks go to `factory/lessons.md`; a change to the factory itself is proposed by `/factory retro` and applied only with the owner's yes.
+- **Details:** `.claude/skills/factory/SKILL.md`.
 
 ## Open
 

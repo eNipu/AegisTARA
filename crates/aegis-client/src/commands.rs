@@ -417,6 +417,30 @@ pub enum Edit {
         /// The claim, or `None`.
         claim: Option<ClaimId>,
     },
+    /// Rates whether a threat scales to many vehicles (FND-10), with the
+    /// reasoning; `None` is not rated.
+    SetThreatScaling {
+        /// The threat.
+        threat: ThreatId,
+        /// Whether it scales, or `None`.
+        scales: Option<bool>,
+        /// Why; may be empty.
+        reason: String,
+    },
+    /// Sets why a damage scenario's impact is rated as it is (FND-09).
+    SetImpactRationale {
+        /// The damage scenario.
+        damage: DamageId,
+        /// The rationale; empty clears it.
+        text: String,
+    },
+    /// Sets why a threat's direct feasibility is rated as it is (FND-09).
+    SetFeasibilityRationale {
+        /// The threat.
+        threat: ThreatId,
+        /// The rationale; empty clears it.
+        text: String,
+    },
     /// Removes a threat scenario, clearing what blocks the removal first
     /// (tree link, ratings, treatment, goal, claim).
     RemoveThreat {
@@ -1430,6 +1454,16 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
+                if project
+                    .damage_scenario(d_idx)
+                    .is_some_and(|d| !d.impact_rationale().is_empty())
+                {
+                    ops.push(Op::SetImpactRationale {
+                        damage: *damage,
+                        text: "".into(),
+                        provenance: p.clone(),
+                    });
+                }
                 ops.push(Op::RemoveDamageScenario { id: *damage });
                 ops
             }
@@ -1556,6 +1590,26 @@ impl Edit {
                 claim: *claim,
                 provenance: p,
             }],
+            Edit::SetImpactRationale { damage, text } => vec![Op::SetImpactRationale {
+                damage: *damage,
+                text: text.trim().into(),
+                provenance: p,
+            }],
+            Edit::SetFeasibilityRationale { threat, text } => vec![Op::SetFeasibilityRationale {
+                threat: *threat,
+                text: text.trim().into(),
+                provenance: p,
+            }],
+            Edit::SetThreatScaling {
+                threat,
+                scales,
+                reason,
+            } => vec![Op::SetThreatScaling {
+                threat: *threat,
+                scales: *scales,
+                reason: reason.trim().into(),
+                provenance: p,
+            }],
             Edit::RemoveThreat { threat } => {
                 let t = project
                     .threat_scenario_idx(threat)
@@ -1594,6 +1648,21 @@ impl Edit {
                     ops.push(Op::SetThreatClaim {
                         threat: *threat,
                         claim: None,
+                        provenance: p.clone(),
+                    });
+                }
+                if !t.feasibility_rationale().is_empty() {
+                    ops.push(Op::SetFeasibilityRationale {
+                        threat: *threat,
+                        text: "".into(),
+                        provenance: p.clone(),
+                    });
+                }
+                if t.scales().is_some() || !t.scaling_reason().is_empty() {
+                    ops.push(Op::SetThreatScaling {
+                        threat: *threat,
+                        scales: None,
+                        reason: "".into(),
                         provenance: p.clone(),
                     });
                 }
@@ -2234,6 +2303,19 @@ impl Edit {
             Edit::SetThreatClaim { threat: id, claim } => threat(id).is_some_and(|t| {
                 t.claim().and_then(|c| project.cybersecurity_claim_id(c)) == *claim
             }),
+            Edit::SetThreatScaling {
+                threat: id,
+                scales,
+                reason,
+            } => threat(id)
+                .is_some_and(|t| t.scales() == *scales && t.scaling_reason() == reason.trim()),
+            Edit::SetFeasibilityRationale { threat: id, text } => {
+                threat(id).is_some_and(|t| t.feasibility_rationale() == text.trim())
+            }
+            Edit::SetImpactRationale { damage, text } => project
+                .damage_scenario_idx(damage)
+                .and_then(|i| project.damage_scenario(i))
+                .is_some_and(|d| d.impact_rationale() == text.trim()),
             _ => false,
         }
     }
@@ -2278,6 +2360,7 @@ impl Edit {
             Edit::SetImpact { .. } => ("rate", "damage scenarios"),
             Edit::SetThreatGoal { .. } => ("set goal of", "threat scenarios"),
             Edit::SetThreatClaim { .. } => ("set claim of", "threat scenarios"),
+            Edit::SetThreatScaling { .. } => ("set scaling of", "threat scenarios"),
             _ => ("change", "items"),
         };
         Some(Label::bulk(verb, noun, items.len()))
@@ -2373,6 +2456,14 @@ pub enum Command {
     SetDraftInterfaceKind(usize),
     /// Show a page of the open project.
     ShowPage(crate::view::Page),
+    /// Filter the table rows of the page on screen (UI-16); an empty text
+    /// clears the filter. Showing another page clears it too.
+    SetFind {
+        /// The text as typed.
+        text: String,
+        /// The text is a regular expression.
+        regex: bool,
+    },
     /// Select an entity (and show the page it belongs to when `navigate`).
     Select {
         /// What to select.

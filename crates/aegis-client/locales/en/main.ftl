@@ -11,6 +11,8 @@ descriptions = Descriptions
 # Section headings (sections 2-5 and 7-8 use pack-defined element names).
 section-executive-summary = 1. Executive summary
 section-item-definition = Item definition
+item-description = Description of the item
+item-scope = Scope of the analysis
 section-figures = Figures
 section-risks = 6. Risk register and treatment
 section-problems = 9. Open problems
@@ -59,6 +61,11 @@ attack-steps = Attack steps
 attack-step = Attack step
 through = Through
 attack-type = Attack type
+rationale = Rationale
+feasibility-rationale = Feasibility rationale
+scales = Scales
+scaling-reason = Scaling reason
+no = no
 
 # Attack trees.
 tree-summary = { $nodes } nodes. Feasibility at the root: { $feasibility }. { $threats_plural }: { $threats }.

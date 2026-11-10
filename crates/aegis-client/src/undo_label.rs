@@ -226,7 +226,10 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::SetThreatAttackTree { threat, .. }
         | Op::SetRiskTreatment { threat, .. }
         | Op::SetThreatGoal { threat, .. }
-        | Op::SetThreatClaim { threat, .. } => Selection::Threat(*threat),
+        | Op::SetThreatClaim { threat, .. }
+        | Op::SetThreatScaling { threat, .. }
+        | Op::SetFeasibilityRationale { threat, .. } => Selection::Threat(*threat),
+        Op::SetImpactRationale { damage, .. } => Selection::Damage(*damage),
         Op::AddAttackTree { id, .. } | Op::RemoveAttackTree { id } => Selection::Tree(*id),
         Op::RemoveTreeNode { tree, .. } => Selection::Tree(*tree),
         Op::AddTreeNode { tree, id: node, .. }
@@ -349,6 +352,17 @@ fn parts(op: &Op, p: &Project) -> Parts {
         }
         Op::SetThreatGoal { threat: t, .. } => ("change", "goal of threat scenario", threat(t)),
         Op::SetThreatClaim { threat: t, .. } => ("change", "claim of threat scenario", threat(t)),
+        Op::SetThreatScaling { threat: t, .. } => {
+            ("change", "scaling of threat scenario", threat(t))
+        }
+        Op::SetFeasibilityRationale { threat: t, .. } => (
+            "change",
+            "feasibility rationale of threat scenario",
+            threat(t),
+        ),
+        Op::SetImpactRationale { damage: d, .. } => {
+            ("change", "impact rationale of damage scenario", damage(d))
+        }
         Op::RemoveThreatScenario { id } => ("remove", "threat scenario", threat(id)),
 
         Op::AddAttackTree { .. } => ("add", "attack tree", None),

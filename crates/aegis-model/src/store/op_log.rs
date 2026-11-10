@@ -376,6 +376,25 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetThreatScaling {
+        threat: Text<ThreatId>,
+        scales: Option<bool>,
+        reason: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetImpactRationale {
+        damage: Text<DamageId>,
+        text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetFeasibilityRationale {
+        threat: Text<ThreatId>,
+        text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddComponent {
         id: Text<ComponentId>,
         name: &'a str,
@@ -493,7 +512,10 @@ fn within_caps(op: &Op) -> bool {
     }
     let name_ok = |name: &str| name.len() <= MAX_NAME_BYTES;
     match op {
-        Op::SetDescription { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
+        Op::SetDescription { text, .. }
+        | Op::SetThreatScaling { reason: text, .. }
+        | Op::SetImpactRationale { text, .. }
+        | Op::SetFeasibilityRationale { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
         Op::SetDescriptionTranslation { lang, text, .. } => {
             lang.len() <= crate::description::MAX_LANG_TAG_BYTES
                 && text.len() <= MAX_DESCRIPTION_BYTES
@@ -1025,6 +1047,35 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         } => OpView::SetThreatClaim {
             threat: Text(*threat),
             claim: claim.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetThreatScaling {
+            threat,
+            scales,
+            reason,
+            provenance,
+        } => OpView::SetThreatScaling {
+            threat: Text(*threat),
+            scales: *scales,
+            reason,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetImpactRationale {
+            damage,
+            text,
+            provenance,
+        } => OpView::SetImpactRationale {
+            damage: Text(*damage),
+            text,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetFeasibilityRationale {
+            threat,
+            text,
+            provenance,
+        } => OpView::SetFeasibilityRationale {
+            threat: Text(*threat),
+            text,
             provenance: ProvenanceView::of(provenance),
         },
         Op::AddComponent {
@@ -1682,6 +1733,35 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::SetThreatClaim {
             threat: threat.0,
             claim: claim.map(|cl| cl.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetThreatScaling {
+            threat,
+            scales,
+            reason,
+            provenance,
+        } => Op::SetThreatScaling {
+            threat: threat.0,
+            scales,
+            reason: reason.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetImpactRationale {
+            damage,
+            text,
+            provenance,
+        } => Op::SetImpactRationale {
+            damage: damage.0,
+            text: text.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetFeasibilityRationale {
+            threat,
+            text,
+            provenance,
+        } => Op::SetFeasibilityRationale {
+            threat: threat.0,
+            text: text.0,
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::AddComponent {

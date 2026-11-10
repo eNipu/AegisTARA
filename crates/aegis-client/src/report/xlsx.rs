@@ -480,8 +480,14 @@ pub fn report_workbook_xlsx_with_figures(
         names.damage_scenario.singular.to_string(),
     ]];
     damage[0].extend(vocab.impact_categories.iter().map(|c| c.label.clone()));
+    damage[0].push("Impact rationale".to_owned());
     damage[0].push("Threats".to_owned());
     for d in pages::damage_rows(ws) {
+        let rationale = ws
+            .project()
+            .damage_scenario_idx(&d.id)
+            .and_then(|i| ws.project().damage_scenario(i))
+            .map_or_else(String::new, |x| x.impact_rationale().to_owned());
         let mut row = vec![d.visual_id, d.name];
         for (i, level) in d.impacts.iter().enumerate() {
             row.push(
@@ -491,6 +497,7 @@ pub fn report_workbook_xlsx_with_figures(
                     .unwrap_or_default(),
             );
         }
+        row.push(rationale);
         row.push(d.threats.to_string());
         damage.push(row);
     }
@@ -508,6 +515,9 @@ pub fn report_workbook_xlsx_with_figures(
         "Catalog references".to_owned(),
         names.damage_scenario.plural.to_string(),
         names.feasibility.to_string(),
+        "Feasibility rationale".to_owned(),
+        "Scales".to_owned(),
+        "Scaling reason".to_owned(),
         "Risk before controls".to_owned(),
         "Risk after controls".to_owned(),
         "Treatment".to_owned(),
@@ -533,6 +543,16 @@ pub fn report_workbook_xlsx_with_figures(
             refs,
             r.damage,
             r.feasibility,
+            t.as_ref()
+                .map_or_else(String::new, |t| t.feasibility_rationale.clone()),
+            match t.as_ref().and_then(|t| t.scales) {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "",
+            }
+            .to_owned(),
+            t.as_ref()
+                .map_or_else(String::new, |t| t.scaling_reason.clone()),
             risk(r.inherent.as_ref()),
             risk(r.residual.as_ref()),
             r.treatment,

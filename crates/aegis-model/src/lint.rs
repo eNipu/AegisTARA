@@ -99,6 +99,18 @@ pub enum LintCode {
         /// The unrated damage scenario.
         damage: DamageId,
     },
+    /// A damage scenario has an impact rating but no rationale, and the pack
+    /// asks for one (FND-09).
+    ImpactWithoutRationale {
+        /// The damage scenario.
+        damage: DamageId,
+    },
+    /// A threat scenario has a direct feasibility rating but no rationale,
+    /// and the pack asks for one (FND-09).
+    FeasibilityWithoutRationale {
+        /// The threat scenario.
+        threat: ThreatId,
+    },
     /// A damage scenario is not linked by any threat scenario.
     DamageScenarioUnlinked {
         /// The unlinked damage scenario.
@@ -278,6 +290,8 @@ impl LintCode {
             Self::AssetWithoutThreats { .. }
             | Self::AssetPropertyUntested { .. }
             | Self::DamageScenarioWithoutImpacts { .. }
+            | Self::ImpactWithoutRationale { .. }
+            | Self::FeasibilityWithoutRationale { .. }
             | Self::DamageScenarioUnlinked { .. }
             | Self::ThreatWithoutDamages { .. }
             | Self::RedundantDirectFeasibility { .. }
@@ -321,6 +335,16 @@ impl fmt::Display for LintCode {
             Self::DamageScenarioWithoutImpacts { damage } => {
                 write!(f, "damage scenario {damage} has no impact ratings")
             }
+            Self::ImpactWithoutRationale { damage } => {
+                write!(
+                    f,
+                    "damage scenario {damage} has an impact rating without a rationale"
+                )
+            }
+            Self::FeasibilityWithoutRationale { threat } => write!(
+                f,
+                "threat scenario {threat} has a direct feasibility rating without a rationale"
+            ),
             Self::DamageScenarioUnlinked { damage } => write!(
                 f,
                 "damage scenario {damage} is not linked to any threat scenario"
@@ -547,6 +571,8 @@ mod tests {
                 property: prop,
             },
             LintCode::DamageScenarioWithoutImpacts { damage },
+            LintCode::ImpactWithoutRationale { damage },
+            LintCode::FeasibilityWithoutRationale { threat },
             LintCode::DamageScenarioUnlinked { damage },
             LintCode::ThreatWithoutDamages { threat },
             LintCode::RedundantDirectFeasibility { threat },

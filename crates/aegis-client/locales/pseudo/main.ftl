@@ -10,6 +10,8 @@ descriptions = ⟦Déscrîptîôns␣⟧
 
 section-executive-summary = ⟦1. Éxécûtîvé sûmmârý␣⟧
 section-item-definition = ⟦Îtém défînîtîôn␣⟧
+item-description = ⟦Déscrîptîôn ôf thé îtém␣⟧
+item-scope = ⟦Scôpé ôf thé ânâlýsîs␣⟧
 section-figures = ⟦Fîgûrés␣⟧
 section-risks = ⟦6. Rîsk régîstér ând tréâtmént␣⟧
 section-problems = ⟦9. Ôpén prôbléms␣⟧
@@ -55,6 +57,11 @@ attack-steps = ⟦Âttâck stéps␣⟧
 attack-step = ⟦Âttâck stép␣⟧
 through = ⟦Thrôûgh␣⟧
 attack-type = ⟦Âttâck týpé␣⟧
+rationale = ⟦Râtîônâlé␣⟧
+feasibility-rationale = ⟦Féâsîbîlîtý râtîônâlé␣⟧
+scales = ⟦Scâlés␣⟧
+scaling-reason = ⟦Scâlîng réâsôn␣⟧
+no = ⟦nô␣⟧
 
 tree-summary = ⟦{ $nodes } nôdés. Féâsîbîlîtý ât thé rôôt: { $feasibility }. { $threats_plural }: { $threats }.␣⟧
 tree-caption = ⟦Âttâck tréé␣⟧

@@ -231,6 +231,7 @@ pub fn second_def() -> MethodologyDef {
                 required: 1,
             },
         }],
+        require_rationale: false,
         attack_potential: Some(AttackPotentialDef {
             factors: vec![
                 FactorDef {
@@ -403,6 +404,7 @@ pub fn wide() -> Methodology {
             })
             .collect(),
         catalog_schemes: vec![scheme("w0"), scheme("w1"), scheme("w2")],
+        require_rationale: false,
         attack_potential: Some(AttackPotentialDef {
             factors: (0..16)
                 .map(|i| FactorDef {
@@ -547,7 +549,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..57,
+        0u8..59,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -596,6 +598,16 @@ impl Gen {
             wide: wide(),
             foreign: builtin(),
             next: 0,
+        }
+    }
+
+    /// A rationale text: sometimes invalid, sometimes empty (clears it).
+    fn rationale(&self, sel: u16) -> Arc<str> {
+        match sel % 16 {
+            0 => "bad\u{0}text".into(),
+            1 => "x".repeat(aegis_model::MAX_DESCRIPTION_CHARS + 1).into(),
+            2..=5 => "".into(),
+            n => format!("rated so because {n}").into(),
         }
     }
 
@@ -1470,6 +1482,31 @@ impl Gen {
                     provenance,
                 }
             }
+            57 if s.b.is_multiple_of(2) => Op::SetImpactRationale {
+                damage: self.damage(p, s.a),
+                text: self.rationale(s.c),
+                provenance,
+            },
+            57 => Op::SetFeasibilityRationale {
+                threat: self.threat(p, s.a),
+                text: self.rationale(s.c),
+                provenance,
+            },
+            56 => Op::SetThreatScaling {
+                threat: self.threat(p, s.a),
+                scales: match s.b % 3 {
+                    0 => None,
+                    1 => Some(true),
+                    _ => Some(false),
+                },
+                reason: match s.c % 16 {
+                    0 => "bad\u{0}text".into(),
+                    1 => "x".repeat(aegis_model::MAX_DESCRIPTION_CHARS + 1).into(),
+                    2 => "".into(),
+                    n => format!("one key opens every car {n}").into(),
+                },
+                provenance,
+            },
             _ => {
                 if self.m.attack_type_count() == 0 && !s.c.is_multiple_of(4) {
                     Op::ApplyControl {
@@ -2275,6 +2312,15 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: p_human.clone(),
         },
     );
+    ok(
+        &mut p,
+        Op::SetThreatScaling {
+            threat: sniff,
+            scales: Some(true),
+            reason: "One sniffer reads every car on the road".into(),
+            provenance: p_human.clone(),
+        },
+    );
 
     // Check the state.
     let lock_idx = p.threat_scenario_idx(&lock).expect("lock");
@@ -2624,6 +2670,57 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: Provenance::default(),
         },
     );
+    rejects(
+        &mut p,
+        Op::RemoveThreatScenario { id: sniff },
+        &aegis_model::ModelError::ThreatHasScaling { threat: sniff },
+    );
+    ok(
+        &mut p,
+        Op::SetImpactRationale {
+            damage: leak,
+            text: "Leaked keys open every car".into(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetFeasibilityRationale {
+            threat: sniff,
+            text: "A radio and a laptop".into(),
+            provenance: Provenance::default(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveDamageScenario { id: leak },
+        &aegis_model::ModelError::DamageHasRationale { damage: leak },
+    );
+    ok(
+        &mut p,
+        Op::SetImpactRationale {
+            damage: leak,
+            text: "".into(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetFeasibilityRationale {
+            threat: sniff,
+            text: "".into(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetThreatScaling {
+            threat: sniff,
+            scales: None,
+            reason: "".into(),
+            provenance: Provenance::default(),
+        },
+    );
     ok(&mut p, Op::RemoveCybersecurityClaim { id: claim });
     ok(&mut p, Op::RemoveAttackTree { id: tree });
     ok(
@@ -2752,6 +2849,7 @@ pub fn max_def() -> MethodologyDef {
                 }
             })
             .collect(),
+        require_rationale: false,
         attack_potential: Some(AttackPotentialDef {
             factors: (0..16)
                 .map(|i| {

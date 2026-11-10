@@ -90,9 +90,15 @@ strip = "symbols"
 # incremental compiles for workspace crates.
 [profile.dev]
 opt-level = 1
+# Line numbers in panics and backtraces, no variable info. Full debug info was
+# most of the size of target/ (191 GB on 2026-11-10) and slows every link.
+# For a debugger session: CARGO_PROFILE_DEV_DEBUG=2 cargo build.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
+# Nobody steps through third-party crates.
+debug = false
 
 # Password hashing is deliberately slow; unoptimized it takes seconds per
 # hash and makes the login tests crawl. Optimize just these crates in dev.

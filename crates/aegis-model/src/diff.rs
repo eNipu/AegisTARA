@@ -568,6 +568,7 @@ pub struct ProjectDiff {
     pub(crate) cybersecurity_claims: EntityDiff<ClaimId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
     pub(crate) notes_changed: bool,
+    pub(crate) item_text_changed: bool,
     pub(crate) languages_changed: bool,
 }
 
@@ -583,6 +584,19 @@ impl ProjectDiff {
     #[must_use]
     pub fn notes_changed(&self) -> bool {
         self.notes_changed
+    }
+
+    /// Whether the item definition's description or scope differs
+    /// (ARC-05). Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(!ProjectDiff::default().item_text_changed());
+    /// ```
+    #[must_use]
+    pub fn item_text_changed(&self) -> bool {
+        self.item_text_changed
     }
 
     /// Whether the project's translation languages differ. Time O(1).

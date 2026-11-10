@@ -80,16 +80,17 @@ const STAGES = [
   ["spec", "Spec"], ["build", "Build"], ["review", "Review"],
   ["approve", "Approve"], ["merged", "Merged"], ["needs-human", "Needs human"],
 ];
-const KINDS = ["security", "ux", "ui", "code"];
+const KINDS = ["security", "ux", "ui", "code"]; // jobs before 162; newer jobs carry gate, review, owner
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 let jobs = [];
 
 function chips(r) {
-  return KINDS.map(k => `<span class="chip ${esc(r?.[k])}" title="${k}: ${esc(r?.[k] || "pending")}">${k}</span>`).join("");
+  const kinds = r && "gate" in r ? ["gate", "review", "owner"] : KINDS;
+  return (r?.slice ? `<b>${esc(r.slice)}</b>` : "") + kinds.map(k => `<span class="chip ${esc(r?.[k])}" title="${k}: ${esc(r?.[k] || "pending")}">${k}</span>`).join("");
 }
 
 function card(j) {
-  const rows = [...(j.history || []), ...(j.reviews && j.round ? [j.reviews] : [])]
+  const rows = [...(j.history || []), ...(j.reviews && (j.round || j.slice) ? [j.reviews] : [])]
     .map((r, i) => `<div class="round"><b>R${i + 1}</b>${chips(r)}</div>`).join("");
   return `<button class="card ${j.stage === "needs-human" ? "human" : ""}" data-id="${esc(j.id)}">
     <div class="id">${esc(j.id)}</div>
