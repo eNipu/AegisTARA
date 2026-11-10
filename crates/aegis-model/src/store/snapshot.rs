@@ -747,6 +747,30 @@ impl Project {
     /// # }
     /// ```
     pub fn save<W: Write>(&self, w: W) -> Result<(), StoreError> {
+        self.with_snapshot_view(|view| {
+            let mut out = BufWriter::new(w);
+            serde_json::to_writer(&mut out, view).map_err(wire::encode_error)?;
+            out.write_all(b"\n")?;
+            out.flush()?;
+            Ok(())
+        })
+    }
+
+    /// The snapshot as a JSON value, plus the visual ID of each entry of
+    /// its `attack_trees` list, in the same order. O(n) in project size.
+    pub(super) fn snapshot_value(&self) -> Result<(serde_json::Value, Vec<String>), StoreError> {
+        let value =
+            self.with_snapshot_view(|view| serde_json::to_value(view).map_err(wire::encode_error))?;
+        let ids = self
+            .attack_trees()
+            .map(|(idx, _, _)| self.attack_tree_visual_id(idx))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(StoreError::UnencodableOp)?;
+        Ok((value, ids))
+    }
+
+    /// Builds the [`SnapshotView`] and hands it to `f`.
+    fn with_snapshot_view<R>(&self, f: impl FnOnce(&SnapshotView<'_>) -> R) -> R {
         let m = &**self.methodology();
         let order = KeyOrder::new(m);
         let ctx = Ctx {
@@ -773,11 +797,7 @@ impl Project {
             review_marks: ReviewMarks(self),
             languages: self.languages().iter().map(|l| &**l).collect(),
         };
-        let mut out = BufWriter::new(w);
-        serde_json::to_writer(&mut out, &view).map_err(wire::encode_error)?;
-        out.write_all(b"\n")?;
-        out.flush()?;
-        Ok(())
+        f(&view)
     }
 
     /// Reads an `aegis-project` v1 snapshot written by

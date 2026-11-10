@@ -270,7 +270,9 @@ pub use description::{
     MAX_LANG_TAG_BYTES, MAX_NOTES_CHARS, Translation,
 };
 pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
-pub use error::{EntityKind, MethodologyError, ModelError, PackError, StoreError};
+pub use error::{
+    EntityKind, MethodologyError, ModelError, PackError, StoreError, WorkspaceProblem,
+};
 pub use eval::{
     AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, TreeEvalCache,
     evaluate,
@@ -305,7 +307,8 @@ pub use sensitivity::{
 pub use store::{
     Limit, LoggedOp, MAX_ACTOR_BYTES, MAX_CATALOG_REF_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES,
     MAX_LABEL_BYTES, MAX_METHODOLOGY_VERSION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES,
-    MAX_PACK_FILE_BYTES, MAX_PROJECT_FILE_BYTES, OpCodec, OpLogReader, OpLogWriter, VocabKind,
+    MAX_PACK_FILE_BYTES, MAX_PROJECT_FILE_BYTES, MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES,
+    OpCodec, OpLogReader, OpLogWriter, VocabKind, WorkspaceFile,
 };
 pub use suggest::{
     Citation, GhostPreview, GhostTreeNode, MAX_CITATIONS_PER_ITEM, MAX_OPS_PER_SUGGESTION,
