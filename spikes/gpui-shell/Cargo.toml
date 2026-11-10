@@ -1,0 +1,24 @@
+[package]
+name = "aegis-spike-gpui-shell"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "LicenseRef-Proprietary"
+description = "AegisTARA shell toolkit spike: workbench docks, tree, inspector and editor with GPUI"
+
+# Own Cargo root. The root workspace excludes `spikes`, but a factory worktree sits
+# inside the main checkout, so Cargo would otherwise find the main checkout's root.
+[workspace]
+
+[dependencies]
+# Exact pins. gpui-component 0.9.1 depends on Zed's GPUI through the crates.io
+# snapshot package `gpui-pre` (renamed to `gpui`), so the spike uses the same one.
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui-component = "=0.9.1"
+# GPUI's desktop platform layer; `runtime_shaders` avoids needing Xcode's `metal` compiler.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
