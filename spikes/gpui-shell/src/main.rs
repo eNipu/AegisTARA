@@ -30,6 +30,7 @@ mod args;
 mod canvas_tab;
 mod editor_tab;
 mod inspector;
+mod measure;
 mod palette;
 mod project_tree;
 mod sample_tree;
@@ -39,14 +40,15 @@ mod shell;
 use gpui::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
 fn main() {
-    let n = match args::parse_nodes(&std::env::args().collect::<Vec<_>>()) {
-        Ok(n) => n,
+    let started = std::time::Instant::now();
+    let args = match args::parse_args(&std::env::args().collect::<Vec<_>>()) {
+        Ok(args) => args,
         Err(message) => {
             eprintln!("{message}");
             std::process::exit(2);
         }
     };
-    let tree = match sample_tree::wide_tree(n, 4) {
+    let tree = match sample_tree::wide_tree(args.nodes, 4) {
         Ok(tree) => tree,
         Err(err) => {
             eprintln!("could not build the sample tree: {err}");
@@ -65,7 +67,7 @@ fn main() {
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            let shell = cx.new(|cx| shell::Shell::new(&tree, window, cx));
+            let shell = cx.new(|cx| shell::Shell::new(&tree, started, &args, window, cx));
             cx.new(|cx| gpui_component::Root::new(shell, window, cx))
         });
         if let Err(err) = opened {

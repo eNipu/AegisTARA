@@ -15,6 +15,54 @@ Pinned versions: `gpui-pre 0.3.12` (renamed to `gpui`), `gpui-pre-platform 0.3.1
 (renamed to `gpui_platform`, features `font-kit` and `runtime_shaders`),
 `gpui-component 0.9.1`.
 
+## Build and run
+
+macOS:
+
+```sh
+cargo build --release --locked --manifest-path spikes/gpui-shell/Cargo.toml
+cargo run --release --locked --manifest-path spikes/gpui-shell/Cargo.toml -- --nodes 100000
+```
+
+Windows (PowerShell):
+
+```powershell
+cargo build --release --locked --manifest-path spikes\gpui-shell\Cargo.toml
+cargo run --release --locked --manifest-path spikes\gpui-shell\Cargo.toml -- --nodes 100000
+```
+
+Options: `--nodes N` (1 to 1,000,000, default 13), `--measure`, `--frames F` (1 to 10,000, default 300).
+
+## Measure
+
+`--measure` centres the view on the tree, pans it 8 px per frame for `F` frames and prints
+`FIRST_FRAME_MS`, `FRAME_INTERVAL_MS p50 p95 max`, `CANVAS_MS p50 p95 max`, `ITEMS`, `NODES`
+and `MEASURE_DONE`, then quits after 3 seconds. The scripts run it and add resident memory
+and binary size:
+
+```sh
+sh spikes/gpui-shell/measure.sh 100000 300          # macOS, Linux
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File spikes\gpui-shell\measure.ps1   # Windows
+```
+
+Both build nothing; build the release binary first. Numbers go in `RESULTS.md`.
+
+## Windows and RDP for the owner
+
+1. Install rustup (https://rustup.rs) and the Visual Studio Build Tools with the
+   "Desktop development with C++" workload and a Windows SDK.
+2. Clone the repository and open PowerShell in it.
+3. `cargo build --release --locked --manifest-path spikes\gpui-shell\Cargo.toml`
+4. `powershell -ExecutionPolicy Bypass -File spikes\gpui-shell\measure.ps1`
+5. Run step 4 once at the laptop and once from the Mac through an RDP client (Microsoft
+   "Windows App"), inside the remote session.
+6. Run the app by hand too (`cargo run --release --manifest-path spikes\gpui-shell\Cargo.toml -- --nodes 100000`)
+   and go through the checklist.
+7. Paste the printed lines and tick the checklist in `RESULTS.md`.
+
 ## Licenses
 
 Checked 2026-11-11 on the locked dependency set: 760 packages (including this spike).
