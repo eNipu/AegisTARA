@@ -139,4 +139,23 @@ if "$OPENSSL" pkeyutl -verify -pubin -inkey update.pem -rawin \
 fi
 ok "a changed SHA256SUMS fails the signature"
 
+mkdir dup1 dup2 out2
+cp "$installer" dup1/same.tar.gz
+cp "$installer" dup2/same.tar.gz
+set +e
+"$repo_root/scripts/offline-bundle.sh" --manifest update.aegis \
+    --installer dup1/same.tar.gz --installer dup2/same.tar.gz \
+    --key key.pk8 --keys keys.txt --out out2 > /dev/null 2>&1
+status=$?
+set -e
+[ "$status" = 2 ] || fail "offline-bundle.sh accepted two installers with one name (exit $status)"
+ok "two installers with one file name are refused"
+
+mkdir "img dir" out3
+cp images.tar.gz "img dir/images.tar.gz"
+"$repo_root/scripts/offline-bundle.sh" --manifest update.aegis --installer "$installer" \
+    --images "img dir/images.tar.gz" --key key.pk8 --keys keys.txt --out out3 > /dev/null \
+    || fail "offline-bundle.sh with an images path containing a space"
+ok "an images path with a space works"
+
 echo "all offline bundle checks passed"
