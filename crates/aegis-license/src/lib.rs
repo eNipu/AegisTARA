@@ -14,9 +14,12 @@
 //! - [`SeatLedger`] counts active named users against the seat limit.
 //! - [`Manifest`] is the signed update manifest the client checks before it
 //!   offers an update (ADR 0034). It uses its own key list.
+//! - [`bundle`] signs and verifies an offline bundle folder for air-gapped
+//!   sites: `SHA256SUMS` with a raw Ed25519 signature by the update key.
 //! - `Issuer` (feature `issuer`) signs both. It is not in server or client
 //!   builds.
 
+pub mod bundle;
 mod envelope;
 mod error;
 mod keys;
@@ -27,6 +30,7 @@ mod seats;
 #[cfg(feature = "issuer")]
 mod issuer;
 
+pub use bundle::BundleError;
 pub use error::LicenseError;
 pub use keys::{MAX_TRUSTED_KEYS, TrustedKeys};
 pub use license::{

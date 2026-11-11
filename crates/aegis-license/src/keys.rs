@@ -100,6 +100,11 @@ impl TrustedKeys {
     pub(crate) fn get(&self, key_id: &str) -> Option<&[u8; 32]> {
         self.keys.iter().find(|(k, _)| k == key_id).map(|(_, v)| v)
     }
+
+    /// Every key with its ID, in list order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &[u8; 32])> {
+        self.keys.iter().map(|(k, v)| (k.as_str(), v))
+    }
 }
 
 fn check_key_id(id: &str) -> Result<(), LicenseError> {

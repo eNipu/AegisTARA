@@ -8,7 +8,14 @@
 //! aegis-license inspect FILE --keys KEYS_FILE
 //! aegis-license sign-update --key KEYFILE --key-id ID --in MANIFEST.json
 //! aegis-license inspect-update FILE --keys KEYS_FILE
+//! aegis-license sign-bundle DIR --key KEYFILE
+//! aegis-license verify-bundle DIR --keys KEYS_FILE
+//! aegis-license public-pem --keys KEYS_FILE --key-id ID
 //! ```
+//!
+//! `sign-bundle` writes `SHA256SUMS` and `SHA256SUMS.sig` in an offline
+//! bundle folder (use the update key). `verify-bundle` checks the folder.
+//! `public-pem` prints a key as PEM for `openssl pkeyutl -verify -rawin`.
 //!
 //! `sign-update` reads the manifest as JSON (the `Manifest` fields; its
 //! `kid` is set from `--key-id`) and prints the signed file. Use a different
@@ -20,6 +27,7 @@
 
 use std::process::ExitCode;
 
+use aegis_license::bundle;
 use aegis_license::{DAY, Issuer, License, LicenseState, Manifest, TrustedKeys};
 
 fn main() -> ExitCode {
@@ -70,8 +78,12 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("inspect") => inspect(args),
         Some("sign-update") => sign_update(args),
         Some("inspect-update") => inspect_update(args),
+        Some("sign-bundle") => sign_bundle(args),
+        Some("verify-bundle") => verify_bundle(args),
+        Some("public-pem") => public_pem(args),
         _ => Err(
-            "use keygen, sign, inspect, sign-update, or inspect-update (see the top of this file)"
+            "use keygen, sign, inspect, sign-update, inspect-update, sign-bundle, \
+             verify-bundle, or public-pem (see the top of this file)"
                 .to_owned(),
         ),
     }
@@ -208,5 +220,45 @@ fn inspect_update(args: &[String]) -> Result<(), String> {
             a.platform, a.bytes, a.sha256, a.url
         );
     }
+    Ok(())
+}
+
+fn read_keys(args: &[String]) -> Result<TrustedKeys, String> {
+    let keys_text = std::fs::read_to_string(need(args, "--keys")?)
+        .map_err(|e| format!("cannot read the key list: {e}"))?;
+    TrustedKeys::parse(&keys_text).map_err(|e| e.to_string())
+}
+
+fn sign_bundle(args: &[String]) -> Result<(), String> {
+    let dir = std::path::Path::new(args.get(1).ok_or("sign-bundle needs a bundle folder")?);
+    let key =
+        std::fs::read(need(args, "--key")?).map_err(|e| format!("cannot read the key: {e}"))?;
+    let issuer = Issuer::from_pkcs8(&key).map_err(|e| e.to_string())?;
+    let sums = bundle::sums_for_dir(dir).map_err(|e| e.to_string())?;
+    let sig = issuer.sign_bundle_sums(&sums).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(bundle::SUMS_FILE), sums.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", bundle::SUMS_FILE))?;
+    std::fs::write(dir.join(bundle::SIG_FILE), sig)
+        .map_err(|e| format!("cannot write {}: {e}", bundle::SIG_FILE))?;
+    println!("signed {} files", sums.lines().count());
+    Ok(())
+}
+
+fn verify_bundle(args: &[String]) -> Result<(), String> {
+    let dir = std::path::Path::new(args.get(1).ok_or("verify-bundle needs a bundle folder")?);
+    let keys = read_keys(args)?;
+    let report = bundle::verify_bundle_dir(dir, &keys).map_err(|e| e.to_string())?;
+    println!("release:   {}", report.release);
+    println!("key:       {}", report.key_id);
+    println!("files:     {}", report.files);
+    println!("bundle ok");
+    Ok(())
+}
+
+fn public_pem(args: &[String]) -> Result<(), String> {
+    let keys = read_keys(args)?;
+    let pem =
+        bundle::public_key_pem(&keys, need(args, "--key-id")?).ok_or("no key with that ID")?;
+    print!("{pem}");
     Ok(())
 }
