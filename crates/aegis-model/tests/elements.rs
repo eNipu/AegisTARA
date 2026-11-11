@@ -294,6 +294,18 @@ fn rename_refuses_a_bad_name() {
     );
 }
 
+#[test]
+fn rename_refuses_a_blank_actor() {
+    let (_, mut p) = project();
+    p.apply(add(1, "first")).expect("add");
+    let rename = Op::RenameElement {
+        id: common::element_id(1),
+        name: "ok".into(),
+        provenance: Provenance::human("  ", 1),
+    };
+    assert_eq!(refusal(&mut p, rename), ModelError::EmptyActor);
+}
+
 fn log_ops() -> Vec<Op> {
     vec![
         add(1, "Spoofed fob"),
