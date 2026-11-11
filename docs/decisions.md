@@ -291,6 +291,7 @@ Details live in [direction-v1.md](direction-v1.md) and [ai-backlog.md](ai-backlo
 - **Status:** agreed by the owner. Changes D7, D25 and the navigation part of D30.
 - **Decision:** the app becomes a workbench: a project tree, tabs and splits, docks, a command palette, settings with layers. Pages become tabs; the relation registry stays. GPUI with gpui-component is the first candidate for the shell, decided by a spike on macOS, a Windows laptop and Windows over RDP. Zed's source may be read for ideas; code from its GPL crates is not copied (D5). The Slint shell ships until the new shell covers the consultancy's daily work, then it is removed.
 - **Accepted for now:** a weaker screen-reader path and no CPU-only rendering; revisit at the first customer deployment.
+- **Spike result (2026-11-11, provisional):** macOS only: within the budgets. The pass bar is on a Windows laptop and over RDP, not measured yet (no Windows machine), so GPUI is neither chosen nor rejected; job 182 waits for that follow-up. Numbers: [ADR 0066](adr/0066-workbench-shell-toolkit.md).
 
 ## D38. Item definition in Markdown; reports through Typst
 

@@ -15,8 +15,8 @@
 | Environment | FIRST_FRAME_MS | FRAME_INTERVAL_MS p50/p95/max | CANVAS_MS p50/p95/max | ITEMS | RSS_MB | BINARY_MB | Machine |
 |---|---|---|---|---|---|---|---|
 | macOS | 520.7 | 8.3 / 8.4 / 61.4 | 0.2 / 0.2 / 0.9 | 85 | 162.3 | 15.9 | Apple M2 Max (Mac14,6), Darwin 27.2.0 |
-| Windows laptop | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) |
-| Windows over RDP | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) | TODO(owner) |
+| Windows laptop | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| Windows over RDP | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
 
 Notes: the Mac display runs at 120 Hz, so an interval of 8.3 ms is the display rate, not a
 limit of the app. `CANVAS_MS` covers building the display list and the paint calls, not the
@@ -26,15 +26,15 @@ GPU work after them. `ITEMS` is the display list of the last frame (about 1000x9
 
 | Check | macOS | Windows laptop | Windows over RDP |
 |---|---|---|---|
-| starts | yes | TODO(owner) | TODO(owner) |
-| draws the tree | yes | TODO(owner) | TODO(owner) |
-| pan | not checked (no one at the keyboard; the automatic pan in `--measure` ran) | TODO(owner) | TODO(owner) |
-| zoom | not checked | TODO(owner) | TODO(owner) |
-| click selects and the inspector follows | not checked | TODO(owner) | TODO(owner) |
-| dock splitter resize | not checked | TODO(owner) | TODO(owner) |
-| editor typing | not checked | TODO(owner) | TODO(owner) |
-| editor undo | not checked | TODO(owner) | TODO(owner) |
-| Japanese IME in the editor (type にほんご) | not checked | TODO(owner) | TODO(owner) |
+| starts | yes | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| draws the tree | yes | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| pan | not checked (no one at the keyboard; the automatic pan in `--measure` ran) | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| zoom | not checked | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| click selects and the inspector follows | not checked | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| dock splitter resize | not checked | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| editor typing | not checked | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| editor undo | not checked | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
+| Japanese IME in the editor (type にほんご) | not checked | not measured (deferred to backlog: no Windows machine yet) | not measured (deferred to backlog: no Windows machine yet) |
 
 ## Versions
 
