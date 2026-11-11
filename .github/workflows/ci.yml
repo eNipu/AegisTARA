@@ -122,6 +122,9 @@ jobs:
         env:
           AEGIS_TEST_DATABASE_URL: postgres://aegis:aegis@127.0.0.1:5432/aegis_test
         run: scripts/ci.sh
+      # The offline bundle for air-gapped sites (job 100), checked as a customer would.
+      - name: scripts/offline-bundle-test.sh
+        run: scripts/offline-bundle-test.sh
       # Only master writes the cache, and only after a green run. Branches and
       # pull requests restore the master entry but never save their own, so
       # they cannot evict or poison it. An exact key hit is not saved again
