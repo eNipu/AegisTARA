@@ -1,0 +1,69 @@
+{
+  "job": "100-offline-bundle",
+  "slices": [
+    {
+      "id": "100a",
+      "title": "Sign and verify an offline bundle folder in aegis-license",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-license/src/bundle.rs",
+        "crates/aegis-license/src/lib.rs",
+        "crates/aegis-license/src/keys.rs",
+        "crates/aegis-license/src/issuer.rs",
+        "crates/aegis-license/tests/bundle.rs"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": ["crates/aegis-license"],
+      "checks": [
+        "cargo test --locked -p aegis-license --test bundle"
+      ]
+    },
+    {
+      "id": "100b",
+      "title": "Bundle commands in the vendor CLI and the bundle build script",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-license/src/bin/aegis-license.rs",
+        "crates/aegis-license/Cargo.toml",
+        "crates/aegis-license/tests/bundle_cli.rs",
+        "scripts/offline-bundle.sh",
+        "scripts/offline-bundle-test.sh",
+        ".github/workflows/ci.yml"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": ["crates/aegis-license"],
+      "checks": [
+        "cargo test --locked -p aegis-license --features issuer --test bundle_cli",
+        "scripts/offline-bundle-test.sh"
+      ]
+    },
+    {
+      "id": "100c",
+      "title": "Offline install steps, named server image and ADR 0067",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "docs/deployment.md",
+        "docs/release-checklist.md",
+        "docs/adr/0067-offline-bundle.md",
+        "deploy/compose.yaml",
+        "deploy/.env.example"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "env POSTGRES_PASSWORD=x AEGIS_OIDC_ISSUER=https://login.example.com AEGIS_OIDC_AUDIENCE=a AEGIS_PUBLIC_URL=https://aegis.example.com docker compose -f deploy/compose.yaml config -q",
+        "grep -q 'AEGIS_SERVER_IMAGE' deploy/compose.yaml",
+        "grep -q 'Offline install (air-gapped sites)' docs/deployment.md",
+        "grep -q 'offline-bundle.sh' docs/release-checklist.md",
+        "test -f docs/adr/0067-offline-bundle.md",
+        "scripts/offline-bundle-test.sh"
+      ]
+    }
+  ]
+}

@@ -412,7 +412,7 @@
     },
     {
       "id": "024-cybersecurity-goals-and-claims",
-      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 \u00a715.4)",
+      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 §15.4)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1121,7 +1121,7 @@
     },
     {
       "id": "115-row-actions",
-      "title": "Row actions in tables: DataTable, + and \u22ef actions, keyboard, read-only, 5,000-row check (UI-09)",
+      "title": "Row actions in tables: DataTable, + and ⋯ actions, keyboard, read-only, 5,000-row check (UI-09)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1259,6 +1259,54 @@
       ],
       "decision": "Provisional: within budgets on macOS; Windows and RDP deferred to the backlog (ADR 0066).",
       "updated": "2026-11-11T12:54:55Z"
+    },
+    {
+      "id": "100-offline-bundle",
+      "title": "Offline bundle",
+      "branch": "factory/100-offline-bundle",
+      "stage": "merged",
+      "slice": "100c",
+      "base": "67ce712230b70a53acd7dcbf7eacb71c7a3d37c7",
+      "reviews": {
+        "slice": "100c",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "100a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 397
+        },
+        {
+          "slice": "100b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 362
+        },
+        {
+          "slice": "100c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "haiku",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 7
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-11T21:10:56Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
