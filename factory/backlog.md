@@ -198,6 +198,7 @@ Later:
 - [ ] Translation of element text through the gateway into the content language fields, reviewed by the user before it is kept (AI-09) (093-ai-translation)
 - [ ] Workspace files on the `large` reference project: build a 100,000-node placeholder project in the benchmark kit, measure workspace write, read and peak memory against the 1.0 s open budget, and add the figures to ADR 0065 (follow-up to 162d)
 - [ ] Project creation: choose the methodology once when the project is created; no control to change it afterwards (D42)
+- [ ] GPUI spike on Windows: set up a Windows VM or laptop, build `spikes/gpui-shell` from branch `factory/181-shell-spike`, run `measure.ps1` at the machine and over RDP, fill the Windows rows of `RESULTS.md`, and turn the provisional result in ADR 0066 and D37 into a final pass or fail (follow-up to 181; blocks 182)
 
 ## Waiting for a design session
 
