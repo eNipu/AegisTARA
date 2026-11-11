@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::control::RiskTreatment;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    NodeIdx, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    NodeId, NodeIdx, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -55,6 +55,8 @@ pub enum EntityKind {
     CybersecurityGoal,
     /// A cybersecurity claim ([`CybersecurityClaim`](crate::CybersecurityClaim)).
     CybersecurityClaim,
+    /// An element of a generic kind ([`Element`](crate::Element)).
+    Element,
 }
 
 impl EntityKind {
@@ -84,6 +86,7 @@ impl EntityKind {
             Self::SecurityControl => "security control",
             Self::CybersecurityGoal => "cybersecurity goal",
             Self::CybersecurityClaim => "cybersecurity claim",
+            Self::Element => "element",
         }
     }
 }
@@ -280,6 +283,9 @@ pub enum ModelError {
     /// A cybersecurity claim with this ID already exists in the project.
     #[error("cybersecurity claim {0} already exists in the project")]
     DuplicateCybersecurityClaim(ClaimId),
+    /// An element with this ID already exists in the project.
+    #[error("element {0} already exists in the project")]
+    DuplicateElement(ElementId),
     /// A component with this ID already exists in the project.
     #[error("component {0} already exists in the project")]
     DuplicateComponent(ComponentId),
@@ -313,6 +319,9 @@ pub enum ModelError {
     /// No cybersecurity claim with this ID is in the project.
     #[error("cybersecurity claim {0} is not in the project")]
     UnknownCybersecurityClaim(ClaimId),
+    /// No element with this ID is in the project.
+    #[error("element {0} is not in the project")]
+    UnknownElement(ElementId),
     /// No component with this ID is in the project.
     #[error("component {0} is not in the project")]
     UnknownComponent(ComponentId),

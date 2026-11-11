@@ -5,9 +5,14 @@
 //! never reads these elements when it evaluates risk. A new kind is one row in
 //! [`KINDS`] plus one [`ElementKind`] variant.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::id::{ThreatId, parse_visual_num};
+use crate::error::{EntityKind, ModelError};
+use crate::id::{ElementId, ThreatId, parse_visual_num};
+use crate::op::Op;
+use crate::project::{Project, check_name, check_provenance};
+use crate::provenance::Provenance;
 
 /// Most live elements of one kind in a project.
 pub const MAX_ELEMENTS_PER_KIND: usize = 10_000;
@@ -199,6 +204,292 @@ impl ElementKind {
     #[must_use]
     pub fn parse_visual(self, text: &str) -> Option<u32> {
         parse_visual_num(self.prefix(), text)
+    }
+}
+
+/// An element of a generic kind: its kind, name and provenance (attributes and links come in 205c, 205d).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Element {
+    kind: ElementKind,
+    name: Arc<str>,
+    provenance: Provenance,
+}
+
+impl Element {
+    /// The kind of this element. Time O(1).
+    #[must_use]
+    pub fn kind(&self) -> ElementKind {
+        self.kind
+    }
+
+    /// The name of this element. Time O(1).
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Who last changed this element, when and from what source. Time O(1).
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
+}
+
+/// The elements of every generic kind in one project.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ElementStore {
+    kinds: BTreeMap<ElementKind, KindSlot>,
+    /// Every live element.
+    #[allow(clippy::zero_sized_map_values)] // one kind today; more rows add variants
+    kind_of: BTreeMap<ElementId, ElementKind>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct KindSlot {
+    /// Visual number and element, in ID order.
+    live: BTreeMap<ElementId, (u32, Element)>,
+    next_visual: u32,
+    /// So an undone removal gets its number back.
+    removed_visuals: BTreeMap<ElementId, u32>,
+}
+
+impl ElementStore {
+    /// The element with this ID. Time O(log n).
+    pub(crate) fn get(&self, id: ElementId) -> Option<&Element> {
+        let kind = self.kind_of.get(&id)?;
+        self.kinds.get(kind)?.live.get(&id).map(|(_, e)| e)
+    }
+
+    /// The element with this ID, mutably. Time O(log n).
+    #[allow(dead_code)] // used by attribute ops in slice 205c
+    pub(crate) fn get_mut(&mut self, id: ElementId) -> Option<&mut Element> {
+        let kind = self.kind_of.get(&id)?;
+        self.kinds.get_mut(kind)?.live.get_mut(&id).map(|(_, e)| e)
+    }
+
+    /// The visual number of this element. Time O(log n).
+    pub(crate) fn visual_num(&self, id: ElementId) -> Option<u32> {
+        let kind = self.kind_of.get(&id)?;
+        self.kinds.get(kind)?.live.get(&id).map(|(n, _)| *n)
+    }
+
+    /// Live elements of `kind`. Time O(1).
+    pub(crate) fn count(&self, kind: ElementKind) -> usize {
+        self.kinds.get(&kind).map_or(0, |k| k.live.len())
+    }
+
+    /// Live elements of `kind` in ID order.
+    pub(crate) fn iter(
+        &self,
+        kind: ElementKind,
+    ) -> impl Iterator<Item = (ElementId, &Element)> + '_ {
+        self.kinds
+            .get(&kind)
+            .into_iter()
+            .flat_map(|k| k.live.iter().map(|(id, (_, e))| (*id, e)))
+    }
+
+    /// Inserts an element. Its number is the one this ID had when removed, else
+    /// the next unused one; numbers are never reused. Time O(log n).
+    pub(crate) fn insert(&mut self, id: ElementId, element: Element) {
+        let kind = element.kind;
+        let slot = self.kinds.entry(kind).or_default();
+        let number = slot.removed_visuals.remove(&id).unwrap_or(slot.next_visual);
+        slot.next_visual = slot.next_visual.max(number.saturating_add(1));
+        slot.live.insert(id, (number, element));
+        self.kind_of.insert(id, kind);
+    }
+
+    /// Removes an element, remembering its number. Time O(log n).
+    pub(crate) fn remove(&mut self, id: ElementId) -> Option<Element> {
+        let kind = self.kind_of.remove(&id)?;
+        let slot = self.kinds.get_mut(&kind)?;
+        let (number, element) = slot.live.remove(&id)?;
+        slot.removed_visuals.insert(id, number);
+        Some(element)
+    }
+
+    /// Whether both stores hold the same live elements per kind, ignoring
+    /// visual numbers and removed numbers. Time O(n).
+    pub(crate) fn same_live(&self, other: &Self) -> bool {
+        ElementKind::ALL
+            .iter()
+            .all(|k| self.iter(*k).eq(other.iter(*k)))
+    }
+}
+
+impl Project {
+    /// Iterates the live elements of `kind` in ID order. Time O(1) to start, O(1) per item.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ElementId, ElementKind, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ElementId::new_v7();
+    /// project.apply(Op::AddElement {
+    ///     id,
+    ///     kind: ElementKind::MisuseCase,
+    ///     name: "Spoofed key fob".into(),
+    ///     provenance: Provenance::human("alice", 1),
+    /// })?;
+    /// let names: Vec<_> = project.elements(ElementKind::MisuseCase).map(|(_, e)| e.name()).collect();
+    /// assert_eq!(names, ["Spoofed key fob"]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn elements(&self, kind: ElementKind) -> impl Iterator<Item = (ElementId, &Element)> + '_ {
+        self.elements.iter(kind)
+    }
+
+    /// The element with this ID. Time O(log n).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ElementId, Methodology, Project};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert!(project.element(ElementId::new_v7()).is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn element(&self, id: ElementId) -> Option<&Element> {
+        self.elements.get(id)
+    }
+
+    /// The number of live elements of `kind`. Time O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ElementKind, Methodology, Project};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// assert_eq!(project.element_count(ElementKind::MisuseCase), 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn element_count(&self, kind: ElementKind) -> usize {
+        self.elements.count(kind)
+    }
+
+    /// The visual ID of an element (`MU00`, ...). Time O(log n).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ElementId, ElementKind, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ElementId::new_v7();
+    /// project.apply(Op::AddElement {
+    ///     id,
+    ///     kind: ElementKind::MisuseCase,
+    ///     name: "Spoofed key fob".into(),
+    ///     provenance: Provenance::human("alice", 1),
+    /// })?;
+    /// assert_eq!(project.element_visual_id(id).as_deref(), Some("MU00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn element_visual_id(&self, id: ElementId) -> Option<String> {
+        let num = self.elements.visual_num(id)?;
+        Some(self.elements.get(id)?.kind.visual_id(num))
+    }
+
+    fn live_element(&self, id: ElementId) -> Result<&Element, ModelError> {
+        self.elements.get(id).ok_or(ModelError::UnknownElement(id))
+    }
+
+    /// Checks the generic element ops; `None` for any other op.
+    pub(crate) fn check_element_op(&self, op: &Op) -> Option<Result<(), ModelError>> {
+        Some(match op {
+            Op::AddElement {
+                id,
+                kind,
+                name,
+                provenance,
+            } => self.check_add_element(*id, *kind, name, provenance),
+            Op::RenameElement { id, name, .. } => self
+                .live_element(*id)
+                .and_then(|_| check_name(EntityKind::Element, name)),
+            Op::RemoveElement { id } => self.live_element(*id).map(|_| ()),
+            _ => return None,
+        })
+    }
+
+    fn check_add_element(
+        &self,
+        id: ElementId,
+        kind: ElementKind,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.elements.get(id).is_some() {
+            return Err(ModelError::DuplicateElement(id));
+        }
+        check_name(EntityKind::Element, name)?;
+        check_provenance(provenance)?;
+        if self.elements.count(kind) >= kind.def().max_elements {
+            return Err(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::Element,
+            });
+        }
+        Ok(())
+    }
+
+    /// Commits `AddElement` and returns its inverse.
+    pub(crate) fn commit_add_element(
+        &mut self,
+        id: ElementId,
+        kind: ElementKind,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Op {
+        self.elements.insert(
+            id,
+            Element {
+                kind,
+                name,
+                provenance,
+            },
+        );
+        Op::RemoveElement { id }
+    }
+
+    /// Commits `RenameElement` and returns its inverse.
+    pub(crate) fn commit_rename_element(
+        &mut self,
+        id: ElementId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let e = self
+            .elements
+            .get_mut(id)
+            .ok_or(ModelError::UnknownElement(id))?;
+        let name = std::mem::replace(&mut e.name, name);
+        let provenance = std::mem::replace(&mut e.provenance, provenance);
+        Ok(Op::RenameElement {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    /// Commits `RemoveElement` and returns its inverse.
+    pub(crate) fn commit_remove_element(&mut self, id: ElementId) -> Result<Op, ModelError> {
+        let e = self
+            .elements
+            .remove(id)
+            .ok_or(ModelError::UnknownElement(id))?;
+        Ok(Op::AddElement {
+            id,
+            kind: e.kind,
+            name: e.name,
+            provenance: e.provenance,
+        })
     }
 }
 

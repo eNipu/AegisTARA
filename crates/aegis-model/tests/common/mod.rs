@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use aegis_model::{
     AssetId, AttackPotentialDef, AttackTree, AttackType, CatalogRef, CatalogScheme,
-    CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ControlId, DamageId, FactorDef,
-    FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel, GateKind, GoalId,
+    CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ControlId, DamageId, ElementId,
+    FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel, GateKind, GoalId,
     ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef, Methodology,
     MethodologyDef, Node, NodeId, Op, PotentialBandDef, Project, Property, PropertyDef,
     PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment, SegmentDef,
@@ -468,6 +468,10 @@ pub fn control_id(n: u64) -> ControlId {
 
 pub fn goal_id(n: u64) -> GoalId {
     GoalId::from_uuid(v7(n)).expect("v7")
+}
+
+pub fn element_id(n: u64) -> ElementId {
+    ElementId::from_uuid(v7(n)).expect("v7")
 }
 
 pub fn claim_id(n: u64) -> ClaimId {
