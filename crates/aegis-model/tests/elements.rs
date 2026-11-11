@@ -386,3 +386,207 @@ fn errors_do_not_contain_names() {
         assert!(!e.to_string().contains(secret), "{e}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Element attributes (205c).
+// ---------------------------------------------------------------------------
+
+use aegis_model::{AttrValue, MAX_ELEMENT_ATTRIBUTES};
+
+fn set_attr(n: u64, key: &str, value: Option<AttrValue>) -> Op {
+    Op::SetElementAttribute {
+        id: common::element_id(n),
+        key: key.into(),
+        value,
+        provenance: who(),
+    }
+}
+
+fn lvl(s: &str) -> Option<AttrValue> {
+    Some(AttrValue::Level(s.into()))
+}
+
+#[test]
+fn set_and_clear_attributes_round_trip() {
+    let (_, mut p) = project();
+    p.apply(add(1, "Spoofed fob")).expect("add");
+    let id = common::element_id(1);
+    let steps = [
+        set_attr(1, "cal", lvl("cal-2")),
+        set_attr(1, "approach", Some(AttrValue::Choice("manual".into()))),
+        set_attr(1, "note", Some(AttrValue::Text("Free text".into()))),
+        set_attr(1, "cal", lvl("cal-3")),
+        set_attr(1, "approach", None),
+    ];
+    for op in steps {
+        let before = p.clone();
+        let inverse = p.apply(op.clone()).expect("apply");
+        let after = p.clone();
+        let keys: Vec<_> = p
+            .element(id)
+            .expect("live")
+            .attributes()
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+        let again = p.apply(inverse.clone()).expect("inverse");
+        assert_eq!(p, before, "{op:?} then {inverse:?}");
+        assert_eq!(again, op);
+        p.apply(again).expect("redo");
+        assert_eq!(p, after);
+    }
+    let e = p.element(id).expect("live");
+    assert_eq!(e.attribute("cal"), lvl("cal-3").as_ref());
+    assert_eq!(e.attribute("approach"), None);
+    // Replacing returns the old value.
+    let inverse = p.apply(set_attr(1, "cal", lvl("cal-4"))).expect("replace");
+    assert_eq!(inverse, set_attr(1, "cal", lvl("cal-3")));
+}
+
+#[test]
+fn clearing_an_unset_key_is_allowed() {
+    let (_, mut p) = project();
+    p.apply(add(1, "x")).expect("add");
+    let before = p.clone();
+    let op = set_attr(1, "cal", None);
+    let inverse = p.apply(op.clone()).expect("clear");
+    assert_eq!(inverse, op);
+    assert!(
+        p.element(common::element_id(1))
+            .expect("live")
+            .attributes()
+            .is_empty()
+    );
+    p.apply(inverse).expect("undo");
+    assert_eq!(p, before);
+}
+
+#[test]
+fn attribute_refusals() {
+    let (_, mut p) = project();
+    let id = common::element_id(1);
+    assert_eq!(
+        refusal(&mut p, set_attr(1, "cal", lvl("a"))),
+        ModelError::UnknownElement(id)
+    );
+    p.apply(add(1, "x")).expect("add");
+    let long = "a".repeat(65);
+    for key in ["", "Cal", "1cal", "cal level", long.as_str()] {
+        assert_eq!(
+            refusal(&mut p, set_attr(1, key, lvl("a"))),
+            ModelError::InvalidAttributeKey { element: id },
+            "{key:?}"
+        );
+    }
+    let text_long = "a".repeat(257);
+    let values = [
+        AttrValue::Level("".into()),
+        AttrValue::Choice("A".into()),
+        AttrValue::Text("".into()),
+        AttrValue::Text("  ".into()),
+        AttrValue::Text(text_long.as_str().into()),
+        AttrValue::Text("a\u{0}b".into()),
+    ];
+    for v in values {
+        assert_eq!(
+            refusal(&mut p, set_attr(1, "cal", Some(v.clone()))),
+            ModelError::InvalidAttributeValue { element: id },
+            "{v:?}"
+        );
+    }
+    for i in 0..MAX_ELEMENT_ATTRIBUTES {
+        p.apply(set_attr(1, &format!("k{i:02}"), lvl("a")))
+            .expect("fill");
+    }
+    assert_eq!(
+        refusal(&mut p, set_attr(1, "extra", lvl("a"))),
+        ModelError::TooManyAttributes {
+            element: id,
+            max: 32
+        }
+    );
+    p.apply(set_attr(1, "k00", lvl("b")))
+        .expect("replace on full");
+    p.apply(set_attr(1, "k01", None)).expect("clear on full");
+    p.apply(set_attr(1, "extra", lvl("a"))).expect("room again");
+    let bad_prov = Op::SetElementAttribute {
+        id,
+        key: "k00".into(),
+        value: lvl("c"),
+        provenance: Provenance::human("  ", 1),
+    };
+    assert_eq!(refusal(&mut p, bad_prov), ModelError::EmptyActor);
+}
+
+#[test]
+fn remove_is_refused_while_attributes_are_set() {
+    let (_, mut p) = project();
+    let id = common::element_id(1);
+    p.apply(add(1, "x")).expect("add");
+    p.apply(set_attr(1, "cal", lvl("a"))).expect("set");
+    assert_eq!(
+        refusal(&mut p, Op::RemoveElement { id }),
+        ModelError::ElementHasAttributes {
+            element: id,
+            count: 1
+        }
+    );
+    p.apply(set_attr(1, "cal", None)).expect("clear");
+    let before = p.clone();
+    let inverse = p.apply(Op::RemoveElement { id }).expect("remove");
+    assert!(p.element(id).is_none());
+    p.apply(inverse).expect("undo");
+    assert_eq!(p, before);
+    assert!(p.element(id).expect("live").attributes().is_empty());
+}
+
+fn attr_ops() -> Vec<Op> {
+    vec![
+        set_attr(1, "cal", lvl("cal-2")),
+        set_attr(1, "approach", Some(AttrValue::Choice("manual".into()))),
+        set_attr(1, "note", Some(AttrValue::Text("Free text".into()))),
+        set_attr(1, "cal", None),
+    ]
+}
+
+#[test]
+fn attribute_ops_round_trip_through_the_op_log() {
+    let m = common::builtin();
+    let ops = attr_ops();
+    let bytes = common::write_log(&m, &ops);
+    let text = String::from_utf8(bytes.clone()).expect("utf8");
+    assert!(text.contains(r#""op":"set_element_attribute""#), "{text}");
+    assert!(text.contains(r#""value":{"level":"cal-2"}"#), "{text}");
+    assert!(text.contains(r#""value":{"choice":"manual"}"#), "{text}");
+    assert!(text.contains(r#""value":{"text":"Free text"}"#), "{text}");
+    assert!(text.contains(r#""value":null"#), "{text}");
+    let read: Vec<Op> = common::read_log(&m, &bytes)
+        .into_iter()
+        .map(|r| r.op)
+        .collect();
+    assert_eq!(read, ops);
+}
+
+#[test]
+fn op_log_refuses_a_missing_value_and_an_unknown_value_type() {
+    let m = common::builtin();
+    let bytes = common::write_log(&m, &[set_attr(1, "cal", lvl("cal-2"))]);
+    let text = String::from_utf8(bytes).expect("utf8");
+    let no_value = text.replace(r#","value":{"level":"cal-2"}"#, "");
+    let bad_type = text.replace(r#"{"level":"cal-2"}"#, r#"{"number":1}"#);
+    for bad in [no_value, bad_type] {
+        assert_ne!(bad, text);
+        let results: Vec<_> = OpLogReader::open(bad.as_bytes(), Arc::clone(&m))
+            .expect("header")
+            .collect();
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(&results[0], Err(StoreError::Decode { .. })),
+            "{:?}",
+            results[0]
+        );
+    }
+}

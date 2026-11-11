@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, ComponentId, ControlId, DataFlowId, ElementId, ElementKind, ElementRef,
-    GateKind, InterfaceId, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    AssetId, AttackTree, AttrValue, ComponentId, ControlId, DataFlowId, ElementId, ElementKind,
+    ElementRef, GateKind, InterfaceId, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
     TrustBoundaryId,
 };
 
@@ -333,6 +333,42 @@ fn walk_elements(seen: &mut BTreeSet<String>) {
         Op::RenameElement {
             id,
             name: "Relayed key fob".into(),
+            provenance: who(),
+        },
+    );
+    for value in [
+        Some(AttrValue::Level("cal-2".into())),
+        Some(AttrValue::Text("Note".into())),
+        None,
+    ] {
+        apply_undo_redo(
+            &mut ws,
+            seen,
+            Op::SetElementAttribute {
+                id,
+                key: "cal".into(),
+                value,
+                provenance: who(),
+            },
+        );
+    }
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::SetElementAttribute {
+            id,
+            key: "cal".into(),
+            value: Some(AttrValue::Choice("a".into())),
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::SetElementAttribute {
+            id,
+            key: "cal".into(),
+            value: None,
             provenance: who(),
         },
     );

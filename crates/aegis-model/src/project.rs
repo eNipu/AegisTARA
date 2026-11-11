@@ -6314,7 +6314,10 @@ impl Project {
                 check_name(EntityKind::CybersecurityClaim, name)?;
             }
             Op::RemoveCybersecurityClaim { id } => return self.check_remove_claim(*id),
-            Op::AddElement { .. } | Op::RenameElement { .. } | Op::RemoveElement { .. } => {
+            Op::AddElement { .. }
+            | Op::RenameElement { .. }
+            | Op::RemoveElement { .. }
+            | Op::SetElementAttribute { .. } => {
                 self.check_element_op(op).unwrap_or(Ok(()))?;
             }
             Op::SetThreatGoal { threat, goal, .. } => {
@@ -6785,6 +6788,12 @@ impl Project {
                 provenance,
             } => self.commit_rename_element(id, name, provenance),
             Op::RemoveElement { id } => self.commit_remove_element(id),
+            Op::SetElementAttribute {
+                id,
+                key,
+                value,
+                provenance,
+            } => self.commit_set_element_attribute(id, key, value, provenance),
             Op::SetThreatGoal {
                 threat,
                 goal,
@@ -11602,6 +11611,7 @@ impl ProjectEvalCache {
             | Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
+            | Op::SetElementAttribute { .. }
             | Op::AddComponent { .. }
             | Op::RenameComponent { .. }
             | Op::SetComponentParent { .. }

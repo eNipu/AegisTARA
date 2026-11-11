@@ -2441,6 +2441,34 @@ pub(super) enum OpWire {
     RemoveElement {
         id: WireId<ElementId>,
     },
+    SetElementAttribute {
+        id: WireId<ElementId>,
+        key: Key,
+        #[serde(deserialize_with = "Option::deserialize")]
+        value: Option<AttrWire>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+}
+
+/// One element attribute value on the wire.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum AttrWire {
+    Level(Key),
+    Choice(Key),
+    Text(Name),
+}
+
+impl AttrWire {
+    pub(super) fn into_value(self) -> crate::element::AttrValue {
+        use crate::element::AttrValue as V;
+        match self {
+            Self::Level(k) => V::Level(k.0),
+            Self::Choice(k) => V::Choice(k.0),
+            Self::Text(t) => V::Text(t.0),
+        }
+    }
 }
 
 /// Resolves the `SetImpact` level key within its category. Time O(log m).
