@@ -207,12 +207,15 @@ impl ElementKind {
     }
 }
 
-/// An element of a generic kind: its kind, name and provenance (attributes and links come in 205c, 205d).
+/// An element of a generic kind: its kind, name, provenance and extra
+/// attributes (links come in 205d).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Element {
     kind: ElementKind,
     name: Arc<str>,
     provenance: Provenance,
+    /// Sorted by key, keys unique.
+    attributes: Vec<(Arc<str>, AttrValue)>,
 }
 
 impl Element {
@@ -232,6 +235,22 @@ impl Element {
     #[must_use]
     pub fn provenance(&self) -> &Provenance {
         &self.provenance
+    }
+
+    /// The extra attributes, sorted by key. Time O(1).
+    #[must_use]
+    pub fn attributes(&self) -> &[(Arc<str>, AttrValue)] {
+        &self.attributes
+    }
+
+    /// The value of one attribute. Time O(log a).
+    #[must_use]
+    pub fn attribute(&self, key: &str) -> Option<&AttrValue> {
+        let i = self
+            .attributes
+            .binary_search_by(|(k, _)| k.as_ref().cmp(key))
+            .ok()?;
+        self.attributes.get(i).map(|(_, v)| v)
     }
 }
 
@@ -261,7 +280,6 @@ impl ElementStore {
     }
 
     /// The element with this ID, mutably. Time O(log n).
-    #[allow(dead_code)] // used by attribute ops in slice 205c
     pub(crate) fn get_mut(&mut self, id: ElementId) -> Option<&mut Element> {
         let kind = self.kind_of.get(&id)?;
         self.kinds.get_mut(kind)?.live.get_mut(&id).map(|(_, e)| e)
@@ -414,9 +432,49 @@ impl Project {
             Op::RenameElement { id, name, .. } => self
                 .live_element(*id)
                 .and_then(|_| check_name(EntityKind::Element, name)),
-            Op::RemoveElement { id } => self.live_element(*id).map(|_| ()),
+            Op::RemoveElement { id } => self.check_remove_element(*id),
+            Op::SetElementAttribute {
+                id,
+                key,
+                value,
+                provenance,
+            } => self.check_set_element_attribute(*id, key, value.as_ref(), provenance),
             _ => return None,
         })
+    }
+
+    fn check_remove_element(&self, id: ElementId) -> Result<(), ModelError> {
+        let count = self.live_element(id)?.attributes.len();
+        if count > 0 {
+            return Err(ModelError::ElementHasAttributes { element: id, count });
+        }
+        Ok(())
+    }
+
+    fn check_set_element_attribute(
+        &self,
+        id: ElementId,
+        key: &str,
+        value: Option<&AttrValue>,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let e = self.live_element(id)?;
+        if !is_key(key) {
+            return Err(ModelError::InvalidAttributeKey { element: id });
+        }
+        if value.is_some_and(|v| !is_attribute_value(v)) {
+            return Err(ModelError::InvalidAttributeValue { element: id });
+        }
+        if value.is_some()
+            && e.attribute(key).is_none()
+            && e.attributes.len() >= MAX_ELEMENT_ATTRIBUTES
+        {
+            return Err(ModelError::TooManyAttributes {
+                element: id,
+                max: MAX_ELEMENT_ATTRIBUTES,
+            });
+        }
+        check_provenance(provenance)
     }
 
     fn check_add_element(
@@ -453,6 +511,7 @@ impl Project {
                 kind,
                 name,
                 provenance,
+                attributes: Vec::new(),
             },
         );
         Op::RemoveElement { id }
@@ -478,6 +537,40 @@ impl Project {
         })
     }
 
+    /// Commits `SetElementAttribute` and returns its inverse.
+    pub(crate) fn commit_set_element_attribute(
+        &mut self,
+        id: ElementId,
+        key: Arc<str>,
+        value: Option<AttrValue>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let e = self
+            .elements
+            .get_mut(id)
+            .ok_or(ModelError::UnknownElement(id))?;
+        let found = e.attributes.binary_search_by(|(k, _)| k.cmp(&key));
+        let old = match (found, value) {
+            (Ok(i), Some(v)) => e
+                .attributes
+                .get_mut(i)
+                .map(|slot| std::mem::replace(&mut slot.1, v)),
+            (Ok(i), None) => Some(e.attributes.remove(i).1),
+            (Err(i), Some(v)) => {
+                e.attributes.insert(i, (Arc::clone(&key), v));
+                None
+            }
+            (Err(_), None) => None,
+        };
+        let provenance = std::mem::replace(&mut e.provenance, provenance);
+        Ok(Op::SetElementAttribute {
+            id,
+            key,
+            value: old,
+            provenance,
+        })
+    }
+
     /// Commits `RemoveElement` and returns its inverse.
     pub(crate) fn commit_remove_element(&mut self, id: ElementId) -> Result<Op, ModelError> {
         let e = self
@@ -494,7 +587,6 @@ impl Project {
 }
 
 /// `[a-z][a-z0-9_-]{0,63}`, the pack key syntax.
-#[allow(dead_code)] // used by the element store in slice 205c
 pub(crate) fn is_key(s: &str) -> bool {
     let mut chars = s.chars();
     let first_ok = chars.next().is_some_and(|c| c.is_ascii_lowercase());
@@ -504,7 +596,6 @@ pub(crate) fn is_key(s: &str) -> bool {
 }
 
 /// 1..=`MAX_ATTRIBUTE_TEXT_CHARS` chars, not blank after trim, no control characters.
-#[allow(dead_code)] // used by the element store in slice 205c
 pub(crate) fn is_attribute_text(s: &str) -> bool {
     let n = s.chars().take(MAX_ATTRIBUTE_TEXT_CHARS + 1).count();
     (1..=MAX_ATTRIBUTE_TEXT_CHARS).contains(&n)
@@ -513,7 +604,6 @@ pub(crate) fn is_attribute_text(s: &str) -> bool {
 }
 
 /// Level and Choice: `is_key`; Text: `is_attribute_text`.
-#[allow(dead_code)] // used by the element store in slice 205c
 pub(crate) fn is_attribute_value(v: &AttrValue) -> bool {
     match v {
         AttrValue::Level(k) | AttrValue::Choice(k) => is_key(k),

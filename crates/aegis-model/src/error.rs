@@ -286,6 +286,34 @@ pub enum ModelError {
     /// An element with this ID already exists in the project.
     #[error("element {0} already exists in the project")]
     DuplicateElement(ElementId),
+    /// An element attribute key is not in pack key syntax.
+    #[error("an attribute key of element {element} is not valid")]
+    InvalidAttributeKey {
+        /// The element.
+        element: ElementId,
+    },
+    /// An element attribute value is not valid for its type.
+    #[error("an attribute value of element {element} is not valid")]
+    InvalidAttributeValue {
+        /// The element.
+        element: ElementId,
+    },
+    /// The element already has the most attributes.
+    #[error("element {element} already has {max} attributes")]
+    TooManyAttributes {
+        /// The element.
+        element: ElementId,
+        /// The cap.
+        max: usize,
+    },
+    /// The element has attributes and cannot be removed.
+    #[error("element {element} still has {count} attributes; clear them first")]
+    ElementHasAttributes {
+        /// The element.
+        element: ElementId,
+        /// How many are set.
+        count: usize,
+    },
     /// A component with this ID already exists in the project.
     #[error("component {0} already exists in the project")]
     DuplicateComponent(ComponentId),

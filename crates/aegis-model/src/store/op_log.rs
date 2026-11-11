@@ -11,7 +11,10 @@ use super::wire::{
     ProvenanceView, RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, TargetView,
     Text,
 };
-use super::{Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
+use super::{
+    Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES, MAX_NAME_BYTES,
+    MAX_OP_RECORD_BYTES,
+};
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
@@ -514,6 +517,33 @@ enum OpView<'a> {
     RemoveElement {
         id: Text<ElementId>,
     },
+    SetElementAttribute {
+        id: Text<ElementId>,
+        key: &'a str,
+        value: Option<AttrView<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+}
+
+/// One element attribute value as written to the op log.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AttrView<'a> {
+    Level(&'a str),
+    Choice(&'a str),
+    Text(&'a str),
+}
+
+impl<'a> AttrView<'a> {
+    pub(super) fn of(v: &'a crate::element::AttrValue) -> AttrView<'a> {
+        use crate::element::AttrValue as V;
+        match v {
+            V::Level(k) => AttrView::Level(k),
+            V::Choice(k) => AttrView::Choice(k),
+            V::Text(t) => AttrView::Text(t),
+        }
+    }
 }
 
 /// Refuses a name, provenance actor, or list the reader would refuse, so
@@ -539,6 +569,15 @@ fn within_caps(op: &Op) -> bool {
         Op::SetProjectLanguages { langs, .. } => langs
             .iter()
             .all(|l| l.len() <= crate::description::MAX_LANG_TAG_BYTES),
+        Op::SetElementAttribute { key, value, .. } => {
+            use crate::element::AttrValue as V;
+            key.len() <= MAX_KEY_BYTES
+                && match value {
+                    None => true,
+                    Some(V::Level(k) | V::Choice(k)) => k.len() <= MAX_KEY_BYTES,
+                    Some(V::Text(t)) => t.len() <= MAX_NAME_BYTES,
+                }
+        }
         Op::AddTreeNode { node, .. } => name_ok(node.label()),
         Op::RenameTreeNode { label, .. } => name_ok(label),
         Op::AddAsset { name, .. }
@@ -1261,6 +1300,17 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveElement { id } => OpView::RemoveElement { id: Text(*id) },
+        Op::SetElementAttribute {
+            id,
+            key,
+            value,
+            provenance,
+        } => OpView::SetElementAttribute {
+            id: Text(*id),
+            key,
+            value: value.as_ref().map(AttrView::of),
+            provenance: ProvenanceView::of(provenance),
+        },
     }
 }
 
@@ -1968,6 +2018,17 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveElement { id } => Op::RemoveElement { id: id.0 },
+        OpWire::SetElementAttribute {
+            id,
+            key,
+            value,
+            provenance,
+        } => Op::SetElementAttribute {
+            id: id.0,
+            key: key.0,
+            value: value.map(wire::AttrWire::into_value),
+            provenance: wire::unwrap_provenance(provenance),
+        },
     })
 }
 
