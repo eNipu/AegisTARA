@@ -85,6 +85,19 @@ Run this list for every release build. Tick each line in the release notes.
 - [ ] SHA-256 sums are published next to the artifacts.
 - [ ] The tag's CI run has an `sbom-<tag>` artifact (job `SBOM`), and its
       three CycloneDX files are published next to the artifacts (NFR-05).
+- [ ] The server image is built and tagged `aegistara-server:<release>`, and
+      saved with `postgres:16` into `images.tar.gz`:
+      `docker save aegistara-server:<release> postgres:16 | gzip -n > images.tar.gz`.
+- [ ] `scripts/offline-bundle.sh` is run with the signed manifest
+      (`update.aegis`), every installer, `images.tar.gz` and the update key
+      (`--keys crates/aegis-license/keys/update.keys`), and its own
+      `verify-bundle` step passes.
+- [ ] The `aegistara-<release>-offline.tar` and its `.tar.sha256` are published
+      to offline customers.
+- [ ] The update public key PEM (`aegis-license public-pem --keys
+      crates/aegis-license/keys/update.keys --key-id ID`) is given to each
+      offline customer once, out of band, and its SHA-256 fingerprint is in the
+      customer's contract papers.
 
 ## Cyber Resilience Act (NFR-05)
 
