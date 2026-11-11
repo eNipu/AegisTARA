@@ -24,6 +24,11 @@ name = "aegis-license"
 path = "src/bin/aegis-license.rs"
 required-features = ["issuer"]
 
+[[test]]
+name = "bundle_cli"
+path = "tests/bundle_cli.rs"
+required-features = ["issuer"]
+
 [dev-dependencies]
 aegis-license = { path = ".", features = ["issuer"] }
 proptest.workspace = true

@@ -31,6 +31,54 @@ The database is on an internal network that only the server can reach. The
 server stops at start with a clear message if the license is missing, wrong,
 or over its grace period.
 
+## Offline install (air-gapped sites)
+
+The offline bundle is one tar file, `aegistara-<release>-offline.tar`, with
+its `aegistara-<release>-offline.tar.sha256`. Unpacking it gives one folder,
+`aegistara-<release>-offline/`, with:
+
+- `SHA256SUMS` and `SHA256SUMS.sig`: the file hashes and their signature.
+- `update.aegis`: the signed update manifest.
+- `installers/`: the desktop installers for each platform.
+- `images.tar.gz`: the server images. Only bundles for server customers have it.
+
+### Check it
+
+Check the bundle on any machine before the files enter the site. The vendor
+gives you the public key file `aegistara-update.pem` separately, with your
+contract or read aloud by its fingerprint. Do not trust a key that came inside
+the bundle. Checking the signature needs OpenSSL 3 or later (LibreSSL, the
+default on macOS, cannot do it).
+
+```sh
+openssl pkeyutl -verify -pubin -inkey aegistara-update.pem -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
+# prints: Signature Verified Successfully
+sha256sum -c --strict SHA256SUMS      # macOS: shasum -a 256 -c --strict SHA256SUMS
+```
+
+### Server
+
+```sh
+docker load -i images.tar.gz
+cp /path/to/license.aegis deploy/license.aegis
+cp deploy/.env.example deploy/.env    # fill in as in Steps, then set:
+# AEGIS_SERVER_IMAGE=aegistara-server:<release>
+docker compose -f deploy/compose.yaml --env-file deploy/.env up -d --no-build
+```
+
+The compose file and `.env.example` come from the vendor with the bundle.
+
+### Desktop
+
+Install the file for your platform from `installers/`. Leave `update_url`
+empty.
+
+### Updates
+
+A new release comes as a new bundle. Check it the same way, then run
+`docker load -i images.tar.gz`, change `AEGIS_SERVER_IMAGE` in `deploy/.env`,
+and run `up -d --no-build`. Hand the new installers to users.
+
 ## Known limits of this build
 
 - **Password login has no e-mail reset and no MFA.** Use it for tests and
@@ -68,5 +116,5 @@ client only offers a release that is newer than the one it runs. Help,
 (`AEGIS_UPDATE_DIR` changes it; with no Downloads folder it makes a new private folder in the temporary folder for each download) and checks its size and SHA-256 against the
 manifest while it arrives. A file that fails is deleted. The app never runs
 the installer: the user closes the app and opens the file (ADR 0048). A site
-without internet leaves `update_url` empty and hands out installers and
-manifests itself.
+without internet leaves `update_url` empty and installs each release from the
+offline bundle (see "Offline install (air-gapped sites)").

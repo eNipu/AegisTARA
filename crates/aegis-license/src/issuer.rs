@@ -3,6 +3,7 @@
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
+use crate::bundle::{BundleError, parse_sums};
 use crate::envelope;
 use crate::error::LicenseError;
 use crate::license::{DOMAIN as LICENSE_DOMAIN, FILE_PREFIX, License};
@@ -75,5 +76,22 @@ impl Issuer {
             MANIFEST_DOMAIN,
             &payload,
         ))
+    }
+
+    /// Signs an offline bundle's `SHA256SUMS` text: a raw Ed25519 signature
+    /// over its exact bytes. The text must parse as sums lines first, so this
+    /// can never sign a license or manifest message.
+    ///
+    /// # Errors
+    ///
+    /// [`BundleError::Malformed`] or [`BundleError::TooLarge`] for text that
+    /// is not valid sums, or [`BundleError::Signing`].
+    pub fn sign_bundle_sums(&self, sums: &str) -> Result<[u8; 64], BundleError> {
+        parse_sums(sums)?;
+        self.pair
+            .sign(sums.as_bytes())
+            .as_ref()
+            .try_into()
+            .map_err(|_| BundleError::Signing)
     }
 }

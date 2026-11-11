@@ -26,6 +26,10 @@ services:
       - backend
 
   server:
+    # With `up --build` compose builds and tags this name. At an offline site,
+    # `docker load` the bundle's images and set AEGIS_SERVER_IMAGE=aegistara-server:<release>,
+    # then run `up -d --no-build`.
+    image: ${AEGIS_SERVER_IMAGE:-aegistara-server:local}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
