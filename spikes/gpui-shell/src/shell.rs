@@ -7,6 +7,9 @@ use gpui::{
 };
 use gpui_component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
 use std::rc::Rc;
+use std::time::Instant;
+
+use crate::args::Args;
 
 use crate::canvas_tab::AttackTreeTab;
 use crate::editor_tab::EditorTab;
@@ -22,12 +25,19 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn new(tree_data: &AttackTree, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        tree_data: &AttackTree,
+        started: Instant,
+        args: &Args,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let selection = cx.new(|_| Selection::default());
         let (area, skin) = DockSkin::dock_area("shell", None, window, cx);
         let tree = cx.new(|cx| ProjectTree::new(selection.clone(), cx));
         let inspector = cx.new(|cx| Inspector::new(selection.clone(), cx));
-        let attack_tree = cx.new(|cx| AttackTreeTab::new(tree_data, selection.clone(), cx));
+        let attack_tree =
+            cx.new(|cx| AttackTreeTab::new(tree_data, selection.clone(), started, args, cx));
         let editor = cx.new(|cx| EditorTab::new(window, cx));
         let center = DockLayout::tabs()
             .panel_view(panel_handle(attack_tree), cx)

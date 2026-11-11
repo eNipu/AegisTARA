@@ -4,6 +4,9 @@
 #[path = "../src/args.rs"]
 mod args;
 #[allow(dead_code)]
+#[path = "../src/measure.rs"]
+mod measure;
+#[allow(dead_code)]
 #[path = "../src/palette.rs"]
 mod palette;
 #[allow(dead_code)]
@@ -12,7 +15,8 @@ mod sample_tree;
 
 use aegis_canvas::{LayoutConfig, NodeStyle, Paint, Scene, SvgTheme, Tone};
 use aegis_model::ModelError;
-use args::parse_nodes;
+use args::parse_args;
+use measure::{line, stats};
 use palette::parse_hex;
 use sample_tree::wide_tree;
 
@@ -22,13 +26,13 @@ fn argv(list: &[&str]) -> Vec<String> {
 
 #[test]
 fn nodes_default_is_13() {
-    assert_eq!(parse_nodes(&argv(&["spike"])), Ok(13));
+    assert_eq!(parse_args(&argv(&["spike"])).map(|a| a.nodes), Ok(13));
 }
 
 #[test]
 fn nodes_reads_the_count() {
     assert_eq!(
-        parse_nodes(&argv(&["spike", "--nodes", "100000"])),
+        parse_args(&argv(&["spike", "--nodes", "100000"])).map(|a| a.nodes),
         Ok(100_000)
     );
 }
@@ -41,11 +45,11 @@ fn nodes_refuses_zero_words_and_too_many() {
         ("1000001", "between 1 and 1000000, got 1000001"),
     ];
     for (bad, why) in cases {
-        let err = parse_nodes(&argv(&["spike", "--nodes", bad])).unwrap_err();
+        let err = parse_args(&argv(&["spike", "--nodes", bad])).unwrap_err();
         assert!(err.contains(why), "{bad}: {err}");
     }
     assert_eq!(
-        parse_nodes(&argv(&["spike", "--nodes"])),
+        parse_args(&argv(&["spike", "--nodes"])).map(|a| a.nodes),
         Err("--nodes needs a number".to_string())
     );
 }
@@ -98,4 +102,32 @@ fn wide_tree_labels_gates_by_position() -> Result<(), ModelError> {
     assert_eq!(scene.label(0), "Root");
     assert_eq!(scene.label(2), "Gate 2");
     Ok(())
+}
+
+#[test]
+fn measure_and_frames_are_read() {
+    let a = parse_args(&argv(&["spike", "--measure", "--frames", "50"])).unwrap();
+    assert_eq!((a.measure, a.frames, a.nodes), (true, 50, 13));
+    let d = parse_args(&argv(&["spike"])).unwrap();
+    assert_eq!((d.measure, d.frames), (false, 300));
+}
+
+#[test]
+fn frames_zero_is_refused() {
+    let err = parse_args(&argv(&["spike", "--frames", "0"])).unwrap_err();
+    assert!(
+        err.contains("--frames must be between 1 and 10000"),
+        "{err}"
+    );
+}
+
+#[test]
+fn stats_use_nearest_rank() {
+    let mut s: Vec<f64> = (1..=100).map(f64::from).collect();
+    let st = stats(&mut s).unwrap();
+    assert_eq!((st.p50, st.p95, st.max), (50.0, 95.0, 100.0));
+    assert_eq!(line("CANVAS_MS", &st), "CANVAS_MS 50.0 95.0 100.0");
+    let one = stats(&mut [7.0]).unwrap();
+    assert_eq!((one.p50, one.p95, one.max), (7.0, 7.0, 7.0));
+    assert!(stats(&mut []).is_none());
 }

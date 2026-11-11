@@ -4,6 +4,9 @@ use aegis_canvas::{
     Align, DisplayList, Item, LayoutConfig, NodeKind, NodeStyle, RenderOptions, Scene, Size,
     Stroke, Viewport, render,
 };
+use std::io::Write as _;
+use std::time::{Duration, Instant};
+
 use aegis_model::{AttackTree, NodeIdx};
 use gpui::{
     App, BorderStyle, Bounds, Context, Entity, FocusHandle, FontWeight, InteractiveElement as _,
@@ -12,8 +15,45 @@ use gpui::{
     canvas, div, point, px, quad, transparent_black,
 };
 
+use crate::args::Args;
+use crate::measure;
 use crate::palette::color;
 use crate::selection::Selection;
+
+/// State of a `--measure` run.
+struct Measure {
+    started: Instant,
+    frames: usize,
+    nodes: usize,
+    canvas_ms: Vec<f64>,
+    interval_ms: Vec<f64>,
+    last_paint: Option<Instant>,
+    prepaint_start: Instant,
+    prepaint_ms: f64,
+    centred: bool,
+    direction: f32,
+    items: usize,
+    done: bool,
+}
+
+impl Measure {
+    /// Prints the results and marks the run done.
+    fn finish(&mut self) {
+        let mut out = String::new();
+        for (name, samples) in [
+            ("FRAME_INTERVAL_MS", &mut self.interval_ms),
+            ("CANVAS_MS", &mut self.canvas_ms),
+        ] {
+            if let Some(s) = measure::stats(samples) {
+                out += &format!("{}\n", measure::line(name, &s));
+            }
+        }
+        out += &format!("ITEMS {}\nNODES {}\nMEASURE_DONE\n", self.items, self.nodes);
+        print!("{out}");
+        let _ = std::io::stdout().flush();
+        self.done = true;
+    }
+}
 
 /// The `Attack tree` panel.
 pub struct AttackTreeTab {
@@ -25,10 +65,31 @@ pub struct AttackTreeTab {
     /// The canvas element's top-left corner in the window, from the last prepaint.
     origin: Point<Pixels>,
     selection: Entity<Selection>,
+    measure: Option<Measure>,
 }
 
 impl AttackTreeTab {
-    pub fn new(tree: &AttackTree, selection: Entity<Selection>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        tree: &AttackTree,
+        selection: Entity<Selection>,
+        started: Instant,
+        args: &Args,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let measure = args.measure.then(|| Measure {
+            started,
+            frames: args.frames,
+            nodes: args.nodes,
+            canvas_ms: Vec::new(),
+            interval_ms: Vec::new(),
+            last_paint: None,
+            prepaint_start: started,
+            prepaint_ms: 0.0,
+            centred: false,
+            direction: -1.0,
+            items: 0,
+            done: false,
+        });
         Self {
             focus_handle: cx.focus_handle(),
             scene: Scene::from_tree(tree, LayoutConfig::default(), |_| NodeStyle::default()),
@@ -37,6 +98,7 @@ impl AttackTreeTab {
             drag_from: None,
             origin: Point::default(),
             selection,
+            measure,
         }
     }
 
@@ -44,6 +106,31 @@ impl AttackTreeTab {
     fn local(&self, p: Point<Pixels>) -> aegis_canvas::Point {
         let d = p - self.origin;
         aegis_canvas::Point::new(d.x.into(), d.y.into())
+    }
+
+    /// Measure mode: record the frame, pan, and ask for the next frame.
+    fn after_paint(&mut self, items: usize, begin: Instant, window: &mut Window) {
+        let Some(m) = self.measure.as_mut().filter(|m| !m.done) else {
+            return;
+        };
+        m.items = items;
+        m.canvas_ms
+            .push(m.prepaint_ms + begin.elapsed().as_secs_f64() * 1000.0);
+        if m.canvas_ms.len() == 1 {
+            println!(
+                "FIRST_FRAME_MS {:.1}",
+                m.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        if m.canvas_ms.len() >= m.frames {
+            m.finish();
+            return;
+        }
+        if m.canvas_ms.len() % 100 == 0 {
+            m.direction = -m.direction;
+        }
+        self.viewport.pan_by_screen(8.0 * m.direction, 0.0);
+        window.request_animation_frame();
     }
 
     fn mouse_down(&mut self, ev: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -104,13 +191,46 @@ impl Render for AttackTreeTab {
             this.update(cx, |tab, _| {
                 tab.origin = bounds.origin;
                 tab.viewport.size = Size::new(bounds.size.width.into(), bounds.size.height.into());
+                if let Some(m) = tab.measure.as_mut() {
+                    m.prepaint_start = Instant::now();
+                    if !m.centred {
+                        m.centred = true;
+                        let (v, s) = (tab.viewport.size, tab.scene.bounds().size);
+                        tab.viewport.origin.x = s.w / 2.0 - v.w / 2.0;
+                        tab.viewport.origin.y = s.h / 2.0 - v.h / 2.0;
+                    }
+                }
                 let selected = tab.selected;
-                render(&tab.scene, &tab.viewport, &RenderOptions { selected })
+                let list = render(&tab.scene, &tab.viewport, &RenderOptions { selected });
+                if let Some(m) = tab.measure.as_mut() {
+                    m.prepaint_ms = m.prepaint_start.elapsed().as_secs_f64() * 1000.0;
+                }
+                list
             })
         };
+        let this = cx.entity();
         let paint =
-            |bounds: Bounds<Pixels>, list: DisplayList, window: &mut Window, cx: &mut App| {
+            move |bounds: Bounds<Pixels>, list: DisplayList, window: &mut Window, cx: &mut App| {
+                let begin = Instant::now();
+                this.update(cx, |tab, _| {
+                    if let Some(m) = tab.measure.as_mut()
+                        && let Some(prev) = m.last_paint.replace(begin)
+                    {
+                        m.interval_ms
+                            .push(begin.duration_since(prev).as_secs_f64() * 1000.0);
+                    }
+                });
                 paint_list(&list, bounds.origin, window, cx);
+                this.update(cx, |tab, _| {
+                    tab.after_paint(list.items.len(), begin, window)
+                });
+                if this.read(cx).measure.as_ref().is_some_and(|m| m.done) {
+                    cx.spawn(async move |cx| {
+                        cx.background_executor().timer(Duration::from_secs(3)).await;
+                        cx.update(|cx| cx.quit());
+                    })
+                    .detach();
+                }
             };
         div()
             .size_full()
