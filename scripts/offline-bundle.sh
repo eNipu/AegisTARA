@@ -60,7 +60,8 @@ done
 [ -n "$out" ] || usage_error "--out is required"
 [ -d "$out" ] || usage_error "--out is not a folder: $out"
 
-for f in "$manifest" "$key" "$keys" $images; do
+for f in "$manifest" "$key" "$keys" "$images"; do
+    [ -n "$f" ] || continue
     [ -f "$f" ] || usage_error "not a regular file: $f"
 done
 old_ifs=$IFS
@@ -72,6 +73,24 @@ for f in $installers; do
     case $(basename "$f") in
         [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*) usage_error "bad installer file name: $f" ;;
     esac
+done
+IFS=$old_ifs
+
+seen=
+IFS='
+'
+for f in $installers; do
+    [ -n "$f" ] || continue
+    base=$(basename "$f")
+    case "
+$seen
+" in
+        *"
+$base
+"*) usage_error "installer file name given twice: $base" ;;
+    esac
+    seen="$seen
+$base"
 done
 IFS=$old_ifs
 
