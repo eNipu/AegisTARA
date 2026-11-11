@@ -180,6 +180,7 @@ answers to `rework.md` under `## Answers`, and have the planner update the promp
 git -C factory/worktrees/<job-id> status --porcelain     # must be empty
 git merge --no-ff factory/<job-id> -m "Merge factory/<job-id>: <title>"
 git worktree remove factory/worktrees/<job-id>
+cargo clean --workspace     # tests built in the worktree point at its removed fixture paths
 git add factory/jobs/<job-id> factory/board.json factory/backlog.md factory/lessons.md
 git commit -m "Record factory job <job-id>"
 ```
