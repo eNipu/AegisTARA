@@ -6315,7 +6315,7 @@ impl Project {
             }
             Op::RemoveCybersecurityClaim { id } => return self.check_remove_claim(*id),
             Op::AddElement { .. } | Op::RenameElement { .. } | Op::RemoveElement { .. } => {
-                return self.check_element_op(op).unwrap_or(Ok(()));
+                self.check_element_op(op).unwrap_or(Ok(()))?;
             }
             Op::SetThreatGoal { threat, goal, .. } => {
                 self.check_set_threat_goal(*threat, *goal)?;
