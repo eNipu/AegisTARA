@@ -15,8 +15,8 @@ use super::{Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_NAME_BYTES, MAX_O
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    NodeId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
@@ -498,6 +498,22 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    AddElement {
+        id: Text<ElementId>,
+        kind: &'static str,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameElement {
+        id: Text<ElementId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveElement {
+        id: Text<ElementId>,
+    },
 }
 
 /// Refuses a name, provenance actor, or list the reader would refuse, so
@@ -535,6 +551,8 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameCybersecurityGoal { name, .. }
         | Op::AddCybersecurityClaim { name, .. }
         | Op::RenameCybersecurityClaim { name, .. }
+        | Op::AddElement { name, .. }
+        | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
         | Op::RenameComponent { name, .. }
         | Op::AddInterface { name, .. }
@@ -1222,6 +1240,27 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             component: component.map(Text),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::AddElement {
+            id,
+            kind,
+            name,
+            provenance,
+        } => OpView::AddElement {
+            id: Text(*id),
+            kind: kind.key(),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameElement {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameElement {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveElement { id } => OpView::RemoveElement { id: Text(*id) },
     }
 }
 
@@ -1908,6 +1947,27 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             component: component.map(|c| c.0),
             provenance: wire::unwrap_provenance(provenance),
         },
+        OpWire::AddElement {
+            id,
+            kind,
+            name,
+            provenance,
+        } => Op::AddElement {
+            id: id.0,
+            kind: kind.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameElement {
+            id,
+            name,
+            provenance,
+        } => Op::RenameElement {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveElement { id } => Op::RemoveElement { id: id.0 },
     })
 }
 

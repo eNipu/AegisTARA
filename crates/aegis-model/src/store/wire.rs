@@ -56,8 +56,8 @@ use crate::control::{
 };
 use crate::error::{PackError, StoreError};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    NodeId, NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -485,6 +485,21 @@ fn note_unknown<T>(
         *pending = Some(unknown_key(kind, s));
     }
     found
+}
+
+/// An element kind key, resolved as it is read.
+pub(super) struct ElementKindKey(pub(super) crate::element::ElementKind);
+
+impl<'de> Deserialize<'de> for ElementKindKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            crate::element::ElementKind::from_key(s)
+                .map(ElementKindKey)
+                .ok_or_else(|| unknown_key(VocabKind::ElementKind, s))
+        })
+        .deserialize(d)
+    }
 }
 
 /// A threat category key, resolved as it is read.
@@ -2409,6 +2424,22 @@ pub(super) enum OpWire {
         component: Option<WireId<ComponentId>>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
+    },
+    AddElement {
+        id: WireId<ElementId>,
+        kind: ElementKindKey,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameElement {
+        id: WireId<ElementId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveElement {
+        id: WireId<ElementId>,
     },
 }
 
