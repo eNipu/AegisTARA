@@ -1,0 +1,85 @@
+{
+  "job": "181-shell-spike",
+  "slices": [
+    {
+      "id": "181a",
+      "title": "GPUI spike window with docks, project tree, inspector and text tab",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "spikes/gpui-shell/*"
+      ],
+      "max_lines": 400,
+      "new_deps": true,
+      "ci": [
+        "spikes/gpui-shell"
+      ],
+      "checks": [
+        "cargo build --locked --release --manifest-path spikes/gpui-shell/Cargo.toml",
+        "grep -q '## Licenses' spikes/gpui-shell/README.md",
+        "grep -q 'gpui-pre-platform' spikes/gpui-shell/Cargo.toml"
+      ]
+    },
+    {
+      "id": "181b",
+      "title": "Paint the aegis-canvas display list in the attack tree tab",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "spikes/gpui-shell/*"
+      ],
+      "max_lines": 400,
+      "new_deps": true,
+      "ci": [
+        "spikes/gpui-shell"
+      ],
+      "checks": [
+        "cargo build --locked --release --manifest-path spikes/gpui-shell/Cargo.toml"
+      ]
+    },
+    {
+      "id": "181c",
+      "title": "Measurement mode, measure scripts and the results sheet",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "spikes/gpui-shell/*"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": [
+        "spikes/gpui-shell"
+      ],
+      "checks": [
+        "cargo build --locked --release --manifest-path spikes/gpui-shell/Cargo.toml",
+        "sh -n spikes/gpui-shell/measure.sh",
+        "test -f spikes/gpui-shell/measure.ps1",
+        "test -f spikes/gpui-shell/RESULTS.md"
+      ]
+    },
+    {
+      "id": "181d",
+      "title": "Mark Windows deferred and record the provisional shell toolkit result",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "docs/adr/0066-workbench-shell-toolkit.md",
+        "docs/decisions.md",
+        "spikes/gpui-shell/RESULTS.md"
+      ],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "test -f docs/adr/0066-workbench-shell-toolkit.md",
+        "test \"$(grep -c '^## ' docs/adr/0066-workbench-shell-toolkit.md)\" -eq 6",
+        "grep -qi 'provisional' docs/adr/0066-workbench-shell-toolkit.md",
+        "grep -q 'Spike result' docs/decisions.md",
+        "grep -q '0066-workbench-shell-toolkit' docs/decisions.md",
+        "! grep -q 'TODO(owner)' spikes/gpui-shell/RESULTS.md",
+        "test \"$(grep -o 'not measured (deferred to backlog: no Windows machine yet)' spikes/gpui-shell/RESULTS.md | wc -l)\" -eq 32",
+        "git diff --quiet 692f1e3 HEAD -- spikes/gpui-shell/src spikes/gpui-shell/Cargo.toml spikes/gpui-shell/measure.sh spikes/gpui-shell/measure.ps1"
+      ]
+    }
+  ]
+}

@@ -1201,6 +1201,64 @@
       ],
       "decision": null,
       "updated": "2026-11-10T17:45:58Z"
+    },
+    {
+      "id": "181-shell-spike",
+      "title": "Workbench shell spike",
+      "branch": "factory/181-shell-spike",
+      "stage": "merged",
+      "slice": "181d",
+      "base": "692f1e3d1f26d02e3d25cec4bce51c3c6c45d32d",
+      "reviews": {
+        "slice": "181d",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "181a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 398
+        },
+        {
+          "slice": "181b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 364
+        },
+        {
+          "slice": "181c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 291
+        },
+        {
+          "slice": "181d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "haiku",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 0
+        }
+      ],
+      "decision": "Provisional: within budgets on macOS; Windows and RDP deferred to the backlog (ADR 0066).",
+      "updated": "2026-11-11T12:54:55Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

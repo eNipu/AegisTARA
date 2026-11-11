@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # A slice may never change the things that judge it, unless its plan lists them.
 PROTECTED = [".claude/*", "factory/verify.py", "factory/lessons.md", "scripts/*", ".github/*", "deny.toml"]
 # Lines here do not count toward the review-size cap.
-NOT_COUNTED = ["*/tests/*", "*/fixtures/*", "*/benches/*", "*/fuzz/*", "docs/*", "factory/*", "*.md", "Cargo.lock"]
+NOT_COUNTED = ["*/tests/*", "*/fixtures/*", "*/benches/*", "*/fuzz/*", "docs/*", "factory/*", "*.md", "*Cargo.lock"]
 TAIL = 60  # lines of command output kept in gate.md
 
 
