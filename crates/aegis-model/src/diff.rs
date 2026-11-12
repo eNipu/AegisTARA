@@ -22,8 +22,8 @@ use std::cmp::Ordering;
 use std::fmt;
 
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ThreatId,
-    TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::methodology::{FeasibilityLevel, RiskLevel};
 
@@ -566,6 +566,7 @@ pub struct ProjectDiff {
     pub(crate) security_controls: EntityDiff<ControlId>,
     pub(crate) cybersecurity_goals: EntityDiff<GoalId>,
     pub(crate) cybersecurity_claims: EntityDiff<ClaimId>,
+    pub(crate) elements: EntityDiff<ElementId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
     pub(crate) notes_changed: bool,
     pub(crate) item_text_changed: bool,
@@ -744,6 +745,21 @@ impl ProjectDiff {
         &self.cybersecurity_claims
     }
 
+    /// Returns the added, removed, and modified [`ElementId`]s of generic
+    /// elements in canonical order. Element changes add no risk delta.
+    ///
+    /// Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(ProjectDiff::default().elements().is_empty());
+    /// ```
+    #[must_use]
+    pub fn elements(&self) -> &EntityDiff<ElementId> {
+        &self.elements
+    }
+
     /// Returns the [`ThreatRiskDelta`]s for all threat scenarios affected by
     /// the diff (added, removed, or modified threat scenarios, or threat
     /// scenarios referencing a modified asset, damage scenario, attack tree,
@@ -799,6 +815,7 @@ impl ProjectDiff {
             && self.security_controls.is_empty()
             && self.cybersecurity_goals.is_empty()
             && self.cybersecurity_claims.is_empty()
+            && self.elements.is_empty()
     }
 }
 

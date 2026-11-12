@@ -799,3 +799,90 @@ fn link_ops_round_trip_through_the_op_log() {
         .collect();
     assert_eq!(read, ops);
 }
+
+// ---------------------------------------------------------------------------
+// Element changes in the project diff (205f)
+// ---------------------------------------------------------------------------
+
+fn diff(base: &Project, curr: &Project) -> aegis_model::ProjectDiff {
+    base.diff(curr).expect("diff")
+}
+
+#[test]
+fn diff_lists_added_removed_and_modified_elements() {
+    let (_, mut base) = project();
+    for (n, name) in [(1, "a"), (2, "b"), (3, "c")] {
+        base.apply(add(n, name)).expect("add");
+    }
+    let mut curr = base.clone();
+    curr.apply(Op::RemoveElement {
+        id: common::element_id(1),
+    })
+    .expect("remove a");
+    curr.apply(Op::RenameElement {
+        id: common::element_id(2),
+        name: "b renamed".into(),
+        provenance: Provenance::human("bob", 2),
+    })
+    .expect("rename b");
+    curr.apply(set_attr(
+        3,
+        "scope",
+        Some(AttrValue::Text("Gateway".into())),
+    ))
+    .expect("attribute c");
+    curr.apply(add(4, "d")).expect("add d");
+
+    let d = diff(&base, &curr);
+    let e = d.elements();
+    assert_eq!(e.added(), [common::element_id(4)]);
+    assert_eq!(e.removed(), [common::element_id(1)]);
+    assert_eq!(e.modified(), [common::element_id(2), common::element_id(3)]);
+    assert!(d.risk_deltas().is_empty());
+    assert!(!d.is_empty());
+    let back = diff(&curr, &base);
+    assert_eq!(back.elements().added(), e.removed());
+    assert_eq!(back.elements().removed(), e.added());
+    assert_eq!(back.elements().modified(), e.modified());
+}
+
+#[test]
+fn diff_sees_a_link_change() {
+    let (_, mut base) = project_with_threats(1);
+    base.apply(add(1, "First")).expect("add");
+    let mut curr = base.clone();
+    curr.apply(link(1, 0)).expect("link");
+
+    let d = diff(&base, &curr);
+    assert_eq!(d.elements().modified(), [common::element_id(1)]);
+    assert!(d.elements().added().is_empty());
+    assert!(d.elements().removed().is_empty());
+    assert!(d.threat_scenarios().modified().is_empty());
+    assert!(d.risk_deltas().is_empty());
+}
+
+#[test]
+fn diff_of_equal_projects_is_empty() {
+    let (_, mut p) = project();
+    p.apply(add(1, "First")).expect("add");
+    let copy = p.clone();
+    assert!(diff(&p, &p).elements().is_empty());
+    assert!(diff(&p, &copy).is_empty());
+    assert!(diff(&copy, &p).is_empty());
+}
+
+#[test]
+fn diff_ignores_an_added_then_removed_element() {
+    let (_, mut p) = project();
+    p.apply(add(1, "First")).expect("add");
+    let before = p.clone();
+    p.apply(add(2, "Second")).expect("add");
+    p.apply(Op::RemoveElement {
+        id: common::element_id(2),
+    })
+    .expect("remove");
+    // The store remembers the removed visual number, but the live elements match.
+    assert_eq!(p, before);
+    assert!(diff(&before, &p).is_empty());
+    assert!(diff(&p, &before).is_empty());
+}

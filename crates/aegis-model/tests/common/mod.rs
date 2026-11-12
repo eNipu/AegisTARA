@@ -550,13 +550,6 @@ pub struct Seed {
     list: Vec<u16>,
 }
 
-impl Seed {
-    /// Whether this seed makes one of the six generic element ops.
-    pub fn is_element_op(&self) -> bool {
-        (58..=63).contains(&self.kind)
-    }
-}
-
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (

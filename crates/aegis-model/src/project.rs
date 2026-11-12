@@ -5688,6 +5688,7 @@ impl Project {
             security_controls,
             cybersecurity_goals,
             cybersecurity_claims,
+            elements: self.elements.diff(&other.elements),
             components,
             interfaces,
             data_flows,
