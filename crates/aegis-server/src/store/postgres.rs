@@ -20,11 +20,11 @@
 //!
 //! Transport (backlog 037): plain TCP by default, for a database on the
 //! same host or a private network (the Compose file and Railway's private
-//! network). [`DbTls::Verify`] encrypts and checks the server certificate
-//! against the OS trust store and the host name (libpq `verify-full`);
-//! [`DbTls::Encrypt`] encrypts without checking the certificate (libpq
-//! `require`), for managed databases with self-signed certificates. Both
-//! use rustls with ring (`aegis_auth::tls`).
+//! network). [`DbTls::Verify`] and [`DbTls::Encrypt`] both encrypt and check
+//! the server certificate chain and the host name against the OS trust store,
+//! or against the file named by `AEGIS_DB_CA_FILE` (at most 1 MiB) for a
+//! private certificate authority. Both use rustls with ring
+//! (`aegis_auth::tls`).
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
