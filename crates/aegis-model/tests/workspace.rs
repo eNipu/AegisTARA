@@ -85,7 +85,7 @@ fn check_keys(p: &Project, seen: &mut BTreeSet<String>) {
 }
 
 /// Ops the recorded set leaves out (interfaces, data flows, trust
-/// boundaries) plus trees, marks, descriptions and languages.
+/// boundaries) plus trees, marks, descriptions, languages and elements.
 fn extra_ops() -> (Arc<Methodology>, Vec<Op>) {
     let m = builtin();
     let (c1, c2) = (component_id(1), component_id(2));
@@ -136,6 +136,18 @@ fn extra_ops() -> (Arc<Methodology>, Vec<Op>) {
             components: vec![c1, c2],
             provenance: Provenance::default(),
         },
+        Op::AddElement {
+            id: common::element_id(7),
+            kind: aegis_model::ElementKind::MisuseCase,
+            name: "Relay attack".into(),
+            provenance: Provenance::default(),
+        },
+        Op::SetElementAttribute {
+            id: common::element_id(7),
+            key: "cal".into(),
+            value: Some(aegis_model::AttrValue::Level("cal-2".into())),
+            provenance: Provenance::default(),
+        },
     ];
     (m, ops.into())
 }
@@ -169,6 +181,7 @@ fn layout_covers_every_snapshot_key() {
         "descriptions",
         "review_marks",
         "languages",
+        "elements",
     ] {
         assert!(seen.contains(key), "never saw {key}");
     }

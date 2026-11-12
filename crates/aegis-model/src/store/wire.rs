@@ -56,8 +56,8 @@ use crate::control::{
 };
 use crate::error::{PackError, StoreError};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    NodeId, NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -328,6 +328,9 @@ caps! {
     AttackTreeNodesCap = crate::tree::MAX_ATTACK_TREE_NODES, Limit::ATTACK_TREE_NODES;
     GoalControlsCap = MAX_GOAL_CONTROLS, Limit::GOAL_CONTROLS;
     BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
+    ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
+    ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
+    ElementLinksCap = crate::element::MAX_ELEMENT_LINKS, Limit::ELEMENT_LINKS;
 }
 
 /// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
@@ -358,6 +361,12 @@ impl<'de, C: Cap> Deserialize<'de> for BoundedStr<C> {
 /// `min(size_hint, C::MAX)` and stops on item `C::MAX + 1`, so it never
 /// holds more than `C::MAX` items.
 pub(crate) struct BoundedVec<T, C>(pub(crate) Vec<T>, PhantomData<C>);
+
+impl<T, C> Default for BoundedVec<T, C> {
+    fn default() -> Self {
+        BoundedVec(Vec::new(), PhantomData)
+    }
+}
 
 impl<'de, T: Deserialize<'de>, C: Cap> Deserialize<'de> for BoundedVec<T, C> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -485,6 +494,21 @@ fn note_unknown<T>(
         *pending = Some(unknown_key(kind, s));
     }
     found
+}
+
+/// An element kind key, resolved as it is read.
+pub(super) struct ElementKindKey(pub(super) crate::element::ElementKind);
+
+impl<'de> Deserialize<'de> for ElementKindKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            crate::element::ElementKind::from_key(s)
+                .map(ElementKindKey)
+                .ok_or_else(|| unknown_key(VocabKind::ElementKind, s))
+        })
+        .deserialize(d)
+    }
 }
 
 /// A threat category key, resolved as it is read.
@@ -1511,6 +1535,52 @@ pub(super) struct SnapshotWire {
     pub(super) review_marks: Vec<ReviewMarkWire>,
     #[serde(default)]
     pub(super) languages: Vec<LangText>,
+    #[serde(default)]
+    pub(super) elements: ElementsByKind,
+}
+
+/// A snapshot element of a generic kind.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ElementWire {
+    pub(super) id: WireId<ElementId>,
+    pub(super) visual_id: Key,
+    pub(super) name: Name,
+    #[serde(default)]
+    pub(super) attributes: BoundedKeyMap<AttrWire, ElementAttributesCap>,
+    #[serde(default)]
+    pub(super) links: BoundedVec<LinkWire, ElementLinksCap>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// The snapshot `elements` map: each kind key with its elements, in file
+/// order. An unknown or repeated kind is refused.
+#[derive(Default)]
+pub(super) struct ElementsByKind(pub(super) Vec<(crate::element::ElementKind, Vec<ElementWire>)>);
+
+impl<'de> Deserialize<'de> for ElementsByKind {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = ElementsByKind;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut kinds: Vec<(crate::element::ElementKind, Vec<ElementWire>)> = Vec::new();
+                while let Some(key) = map.next_key::<ElementKindKey>()? {
+                    if kinds.iter().any(|(k, _)| *k == key.0) {
+                        return Err(de::Error::custom("duplicate key"));
+                    }
+                    let list = map.next_value::<BoundedVec<ElementWire, ElementsCap>>()?;
+                    kinds.push((key.0, list.0));
+                }
+                Ok(ElementsByKind(kinds))
+            }
+        }
+        d.deserialize_map(V)
+    }
 }
 
 /// A step whose rating awaits review.
@@ -2410,6 +2480,77 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    AddElement {
+        id: WireId<ElementId>,
+        kind: ElementKindKey,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameElement {
+        id: WireId<ElementId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveElement {
+        id: WireId<ElementId>,
+    },
+    SetElementAttribute {
+        id: WireId<ElementId>,
+        key: Key,
+        #[serde(deserialize_with = "Option::deserialize")]
+        value: Option<AttrWire>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    LinkElement {
+        id: WireId<ElementId>,
+        target: LinkWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkElement {
+        id: WireId<ElementId>,
+        target: LinkWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+}
+
+/// One element link target on the wire.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum LinkWire {
+    Threat(WireId<ThreatId>),
+}
+
+impl LinkWire {
+    pub(super) fn into_target(self) -> crate::element::LinkTarget {
+        match self {
+            Self::Threat(t) => crate::element::LinkTarget::Threat(t.0),
+        }
+    }
+}
+
+/// One element attribute value on the wire.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum AttrWire {
+    Level(Key),
+    Choice(Key),
+    Text(Name),
+}
+
+impl AttrWire {
+    pub(super) fn into_value(self) -> crate::element::AttrValue {
+        use crate::element::AttrValue as V;
+        match self {
+            Self::Level(k) => V::Level(k.0),
+            Self::Choice(k) => V::Choice(k.0),
+            Self::Text(t) => V::Text(t.0),
+        }
+    }
 }
 
 /// Resolves the `SetImpact` level key within its category. Time O(log m).

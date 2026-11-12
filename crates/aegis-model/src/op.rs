@@ -5,9 +5,10 @@ use std::sync::Arc;
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
 use crate::description::ElementRef;
+use crate::element::{AttrValue, ElementKind, LinkTarget};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    NodeId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -86,6 +87,12 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
 /// | `SetImpactRationale` | the same with the old text and provenance | O(log n + r) |
 /// | `SetFeasibilityRationale` | the same with the old text and provenance | O(log n + r) |
+/// | `AddElement` | `RemoveElement` | O(log n) |
+/// | `RenameElement` | the same with the old name and provenance | O(log n) |
+/// | `RemoveElement` | `AddElement` with the old kind, name and provenance | O(log n) |
+/// | `SetElementAttribute` | the same with the old value (`None` if unset) and provenance | O(log n + a) |
+/// | `LinkElement` | `UnlinkElement` with the element's old provenance | O(log n + l) |
+/// | `UnlinkElement` | `LinkElement` with the element's old provenance | O(log n + l) |
 ///
 /// ```
 /// use std::sync::Arc;
@@ -868,6 +875,60 @@ pub enum Op {
         /// Provenance of binding or unbinding the component.
         provenance: Provenance,
     },
+    /// Adds an element of a generic kind, with no attributes and no links.
+    AddElement {
+        /// Unused element ID.
+        id: ElementId,
+        /// Kind of the element.
+        kind: ElementKind,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Provenance of the element creation.
+        provenance: Provenance,
+    },
+    /// Renames an element.
+    RenameElement {
+        /// Existing element.
+        id: ElementId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Removes an element. Refused while it has any attribute or link.
+    RemoveElement {
+        /// Existing element.
+        id: ElementId,
+    },
+    /// Sets (`Some`) or clears (`None`) one extra attribute of an element (D34).
+    SetElementAttribute {
+        /// Existing element.
+        id: ElementId,
+        /// Attribute key, pack key syntax.
+        key: Arc<str>,
+        /// New value, or `None` to clear.
+        value: Option<AttrValue>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Links an element to a target its kind allows (a threat scenario for a misuse case).
+    LinkElement {
+        /// Existing element.
+        id: ElementId,
+        /// What to link.
+        target: LinkTarget,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Removes one link of an element.
+    UnlinkElement {
+        /// Existing element.
+        id: ElementId,
+        /// The linked target.
+        target: LinkTarget,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
 }
 
 impl Op {
@@ -936,6 +997,11 @@ impl Op {
             | Self::UnlinkGoalControl { provenance, .. }
             | Self::AddCybersecurityClaim { provenance, .. }
             | Self::RenameCybersecurityClaim { provenance, .. }
+            | Self::AddElement { provenance, .. }
+            | Self::RenameElement { provenance, .. }
+            | Self::SetElementAttribute { provenance, .. }
+            | Self::LinkElement { provenance, .. }
+            | Self::UnlinkElement { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }
@@ -962,6 +1028,7 @@ impl Op {
             | Self::RemoveSecurityControl { .. }
             | Self::RemoveCybersecurityGoal { .. }
             | Self::RemoveCybersecurityClaim { .. }
+            | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }
             | Self::RemoveDataFlow { .. }
@@ -1034,6 +1101,11 @@ impl Op {
             | Self::UnlinkGoalControl { provenance, .. }
             | Self::AddCybersecurityClaim { provenance, .. }
             | Self::RenameCybersecurityClaim { provenance, .. }
+            | Self::AddElement { provenance, .. }
+            | Self::RenameElement { provenance, .. }
+            | Self::SetElementAttribute { provenance, .. }
+            | Self::LinkElement { provenance, .. }
+            | Self::UnlinkElement { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }
@@ -1062,6 +1134,7 @@ impl Op {
             | Self::RemoveSecurityControl { .. }
             | Self::RemoveCybersecurityGoal { .. }
             | Self::RemoveCybersecurityClaim { .. }
+            | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }
             | Self::RemoveDataFlow { .. }
