@@ -1,0 +1,7 @@
+## Answers
+
+Owner (2026-11-11): slice 205b keeps its commit b03172b as built. Its size cap in `plan.json` is raised from 400 to 480 lines for this slice only (475 counted; about 110 are the doc comments and doc tests the prompt asked for). No split.
+
+Orchestrator (2026-11-12), before slice 205e is built: the review of 205d (`slices/205d/review.md`) found that `ElementStore::inbound` (the count of element links per threat) is only updated when a link or unlink op is applied. The 205e prompt does not say that loading rebuilds it. Update `prompts/205e.md` so that every load path (snapshot and workspace files) rebuilds `inbound` from the stored links, and add a test that loads a project with a linked threat, tries to remove that threat and expects the refusal. Keep the slice inside its size cap; if it no longer fits, say so in the prompt's notes and adjust `plan.json`.
+
+Orchestrator (2026-11-12), before slice 205f is built: slice 205e (see `slices/205e/build.md` and `slices/205e/review.md`) made `check_diff_sequence` in `crates/aegis-model/tests/ops_properties.rs` skip element seeds through a new `Seed::is_element_op`, because `Project::diff` does not cover elements yet. Update `prompts/205f.md` so that, once the diff covers elements, the builder removes that filter and `Seed::is_element_op` if nothing else uses it, and the `diff_soundness_*` tests pass with the six element ops included. Adjust the slice's `allow`, `checks`, `ci` and `max_lines` in `plan.json` if this needs it.

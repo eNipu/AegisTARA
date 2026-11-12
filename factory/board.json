@@ -1307,6 +1307,84 @@
       ],
       "decision": null,
       "updated": "2026-11-11T21:10:56Z"
+    },
+    {
+      "id": "205-generic-element-store",
+      "title": "Generic element store",
+      "branch": "factory/205-generic-element-store",
+      "stage": "merged",
+      "slice": "205f",
+      "base": "76222cb8bbe01d492e78abfc2fc9c34a1d327513",
+      "reviews": {
+        "slice": "205f",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "205a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 385
+        },
+        {
+          "slice": "205b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 2,
+          "review_tries": 2,
+          "lines": 475
+        },
+        {
+          "slice": "205c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 251
+        },
+        {
+          "slice": "205d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 321
+        },
+        {
+          "slice": "205e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 323
+        },
+        {
+          "slice": "205f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "haiku",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 71
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-12T04:23:06Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
