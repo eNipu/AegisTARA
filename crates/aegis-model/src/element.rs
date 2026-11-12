@@ -5,9 +5,11 @@
 //! never reads these elements when it evaluates risk. A new kind is one row in
 //! [`KINDS`] plus one [`ElementKind`] variant.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::diff::EntityDiff;
 use crate::error::{EntityKind, ModelError};
 use crate::id::{ElementId, ThreatId, parse_visual_num};
 use crate::op::Op;
@@ -377,6 +379,53 @@ impl ElementStore {
         ElementKind::ALL
             .iter()
             .all(|k| self.iter(*k).eq(other.iter(*k)))
+    }
+
+    /// Added, removed and modified live elements between `self` (baseline)
+    /// and `curr`, in ID order. Visual numbers, removed numbers and inbound
+    /// counts are ignored, so the diff is empty exactly when `same_live`
+    /// holds. Time O((n + m) log n), one merge walk over both `kind_of` maps.
+    pub(crate) fn diff(&self, curr: &Self) -> EntityDiff<ElementId> {
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        let mut modified = Vec::new();
+        let mut base = self.kind_of.keys().copied().peekable();
+        let mut now = curr.kind_of.keys().copied().peekable();
+        loop {
+            match (base.peek().copied(), now.peek().copied()) {
+                (Some(a), Some(b)) => match a.cmp(&b) {
+                    Ordering::Less => {
+                        base.next();
+                        removed.push(a);
+                    }
+                    Ordering::Greater => {
+                        now.next();
+                        added.push(b);
+                    }
+                    Ordering::Equal => {
+                        base.next();
+                        now.next();
+                        if self.get(a) != curr.get(a) {
+                            modified.push(a);
+                        }
+                    }
+                },
+                (Some(a), None) => {
+                    base.next();
+                    removed.push(a);
+                }
+                (None, Some(b)) => {
+                    now.next();
+                    added.push(b);
+                }
+                (None, None) => break,
+            }
+        }
+        EntityDiff {
+            added: added.into_boxed_slice(),
+            removed: removed.into_boxed_slice(),
+            modified: modified.into_boxed_slice(),
+        }
     }
 }
 

@@ -330,16 +330,9 @@ fn check_diff_sequence(
     m: &std::sync::Arc<aegis_model::Methodology>,
     seeds: &[common::Seed],
 ) -> Result<(), TestCaseError> {
-    // `Project::diff` does not cover generic elements until slice 205f, so
-    // element ops are left out of this check until then.
-    let seeds: Vec<common::Seed> = seeds
-        .iter()
-        .filter(|s| !s.is_element_op())
-        .cloned()
-        .collect();
     let first = aegis_model::Project::new(std::sync::Arc::clone(m));
     let mut prev = first.clone();
-    accepted(m, &seeds, |curr, _, _| {
+    accepted(m, seeds, |curr, _, _| {
         check_diff_pair(&prev, curr)?;
         check_diff_pair(&first, curr)?;
         prev = curr.clone();
@@ -428,6 +421,9 @@ fn check_diff_pair(
         fwd.cybersecurity_claims().modified(),
         rev.cybersecurity_claims().modified()
     );
+    prop_assert_eq!(fwd.elements().added(), rev.elements().removed());
+    prop_assert_eq!(fwd.elements().removed(), rev.elements().added());
+    prop_assert_eq!(fwd.elements().modified(), rev.elements().modified());
 
     // Risk deltas are sorted by ThreatId and symmetric between fwd and rev.
     prop_assert!(
