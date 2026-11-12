@@ -1,0 +1,154 @@
+{
+  "job": "205-generic-element-store",
+  "slices": [
+    {
+      "id": "205a",
+      "title": "Element kind table and element IDs",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/id.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/tests/elements.rs"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test elements"
+      ]
+    },
+    {
+      "id": "205b",
+      "title": "Add, rename and remove elements, with op log",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test elements",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "205c",
+      "title": "Set and clear element attributes",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test elements",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "205d",
+      "title": "Link elements to threat scenarios, with the threat removal guard",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test elements",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "205e",
+      "title": "Elements in the snapshot and in one workspace file per kind",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/store/*",
+        "crates/aegis-model/tests/*"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test elements_store",
+        "cargo test --locked -p aegis-model --test workspace",
+        "cargo test --locked -p aegis-model --test workspace_limits",
+        "cargo test --locked -p aegis-model --test ops_properties",
+        "cargo test --locked -p aegis-model --test store_properties",
+        "cargo test --locked -p aegis-model --test workspace_properties"
+      ]
+    },
+    {
+      "id": "205f",
+      "title": "Elements in the project diff, ADR 0068 and the architecture entry",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/diff.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/tests/*",
+        "docs/adr/0068-generic-element-store.md",
+        "docs/architecture.md"
+      ],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test elements",
+        "cargo test --locked -p aegis-model --test ops_properties"
+      ]
+    }
+  ]
+}
