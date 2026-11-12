@@ -68,7 +68,7 @@ flowchart LR
 
 | Boundary | What is checked there |
 |---|---|
-| Network edge | `Customer` TLS proxy ends HTTPS. The server itself speaks plain HTTP and listens on the host's loopback by default. |
+| Network edge | `Customer` TLS proxy ends HTTPS. The server itself speaks plain HTTP. In the container it listens on all interfaces on port 50051. The supplied compose file publishes that port only on the host's loopback. `Customer` keeps the plain port off other networks. |
 | Server login layer | Every call needs a valid login, except the public account calls and `GET /healthz`. |
 | Project permission check | After login, each call is checked against the user's role in that project. |
 | Database network | Only the server should reach PostgreSQL. `Customer` keeps it on a private network. |
@@ -117,6 +117,7 @@ provider. Cloud AI providers are `Planned` and will be opt-in.
 - `docs/decisions.md`
 - `docs/requirements.md`
 - `deploy/Dockerfile`
+- `deploy/compose.yaml`
 - `crates/aegis-server/src/main.rs`
 - `crates/aegis-server/src/health.rs`
 - `crates/aegis-server/src/auth_layer.rs`
