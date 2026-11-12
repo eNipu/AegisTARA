@@ -9,12 +9,12 @@ each a few pages.
 
 | Chapter | English | Japanese |
 |---|---|---|
-| 1. Architecture and data flow | [en/01-architecture-and-data-flow.md](en/01-architecture-and-data-flow.md) | added in a later change |
-| 2. Cryptography | added in a later change | added in a later change |
-| 3. Authentication and access | added in a later change | added in a later change |
-| 4. Logging and retention | added in a later change | added in a later change |
-| 5. Personal data | added in a later change | added in a later change |
-| 6. Security questionnaire | added in a later change | added in a later change |
+| 1. Architecture and data flow | [en/01-architecture-and-data-flow.md](en/01-architecture-and-data-flow.md) | [ja/01-architecture-and-data-flow.md](ja/01-architecture-and-data-flow.md) |
+| 2. Cryptography | [en/02-cryptography.md](en/02-cryptography.md) | [ja/02-cryptography.md](ja/02-cryptography.md) |
+| 3. Authentication and access | [en/03-authentication-and-access.md](en/03-authentication-and-access.md) | [ja/03-authentication-and-access.md](ja/03-authentication-and-access.md) |
+| 4. Logging and retention | [en/04-logging-and-retention.md](en/04-logging-and-retention.md) | [ja/04-logging-and-retention.md](ja/04-logging-and-retention.md) |
+| 5. Personal data | [en/05-personal-data.md](en/05-personal-data.md) | [ja/05-personal-data.md](ja/05-personal-data.md) |
+| 6. Security questionnaire | [en/06-security-questionnaire.md](en/06-security-questionnaire.md) | [ja/06-security-questionnaire.md](ja/06-security-questionnaire.md) |
 
 ## Writing rules
 
@@ -29,12 +29,20 @@ each a few pages.
 ## Check the pack
 
 ```sh
-sh scripts/check-security-pack.sh
+sh scripts/check-security-pack.sh --complete
 ```
 
 The script checks that English and Japanese chapters have the same headings
-and table IDs, and that every source file a chapter names exists. Add
-`--complete` to require all six chapters in both languages.
+and table IDs, and that every source file a chapter names exists.
+`--complete` requires all six chapters in both languages. CI runs it.
+
+## Outside the pack
+
+The owner does these, not the pack:
+
+- Answers to the `Vendor` rows, for each customer.
+- A legal review of chapter 5.
+- A read of the Japanese by a native speaker before the first hand-over.
 
 ## Scope
 

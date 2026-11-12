@@ -101,6 +101,7 @@ recreate or customize them manually in **Run → Edit Configurations…**
 10. [docs/adr/](docs/adr): one decision record per job (0025 to 0038 cover the server, login, canvas, client, shell, licensing, observers, release, password login, gRPC-Web, baselines and the TARA pages).
 11. [docs/review-requirements.md](docs/review-requirements.md): what to review before the work is accepted.
 12. [docs/railway.md](docs/railway.md): the test server on Railway.
+13. [docs/security-pack/](docs/security-pack/README.md): the product security pack, in English and Japanese, for a buyer's security team and for answering vendor questionnaires.
 
 ## Continuous integration
 

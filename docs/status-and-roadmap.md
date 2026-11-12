@@ -78,6 +78,7 @@
 | 070 | One report document model: HTML on `ReportDoc`, TOC and anchors | 0056 |
 | 071 | Report builder: sections, filters, language, branding, saved profiles, audit record | 0056 |
 | 072 | XLSX export: risk-register sheet and a full workbook, formula injection guarded | 0056 |
+| 102 | Product security pack in English and Japanese, with a parity check | 0069 |
 
 All completed jobs (`001`–`041`, `045`–`057`, `060`–`072`, `107`–`108`, `109`, `110`, `111`, and `089`) have completed the four factory review stages (`code`, `security`, `ux`, `ui`). See `docs/review-requirements.md` and `factory/jobs/<id>/`.
 

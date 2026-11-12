@@ -113,3 +113,10 @@ Run this list for every release build. Tick each line in the release notes.
       14 days after the fix).
 - [ ] The release notes list the engine version (`ENGINE_VERSION`) and the
       oplog format version.
+
+## Product security pack (NFR-07, NFR-09)
+
+- [ ] `scripts/check-security-pack.sh --complete` passes.
+- [ ] Every chapter of `docs/security-pack/` was re-read against this
+      release, and each changed statement was changed in English and Japanese.
+- [ ] The `Planned` rows that this release built were updated.

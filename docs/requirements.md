@@ -42,7 +42,7 @@ the business model: the owner's consultancy uses the tool first (D21, D22). Phas
 | G36 | Power-user UI missing: command palette, resizable panel slots, history panel, bulk edit (an inspector panel exists) | `app.slint` | "Feels like a solid tool" needs these | 081 to 085 |
 | G37 | Our own product's EU Cyber Resilience Act duties not planned (SBOM, vulnerability handling, support period) | none | Reporting duties apply since September 2026; full duties December 2027 | 101 |
 | G38 | No signed installers, no production keys, no offline bundle | G13 in the roadmap; ADR 0034 | Cannot ship to a customer | 099, 100 |
-| G39 | No Japanese or English user manual, no product security pack for vendor questionnaires | `docs/` holds engineering docs only | Japanese buyers ask for both before a PoC | 102, 103 |
+| G39 | No Japanese or English user manual, no product security pack for vendor questionnaires | The product security pack exists in English and Japanese (`docs/security-pack/`, job 102). The user manual (job 103) is still open | Japanese buyers ask for both before a PoC | 102, 103 |
 | G40 | Reviews of jobs 027 to 056 still pending | `review-requirements.md` | Known unknowns before customers | Roadmap item 1 |
 | G41 | ~~D4 and D7 unconfirmed~~ | Both confirmed 2026-10-26 | | Done |
 | G42 | No way to work without a server | The app needs `aegis-server` and PostgreSQL or memory | The consultancy and small projects need a single-user app | 107 |
