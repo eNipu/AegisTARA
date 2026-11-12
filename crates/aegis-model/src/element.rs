@@ -270,6 +270,7 @@ pub(crate) struct ElementStore {
     #[allow(clippy::zero_sized_map_values)] // one kind today; more rows add variants
     kind_of: BTreeMap<ElementId, ElementKind>,
     /// How many elements link each target; derived, no zero entries.
+    /// Loading rebuilds it by replaying each stored link as `LinkElement`.
     inbound: BTreeMap<LinkTarget, u32>,
 }
 
@@ -345,6 +346,20 @@ impl ElementStore {
         slot.next_visual = slot.next_visual.max(number.saturating_add(1));
         slot.live.insert(id, (number, element));
         self.kind_of.insert(id, kind);
+    }
+
+    /// Sets the loaded visual number of a live element and its kind's next
+    /// number. Time O(log n).
+    fn set_loaded_visual(&mut self, id: ElementId, vis: u32, next: u32) {
+        let Some(kind) = self.kind_of.get(&id) else {
+            return;
+        };
+        if let Some(slot) = self.kinds.get_mut(kind)
+            && let Some(entry) = slot.live.get_mut(&id)
+        {
+            entry.0 = vis;
+            slot.next_visual = next;
+        }
     }
 
     /// Removes an element, remembering its number. Time O(log n).
@@ -443,6 +458,11 @@ impl Project {
     pub fn element_visual_id(&self, id: ElementId) -> Option<String> {
         let num = self.elements.visual_num(id)?;
         Some(self.elements.get(id)?.kind.visual_id(num))
+    }
+
+    /// Sets a loaded element's visual number and its kind's next number.
+    pub(crate) fn set_element_loaded_visual(&mut self, id: ElementId, vis: u32, next: u32) {
+        self.elements.set_loaded_visual(id, vis, next);
     }
 
     fn live_element(&self, id: ElementId) -> Result<&Element, ModelError> {

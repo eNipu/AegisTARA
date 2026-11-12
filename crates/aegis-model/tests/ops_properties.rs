@@ -330,9 +330,16 @@ fn check_diff_sequence(
     m: &std::sync::Arc<aegis_model::Methodology>,
     seeds: &[common::Seed],
 ) -> Result<(), TestCaseError> {
+    // `Project::diff` does not cover generic elements until slice 205f, so
+    // element ops are left out of this check until then.
+    let seeds: Vec<common::Seed> = seeds
+        .iter()
+        .filter(|s| !s.is_element_op())
+        .cloned()
+        .collect();
     let first = aegis_model::Project::new(std::sync::Arc::clone(m));
     let mut prev = first.clone();
-    accepted(m, seeds, |curr, _, _| {
+    accepted(m, &seeds, |curr, _, _| {
         check_diff_pair(&prev, curr)?;
         check_diff_pair(&first, curr)?;
         prev = curr.clone();
@@ -512,7 +519,7 @@ fn ops_generator_covers_every_op_and_most_errors() {
         assert!((0.2..0.9).contains(&share), "valid share {share}");
         // The second pack declares no interface kinds or attack types, so it
         // has no interface to add or remove and no control rule to set.
-        let kinds = if m.interface_kind_count() > 0 { 49 } else { 46 };
+        let kinds = if m.interface_kind_count() > 0 { 55 } else { 52 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",

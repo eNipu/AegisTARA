@@ -6,16 +6,18 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::MAX_PROJECT_FILE_BYTES;
+use super::op_log::{AttrView, LinkView};
 use super::wire::{
     self, CappedReader, CatalogRefsByKey, ControlRulesByKey, ControlTargetsByItem, FORMAT_VERSION,
     ImpactsByKey, KeyOrder, MethodologyView, NodesView, PropertyKeys, ProvenanceView, Required,
     RiskTreatmentWire, SnapshotWire, StepAttackTypeByNode, StepFactorsByNode,
     StepFeasibilityByNode, StepMitigationsByNode, StepViaByNode, TargetView, Text, VisualDisplay,
 };
+use crate::element::{AttrValue, ElementKind};
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, ThreatId,
-    TreeId, TrustBoundaryId, VisualPrefix,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
 };
 use crate::methodology::Methodology;
 use crate::op::Op;
@@ -53,6 +55,8 @@ struct SnapshotView<'a> {
     review_marks: ReviewMarks<'a>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     languages: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Elements::is_empty")]
+    elements: Elements<'a>,
 }
 
 /// What every entity view needs.
@@ -76,6 +80,78 @@ struct DataFlows<'a>(&'a Project);
 struct TrustBoundaries<'a>(&'a Project);
 struct Descriptions<'a>(&'a Project);
 struct ReviewMarks<'a>(&'a Project);
+struct Elements<'a>(&'a Project);
+
+impl Elements<'_> {
+    fn is_empty(&self) -> bool {
+        ElementKind::ALL
+            .iter()
+            .all(|k| self.0.element_count(*k) == 0)
+    }
+}
+
+/// The elements of one kind, in ID order.
+struct ElementList<'a>(&'a Project, ElementKind);
+
+#[derive(Serialize)]
+struct ElementView<'a> {
+    id: Text<ElementId>,
+    visual_id: String,
+    name: &'a str,
+    #[serde(skip_serializing_if = "ElementAttrs::is_empty")]
+    attributes: ElementAttrs<'a>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    links: Vec<LinkView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+/// Attributes by key, in byte order (the store keeps them sorted).
+struct ElementAttrs<'a>(&'a [(Arc<str>, AttrValue)]);
+
+impl ElementAttrs<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for ElementAttrs<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_map(self.0.iter().map(|(k, v)| (&**k, AttrView::of(v))))
+    }
+}
+
+impl Serialize for Elements<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_map(
+            ElementKind::ALL
+                .iter()
+                .filter(|k| self.0.element_count(**k) > 0)
+                .map(|k| (k.key(), ElementList(self.0, *k))),
+        )
+    }
+}
+
+impl Serialize for ElementList<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        let mut views = Vec::with_capacity(p.element_count(self.1));
+        for (id, e) in p.elements(self.1) {
+            let visual_id = p
+                .element_visual_id(id)
+                .ok_or_else(|| serde::ser::Error::custom("element has no visual ID"))?;
+            views.push(ElementView {
+                id: Text(id),
+                visual_id,
+                name: e.name(),
+                attributes: ElementAttrs(e.attributes()),
+                links: e.links().iter().map(|t| LinkView::of(*t)).collect(),
+                provenance: ProvenanceView::of(e.provenance()),
+            });
+        }
+        s.collect_seq(views)
+    }
+}
 
 impl ReviewMarks<'_> {
     fn is_empty(&self) -> bool {
@@ -796,6 +872,7 @@ impl Project {
             descriptions: Descriptions(self),
             review_marks: ReviewMarks(self),
             languages: self.languages().iter().map(|l| &**l).collect(),
+            elements: Elements(self),
         };
         f(&view)
     }
@@ -1114,6 +1191,21 @@ impl Project {
             apply_snapshot_threat(&mut project, t)?;
             project.set_threat_loaded_visual(&id, vis, next_vis);
         }
+        for (kind, list) in snapshot.elements.0 {
+            let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+            for e in list {
+                let vis = kind
+                    .parse_visual(&e.visual_id.0)
+                    .ok_or(StoreError::InvalidId)?;
+                if !used.insert(vis) {
+                    return Err(StoreError::DuplicateEntry);
+                }
+                next_vis = next_vis.max(vis.saturating_add(1));
+                let id = e.id.0;
+                apply_snapshot_element(&mut project, kind, e)?;
+                project.set_element_loaded_visual(id, vis, next_vis);
+            }
+        }
         // Marks that name no tree of this snapshot are refused by the model.
         for (tree, node) in marks {
             project.apply(Op::SetReviewMark {
@@ -1165,6 +1257,41 @@ fn claim_visual<K>(
     }
     *next = (*next).max(vis.saturating_add(1));
     Ok(vis)
+}
+
+/// Adds one snapshot element through `apply`: `AddElement`, then one
+/// `SetElementAttribute` per attribute and one `LinkElement` per link, all
+/// with the stored provenance. Replaying the links rebuilds the inbound
+/// link counts.
+fn apply_snapshot_element(
+    project: &mut Project,
+    kind: ElementKind,
+    e: wire::ElementWire,
+) -> Result<(), StoreError> {
+    let provenance = wire::unwrap_provenance(e.provenance);
+    let id = e.id.0;
+    project.apply(Op::AddElement {
+        id,
+        kind,
+        name: e.name.0,
+        provenance: provenance.clone(),
+    })?;
+    for (key, value) in e.attributes.0 {
+        project.apply(Op::SetElementAttribute {
+            id,
+            key,
+            value: Some(value.into_value()),
+            provenance: provenance.clone(),
+        })?;
+    }
+    for link in e.links.0 {
+        project.apply(Op::LinkElement {
+            id,
+            target: link.into_target(),
+            provenance: provenance.clone(),
+        })?;
+    }
+    Ok(())
 }
 
 fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(), StoreError> {
