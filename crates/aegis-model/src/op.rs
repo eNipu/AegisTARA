@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
 use crate::description::ElementRef;
-use crate::element::{AttrValue, ElementKind};
+use crate::element::{AttrValue, ElementKind, LinkTarget};
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
     NodeId, ThreatId, TreeId, TrustBoundaryId,
@@ -91,6 +91,8 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `RenameElement` | the same with the old name and provenance | O(log n) |
 /// | `RemoveElement` | `AddElement` with the old kind, name and provenance | O(log n) |
 /// | `SetElementAttribute` | the same with the old value (`None` if unset) and provenance | O(log n + a) |
+/// | `LinkElement` | `UnlinkElement` with the element's old provenance | O(log n + l) |
+/// | `UnlinkElement` | `LinkElement` with the element's old provenance | O(log n + l) |
 ///
 /// ```
 /// use std::sync::Arc;
@@ -893,7 +895,7 @@ pub enum Op {
         /// Provenance of the rename.
         provenance: Provenance,
     },
-    /// Removes an element. Refused while it has any attribute (205d adds links).
+    /// Removes an element. Refused while it has any attribute or link.
     RemoveElement {
         /// Existing element.
         id: ElementId,
@@ -906,6 +908,24 @@ pub enum Op {
         key: Arc<str>,
         /// New value, or `None` to clear.
         value: Option<AttrValue>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Links an element to a target its kind allows (a threat scenario for a misuse case).
+    LinkElement {
+        /// Existing element.
+        id: ElementId,
+        /// What to link.
+        target: LinkTarget,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Removes one link of an element.
+    UnlinkElement {
+        /// Existing element.
+        id: ElementId,
+        /// The linked target.
+        target: LinkTarget,
         /// Provenance of the change.
         provenance: Provenance,
     },
@@ -980,6 +1000,8 @@ impl Op {
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }
+            | Self::LinkElement { provenance, .. }
+            | Self::UnlinkElement { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }
@@ -1082,6 +1104,8 @@ impl Op {
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }
+            | Self::LinkElement { provenance, .. }
+            | Self::UnlinkElement { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }

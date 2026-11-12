@@ -2449,6 +2449,33 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    LinkElement {
+        id: WireId<ElementId>,
+        target: LinkWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkElement {
+        id: WireId<ElementId>,
+        target: LinkWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+}
+
+/// One element link target on the wire.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum LinkWire {
+    Threat(WireId<ThreatId>),
+}
+
+impl LinkWire {
+    pub(super) fn into_target(self) -> crate::element::LinkTarget {
+        match self {
+            Self::Threat(t) => crate::element::LinkTarget::Threat(t.0),
+        }
+    }
 }
 
 /// One element attribute value on the wire.

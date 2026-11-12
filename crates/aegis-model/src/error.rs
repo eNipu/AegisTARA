@@ -314,6 +314,50 @@ pub enum ModelError {
         /// How many are set.
         count: usize,
     },
+    /// The element kind may not link to this kind of target.
+    #[error("element {element} cannot link to a {target:?}")]
+    LinkNotAllowed {
+        /// The element.
+        element: ElementId,
+        /// The refused target kind.
+        target: crate::element::TargetKind,
+    },
+    /// The element already links this target.
+    #[error("element {element} already links this target")]
+    DuplicateElementLink {
+        /// The element.
+        element: ElementId,
+    },
+    /// The element has no such link.
+    #[error("element {element} does not link this target")]
+    ElementLinkMissing {
+        /// The element.
+        element: ElementId,
+    },
+    /// The element already has the most links.
+    #[error("element {element} already has {max} links")]
+    TooManyElementLinks {
+        /// The element.
+        element: ElementId,
+        /// The cap.
+        max: usize,
+    },
+    /// The element has links and cannot be removed.
+    #[error("element {element} still has {count} links; unlink them first")]
+    ElementHasLinks {
+        /// The element.
+        element: ElementId,
+        /// How many links it has.
+        count: usize,
+    },
+    /// Elements still link the threat scenario, so it cannot be removed.
+    #[error("threat scenario {threat} is still linked from {elements} elements")]
+    ThreatLinkedFromElements {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// How many elements link it.
+        elements: u32,
+    },
     /// A component with this ID already exists in the project.
     #[error("component {0} already exists in the project")]
     DuplicateComponent(ComponentId),

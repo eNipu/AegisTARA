@@ -6317,7 +6317,9 @@ impl Project {
             Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
-            | Op::SetElementAttribute { .. } => {
+            | Op::SetElementAttribute { .. }
+            | Op::LinkElement { .. }
+            | Op::UnlinkElement { .. } => {
                 self.check_element_op(op).unwrap_or(Ok(()))?;
             }
             Op::SetThreatGoal { threat, goal, .. } => {
@@ -6794,6 +6796,16 @@ impl Project {
                 value,
                 provenance,
             } => self.commit_set_element_attribute(id, key, value, provenance),
+            Op::LinkElement {
+                id,
+                target,
+                provenance,
+            } => self.commit_link_element(id, target, provenance),
+            Op::UnlinkElement {
+                id,
+                target,
+                provenance,
+            } => self.commit_unlink_element(id, target, provenance),
             Op::SetThreatGoal {
                 threat,
                 goal,
@@ -8054,6 +8066,15 @@ impl Project {
         }
         if !t.feasibility_rationale.is_empty() {
             return Err(ModelError::ThreatHasRationale { threat: id });
+        }
+        let elements = self
+            .elements
+            .inbound(crate::element::LinkTarget::Threat(id));
+        if elements > 0 {
+            return Err(ModelError::ThreatLinkedFromElements {
+                threat: id,
+                elements,
+            });
         }
         Ok(())
     }
@@ -11612,6 +11633,8 @@ impl ProjectEvalCache {
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
             | Op::SetElementAttribute { .. }
+            | Op::LinkElement { .. }
+            | Op::UnlinkElement { .. }
             | Op::AddComponent { .. }
             | Op::RenameComponent { .. }
             | Op::SetComponentParent { .. }
