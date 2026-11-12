@@ -85,8 +85,11 @@ and run `up -d --no-build`. Hand the new installers to users.
   trials. Customers get company SSO (decision D10).
 - **One server instance per database.** The account cache assumes it
   (ADR 0035).
-- **`AEGIS_DB_TLS=encrypt` does not check the database certificate.** Use
-  `verify` when the database has a real certificate.
+- **`AEGIS_DB_TLS` is `off` by default**, for a database on the same host or
+  a private network. `encrypt` and `verify` both encrypt the connection and
+  check the database certificate and host name against the operating system
+  trust store, or against `AEGIS_DB_CA_FILE` for a private certificate
+  authority.
 
 ## Event log size
 
