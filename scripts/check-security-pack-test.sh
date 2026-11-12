@@ -26,7 +26,9 @@ Text.
 |---|---|
 | DF-01 | $3 |
 
-## $2.2 Sources
+## $2.2 Second $3
+
+## $2.3 Sources
 
 - \`src.txt\`
 EOT
@@ -68,10 +70,10 @@ broken() {
 }
 
 expect "good pack" 0 "$good"
-broken "ja section removed" "sed -i.bak '/^## 1.2 /,\$d' ja/01-architecture-and-data-flow.md && rm -f ja/*.bak"
+broken "ja section removed" "sed -i.bak -e '/^## 1.2 /,/^## 1.3 /{' -e '/^## 1.3 /!d' -e '}' -e 's/^## 1.3 /## 1.2 /' ja/01-architecture-and-data-flow.md && rm -f ja/*.bak"
 broken "ja row ID removed" "sed -i.bak 's/DF-01/none/' ja/01-architecture-and-data-flow.md && rm -f ja/*.bak"
 broken "missing source path" "sed -i.bak 's/src.txt/gone.txt/' en/02-cryptography.md && rm -f en/*.bak"
-broken "heading gap" "sed -i.bak 's/^## 1.2 /## 1.3 /' en/01-architecture-and-data-flow.md && rm -f en/*.bak"
+broken "heading gap" "sed -i.bak 's/^## 1.2 /## 1.3 /' en/01-architecture-and-data-flow.md ja/01-architecture-and-data-flow.md && rm -f en/*.bak ja/*.bak"
 broken "extra file" "echo '# 7. Extra' >en/07-extra.md"
 broken "marker word" "echo 'TODO later' >>en/02-cryptography.md"
 broken "untranslated ja" "cp en/02-cryptography.md ja/02-cryptography.md"
