@@ -70,12 +70,11 @@ Pass `model` on every spawn; it overrides the agent file.
 
 | Agent | Slice `tier` or `risk` | Model |
 |---|---|---|
-| planner | any | opus |
-| builder | `small` | haiku |
-| builder | `standard` | sonnet |
+| planner | any | fable |
+| builder | `small` or `standard` | sonnet |
 | builder | `hard` | opus |
-| reviewer | `risk: normal` | sonnet; opus when the builder was sonnet and the slice is `hard` |
-| reviewer | `risk: high` | opus |
+| reviewer | `risk: normal` | opus |
+| reviewer | `risk: high` | fable |
 
 - A builder that fails the gate twice on `small` or `standard` is not retried on a bigger
   model automatically. Stop and tell the owner; they may say `/factory rework <slice> use opus`.
