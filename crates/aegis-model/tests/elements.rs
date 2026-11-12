@@ -590,3 +590,212 @@ fn op_log_refuses_a_missing_value_and_an_unknown_value_type() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Links (205d).
+// ---------------------------------------------------------------------------
+
+use aegis_model::{LinkTarget, ThreatId};
+
+/// A project with `n` threat scenarios (`threat_id(1000 + i)`) on one asset.
+fn project_with_threats(n: u64) -> (Arc<Methodology>, Project) {
+    let (m, mut p) = project();
+    let category = m.impact_categories().next().expect("category");
+    let level = m.levels(category).next().expect("level");
+    let asset = common::asset_id(1);
+    let damage = common::damage_id(2);
+    p.apply(Op::AddAsset {
+        id: asset,
+        name: "ECU".into(),
+        properties: m.all_properties(),
+        provenance: who(),
+    })
+    .expect("asset");
+    p.apply(Op::AddDamageScenario {
+        id: damage,
+        name: "Harm".into(),
+        impacts: vec![(category, level)],
+        provenance: who(),
+    })
+    .expect("damage");
+    for i in 0..n {
+        p.apply(Op::AddThreatScenario {
+            id: th(i),
+            name: "Threat".into(),
+            asset,
+            category: m.threat_categories().next().expect("threat category"),
+            catalog_refs: vec![],
+            damages: vec![damage],
+            provenance: who(),
+        })
+        .expect("threat");
+    }
+    (m, p)
+}
+
+fn th(i: u64) -> ThreatId {
+    common::threat_id(1000 + i)
+}
+
+fn link(n: u64, i: u64) -> Op {
+    Op::LinkElement {
+        id: common::element_id(n),
+        target: LinkTarget::Threat(th(i)),
+        provenance: who(),
+    }
+}
+
+fn unlink(n: u64, i: u64) -> Op {
+    Op::UnlinkElement {
+        id: common::element_id(n),
+        target: LinkTarget::Threat(th(i)),
+        provenance: who(),
+    }
+}
+
+#[test]
+fn link_and_unlink_round_trip() {
+    let (_, mut p) = project_with_threats(3);
+    p.apply(add(1, "First")).expect("add");
+    p.apply(add(2, "Second")).expect("add");
+    // Link out of order: the list stays sorted. Threat 0 is linked by both (N:M).
+    let steps = [link(1, 2), link(1, 0), link(2, 0)];
+    for op in steps {
+        let before = p.clone();
+        let inverse = p.apply(op.clone()).expect("apply");
+        let after = p.clone();
+        let again = p.apply(inverse.clone()).expect("inverse");
+        assert_eq!(p, before, "{op:?} then {inverse:?}");
+        assert_eq!(again, op);
+        p.apply(again).expect("redo");
+        assert_eq!(p, after);
+    }
+    let links = p.element(common::element_id(1)).expect("e1").links();
+    assert_eq!(links, [th(0), th(2)].map(LinkTarget::Threat));
+    assert!(links.windows(2).all(|w| w[0] < w[1]));
+    let links = p.element(common::element_id(2)).expect("e2").links();
+    assert_eq!(links, [LinkTarget::Threat(th(0))]);
+    // Unlink round trips too.
+    let before = p.clone();
+    let inverse = p.apply(unlink(1, 0)).expect("unlink");
+    assert!(matches!(inverse, Op::LinkElement { .. }));
+    p.apply(inverse).expect("relink");
+    assert_eq!(p, before);
+}
+
+#[test]
+fn link_refusals() {
+    let (_, mut p) = project_with_threats(1);
+    p.apply(add(1, "First")).expect("add");
+    assert_eq!(
+        refusal(&mut p, link(9, 0)),
+        ModelError::UnknownElement(common::element_id(9))
+    );
+    assert_eq!(
+        refusal(&mut p, unlink(9, 0)),
+        ModelError::UnknownElement(common::element_id(9))
+    );
+    assert_eq!(
+        refusal(&mut p, link(1, 5)),
+        ModelError::UnknownThreatScenario(th(5))
+    );
+    assert_eq!(
+        refusal(&mut p, unlink(1, 0)),
+        ModelError::ElementLinkMissing {
+            element: common::element_id(1)
+        }
+    );
+    p.apply(link(1, 0)).expect("link");
+    assert_eq!(
+        refusal(&mut p, link(1, 0)),
+        ModelError::DuplicateElementLink {
+            element: common::element_id(1)
+        }
+    );
+}
+
+#[test]
+fn links_are_capped() {
+    let (_, mut p) = project_with_threats(257);
+    p.apply(add(1, "Many")).expect("add");
+    for i in 0..256 {
+        p.apply(link(1, i)).expect("link within the cap");
+    }
+    assert_eq!(
+        refusal(&mut p, link(1, 256)),
+        ModelError::TooManyElementLinks {
+            element: common::element_id(1),
+            max: 256
+        }
+    );
+}
+
+#[test]
+fn remove_is_refused_while_links_exist() {
+    let (_, mut p) = project_with_threats(1);
+    p.apply(add(1, "First")).expect("add");
+    p.apply(link(1, 0)).expect("link");
+    let remove = Op::RemoveElement {
+        id: common::element_id(1),
+    };
+    assert_eq!(
+        refusal(&mut p, remove.clone()),
+        ModelError::ElementHasLinks {
+            element: common::element_id(1),
+            count: 1
+        }
+    );
+    p.apply(unlink(1, 0)).expect("unlink");
+    p.apply(remove).expect("remove");
+    assert_eq!(p.element_count(MU), 0);
+}
+
+#[test]
+fn threat_cannot_be_removed_while_linked() {
+    let (_, mut p) = project_with_threats(1);
+    p.apply(add(1, "First")).expect("add");
+    p.apply(add(2, "Second")).expect("add");
+    p.apply(link(1, 0)).expect("link");
+    p.apply(link(2, 0)).expect("link");
+    let remove = Op::RemoveThreatScenario { id: th(0) };
+    assert_eq!(
+        refusal(&mut p, remove.clone()),
+        ModelError::ThreatLinkedFromElements {
+            threat: th(0),
+            elements: 2
+        }
+    );
+    p.apply(unlink(1, 0)).expect("unlink");
+    assert_eq!(
+        refusal(&mut p, remove.clone()),
+        ModelError::ThreatLinkedFromElements {
+            threat: th(0),
+            elements: 1
+        }
+    );
+    p.apply(unlink(2, 0)).expect("unlink");
+    let before = p.clone();
+    let inverse = p.apply(remove).expect("remove");
+    assert!(p.threat_scenario_idx(&th(0)).is_none());
+    p.apply(inverse).expect("restore");
+    assert_eq!(p, before);
+}
+
+#[test]
+fn link_ops_round_trip_through_the_op_log() {
+    let m = common::builtin();
+    let ops = vec![link(1, 0), unlink(1, 0)];
+    let bytes = common::write_log(&m, &ops);
+    let text = String::from_utf8(bytes.clone()).expect("utf8");
+    assert!(text.contains(r#""op":"link_element""#), "{text}");
+    assert!(text.contains(r#""op":"unlink_element""#), "{text}");
+    assert!(
+        text.contains(&format!(r#""target":{{"threat":"{}"}}"#, th(0))),
+        "{text}"
+    );
+    let read: Vec<Op> = common::read_log(&m, &bytes)
+        .into_iter()
+        .map(|r| r.op)
+        .collect();
+    assert_eq!(read, ops);
+}

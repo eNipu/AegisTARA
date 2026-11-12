@@ -208,7 +208,7 @@ impl ElementKind {
 }
 
 /// An element of a generic kind: its kind, name, provenance and extra
-/// attributes (links come in 205d).
+/// attributes and links.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Element {
     kind: ElementKind,
@@ -216,6 +216,8 @@ pub struct Element {
     provenance: Provenance,
     /// Sorted by key, keys unique.
     attributes: Vec<(Arc<str>, AttrValue)>,
+    /// Sorted, unique.
+    links: Vec<LinkTarget>,
 }
 
 impl Element {
@@ -243,6 +245,12 @@ impl Element {
         &self.attributes
     }
 
+    /// The link targets, sorted. Time O(1).
+    #[must_use]
+    pub fn links(&self) -> &[LinkTarget] {
+        &self.links
+    }
+
     /// The value of one attribute. Time O(log a).
     #[must_use]
     pub fn attribute(&self, key: &str) -> Option<&AttrValue> {
@@ -261,6 +269,8 @@ pub(crate) struct ElementStore {
     /// Every live element.
     #[allow(clippy::zero_sized_map_values)] // one kind today; more rows add variants
     kind_of: BTreeMap<ElementId, ElementKind>,
+    /// How many elements link each target; derived, no zero entries.
+    inbound: BTreeMap<LinkTarget, u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -289,6 +299,25 @@ impl ElementStore {
     pub(crate) fn visual_num(&self, id: ElementId) -> Option<u32> {
         let kind = self.kind_of.get(&id)?;
         self.kinds.get(kind)?.live.get(&id).map(|(n, _)| *n)
+    }
+
+    /// How many elements link `target`. Time O(log n).
+    pub(crate) fn inbound(&self, target: LinkTarget) -> u32 {
+        self.inbound.get(&target).copied().unwrap_or(0)
+    }
+
+    fn inbound_add(&mut self, target: LinkTarget) {
+        let n = self.inbound.entry(target).or_insert(0);
+        *n = n.saturating_add(1);
+    }
+
+    fn inbound_sub(&mut self, target: LinkTarget) {
+        if let Some(n) = self.inbound.get_mut(&target) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.inbound.remove(&target);
+            }
+        }
     }
 
     /// Live elements of `kind`. Time O(1).
@@ -439,14 +468,52 @@ impl Project {
                 value,
                 provenance,
             } => self.check_set_element_attribute(*id, key, value.as_ref(), provenance),
+            Op::LinkElement { id, target, .. } => self.check_link_element(*id, *target),
+            Op::UnlinkElement { id, target, .. } => self.live_element(*id).and_then(|e| {
+                if e.links.binary_search(target).is_ok() {
+                    Ok(())
+                } else {
+                    Err(ModelError::ElementLinkMissing { element: *id })
+                }
+            }),
             _ => return None,
         })
     }
 
     fn check_remove_element(&self, id: ElementId) -> Result<(), ModelError> {
-        let count = self.live_element(id)?.attributes.len();
+        let e = self.live_element(id)?;
+        let count = e.attributes.len();
         if count > 0 {
             return Err(ModelError::ElementHasAttributes { element: id, count });
+        }
+        let count = e.links.len();
+        if count > 0 {
+            return Err(ModelError::ElementHasLinks { element: id, count });
+        }
+        Ok(())
+    }
+
+    fn check_link_element(&self, id: ElementId, target: LinkTarget) -> Result<(), ModelError> {
+        let e = self.live_element(id)?;
+        if !e.kind.allows(target.kind()) {
+            return Err(ModelError::LinkNotAllowed {
+                element: id,
+                target: target.kind(),
+            });
+        }
+        match target {
+            LinkTarget::Threat(t) => {
+                if self.threat_scenario_idx(&t).is_none() {
+                    return Err(ModelError::UnknownThreatScenario(t));
+                }
+            }
+        }
+        if e.links.binary_search(&target).is_ok() {
+            return Err(ModelError::DuplicateElementLink { element: id });
+        }
+        let max = e.kind.def().max_links;
+        if e.links.len() >= max {
+            return Err(ModelError::TooManyElementLinks { element: id, max });
         }
         Ok(())
     }
@@ -512,6 +579,7 @@ impl Project {
                 name,
                 provenance,
                 attributes: Vec::new(),
+                links: Vec::new(),
             },
         );
         Op::RemoveElement { id }
@@ -571,6 +639,60 @@ impl Project {
         })
     }
 
+    /// Commits `LinkElement` and returns its inverse.
+    pub(crate) fn commit_link_element(
+        &mut self,
+        id: ElementId,
+        target: LinkTarget,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let e = self
+            .elements
+            .get_mut(id)
+            .ok_or(ModelError::UnknownElement(id))?;
+        if let Err(i) = e.links.binary_search(&target) {
+            e.links.insert(i, target);
+            self.elements.inbound_add(target);
+        }
+        let e = self
+            .elements
+            .get_mut(id)
+            .ok_or(ModelError::UnknownElement(id))?;
+        let provenance = std::mem::replace(&mut e.provenance, provenance);
+        Ok(Op::UnlinkElement {
+            id,
+            target,
+            provenance,
+        })
+    }
+
+    /// Commits `UnlinkElement` and returns its inverse.
+    pub(crate) fn commit_unlink_element(
+        &mut self,
+        id: ElementId,
+        target: LinkTarget,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let e = self
+            .elements
+            .get_mut(id)
+            .ok_or(ModelError::UnknownElement(id))?;
+        if let Ok(i) = e.links.binary_search(&target) {
+            e.links.remove(i);
+            self.elements.inbound_sub(target);
+        }
+        let e = self
+            .elements
+            .get_mut(id)
+            .ok_or(ModelError::UnknownElement(id))?;
+        let provenance = std::mem::replace(&mut e.provenance, provenance);
+        Ok(Op::LinkElement {
+            id,
+            target,
+            provenance,
+        })
+    }
+
     /// Commits `RemoveElement` and returns its inverse.
     pub(crate) fn commit_remove_element(&mut self, id: ElementId) -> Result<Op, ModelError> {
         let e = self
@@ -614,6 +736,14 @@ pub(crate) fn is_attribute_value(v: &AttrValue) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allows_reads_the_kind_table() {
+        // LinkNotAllowed cannot be reached through ops while the only kind
+        // allows every target kind, so the table lookup is checked here.
+        assert!(ElementKind::MisuseCase.allows(TargetKind::Threat));
+        assert_eq!(ElementKind::MisuseCase.def().targets, &[TargetKind::Threat]);
+    }
 
     #[test]
     fn key_syntax() {

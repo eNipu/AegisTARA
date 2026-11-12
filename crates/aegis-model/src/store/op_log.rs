@@ -524,6 +524,33 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    LinkElement {
+        id: Text<ElementId>,
+        target: LinkView,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkElement {
+        id: Text<ElementId>,
+        target: LinkView,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+}
+
+/// One element link target as written to the op log.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum LinkView {
+    Threat(Text<ThreatId>),
+}
+
+impl LinkView {
+    pub(super) fn of(t: crate::element::LinkTarget) -> LinkView {
+        match t {
+            crate::element::LinkTarget::Threat(id) => LinkView::Threat(Text(id)),
+        }
+    }
 }
 
 /// One element attribute value as written to the op log.
@@ -1311,6 +1338,24 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             value: value.as_ref().map(AttrView::of),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::LinkElement {
+            id,
+            target,
+            provenance,
+        } => OpView::LinkElement {
+            id: Text(*id),
+            target: LinkView::of(*target),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkElement {
+            id,
+            target,
+            provenance,
+        } => OpView::UnlinkElement {
+            id: Text(*id),
+            target: LinkView::of(*target),
+            provenance: ProvenanceView::of(provenance),
+        },
     }
 }
 
@@ -2027,6 +2072,24 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             id: id.0,
             key: key.0,
             value: value.map(wire::AttrWire::into_value),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::LinkElement {
+            id,
+            target,
+            provenance,
+        } => Op::LinkElement {
+            id: id.0,
+            target: target.into_target(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkElement {
+            id,
+            target,
+            provenance,
+        } => Op::UnlinkElement {
+            id: id.0,
+            target: target.into_target(),
             provenance: wire::unwrap_provenance(provenance),
         },
     })

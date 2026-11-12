@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, AttrValue, ComponentId, ControlId, DataFlowId, ElementId, ElementKind,
-    ElementRef, GateKind, InterfaceId, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
-    TrustBoundaryId,
+    AssetId, AttackTree, AttrValue, ComponentId, ControlId, DamageId, DataFlowId, ElementId,
+    ElementKind, ElementRef, GateKind, InterfaceId, LinkTarget, Methodology, Node, NodeId, Op,
+    Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -369,6 +369,54 @@ fn walk_elements(seen: &mut BTreeSet<String>) {
             id,
             key: "cal".into(),
             value: None,
+            provenance: who(),
+        },
+    );
+    let (asset, damage, threat) = (AssetId::new_v7(), DamageId::new_v7(), ThreatId::new_v7());
+    let m = Arc::clone(ws.project().methodology());
+    let category = m.impact_categories().next().expect("category");
+    let level = m.levels(category).next().expect("level");
+    for op in [
+        Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        },
+        Op::AddDamageScenario {
+            id: damage,
+            name: "Harm".into(),
+            impacts: vec![(category, level)],
+            provenance: who(),
+        },
+        Op::AddThreatScenario {
+            id: threat,
+            name: "Spoof".into(),
+            asset,
+            category: m.threat_categories().next().expect("threat category"),
+            catalog_refs: vec![],
+            damages: vec![damage],
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    let target = LinkTarget::Threat(threat);
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::LinkElement {
+            id,
+            target,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::UnlinkElement {
+            id,
+            target,
             provenance: who(),
         },
     );
