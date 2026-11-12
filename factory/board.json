@@ -1385,6 +1385,84 @@
       ],
       "decision": null,
       "updated": "2026-11-12T04:23:06Z"
+    },
+    {
+      "id": "102-product-security-pack",
+      "title": "Product security pack",
+      "branch": "factory/102-product-security-pack",
+      "stage": "merged",
+      "slice": "102f",
+      "base": "b138e57debd0da2264b6916033058cbc9d6c7ec9",
+      "reviews": {
+        "slice": "102f",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "102a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 2,
+          "review_tries": 3,
+          "lines": 198
+        },
+        {
+          "slice": "102b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 10
+        },
+        {
+          "slice": "102c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 2,
+          "review_tries": 3,
+          "lines": 0
+        },
+        {
+          "slice": "102d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 0
+        },
+        {
+          "slice": "102e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 0
+        },
+        {
+          "slice": "102f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 5
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-12T19:06:34Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
