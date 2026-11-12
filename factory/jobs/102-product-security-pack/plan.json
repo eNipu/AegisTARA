@@ -1,0 +1,131 @@
+{
+  "job": "102-product-security-pack",
+  "slices": [
+    {
+      "id": "102a",
+      "title": "Pack check script and the architecture and data flow chapter",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "scripts/check-security-pack.sh",
+        "scripts/check-security-pack-test.sh",
+        "docs/security-pack/README.md",
+        "docs/security-pack/en/01-architecture-and-data-flow.md"
+      ],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-license"
+      ],
+      "checks": [
+        "sh scripts/check-security-pack.sh",
+        "sh scripts/check-security-pack-test.sh"
+      ]
+    },
+    {
+      "id": "102b",
+      "title": "Cryptography and authentication chapters, stale database TLS text fixed",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "docs/security-pack/en/02-cryptography.md",
+        "docs/security-pack/en/03-authentication-and-access.md",
+        "docs/deployment.md",
+        "crates/aegis-server/src/store/postgres.rs"
+      ],
+      "max_lines": 20,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-server"
+      ],
+      "checks": [
+        "sh scripts/check-security-pack.sh",
+        "sh -c \"! grep -n 'does not check the database certificate' docs/deployment.md\"",
+        "sh -c \"! grep -n 'without checking the certificate' crates/aegis-server/src/store/postgres.rs\""
+      ]
+    },
+    {
+      "id": "102c",
+      "title": "Logging and retention chapter, personal data chapter for GDPR and APPI",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "docs/security-pack/en/04-logging-and-retention.md",
+        "docs/security-pack/en/05-personal-data.md",
+        "docs/security-pack/en/03-authentication-and-access.md"
+      ],
+      "max_lines": 10,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-license"
+      ],
+      "checks": [
+        "sh scripts/check-security-pack.sh"
+      ]
+    },
+    {
+      "id": "102d",
+      "title": "Answers to a typical vendor security questionnaire",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "docs/security-pack/en/06-security-questionnaire.md"
+      ],
+      "max_lines": 10,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-license"
+      ],
+      "checks": [
+        "sh scripts/check-security-pack.sh",
+        "sh -c \"test $(grep -c '^| Q-' docs/security-pack/en/06-security-questionnaire.md) -ge 40\""
+      ]
+    },
+    {
+      "id": "102e",
+      "title": "Japanese chapters 1 to 3",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "docs/security-pack/ja/01-architecture-and-data-flow.md",
+        "docs/security-pack/ja/02-cryptography.md",
+        "docs/security-pack/ja/03-authentication-and-access.md"
+      ],
+      "max_lines": 10,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-license"
+      ],
+      "checks": [
+        "sh scripts/check-security-pack.sh"
+      ]
+    },
+    {
+      "id": "102f",
+      "title": "Japanese chapters 4 to 6, CI step, ADR 0069 and doc links",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "docs/security-pack/ja/04-logging-and-retention.md",
+        "docs/security-pack/ja/05-personal-data.md",
+        "docs/security-pack/ja/06-security-questionnaire.md",
+        "docs/security-pack/README.md",
+        "docs/adr/0069-product-security-pack.md",
+        "docs/release-checklist.md",
+        "docs/status-and-roadmap.md",
+        "docs/requirements.md",
+        "README.md",
+        ".github/workflows/ci.yml"
+      ],
+      "max_lines": 20,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "sh scripts/check-security-pack.sh --complete",
+        "sh scripts/check-security-pack-test.sh",
+        "sh -c \"test $(grep -c '^| Q-' docs/security-pack/ja/06-security-questionnaire.md) -ge 40\"",
+        "sh -c \"test $(grep -c 'run: scripts/check-security-pack' .github/workflows/ci.yml) -eq 2\""
+      ]
+    }
+  ]
+}
