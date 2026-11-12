@@ -9,8 +9,9 @@ with who made it and when. Both are chained with SHA-256, so a change made
 behind the server's back can be found. The event log is trimmed by age and by
 size; the operation history is never trimmed. The server also writes an
 ordinary process log to standard output, which the customer's platform
-collects. The server sends no log anywhere by itself. The log never holds a
-password or a session token.
+collects. The server sends no log anywhere by itself. The event log never
+stores the password field or a session token. A failed login records the typed
+user name as typed (4.3).
 
 ## 4.2 The logs
 
@@ -38,8 +39,10 @@ What the process log holds, as the code stands:
 Each event has five fields: the time, the actor, the kind, the target and a
 short detail. The actor is the user name or, for company login, the subject
 from the identity provider. For a failed login the actor is the user name that
-was typed. The target is a user name, a project ID, or empty. The log never
-holds a password or a token. Text fields have control characters removed and
+was typed. The target is a user name, a project ID, or empty. The event log
+never stores the password field or a token. For a failed login, the text typed
+as the user name is recorded as typed. A password typed into the name box by
+mistake would be kept until the retention removes it. Text fields have control characters removed and
 are cut to 256 characters.
 
 | Kind as stored | Meaning |
