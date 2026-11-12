@@ -125,6 +125,11 @@ jobs:
       # The offline bundle for air-gapped sites (job 100), checked as a customer would.
       - name: scripts/offline-bundle-test.sh
         run: scripts/offline-bundle-test.sh
+      # The product security pack (job 102): English and Japanese must not drift apart.
+      - name: scripts/check-security-pack.sh
+        run: scripts/check-security-pack.sh --complete
+      - name: scripts/check-security-pack-test.sh
+        run: scripts/check-security-pack-test.sh
       # Only master writes the cache, and only after a green run. Branches and
       # pull requests restore the master entry but never save their own, so
       # they cannot evict or poison it. An exact key hit is not saved again
