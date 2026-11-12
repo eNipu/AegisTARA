@@ -83,9 +83,9 @@ to most capable.
 - No project role grants server administration. A server administrator (from
   the company login claim, or the password administrator flag) has every
   permission in every project, without a membership.
-- Membership is per project, for a user or for a group from the identity
-  provider. A user holds the most capable role they get from their own entry
-  and their groups.
+- Membership is per project, by user name. Membership for a group from the
+  identity provider is `Planned`: company login fills no groups in this
+  release, so a group entry matches no one.
 - The person who creates a project becomes its owner. A project always keeps
   one owner: the last owner cannot be removed or demoted.
 - The last enabled administrator cannot be removed, disabled or demoted.
@@ -116,8 +116,7 @@ a lock.
 - Roles are built in and cannot be edited. The `methodology_owner` role
   currently grants read access only.
 - The lock lifetime is a server setting, not a per-project one.
-- `Customer` runs the identity provider, its MFA rules and its group
-  claims.
+- `Customer` runs the identity provider and its MFA rules.
 
 ## 3.9 Sources
 
