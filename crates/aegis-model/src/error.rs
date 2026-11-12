@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::control::RiskTreatment;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    NodeIdx, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    NodeId, NodeIdx, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -55,6 +55,8 @@ pub enum EntityKind {
     CybersecurityGoal,
     /// A cybersecurity claim ([`CybersecurityClaim`](crate::CybersecurityClaim)).
     CybersecurityClaim,
+    /// An element of a generic kind ([`Element`](crate::Element)).
+    Element,
 }
 
 impl EntityKind {
@@ -84,6 +86,7 @@ impl EntityKind {
             Self::SecurityControl => "security control",
             Self::CybersecurityGoal => "cybersecurity goal",
             Self::CybersecurityClaim => "cybersecurity claim",
+            Self::Element => "element",
         }
     }
 }
@@ -280,6 +283,81 @@ pub enum ModelError {
     /// A cybersecurity claim with this ID already exists in the project.
     #[error("cybersecurity claim {0} already exists in the project")]
     DuplicateCybersecurityClaim(ClaimId),
+    /// An element with this ID already exists in the project.
+    #[error("element {0} already exists in the project")]
+    DuplicateElement(ElementId),
+    /// An element attribute key is not in pack key syntax.
+    #[error("an attribute key of element {element} is not valid")]
+    InvalidAttributeKey {
+        /// The element.
+        element: ElementId,
+    },
+    /// An element attribute value is not valid for its type.
+    #[error("an attribute value of element {element} is not valid")]
+    InvalidAttributeValue {
+        /// The element.
+        element: ElementId,
+    },
+    /// The element already has the most attributes.
+    #[error("element {element} already has {max} attributes")]
+    TooManyAttributes {
+        /// The element.
+        element: ElementId,
+        /// The cap.
+        max: usize,
+    },
+    /// The element has attributes and cannot be removed.
+    #[error("element {element} still has {count} attributes; clear them first")]
+    ElementHasAttributes {
+        /// The element.
+        element: ElementId,
+        /// How many are set.
+        count: usize,
+    },
+    /// The element kind may not link to this kind of target.
+    #[error("element {element} cannot link to a {target:?}")]
+    LinkNotAllowed {
+        /// The element.
+        element: ElementId,
+        /// The refused target kind.
+        target: crate::element::TargetKind,
+    },
+    /// The element already links this target.
+    #[error("element {element} already links this target")]
+    DuplicateElementLink {
+        /// The element.
+        element: ElementId,
+    },
+    /// The element has no such link.
+    #[error("element {element} does not link this target")]
+    ElementLinkMissing {
+        /// The element.
+        element: ElementId,
+    },
+    /// The element already has the most links.
+    #[error("element {element} already has {max} links")]
+    TooManyElementLinks {
+        /// The element.
+        element: ElementId,
+        /// The cap.
+        max: usize,
+    },
+    /// The element has links and cannot be removed.
+    #[error("element {element} still has {count} links; unlink them first")]
+    ElementHasLinks {
+        /// The element.
+        element: ElementId,
+        /// How many links it has.
+        count: usize,
+    },
+    /// Elements still link the threat scenario, so it cannot be removed.
+    #[error("threat scenario {threat} is still linked from {elements} elements")]
+    ThreatLinkedFromElements {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// How many elements link it.
+        elements: u32,
+    },
     /// A component with this ID already exists in the project.
     #[error("component {0} already exists in the project")]
     DuplicateComponent(ComponentId),
@@ -313,6 +391,9 @@ pub enum ModelError {
     /// No cybersecurity claim with this ID is in the project.
     #[error("cybersecurity claim {0} is not in the project")]
     UnknownCybersecurityClaim(ClaimId),
+    /// No element with this ID is in the project.
+    #[error("element {0} is not in the project")]
+    UnknownElement(ElementId),
     /// No component with this ID is in the project.
     #[error("component {0} is not in the project")]
     UnknownComponent(ComponentId),

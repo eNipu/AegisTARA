@@ -152,15 +152,15 @@ pub const MAX_PACK_FILE_BYTES: u64 = 4 * 1024 * 1024;
 pub const MAX_LABEL_BYTES: usize = 4 * MAX_LABEL_CHARS;
 
 /// Largest number of files [`Project::from_workspace_files`](crate::Project::from_workspace_files)
-/// reads: 10,010. That is the ten fixed files plus one file per attack
-/// tree for up to 10,000 trees. The model has no cap on trees of its own;
+/// reads: 10,011. That is the ten fixed files, one file per element kind,
+/// and one file per attack tree for up to 10,000 trees. The model has no cap on trees of its own;
 /// the 64 MiB total ([`MAX_PROJECT_FILE_BYTES`]) is the real bound, and a
 /// project with 2,000 threats has about 2,000 trees.
 ///
 /// ```
-/// assert_eq!(aegis_model::MAX_WORKSPACE_FILES, 10 + 10_000);
+/// assert_eq!(aegis_model::MAX_WORKSPACE_FILES, 10 + 1 + 10_000);
 /// ```
-pub const MAX_WORKSPACE_FILES: usize = 10 + 10_000;
+pub const MAX_WORKSPACE_FILES: usize = 10 + crate::element::KINDS.len() + 10_000;
 
 /// Largest single workspace file, in bytes: 16 MiB. The biggest file in a
 /// typical project (the threats file, 2,000 threats) is about 1 MB; the
@@ -379,6 +379,24 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A snapshot lists more than
+    /// [`MAX_ELEMENTS_PER_KIND`](crate::MAX_ELEMENTS_PER_KIND) elements of one kind.
+    Elements {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// An element has more than
+    /// [`MAX_ELEMENT_ATTRIBUTES`](crate::MAX_ELEMENT_ATTRIBUTES) attributes.
+    ElementAttributes {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// An element has more than
+    /// [`MAX_ELEMENT_LINKS`](crate::MAX_ELEMENT_LINKS) links.
+    ElementLinks {
+        /// The cap, in items.
+        max: usize,
+    },
     /// More than [`MAX_WORKSPACE_FILES`] workspace files.
     WorkspaceFiles {
         /// The cap, in files.
@@ -482,6 +500,15 @@ impl Limit {
     pub(crate) const PACK_TRANSLATIONS: Limit = Limit::PackTranslations {
         max: MAX_PACK_TRANSLATIONS,
     };
+    pub(crate) const ELEMENTS: Limit = Limit::Elements {
+        max: crate::element::MAX_ELEMENTS_PER_KIND,
+    };
+    pub(crate) const ELEMENT_ATTRIBUTES: Limit = Limit::ElementAttributes {
+        max: crate::element::MAX_ELEMENT_ATTRIBUTES,
+    };
+    pub(crate) const ELEMENT_LINKS: Limit = Limit::ElementLinks {
+        max: crate::element::MAX_ELEMENT_LINKS,
+    };
     pub(crate) const WORKSPACE_FILES: Limit = Limit::WorkspaceFiles {
         max: MAX_WORKSPACE_FILES,
     };
@@ -556,6 +583,15 @@ impl fmt::Display for Limit {
             Limit::PackTranslations { max } => {
                 write!(f, "more than {max} pack translations")
             }
+            Limit::Elements { max } => {
+                write!(f, "more than {max} elements of one kind")
+            }
+            Limit::ElementAttributes { max } => {
+                write!(f, "more than {max} element attributes")
+            }
+            Limit::ElementLinks { max } => {
+                write!(f, "more than {max} element links")
+            }
             Limit::WorkspaceFiles { max } => write!(f, "more than {max} workspace files"),
             Limit::WorkspaceFileBytes { max } => {
                 write!(f, "workspace file is larger than {max} bytes")
@@ -595,6 +631,8 @@ pub enum VocabKind {
     InterfaceKind,
     /// An attack step attack type.
     AttackType,
+    /// A generic element kind.
+    ElementKind,
 }
 
 impl fmt::Display for VocabKind {
@@ -610,6 +648,7 @@ impl fmt::Display for VocabKind {
             VocabKind::CatalogScheme => "catalog scheme",
             VocabKind::InterfaceKind => "interface kind",
             VocabKind::AttackType => "attack type",
+            VocabKind::ElementKind => "element kind",
         })
     }
 }

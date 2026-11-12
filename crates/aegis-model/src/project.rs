@@ -610,6 +610,8 @@ pub struct Project {
     review_marks: std::collections::BTreeSet<(TreeId, NodeId)>,
     /// The languages descriptions are translated into, and who set them.
     languages: (Arc<[Arc<str>]>, Provenance),
+    /// Elements of the generic kinds (job 205).
+    pub(crate) elements: crate::element::ElementStore,
 }
 
 /// Adds `ids` to the `modified` list of `diff`, except the ones that were
@@ -625,7 +627,7 @@ fn merge_modified<I: Copy + Ord>(diff: &mut EntityDiff<I>, ids: Vec<I>) {
 }
 
 /// Checks an entity name. Time O(name length).
-fn check_name(kind: EntityKind, name: &str) -> Result<(), ModelError> {
+pub(crate) fn check_name(kind: EntityKind, name: &str) -> Result<(), ModelError> {
     if name.trim().is_empty() {
         return Err(ModelError::EmptyName { kind });
     }
@@ -639,7 +641,7 @@ fn check_name(kind: EntityKind, name: &str) -> Result<(), ModelError> {
 }
 
 /// Checks operation provenance. Time O(actor length).
-fn check_provenance(provenance: &Provenance) -> Result<(), ModelError> {
+pub(crate) fn check_provenance(provenance: &Provenance) -> Result<(), ModelError> {
     let actor = provenance.actor();
     if !actor.is_empty() {
         if actor.trim().is_empty() {
@@ -725,6 +727,7 @@ impl Project {
             description_bytes: 0,
             review_marks: std::collections::BTreeSet::new(),
             languages: (Arc::from([]), Provenance::default()),
+            elements: crate::element::ElementStore::default(),
         }
     }
 
@@ -5685,6 +5688,7 @@ impl Project {
             security_controls,
             cybersecurity_goals,
             cybersecurity_claims,
+            elements: self.elements.diff(&other.elements),
             components,
             interfaces,
             data_flows,
@@ -6311,6 +6315,14 @@ impl Project {
                 check_name(EntityKind::CybersecurityClaim, name)?;
             }
             Op::RemoveCybersecurityClaim { id } => return self.check_remove_claim(*id),
+            Op::AddElement { .. }
+            | Op::RenameElement { .. }
+            | Op::RemoveElement { .. }
+            | Op::SetElementAttribute { .. }
+            | Op::LinkElement { .. }
+            | Op::UnlinkElement { .. } => {
+                self.check_element_op(op).unwrap_or(Ok(()))?;
+            }
             Op::SetThreatGoal { threat, goal, .. } => {
                 self.check_set_threat_goal(*threat, *goal)?;
             }
@@ -6767,6 +6779,34 @@ impl Project {
                 provenance,
             } => self.commit_rename_claim(id, name, provenance),
             Op::RemoveCybersecurityClaim { id } => self.commit_remove_claim(id),
+            Op::AddElement {
+                id,
+                kind,
+                name,
+                provenance,
+            } => Ok(self.commit_add_element(id, kind, name, provenance)),
+            Op::RenameElement {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_element(id, name, provenance),
+            Op::RemoveElement { id } => self.commit_remove_element(id),
+            Op::SetElementAttribute {
+                id,
+                key,
+                value,
+                provenance,
+            } => self.commit_set_element_attribute(id, key, value, provenance),
+            Op::LinkElement {
+                id,
+                target,
+                provenance,
+            } => self.commit_link_element(id, target, provenance),
+            Op::UnlinkElement {
+                id,
+                target,
+                provenance,
+            } => self.commit_unlink_element(id, target, provenance),
             Op::SetThreatGoal {
                 threat,
                 goal,
@@ -8027,6 +8067,15 @@ impl Project {
         }
         if !t.feasibility_rationale.is_empty() {
             return Err(ModelError::ThreatHasRationale { threat: id });
+        }
+        let elements = self
+            .elements
+            .inbound(crate::element::LinkTarget::Threat(id));
+        if elements > 0 {
+            return Err(ModelError::ThreatLinkedFromElements {
+                threat: id,
+                elements,
+            });
         }
         Ok(())
     }
@@ -10474,6 +10523,7 @@ impl PartialEq for Project {
             && self.descriptions == other.descriptions
             && self.review_marks == other.review_marks
             && self.languages() == other.languages()
+            && self.elements.same_live(&other.elements)
             && self.assets.len() == other.assets.len()
             && self.damages.len() == other.damages.len()
             && self.threats.len() == other.threats.len()
@@ -11580,6 +11630,12 @@ impl ProjectEvalCache {
             | Op::AddCybersecurityClaim { .. }
             | Op::RenameCybersecurityClaim { .. }
             | Op::RemoveCybersecurityClaim { .. }
+            | Op::AddElement { .. }
+            | Op::RenameElement { .. }
+            | Op::RemoveElement { .. }
+            | Op::SetElementAttribute { .. }
+            | Op::LinkElement { .. }
+            | Op::UnlinkElement { .. }
             | Op::AddComponent { .. }
             | Op::RenameComponent { .. }
             | Op::SetComponentParent { .. }

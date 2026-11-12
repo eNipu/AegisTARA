@@ -11,12 +11,15 @@ use super::wire::{
     ProvenanceView, RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, TargetView,
     Text,
 };
-use super::{Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_NAME_BYTES, MAX_OP_RECORD_BYTES};
+use super::{
+    Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES, MAX_NAME_BYTES,
+    MAX_OP_RECORD_BYTES,
+};
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, NodeId,
-    ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
+    NodeId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
@@ -498,6 +501,76 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    AddElement {
+        id: Text<ElementId>,
+        kind: &'static str,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameElement {
+        id: Text<ElementId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveElement {
+        id: Text<ElementId>,
+    },
+    SetElementAttribute {
+        id: Text<ElementId>,
+        key: &'a str,
+        value: Option<AttrView<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    LinkElement {
+        id: Text<ElementId>,
+        target: LinkView,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkElement {
+        id: Text<ElementId>,
+        target: LinkView,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+}
+
+/// One element link target as written to the op log.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum LinkView {
+    Threat(Text<ThreatId>),
+}
+
+impl LinkView {
+    pub(super) fn of(t: crate::element::LinkTarget) -> LinkView {
+        match t {
+            crate::element::LinkTarget::Threat(id) => LinkView::Threat(Text(id)),
+        }
+    }
+}
+
+/// One element attribute value as written to the op log.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AttrView<'a> {
+    Level(&'a str),
+    Choice(&'a str),
+    Text(&'a str),
+}
+
+impl<'a> AttrView<'a> {
+    pub(super) fn of(v: &'a crate::element::AttrValue) -> AttrView<'a> {
+        use crate::element::AttrValue as V;
+        match v {
+            V::Level(k) => AttrView::Level(k),
+            V::Choice(k) => AttrView::Choice(k),
+            V::Text(t) => AttrView::Text(t),
+        }
+    }
 }
 
 /// Refuses a name, provenance actor, or list the reader would refuse, so
@@ -523,6 +596,15 @@ fn within_caps(op: &Op) -> bool {
         Op::SetProjectLanguages { langs, .. } => langs
             .iter()
             .all(|l| l.len() <= crate::description::MAX_LANG_TAG_BYTES),
+        Op::SetElementAttribute { key, value, .. } => {
+            use crate::element::AttrValue as V;
+            key.len() <= MAX_KEY_BYTES
+                && match value {
+                    None => true,
+                    Some(V::Level(k) | V::Choice(k)) => k.len() <= MAX_KEY_BYTES,
+                    Some(V::Text(t)) => t.len() <= MAX_NAME_BYTES,
+                }
+        }
         Op::AddTreeNode { node, .. } => name_ok(node.label()),
         Op::RenameTreeNode { label, .. } => name_ok(label),
         Op::AddAsset { name, .. }
@@ -535,6 +617,8 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameCybersecurityGoal { name, .. }
         | Op::AddCybersecurityClaim { name, .. }
         | Op::RenameCybersecurityClaim { name, .. }
+        | Op::AddElement { name, .. }
+        | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
         | Op::RenameComponent { name, .. }
         | Op::AddInterface { name, .. }
@@ -1222,6 +1306,56 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             component: component.map(Text),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::AddElement {
+            id,
+            kind,
+            name,
+            provenance,
+        } => OpView::AddElement {
+            id: Text(*id),
+            kind: kind.key(),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameElement {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameElement {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveElement { id } => OpView::RemoveElement { id: Text(*id) },
+        Op::SetElementAttribute {
+            id,
+            key,
+            value,
+            provenance,
+        } => OpView::SetElementAttribute {
+            id: Text(*id),
+            key,
+            value: value.as_ref().map(AttrView::of),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::LinkElement {
+            id,
+            target,
+            provenance,
+        } => OpView::LinkElement {
+            id: Text(*id),
+            target: LinkView::of(*target),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkElement {
+            id,
+            target,
+            provenance,
+        } => OpView::UnlinkElement {
+            id: Text(*id),
+            target: LinkView::of(*target),
+            provenance: ProvenanceView::of(provenance),
+        },
     }
 }
 
@@ -1906,6 +2040,56 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::SetAssetComponent {
             asset: asset.0,
             component: component.map(|c| c.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::AddElement {
+            id,
+            kind,
+            name,
+            provenance,
+        } => Op::AddElement {
+            id: id.0,
+            kind: kind.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameElement {
+            id,
+            name,
+            provenance,
+        } => Op::RenameElement {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveElement { id } => Op::RemoveElement { id: id.0 },
+        OpWire::SetElementAttribute {
+            id,
+            key,
+            value,
+            provenance,
+        } => Op::SetElementAttribute {
+            id: id.0,
+            key: key.0,
+            value: value.map(wire::AttrWire::into_value),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::LinkElement {
+            id,
+            target,
+            provenance,
+        } => Op::LinkElement {
+            id: id.0,
+            target: target.into_target(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkElement {
+            id,
+            target,
+            provenance,
+        } => Op::UnlinkElement {
+            id: id.0,
+            target: target.into_target(),
             provenance: wire::unwrap_provenance(provenance),
         },
     })

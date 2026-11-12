@@ -2,11 +2,12 @@
 //! is undone to exactly the previous project (links, ratings, descriptions,
 //! tree nodes), and redone to exactly the project after it.
 //!
-//! Two walks cover all kinds. The first replays the ops of the model's own "every op" walk-through applies over
+//! Three walks cover all kinds. The first replays the ops of the model's own
 //! "every op" walk-through over the second methodology (`second_every_op`,
 //! 37 kinds: vocabulary, threats, trees, controls, goals); the second walk
-//! below covers the other 28 (item definition, tree nodes, descriptions,
-//! review marks). A new `Op` variant fails this test until a walk covers it.
+//! below covers the next 28 (item definition, tree nodes, descriptions,
+//! review marks); the third covers the generic element ops. A new `Op`
+//! variant fails this test until a walk covers it.
 
 #[path = "../../aegis-model/tests/common/mod.rs"]
 mod common;
@@ -17,8 +18,9 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, ComponentId, ControlId, DataFlowId, ElementRef, GateKind, InterfaceId,
-    Methodology, Node, NodeId, Op, Project, Provenance, TreeId, TrustBoundaryId,
+    AssetId, AttackTree, AttrValue, ComponentId, ControlId, DamageId, DataFlowId, ElementId,
+    ElementKind, ElementRef, GateKind, InterfaceId, LinkTarget, Methodology, Node, NodeId, Op,
+    Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -310,6 +312,117 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
     go(Op::RemoveComponent { id: c1 });
 }
 
+/// The generic element ops, over an empty workspace.
+fn walk_elements(seen: &mut BTreeSet<String>) {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let id = ElementId::new_v7();
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::AddElement {
+            id,
+            kind: ElementKind::MisuseCase,
+            name: "Spoofed key fob".into(),
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::RenameElement {
+            id,
+            name: "Relayed key fob".into(),
+            provenance: who(),
+        },
+    );
+    for value in [
+        Some(AttrValue::Level("cal-2".into())),
+        Some(AttrValue::Text("Note".into())),
+        None,
+    ] {
+        apply_undo_redo(
+            &mut ws,
+            seen,
+            Op::SetElementAttribute {
+                id,
+                key: "cal".into(),
+                value,
+                provenance: who(),
+            },
+        );
+    }
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::SetElementAttribute {
+            id,
+            key: "cal".into(),
+            value: Some(AttrValue::Choice("a".into())),
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::SetElementAttribute {
+            id,
+            key: "cal".into(),
+            value: None,
+            provenance: who(),
+        },
+    );
+    let (asset, damage, threat) = (AssetId::new_v7(), DamageId::new_v7(), ThreatId::new_v7());
+    let m = Arc::clone(ws.project().methodology());
+    let category = m.impact_categories().next().expect("category");
+    let level = m.levels(category).next().expect("level");
+    for op in [
+        Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        },
+        Op::AddDamageScenario {
+            id: damage,
+            name: "Harm".into(),
+            impacts: vec![(category, level)],
+            provenance: who(),
+        },
+        Op::AddThreatScenario {
+            id: threat,
+            name: "Spoof".into(),
+            asset,
+            category: m.threat_categories().next().expect("threat category"),
+            catalog_refs: vec![],
+            damages: vec![damage],
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    let target = LinkTarget::Threat(threat);
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::LinkElement {
+            id,
+            target,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::UnlinkElement {
+            id,
+            target,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(&mut ws, seen, Op::RemoveElement { id });
+}
+
 #[test]
 fn every_op_kind_is_undone_and_redone_exactly() {
     let m = common::second();
@@ -319,6 +432,7 @@ fn every_op_kind_is_undone_and_redone_exactly() {
         apply_undo_redo(&mut ws, &mut seen, op);
     }
     walk_item_definition_trees_and_descriptions(&mut seen);
+    walk_elements(&mut seen);
     assert_eq!(seen, declared_variants(), "an Op variant is not exercised");
 }
 

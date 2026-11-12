@@ -229,6 +229,7 @@ mod control;
 mod damage;
 mod description;
 mod diff;
+mod element;
 mod error;
 mod eval;
 mod id;
@@ -270,6 +271,10 @@ pub use description::{
     MAX_LANG_TAG_BYTES, MAX_NOTES_CHARS, Translation,
 };
 pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
+pub use element::{
+    AttrValue, Element, ElementKind, KINDS, KindDef, LinkTarget, MAX_ATTRIBUTE_TEXT_CHARS,
+    MAX_ELEMENT_ATTRIBUTES, MAX_ELEMENT_LINKS, MAX_ELEMENTS_PER_KIND, TargetKind,
+};
 pub use error::{
     EntityKind, MethodologyError, ModelError, PackError, StoreError, WorkspaceProblem,
 };
@@ -279,9 +284,9 @@ pub use eval::{
 };
 pub use id::{
     AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId, ControlIdx,
-    DamageId, DamageIdx, DataFlowId, DataFlowIdx, GoalId, GoalIdx, InterfaceId, InterfaceIdx,
-    NodeId, NodeIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
-    TrustBoundaryIdx, VisualPrefix, format_visual_id,
+    DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx, InterfaceId,
+    InterfaceIdx, NodeId, NodeIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix, format_visual_id,
 };
 pub use item::{
     Component, DataFlow, Interface, ItemRef, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS,

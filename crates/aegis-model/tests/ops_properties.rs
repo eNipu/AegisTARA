@@ -421,6 +421,9 @@ fn check_diff_pair(
         fwd.cybersecurity_claims().modified(),
         rev.cybersecurity_claims().modified()
     );
+    prop_assert_eq!(fwd.elements().added(), rev.elements().removed());
+    prop_assert_eq!(fwd.elements().removed(), rev.elements().added());
+    prop_assert_eq!(fwd.elements().modified(), rev.elements().modified());
 
     // Risk deltas are sorted by ThreatId and symmetric between fwd and rev.
     prop_assert!(
@@ -512,7 +515,7 @@ fn ops_generator_covers_every_op_and_most_errors() {
         assert!((0.2..0.9).contains(&share), "valid share {share}");
         // The second pack declares no interface kinds or attack types, so it
         // has no interface to add or remove and no control rule to set.
-        let kinds = if m.interface_kind_count() > 0 { 49 } else { 46 };
+        let kinds = if m.interface_kind_count() > 0 { 55 } else { 52 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",

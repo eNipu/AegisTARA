@@ -922,6 +922,90 @@ impl fmt::Display for SuggestionId {
     }
 }
 
+/// Stable public ID of an element of a generic kind (misuse case, ...): an RFC 9562 version 7 UUID.
+///
+/// ```
+/// use aegis_model::ElementId;
+///
+/// # fn main() -> Result<(), aegis_model::ModelError> {
+/// let id = ElementId::new_v7();
+/// assert_eq!(id.to_string().parse::<ElementId>()?, id);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ElementId(Uuid);
+
+impl ElementId {
+    /// Creates a fresh `UUIDv7` from the system clock and random bits. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::ElementId;
+    ///
+    /// let a = ElementId::new_v7();
+    /// assert_ne!(a, ElementId::new_v7());
+    /// assert_eq!(a.as_uuid().get_version_num(), 7);
+    /// ```
+    #[must_use]
+    pub fn new_v7() -> Self {
+        ElementId(Uuid::now_v7())
+    }
+
+    /// Wraps a UUID after checking that it is version 7 with the RFC 9562
+    /// variant. Time O(1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::NotVersion7`] for any other version or variant.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, ElementId};
+    /// use uuid::Uuid;
+    ///
+    /// let v4 = Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").ok();
+    /// assert_eq!(v4.map(ElementId::from_uuid), Some(Err(ModelError::NotVersion7)));
+    /// assert!(ElementId::from_uuid(Uuid::now_v7()).is_ok());
+    /// ```
+    pub fn from_uuid(u: Uuid) -> Result<Self, ModelError> {
+        check_v7(u).map(ElementId)
+    }
+
+    /// Returns the underlying UUID. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::ElementId;
+    ///
+    /// let id = ElementId::new_v7();
+    /// assert_eq!(id.as_uuid().get_version_num(), 7);
+    /// ```
+    #[must_use]
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+}
+
+impl FromStr for ElementId {
+    type Err = ModelError;
+
+    /// Parses any textual UUID form accepted by [`Uuid::parse_str`], then
+    /// checks that it is version 7.
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::InvalidUuid`] for malformed text,
+    /// [`ModelError::NotVersion7`] for a valid UUID of another version.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_v7(s).map(ElementId)
+    }
+}
+
+impl fmt::Display for ElementId {
+    /// Writes the hyphenated lowercase form.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.hyphenated(), f)
+    }
+}
+
 /// Fixed human-readable prefix for an element kind's visual ID (FND-06).
 ///
 /// Every numbered element kind has a short uppercase prefix (`A`, `D`, `T`,
@@ -1025,15 +1109,20 @@ impl VisualPrefix {
     /// ```
     #[must_use]
     pub fn parse_num(self, text: &str) -> Option<u32> {
-        let digits = text.strip_prefix(self.as_str())?;
-        if digits.len() < 2 || digits.len() > 10 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        if digits.len() > 2 && digits.starts_with('0') {
-            return None;
-        }
-        digits.parse::<u32>().ok()
+        parse_visual_num(self.as_str(), text)
     }
+}
+
+/// Parses `text` as `prefix` followed by a sequence number (rules of `VisualPrefix::parse_num`).
+pub(crate) fn parse_visual_num(prefix: &str, text: &str) -> Option<u32> {
+    let digits = text.strip_prefix(prefix)?;
+    if digits.len() < 2 || digits.len() > 10 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if digits.len() > 2 && digits.starts_with('0') {
+        return None;
+    }
+    digits.parse::<u32>().ok()
 }
 
 /// Formats a visual ID from its [`VisualPrefix`] and 0-based sequence
