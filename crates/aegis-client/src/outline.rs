@@ -28,6 +28,15 @@
 //!   when their text and kind stay the same. A renamed node is a new node.
 //!   The root is the exception: it is always the tree's root, and a new text
 //!   for the first line renames it.
+//! - A step may say what it goes through and its attack type after its name:
+//!   `- Read the flash | through: C00 | type: debug-access`. Both are
+//!   optional, in either order; `-` means none. The values are text here.
+//! - Only `through:` and `type:` are read after ` | `. Other text after
+//!   ` | ` stays in the name, unless it looks like `key: value` with a
+//!   lower-case key; such a name is written with ` | through: - | type: -`
+//!   at the end, which keeps it whole.
+//! - A gate has no such values. A shared step's values are written on its
+//!   first line; later lines repeat the same values or none.
 //!
 //! Parsing is O(lines x depth); a tree has at most [`MAX_ATTACK_TREE_NODES`]
 //! nodes, so the text is at most [`MAX_OUTLINE_BYTES`].
@@ -85,6 +94,42 @@ pub enum OutlineError {
         /// The limit.
         max: usize,
     },
+    /// Text after ` | ` that looks like a value but is not `through:` or `type:`.
+    #[error(
+        "line {0}: after \" | \" only \"through: <ID>\" and \"type: <key>\" are understood; to keep such text in the name, end the line with \" | through: - | type: -\""
+    )]
+    UnknownNote(usize),
+    /// `through:` or `type:` twice on one line.
+    #[error("line {0}: \"through\" or \"type\" is written twice")]
+    DuplicateNote(usize),
+    /// `through:` or `type:` on a gate.
+    #[error("line {0}: only a step can go through something or have an attack type, not a gate")]
+    NoteOnGate(usize),
+    /// A shared step written again with other values.
+    #[error(
+        "line {0}: this step is written before with another \"through\" or \"type\"; write them on its first line"
+    )]
+    NoteConflict(usize),
+}
+
+/// What one step line says after its name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StepNote {
+    /// Line of the step's first occurrence, from 1.
+    pub line: usize,
+    /// The `through:` value as written; `None` when absent or `-`.
+    pub through: Option<String>,
+    /// The `type:` value as written; `None` when absent or `-`.
+    pub attack_type: Option<String>,
+}
+
+/// A parsed outline: the tree and what its steps say after their names.
+#[derive(Clone, Debug)]
+pub struct ParsedOutline {
+    /// The tree.
+    pub tree: AttackTree,
+    /// One entry per step, in the order of first lines. Gates have none.
+    pub notes: Vec<(NodeId, StepNote)>,
 }
 
 const PREFIXES: [(&str, Option<GateKind>); 4] = [
@@ -107,27 +152,80 @@ fn prefix(kind: Option<GateKind>) -> &'static str {
 /// reached; its children only the first time. Time O(V + E).
 #[must_use]
 pub fn to_outline(tree: &AttackTree) -> String {
+    to_outline_with(tree, |_| (None, None))
+}
+
+/// Writes a tree as an outline, with what `note` returns for each step
+/// (through, attack type) after its name. Time O(V + E).
+#[must_use]
+pub fn to_outline_with<F>(tree: &AttackTree, mut note: F) -> String
+where
+    F: FnMut(NodeIdx) -> (Option<String>, Option<String>),
+{
     let mut out = String::new();
-    let mut seen = vec![false; tree.len()];
-    write_node(tree, tree.root(), 0, &mut seen, &mut out);
+    // The tail of each node, built on its first line and reused after.
+    let mut tails: Vec<Option<String>> = vec![None; tree.len()];
+    write_node(tree, tree.root(), 0, &mut tails, &mut out, &mut note);
     out
 }
 
-fn write_node(tree: &AttackTree, idx: NodeIdx, depth: usize, seen: &mut [bool], out: &mut String) {
+/// The text written after a node's name.
+fn tail_of(label: &str, through: Option<&str>, attack_type: Option<&str>) -> String {
+    let plain = matches!(read_tail(0, label), Ok(t) if t.name == label && !t.has_tail);
+    if !plain {
+        return format!(
+            " | through: {} | type: {}",
+            through.unwrap_or("-"),
+            attack_type.unwrap_or("-")
+        );
+    }
+    let mut tail = String::new();
+    if let Some(v) = through {
+        let _ = write!(tail, " | through: {v}");
+    }
+    if let Some(v) = attack_type {
+        let _ = write!(tail, " | type: {v}");
+    }
+    tail
+}
+
+fn write_node<F>(
+    tree: &AttackTree,
+    idx: NodeIdx,
+    depth: usize,
+    tails: &mut [Option<String>],
+    out: &mut String,
+    note: &mut F,
+) where
+    F: FnMut(NodeIdx) -> (Option<String>, Option<String>),
+{
     let Some(node) = tree.get(idx) else {
         return;
     };
+    let first = tails[idx.index()].is_none();
+    if first {
+        let (through, attack_type) = if node.gate_kind().is_none() {
+            note(idx)
+        } else {
+            (None, None)
+        };
+        tails[idx.index()] = Some(tail_of(
+            node.label(),
+            through.as_deref(),
+            attack_type.as_deref(),
+        ));
+    }
     let _ = writeln!(
         out,
-        "{}{}{}",
+        "{}{}{}{}",
         "  ".repeat(depth),
         prefix(node.gate_kind()),
-        node.label()
+        node.label(),
+        tails[idx.index()].as_deref().unwrap_or_default()
     );
-    let first = !std::mem::replace(&mut seen[idx.index()], true);
     if first {
         for &child in tree.children(idx) {
-            write_node(tree, child, depth + 1, seen, out);
+            write_node(tree, child, depth + 1, tails, out, note);
         }
     }
 }
@@ -137,6 +235,56 @@ struct Line<'a> {
     indent: usize,
     kind: Option<GateKind>,
     label: &'a str,
+    through: Option<&'a str>,
+    attack_type: Option<&'a str>,
+    has_tail: bool,
+}
+
+/// A name and the values read after it.
+struct Tail<'a> {
+    name: &'a str,
+    through: Option<&'a str>,
+    attack_type: Option<&'a str>,
+    has_tail: bool,
+}
+
+/// Reads ` | through: <v>` and ` | type: <v>` off the end of `rest`.
+fn read_tail(number: usize, rest: &str) -> Result<Tail<'_>, OutlineError> {
+    let mut name = rest;
+    let mut through: Option<&str> = None;
+    let mut attack_type: Option<&str> = None;
+    while through.is_none() || attack_type.is_none() {
+        let Some(pos) = name.rfind(" | ") else {
+            break;
+        };
+        let seg = name[pos + 3..].trim();
+        let Some((key, value)) = seg.split_once(':') else {
+            break;
+        };
+        if key.is_empty() || !key.bytes().all(|b| b.is_ascii_lowercase()) {
+            break;
+        }
+        let value = value.trim();
+        let slot = match key {
+            "through" => &mut through,
+            "type" => &mut attack_type,
+            _ => return Err(OutlineError::UnknownNote(number)),
+        };
+        if slot.is_some() {
+            return Err(OutlineError::DuplicateNote(number));
+        }
+        if value.is_empty() {
+            return Err(OutlineError::UnknownNote(number));
+        }
+        *slot = Some(value);
+        name = name[..pos].trim_end();
+    }
+    Ok(Tail {
+        name,
+        has_tail: through.is_some() || attack_type.is_some(),
+        through: through.filter(|v| *v != "-"),
+        attack_type: attack_type.filter(|v| *v != "-"),
+    })
 }
 
 fn parse_line(number: usize, raw: &str) -> Result<Option<Line<'_>>, OutlineError> {
@@ -154,6 +302,8 @@ fn parse_line(number: usize, raw: &str) -> Result<Option<Line<'_>>, OutlineError
         .iter()
         .find_map(|(p, k)| body.strip_prefix(p).map(|rest| (*k, rest.trim())))
         .unwrap_or((None, body));
+    let tail = read_tail(number, label)?;
+    let label = tail.name;
     if label.is_empty() || matches!(body, "OR" | "AND" | "SEQ" | "-") {
         return Err(OutlineError::NoText(number));
     }
@@ -165,6 +315,9 @@ fn parse_line(number: usize, raw: &str) -> Result<Option<Line<'_>>, OutlineError
         indent,
         kind,
         label,
+        through: tail.through,
+        attack_type: tail.attack_type,
+        has_tail: tail.has_tail,
     }))
 }
 
@@ -178,6 +331,19 @@ pub fn parse_outline(
     text: &str,
     previous: Option<&AttackTree>,
 ) -> Result<AttackTree, OutlineError> {
+    parse_outline_annotated(text, previous).map(|p| p.tree)
+}
+
+/// Reads an outline into a tree, with what each step says after its name.
+/// Nodes keep their IDs as in [`parse_outline`].
+///
+/// # Errors
+///
+/// The first [`OutlineError`], with its line.
+pub fn parse_outline_annotated(
+    text: &str,
+    previous: Option<&AttackTree>,
+) -> Result<ParsedOutline, OutlineError> {
     if text.len() > MAX_OUTLINE_BYTES {
         return Err(OutlineError::TooLong);
     }
@@ -218,16 +384,58 @@ pub fn parse_outline(
         None => Node::step(label),
     };
 
+    let gate_note = |line: &Line<'_>| {
+        if line.kind.is_some() && (line.through.is_some() || line.attack_type.is_some()) {
+            return Err(OutlineError::NoteOnGate(line.number));
+        }
+        Ok(())
+    };
+    gate_note(first)?;
+
     let mut tree = AttackTree::new(root_id, node_of(first.label, first.kind))
         .map_err(|_| OutlineError::Empty)?;
-    // Text to (node, kind, whether its children were written).
-    let mut by_label: HashMap<&str, (NodeIdx, Option<GateKind>, bool)> = HashMap::new();
-    by_label.insert(first.label, (tree.root(), first.kind, true));
+    let mut notes = Vec::new();
+    let mut note_of = |tree: &AttackTree, idx: NodeIdx, line: &Line<'_>| {
+        if line.kind.is_none()
+            && let Some(id) = tree.id_of(idx)
+        {
+            notes.push((
+                id,
+                StepNote {
+                    line: line.number,
+                    through: line.through.map(str::to_owned),
+                    attack_type: line.attack_type.map(str::to_owned),
+                },
+            ));
+        }
+    };
+    note_of(&tree, tree.root(), first);
+    // Text to (node, kind, whether its children were written, the first
+    // line's through and type).
+    type Entry<'a> = (
+        NodeIdx,
+        Option<GateKind>,
+        bool,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
+    let mut by_label: HashMap<&str, Entry<'_>> = HashMap::new();
+    by_label.insert(
+        first.label,
+        (
+            tree.root(),
+            first.kind,
+            true,
+            first.through,
+            first.attack_type,
+        ),
+    );
     // The open ancestors: (indent, node, kind, accepts children here).
     let mut stack: Vec<(usize, NodeIdx, Option<GateKind>, bool)> =
         vec![(0, tree.root(), first.kind, true)];
 
     for line in &lines[1..] {
+        gate_note(line)?;
         while stack
             .last()
             .is_some_and(|(indent, ..)| *indent >= line.indent)
@@ -246,9 +454,12 @@ pub fn parse_outline(
             return Err(OutlineError::SharedRedefined(line.number));
         }
         let (idx, fresh) = match by_label.get(line.label) {
-            Some(&(idx, kind, _)) => {
+            Some(&(idx, kind, _, through, attack_type)) => {
                 if kind != line.kind {
                     return Err(OutlineError::KindConflict(line.number));
+                }
+                if line.has_tail && (line.through, line.attack_type) != (through, attack_type) {
+                    return Err(OutlineError::NoteConflict(line.number));
                 }
                 if tree.children(parent).contains(&idx) {
                     return Err(OutlineError::DuplicateChild(line.number));
@@ -272,14 +483,18 @@ pub fn parse_outline(
                     .map_err(|_| OutlineError::TooManyNodes {
                         max: MAX_ATTACK_TREE_NODES,
                     })?;
-                by_label.insert(line.label, (idx, line.kind, true));
+                by_label.insert(
+                    line.label,
+                    (idx, line.kind, true, line.through, line.attack_type),
+                );
+                note_of(&tree, idx, line);
                 (idx, true)
             }
         };
         // Children may follow only the first line of a node.
         stack.push((line.indent, idx, line.kind, fresh));
     }
-    Ok(tree)
+    Ok(ParsedOutline { tree, notes })
 }
 
 #[cfg(test)]
