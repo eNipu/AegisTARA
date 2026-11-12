@@ -9,6 +9,7 @@ use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use super::{Limit, MAX_PROJECT_FILE_BYTES, MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES, wire};
+use crate::element::{ElementKind, KINDS};
 use crate::error::{ModelError, StoreError, WorkspaceProblem};
 use crate::id::VisualPrefix;
 use crate::methodology::Methodology;
@@ -47,6 +48,9 @@ const LAYOUT: &[(&str, &str, &[&str])] = &[
 ];
 
 const TREES_KEY: &str = "attack_trees";
+
+/// The snapshot key of generic elements; each kind has its own file.
+const ELEMENTS_KEY: &str = "elements";
 
 /// The `version` of the workspace envelope. It is the workspace format's own
 /// number, not the snapshot's [`wire::FORMAT_VERSION`]: the two change
@@ -117,6 +121,7 @@ impl Project {
             k == "format"
                 || k == "version"
                 || k == TREES_KEY
+                || k == ELEMENTS_KEY
                 || LAYOUT.iter().any(|(_, _, keys)| keys.contains(&k))
         };
         if !map.keys().all(|k| placed(k)) {
@@ -134,6 +139,21 @@ impl Project {
                 files.push(WorkspaceFile {
                     path: path.to_owned(),
                     bytes: render(kind, entries)?,
+                });
+            }
+        }
+        if let Some(elements) = map.get(ELEMENTS_KEY) {
+            let Value::Object(kinds) = elements else {
+                return Err(StoreError::UnencodableOp);
+            };
+            for (key, list) in kinds {
+                let kind = ElementKind::from_key(key).ok_or(StoreError::UnencodableOp)?;
+                if matches!(list, Value::Array(a) if a.is_empty()) {
+                    continue;
+                }
+                files.push(WorkspaceFile {
+                    path: format!("systems/main/{}.json", kind.def().file_stem),
+                    bytes: render(kind.key(), vec![(ELEMENTS_KEY, list)])?,
                 });
             }
         }
@@ -199,6 +219,13 @@ fn lookup(path: &str) -> Option<(&'static str, &'static [&'static str])> {
     if let Some(&(_, kind, keys)) = LAYOUT.iter().find(|(p, _, _)| *p == path) {
         return Some((kind, keys));
     }
+    let element_row = path
+        .strip_prefix("systems/main/")
+        .and_then(|rest| rest.strip_suffix(".json"))
+        .and_then(|stem| KINDS.iter().find(|d| d.file_stem == stem));
+    if let Some(row) = element_row {
+        return Some((row.key, &[ELEMENTS_KEY][..]));
+    }
     let name = path
         .strip_prefix("systems/main/trees/")?
         .strip_suffix(".json")?;
@@ -234,11 +261,42 @@ fn tree_file_with(id: &str, trees: &[(&str, &[u8])]) -> String {
         .map_or_else(|| "aegis.json".to_owned(), short)
 }
 
+/// The first element file whose text holds `id`.
+fn element_file_with(id: &str, files: &[(&str, &[u8])]) -> Option<String> {
+    let needle = id.as_bytes();
+    files
+        .iter()
+        .find(|(_, bytes)| bytes.windows(needle.len()).any(|w| w == needle))
+        .map(|&(path, _)| short(path))
+}
+
+/// The element or threat ID an element load error names.
+fn element_error_id(model: &ModelError) -> Option<String> {
+    use ModelError as E;
+    match model {
+        E::DuplicateElement(id) | E::UnknownElement(id) => Some(id.to_string()),
+        E::InvalidAttributeKey { element }
+        | E::InvalidAttributeValue { element }
+        | E::TooManyAttributes { element, .. }
+        | E::ElementHasAttributes { element, .. }
+        | E::LinkNotAllowed { element, .. }
+        | E::DuplicateElementLink { element }
+        | E::ElementLinkMissing { element }
+        | E::TooManyElementLinks { element, .. }
+        | E::ElementHasLinks { element, .. } => Some(element.to_string()),
+        E::UnknownThreatScenario(t) => Some(t.to_string()),
+        _ => None,
+    }
+}
+
 /// The file `Project::load` refused, as well as the error tells.
-fn blame(err: &StoreError, trees: &[(&str, &[u8])]) -> String {
+fn blame(err: &StoreError, trees: &[(&str, &[u8])], elements: &[(&str, &[u8])]) -> String {
     let StoreError::Model(model) = err else {
         return "aegis.json".to_owned();
     };
+    if let Some(path) = element_error_id(model).and_then(|id| element_file_with(&id, elements)) {
+        return path;
+    }
     let key = match model {
         ModelError::DuplicateAttackTree(id) => return tree_file_with(&id.to_string(), trees),
         ModelError::DuplicateId(id) => return tree_file_with(&id.to_string(), trees),
@@ -358,6 +416,8 @@ impl Project {
         // Pass 2: parse each file.
         let mut snapshot = Map::new();
         let mut trees: Vec<(u32, &str, &[u8], Vec<Value>)> = Vec::new();
+        let mut elements = Map::new();
+        let mut element_files: Vec<(&str, &[u8])> = Vec::new();
         for (path, bytes, kind, keys) in taken {
             let envelope = |problem| StoreError::WorkspaceEnvelope {
                 path: short(path),
@@ -405,6 +465,12 @@ impl Project {
                     Some(_) => return Err(tree_name()),
                 }
                 trees.push((num, path, bytes, list));
+            } else if keys == [ELEMENTS_KEY] {
+                let Some(list @ Value::Array(_)) = obj.remove(ELEMENTS_KEY) else {
+                    return Err(envelope(WorkspaceProblem::Json));
+                };
+                elements.insert(kind.to_owned(), list);
+                element_files.push((path, bytes));
             } else {
                 snapshot.append(&mut obj);
             }
@@ -415,6 +481,9 @@ impl Project {
         if !trees.is_empty() {
             let joined = trees.into_iter().flat_map(|t| t.3).collect();
             snapshot.insert(TREES_KEY.to_owned(), Value::Array(joined));
+        }
+        if !elements.is_empty() {
+            snapshot.insert(ELEMENTS_KEY.to_owned(), Value::Object(elements));
         }
         // The writer leaves out empty lists; the snapshot requires these three.
         for key in ["assets", "damage_scenarios", "threat_scenarios"] {
@@ -430,7 +499,7 @@ impl Project {
                 path: "aegis.json".to_owned(),
             },
             other => StoreError::InWorkspace {
-                path: blame(&other, &tree_files),
+                path: blame(&other, &tree_files, &element_files),
                 source: Box::new(other),
             },
         })

@@ -328,6 +328,9 @@ caps! {
     AttackTreeNodesCap = crate::tree::MAX_ATTACK_TREE_NODES, Limit::ATTACK_TREE_NODES;
     GoalControlsCap = MAX_GOAL_CONTROLS, Limit::GOAL_CONTROLS;
     BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
+    ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
+    ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
+    ElementLinksCap = crate::element::MAX_ELEMENT_LINKS, Limit::ELEMENT_LINKS;
 }
 
 /// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
@@ -358,6 +361,12 @@ impl<'de, C: Cap> Deserialize<'de> for BoundedStr<C> {
 /// `min(size_hint, C::MAX)` and stops on item `C::MAX + 1`, so it never
 /// holds more than `C::MAX` items.
 pub(crate) struct BoundedVec<T, C>(pub(crate) Vec<T>, PhantomData<C>);
+
+impl<T, C> Default for BoundedVec<T, C> {
+    fn default() -> Self {
+        BoundedVec(Vec::new(), PhantomData)
+    }
+}
 
 impl<'de, T: Deserialize<'de>, C: Cap> Deserialize<'de> for BoundedVec<T, C> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -1526,6 +1535,52 @@ pub(super) struct SnapshotWire {
     pub(super) review_marks: Vec<ReviewMarkWire>,
     #[serde(default)]
     pub(super) languages: Vec<LangText>,
+    #[serde(default)]
+    pub(super) elements: ElementsByKind,
+}
+
+/// A snapshot element of a generic kind.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ElementWire {
+    pub(super) id: WireId<ElementId>,
+    pub(super) visual_id: Key,
+    pub(super) name: Name,
+    #[serde(default)]
+    pub(super) attributes: BoundedKeyMap<AttrWire, ElementAttributesCap>,
+    #[serde(default)]
+    pub(super) links: BoundedVec<LinkWire, ElementLinksCap>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// The snapshot `elements` map: each kind key with its elements, in file
+/// order. An unknown or repeated kind is refused.
+#[derive(Default)]
+pub(super) struct ElementsByKind(pub(super) Vec<(crate::element::ElementKind, Vec<ElementWire>)>);
+
+impl<'de> Deserialize<'de> for ElementsByKind {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = ElementsByKind;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut kinds: Vec<(crate::element::ElementKind, Vec<ElementWire>)> = Vec::new();
+                while let Some(key) = map.next_key::<ElementKindKey>()? {
+                    if kinds.iter().any(|(k, _)| *k == key.0) {
+                        return Err(de::Error::custom("duplicate key"));
+                    }
+                    let list = map.next_value::<BoundedVec<ElementWire, ElementsCap>>()?;
+                    kinds.push((key.0, list.0));
+                }
+                Ok(ElementsByKind(kinds))
+            }
+        }
+        d.deserialize_map(V)
+    }
 }
 
 /// A step whose rating awaits review.

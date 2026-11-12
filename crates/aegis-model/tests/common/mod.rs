@@ -550,10 +550,17 @@ pub struct Seed {
     list: Vec<u16>,
 }
 
+impl Seed {
+    /// Whether this seed makes one of the six generic element ops.
+    pub fn is_element_op(&self) -> bool {
+        (58..=63).contains(&self.kind)
+    }
+}
+
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..59,
+        0u8..65,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -756,6 +763,40 @@ impl Gen {
         match nth(existing, sel / 8) {
             Some(id) if !sel.is_multiple_of(8) => id,
             _ => claim_id(self.fresh()),
+        }
+    }
+
+    fn element(&mut self, p: &Project, sel: u16) -> ElementId {
+        let existing: Vec<_> = p
+            .elements(aegis_model::ElementKind::MisuseCase)
+            .map(|(id, _)| id)
+            .collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => element_id(self.fresh()),
+        }
+    }
+
+    /// An attribute key, sometimes invalid.
+    fn attr_key(&self, sel: u16) -> Arc<str> {
+        match sel % 16 {
+            0 => "Bad".into(),
+            1 => "x".repeat(65).into(),
+            n => format!("k{}", n % 6).into(),
+        }
+    }
+
+    /// An attribute value, sometimes invalid, sometimes `None` (clears it).
+    fn attr_value(&self, sel: u16) -> Option<aegis_model::AttrValue> {
+        use aegis_model::AttrValue as V;
+        match sel % 16 {
+            0..=2 => None,
+            3 => Some(V::Level("Bad".into())),
+            4 => Some(V::Text("a\nb".into())),
+            5 => Some(V::Text("".into())),
+            n if n % 3 == 0 => Some(V::Level(format!("cal-{}", n % 4 + 1).into())),
+            n if n % 3 == 1 => Some(V::Choice("remote".into())),
+            n => Some(V::Text(format!("seen in {n}").into())),
         }
     }
 
@@ -1511,6 +1552,55 @@ impl Gen {
                 },
                 provenance,
             },
+            58 => Op::AddElement {
+                id: if s.a.is_multiple_of(16) {
+                    self.element(p, s.b)
+                } else {
+                    element_id(self.fresh())
+                },
+                kind: aegis_model::ElementKind::MisuseCase,
+                name: self.name(s.c),
+                provenance,
+            },
+            59 => Op::RenameElement {
+                id: self.element(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            60 => Op::RemoveElement {
+                id: self.element(p, s.a),
+            },
+            61 => Op::SetElementAttribute {
+                id: self.element(p, s.a),
+                key: self.attr_key(s.b),
+                value: self.attr_value(s.c),
+                provenance,
+            },
+            62 => Op::LinkElement {
+                id: self.element(p, s.a),
+                target: aegis_model::LinkTarget::Threat(self.threat(p, s.b)),
+                provenance,
+            },
+            63 => {
+                let linked: Vec<_> = p
+                    .elements(aegis_model::ElementKind::MisuseCase)
+                    .filter(|(_, e)| !e.links().is_empty())
+                    .map(|(id, e)| (id, e.links().to_vec()))
+                    .collect();
+                let (id, links) = match nth(linked, s.a) {
+                    Some(pick) if !s.c.is_multiple_of(4) => pick,
+                    _ => (self.element(p, s.a), Vec::new()),
+                };
+                let target = match nth(links, s.b) {
+                    Some(t) => t,
+                    None => aegis_model::LinkTarget::Threat(self.threat(p, s.b)),
+                };
+                Op::UnlinkElement {
+                    id,
+                    target,
+                    provenance,
+                }
+            }
             _ => {
                 if self.m.attack_type_count() == 0 && !s.c.is_multiple_of(4) {
                     Op::ApplyControl {
