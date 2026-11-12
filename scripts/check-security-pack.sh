@@ -37,13 +37,6 @@ fail() {
     fails=$((fails + 1))
 }
 
-is_name() {
-    for n in $names; do
-        [ "$n" = "$1" ] && return 0
-    done
-    return 1
-}
-
 # Heading numbers (N.M) of a chapter, one per line.
 heads() {
     sed -n 's/^## \([0-9][0-9]*\.[0-9][0-9]*\) .*/\1/p' "$1"
@@ -65,39 +58,20 @@ check_chapter() {
     esac
     n=$(printf '%s' "$base" | cut -c1-2 | sed 's/^0//')
     expect=1
-    total=0
     for h in $(grep '^## ' "$f" | cut -d' ' -f2); do
-        total=$((total + 1))
-        if [ "$h" != "$n.$expect" ]; then
-            fail "$label" "heading '$h' should be '$n.$expect'"
-        fi
+        [ "$h" = "$n.$expect" ] || fail "$label" "heading '$h' should be '$n.$expect'"
         expect=$((expect + 1))
     done
-    if [ "$(grep -c '^## ' "$f")" -ne "$total" ]; then
-        fail "$label" "a heading has no number"
-    fi
-    if [ "$(grep -c '^## ' "$f")" -lt 2 ]; then
-        fail "$label" "needs at least two '## ' headings"
-    fi
+    [ "$expect" -ge 3 ] || fail "$label" "needs at least two '## ' headings"
     # R4: the last section.
     last=$(grep -n '^## ' "$f" | tail -n 1 | cut -d: -f1 || true)
-    paths=""
-    if [ -n "$last" ]; then
-        paths=$(tail -n +"$last" "$f" | sed -n 's/^- `\([^`]*\)`$/\1/p')
-    fi
-    if [ -z "$paths" ]; then
-        fail "$label" "last section lists no source path"
-    else
-        for p in $paths; do
-            [ -e "$root/$p" ] || fail "$label" "source path '$p' does not exist"
-        done
-    fi
-    if grep -q -w -e TODO -e TBD -e FIXME -e XXX "$f"; then
-        fail "$label" "contains a marker word"
-    fi
-    if [ "$(wc -l <"$f")" -gt 220 ]; then
-        fail "$label" "longer than 220 lines"
-    fi
+    paths=$(tail -n +"${last:-1}" "$f" | sed -n 's/^- `\([^`]*\)`$/\1/p')
+    [ -n "$paths" ] || fail "$label" "last section lists no source path"
+    for p in $paths; do
+        [ -e "$root/$p" ] || fail "$label" "source path '$p' does not exist"
+    done
+    grep -q -w -e TODO -e TBD -e FIXME -e XXX "$f" && fail "$label" "contains a marker word"
+    [ "$(wc -l <"$f")" -le 220 ] || fail "$label" "longer than 220 lines"
 }
 
 for lang in en ja; do
@@ -107,10 +81,10 @@ for lang in en ja; do
         [ -e "$f" ] || continue
         base=$(basename "$f")
         count=$((count + 1))
-        if ! is_name "$base"; then
-            fail "$lang/$base" "not one of the six chapter names"
-            continue
-        fi
+        case " $names " in
+            *" $base "*) ;;
+            *) fail "$lang/$base" "not one of the six chapter names"; continue ;;
+        esac
         check_chapter "$f" "$lang/$base"
         if [ "$lang" = "ja" ]; then
             if [ ! -e "$pack/en/$base" ]; then
@@ -135,7 +109,5 @@ if [ "$complete" -eq 1 ]; then
     done
 fi
 
-if [ "$fails" -gt 0 ]; then
-    exit 1
-fi
+[ "$fails" -eq 0 ] || exit 1
 echo "security pack ok ($count files)"
