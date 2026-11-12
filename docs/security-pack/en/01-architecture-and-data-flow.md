@@ -60,7 +60,7 @@ flowchart LR
 | DF-02 | Server | PostgreSQL | All project data, users, sessions, event log | Plain TCP on a private network by default. TLS when `AEGIS_DB_TLS` is `encrypt` or `verify`. Stays inside the customer's network. | The server |
 | DF-03 | Desktop app | Identity provider | Company login (OpenID Connect) in the system browser; tokens come back | HTTPS. Only when company login is used. Goes where the customer's identity provider is, which may be outside its network. | The user |
 | DF-04 | Server | Identity provider | A request for the provider's signing keys, used to check tokens; the provider's discovery document at start | HTTPS. Only with company login. No project data. Goes where the customer's identity provider is. | The server |
-| DF-05 | Desktop app | Update address | A signed update manifest; the installer when the user asks for it | HTTPS to the address in `update_url`. Only when `update_url` is set. The manifest is signed and the installer is checked against it. The app never runs the installer. Leaves the customer's network. | The user |
+| DF-05 | Desktop app | Update address | A signed update manifest; the installer when the user asks for it | HTTPS to the address in `update_url`. Only when `update_url` or the environment variable `AEGIS_UPDATE_URL` is set (the variable wins). The manifest is signed and the installer is checked against it. The app never runs the installer. Leaves the customer's network. | The user |
 | DF-06 | Desktop app | Embedded server | The same calls as DF-01 | gRPC on `127.0.0.1` only, random port, no login. Does not leave the computer. | The user |
 | DF-07 | Desktop app | Local export folder | Reports and tables the user exports | Files written to a local folder. Leaves the network only if the user sends the files. | The user |
 
@@ -86,7 +86,7 @@ A search of the source code for telemetry, analytics and error-reporting
 services found none.
 
 The only optional outbound flow is the update check (DF-05). A site without
-internet leaves `update_url` empty and installs each release from an offline
+internet leaves both `update_url` and `AEGIS_UPDATE_URL` empty and installs each release from an offline
 bundle. Company login (DF-03, DF-04) talks to the customer's own identity
 provider. Cloud AI providers are `Planned` and will be opt-in.
 
@@ -97,7 +97,8 @@ provider. Cloud AI providers are `Planned` and will be opt-in.
 | PostgreSQL | Projects, operation history, baselines, figures, users, sessions, settings, event log | `Customer` |
 | Standalone project folder | `ops.jsonl` (history), `ops.meta`, `snapshots/`, `manifest.json` | The user |
 | Desktop settings file | Server address, transport, last user name, export folder, update address, standalone folder and license paths, report profiles, language, appearance, panel width. It never holds a password or token. | The user |
-| Operating system keychain | The session token, only when the user ticks "keep me logged in" | The user, through the operating system |
+| Operating system keychain, password login | The session token, only when the user ticks "keep me logged in" | The user, through the operating system |
+| Operating system keychain, company login | A device key and a refresh token, always. Kept in memory only if the machine has no keychain | The user, through the operating system |
 | Export folder | Reports and tables the user exports | The user |
 
 ## 1.8 Limits to know
@@ -122,4 +123,7 @@ provider. Cloud AI providers are `Planned` and will be opt-in.
 - `crates/aegis-auth/src/jwks.rs`
 - `crates/aegis-client/src/settings.rs`
 - `crates/aegis-shell/src/provider.rs`
+- `crates/aegis-shell/src/launcher.rs`
+- `crates/aegis-shell/src/standalone.rs`
+- `crates/aegis-server/src/access.rs`
 - `crates/aegis-server/src/store/folder.rs`
