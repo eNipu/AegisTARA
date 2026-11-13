@@ -16,6 +16,7 @@ fn step(label: &str) -> ItemNode {
         label: label.into(),
         gate: None,
         feasibility: None,
+        attack_type: None,
         children: vec![],
     }
 }
@@ -25,6 +26,7 @@ fn gate(kind: GateKind, label: &str, children: Vec<ItemNode>) -> ItemNode {
         label: label.into(),
         gate: Some(kind),
         feasibility: None,
+        attack_type: None,
         children,
     }
 }
@@ -217,6 +219,7 @@ fn items_must_be_well_formed_and_unique() {
         label: "s".into(),
         gate: None,
         feasibility: None,
+        attack_type: None,
         children: vec![step("c")],
     };
     assert!(matches!(
@@ -456,4 +459,60 @@ fn rehash_fixes_only_the_hash() {
     // Anything else wrong is still refused.
     let broken = edited.replace("aegis-library", "other");
     assert!(LibraryPack::rehash(broken.as_bytes()).is_err());
+}
+
+#[test]
+fn a_step_may_suggest_an_attack_type_by_key() {
+    let mut a = item("a", "A");
+    a.tree.children[0].attack_type = Some("debug-access".into());
+    let p = pack(vec![a]);
+    let bytes = p.to_bytes();
+    let again = LibraryPack::from_bytes(&bytes).expect("reads");
+    assert_eq!(
+        again.items()[0].tree.children[0].attack_type.as_deref(),
+        Some("debug-access")
+    );
+    assert_eq!(again, p);
+}
+
+#[test]
+fn a_bad_attack_type_is_refused_with_its_own_error() {
+    let mut on_gate = item("a", "A");
+    on_gate.tree.attack_type = Some("debug-access".into());
+    assert_eq!(
+        LibraryPack::new(meta(), vec![on_gate]).err(),
+        Some(LibraryError::Invalid("a gate has an attack type"))
+    );
+    let mut long = item("a", "A");
+    long.tree.children[0].attack_type = Some("k".repeat(65));
+    assert_eq!(
+        LibraryPack::new(meta(), vec![long]).err(),
+        Some(LibraryError::Limit("an attack type key is too long"))
+    );
+    let mut blank = item("a", "A");
+    blank.tree.children[0].attack_type = Some("  ".into());
+    assert_eq!(
+        LibraryPack::new(meta(), vec![blank]).err(),
+        Some(LibraryError::Invalid("an attack type key is empty"))
+    );
+}
+
+#[test]
+fn steps_without_an_attack_type_do_not_write_the_field() {
+    let text = String::from_utf8(pack(vec![item("a", "A")]).to_bytes()).expect("utf8");
+    assert!(!text.contains("attack_type"), "{text}");
+}
+
+#[test]
+fn the_demo_pack_suggests_attack_types() {
+    let demo = LibraryPack::builtin_demo();
+    let mut n = 0;
+    for it in demo.items() {
+        let mut stack = vec![&it.tree];
+        while let Some(x) = stack.pop() {
+            n += usize::from(x.attack_type.is_some());
+            stack.extend(x.children.iter());
+        }
+    }
+    assert!(n >= 2, "{n}");
 }

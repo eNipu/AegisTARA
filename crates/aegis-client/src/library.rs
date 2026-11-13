@@ -2,7 +2,8 @@
 //!
 //! An item is copied: as a new tree, under a gate of a tree, or in place of a
 //! step. The whole insert is one batch, so one undo takes it back. Ratings
-//! come along only when the user asks, and each one is marked for review.
+//! come along only when the user asks, and each one is marked for review. A
+//! suggested attack type is filled in on the copy and counted in the origin note.
 //! A name that the tree already has is never merged silently: the copy gets
 //! its own text ("name (2)") unless the user ticked the name to be shared.
 
@@ -169,6 +170,8 @@ struct Builder<'a> {
     shareable: std::collections::BTreeMap<String, (NodeId, u32)>,
     /// Arena size as the ops build it up.
     count: u32,
+    /// Steps whose attack type was filled in.
+    typed: usize,
 }
 
 impl Builder<'_> {
@@ -212,6 +215,22 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// Fills in the suggested attack type when the methodology has the key.
+    fn attack_type(&mut self, node: &ItemNode, id: NodeId) {
+        let Some(key) = &node.attack_type else {
+            return;
+        };
+        if let Some(t) = self.project.methodology().attack_type(key) {
+            self.ops.push(Op::SetStepAttackType {
+                tree: self.tree,
+                node: id,
+                attack_type: Some(t),
+                provenance: self.prov.clone(),
+            });
+            self.typed += 1;
+        }
+    }
+
     /// Adds `node` and everything below it, parents before children.
     fn add(&mut self, node: &ItemNode, parent: NodeId, position: u32) -> Result<(), EditError> {
         let mut stack = vec![(node, parent, position)];
@@ -251,6 +270,7 @@ impl Builder<'_> {
             });
             self.count += 1;
             self.rating(n, id)?;
+            self.attack_type(n, id);
             // Children are pushed backwards so they pop in order.
             for (i, c) in n.children.iter().enumerate().rev() {
                 let p = u32::try_from(i).map_err(|_| err("too many children"))?;
@@ -261,15 +281,21 @@ impl Builder<'_> {
     }
 }
 
-fn origin_note(pack: &LibraryPack, item: &LibraryItem) -> String {
-    format!(
+fn origin_note(pack: &LibraryPack, item: &LibraryItem, typed: usize) -> String {
+    let mut note = format!(
         "Copied from library \"{}\" ({} {}, item {}), license {}.",
         pack.title(),
         pack.id(),
         pack.pack_version(),
         item.id,
         pack.license()
-    )
+    );
+    if typed >= 1 {
+        note.push_str(&format!(
+            " Suggested attack types were filled in on {typed} step(s); check them in the step inspector."
+        ));
+    }
+    note
 }
 
 /// Builds the ops of one insert. The author `actor` and time go into the
@@ -306,8 +332,8 @@ pub fn insert_ops(
         used: BTreeSet::new(),
         shareable: std::collections::BTreeMap::new(),
         count: 0,
+        typed: 0,
     };
-    let note = origin_note(pack, item);
     match mode {
         InsertMode::NewTree { id, threat } => {
             let label = b.unique(&item.tree.label)?;
@@ -326,6 +352,7 @@ pub fn insert_ops(
             });
             b.count = 1;
             b.rating(&item.tree, root)?;
+            b.attack_type(&item.tree, root);
             for (i, c) in item.tree.children.iter().enumerate() {
                 let p = u32::try_from(i).map_err(|_| err("too many children"))?;
                 b.add(c, root, p)?;
@@ -337,6 +364,7 @@ pub fn insert_ops(
                     provenance: human.clone(),
                 });
             }
+            let note = origin_note(pack, item, b.typed);
             b.ops.push(Op::SetDescription {
                 target: ElementRef::Tree(*id),
                 text: note.into(),
@@ -404,6 +432,7 @@ pub fn insert_ops(
                     provenance: prov.clone(),
                 });
             }
+            let note = origin_note(pack, item, b.typed);
             let old = project.description(ElementRef::Tree(*tree)).unwrap_or("");
             let text = if old.is_empty() {
                 note
@@ -621,6 +650,9 @@ impl LibraryView {
             out.push_str(&n.label);
             if let Some(f) = &n.feasibility {
                 out.push_str(&format!("  [{f}]"));
+            }
+            if let Some(k) = &n.attack_type {
+                out.push_str(&format!("  {{type: {k}}}"));
             }
             out.push('\n');
             stack.extend(n.children.iter().rev().map(|c| (c, depth + 1)));
