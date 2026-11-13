@@ -617,10 +617,6 @@ fn control_kind_rule_cap() {
 fn control_kind_interface_kind_cap() {
     at_cap(&with_preset(32, 1), "32 interface kinds");
     let mut d = with_preset(32, 1);
-    d.element_names.interface_kinds.push(LevelDef {
-        key: "extra".into(),
-        label: "X".into(),
-    });
     d.element_names.control_kinds[0]
         .interface_kinds
         .push("extra".into());
