@@ -392,6 +392,7 @@ impl From<ElementNamesWire> for ElementNamesDef {
             feasibility: w.feasibility.map_or(def.feasibility, |l| l.0),
             interface_kinds: Vec::new(),
             attack_types: Vec::new(),
+            control_kinds: Vec::new(),
             translations: BTreeMap::new(),
         }
     }
@@ -417,6 +418,7 @@ impl From<PackTranslationWire> for PackTranslationDef {
             factor_levels: unwrap_label_map(w.factor_levels),
             interface_kinds: unwrap_label_map(w.interface_kinds),
             attack_types: unwrap_label_map(w.attack_types),
+            control_kinds: BTreeMap::new(),
         }
     }
 }

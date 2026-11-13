@@ -295,9 +295,10 @@ pub use item::{
 pub use lint::{LintCode, LintFinding, LintSeverity};
 pub use methodology::{
     AttackPotential, AttackPotentialDef, AttackType, CatalogRef, CatalogScheme, CatalogSchemeDef,
-    CatalogSyntax, ElementNameDef, ElementNamesDef, FactorContribution, FactorDef, FactorLevel,
-    FactorLevelDef, FeasibilityFactor, FeasibilityLevel, ImpactCategory, ImpactCategoryDef,
-    InterfaceKind, Level, LevelDef, MAX_ATTACK_TYPES, MAX_FACTOR_POINTS, MAX_FEASIBILITY_FACTORS,
+    CatalogSyntax, ControlKind, ControlKindDef, ElementNameDef, ElementNamesDef,
+    FactorContribution, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor,
+    FeasibilityLevel, ImpactCategory, ImpactCategoryDef, InterfaceKind, Level, LevelDef,
+    MAX_ATTACK_TYPES, MAX_CONTROL_KINDS, MAX_FACTOR_POINTS, MAX_FEASIBILITY_FACTORS,
     MAX_INTERFACE_KINDS, MAX_PACK_TRANSLATIONS, MIN_FEASIBILITY_FACTORS, Methodology,
     MethodologyDef, PackTranslationDef, PotentialBand, PotentialBandDef, Property, PropertyDef,
     RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
