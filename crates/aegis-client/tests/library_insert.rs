@@ -517,3 +517,145 @@ fn every_item_of_the_demo_pack_inserts_as_a_tree_and_links_to_a_threat() {
     }
     let _ = ThreatId::new_v7();
 }
+
+/// Labels of the steps of `tree` that have an attack type, with its key.
+fn typed_steps(project: &Project, tree: TreeId) -> Vec<(String, String)> {
+    let idx = project.attack_tree_idx(&tree).expect("tree");
+    tree_of(project, tree)
+        .iter()
+        .filter_map(|(i, _, n)| {
+            let t = project.step_attack_type(idx, i)?;
+            let key = project.methodology().attack_type_key(t)?;
+            Some((n.label().to_owned(), key.to_owned()))
+        })
+        .collect()
+}
+
+fn tree_description(ws: &Workspace, tree: TreeId) -> String {
+    ws.project()
+        .description(aegis_model::ElementRef::Tree(tree))
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[test]
+fn a_suggested_attack_type_is_filled_in_counted_and_undone_together() {
+    let (mut ws, pack) = (workspace(), pack());
+    let before = ws.project().clone();
+    let tree = new_tree(&mut ws, &pack, "uds-exec", plain());
+    assert_eq!(
+        typed_steps(ws.project(), tree),
+        vec![(
+            "Reflash the ECU with modified firmware".to_owned(),
+            "firmware-modification".to_owned()
+        )]
+    );
+    let note = tree_description(&ws, tree);
+    assert!(
+        note.contains("Suggested attack types were filled in on 1 step(s)"),
+        "{note}"
+    );
+    assert!(ws.project().review_marks().next().is_none());
+    ws.undo().expect("one undo step");
+    assert_eq!(ws.project(), &before);
+}
+
+#[test]
+fn an_item_without_a_suggestion_says_nothing_about_attack_types() {
+    let (mut ws, pack) = (workspace(), pack());
+    let tree = new_tree(&mut ws, &pack, "reach-obd-port", plain());
+    assert!(!tree_description(&ws, tree).contains("Suggested attack types"));
+    assert!(typed_steps(ws.project(), tree).is_empty());
+}
+
+#[test]
+fn a_key_the_methodology_lacks_is_skipped_without_an_error() {
+    let mut ws = workspace();
+    let mut item = pack().items()[item_index(&pack(), "reach-obd-port")].clone();
+    item.tree.attack_type = Some("no-such-type".into());
+    let odd = Arc::new(
+        LibraryPack::new(
+            aegis_model::library::PackMeta {
+                id: "p".into(),
+                title: "P".into(),
+                pack_version: "1".into(),
+                license: "CC0-1.0".into(),
+                sources: "s".into(),
+            },
+            vec![item],
+        )
+        .expect("pack"),
+    );
+    let tree = TreeId::new_v7();
+    apply(
+        &mut ws,
+        &Edit::InsertLibraryItem {
+            pack: odd,
+            item: 0,
+            mode: InsertMode::NewTree {
+                id: tree,
+                threat: None,
+            },
+            options: plain(),
+        },
+    )
+    .expect("inserts");
+    assert!(typed_steps(ws.project(), tree).is_empty());
+    assert!(!tree_description(&ws, tree).contains("Suggested attack types"));
+}
+
+#[test]
+fn a_shared_step_keeps_its_own_attack_type_and_the_value_can_be_cleared() {
+    let (mut ws, tree, gate, _) = host();
+    let pack = pack();
+    apply(
+        &mut ws,
+        &Edit::ReplaceTree {
+            tree,
+            outline: "OR Goal
+  AND Existing gate
+    - Reflash the ECU with modified firmware
+"
+            .into(),
+        },
+    )
+    .expect("host outline");
+    let _ = gate;
+    let gate = node(tree_of(ws.project(), tree), "Existing gate");
+    let options = InsertOptions {
+        share_all: true,
+        ..plain()
+    };
+    apply(
+        &mut ws,
+        &insert(
+            &pack,
+            "uds-exec",
+            InsertMode::UnderGate { tree, gate },
+            options,
+        ),
+    )
+    .expect("inserts");
+    assert!(
+        typed_steps(ws.project(), tree).is_empty(),
+        "the shared step was not touched"
+    );
+
+    // A fresh insert gives a normal value that the user can clear.
+    let mut ws = workspace();
+    let tree = new_tree(&mut ws, &pack, "uds-exec", plain());
+    let step = node(
+        tree_of(ws.project(), tree),
+        "Reflash the ECU with modified firmware",
+    );
+    apply(
+        &mut ws,
+        &Edit::SetStepAttackType {
+            tree,
+            node: step,
+            attack_type: None,
+        },
+    )
+    .expect("clears");
+    assert!(typed_steps(ws.project(), tree).is_empty());
+}

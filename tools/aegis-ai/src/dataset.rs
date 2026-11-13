@@ -884,6 +884,7 @@ fn bind_node_slots(node: &ItemNode, bus: &str, ecu: &str, function: &str) -> Ite
         label,
         gate: node.gate,
         feasibility: node.feasibility.clone(),
+        attack_type: None,
         children,
     }
 }
