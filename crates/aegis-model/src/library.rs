@@ -6,7 +6,8 @@
 //! template, with names, tags, facets (STRIDE category, interface, asset type,
 //! attack type, catalog IDs) and the tree itself. Items carry no ratings of
 //! their own authority: a leaf may suggest a feasibility level by key, and
-//! an insert marks it "needs review" (see `Op::SetReviewMark`).
+//! an insert marks it "needs review" (see `Op::SetReviewMark`). A step may also
+//! suggest an attack type by key, which an insert fills in as a normal value.
 //!
 //! # Caps (R3)
 //!
@@ -123,6 +124,10 @@ pub struct ItemNode {
     /// A suggested feasibility level, as the methodology's key (steps only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feasibility: Option<String>,
+    /// A suggested attack type, as the methodology's key (steps only). An
+    /// insert fills it in when the project's methodology has the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack_type: Option<String>,
     /// Children in order (gates only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ItemNode>,
@@ -340,6 +345,15 @@ fn check_tree(it: &LibraryItem) -> Result<(), LibraryError> {
         }
         if let Some(key) = &node.feasibility {
             check_text(key, MAX_SHORT_CHARS, "a rating key is too long")?;
+        }
+        if node.gate.is_some() && node.attack_type.is_some() {
+            return Err(LibraryError::Invalid("a gate has an attack type"));
+        }
+        if let Some(key) = &node.attack_type {
+            if key.trim().is_empty() {
+                return Err(LibraryError::Invalid("an attack type key is empty"));
+            }
+            check_text(key, MAX_SHORT_CHARS, "an attack type key is too long")?;
         }
         stack.extend(node.children.iter().map(|c| (c, depth + 1)));
     }

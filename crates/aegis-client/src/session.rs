@@ -3329,8 +3329,7 @@ fn page_data(open: &Open) -> PageData {
             let project = ws.project();
             d.outline = shown_tree(ws, ui)
                 .and_then(|t| project.attack_tree_idx(&t))
-                .and_then(|i| project.attack_tree(i))
-                .map(crate::outline::to_outline);
+                .and_then(|i| crate::outline::to_outline_annotated(project, i));
             d.controls = pages::control_rows(ws);
         }
         Page::Controls => {

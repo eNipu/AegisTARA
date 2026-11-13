@@ -305,6 +305,7 @@ fn parse_single_node_line(line_no: usize, content: &str) -> Result<ItemNode, Dsl
             label: label_part.to_owned(),
             gate: None,
             feasibility,
+            attack_type: None,
             children: Vec::new(),
         })
     } else {
@@ -327,6 +328,7 @@ fn parse_gate_rest(line_no: usize, kind: GateKind, rest: &str) -> Result<ItemNod
         label: label.to_owned(),
         gate: Some(kind),
         feasibility: None,
+        attack_type: None,
         children: Vec::new(),
     })
 }
@@ -491,28 +493,33 @@ mod tests {
             label: "Run modified code on the ECU over UDS".into(),
             gate: Some(GateKind::SeqAnd),
             feasibility: None,
+            attack_type: None,
             children: vec![
                 ItemNode {
                     label: "Reach the OBD port".into(),
                     gate: None,
                     feasibility: Some("low".into()),
+                    attack_type: None,
                     children: vec![],
                 },
                 ItemNode {
                     label: "Pass security access".into(),
                     gate: Some(GateKind::Or),
                     feasibility: None,
+                    attack_type: None,
                     children: vec![
                         ItemNode {
                             label: "Guess a weak diagnostic PIN".into(),
                             gate: None,
                             feasibility: Some("low".into()),
+                            attack_type: None,
                             children: vec![],
                         },
                         ItemNode {
                             label: "Recover the seed-key secret from another unit".into(),
                             gate: None,
                             feasibility: Some("high".into()),
+                            attack_type: None,
                             children: vec![],
                         },
                     ],

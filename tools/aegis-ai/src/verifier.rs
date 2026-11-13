@@ -157,6 +157,7 @@ impl Verifier {
                 label: "Parent gate".into(),
                 gate: Some(aegis_model::GateKind::Or),
                 feasibility: None,
+                attack_type: None,
                 children: vec![item_root.clone()],
             };
             &owned_wrapper

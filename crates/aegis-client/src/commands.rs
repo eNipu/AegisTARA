@@ -18,7 +18,7 @@ use aegis_model::{
     TreeId, TrustBoundaryId,
 };
 
-use crate::outline::{OutlineError, parse_outline};
+use crate::outline::{OutlineError, ResolvedNote, parse_outline_annotated, resolve_notes};
 
 /// The treatment decisions, in the order the view offers them.
 pub const TREATMENTS: [RiskTreatment; 4] = [
@@ -955,6 +955,44 @@ fn root_node_without_children(node: &aegis_model::Node) -> aegis_model::Node {
     }
 }
 
+/// Appends the ops that make each step's through item and attack type what
+/// the outline says. A step new to the tree starts with none.
+fn note_ops(
+    project: &Project,
+    tree: TreeId,
+    old: &AttackTree,
+    notes: &[ResolvedNote],
+    p: &Provenance,
+    ops: &mut Vec<Op>,
+) {
+    let t_idx = project.attack_tree_idx(&tree);
+    for (node, via, attack_type) in notes {
+        let was = old
+            .idx_of(node)
+            .filter(|&i| old.get(i).is_some_and(|n| n.gate_kind().is_none()))
+            .zip(t_idx);
+        let (cur_via, cur_type) = was.map_or((None, None), |(i, t)| {
+            (project.step_via(t, i), project.step_attack_type(t, i))
+        });
+        if cur_via != *via {
+            ops.push(Op::SetStepVia {
+                tree,
+                node: *node,
+                via: *via,
+                provenance: p.clone(),
+            });
+        }
+        if cur_type != *attack_type {
+            ops.push(Op::SetStepAttackType {
+                tree,
+                node: *node,
+                attack_type: *attack_type,
+                provenance: p.clone(),
+            });
+        }
+    }
+}
+
 fn threats_on_tree(project: &Project, tree: TreeId) -> Vec<ThreatId> {
     let Some(t_idx) = project.attack_tree_idx(&tree) else {
         return Vec::new();
@@ -1696,8 +1734,11 @@ impl Edit {
                     .attack_tree_idx(tree)
                     .and_then(|i| project.attack_tree(i))
                     .ok_or(EditError::Missing)?;
-                let new = parse_outline(outline, Some(old))?;
-                crate::tree_diff::replace_tree_ops(project, *tree, &new, &p)?
+                let parsed = parse_outline_annotated(outline, Some(old))?;
+                let notes = resolve_notes(project, &parsed.notes)?;
+                let mut ops = crate::tree_diff::replace_tree_ops(project, *tree, &parsed.tree, &p)?;
+                note_ops(project, *tree, old, &notes, &p, &mut ops);
+                ops
             }
             Edit::RemoveTree { tree } => {
                 if project.attack_tree_idx(tree).is_none() {

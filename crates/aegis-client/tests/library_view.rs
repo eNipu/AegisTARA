@@ -94,3 +94,24 @@ fn catalog_pick_tracks_the_same_catalog_across_filtering_and_clears_when_filtere
     assert_eq!(v.catalog_picked_row(), None);
     assert!(v.catalog_preview().is_empty());
 }
+
+#[test]
+fn the_preview_shows_a_suggested_attack_type() {
+    let mut v = view();
+    v.set_query("UDS");
+    let rows = v.rows().len();
+    let mut found = false;
+    for i in 0..rows {
+        v.pick(Some(i));
+        if v.preview().contains("Reflash") {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "an item with the reflash step");
+    assert!(
+        v.preview().contains("{type: firmware-modification}"),
+        "{}",
+        v.preview()
+    );
+}
