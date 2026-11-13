@@ -205,12 +205,26 @@ fn an_outline_edit_that_moves_a_step_keeps_its_through_and_attack_type() {
             attack_type: Some(1),
         },
     );
-    // Same steps, other order, one renamed neighbour.
+    // Same steps, other order, one renamed neighbour. The text decides, so
+    // the values are written in it.
+    let (p0, t0) = (fx.ws.project(), fx.ws.project().attack_tree_idx(&fx.tree));
+    let t0 = t0.expect("tree");
+    let n0 = p0
+        .attack_tree(t0)
+        .and_then(|t| t.idx_of(&fx.flash))
+        .expect("step");
+    let key = p0
+        .methodology()
+        .attack_type_key(p0.step_attack_type(t0, n0).expect("type"))
+        .expect("key")
+        .to_owned();
     run(
         &mut fx.ws,
         Edit::ReplaceTree {
             tree: fx.tree,
-            outline: "OR Goal\n  - Open JTAG port\n  - Flash firmware\n".into(),
+            outline: format!(
+                "OR Goal\n  - Open JTAG port\n  - Flash firmware | through: C00 | type: {key}\n"
+            ),
         },
     );
     let p = fx.ws.project();

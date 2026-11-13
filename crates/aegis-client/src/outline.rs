@@ -44,7 +44,10 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use aegis_model::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, NodeId, NodeIdx};
+use aegis_model::{
+    AttackTree, AttackType, GateKind, ItemRef, MAX_ATTACK_TREE_NODES, Node, NodeId, NodeIdx,
+    Project, TreeIdx,
+};
 
 /// Longest node text, in characters.
 pub const MAX_LABEL_CHARS: usize = 256;
@@ -110,6 +113,12 @@ pub enum OutlineError {
         "line {0}: this step is written before with another \"through\" or \"type\"; write them on its first line"
     )]
     NoteConflict(usize),
+    /// A `through:` value that is no component or interface ID.
+    #[error("line {0}: no component or interface has this ID (write it like C00 or IF00)")]
+    UnknownItem(usize),
+    /// A `type:` value that is no attack type key of the methodology.
+    #[error("line {0}: this methodology has no attack type with this key")]
+    UnknownAttackType(usize),
 }
 
 /// What one step line says after its name.
@@ -156,7 +165,9 @@ pub fn to_outline(tree: &AttackTree) -> String {
 }
 
 /// Writes a tree as an outline, with what `note` returns for each step
-/// (through, attack type) after its name. Time O(V + E).
+/// (through, attack type) after its name. A value that is empty, `-`, or has
+/// a character other than an ASCII letter, digit, `_` or `-` is not written.
+/// Time O(V + E).
 #[must_use]
 pub fn to_outline_with<F>(tree: &AttackTree, mut note: F) -> String
 where
@@ -169,8 +180,21 @@ where
     out
 }
 
+/// Whether `value` reads back as written after `through:` or `type:`:
+/// not empty, not `-`, and only ASCII letters, digits, `_` and `-`.
+/// Time O(length).
+fn is_note_value(value: &str) -> bool {
+    value != "-"
+        && !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 /// The text written after a node's name.
 fn tail_of(label: &str, through: Option<&str>, attack_type: Option<&str>) -> String {
+    let through = through.filter(|v| is_note_value(v));
+    let attack_type = attack_type.filter(|v| is_note_value(v));
     let plain = matches!(read_tail(0, label), Ok(t) if t.name == label && !t.has_tail);
     if !plain {
         return format!(
@@ -187,6 +211,79 @@ fn tail_of(label: &str, through: Option<&str>, attack_type: Option<&str>) -> Str
         let _ = write!(tail, " | type: {v}");
     }
     tail
+}
+
+/// The outline of a tree of `project` with what each step goes through
+/// (the visual ID, `C00` or `IF00`) and its attack type (the pack key)
+/// after its name. `None` if the tree is gone. Time O(V + E).
+#[must_use]
+pub fn to_outline_annotated(project: &Project, tree: TreeIdx) -> Option<String> {
+    let t = project.attack_tree(tree)?;
+    let methodology = project.methodology();
+    Some(to_outline_with(t, |node| {
+        let through = project.step_via(tree, node).and_then(|via| match via {
+            ItemRef::Component(id) => project
+                .component_idx(&id)
+                .and_then(|i| project.component_visual_id(i)),
+            ItemRef::Interface(id) => project
+                .interface_idx(&id)
+                .and_then(|i| project.interface_visual_id(i)),
+        });
+        let kind = project
+            .step_attack_type(tree, node)
+            .and_then(|k| methodology.attack_type_key(k))
+            .map(str::to_owned);
+        (through, kind)
+    }))
+}
+
+/// One step's values, resolved against a project.
+pub(crate) type ResolvedNote = (NodeId, Option<ItemRef>, Option<AttackType>);
+
+/// Resolves what the outline says about its steps. Time O(components +
+/// interfaces + notes).
+///
+/// # Errors
+///
+/// [`OutlineError::UnknownItem`] or [`OutlineError::UnknownAttackType`]
+/// with the step's line.
+pub(crate) fn resolve_notes(
+    project: &Project,
+    notes: &[(NodeId, StepNote)],
+) -> Result<Vec<ResolvedNote>, OutlineError> {
+    let mut items: HashMap<String, ItemRef> = HashMap::new();
+    for (idx, id, _) in project.components() {
+        if let Some(v) = project.component_visual_id(idx) {
+            items.insert(v, ItemRef::Component(id));
+        }
+    }
+    for (idx, id, _) in project.interfaces() {
+        if let Some(v) = project.interface_visual_id(idx) {
+            items.insert(v, ItemRef::Interface(id));
+        }
+    }
+    let methodology = project.methodology();
+    let mut out = Vec::with_capacity(notes.len());
+    for (node, note) in notes {
+        let via = match &note.through {
+            Some(v) => Some(
+                *items
+                    .get(&v.to_ascii_uppercase())
+                    .ok_or(OutlineError::UnknownItem(note.line))?,
+            ),
+            None => None,
+        };
+        let kind = match &note.attack_type {
+            Some(k) => Some(
+                methodology
+                    .attack_type(k)
+                    .ok_or(OutlineError::UnknownAttackType(note.line))?,
+            ),
+            None => None,
+        };
+        out.push((*node, via, kind));
+    }
+    Ok(out)
 }
 
 fn write_node<F>(
