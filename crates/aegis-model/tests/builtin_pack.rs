@@ -158,6 +158,7 @@ fn ja_translation() -> PackTranslationDef {
             feasibility: s("攻撃実現可能性"),
             interface_kinds: Vec::new(),
             attack_types: Vec::new(),
+            control_kinds: Vec::new(),
             translations: BTreeMap::new(),
         }),
         impact_categories: BTreeMap::from([
@@ -252,6 +253,7 @@ fn ja_translation() -> PackTranslationDef {
             (s("wireless-proximity"), s("近接無線")),
             (s("side-channel"), s("サイドチャネル")),
         ]),
+        control_kinds: BTreeMap::new(),
     }
 }
 

@@ -1525,6 +1525,55 @@ pub enum MethodologyError {
     /// Two attack types share a key.
     #[error("attack type key {0:?} is declared twice")]
     DuplicateAttackType(Arc<str>),
+    /// More than `max` setting presets (control kinds) are declared.
+    #[error("more than {max} control kinds")]
+    TooManyControlKinds {
+        /// The limit.
+        max: usize,
+    },
+    /// Two control kinds share a key.
+    #[error("control kind key {0:?} is declared twice")]
+    DuplicateControlKind(Arc<str>),
+    /// A control kind has no rules or more than `max`.
+    #[error("control kind {control_kind:?} must have 1 to {max} rules")]
+    ControlKindRuleCount {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The limit.
+        max: usize,
+    },
+    /// A control kind rule names an attack type that is not declared.
+    #[error("control kind {control_kind:?} has a rule for unknown attack type {attack_type:?}")]
+    UnknownControlKindAttackType {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The unknown attack type key, cut like [`InvalidKey`](Self::InvalidKey)'s.
+        attack_type: Arc<str>,
+    },
+    /// A control kind rule names a feasibility level that is not declared.
+    #[error("control kind {control_kind:?} has a rule with unknown feasibility level {level:?}")]
+    UnknownControlKindFeasibilityLevel {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The unknown feasibility level key, cut like [`InvalidKey`](Self::InvalidKey)'s.
+        level: Arc<str>,
+    },
+    /// A control kind names an interface kind that is not declared.
+    #[error("control kind {control_kind:?} names unknown interface kind {interface_kind:?}")]
+    UnknownControlKindInterfaceKind {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The unknown interface kind key, cut like [`InvalidKey`](Self::InvalidKey)'s.
+        interface_kind: Arc<str>,
+    },
+    /// A control kind lists the same interface kind twice.
+    #[error("control kind {control_kind:?} lists interface kind {interface_kind:?} twice")]
+    RepeatedControlKindInterfaceKind {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The repeated interface kind key.
+        interface_kind: Arc<str>,
+    },
     /// More than `max` language translations are declared in a pack.
     #[error("more than {max} pack translations")]
     TooManyTranslations {
