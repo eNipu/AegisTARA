@@ -120,6 +120,7 @@ fn step(label: &str, feas: &str) -> ItemNode {
         label: label.to_owned(),
         gate: None,
         feasibility: Some(feas.to_owned()),
+        attack_type: None,
         children: Vec::new(),
     }
 }
@@ -129,6 +130,7 @@ fn gate(kind: GateKind, label: &str, children: Vec<ItemNode>) -> ItemNode {
         label: label.to_owned(),
         gate: Some(kind),
         feasibility: None,
+        attack_type: None,
         children,
     }
 }
