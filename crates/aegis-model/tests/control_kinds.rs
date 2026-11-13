@@ -1,5 +1,7 @@
 //! Setting presets (control kinds) in a methodology definition (CFG-06).
 
+mod common;
+
 use std::sync::Arc;
 
 use aegis_model::{
@@ -245,4 +247,111 @@ fn all_rules(def: &MethodologyDef, n: usize) -> std::collections::BTreeMap<Arc<s
         .take(n)
         .map(|a| (Arc::clone(&a.key), s("low")))
         .collect()
+}
+
+// Pack files (124b).
+
+use aegis_model::LevelDef;
+use common::{pack_bytes, second_def};
+use std::collections::BTreeMap;
+
+fn lv(k: &str, l: &str) -> LevelDef {
+    LevelDef {
+        key: k.into(),
+        label: l.into(),
+    }
+}
+
+fn rule_map(pairs: &[(&str, &str)]) -> BTreeMap<Arc<str>, Arc<str>> {
+    pairs.iter().map(|&(a, l)| (a.into(), l.into())).collect()
+}
+
+/// The second definition with two attack types, two interface kinds, a
+/// component preset, an interface preset and a `ja` label for each.
+fn pack_presets() -> MethodologyDef {
+    let mut d = second_def();
+    let low = Arc::clone(&d.feasibility_levels[0].key);
+    d.element_names.attack_types = vec![
+        lv("bootloader-exploit", "Bootloader exploit"),
+        lv("debug-access", "Debug access"),
+    ];
+    d.element_names.interface_kinds = vec![lv("debug", "Debug"), lv("usb", "USB")];
+    d.element_names.control_kinds = vec![
+        ControlKindDef {
+            key: "secure-boot".into(),
+            label: "Secure boot".into(),
+            interface_kinds: Vec::new(),
+            rules: rule_map(&[("bootloader-exploit", &low)]),
+        },
+        ControlKindDef {
+            key: "debug-port-locked".into(),
+            label: "Debug port locked".into(),
+            interface_kinds: vec!["debug".into()],
+            rules: rule_map(&[("debug-access", &low), ("bootloader-exploit", &low)]),
+        },
+    ];
+    d.element_names.translations.insert(
+        "ja".into(),
+        PackTranslationDef {
+            control_kinds: rule_map(&[("secure-boot", "セキュアブート")]),
+            ..PackTranslationDef::default()
+        },
+    );
+    d
+}
+
+fn pack_text(d: &MethodologyDef) -> String {
+    String::from_utf8(pack_bytes(d)).expect("utf-8")
+}
+
+#[test]
+fn presets_round_trip_and_the_model_accepts_them() {
+    let d = pack_presets();
+    let back = MethodologyDef::read_pack(pack_bytes(&d).as_slice()).expect("reads");
+    assert_eq!(back, d);
+    assert!(Methodology::new(back).is_ok());
+}
+
+#[test]
+fn presets_write_the_same_bytes_twice() {
+    let d = pack_presets();
+    let first = pack_bytes(&d);
+    assert_eq!(first, pack_bytes(&d));
+    let back = MethodologyDef::read_pack(first.as_slice()).expect("reads");
+    assert_eq!(pack_bytes(&back), first);
+}
+
+#[test]
+fn presets_are_written_in_the_documented_shape() {
+    let t = pack_text(&pack_presets());
+    assert!(t.contains("    \"control_kinds\": [\n      {\n        \"key\": \"secure-boot\","));
+    assert!(t.contains("        \"interface_kinds\": [\n          \"debug\"\n        ],\n"));
+    assert!(t.contains("        \"rules\": {\n          \"bootloader-exploit\": "));
+    // Rules are in key order.
+    let a = t.find("\"bootloader-exploit\": \"").expect("rule");
+    let b = t.find("\"debug-access\": \"").expect("rule");
+    assert!(a < b);
+    assert!(t.contains("\"control_kinds\": {\n          \"secure-boot\": \"セキュアブート\""));
+    // Presets come after attack types and before translations.
+    let at = t.find("\"attack_types\": [").expect("attack types");
+    let ck = t.find("\"control_kinds\": [").expect("control kinds");
+    let tr = t.find("\"translations\"").expect("translations");
+    assert!(at < ck && ck < tr);
+}
+
+#[test]
+fn a_component_preset_has_no_interface_kinds_line() {
+    let mut d = pack_presets();
+    d.element_names.control_kinds.truncate(1);
+    d.element_names.translations.clear();
+    let t = pack_text(&d);
+    assert!(t.contains("\"secure-boot\""));
+    assert!(!t.contains("interface_kinds\": [\n          \"debug\""));
+    let start = t.find("\"control_kinds\"").expect("control kinds");
+    assert!(!t[start..].contains("\"interface_kinds\""));
+}
+
+#[test]
+fn no_presets_write_no_control_kinds() {
+    assert!(!pack_text(&second_def()).contains("control_kinds"));
 }

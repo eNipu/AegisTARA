@@ -12,9 +12,10 @@ use std::io::Read;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackPotentialDef, CatalogSchemeDef, FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef,
-    Limit, MAX_LABEL_BYTES, MAX_PACK_FILE_BYTES, Methodology, MethodologyDef, MethodologyError,
-    PackError, PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
+    AttackPotentialDef, CatalogSchemeDef, ControlKindDef, FactorDef, FactorLevelDef,
+    ImpactCategoryDef, LevelDef, Limit, MAX_LABEL_BYTES, MAX_PACK_FILE_BYTES, Methodology,
+    MethodologyDef, MethodologyError, PackError, PotentialBandDef, PropertyDef, SegmentDef,
+    ThreatCategoryDef,
 };
 use common::{key_of_len, max_def, pack_bytes, second_def};
 
@@ -552,4 +553,95 @@ fn maximal_pack_loads_below_the_file_cap() {
     );
     let m = Methodology::read_pack(bytes.as_slice()).expect("maximal pack loads");
     assert_eq!(Methodology::new(def).ok(), Some(m));
+}
+
+/// The second definition with 32 interface kinds, 17 attack types and one
+/// preset that uses the first `interfaces` interface kinds and the first
+/// `rules` attack types.
+fn with_preset(interfaces: usize, rules: usize) -> MethodologyDef {
+    let entry = |tag: &str, i: usize| LevelDef {
+        key: key_of_len(tag, i, 8),
+        label: "X".into(),
+    };
+    let mut d = second_def();
+    let low = Arc::clone(&d.feasibility_levels[0].key);
+    d.element_names.interface_kinds = (0..32).map(|i| entry("ik", i)).collect();
+    d.element_names.attack_types = (0..17).map(|i| entry("at", i)).collect();
+    d.element_names.control_kinds = vec![ControlKindDef {
+        key: "kind".into(),
+        label: "Kind".into(),
+        interface_kinds: d.element_names.interface_kinds[..interfaces]
+            .iter()
+            .map(|e| Arc::clone(&e.key))
+            .collect(),
+        rules: d.element_names.attack_types[..rules]
+            .iter()
+            .map(|e| (Arc::clone(&e.key), Arc::clone(&low)))
+            .collect(),
+    }];
+    d
+}
+
+#[test]
+fn control_kind_count_cap() {
+    let many = |n: usize| {
+        let mut d = with_preset(0, 1);
+        let one = d.element_names.control_kinds[0].clone();
+        d.element_names.control_kinds = (0..n)
+            .map(|i| ControlKindDef {
+                key: key_of_len("ck", i, 8),
+                ..one.clone()
+            })
+            .collect();
+        d
+    };
+    at_cap(&many(64), "64 control kinds");
+    over_cap(
+        &many(65),
+        Limit::ControlKinds { max: 64 },
+        "65 control kinds",
+    );
+}
+
+#[test]
+fn control_kind_rule_cap() {
+    at_cap(&with_preset(0, 16), "16 rules");
+    over_cap(
+        &with_preset(0, 17),
+        Limit::ControlRules { max: 16 },
+        "17 rules",
+    );
+}
+
+#[test]
+fn control_kind_interface_kind_cap() {
+    at_cap(&with_preset(32, 1), "32 interface kinds");
+    let mut d = with_preset(32, 1);
+    d.element_names.interface_kinds.push(LevelDef {
+        key: "extra".into(),
+        label: "X".into(),
+    });
+    d.element_names.control_kinds[0]
+        .interface_kinds
+        .push("extra".into());
+    over_cap(&d, Limit::InterfaceKinds { max: 32 }, "33 interface kinds");
+}
+
+#[test]
+fn control_kind_key_and_label_caps() {
+    let mut d = with_preset(0, 1);
+    d.element_names.control_kinds[0].key = key_of_len("k", 7, 64);
+    at_cap(&d, "64-byte preset key");
+    d.element_names.control_kinds[0].key = key_of_len("k", 7, 65);
+    over_cap(&d, Limit::KeyBytes { max: 64 }, "65-byte preset key");
+
+    let mut d = with_preset(0, 1);
+    d.element_names.control_kinds[0].label = "\u{1f600}".repeat(256).into();
+    at_cap(&d, "1024-byte preset label");
+    d.element_names.control_kinds[0].label = format!("x{}", "\u{1f600}".repeat(256)).into();
+    over_cap(
+        &d,
+        Limit::LabelBytes { max: 1024 },
+        "1025-byte preset label",
+    );
 }
