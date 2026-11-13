@@ -1,0 +1,60 @@
+{
+  "job": "122d-through-in-outline",
+  "slices": [
+    {
+      "id": "122da",
+      "title": "Read and write through and type in the outline text",
+      "tier": "hard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/outline.rs",
+        "crates/aegis-client/tests/outline_notes.rs"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": ["cargo test --locked -p aegis-client --test outline_notes"]
+    },
+    {
+      "id": "122db",
+      "title": "Apply through and type from the outline as ops",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/outline.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/tests/outline_apply.rs",
+        "crates/aegis-client/tests/step_via.rs"
+      ],
+      "max_lines": 250,
+      "new_deps": false,
+      "ci": ["crates/aegis-client", "crates/aegis-shell"],
+      "checks": ["cargo test --locked -p aegis-client --test outline_apply --test step_via"]
+    },
+    {
+      "id": "122dc",
+      "title": "A library step may suggest an attack type",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/library.rs",
+        "crates/aegis-model/packs/library-demo.json",
+        "crates/aegis-model/tests/library.rs",
+        "crates/aegis-client/src/library.rs",
+        "crates/aegis-client/tests/library_insert.rs",
+        "crates/aegis-client/tests/library_view.rs",
+        "tools/aegis-ai/src/*",
+        "docs/architecture.md"
+      ],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test library",
+        "cargo test --locked -p aegis-client --test library_insert --test library_view",
+        "cargo check --locked --all-targets --manifest-path tools/aegis-ai/Cargo.toml"
+      ]
+    }
+  ]
+}
