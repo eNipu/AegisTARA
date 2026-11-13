@@ -1463,6 +1463,54 @@
       ],
       "decision": null,
       "updated": "2026-11-12T19:06:34Z"
+    },
+    {
+      "id": "122d-through-in-outline",
+      "title": "Through and attack type in the outline text and the library",
+      "branch": "factory/122d-through-in-outline",
+      "stage": "merged",
+      "slice": "122dc",
+      "base": "efcc00aa143c1543f7943c56079f10968bc26561",
+      "reviews": {
+        "slice": "122dc",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "122da",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 241
+        },
+        {
+          "slice": "122db",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 151
+        },
+        {
+          "slice": "122dc",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 71
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-13T09:43:38Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
