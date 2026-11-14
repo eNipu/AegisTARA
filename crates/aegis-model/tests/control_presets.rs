@@ -9,7 +9,8 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    ControlId, ControlKind, Methodology, ModelError, Op, OpCodec, Project, Provenance,
+    ComponentId, ControlId, ControlKind, InterfaceId, ItemRef, LintCode, Methodology, ModelError,
+    Op, OpCodec, Project, Provenance,
 };
 
 fn methodology() -> Arc<Methodology> {
@@ -183,4 +184,116 @@ fn snapshot_round_trips_and_omits_an_absent_kind() {
     let bad = text.replace("\"kind\":\"secure-boot\"", "\"kind\":\"no-such-preset\"");
     assert_ne!(bad, text);
     assert!(Project::load(bad.as_bytes(), m).is_err());
+}
+
+fn rule(p: &mut Project, control: ControlId, attack: &str, level: Option<&str>) {
+    let m = p.methodology().clone();
+    p.apply(Op::SetControlRule {
+        control,
+        attack_type: m.attack_type(attack).expect("attack type"),
+        ceiling: level.map(|l| m.feasibility_level(l).expect("level")),
+        provenance: Provenance::default(),
+    })
+    .expect("rule");
+}
+
+fn preset_control() -> (Project, ControlId) {
+    let m = methodology();
+    let (mut p, id) = project_with_control();
+    p.apply(set(id, Some(boot(&m)), Provenance::default()))
+        .expect("set");
+    rule(&mut p, id, "firmware-modification", Some("low"));
+    rule(&mut p, id, "bootloader-exploit", Some("low"));
+    (p, id)
+}
+
+fn differing(p: &Project) -> Vec<ControlId> {
+    p.lint()
+        .into_iter()
+        .filter_map(|f| match f.code() {
+            LintCode::ControlRulesDifferFromKind { control } => Some(control),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn warning_appears_exactly_when_the_rules_differ() {
+    let (mut p, id) = preset_control();
+    assert!(differing(&p).is_empty());
+
+    rule(&mut p, id, "bootloader-exploit", Some("medium"));
+    assert_eq!(differing(&p), [id]);
+    rule(&mut p, id, "bootloader-exploit", Some("low"));
+    assert!(differing(&p).is_empty());
+
+    rule(&mut p, id, "debug-access", Some("low"));
+    assert_eq!(differing(&p), [id]);
+    rule(&mut p, id, "debug-access", None);
+    assert!(differing(&p).is_empty());
+
+    rule(&mut p, id, "bootloader-exploit", None);
+    assert_eq!(differing(&p), [id]);
+}
+
+#[test]
+fn a_control_without_a_kind_never_differs() {
+    let (mut p, id) = project_with_control();
+    rule(&mut p, id, "debug-access", Some("low"));
+    assert!(differing(&p).is_empty());
+    let idx = p.security_control_idx(&id).expect("idx");
+    assert!(!p.control_differs_from_kind(idx));
+}
+
+#[test]
+fn fit_follows_the_preset_target_kinds() {
+    let m = methodology();
+    let mut p = Project::new(Arc::clone(&m));
+    let comp = ComponentId::new_v7();
+    p.apply(Op::AddComponent {
+        id: comp,
+        name: "ECU".into(),
+        parent: None,
+        provenance: Provenance::default(),
+    })
+    .expect("component");
+    let mut iface = |key: &str| {
+        let id = InterfaceId::new_v7();
+        p.apply(Op::AddInterface {
+            id,
+            name: key.into(),
+            component: comp,
+            kind: m.interface_kind(key).expect("interface kind"),
+            provenance: Provenance::default(),
+        })
+        .expect("interface");
+        ItemRef::Interface(id)
+    };
+    let (debug, can, eth) = (iface("debug"), iface("can"), iface("ethernet"));
+    let c = ItemRef::Component(comp);
+    let kind = |k: &str| m.control_kind(k).expect("kind");
+    let (sb, dp, sc) = (
+        kind("secure-boot"),
+        kind("debug-port-locked"),
+        kind("secoc"),
+    );
+
+    assert!(p.control_kind_fits(sb, c));
+    assert!(!p.control_kind_fits(sb, debug));
+    assert!(!p.control_kind_fits(sb, can));
+
+    assert!(p.control_kind_fits(dp, debug));
+    assert!(!p.control_kind_fits(dp, can));
+    assert!(!p.control_kind_fits(dp, c));
+
+    assert!(p.control_kind_fits(sc, can));
+    assert!(p.control_kind_fits(sc, eth));
+    assert!(!p.control_kind_fits(sc, debug));
+    assert!(!p.control_kind_fits(sc, c));
+
+    let ghost_c = ItemRef::Component(ComponentId::new_v7());
+    let ghost_i = ItemRef::Interface(InterfaceId::new_v7());
+    assert!(!p.control_kind_fits(sb, ghost_c));
+    assert!(!p.control_kind_fits(dp, ghost_i));
+    assert!(!p.control_kind_fits(sc, ghost_i));
 }
