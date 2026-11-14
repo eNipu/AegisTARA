@@ -1511,6 +1511,94 @@
       ],
       "decision": null,
       "updated": "2026-11-13T09:43:38Z"
+    },
+    {
+      "id": "124-control-presets",
+      "title": "Setting presets from the pack",
+      "branch": "factory/124-control-presets",
+      "stage": "merged",
+      "slice": "124g",
+      "base": "ee4a6cafe8442d39a27696460d559fbac6db035a",
+      "reviews": {
+        "slice": "124g",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "124a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 340
+        },
+        {
+          "slice": "124b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 97
+        },
+        {
+          "slice": "124c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 270
+        },
+        {
+          "slice": "124d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 212
+        },
+        {
+          "slice": "124e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 106
+        },
+        {
+          "slice": "124f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 174
+        },
+        {
+          "slice": "124g",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 125
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-14T12:14:54Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
