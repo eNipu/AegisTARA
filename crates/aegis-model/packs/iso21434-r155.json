@@ -557,6 +557,123 @@
         "label": "Side channel"
       }
     ],
+    "control_kinds": [
+      {
+        "key": "secure-boot",
+        "label": "Secure boot",
+        "rules": {
+          "bootloader-exploit": "low",
+          "firmware-modification": "low"
+        }
+      },
+      {
+        "key": "secure-flash",
+        "label": "Secure flash (signed updates)",
+        "rules": {
+          "firmware-modification": "low"
+        }
+      },
+      {
+        "key": "flash-read-protection",
+        "label": "Flash read-out protection",
+        "rules": {
+          "flash-read-out": "low"
+        }
+      },
+      {
+        "key": "hsm-key-storage",
+        "label": "Keys stored in an HSM",
+        "rules": {
+          "flash-read-out": "low",
+          "side-channel": "low"
+        }
+      },
+      {
+        "key": "housing-sealed",
+        "label": "Housing sealed (tamper evident)",
+        "rules": {
+          "physical-tampering": "low"
+        }
+      },
+      {
+        "key": "debug-port-locked",
+        "label": "Debug port locked",
+        "interface_kinds": [
+          "debug"
+        ],
+        "rules": {
+          "debug-access": "low",
+          "flash-read-out": "low"
+        }
+      },
+      {
+        "key": "debug-port-fused",
+        "label": "Debug port fused off",
+        "interface_kinds": [
+          "debug"
+        ],
+        "rules": {
+          "debug-access": "very-low",
+          "flash-read-out": "very-low"
+        }
+      },
+      {
+        "key": "secure-diagnostics",
+        "label": "Secure diagnostics (seed and key)",
+        "interface_kinds": [
+          "can",
+          "ethernet",
+          "usb"
+        ],
+        "rules": {
+          "diagnostic-access": "medium"
+        }
+      },
+      {
+        "key": "diagnostic-auth-hsm",
+        "label": "Authenticated diagnostics with HSM",
+        "interface_kinds": [
+          "can",
+          "ethernet",
+          "usb"
+        ],
+        "rules": {
+          "diagnostic-access": "low"
+        }
+      },
+      {
+        "key": "secoc",
+        "label": "Message authentication (SecOC)",
+        "interface_kinds": [
+          "can",
+          "ethernet"
+        ],
+        "rules": {
+          "local-bus-injection": "low"
+        }
+      },
+      {
+        "key": "network-firewall",
+        "label": "Firewall and network segmentation",
+        "interface_kinds": [
+          "ethernet",
+          "cellular"
+        ],
+        "rules": {
+          "remote-network": "low"
+        }
+      },
+      {
+        "key": "wireless-pairing-auth",
+        "label": "Authenticated wireless pairing",
+        "interface_kinds": [
+          "wireless"
+        ],
+        "rules": {
+          "wireless-proximity": "low"
+        }
+      }
+    ],
     "translations": {
       "ja": {
         "label": "ISO/SAE 21434 + UN R155",
@@ -700,6 +817,20 @@
           "remote-network": "リモートネットワーク",
           "side-channel": "サイドチャネル",
           "wireless-proximity": "近接無線"
+        },
+        "control_kinds": {
+          "debug-port-fused": "デバッグポートの無効化（ヒューズ）",
+          "debug-port-locked": "デバッグポートのロック",
+          "diagnostic-auth-hsm": "HSMによる診断認証",
+          "flash-read-protection": "フラッシュ読み出し保護",
+          "housing-sealed": "筐体の封印（開封検知）",
+          "hsm-key-storage": "HSMでの鍵保管",
+          "network-firewall": "ファイアウォールとネットワーク分離",
+          "secoc": "メッセージ認証（SecOC）",
+          "secure-boot": "セキュアブート",
+          "secure-diagnostics": "セキュア診断（シード＆キー）",
+          "secure-flash": "セキュアフラッシュ（署名付き更新）",
+          "wireless-pairing-auth": "認証付き無線ペアリング"
         }
       }
     }
