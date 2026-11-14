@@ -5,7 +5,7 @@
 //! Three walks cover all kinds. The first replays the ops of the model's own
 //! "every op" walk-through over the second methodology (`second_every_op`,
 //! 37 kinds: vocabulary, threats, trees, controls, goals); the second walk
-//! below covers the next 28 (item definition, tree nodes, descriptions,
+//! below covers the next 29 (item definition, tree nodes, descriptions,
 //! review marks); the third covers the generic element ops. A new `Op`
 //! variant fails this test until a walk covers it.
 
@@ -55,7 +55,7 @@ fn who() -> Provenance {
     Provenance::human("alice", 1)
 }
 
-/// The 28 kinds the model's walk-through does not reach, built against a
+/// The 29 kinds the model's walk-through does not reach, built against a
 /// valid starting state and torn down again.
 fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
     let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
@@ -216,6 +216,16 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
         control: ctrl,
         attack_type: at,
         ceiling: None,
+        provenance: who(),
+    });
+    go(Op::SetControlKind {
+        control: ctrl,
+        kind: m.control_kinds().next(),
+        provenance: who(),
+    });
+    go(Op::SetControlKind {
+        control: ctrl,
+        kind: None,
         provenance: who(),
     });
     go(Op::RemoveSecurityControl { id: ctrl });

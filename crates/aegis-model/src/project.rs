@@ -30,8 +30,9 @@ use crate::item::{
 };
 use crate::lint::{LintCode, LintFinding};
 use crate::methodology::{
-    AttackPotential, AttackType, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel,
-    ImpactCategory, InterfaceKind, Level, Methodology, Property, RiskLevel, ThreatCategory,
+    AttackPotential, AttackType, CatalogRef, ControlKind, FactorLevel, FeasibilityFactor,
+    FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Methodology, Property, RiskLevel,
+    ThreatCategory,
 };
 use crate::op::Op;
 use crate::paths::{AttackPath, ChokePoint};
@@ -6281,6 +6282,9 @@ impl Project {
                 ceiling,
                 ..
             } => self.check_set_control_rule(*control, *attack_type, *ceiling)?,
+            Op::SetControlKind { control, kind, .. } => {
+                self.check_set_control_kind(*control, *kind)?;
+            }
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -6739,6 +6743,11 @@ impl Project {
                 ceiling,
                 provenance,
             } => self.commit_set_control_rule(control, attack_type, ceiling, provenance),
+            Op::SetControlKind {
+                control,
+                kind,
+                provenance,
+            } => self.commit_set_control_kind(control, kind, provenance),
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -8387,6 +8396,18 @@ impl Project {
         Ok(())
     }
 
+    fn check_set_control_kind(
+        &self,
+        control: ControlId,
+        kind: Option<ControlKind>,
+    ) -> Result<(), ModelError> {
+        self.live_control(control)?;
+        if let Some(kind) = kind {
+            self.methodology.check_control_kind(kind)?;
+        }
+        Ok(())
+    }
+
     fn check_remove_control(&self, id: ControlId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Control(id), EntityKind::SecurityControl)?;
         let idx = self.live_control(id)?;
@@ -8418,6 +8439,9 @@ impl Project {
                 control: id,
                 rules: c.rules.len(),
             });
+        }
+        if c.kind.is_some() {
+            return Err(ModelError::SecurityControlHasKind { control: id });
         }
         Ok(())
     }
@@ -9565,6 +9589,7 @@ impl Project {
             name,
             targets: Vec::new(),
             rules: Vec::new(),
+            kind: None,
             provenance,
         };
         self.controls.push(id, control, self.slot_limit).ok_or(
@@ -9666,6 +9691,22 @@ impl Project {
             control,
             attack_type,
             ceiling: old,
+            provenance,
+        })
+    }
+
+    fn commit_set_control_kind(
+        &mut self,
+        control: ControlId,
+        kind: Option<ControlKind>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let c = self.control_mut(control)?;
+        let old = std::mem::replace(&mut c.kind, kind);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::SetControlKind {
+            control,
+            kind: old,
             provenance,
         })
     }
@@ -10663,6 +10704,7 @@ impl Project {
     fn same_control(&self, x: &SecurityControl, other: &Project, y: &SecurityControl) -> bool {
         x.name == y.name
             && x.rules == y.rules
+            && x.kind == y.kind
             && x.provenance == y.provenance
             && x.targets.len() == y.targets.len()
             && x.targets
@@ -11621,6 +11663,7 @@ impl ProjectEvalCache {
             | Op::SetFeasibilityRationale { .. }
             | Op::AddSecurityControl { .. }
             | Op::RenameSecurityControl { .. }
+            | Op::SetControlKind { .. }
             | Op::RemoveSecurityControl { .. }
             | Op::AddCybersecurityGoal { .. }
             | Op::RenameCybersecurityGoal { .. }

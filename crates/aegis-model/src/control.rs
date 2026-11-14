@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::id::{ControlId, ControlIdx};
 use crate::item::{ItemIdx, ItemRef};
-use crate::methodology::{AttackType, FeasibilityLevel};
+use crate::methodology::{AttackType, ControlKind, FeasibilityLevel};
 use crate::provenance::Provenance;
 
 /// Maximum number of [`StepMitigation`]s attached to one attack step.
@@ -273,7 +273,8 @@ impl StepCeiling {
 /// or applied as a setting to components and interfaces via
 /// [`Op::ApplyControl`](crate::Op::ApplyControl) with rules set via
 /// [`Op::SetControlRule`](crate::Op::SetControlRule) to cap matching steps'
-/// residual feasibility.
+/// residual feasibility. [`Op::SetControlKind`](crate::Op::SetControlKind)
+/// records which pack preset the control was made from.
 ///
 /// Built and changed only through [`Project::apply`](crate::Project::apply).
 ///
@@ -301,6 +302,7 @@ pub struct SecurityControl {
     pub(crate) name: Arc<str>,
     pub(crate) targets: Vec<ItemIdx>,
     pub(crate) rules: Vec<ControlRule>,
+    pub(crate) kind: Option<ControlKind>,
     pub(crate) provenance: Provenance,
 }
 
@@ -328,6 +330,39 @@ impl SecurityControl {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the pack preset this control was created from, if any
+    /// (CFG-06). Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let boot = m.control_kind("secure-boot").ok_or("no preset")?;
+    /// let mut project = Project::new(m);
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id,
+    ///     name: "Secure boot".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetControlKind {
+    ///     control: id,
+    ///     kind: Some(boot),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("missing")?;
+    /// let c = project.security_control(idx).ok_or("missing")?;
+    /// assert_eq!(c.kind(), Some(boot));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn kind(&self) -> Option<ControlKind> {
+        self.kind
     }
 
     /// Returns the control's [`ControlRule`]s, sorted by [`AttackType`]. Time O(1).
