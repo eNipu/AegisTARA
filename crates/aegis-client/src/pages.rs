@@ -614,12 +614,11 @@ pub fn component_rows(ws: &Workspace) -> Vec<ComponentRow> {
         .collect()
 }
 
-fn format_control_rules(project: &Project, c: &aegis_model::SecurityControl) -> String {
-    let m = project.methodology();
-    if c.rules().is_empty() {
+fn format_rules(m: &Methodology, rules: &[aegis_model::ControlRule]) -> String {
+    if rules.is_empty() {
         return "No rules yet".to_owned();
     }
-    c.rules()
+    rules
         .iter()
         .map(|rule| {
             format!(
@@ -630,6 +629,10 @@ fn format_control_rules(project: &Project, c: &aegis_model::SecurityControl) -> 
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn format_control_rules(project: &Project, c: &aegis_model::SecurityControl) -> String {
+    format_rules(project.methodology(), c.rules())
 }
 
 fn setting_row(
@@ -667,6 +670,109 @@ fn available_controls_for(
             name: c.name().to_owned(),
         })
         .collect()
+}
+
+/// One existing setting offered by "Add setting".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddSettingExisting {
+    /// The security control.
+    pub id: ControlId,
+    /// Short visual ID (`SC00`, `SC01`, ...).
+    pub visual_id: String,
+    /// Control name.
+    pub name: String,
+    /// How many components and interfaces it is applied to already.
+    pub applied_to: usize,
+}
+
+/// One pack preset offered by "Add setting".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddSettingPreset {
+    /// Position in the methodology's control kinds, for `Edit::AddPresetSetting`.
+    pub kind: usize,
+    /// Label in the asked language; also the name the new setting gets.
+    pub name: String,
+    /// One-line summary of its rules, e.g. `Debug access \u{2192} Low, Flash read-out \u{2192} Low`.
+    pub rules: String,
+}
+
+/// What "Add setting" lists for one component or interface (CFG-06).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddSettingList {
+    /// The pack's label, for the heading "From the pack (...)".
+    pub pack: String,
+    /// Existing settings not applied to the target yet.
+    pub existing: Vec<AddSettingExisting>,
+    /// Pack presets that fit the target and are not in the project yet.
+    pub presets: Vec<AddSettingPreset>,
+    /// The trimmed filter text: the name a custom setting would get. May be empty.
+    pub custom: String,
+}
+
+/// What "Add setting" lists for `target` and a typed `filter` (CFG-06): the
+/// existing settings that fit, the pack presets that fit and are not yet in
+/// the project, and the custom entry. `None` when `target` is not in the
+/// project. Time O(controls * targets + presets), space O(result).
+#[must_use]
+pub fn add_setting_list(
+    ws: &Workspace,
+    target: aegis_model::ItemRef,
+    filter: &str,
+    lang: &str,
+) -> Option<AddSettingList> {
+    let project = ws.project();
+    let m = project.methodology();
+    let exists = match target {
+        aegis_model::ItemRef::Component(id) => project.component_idx(&id).is_some(),
+        aegis_model::ItemRef::Interface(id) => project.interface_idx(&id).is_some(),
+    };
+    if !exists {
+        return None;
+    }
+    let custom = filter.trim().to_owned();
+    let needle = custom.to_lowercase();
+    let matches = |name: &str| needle.is_empty() || name.to_lowercase().contains(&needle);
+    let existing = project
+        .security_controls()
+        .filter(|(c_idx, _, c)| {
+            matches(c.name())
+                && c.kind()
+                    .is_none_or(|k| project.control_kind_fits(k, target))
+                && !project.control_targets(*c_idx).any(|t| t == target)
+        })
+        .map(|(c_idx, id, c)| AddSettingExisting {
+            id,
+            visual_id: project
+                .security_control_visual_id(c_idx)
+                .unwrap_or_default(),
+            name: c.name().to_owned(),
+            applied_to: project.control_targets(c_idx).count(),
+        })
+        .collect();
+    let presets = m
+        .control_kinds()
+        .enumerate()
+        .filter(|(_, k)| project.control_kind_fits(*k, target))
+        .filter(|(_, k)| {
+            !project
+                .security_controls()
+                .any(|(_, _, c)| c.kind() == Some(*k))
+        })
+        .filter_map(|(pos, k)| {
+            let name = m.control_kind_label_for_lang(k, lang)?;
+            matches(name).then(|| AddSettingPreset {
+                kind: pos,
+                name: name.to_owned(),
+                rules: format_rules(m, m.control_kind_rules(k)),
+            })
+        })
+        .collect();
+    Some(AddSettingList {
+        pack: m.label().to_owned(),
+        existing,
+        presets,
+        custom,
+    })
 }
 
 /// The selected component's details.
@@ -1532,6 +1638,12 @@ pub struct ControlDetail {
     pub goals: Vec<LinkRow>,
     /// Provenance text.
     pub changed: String,
+    /// The pack preset's label, `None` for a custom setting; for the subtitle
+    /// "Security setting · Secure boot (pack preset)".
+    pub preset: Option<String>,
+    /// The rules differ from the pack's current values; the screen offers
+    /// `Edit::UsePackValues`.
+    pub differs_from_preset: bool,
 }
 
 fn control_uses(project: &Project, c_idx: aegis_model::ControlIdx) -> Vec<LinkRow> {
@@ -1659,6 +1771,11 @@ pub fn control_detail(ws: &Workspace, id: ControlId) -> Option<ControlDetail> {
             })
             .collect(),
         changed: changed_text(c.provenance()),
+        preset: c
+            .kind()
+            .and_then(|k| m.control_kind_label(k))
+            .map(str::to_owned),
+        differs_from_preset: project.control_differs_from_kind(idx),
     })
 }
 

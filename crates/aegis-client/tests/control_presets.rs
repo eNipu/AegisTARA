@@ -358,3 +358,175 @@ fn duplicate_and_remove_keep_the_kind() {
     fx.ws.undo().expect("undo");
     assert!(fx.ws.project() == &before);
 }
+
+fn list(fx: &Fx, target: ItemRef, filter: &str, lang: &str) -> aegis_client::pages::AddSettingList {
+    aegis_client::pages::add_setting_list(&fx.ws, target, filter, lang).expect("list")
+}
+
+fn kinds(l: &aegis_client::pages::AddSettingList) -> Vec<usize> {
+    l.presets.iter().map(|p| p.kind).collect()
+}
+
+fn names(l: &aegis_client::pages::AddSettingList) -> Vec<&str> {
+    l.presets.iter().map(|p| p.name.as_str()).collect()
+}
+
+#[test]
+fn list_for_a_component_and_interfaces() {
+    let fx = fixture();
+    let ecu = ItemRef::Component(fx.ecu);
+    let l = list(&fx, ecu, "", "en");
+    assert_eq!(kinds(&l), vec![0, 1, 2, 3, 4]);
+    assert_eq!(
+        names(&l)[..2],
+        ["Secure boot", "Secure flash (signed updates)"]
+    );
+    assert!(l.existing.is_empty());
+    assert_eq!(l.custom, "");
+    assert_eq!(l.pack, fx.ws.project().methodology().label());
+    assert!(l.presets.iter().all(|p| !p.rules.is_empty()));
+    let j = list(&fx, ItemRef::Interface(fx.jtag), "", "en");
+    assert_eq!(kinds(&j), vec![5, 6]);
+    let c = list(&fx, ItemRef::Interface(fx.can), "", "en");
+    assert_eq!(kinds(&c), vec![7, 8, 9]);
+    assert!(c.presets.iter().any(|p| p.name.contains("SecOC")));
+}
+
+#[test]
+fn filter_is_trimmed_and_case_free() {
+    let fx = fixture();
+    let l = list(&fx, ItemRef::Component(fx.ecu), "  SEC ", "en");
+    assert_eq!(names(&l), ["Secure boot", "Secure flash (signed updates)"]);
+    assert_eq!(l.custom, "SEC");
+}
+
+#[test]
+fn labels_follow_the_language() {
+    let fx = fixture();
+    let ecu = ItemRef::Component(fx.ecu);
+    let ja = list(&fx, ecu, "セキュア", "ja");
+    assert!(!ja.presets.is_empty());
+    assert_eq!(ja.presets[0].name, "セキュアブート");
+    assert!(ja.presets.iter().all(|p| p.name.contains("セキュア")));
+    let fr = list(&fx, ecu, "secure boot", "fr");
+    assert_eq!(names(&fr), ["Secure boot"]);
+}
+
+#[test]
+fn created_presets_move_to_existing() {
+    let mut fx = fixture();
+    let ecu = ItemRef::Component(fx.ecu);
+    let id = ControlId::new_v7();
+    run(&mut fx.ws, preset(id, 0, "Secure boot", ecu));
+    let same = list(&fx, ecu, "", "en");
+    assert!(same.existing.is_empty());
+    assert!(!kinds(&same).contains(&0));
+    let other = ComponentId::new_v7();
+    run(
+        &mut fx.ws,
+        Edit::AddComponent {
+            id: other,
+            name: "Gateway".into(),
+            parent: None,
+        },
+    );
+    let l = list(&fx, ItemRef::Component(other), "", "en");
+    assert_eq!(l.existing.len(), 1);
+    assert_eq!(l.existing[0].id, id);
+    assert_eq!(l.existing[0].name, "Secure boot");
+    assert_eq!(l.existing[0].applied_to, 1);
+    assert!(!kinds(&l).contains(&0));
+}
+
+#[test]
+fn existing_respects_the_fit() {
+    let mut fx = fixture();
+    let (locked, custom) = (ControlId::new_v7(), ControlId::new_v7());
+    run(
+        &mut fx.ws,
+        preset(locked, 5, "Debug port locked", ItemRef::Interface(fx.jtag)),
+    );
+    run(
+        &mut fx.ws,
+        Edit::AddCustomSetting {
+            id: custom,
+            name: "Custom".into(),
+            target: ItemRef::Interface(fx.jtag),
+            rules: vec![(0, 0)],
+        },
+    );
+    let l = list(&fx, ItemRef::Component(fx.ecu), "", "en");
+    let ids: Vec<_> = l.existing.iter().map(|e| e.id).collect();
+    assert_eq!(ids, vec![custom]);
+}
+
+#[test]
+fn every_listed_preset_is_accepted() {
+    let fx = fixture();
+    for target in [
+        ItemRef::Component(fx.ecu),
+        ItemRef::Interface(fx.jtag),
+        ItemRef::Interface(fx.can),
+    ] {
+        for p in list(&fx, target, "", "en").presets {
+            let e = preset(ControlId::new_v7(), p.kind, &p.name, target);
+            e.to_ops(fx.ws.project(), "alice", 1).expect("accepted");
+        }
+    }
+}
+
+#[test]
+fn unknown_target_gives_none() {
+    let fx = fixture();
+    let gone = ItemRef::Component(ComponentId::new_v7());
+    assert!(aegis_client::pages::add_setting_list(&fx.ws, gone, "", "en").is_none());
+}
+
+#[test]
+fn control_detail_names_the_preset_and_the_difference() {
+    let mut fx = fixture();
+    let (id, custom) = (ControlId::new_v7(), ControlId::new_v7());
+    run(
+        &mut fx.ws,
+        preset(id, 0, "Secure boot", ItemRef::Component(fx.ecu)),
+    );
+    let d = aegis_client::pages::control_detail(&fx.ws, id).expect("d");
+    assert_eq!(d.preset.as_deref(), Some("Secure boot"));
+    assert!(!d.differs_from_preset);
+    let m = fx.ws.project().methodology().clone();
+    let kind = m.control_kind("secure-boot").expect("kind");
+    let first = m.control_kind_rules(kind)[0];
+    let at = m
+        .attack_types()
+        .position(|t| t == first.attack_type())
+        .expect("pos");
+    let other = m
+        .feasibility_levels()
+        .position(|(l, _, _)| l != first.ceiling())
+        .expect("level");
+    run(
+        &mut fx.ws,
+        Edit::SetControlRule {
+            control: id,
+            attack_type: at,
+            level: Some(other),
+        },
+    );
+    let d = aegis_client::pages::control_detail(&fx.ws, id).expect("d");
+    assert!(d.differs_from_preset);
+    run(&mut fx.ws, Edit::UsePackValues { control: id });
+    let d = aegis_client::pages::control_detail(&fx.ws, id).expect("d");
+    assert!(!d.differs_from_preset);
+    run(
+        &mut fx.ws,
+        Edit::AddCustomSetting {
+            id: custom,
+            name: "Mine".into(),
+            target: ItemRef::Component(fx.ecu),
+            rules: vec![(0, 0)],
+        },
+    );
+    let d = aegis_client::pages::control_detail(&fx.ws, custom).expect("d");
+    assert_eq!(d.preset, None);
+    assert!(!d.differs_from_preset);
+}
