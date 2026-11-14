@@ -1,0 +1,137 @@
+{
+  "job": "124-control-presets",
+  "slices": [
+    {
+      "id": "124a",
+      "title": "Setting presets in the methodology definition",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/methodology/mod.rs",
+        "crates/aegis-model/src/methodology/pack.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/tests/control_kinds.rs",
+        "crates/aegis-model/tests/builtin_pack.rs"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": ["cargo test --locked -p aegis-model --test control_kinds --test builtin_pack"]
+    },
+    {
+      "id": "124b",
+      "title": "Read and write control_kinds in pack files",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/methodology/pack.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/tests/control_kinds.rs",
+        "crates/aegis-model/tests/pack.rs",
+        "crates/aegis-model/tests/pack_limits.rs"
+      ],
+      "max_lines": 250,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": ["cargo test --locked -p aegis-model --test control_kinds --test pack --test pack_limits --test pack_properties"]
+    },
+    {
+      "id": "124c",
+      "title": "Example presets in the ISO, CRA and STRIDE packs",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/packs/iso21434-r155.json",
+        "crates/aegis-model/packs/eu-cra.json",
+        "crates/aegis-model/packs/stride-services-cloud.json",
+        "crates/aegis-model/tests/builtin_pack.rs",
+        "crates/aegis-model/tests/stride_pack.rs"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": ["cargo test --locked -p aegis-model --test builtin_pack --test stride_pack"]
+    },
+    {
+      "id": "124d",
+      "title": "A control remembers its preset: Op::SetControlKind",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/control.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/methodology/mod.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/snapshot.rs",
+        "crates/aegis-model/tests/control_presets.rs",
+        "crates/aegis-model/tests/control_settings.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/tests/undo_every_op.rs",
+        "crates/aegis-client/tests/undo_labels.rs"
+      ],
+      "max_lines": 380,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test control_presets --test control_settings --test store",
+        "cargo test --locked -p aegis-client --test undo_every_op --test undo_labels"
+      ]
+    },
+    {
+      "id": "124e",
+      "title": "Warn when a setting's rules differ from its preset",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/lint.rs",
+        "crates/aegis-model/tests/control_presets.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/tests/pages.rs"
+      ],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test control_presets",
+        "cargo test --locked -p aegis-client --test pages"
+      ]
+    },
+    {
+      "id": "124f",
+      "title": "Commands: add a preset setting, refuse a wrong fit, use the pack's values",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/tests/control_presets.rs"
+      ],
+      "max_lines": 250,
+      "new_deps": false,
+      "ci": ["crates/aegis-client", "crates/aegis-shell"],
+      "checks": ["cargo test --locked -p aegis-client --test control_presets"]
+    },
+    {
+      "id": "124g",
+      "title": "View data for the Add setting list and the preset line",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/tests/control_presets.rs",
+        "docs/adr/0070-control-presets.md",
+        "docs/architecture.md"
+      ],
+      "max_lines": 250,
+      "new_deps": false,
+      "ci": [],
+      "checks": ["cargo test --locked -p aegis-client --test control_presets"]
+    }
+  ]
+}
