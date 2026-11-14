@@ -2048,6 +2048,13 @@ impl Edit {
                         });
                     }
                 }
+                if ctrl.kind().is_some() {
+                    ops.push(Op::SetControlKind {
+                        control: *control,
+                        kind: None,
+                        provenance: p.clone(),
+                    });
+                }
                 ops.push(Op::RemoveSecurityControl { id: *control });
                 ops
             }

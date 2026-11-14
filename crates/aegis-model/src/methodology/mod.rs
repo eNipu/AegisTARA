@@ -3628,6 +3628,15 @@ impl Methodology {
         }
     }
 
+    /// Checks that a control kind is declared in this methodology. Time O(1).
+    pub(crate) fn check_control_kind(&self, kind: ControlKind) -> Result<(), ModelError> {
+        if kind.index() < self.control_kinds.len() {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownControlKind(kind))
+        }
+    }
+
     /// Checks that an interface kind is declared in this methodology. Time O(1).
     pub(crate) fn check_interface_kind(&self, kind: InterfaceKind) -> Result<(), ModelError> {
         if kind.index() < self.interface_kinds.len() {

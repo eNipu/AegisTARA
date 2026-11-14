@@ -10,8 +10,9 @@ use crate::id::{
 };
 use crate::item::ItemRef;
 use crate::methodology::{
-    AttackType, CatalogRef, CatalogScheme, CatalogSyntax, FactorLevel, FeasibilityFactor,
-    FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Property, RiskLevel, ThreatCategory,
+    AttackType, CatalogRef, CatalogScheme, CatalogSyntax, ControlKind, FactorLevel,
+    FeasibilityFactor, FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Property, RiskLevel,
+    ThreatCategory,
 };
 use crate::store::{Limit, VocabKind};
 
@@ -598,6 +599,9 @@ pub enum ModelError {
     /// The attack type index is not in the project's methodology.
     #[error("attack type index {} is not in the methodology", .0.index())]
     UnknownAttackType(AttackType),
+    /// The control kind index is not in the project's methodology.
+    #[error("control kind index {} is not in the methodology", .0.index())]
+    UnknownControlKind(ControlKind),
     /// Setting `parent` on `component` would create a cycle in the component hierarchy.
     #[error("setting component {parent} as parent of {component} would create a cycle")]
     ComponentCycle {
@@ -858,6 +862,13 @@ pub enum ModelError {
         control: ControlId,
         /// How many control rules it carries.
         rules: usize,
+    },
+    /// The security control cannot be removed while it still names a pack
+    /// preset; clear the kind first.
+    #[error("security control {control} still names a pack preset")]
+    SecurityControlHasKind {
+        /// The security control.
+        control: ControlId,
     },
     /// The security control is already applied to this target, or a snapshot
     /// lists it twice.

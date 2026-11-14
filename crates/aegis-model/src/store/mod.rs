@@ -643,6 +643,8 @@ pub enum VocabKind {
     InterfaceKind,
     /// An attack step attack type.
     AttackType,
+    /// A security control preset.
+    ControlKind,
     /// A generic element kind.
     ElementKind,
 }
@@ -660,6 +662,7 @@ impl fmt::Display for VocabKind {
             VocabKind::CatalogScheme => "catalog scheme",
             VocabKind::InterfaceKind => "interface kind",
             VocabKind::AttackType => "attack type",
+            VocabKind::ControlKind => "control kind",
             VocabKind::ElementKind => "element kind",
         })
     }

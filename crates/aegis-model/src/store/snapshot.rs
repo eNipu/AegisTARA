@@ -342,6 +342,8 @@ struct ControlView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<Required<&'a str>>,
     #[serde(skip_serializing_if = "ControlTargetsByItem::is_empty")]
     targets: ControlTargetsByItem<'a>,
     #[serde(skip_serializing_if = "ControlRulesByKey::is_empty")]
@@ -593,6 +595,7 @@ impl Serialize for Controls<'_> {
                         pos,
                     ),
                     name: c.name(),
+                    kind: c.kind().map(|k| Required(m.control_kind_key(k))),
                     targets: ControlTargetsByItem {
                         project: p,
                         control: c,
@@ -1081,6 +1084,13 @@ impl Project {
                 provenance: provenance.clone(),
             })?;
             project.set_control_loaded_visual(&id, vis, next_vis);
+            if let Some(kind) = c.kind {
+                project.apply(Op::SetControlKind {
+                    control: id,
+                    kind: Some(kind.0),
+                    provenance: provenance.clone(),
+                })?;
+            }
             for target in c.targets.0 {
                 project.apply(Op::ApplyControl {
                     control: id,
