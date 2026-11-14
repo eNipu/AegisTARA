@@ -13,9 +13,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ElementNameDef, ElementNamesDef,
-    FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, Methodology, MethodologyDef,
-    ModelError, PackTranslationDef, PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
+    AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ControlKindDef, ElementNameDef,
+    ElementNamesDef, FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, Methodology,
+    MethodologyDef, ModelError, PackTranslationDef, PotentialBandDef, PropertyDef, SegmentDef,
+    ThreatCategoryDef,
 };
 
 /// The shipped pack bytes.
@@ -105,6 +106,98 @@ const ATTACK_TYPES: [(&str, &str); 10] = [
     ("remote-network", "Remote network"),
     ("wireless-proximity", "Wireless proximity"),
     ("side-channel", "Side channel"),
+];
+
+/// Setting presets: key, label, interface kinds, rules, Japanese label.
+#[allow(clippy::type_complexity)]
+const CONTROL_KINDS: [(&str, &str, &[&str], &[(&str, &str)], &str); 12] = [
+    (
+        "secure-boot",
+        "Secure boot",
+        &[],
+        &[
+            ("firmware-modification", "low"),
+            ("bootloader-exploit", "low"),
+        ],
+        "セキュアブート",
+    ),
+    (
+        "secure-flash",
+        "Secure flash (signed updates)",
+        &[],
+        &[("firmware-modification", "low")],
+        "セキュアフラッシュ（署名付き更新）",
+    ),
+    (
+        "flash-read-protection",
+        "Flash read-out protection",
+        &[],
+        &[("flash-read-out", "low")],
+        "フラッシュ読み出し保護",
+    ),
+    (
+        "hsm-key-storage",
+        "Keys stored in an HSM",
+        &[],
+        &[("flash-read-out", "low"), ("side-channel", "low")],
+        "HSMでの鍵保管",
+    ),
+    (
+        "housing-sealed",
+        "Housing sealed (tamper evident)",
+        &[],
+        &[("physical-tampering", "low")],
+        "筐体の封印（開封検知）",
+    ),
+    (
+        "debug-port-locked",
+        "Debug port locked",
+        &["debug"],
+        &[("debug-access", "low"), ("flash-read-out", "low")],
+        "デバッグポートのロック",
+    ),
+    (
+        "debug-port-fused",
+        "Debug port fused off",
+        &["debug"],
+        &[("debug-access", "very-low"), ("flash-read-out", "very-low")],
+        "デバッグポートの無効化（ヒューズ）",
+    ),
+    (
+        "secure-diagnostics",
+        "Secure diagnostics (seed and key)",
+        &["can", "ethernet", "usb"],
+        &[("diagnostic-access", "medium")],
+        "セキュア診断（シード＆キー）",
+    ),
+    (
+        "diagnostic-auth-hsm",
+        "Authenticated diagnostics with HSM",
+        &["can", "ethernet", "usb"],
+        &[("diagnostic-access", "low")],
+        "HSMによる診断認証",
+    ),
+    (
+        "secoc",
+        "Message authentication (SecOC)",
+        &["can", "ethernet"],
+        &[("local-bus-injection", "low")],
+        "メッセージ認証（SecOC）",
+    ),
+    (
+        "network-firewall",
+        "Firewall and network segmentation",
+        &["ethernet", "cellular"],
+        &[("remote-network", "low")],
+        "ファイアウォールとネットワーク分離",
+    ),
+    (
+        "wireless-pairing-auth",
+        "Authenticated wireless pairing",
+        &["wireless"],
+        &[("wireless-proximity", "low")],
+        "認証付き無線ペアリング",
+    ),
 ];
 
 fn ja_translation() -> PackTranslationDef {
@@ -253,7 +346,10 @@ fn ja_translation() -> PackTranslationDef {
             (s("wireless-proximity"), s("近接無線")),
             (s("side-channel"), s("サイドチャネル")),
         ]),
-        control_kinds: BTreeMap::new(),
+        control_kinds: CONTROL_KINDS
+            .iter()
+            .map(|&(key, _, _, _, ja)| (s(key), s(ja)))
+            .collect(),
     }
 }
 
@@ -295,6 +391,15 @@ fn expected() -> MethodologyDef {
                 .map(|&(key, label)| LevelDef {
                     key: s(key),
                     label: s(label),
+                })
+                .collect(),
+            control_kinds: CONTROL_KINDS
+                .iter()
+                .map(|&(key, label, kinds, rules, _)| ControlKindDef {
+                    key: s(key),
+                    label: s(label),
+                    interface_kinds: kinds.iter().map(|&k| s(k)).collect(),
+                    rules: rules.iter().map(|&(a, l)| (s(a), s(l))).collect(),
                 })
                 .collect(),
             translations: BTreeMap::from([(s("ja"), ja_translation())]),
@@ -808,6 +913,27 @@ fn eu_cra_pack_is_canonical_and_evaluates_plain_likelihood() {
     );
 
     let m = Methodology::eu_cra().expect("eu-cra methodology");
+    let presets: Vec<_> = m
+        .control_kinds()
+        .filter_map(|k| m.control_kind_key(k))
+        .collect();
+    assert_eq!(
+        presets,
+        [
+            "secure-boot",
+            "secure-flash",
+            "flash-read-protection",
+            "hsm-key-storage",
+            "housing-sealed",
+            "debug-port-locked",
+            "network-firewall",
+            "wireless-pairing-auth",
+        ]
+    );
+    assert!(
+        m.control_kinds()
+            .all(|k| m.control_kind_interface_kinds(k).is_empty())
+    );
     assert_eq!(m.key(), "eu-cra");
     assert_eq!(m.version(), "0.1.0");
     assert_eq!(m.label(), "EU Cyber Resilience Act (Annex I)");
@@ -849,6 +975,71 @@ fn eu_cra_pack_is_canonical_and_evaluates_plain_likelihood() {
         .parse_catalog_ref(scheme, "CRA-1.2")
         .expect("parse CRA-1.2");
     assert_eq!(m.display_catalog_ref(&parsed).to_string(), "CRA-1.2");
+}
+
+/// The preset's rules as (attack type key, level key) pairs.
+fn preset_rules(m: &Methodology, key: &str) -> Vec<(String, String)> {
+    let kind = m.control_kind(key).expect("preset exists");
+    m.control_kind_rules(kind)
+        .iter()
+        .map(|r| {
+            (
+                m.attack_type_key(r.attack_type())
+                    .expect("attack")
+                    .to_owned(),
+                m.feasibility_level_key(r.ceiling())
+                    .expect("level")
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn iso21434_control_kinds() {
+    let m = m();
+    let keys: Vec<_> = m
+        .control_kinds()
+        .filter_map(|k| m.control_kind_key(k))
+        .collect();
+    let want: Vec<_> = CONTROL_KINDS.iter().map(|c| c.0).collect();
+    assert_eq!(keys.len(), 12);
+    assert_eq!(keys, want);
+
+    let boot = m.control_kind("secure-boot").expect("secure-boot");
+    assert!(m.control_kind_interface_kinds(boot).is_empty());
+    let mut rules = preset_rules(&m, "secure-boot");
+    rules.sort();
+    assert_eq!(
+        rules,
+        [
+            ("bootloader-exploit".to_owned(), "low".to_owned()),
+            ("firmware-modification".to_owned(), "low".to_owned()),
+        ]
+    );
+
+    let fused = m
+        .control_kind("debug-port-fused")
+        .expect("debug-port-fused");
+    let kinds: Vec<_> = m
+        .control_kind_interface_kinds(fused)
+        .iter()
+        .filter_map(|&k| m.interface_kind_key(k))
+        .collect();
+    assert_eq!(kinds, ["debug"]);
+    let rules = preset_rules(&m, "debug-port-fused");
+    assert_eq!(rules.len(), 2);
+    assert!(rules.iter().all(|(_, level)| level == "very-low"));
+
+    let secoc = m.control_kind("secoc").expect("secoc");
+    assert_eq!(
+        m.control_kind_label_for_lang(secoc, "ja"),
+        Some("メッセージ認証（SecOC）")
+    );
+    assert_eq!(
+        m.control_kind_label_for_lang(secoc, "en"),
+        Some("Message authentication (SecOC)")
+    );
 }
 
 #[test]

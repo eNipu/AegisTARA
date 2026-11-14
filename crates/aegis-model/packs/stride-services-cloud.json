@@ -285,6 +285,64 @@
         "label": "Physical access"
       }
     ],
+    "control_kinds": [
+      {
+        "key": "network-segmentation",
+        "label": "Network segmentation and firewall",
+        "rules": {
+          "network-exposure": "low"
+        }
+      },
+      {
+        "key": "mfa",
+        "label": "Multi-factor authentication",
+        "rules": {
+          "credential-theft": "low"
+        }
+      },
+      {
+        "key": "secrets-vault",
+        "label": "Secrets in a managed vault",
+        "rules": {
+          "credential-theft": "low"
+        }
+      },
+      {
+        "key": "input-validation",
+        "label": "Input validation and parameterized queries",
+        "rules": {
+          "injection": "low"
+        }
+      },
+      {
+        "key": "waf",
+        "label": "Web application firewall",
+        "rules": {
+          "injection": "medium"
+        }
+      },
+      {
+        "key": "hardened-baseline",
+        "label": "Hardened configuration baseline",
+        "rules": {
+          "misconfiguration": "low"
+        }
+      },
+      {
+        "key": "signed-artifacts",
+        "label": "Signed build artifacts",
+        "rules": {
+          "supply-chain": "low"
+        }
+      },
+      {
+        "key": "datacenter-access",
+        "label": "Physical access control at the data centre",
+        "rules": {
+          "physical-access": "very-low"
+        }
+      }
+    ],
     "translations": {
       "ja": {
         "attack_types": {
@@ -294,6 +352,16 @@
           "network-exposure": "ネットワーク露出",
           "physical-access": "物理アクセス",
           "supply-chain": "サプライチェーン"
+        },
+        "control_kinds": {
+          "datacenter-access": "データセンターの物理アクセス制御",
+          "hardened-baseline": "堅牢化された構成ベースライン",
+          "input-validation": "入力検証とパラメータ化クエリ",
+          "mfa": "多要素認証",
+          "network-segmentation": "ネットワーク分離とファイアウォール",
+          "secrets-vault": "マネージドボールトでのシークレット管理",
+          "signed-artifacts": "署名付きビルド成果物",
+          "waf": "Webアプリケーションファイアウォール"
         }
       }
     }
