@@ -643,6 +643,25 @@ pub enum Edit {
         /// `(attack_type_position, feasibility_level_position)` rules.
         rules: Vec<(usize, usize)>,
     },
+    /// Creates a security control from a pack preset, copies the preset's
+    /// rules into it and applies it to `target`, in one undo step (CFG-06).
+    AddPresetSetting {
+        /// New control ID.
+        id: ControlId,
+        /// Position in the methodology's control kinds.
+        kind: usize,
+        /// Control name: the preset's label in the user's language.
+        name: String,
+        /// Target component or interface.
+        target: ItemRef,
+    },
+    /// Sets a preset-based control's rules back to the pack's values, in one
+    /// undo step (CFG-06). No ops when the control has no preset or its rules
+    /// already equal the preset's.
+    UsePackValues {
+        /// The control.
+        control: ControlId,
+    },
     /// Removes a control, detaching it from steps, targets, rules, and goals first.
     RemoveControl {
         /// The control.
@@ -842,6 +861,53 @@ pub enum EditError {
     /// A library item cannot go there.
     #[error("{0}")]
     Library(String),
+    /// The pack preset is not meant for this kind of element.
+    #[error("{0}")]
+    PresetDoesNotFit(String),
+}
+
+/// The refusal for a preset that does not fit `target`.
+fn preset_fit_error(
+    project: &Project,
+    kind: aegis_model::ControlKind,
+    target: ItemRef,
+) -> EditError {
+    let m = project.methodology();
+    let label = m.control_kind_label(kind).unwrap_or_default();
+    let kinds = m
+        .control_kind_interface_kinds(kind)
+        .iter()
+        .filter_map(|k| m.interface_kind_label(*k))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let iface = match target {
+        ItemRef::Component(id) => {
+            if project.component_idx(&id).is_none() {
+                return EditError::Missing;
+            }
+            None
+        }
+        ItemRef::Interface(id) => match project
+            .interface_idx(&id)
+            .and_then(|i| project.interface(i))
+        {
+            Some(i) => Some(i.kind()),
+            None => return EditError::Missing,
+        },
+    };
+    let text = match iface {
+        Some(_) if kinds.is_empty() => {
+            format!("\"{label}\" is a setting for components; it cannot be applied to an interface")
+        }
+        Some(k) => format!(
+            "\"{label}\" is a setting for {kinds} interfaces; it cannot be applied to a {} interface",
+            m.interface_kind_label(k).unwrap_or_default()
+        ),
+        None => format!(
+            "\"{label}\" is a setting for {kinds} interfaces; it cannot be applied to a component"
+        ),
+    };
+    EditError::PresetDoesNotFit(text)
 }
 
 /// Ops that clear the "through" of every step that goes through `item`
@@ -1946,11 +2012,102 @@ impl Edit {
                 name: name(n)?,
                 provenance: p,
             }],
-            Edit::ApplyControl { control, target } => vec![Op::ApplyControl {
-                control: *control,
-                target: *target,
-                provenance: p,
-            }],
+            Edit::ApplyControl { control, target } => {
+                let kind = project
+                    .security_control_idx(control)
+                    .and_then(|i| project.security_control(i))
+                    .and_then(aegis_model::SecurityControl::kind);
+                if let Some(kind) = kind
+                    && !project.control_kind_fits(kind, *target)
+                {
+                    return Err(preset_fit_error(project, kind, *target));
+                }
+                vec![Op::ApplyControl {
+                    control: *control,
+                    target: *target,
+                    provenance: p,
+                }]
+            }
+            Edit::AddPresetSetting {
+                id,
+                kind,
+                name: n,
+                target,
+            } => {
+                let kind = m
+                    .control_kinds()
+                    .nth(*kind)
+                    .ok_or(EditError::UnknownChoice)?;
+                if !project.control_kind_fits(kind, *target) {
+                    return Err(preset_fit_error(project, kind, *target));
+                }
+                let mut ops = vec![
+                    Op::AddSecurityControl {
+                        id: *id,
+                        name: name(n)?,
+                        provenance: p.clone(),
+                    },
+                    Op::SetControlKind {
+                        control: *id,
+                        kind: Some(kind),
+                        provenance: p.clone(),
+                    },
+                ];
+                for rule in m.control_kind_rules(kind) {
+                    ops.push(Op::SetControlRule {
+                        control: *id,
+                        attack_type: rule.attack_type(),
+                        ceiling: Some(rule.ceiling()),
+                        provenance: p.clone(),
+                    });
+                }
+                ops.push(Op::ApplyControl {
+                    control: *id,
+                    target: *target,
+                    provenance: p,
+                });
+                ops
+            }
+            Edit::UsePackValues { control } => {
+                let ctrl = project
+                    .security_control_idx(control)
+                    .and_then(|i| project.security_control(i))
+                    .ok_or(EditError::Missing)?;
+                let Some(kind) = ctrl.kind() else {
+                    return Ok(Vec::new());
+                };
+                let preset = m.control_kind_rules(kind);
+                let want = |t| {
+                    preset
+                        .iter()
+                        .find(|r| r.attack_type() == t)
+                        .map(aegis_model::ControlRule::ceiling)
+                };
+                let mut ops = Vec::new();
+                for t in m.attack_types() {
+                    if ctrl.rule_for(t).is_some() && want(t).is_none() {
+                        ops.push(Op::SetControlRule {
+                            control: *control,
+                            attack_type: t,
+                            ceiling: None,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                for t in m.attack_types() {
+                    if let Some(level) = want(t)
+                        && ctrl.rule_for(t) != Some(level)
+                    {
+                        ops.push(Op::SetControlRule {
+                            control: *control,
+                            attack_type: t,
+                            ceiling: Some(level),
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                ops
+            }
             Edit::UnapplyControl { control, target } => vec![Op::UnapplyControl {
                 control: *control,
                 target: *target,
@@ -2254,6 +2411,13 @@ impl Edit {
                     name: name(&copy_name(c.name(), suffix))?,
                     provenance: p.clone(),
                 }];
+                if let Some(kind) = c.kind() {
+                    ops.push(Op::SetControlKind {
+                        control: *id,
+                        kind: Some(kind),
+                        provenance: p.clone(),
+                    });
+                }
                 for rule in c.rules() {
                     ops.push(Op::SetControlRule {
                         control: *id,
