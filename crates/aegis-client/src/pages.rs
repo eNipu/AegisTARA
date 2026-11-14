@@ -2225,6 +2225,22 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::ControlRulesDifferFromKind { control } => {
+            let s = Selection::Control(control);
+            let label = project
+                .security_control_idx(&control)
+                .and_then(|idx| project.security_control(idx))
+                .and_then(|c| c.kind())
+                .and_then(|k| m.control_kind_label(k))
+                .unwrap_or("?");
+            (
+                format!(
+                    "Setting {} has rules that differ from its pack preset \"{label}\".",
+                    q(s)
+                ),
+                s,
+            )
+        }
         L::CybersecurityGoalWithoutControls { goal } => {
             let s = Selection::Goal(goal);
             (

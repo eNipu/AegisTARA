@@ -238,6 +238,12 @@ pub enum LintCode {
         /// The unused security control.
         control: ControlId,
     },
+    /// A security control was created from a pack preset and its rules no
+    /// longer equal the preset's rules in the project's methodology (CFG-06).
+    ControlRulesDifferFromKind {
+        /// The security control.
+        control: ControlId,
+    },
     /// A cybersecurity goal links to zero security controls.
     CybersecurityGoalWithoutControls {
         /// The cybersecurity goal with an empty control list.
@@ -300,6 +306,7 @@ impl LintCode {
             | Self::AttackTreeStepIncompleteFactors { .. }
             | Self::RedundantStepFeasibility { .. }
             | Self::SecurityControlUnused { .. }
+            | Self::ControlRulesDifferFromKind { .. }
             | Self::StepSettingsIncomplete { .. }
             | Self::ReduceTreatmentWithoutGoal { .. }
             | Self::RetainOrShareTreatmentWithoutClaim { .. }
@@ -399,6 +406,10 @@ impl fmt::Display for LintCode {
             Self::SecurityControlUnused { control } => write!(
                 f,
                 "security control {control} is not attached to any attack step"
+            ),
+            Self::ControlRulesDifferFromKind { control } => write!(
+                f,
+                "security control {control} has rules that differ from its pack preset"
             ),
             Self::ReduceTreatmentWithoutGoal { threat } => write!(
                 f,
