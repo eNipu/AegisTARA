@@ -30,8 +30,9 @@ use crate::item::{
 };
 use crate::lint::{LintCode, LintFinding};
 use crate::methodology::{
-    AttackPotential, AttackType, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel,
-    ImpactCategory, InterfaceKind, Level, Methodology, Property, RiskLevel, ThreatCategory,
+    AttackPotential, AttackType, CatalogRef, ControlKind, FactorLevel, FeasibilityFactor,
+    FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Methodology, Property, RiskLevel,
+    ThreatCategory,
 };
 use crate::op::Op;
 use crate::paths::{AttackPath, ChokePoint};
@@ -1657,6 +1658,80 @@ impl Project {
         self.controls
             .iter()
             .filter(move |(_, _, c)| want.is_some_and(|w| c.targets.contains(&w)))
+    }
+
+    /// Answers whether the preset `kind` fits `target` (CFG-06): a preset for
+    /// components fits an existing component; a preset for interface kinds
+    /// fits an existing interface of one of those kinds. False for an unknown
+    /// target or an unknown kind. The model only answers; it never refuses.
+    ///
+    /// Time O(log n + I), `I <= 32`, space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ComponentId, ItemRef, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let boot = m.control_kind("secure-boot").ok_or("kind")?;
+    /// let mut project = Project::new(Arc::clone(&m));
+    /// let ecu = ComponentId::new_v7();
+    /// project.apply(Op::AddComponent {
+    ///     id: ecu, name: "Gateway".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// assert!(project.control_kind_fits(boot, ItemRef::Component(ecu)));
+    /// assert!(!project.control_kind_fits(boot, ItemRef::Component(ComponentId::new_v7())));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind_fits(&self, kind: ControlKind, target: ItemRef) -> bool {
+        if self.methodology.control_kind_key(kind).is_none() {
+            return false;
+        }
+        let kinds = self.methodology.control_kind_interface_kinds(kind);
+        match target {
+            ItemRef::Component(id) => self.component_idx(&id).is_some() && kinds.is_empty(),
+            ItemRef::Interface(id) => self
+                .interface_idx(&id)
+                .and_then(|idx| self.interface(idx))
+                .is_some_and(|i| kinds.contains(&i.kind())),
+        }
+    }
+
+    /// True when `control` was made from a pack preset and its rules are no
+    /// longer the preset's rules in the project's methodology (CFG-06). False
+    /// without a kind or for an unknown control.
+    ///
+    /// Time O(R), `R <= 16`, space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{ControlId, Methodology, Op, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let boot = m.control_kind("secure-boot").ok_or("kind")?;
+    /// let mut project = Project::new(m);
+    /// let id = ControlId::new_v7();
+    /// project.apply(Op::AddSecurityControl {
+    ///     id, name: "Boot".into(), provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.security_control_idx(&id).ok_or("idx")?;
+    /// assert!(!project.control_differs_from_kind(idx));
+    /// project.apply(Op::SetControlKind {
+    ///     control: id, kind: Some(boot), provenance: Provenance::default(),
+    /// })?;
+    /// // The kind alone does not copy the rules, so they differ.
+    /// assert!(project.control_differs_from_kind(idx));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_differs_from_kind(&self, control: ControlIdx) -> bool {
+        let Some(c) = self.controls.get(control) else {
+            return false;
+        };
+        c.kind
+            .is_some_and(|kind| c.rules.as_slice() != self.methodology.control_kind_rules(kind))
     }
 
     // -- Cybersecurity goals -----------------------------------------------------
@@ -5492,6 +5567,11 @@ impl Project {
                     control: id,
                 }));
             }
+            if self.control_differs_from_kind(idx) {
+                findings.push(LintFinding::new(LintCode::ControlRulesDifferFromKind {
+                    control: id,
+                }));
+            }
         }
     }
 
@@ -6281,6 +6361,9 @@ impl Project {
                 ceiling,
                 ..
             } => self.check_set_control_rule(*control, *attack_type, *ceiling)?,
+            Op::SetControlKind { control, kind, .. } => {
+                self.check_set_control_kind(*control, *kind)?;
+            }
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -6739,6 +6822,11 @@ impl Project {
                 ceiling,
                 provenance,
             } => self.commit_set_control_rule(control, attack_type, ceiling, provenance),
+            Op::SetControlKind {
+                control,
+                kind,
+                provenance,
+            } => self.commit_set_control_kind(control, kind, provenance),
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -8387,6 +8475,18 @@ impl Project {
         Ok(())
     }
 
+    fn check_set_control_kind(
+        &self,
+        control: ControlId,
+        kind: Option<ControlKind>,
+    ) -> Result<(), ModelError> {
+        self.live_control(control)?;
+        if let Some(kind) = kind {
+            self.methodology.check_control_kind(kind)?;
+        }
+        Ok(())
+    }
+
     fn check_remove_control(&self, id: ControlId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Control(id), EntityKind::SecurityControl)?;
         let idx = self.live_control(id)?;
@@ -8418,6 +8518,9 @@ impl Project {
                 control: id,
                 rules: c.rules.len(),
             });
+        }
+        if c.kind.is_some() {
+            return Err(ModelError::SecurityControlHasKind { control: id });
         }
         Ok(())
     }
@@ -9565,6 +9668,7 @@ impl Project {
             name,
             targets: Vec::new(),
             rules: Vec::new(),
+            kind: None,
             provenance,
         };
         self.controls.push(id, control, self.slot_limit).ok_or(
@@ -9666,6 +9770,22 @@ impl Project {
             control,
             attack_type,
             ceiling: old,
+            provenance,
+        })
+    }
+
+    fn commit_set_control_kind(
+        &mut self,
+        control: ControlId,
+        kind: Option<ControlKind>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let c = self.control_mut(control)?;
+        let old = std::mem::replace(&mut c.kind, kind);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::SetControlKind {
+            control,
+            kind: old,
             provenance,
         })
     }
@@ -10663,6 +10783,7 @@ impl Project {
     fn same_control(&self, x: &SecurityControl, other: &Project, y: &SecurityControl) -> bool {
         x.name == y.name
             && x.rules == y.rules
+            && x.kind == y.kind
             && x.provenance == y.provenance
             && x.targets.len() == y.targets.len()
             && x.targets
@@ -11621,6 +11742,7 @@ impl ProjectEvalCache {
             | Op::SetFeasibilityRationale { .. }
             | Op::AddSecurityControl { .. }
             | Op::RenameSecurityControl { .. }
+            | Op::SetControlKind { .. }
             | Op::RemoveSecurityControl { .. }
             | Op::AddCybersecurityGoal { .. }
             | Op::RenameCybersecurityGoal { .. }

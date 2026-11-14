@@ -1437,3 +1437,33 @@ fn the_threat_inspector_and_the_diff_show_the_settings_on_the_deciding_step() {
         c.lines
     );
 }
+
+#[test]
+fn a_control_that_left_its_preset_is_a_warning() {
+    use aegis_model::{Op, Provenance};
+    let mut t = tara();
+    let m = Arc::clone(t.ws.project().methodology());
+    let ops = vec![
+        Op::SetControlKind {
+            control: t.control,
+            kind: m.control_kind("secure-boot"),
+            provenance: Provenance::human("mira", 1),
+        },
+        Op::SetControlRule {
+            control: t.control,
+            attack_type: m.attack_type("firmware-modification").expect("attack type"),
+            ceiling: m.feasibility_level("medium"),
+            provenance: Provenance::human("mira", 1),
+        },
+    ];
+    t.ws.apply(ops, Origin::Edit).expect("applies");
+    let row = pages::problems(&t.ws)
+        .into_iter()
+        .find(|p| {
+            p.text
+                .ends_with("has rules that differ from its pack preset \"Secure boot\".")
+        })
+        .expect("row");
+    assert!(!row.error);
+    assert!(matches!(row.target, Some(Selection::Control(_))));
+}

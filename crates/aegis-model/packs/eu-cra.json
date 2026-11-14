@@ -398,6 +398,67 @@
         "label": "Side channel"
       }
     ],
+    "control_kinds": [
+      {
+        "key": "secure-boot",
+        "label": "Secure boot",
+        "rules": {
+          "bootloader-exploit": "low",
+          "firmware-modification": "low"
+        }
+      },
+      {
+        "key": "secure-flash",
+        "label": "Secure flash (signed updates)",
+        "rules": {
+          "firmware-modification": "low"
+        }
+      },
+      {
+        "key": "flash-read-protection",
+        "label": "Flash read-out protection",
+        "rules": {
+          "flash-read-out": "low"
+        }
+      },
+      {
+        "key": "hsm-key-storage",
+        "label": "Keys stored in an HSM",
+        "rules": {
+          "flash-read-out": "low",
+          "side-channel": "low"
+        }
+      },
+      {
+        "key": "housing-sealed",
+        "label": "Housing sealed (tamper evident)",
+        "rules": {
+          "physical-tampering": "low"
+        }
+      },
+      {
+        "key": "debug-port-locked",
+        "label": "Debug port locked",
+        "rules": {
+          "debug-access": "low",
+          "flash-read-out": "low"
+        }
+      },
+      {
+        "key": "network-firewall",
+        "label": "Firewall and network segmentation",
+        "rules": {
+          "remote-network": "low"
+        }
+      },
+      {
+        "key": "wireless-pairing-auth",
+        "label": "Authenticated wireless pairing",
+        "rules": {
+          "wireless-proximity": "low"
+        }
+      }
+    ],
     "translations": {
       "ja": {
         "attack_types": {
@@ -411,6 +472,16 @@
           "remote-network": "リモートネットワーク",
           "side-channel": "サイドチャネル",
           "wireless-proximity": "近接無線"
+        },
+        "control_kinds": {
+          "debug-port-locked": "デバッグポートのロック",
+          "flash-read-protection": "フラッシュ読み出し保護",
+          "housing-sealed": "筐体の封印（開封検知）",
+          "hsm-key-storage": "HSMでの鍵保管",
+          "network-firewall": "ファイアウォールとネットワーク分離",
+          "secure-boot": "セキュアブート",
+          "secure-flash": "セキュアフラッシュ（署名付き更新）",
+          "wireless-pairing-auth": "認証付き無線ペアリング"
         }
       }
     }

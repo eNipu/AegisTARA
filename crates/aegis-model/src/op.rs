@@ -12,8 +12,8 @@ use crate::id::{
 };
 use crate::item::ItemRef;
 use crate::methodology::{
-    AttackType, CatalogRef, FactorLevel, FeasibilityFactor, FeasibilityLevel, ImpactCategory,
-    InterfaceKind, Level, ThreatCategory,
+    AttackType, CatalogRef, ControlKind, FactorLevel, FeasibilityFactor, FeasibilityLevel,
+    ImpactCategory, InterfaceKind, Level, ThreatCategory,
 };
 use crate::provenance::Provenance;
 use crate::tree::{AttackTree, GateKind, Node};
@@ -73,6 +73,7 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `ApplyControl` | `UnapplyControl` with the old control provenance | O(log n + t) |
 /// | `UnapplyControl` | `ApplyControl` with the old control provenance | O(log n + t) |
 /// | `SetControlRule` | the same with the old ceiling and control provenance | O(log n + r) |
+/// | `SetControlKind` | the same with the old kind and control provenance | O(log n) |
 /// | `SetStepMitigation` | the same with the old feasibility and provenance | O(log n + log V + m) |
 /// | `AddCybersecurityGoal` | `RemoveCybersecurityGoal` | O(m log n + m log m) |
 /// | `RenameCybersecurityGoal` | the same with the old name and provenance | O(log n) |
@@ -533,7 +534,7 @@ pub enum Op {
     },
     /// Removes a security control that is not attached to any attack step,
     /// linked by any goal, applied to any component or interface, or carrying
-    /// any control rules.
+    /// any control rules or pack preset.
     RemoveSecurityControl {
         /// Existing security control.
         id: ControlId,
@@ -572,6 +573,17 @@ pub enum Op {
         /// the rule.
         ceiling: Option<FeasibilityLevel>,
         /// Provenance of the rule change.
+        provenance: Provenance,
+    },
+    /// Sets or clears (`None`) the pack preset a
+    /// [`SecurityControl`](crate::SecurityControl) was created from (CFG-06,
+    /// D26). The kind is a label: it changes no rule and no risk number.
+    SetControlKind {
+        /// Existing security control.
+        control: ControlId,
+        /// A control kind of the project's methodology, or `None`.
+        kind: Option<ControlKind>,
+        /// Provenance of the change.
         provenance: Provenance,
     },
     /// Attaches, updates, or detaches (`None`) a [`SecurityControl`](crate::SecurityControl)
@@ -990,6 +1002,7 @@ impl Op {
             | Self::ApplyControl { provenance, .. }
             | Self::UnapplyControl { provenance, .. }
             | Self::SetControlRule { provenance, .. }
+            | Self::SetControlKind { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }
@@ -1094,6 +1107,7 @@ impl Op {
             | Self::ApplyControl { provenance, .. }
             | Self::UnapplyControl { provenance, .. }
             | Self::SetControlRule { provenance, .. }
+            | Self::SetControlKind { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }
