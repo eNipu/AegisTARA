@@ -58,9 +58,9 @@ use crate::control::{
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::{
-    MAX_ATTACK_TYPES, MAX_CATALOG_SCHEMES, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES,
-    MAX_INTERFACE_KINDS, MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS, MAX_PACK_TRANSLATIONS,
-    MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
+    MAX_ATTACK_TYPES, MAX_CATALOG_SCHEMES, MAX_CONTROL_KINDS, MAX_FEASIBILITY_FACTORS,
+    MAX_IMPACT_CATEGORIES, MAX_INTERFACE_KINDS, MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS,
+    MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
 };
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_ATTACK_TREE_NODES;
@@ -373,6 +373,12 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A pack declares more than [`MAX_CONTROL_KINDS`](crate::MAX_CONTROL_KINDS)
+    /// control kinds.
+    ControlKinds {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A pack declares more than [`MAX_PACK_TRANSLATIONS`](crate::MAX_PACK_TRANSLATIONS)
     /// language translations.
     PackTranslations {
@@ -497,6 +503,9 @@ impl Limit {
     pub(crate) const ATTACK_TYPES: Limit = Limit::AttackTypes {
         max: MAX_ATTACK_TYPES,
     };
+    pub(crate) const CONTROL_KINDS: Limit = Limit::ControlKinds {
+        max: MAX_CONTROL_KINDS,
+    };
     pub(crate) const PACK_TRANSLATIONS: Limit = Limit::PackTranslations {
         max: MAX_PACK_TRANSLATIONS,
     };
@@ -580,6 +589,9 @@ impl fmt::Display for Limit {
             Limit::AttackTypes { max } => {
                 write!(f, "more than {max} attack types")
             }
+            Limit::ControlKinds { max } => {
+                write!(f, "more than {max} control kinds")
+            }
             Limit::PackTranslations { max } => {
                 write!(f, "more than {max} pack translations")
             }
@@ -631,6 +643,8 @@ pub enum VocabKind {
     InterfaceKind,
     /// An attack step attack type.
     AttackType,
+    /// A security control preset.
+    ControlKind,
     /// A generic element kind.
     ElementKind,
 }
@@ -648,6 +662,7 @@ impl fmt::Display for VocabKind {
             VocabKind::CatalogScheme => "catalog scheme",
             VocabKind::InterfaceKind => "interface kind",
             VocabKind::AttackType => "attack type",
+            VocabKind::ControlKind => "control kind",
             VocabKind::ElementKind => "element kind",
         })
     }
@@ -683,6 +698,7 @@ mod tests {
             Limit::GOAL_CONTROLS,
             Limit::CONTROL_TARGETS,
             Limit::CONTROL_RULES,
+            Limit::CONTROL_KINDS,
         ] {
             assert_ne!(l.to_string(), "");
         }

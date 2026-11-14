@@ -63,3 +63,44 @@ fn stride_pack_parses_catalog_ids_without_including_catalog_records() {
         .expect("ATT&CK scheme");
     assert!(methodology.parse_catalog_ref(attack, "T1059.1").is_err());
 }
+
+#[test]
+fn stride_pack_carries_setting_presets() {
+    let m = Methodology::stride_services_cloud().expect("built-in pack loads");
+    let keys: Vec<_> = m
+        .control_kinds()
+        .filter_map(|k| m.control_kind_key(k))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "network-segmentation",
+            "mfa",
+            "secrets-vault",
+            "input-validation",
+            "waf",
+            "hardened-baseline",
+            "signed-artifacts",
+            "datacenter-access",
+        ]
+    );
+    assert!(
+        m.control_kinds()
+            .all(|k| m.control_kind_interface_kinds(k).is_empty())
+    );
+
+    let dc = m.control_kind("datacenter-access").expect("preset");
+    let rules = m.control_kind_rules(dc);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        m.attack_type_key(rules[0].attack_type()),
+        Some("physical-access")
+    );
+    assert_eq!(
+        m.feasibility_level_key(rules[0].ceiling()),
+        Some("very-low")
+    );
+
+    let mfa = m.control_kind("mfa").expect("preset");
+    assert_eq!(m.control_kind_label_for_lang(mfa, "ja"), Some("多要素認証"));
+}

@@ -61,9 +61,9 @@ use crate::id::{
 };
 use crate::item::ItemRef;
 use crate::methodology::{
-    AttackType, CatalogRef, CatalogScheme, FactorLevel, FeasibilityFactor, FeasibilityLevel,
-    ImpactCategory, InterfaceKind, Level, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES,
-    MAX_PROPERTIES, Methodology, Property, ThreatCategory,
+    AttackType, CatalogRef, CatalogScheme, ControlKind, FactorLevel, FeasibilityFactor,
+    FeasibilityLevel, ImpactCategory, InterfaceKind, Level, MAX_FEASIBILITY_FACTORS,
+    MAX_IMPACT_CATEGORIES, MAX_PROPERTIES, Methodology, Property, ThreatCategory,
 };
 use crate::provenance::{Provenance, ProvenanceSource};
 use crate::tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, WireNodeParts};
@@ -602,6 +602,22 @@ impl<'de> Deserialize<'de> for InterfaceKindKey {
                 .interface_kind(s)
                 .map(InterfaceKindKey)
                 .ok_or_else(|| unknown_key(VocabKind::InterfaceKind, s))
+        })
+        .deserialize(d)
+    }
+}
+
+/// A control kind key, resolved as it is read.
+pub(super) struct ControlKindKey(pub(super) ControlKind);
+
+impl<'de> Deserialize<'de> for ControlKindKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            check_key_len(s)?;
+            context()?
+                .control_kind(s)
+                .map(ControlKindKey)
+                .ok_or_else(|| unknown_key(VocabKind::ControlKind, s))
         })
         .deserialize(d)
     }
@@ -1901,6 +1917,8 @@ pub(super) struct ControlWire {
     #[serde(default, deserialize_with = "some")]
     pub(super) visual_id: Option<WireVisual<ControlVisual>>,
     pub(super) name: Name,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) kind: Option<ControlKindKey>,
     #[serde(default)]
     pub(super) targets: ControlTargetsWire,
     #[serde(default)]
@@ -2283,6 +2301,13 @@ pub(super) enum OpWire {
         attack_type: AttackTypeKey,
         #[serde(deserialize_with = "Option::deserialize")]
         ceiling: Option<FeasibilityLevelKey>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetControlKind {
+        control: WireId<ControlId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        kind: Option<ControlKindKey>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

@@ -794,6 +794,7 @@ classDiagram
         RedundantStepFeasibility(tree: TreeId, node: NodeId)
         StepSettingsIncomplete(tree: TreeId, node: NodeId)
         SecurityControlUnused(control: ControlId)
+        ControlRulesDifferFromKind(control: ControlId)
         CybersecurityGoalWithoutControls(goal: GoalId)
         CybersecurityGoalUnlinked(goal: GoalId)
         CybersecurityClaimUnlinked(claim: ClaimId)
@@ -2405,3 +2406,12 @@ its component) and `available_controls`; `ControlDetail` has `targets` and
 and names the risks whose level moved. The shell adds `SettingsSection` and
 `RulesTable` in `widgets.slint`: a custom setting is an inline draft with a
 rules table, never a modal.
+
+**Presets** (CFG-06, ADR 0070): a pack may declare `control_kinds`, named
+setting presets with rules and, for interfaces, the interface kinds they fit.
+`Edit::AddPresetSetting` copies a preset's rules into a new control and records
+the kind with `Op::SetControlKind`; `Edit::UsePackValues` resets the rules to
+the pack's current values in one undo step. `LintCode::ControlRulesDifferFromKind`
+warns when they differ. `pages::add_setting_list` gives the "Add setting" list
+(existing settings, fitting presets, custom entry) and `ControlDetail` carries
+`preset` and `differs_from_preset`.

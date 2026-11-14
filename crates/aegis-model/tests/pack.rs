@@ -407,3 +407,44 @@ fn a_pack_without_attack_types_loads_with_none() {
     assert_eq!(m.attack_types().count(), 0);
     assert_eq!(m.attack_type("firmware-modification"), None);
 }
+
+#[test]
+fn a_pack_without_control_kinds_loads_with_none() {
+    let m = Methodology::read_pack(TINY.as_bytes()).expect("valid");
+    assert_eq!(m.control_kinds().len(), 0);
+}
+
+/// `TINY` with one attack type, one level key and a preset body `kind`.
+fn with_kind(kind: &str) -> String {
+    edit(
+        r#""properties": [{"key": "i", "label": "I"}],"#,
+        &format!(
+            r#""attack_types": [{{"key": "a", "label": "A"}}], "control_kinds": [{kind}], "properties": [{{"key": "i", "label": "I"}}],"#
+        ),
+    )
+}
+
+#[test]
+fn a_control_kind_loads() {
+    let text = with_kind(r#"{"key": "k", "label": "K", "rules": {"a": "low"}}"#);
+    let m = read(&text).expect("valid");
+    assert_eq!(m.control_kinds().len(), 1);
+}
+
+#[test]
+fn a_control_kind_with_an_unknown_field_is_refused() {
+    let text = with_kind(r#"{"key": "k", "label": "K", "rules": {"a": "low"}, "x": 1}"#);
+    assert!(matches!(read(&text), Err(PackError::Decode { .. })));
+}
+
+#[test]
+fn a_control_kind_without_rules_is_refused() {
+    let text = with_kind(r#"{"key": "k", "label": "K"}"#);
+    assert!(matches!(read(&text), Err(PackError::Decode { .. })));
+}
+
+#[test]
+fn a_repeated_rule_key_is_refused() {
+    let text = with_kind(r#"{"key": "k", "label": "K", "rules": {"a": "low", "a": "high"}}"#);
+    assert!(matches!(read(&text), Err(PackError::Decode { .. })));
+}

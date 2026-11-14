@@ -10,8 +10,9 @@ use crate::id::{
 };
 use crate::item::ItemRef;
 use crate::methodology::{
-    AttackType, CatalogRef, CatalogScheme, CatalogSyntax, FactorLevel, FeasibilityFactor,
-    FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Property, RiskLevel, ThreatCategory,
+    AttackType, CatalogRef, CatalogScheme, CatalogSyntax, ControlKind, FactorLevel,
+    FeasibilityFactor, FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Property, RiskLevel,
+    ThreatCategory,
 };
 use crate::store::{Limit, VocabKind};
 
@@ -598,6 +599,9 @@ pub enum ModelError {
     /// The attack type index is not in the project's methodology.
     #[error("attack type index {} is not in the methodology", .0.index())]
     UnknownAttackType(AttackType),
+    /// The control kind index is not in the project's methodology.
+    #[error("control kind index {} is not in the methodology", .0.index())]
+    UnknownControlKind(ControlKind),
     /// Setting `parent` on `component` would create a cycle in the component hierarchy.
     #[error("setting component {parent} as parent of {component} would create a cycle")]
     ComponentCycle {
@@ -858,6 +862,13 @@ pub enum ModelError {
         control: ControlId,
         /// How many control rules it carries.
         rules: usize,
+    },
+    /// The security control cannot be removed while it still names a pack
+    /// preset; clear the kind first.
+    #[error("security control {control} still names a pack preset")]
+    SecurityControlHasKind {
+        /// The security control.
+        control: ControlId,
     },
     /// The security control is already applied to this target, or a snapshot
     /// lists it twice.
@@ -1525,6 +1536,55 @@ pub enum MethodologyError {
     /// Two attack types share a key.
     #[error("attack type key {0:?} is declared twice")]
     DuplicateAttackType(Arc<str>),
+    /// More than `max` setting presets (control kinds) are declared.
+    #[error("more than {max} control kinds")]
+    TooManyControlKinds {
+        /// The limit.
+        max: usize,
+    },
+    /// Two control kinds share a key.
+    #[error("control kind key {0:?} is declared twice")]
+    DuplicateControlKind(Arc<str>),
+    /// A control kind has no rules or more than `max`.
+    #[error("control kind {control_kind:?} must have 1 to {max} rules")]
+    ControlKindRuleCount {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The limit.
+        max: usize,
+    },
+    /// A control kind rule names an attack type that is not declared.
+    #[error("control kind {control_kind:?} has a rule for unknown attack type {attack_type:?}")]
+    UnknownControlKindAttackType {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The unknown attack type key, cut like [`InvalidKey`](Self::InvalidKey)'s.
+        attack_type: Arc<str>,
+    },
+    /// A control kind rule names a feasibility level that is not declared.
+    #[error("control kind {control_kind:?} has a rule with unknown feasibility level {level:?}")]
+    UnknownControlKindFeasibilityLevel {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The unknown feasibility level key, cut like [`InvalidKey`](Self::InvalidKey)'s.
+        level: Arc<str>,
+    },
+    /// A control kind names an interface kind that is not declared.
+    #[error("control kind {control_kind:?} names unknown interface kind {interface_kind:?}")]
+    UnknownControlKindInterfaceKind {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The unknown interface kind key, cut like [`InvalidKey`](Self::InvalidKey)'s.
+        interface_kind: Arc<str>,
+    },
+    /// A control kind lists the same interface kind twice.
+    #[error("control kind {control_kind:?} lists interface kind {interface_kind:?} twice")]
+    RepeatedControlKindInterfaceKind {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The repeated interface kind key.
+        interface_kind: Arc<str>,
+    },
     /// More than `max` language translations are declared in a pack.
     #[error("more than {max} pack translations")]
     TooManyTranslations {

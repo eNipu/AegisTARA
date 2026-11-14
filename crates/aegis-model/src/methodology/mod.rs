@@ -23,6 +23,7 @@ pub use catalog::{CatalogRef, CatalogSyntax, SegmentDef};
 pub(crate) use catalog::{MAX_PREFIX_LEN, MAX_SEGMENTS};
 
 use crate::asset::PropertySet;
+use crate::control::{ControlRule, MAX_CONTROL_RULES};
 use crate::error::{MethodologyError, ModelError};
 
 /// Most impact categories a methodology may declare.
@@ -42,6 +43,8 @@ pub const MAX_CATALOG_SCHEMES: usize = 16;
 pub const MAX_INTERFACE_KINDS: usize = 32;
 /// Most attack types a methodology may declare for attack steps (CFG-02).
 pub const MAX_ATTACK_TYPES: usize = 32;
+/// Most setting presets (control kinds) a methodology may declare (CFG-06).
+pub const MAX_CONTROL_KINDS: usize = 64;
 /// Most per-language translations a methodology pack may declare.
 pub const MAX_PACK_TRANSLATIONS: usize = 16;
 /// Fewest factors an `attack_potential` scheme may declare.
@@ -214,6 +217,34 @@ pub struct PackTranslationDef {
     pub interface_kinds: BTreeMap<Arc<str>, Arc<str>>,
     /// Localized attack type labels, keyed by attack type key.
     pub attack_types: BTreeMap<Arc<str>, Arc<str>>,
+    /// Localized control kind labels, keyed by control kind key.
+    pub control_kinds: BTreeMap<Arc<str>, Arc<str>>,
+}
+
+/// A setting preset (control kind) in a [`MethodologyDef`]: a named set of
+/// default rules a consultant picks instead of typing them (CFG-06).
+///
+/// ```
+/// use aegis_model::ControlKindDef;
+///
+/// let d = ControlKindDef {
+///     key: "secure-boot".into(),
+///     label: "Secure boot".into(),
+///     interface_kinds: Vec::new(),
+///     rules: [("firmware-modification".into(), "very-low".into())].into(),
+/// };
+/// assert!(d.interface_kinds.is_empty());
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlKindDef {
+    /// Stable key, unique among control kinds.
+    pub key: Arc<str>,
+    /// Display label, used as the name of a setting created from the preset.
+    pub label: Arc<str>,
+    /// Interface kind keys the preset is for. Empty: the preset is for components.
+    pub interface_kinds: Vec<Arc<str>>,
+    /// Default rules: attack type key to feasibility level key. 1 to 16 entries.
+    pub rules: BTreeMap<Arc<str>, Arc<str>>,
 }
 
 /// Pack-defined display names for the model's element types and the
@@ -261,6 +292,8 @@ pub struct ElementNamesDef {
     pub interface_kinds: Vec<LevelDef>,
     /// Pack-defined attack types for attack steps, 0 to 32 (CFG-02, Decision D26).
     pub attack_types: Vec<LevelDef>,
+    /// Pack-defined setting presets, 0 to 64 (CFG-06, Decision D26).
+    pub control_kinds: Vec<ControlKindDef>,
     /// Optional per-language translations of pack labels and element names (L10N-07).
     pub translations: BTreeMap<Arc<str>, PackTranslationDef>,
 }
@@ -315,6 +348,7 @@ impl Default for ElementNamesDef {
             feasibility: Arc::from("Attack feasibility"),
             interface_kinds: Vec::new(),
             attack_types: Vec::new(),
+            control_kinds: Vec::new(),
             translations: BTreeMap::new(),
         }
     }
@@ -744,6 +778,32 @@ vocab_index! {
     /// # }
     /// ```
     AttackType
+}
+
+vocab_index! {
+    /// Index of a setting preset (control kind) in a [`Methodology`]. 1 byte.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.control_kind("no-such-preset"), None);
+    /// for (i, k) in m.control_kinds().enumerate() {
+    ///     assert_eq!(k.index(), i);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ControlKind
+}
+
+/// One validated setting preset: its entry, interface kinds and rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ControlKindData {
+    entry: Entry,
+    interface_kinds: Vec<InterfaceKind>,
+    rules: Vec<ControlRule>,
 }
 
 /// One validated score band in a [`Methodology`]'s attack potential scheme.
@@ -1202,6 +1262,8 @@ pub struct Methodology {
     interface_by_key: BTreeMap<Arc<str>, u8>,
     attack_types: Vec<Entry>,
     attack_by_key: BTreeMap<Arc<str>, u8>,
+    control_kinds: Vec<ControlKindData>,
+    control_kind_by_key: BTreeMap<Arc<str>, u8>,
     translations: BTreeMap<Arc<str>, PackTranslationDef>,
     impact_categories: Vec<CategoryData>,
     impact_by_key: BTreeMap<Arc<str>, u8>,
@@ -1390,6 +1452,12 @@ impl Methodology {
         Self::check_element_names(&def.element_names)?;
         let interface_kinds = Self::build_interface_kinds(&def.element_names.interface_kinds)?;
         let attack_types = Self::build_attack_types(&def.element_names.attack_types)?;
+        let control_kinds = Self::build_control_kinds(
+            &def.element_names.control_kinds,
+            &interface_kinds.by_key,
+            &attack_types.by_key,
+            &feasibility.by_key,
+        )?;
         Self::check_translations(&def.element_names.translations)?;
         let translations = def.element_names.translations.clone();
 
@@ -1402,6 +1470,8 @@ impl Methodology {
             interface_by_key: interface_kinds.by_key,
             attack_types: attack_types.items,
             attack_by_key: attack_types.by_key,
+            control_kinds: control_kinds.items,
+            control_kind_by_key: control_kinds.by_key,
             translations,
             impact_categories: impacts.items,
             impact_by_key: impacts.by_key,
@@ -1487,6 +1557,80 @@ impl Methodology {
         Ok(Vocab { items: out, by_key })
     }
 
+    /// Validates the setting presets and resolves their keys. Time
+    /// O(K * (I + R)) with K <= 64 presets, I <= 32 interface kinds and
+    /// R <= 16 rules each.
+    fn build_control_kinds(
+        defs: &[ControlKindDef],
+        interface_by_key: &BTreeMap<Arc<str>, u8>,
+        attack_by_key: &BTreeMap<Arc<str>, u8>,
+        feasibility_by_key: &BTreeMap<Arc<str>, u8>,
+    ) -> Result<Vocab<ControlKindData>, MethodologyError> {
+        check_count(defs.len(), 0, MAX_CONTROL_KINDS, || {
+            MethodologyError::TooManyControlKinds {
+                max: MAX_CONTROL_KINDS,
+            }
+        })?;
+        let mut by_key = BTreeMap::new();
+        let mut out = Vec::with_capacity(defs.len());
+        for (pos, d) in defs.iter().enumerate() {
+            let entry = add_entry(
+                &d.key,
+                &d.label,
+                pos,
+                &mut by_key,
+                MethodologyError::DuplicateControlKind,
+            )?;
+            let mut interface_kinds: Vec<InterfaceKind> =
+                Vec::with_capacity(d.interface_kinds.len());
+            for ik in &d.interface_kinds {
+                let Some(&i) = interface_by_key.get(ik) else {
+                    return Err(MethodologyError::UnknownControlKindInterfaceKind {
+                        control_kind: Arc::clone(&d.key),
+                        interface_kind: error_key_text(ik),
+                    });
+                };
+                if interface_kinds.contains(&InterfaceKind(i)) {
+                    return Err(MethodologyError::RepeatedControlKindInterfaceKind {
+                        control_kind: Arc::clone(&d.key),
+                        interface_kind: Arc::clone(ik),
+                    });
+                }
+                interface_kinds.push(InterfaceKind(i));
+            }
+            interface_kinds.sort_unstable();
+            check_count(d.rules.len(), 1, MAX_CONTROL_RULES, || {
+                MethodologyError::ControlKindRuleCount {
+                    control_kind: Arc::clone(&d.key),
+                    max: MAX_CONTROL_RULES,
+                }
+            })?;
+            let mut rules = Vec::with_capacity(d.rules.len());
+            for (attack, level) in &d.rules {
+                let Some(&a) = attack_by_key.get(attack) else {
+                    return Err(MethodologyError::UnknownControlKindAttackType {
+                        control_kind: Arc::clone(&d.key),
+                        attack_type: error_key_text(attack),
+                    });
+                };
+                let Some(&f) = feasibility_by_key.get(level) else {
+                    return Err(MethodologyError::UnknownControlKindFeasibilityLevel {
+                        control_kind: Arc::clone(&d.key),
+                        level: error_key_text(level),
+                    });
+                };
+                rules.push(ControlRule::new(AttackType(a), FeasibilityLevel(f)));
+            }
+            rules.sort_unstable();
+            out.push(ControlKindData {
+                entry,
+                interface_kinds,
+                rules,
+            });
+        }
+        Ok(Vocab { items: out, by_key })
+    }
+
     fn check_translations(
         translations: &BTreeMap<Arc<str>, PackTranslationDef>,
     ) -> Result<(), MethodologyError> {
@@ -1515,6 +1659,7 @@ impl Methodology {
                 &tr.factor_levels,
                 &tr.interface_kinds,
                 &tr.attack_types,
+                &tr.control_kinds,
             ] {
                 for (k, v) in maps {
                     check_key(k)?;
@@ -3126,6 +3271,143 @@ impl Methodology {
         self.attack_types.get(kind.index()).map(|e| &*e.label)
     }
 
+    // -- Control kinds: setting presets (CFG-06) ------------------------------
+
+    /// Iterates the setting presets in declaration order. Time O(1) per item.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// for k in m.control_kinds() {
+    ///     assert!(m.control_kind_key(k).is_some());
+    ///     assert!(!m.control_kind_rules(k).is_empty());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn control_kinds(&self) -> impl ExactSizeIterator<Item = ControlKind> + use<> {
+        index_range(self.control_kinds.len()).map(ControlKind)
+    }
+
+    /// Resolves a setting preset key in O(log K), K <= 64.
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert_eq!(m.control_kind("no-such-preset"), None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind(&self, key: &str) -> Option<ControlKind> {
+        self.control_kind_by_key.get(key).copied().map(ControlKind)
+    }
+
+    /// Returns a setting preset's key, or `None` if out of range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.control_kinds().all(|k| m.control_kind_key(k).is_some()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind_key(&self, kind: ControlKind) -> Option<&str> {
+        self.control_kinds.get(kind.index()).map(|d| &*d.entry.key)
+    }
+
+    /// Returns a setting preset's display label, or `None` if out of range.
+    /// Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.control_kinds().all(|k| m.control_kind_label(k).is_some()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind_label(&self, kind: ControlKind) -> Option<&str> {
+        self.control_kinds
+            .get(kind.index())
+            .map(|d| &*d.entry.label)
+    }
+
+    /// Returns a setting preset's localized label for `lang`, falling back to
+    /// [`Self::control_kind_label`]. Time O(log T + log K).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// for k in m.control_kinds() {
+    ///     assert_eq!(m.control_kind_label_for_lang(k, "xx"), m.control_kind_label(k));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind_label_for_lang(&self, kind: ControlKind, lang: &str) -> Option<&str> {
+        let data = self.control_kinds.get(kind.index())?;
+        if let Some(lbl) = self
+            .translation(lang)
+            .and_then(|tr| tr.control_kinds.get(&data.entry.key))
+        {
+            return Some(lbl);
+        }
+        Some(&data.entry.label)
+    }
+
+    /// Returns a setting preset's default rules, sorted by attack type. Empty
+    /// when out of range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.control_kinds().all(|k| !m.control_kind_rules(k).is_empty()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind_rules(&self, kind: ControlKind) -> &[ControlRule] {
+        self.control_kinds
+            .get(kind.index())
+            .map_or(&[], |d| d.rules.as_slice())
+    }
+
+    /// Returns the interface kinds a setting preset is for, sorted by index.
+    /// Empty means the preset is for components; also empty when out of
+    /// range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// let n = m.interface_kinds().count();
+    /// assert!(m.control_kinds().all(|k| m.control_kind_interface_kinds(k).len() <= n));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind_interface_kinds(&self, kind: ControlKind) -> &[InterfaceKind] {
+        self.control_kinds
+            .get(kind.index())
+            .map_or(&[], |d| d.interface_kinds.as_slice())
+    }
+
     // -- Translations (L10N-07) -----------------------------------------------
 
     /// Returns all per-language translation tables declared by this pack. Time O(1).
@@ -3343,6 +3625,15 @@ impl Methodology {
             Ok(())
         } else {
             Err(ModelError::UnknownAttackType(kind))
+        }
+    }
+
+    /// Checks that a control kind is declared in this methodology. Time O(1).
+    pub(crate) fn check_control_kind(&self, kind: ControlKind) -> Result<(), ModelError> {
+        if kind.index() < self.control_kinds.len() {
+            Ok(())
+        } else {
+            Err(ModelError::UnknownControlKind(kind))
         }
     }
 
