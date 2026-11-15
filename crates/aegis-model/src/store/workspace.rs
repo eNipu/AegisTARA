@@ -283,7 +283,9 @@ fn element_error_id(model: &ModelError) -> Option<String> {
         | E::DuplicateElementLink { element }
         | E::ElementLinkMissing { element }
         | E::TooManyElementLinks { element, .. }
-        | E::ElementHasLinks { element, .. } => Some(element.to_string()),
+        | E::ElementHasLinks { element, .. }
+        | E::NotASystem { element } => Some(element.to_string()),
+        E::SystemHasComponents { system, .. } => Some(system.to_string()),
         E::UnknownThreatScenario(t) => Some(t.to_string()),
         _ => None,
     }

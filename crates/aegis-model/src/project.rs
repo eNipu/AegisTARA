@@ -16,13 +16,14 @@ use crate::description::{
     MAX_DESCRIPTION_TRANSLATIONS, Translation, check_lang, check_text,
 };
 use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDelta};
+use crate::element::ElementKind;
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
 use crate::id::{
     ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId,
-    ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, GoalId, GoalIdx, InterfaceId,
-    InterfaceIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
-    TrustBoundaryIdx, VisualPrefix,
+    ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx,
+    InterfaceId, InterfaceIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
@@ -6534,6 +6535,11 @@ impl Project {
             Op::SetComponentParent { id, parent, .. } => {
                 self.check_set_component_parent(*id, *parent)?;
             }
+            Op::SetComponentSystem {
+                id,
+                system,
+                provenance,
+            } => return self.check_set_component_system(*id, *system, provenance),
             Op::RemoveComponent { id } => return self.check_remove_component(*id),
             Op::AddInterface {
                 id,
@@ -7056,6 +7062,11 @@ impl Project {
                 parent,
                 provenance,
             } => self.commit_set_component_parent(id, parent, provenance),
+            Op::SetComponentSystem {
+                id,
+                system,
+                provenance,
+            } => self.commit_set_component_system(id, system, provenance),
             Op::RemoveComponent { id } => self.commit_remove_component(id),
             Op::AddInterface {
                 id,
@@ -8856,13 +8867,41 @@ impl Project {
         id: ComponentId,
         parent: Option<ComponentId>,
     ) -> Result<(), ModelError> {
-        let (idx, _) = self.live_component(id)?;
+        let (idx, c) = self.live_component(id)?;
+        if parent.is_some() && c.system.is_some() {
+            return Err(ModelError::ComponentHasSystem { component: id });
+        }
         self.check_component_parent_chain(id, Some(idx), parent)
+    }
+
+    fn check_set_component_system(
+        &self,
+        id: ComponentId,
+        system: Option<ElementId>,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (_, c) = self.live_component(id)?;
+        if let Some(sys) = system {
+            if c.parent.is_some() {
+                return Err(ModelError::ChildComponentSystem { component: id });
+            }
+            let e = self
+                .elements
+                .get(sys)
+                .ok_or(ModelError::UnknownElement(sys))?;
+            if e.kind() != ElementKind::System {
+                return Err(ModelError::NotASystem { element: sys });
+            }
+        }
+        check_provenance(provenance)
     }
 
     fn check_remove_component(&self, id: ComponentId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Component(id), EntityKind::Component)?;
-        let (idx, _) = self.live_component(id)?;
+        let (idx, c) = self.live_component(id)?;
+        if c.system.is_some() {
+            return Err(ModelError::ComponentHasSystem { component: id });
+        }
         let pos = idx.index();
         let children = self.refs.component_children.get(pos).copied().unwrap_or(0);
         if children > 0 {
@@ -10256,6 +10295,7 @@ impl Project {
         let comp = Component {
             name,
             parent: parent_idx,
+            system: None,
             provenance,
         };
         self.components.push(id, comp, self.slot_limit).ok_or(
@@ -10326,6 +10366,22 @@ impl Project {
         Ok(Op::SetComponentParent {
             id,
             parent: old_parent,
+            provenance,
+        })
+    }
+
+    fn commit_set_component_system(
+        &mut self,
+        id: ComponentId,
+        system: Option<ElementId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let c = self.component_mut(id)?;
+        let old = std::mem::replace(&mut c.system, system);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::SetComponentSystem {
+            id,
+            system: old,
             provenance,
         })
     }
@@ -10840,6 +10896,7 @@ impl Project {
     /// parent references resolved to public IDs. O(1).
     fn same_component(&self, x: &Component, other: &Project, y: &Component) -> bool {
         x.name == y.name
+            && x.system == y.system
             && x.provenance == y.provenance
             && self.component_opt_key(x.parent) == other.component_opt_key(y.parent)
     }
@@ -11858,6 +11915,7 @@ impl ProjectEvalCache {
             | Op::AddComponent { .. }
             | Op::RenameComponent { .. }
             | Op::SetComponentParent { .. }
+            | Op::SetComponentSystem { .. }
             | Op::RemoveComponent { .. }
             | Op::AddInterface { .. }
             | Op::RenameInterface { .. }

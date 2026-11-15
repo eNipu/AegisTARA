@@ -6,7 +6,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::{ComponentId, ComponentIdx, InterfaceId, InterfaceIdx};
+use crate::id::{ComponentId, ComponentIdx, ElementId, InterfaceId, InterfaceIdx};
 use crate::methodology::InterfaceKind;
 use crate::provenance::Provenance;
 
@@ -90,6 +90,7 @@ pub(crate) enum ItemIdx {
 pub struct Component {
     pub(crate) name: Arc<str>,
     pub(crate) parent: Option<ComponentIdx>,
+    pub(crate) system: Option<ElementId>,
     pub(crate) provenance: Provenance,
 }
 
@@ -145,6 +146,39 @@ impl Component {
     #[must_use]
     pub fn parent(&self) -> Option<ComponentIdx> {
         self.parent
+    }
+
+    /// The system this component was put in, or `None`. A child component has
+    /// none: it follows its parent. Time O(1).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ComponentId, ElementId, ElementKind, Methodology, Op, Project, Provenance};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let id = ComponentId::new_v7();
+    /// let system = ElementId::new_v7();
+    /// project.apply(Op::AddElement {
+    ///     id: system, kind: ElementKind::System, name: "Powertrain".into(),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::AddComponent {
+    ///     id, name: "ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// let (_, _, c) = project.components().next().ok_or("missing")?;
+    /// assert_eq!(c.system(), None);
+    /// project.apply(Op::SetComponentSystem {
+    ///     id, system: Some(system), provenance: Provenance::default(),
+    /// })?;
+    /// let (_, _, c) = project.components().next().ok_or("missing")?;
+    /// assert_eq!(c.system(), Some(system));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn system(&self) -> Option<ElementId> {
+        self.system
     }
 
     /// Returns the provenance of the last [`Op`](crate::Op) that created or
