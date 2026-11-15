@@ -13,9 +13,9 @@
 //! the user decides what happens to those threats.
 
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GateKind, GoalId,
-    InterfaceId, ItemRef, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
-    TreeId, TrustBoundaryId,
+    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId,
+    ElementKind, GateKind, GoalId, InterfaceId, ItemRef, NodeId, Op, Project, PropertySet,
+    Provenance, RiskTreatment, ThreatId, TreeId, TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, ResolvedNote, parse_outline_annotated, resolve_notes};
@@ -196,6 +196,35 @@ pub enum Edit {
     RemoveComponent {
         /// The component.
         component: ComponentId,
+    },
+    // ---- systems (job 119) ----
+    /// Adds a system.
+    AddSystem {
+        /// New ID.
+        id: ElementId,
+        /// Name.
+        name: String,
+    },
+    /// Renames a system.
+    RenameSystem {
+        /// The system.
+        system: ElementId,
+        /// New name.
+        name: String,
+    },
+    /// Removes a system. Its components are taken out first; no other
+    /// element is removed.
+    RemoveSystem {
+        /// The system.
+        system: ElementId,
+    },
+    /// Puts components in a system, or in none (`None`). A component that
+    /// has a parent is skipped: it follows its parent.
+    MoveToSystem {
+        /// The components, in the order to move them.
+        components: Vec<ComponentId>,
+        /// The system, or `None` for no system.
+        system: Option<ElementId>,
     },
     /// Adds an interface on a component.
     AddInterface {
@@ -1070,6 +1099,41 @@ fn threats_on_tree(project: &Project, tree: TreeId) -> Vec<ThreatId> {
         .collect()
 }
 
+/// The system of a component, if it exists and has one.
+fn component_system(project: &Project, id: &ComponentId) -> Option<ElementId> {
+    project.component(project.component_idx(id)?)?.system()
+}
+
+/// The element `id`, if it is a system.
+fn live_system(project: &Project, id: ElementId) -> Result<&aegis_model::Element, EditError> {
+    project
+        .element(id)
+        .filter(|e| e.kind() == ElementKind::System)
+        .ok_or(EditError::Missing)
+}
+
+/// The components a move to `system` changes, once each, in the given order.
+fn move_targets(
+    project: &Project,
+    components: &[ComponentId],
+    system: Option<ElementId>,
+) -> Result<Vec<ComponentId>, EditError> {
+    if let Some(s) = system {
+        live_system(project, s)?;
+    }
+    let mut out: Vec<ComponentId> = Vec::new();
+    for id in components {
+        let c = project
+            .component_idx(id)
+            .and_then(|i| project.component(i))
+            .ok_or(EditError::Missing)?;
+        if c.parent().is_none() && c.system() != system && !out.contains(id) {
+            out.push(*id);
+        }
+    }
+    Ok(out)
+}
+
 impl Edit {
     /// Builds the ops for this edit against `project` and its methodology.
     /// The provenance records who made the change and when.
@@ -1319,11 +1383,69 @@ impl Edit {
                 name: name(n)?,
                 provenance: p,
             }],
-            Edit::SetComponentParent { component, parent } => vec![Op::SetComponentParent {
-                id: *component,
-                parent: *parent,
+            Edit::SetComponentParent { component, parent } => {
+                let mut ops = Vec::new();
+                if parent.is_some() && component_system(project, component).is_some() {
+                    ops.push(Op::SetComponentSystem {
+                        id: *component,
+                        system: None,
+                        provenance: p.clone(),
+                    });
+                }
+                ops.push(Op::SetComponentParent {
+                    id: *component,
+                    parent: *parent,
+                    provenance: p,
+                });
+                ops
+            }
+            Edit::AddSystem { id, name: n } => vec![Op::AddElement {
+                id: *id,
+                kind: ElementKind::System,
+                name: name(n)?,
                 provenance: p,
             }],
+            Edit::RenameSystem { system, name: n } => {
+                live_system(project, *system)?;
+                vec![Op::RenameElement {
+                    id: *system,
+                    name: name(n)?,
+                    provenance: p,
+                }]
+            }
+            Edit::RemoveSystem { system } => {
+                let el = live_system(project, *system)?;
+                let mut ops = Vec::new();
+                for (_, id, c) in project.components() {
+                    if c.system() == Some(*system) {
+                        ops.push(Op::SetComponentSystem {
+                            id,
+                            system: None,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                for (key, _) in el.attributes() {
+                    ops.push(Op::SetElementAttribute {
+                        id: *system,
+                        key: key.clone(),
+                        value: None,
+                        provenance: p.clone(),
+                    });
+                }
+                ops.push(Op::RemoveElement { id: *system });
+                ops
+            }
+            Edit::MoveToSystem { components, system } => {
+                move_targets(project, components, *system)?
+                    .into_iter()
+                    .map(|id| Op::SetComponentSystem {
+                        id,
+                        system: *system,
+                        provenance: p.clone(),
+                    })
+                    .collect()
+            }
             Edit::RemoveComponent { component } => {
                 let c_idx = project.component_idx(component).ok_or(EditError::Missing)?;
                 let mut ops = Vec::new();
@@ -1394,6 +1516,13 @@ impl Edit {
                             provenance: p.clone(),
                         });
                     }
+                }
+                if component_system(project, component).is_some() {
+                    ops.push(Op::SetComponentSystem {
+                        id: *component,
+                        system: None,
+                        provenance: p.clone(),
+                    });
                 }
                 ops.push(Op::RemoveComponent { id: *component });
                 ops
@@ -2528,6 +2657,12 @@ impl Edit {
                 .damage_scenario_idx(damage)
                 .and_then(|i| project.damage_scenario(i))
                 .is_some_and(|d| d.impact_rationale() == text.trim()),
+            Edit::RenameSystem { system, name } => project
+                .element(*system)
+                .is_some_and(|e| e.kind() == ElementKind::System && e.name() == name.trim()),
+            Edit::MoveToSystem { components, system } => {
+                move_targets(project, components, *system).is_ok_and(|v| v.is_empty())
+            }
             _ => false,
         }
     }
@@ -2573,6 +2708,7 @@ impl Edit {
             Edit::SetThreatGoal { .. } => ("set goal of", "threat scenarios"),
             Edit::SetThreatClaim { .. } => ("set claim of", "threat scenarios"),
             Edit::SetThreatScaling { .. } => ("set scaling of", "threat scenarios"),
+            Edit::MoveToSystem { .. } => ("move", "components"),
             _ => ("change", "items"),
         };
         Some(Label::bulk(verb, noun, items.len()))
