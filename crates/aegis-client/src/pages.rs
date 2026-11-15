@@ -2635,6 +2635,17 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::ComponentWithoutSystem { component } => {
+            let s = Selection::Component(component);
+            (
+                format!(
+                    "{} {} is in no system.",
+                    m.element_names().component.singular,
+                    q(s)
+                ),
+                s,
+            )
+        }
         L::BoundaryCrossingDataFlowWithoutThreat { flow } => {
             let s = Selection::DataFlow(flow);
             (

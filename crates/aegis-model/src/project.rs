@@ -5438,6 +5438,7 @@ impl Project {
         self.lint_goals(&mut findings);
         self.lint_claims(&mut findings);
         self.lint_data_flows(&mut findings);
+        self.lint_components(&mut findings);
         findings.sort_unstable();
         findings
     }
@@ -5693,6 +5694,19 @@ impl Project {
             if self.refs.claims.get(idx.index()).copied().unwrap_or(0) == 0 {
                 findings.push(LintFinding::new(LintCode::CybersecurityClaimUnlinked {
                     claim: id,
+                }));
+            }
+        }
+    }
+
+    fn lint_components(&self, findings: &mut Vec<LintFinding>) {
+        if self.element_count(ElementKind::System) == 0 {
+            return;
+        }
+        for (_idx, id, component) in self.components.iter() {
+            if component.parent().is_none() && component.system().is_none() {
+                findings.push(LintFinding::new(LintCode::ComponentWithoutSystem {
+                    component: id,
                 }));
             }
         }
