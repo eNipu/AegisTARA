@@ -42,7 +42,7 @@ use std::time::Duration;
 
 use aegis_auth::layer::CredentialProvider;
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
     Methodology, OpCodec, Project, ThreatId, TreeId, TrustBoundaryId,
 };
 use aegis_proto as pb;
@@ -2912,6 +2912,10 @@ impl<P: CredentialProvider> Actor<P> {
                 id: TrustBoundaryId::new_v7(),
                 name,
             },
+            DraftKind::System => Edit::AddSystem {
+                id: ElementId::new_v7(),
+                name,
+            },
         };
         let notice_before = self.next_notice;
         if self.edit(&edit) {
@@ -3285,6 +3289,7 @@ fn page_data(open: &Open) -> PageData {
         Page::Overview => d.overview = Some(pages::overview(ws)),
         Page::Item => {
             d.components = pages::component_rows(ws);
+            d.systems = crate::systems::system_rows(ws);
             d.component = ui
                 .selected_component
                 .and_then(|id| pages::component_detail(ws, id));

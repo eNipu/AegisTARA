@@ -230,6 +230,8 @@ pub struct PageData {
     pub components: Vec<ComponentRow>,
     /// The selected component.
     pub component: Option<ComponentDetail>,
+    /// Item definition page: systems (job 119).
+    pub systems: Vec<crate::systems::SystemRow>,
     /// Item definition page: interfaces (job 074).
     pub interfaces: Vec<InterfaceRow>,
     /// The selected interface.
