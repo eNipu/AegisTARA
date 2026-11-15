@@ -7,8 +7,8 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    ComponentId, ElementId, ElementKind, Methodology, ModelError, Op, Project, Provenance,
-    StoreError,
+    ComponentId, ElementId, ElementKind, LintCode, Methodology, ModelError, Op, Project,
+    Provenance, StoreError,
 };
 use common::{builtin, component_id, element_id, read_log, save, write_log};
 use serde_json::{Value, json};
@@ -360,4 +360,43 @@ fn the_v1_fixture_saves_the_same_bytes_without_a_system_key() {
     );
     let again = Project::load(saved.as_slice(), Arc::clone(p.methodology())).expect("reload");
     assert_eq!(save(&again), saved);
+}
+
+fn without_system(p: &Project) -> Vec<ComponentId> {
+    p.lint()
+        .iter()
+        .filter_map(|f| match f.code() {
+            LintCode::ComponentWithoutSystem { component } => Some(component),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn no_finding_without_systems() {
+    let mut p = Project::new(builtin());
+    p.apply(add_component(10, "Secret Gateway", None))
+        .expect("add");
+    assert!(without_system(&p).is_empty());
+}
+
+#[test]
+fn top_level_components_in_no_system_are_reported_and_children_follow_their_parent() {
+    let (_, mut p) = project();
+    // 10 and 12 are top-level in no system; 11 is a child of 10.
+    assert_eq!(without_system(&p), vec![component_id(10), component_id(12)]);
+    let f = p
+        .lint()
+        .into_iter()
+        .find(|f| matches!(f.code(), LintCode::ComponentWithoutSystem { .. }))
+        .expect("finding");
+    assert!(f.is_warning());
+
+    p.apply(put(10, Some(SYS_A))).expect("put");
+    // 10 is in a system, its child 11 is not reported, 12 still is.
+    assert_eq!(without_system(&p), vec![component_id(12)]);
+    p.apply(put(12, Some(SYS_B))).expect("put");
+    assert!(without_system(&p).is_empty());
+    p.apply(put(12, None)).expect("clear");
+    assert_eq!(without_system(&p), vec![component_id(12)]);
 }
