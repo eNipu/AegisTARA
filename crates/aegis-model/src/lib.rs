@@ -244,6 +244,7 @@ mod provenance;
 mod sensitivity;
 mod store;
 mod suggest;
+mod system;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod testkit;
@@ -320,5 +321,6 @@ pub use suggest::{
     Citation, GhostPreview, GhostTreeNode, MAX_CITATIONS_PER_ITEM, MAX_OPS_PER_SUGGESTION,
     MAX_SUGGESTIONS_PER_BRANCH, SuggestionBranch, SuggestionError, SuggestionItem,
 };
+pub use system::{SystemSet, SystemUse};
 pub use threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
 pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Node, RemovedNode};
