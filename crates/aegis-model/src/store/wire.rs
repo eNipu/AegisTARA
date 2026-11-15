@@ -1963,6 +1963,8 @@ pub(super) struct ComponentWire {
     #[serde(default, deserialize_with = "some")]
     pub(super) parent: Option<WireId<ComponentId>>,
     #[serde(default, deserialize_with = "some")]
+    pub(super) system: Option<WireId<ElementId>>,
+    #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
@@ -2415,6 +2417,13 @@ pub(super) enum OpWire {
         id: WireId<ComponentId>,
         #[serde(deserialize_with = "Option::deserialize")]
         parent: Option<WireId<ComponentId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetComponentSystem {
+        id: WireId<ComponentId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        system: Option<WireId<ElementId>>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

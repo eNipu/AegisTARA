@@ -423,6 +423,12 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetComponentSystem {
+        id: Text<ComponentId>,
+        system: Option<Text<ElementId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     RemoveComponent {
         id: Text<ComponentId>,
     },
@@ -1206,6 +1212,15 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             parent: parent.map(Text),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::SetComponentSystem {
+            id,
+            system,
+            provenance,
+        } => OpView::SetComponentSystem {
+            id: Text(*id),
+            system: system.map(Text),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::RemoveComponent { id } => OpView::RemoveComponent { id: Text(*id) },
         Op::AddInterface {
             id,
@@ -1949,6 +1964,15 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::SetComponentParent {
             id: id.0,
             parent: parent.map(|p| p.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetComponentSystem {
+            id,
+            system,
+            provenance,
+        } => Op::SetComponentSystem {
+            id: id.0,
+            system: system.map(|s| s.0),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveComponent { id } => Op::RemoveComponent { id: id.0 },

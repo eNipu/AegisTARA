@@ -575,6 +575,18 @@ impl Project {
         if count > 0 {
             return Err(ModelError::ElementHasLinks { element: id, count });
         }
+        if e.kind == ElementKind::System {
+            let components = self
+                .components()
+                .filter(|(_, _, c)| c.system == Some(id))
+                .count();
+            if components > 0 {
+                return Err(ModelError::SystemHasComponents {
+                    system: id,
+                    components,
+                });
+            }
+        }
         Ok(())
     }
 
