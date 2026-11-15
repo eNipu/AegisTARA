@@ -1,0 +1,79 @@
+{
+  "job": "125-reduced-by",
+  "slices": [
+    {
+      "id": "125a",
+      "title": "Find the deciding step of a tree and what caps it",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/control.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/tests/reduced_by.rs",
+        "factory/jobs/125-reduced-by/slices/125a/*"
+      ],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": ["cargo test --locked -p aegis-model --test reduced_by"]
+    },
+    {
+      "id": "125b",
+      "title": "Reduced by on risk rows and Lowers N risks on control rows",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/tests/reduced_by.rs",
+        "factory/jobs/125-reduced-by/slices/125b/*"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test reduced_by --test pages",
+        "cargo check --locked -p aegis-shell"
+      ]
+    },
+    {
+      "id": "125c",
+      "title": "Reduced by, Risks lowered and Security settings in the report",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/report/doc.rs",
+        "crates/aegis-client/locales/en/main.ftl",
+        "crates/aegis-client/locales/ja/main.ftl",
+        "crates/aegis-client/locales/pseudo/main.ftl",
+        "crates/aegis-client/tests/reduced_by_report.rs",
+        "factory/jobs/125-reduced-by/slices/125c/*"
+      ],
+      "max_lines": 250,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test reduced_by_report --test report_builder --test pages"
+      ]
+    },
+    {
+      "id": "125d",
+      "title": "Reduced by columns and a Security settings sheet in the workbook",
+      "tier": "small",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/report/xlsx.rs",
+        "crates/aegis-client/tests/reduced_by_report.rs",
+        "factory/jobs/125-reduced-by/slices/125d/*"
+      ],
+      "max_lines": 120,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test reduced_by_report --test report_builder --test pages",
+        "cargo check --locked -p aegis-shell"
+      ]
+    }
+  ]
+}

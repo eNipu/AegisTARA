@@ -1599,6 +1599,64 @@
       ],
       "decision": null,
       "updated": "2026-11-14T12:14:54Z"
+    },
+    {
+      "id": "125-reduced-by",
+      "title": "\"Reduced by\" in tables and reports",
+      "branch": "factory/125-reduced-by",
+      "stage": "merged",
+      "slice": "125d",
+      "base": "425a9180639a0f0874b1deb5c10cfd8117d177d9",
+      "reviews": {
+        "slice": "125d",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "125a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 172
+        },
+        {
+          "slice": "125b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 186
+        },
+        {
+          "slice": "125c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 132
+        },
+        {
+          "slice": "125d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 40
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-15T18:27:24Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
