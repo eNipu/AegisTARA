@@ -189,6 +189,7 @@ fn risk_rows_block(catalog: &Catalog, rows: &[RiskRow]) -> Block {
             catalog.tr("feasibility"),
             catalog.tr("risk-before"),
             catalog.tr("risk-after"),
+            catalog.tr("reduced-by"),
             catalog.tr("treatment"),
             catalog.tr("goal-or-claim"),
         ],
@@ -202,6 +203,11 @@ fn risk_rows_block(catalog: &Catalog, rows: &[RiskRow]) -> Block {
                     r.feasibility.clone(),
                     risk_cell_text(catalog, r.inherent.as_ref()),
                     risk_cell_text(catalog, r.residual.as_ref()),
+                    pages::reduced_by_text(r).unwrap_or_else(|| {
+                        r.deciding_step.as_ref().map_or_else(String::new, |s| {
+                            catalog.tr_with("reduced-by-none", &[("step", &s.label)])
+                        })
+                    }),
                     r.treatment.clone(),
                     r.backing.clone(),
                 ]
@@ -723,6 +729,31 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         for tb in &tb_rows {
             push_target_figures(&mut b, &profile.figures, ElementRef::TrustBoundary(tb.id));
         }
+        let settings = pages::applied_settings(ws, lang.code());
+        if !settings.is_empty() {
+            b.push(Heading(3, catalog.tr("security-settings")));
+            b.push(Paragraph(
+                catalog.tr("security-settings-note"),
+                Style::Muted,
+            ));
+            b.push(table(
+                &[
+                    catalog.tr("applied-to"),
+                    catalog.tr("setting"),
+                    catalog.tr("rules"),
+                ],
+                settings
+                    .into_iter()
+                    .map(|s| {
+                        vec![
+                            format!("{} · {}", s.target_visual_id, s.target_label),
+                            format!("{} · {}", s.control_visual_id, s.name),
+                            s.rules,
+                        ]
+                    })
+                    .collect(),
+            ));
+        }
         desc_list(
             &mut b,
             &section_descriptions(ws, Described::Item, lang),
@@ -983,6 +1014,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 catalog.tr("control"),
                 catalog.tr("attack-steps"),
                 catalog.tr("goals"),
+                catalog.tr("risks-lowered"),
             ],
             pages::control_rows(ws)
                 .into_iter()
@@ -991,6 +1023,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                         format!("{} · {}", c.visual_id, c.name),
                         c.steps.to_string(),
                         c.goals.to_string(),
+                        c.lowers.to_string(),
                     ]
                 })
                 .collect(),

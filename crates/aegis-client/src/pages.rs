@@ -15,7 +15,7 @@
 use aegis_canvas::Tone;
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, LintCode,
-    LintSeverity, Methodology, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    LintSeverity, Methodology, NodeId, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 use crate::commands::TREATMENTS;
@@ -409,6 +409,81 @@ pub struct SettingRow {
     pub inherited: bool,
     /// Owning component name when `inherited` is true.
     pub from_component: String,
+}
+
+/// One security setting applied directly to a component or an interface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedSettingRow {
+    /// The component or interface.
+    pub target: aegis_model::ItemRef,
+    /// Its short visual ID (`C00`, `IF00`).
+    pub target_visual_id: String,
+    /// Its name; an interface reads `"ADAS ECU / JTAG"`.
+    pub target_label: String,
+    /// The security control.
+    pub control: ControlId,
+    /// The control's short visual ID (`SC00`).
+    pub control_visual_id: String,
+    /// The control's name.
+    pub name: String,
+    /// Its rules in the asked language, e.g. `Debug access → Low`; empty
+    /// when it has none.
+    pub rules: String,
+}
+
+/// Every setting applied directly to a component or an interface: components
+/// in project order, each followed by its interfaces; inherited settings are
+/// not repeated on interfaces. Labels use `lang`. Time O(components + interfaces × controls).
+#[must_use]
+pub fn applied_settings(ws: &Workspace, lang: &str) -> Vec<AppliedSettingRow> {
+    let project = ws.project();
+    let m = project.methodology();
+    let mut out = Vec::new();
+    let mut push = |target: aegis_model::ItemRef, visual_id: String| {
+        for (c_idx, id, c) in project.controls_applied_to(target) {
+            let rules = c
+                .rules()
+                .iter()
+                .map(|r| {
+                    let attack = m
+                        .attack_type_label_for_lang(r.attack_type(), lang)
+                        .or_else(|| m.attack_type_label(r.attack_type()))
+                        .unwrap_or("?");
+                    let ceiling = m
+                        .feasibility_level_label_for_lang(r.ceiling(), lang)
+                        .map_or_else(|| feasibility_label(m, r.ceiling()), str::to_owned);
+                    format!("{attack} \u{2192} {ceiling}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(AppliedSettingRow {
+                target,
+                target_visual_id: visual_id.clone(),
+                target_label: crate::view::through_label(project, target),
+                control: id,
+                control_visual_id: project
+                    .security_control_visual_id(c_idx)
+                    .unwrap_or_default(),
+                name: c.name().to_owned(),
+                rules,
+            });
+        }
+    };
+    for (c_idx, c_id, _) in project.components() {
+        push(
+            aegis_model::ItemRef::Component(c_id),
+            project.component_visual_id(c_idx).unwrap_or_default(),
+        );
+        for (i_idx, i_id, i) in project.interfaces() {
+            if i.component() == c_idx {
+                push(
+                    aegis_model::ItemRef::Interface(i_id),
+                    project.interface_visual_id(i_idx).unwrap_or_default(),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// One rule of a security control: attack type -> feasibility ceiling (CFG-03).
@@ -1272,28 +1347,17 @@ fn ceiling_lines(ws: &Workspace, id: ThreatId) -> Vec<String> {
     else {
         return Vec::new();
     };
-    let (Some(tree), Some(tree_id), Ok(eval)) = (
-        project.attack_tree(tree_idx),
+    let (Some(tree_id), Ok(eval)) = (
         project.attack_tree_id(tree_idx),
         ws.cache().evaluate_residual_threat(project, id),
     ) else {
         return Vec::new();
     };
-    let Some(step) = eval.why_path(tree.root()).last() else {
+    let Some(step) = project.deciding_step(tree_idx, eval) else {
         return Vec::new();
     };
-    let (Some(inherent), Some(residual)) = (
-        project.effective_step_feasibility(tree_idx, step),
-        project.residual_step_feasibility(tree_idx, step),
-    ) else {
-        return Vec::new();
-    };
-    let (Some(node), true) = (tree.id_of(step), residual < inherent) else {
-        return Vec::new();
-    };
-    // Only ceilings below the rating cap anything.
-    let mut ceilings = project.step_ceilings(tree_idx, step);
-    ceilings.retain(|c| c.feasibility() < inherent);
+    let node = step.node_id();
+    let ceilings = step.ceilings();
     let mut lines: Vec<String> = ceilings
         .iter()
         .take(SHOWN)
@@ -1465,6 +1529,152 @@ pub struct RiskRow {
     pub treatment: String,
     /// The goal or claim that backs the treatment.
     pub backing: String,
+    /// Settings that cap the step deciding the risk after controls, deciding
+    /// one first; each control once.
+    pub reduced_by: Vec<ReducedByEntry>,
+    /// The step that decides the risk after controls; `None` when the threat
+    /// has no attack tree or it cannot be evaluated.
+    pub deciding_step: Option<DecidingStepView>,
+    /// The risk after controls is lower than the risk before controls.
+    pub lowered: bool,
+}
+
+/// One setting that caps a risk's deciding step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReducedByEntry {
+    /// The setting.
+    pub control: ControlId,
+    /// Its short visual ID (`SC00`, `SC01`, ...).
+    pub visual_id: String,
+    /// The control's name.
+    pub name: String,
+    /// The component or interface it is applied to; empty when attached to
+    /// the step by hand.
+    pub on: String,
+    /// Feasibility label of the ceiling, for example `Low`.
+    pub ceiling: String,
+}
+
+/// The step that decides a risk after controls.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecidingStepView {
+    /// The attack tree.
+    pub tree: TreeId,
+    /// The step in that tree.
+    pub node: NodeId,
+    /// The step's text.
+    pub label: String,
+}
+
+/// Settings that cap the deciding step of a threat, the step itself, and
+/// whether the risk after controls is lower than before. Time O(depth + controls).
+fn reduction(
+    ws: &Workspace,
+    id: ThreatId,
+) -> (Vec<ReducedByEntry>, Option<DecidingStepView>, bool) {
+    let project = ws.project();
+    let m = project.methodology();
+    let Some(tree_idx) = project
+        .threat_scenario_idx(&id)
+        .and_then(|i| project.threat_scenario(i))
+        .and_then(aegis_model::ThreatScenario::attack_tree)
+    else {
+        return (Vec::new(), None, false);
+    };
+    let (Some(tree_id), Ok(eval)) = (
+        project.attack_tree_id(tree_idx),
+        ws.cache().evaluate_residual_threat(project, id),
+    ) else {
+        return (Vec::new(), None, false);
+    };
+    let Some(step) = project.deciding_step(tree_idx, eval) else {
+        return (Vec::new(), None, false);
+    };
+    let view = DecidingStepView {
+        tree: tree_id,
+        node: step.node_id(),
+        label: node_label(project, tree_id, step.node_id()),
+    };
+    let mut entries: Vec<ReducedByEntry> = Vec::new();
+    for c in step.ceilings() {
+        if entries.iter().any(|e| e.control == c.control_id()) {
+            continue;
+        }
+        entries.push(ReducedByEntry {
+            control: c.control_id(),
+            visual_id: project
+                .security_control_visual_id(c.control())
+                .unwrap_or_default(),
+            name: project
+                .security_control(c.control())
+                .map_or_else(String::new, |k| k.name().to_owned()),
+            on: match c.source() {
+                aegis_model::CeilingSource::ControlRule { target, .. } => {
+                    crate::view::through_label(project, target)
+                }
+                aegis_model::CeilingSource::StepMitigation => String::new(),
+            },
+            ceiling: feasibility_label(m, c.feasibility()),
+        });
+    }
+    let level_pos = |r: Result<&aegis_model::ThreatRisk, aegis_model::ModelError>| {
+        let level = r.ok().and_then(aegis_model::ThreatRisk::max_risk)?;
+        m.risk_levels().position(|(l, _, _)| l == level)
+    };
+    let lowered = matches!(
+        (
+            level_pos(ws.cache().evaluate_risk(project, id)),
+            level_pos(ws.cache().evaluate_residual_risk(project, id)),
+        ),
+        (Some(before), Some(after)) if after < before
+    );
+    (entries, Some(view), lowered)
+}
+
+/// Short text for the "Reduced by" table cell: the first setting and how many
+/// more, the deciding step when nothing caps it, or a dash. Time O(1).
+#[must_use]
+pub fn reduced_by_cell(row: &RiskRow) -> String {
+    match (row.reduced_by.first(), &row.deciding_step) {
+        (Some(first), _) => match row.reduced_by.len() - 1 {
+            0 => first.name.clone(),
+            n => format!("{} +{n}", first.name),
+        },
+        (None, Some(step)) => format!("\u{2014} ({})", step.label),
+        (None, None) => "\u{2014}".to_owned(),
+    }
+}
+
+/// Full list of settings for reports and exports, `None` when nothing caps
+/// the deciding step. Time O(settings).
+#[must_use]
+pub fn reduced_by_text(row: &RiskRow) -> Option<String> {
+    if row.reduced_by.is_empty() {
+        return None;
+    }
+    Some(
+        row.reduced_by
+            .iter()
+            .map(|e| {
+                if e.on.is_empty() {
+                    e.name.clone()
+                } else {
+                    format!("{} ({})", e.name, e.on)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+/// "Lowers no risk", "Lowers 1 risk", "Lowers 3 risks". Time O(1).
+#[must_use]
+pub fn lowers_label(n: usize) -> String {
+    match n {
+        0 => "Lowers no risk".to_owned(),
+        1 => "Lowers 1 risk".to_owned(),
+        n => format!("Lowers {n} risks"),
+    }
 }
 
 /// The risk register: every threat, worst risk first (ties in project
@@ -1500,6 +1710,7 @@ pub fn risk_rows(ws: &Workspace) -> Vec<RiskRow> {
                     )
                 })
                 .unwrap_or_default();
+            let (reduced_by, deciding_step, lowered) = reduction(ws, id);
             let backing = t
                 .goal()
                 .and_then(|g| project.cybersecurity_goal(g))
@@ -1536,6 +1747,9 @@ pub fn risk_rows(ws: &Workspace) -> Vec<RiskRow> {
                         .unwrap_or_default()
                         .to_owned(),
                     backing,
+                    reduced_by,
+                    deciding_step,
+                    lowered,
                 },
             )
         })
@@ -1617,6 +1831,9 @@ pub struct ControlRow {
     pub steps: usize,
     /// Goals it belongs to.
     pub goals: usize,
+    /// Risks whose risk after controls is lower and whose deciding step this
+    /// control caps.
+    pub lowers: usize,
 }
 
 /// The selected control.
@@ -1673,7 +1890,7 @@ fn control_uses(project: &Project, c_idx: aegis_model::ControlIdx) -> Vec<LinkRo
     out
 }
 
-/// Every control. Time O(controls + tree nodes + goals).
+/// Every control. Time O(controls + tree nodes + goals + threats × depth).
 #[must_use]
 pub fn control_rows(ws: &Workspace) -> Vec<ControlRow> {
     let project = ws.project();
@@ -1695,6 +1912,15 @@ pub fn control_rows(ws: &Workspace) -> Vec<ControlRow> {
             *goals.entry(*c).or_insert(0usize) += 1;
         }
     }
+    let mut lowers = std::collections::HashMap::new();
+    for (_, id, _) in project.threat_scenarios() {
+        let (entries, _, lowered) = reduction(ws, id);
+        if lowered {
+            for e in entries {
+                *lowers.entry(e.control).or_insert(0usize) += 1;
+            }
+        }
+    }
     project
         .security_controls()
         .map(|(idx, id, c)| ControlRow {
@@ -1703,6 +1929,7 @@ pub fn control_rows(ws: &Workspace) -> Vec<ControlRow> {
             name: c.name().to_owned(),
             steps: steps.get(&idx).copied().unwrap_or(0),
             goals: goals.get(&idx).copied().unwrap_or(0),
+            lowers: lowers.get(&id).copied().unwrap_or(0),
         })
         .collect()
 }

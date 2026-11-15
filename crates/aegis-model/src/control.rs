@@ -4,7 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::{ControlId, ControlIdx};
+use crate::id::{ControlId, ControlIdx, NodeId, NodeIdx, TreeIdx};
 use crate::item::{ItemIdx, ItemRef};
 use crate::methodology::{AttackType, ControlKind, FeasibilityLevel};
 use crate::provenance::Provenance;
@@ -262,6 +262,67 @@ impl StepCeiling {
     #[must_use]
     pub const fn source(&self) -> CeilingSource {
         self.source
+    }
+}
+
+/// The attack step that decides a tree's residual feasibility, with the
+/// security settings that cap it, returned by
+/// [`Project::deciding_step`](crate::Project::deciding_step) (CFG-07).
+///
+/// Holds only typed IDs, arena indices, and methodology scale levels, never
+/// user-supplied names (rule R6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecidingStep {
+    pub(crate) tree: TreeIdx,
+    pub(crate) node: NodeIdx,
+    pub(crate) node_id: NodeId,
+    pub(crate) rated: FeasibilityLevel,
+    pub(crate) residual: FeasibilityLevel,
+    pub(crate) ceilings: Vec<StepCeiling>,
+}
+
+impl DecidingStep {
+    /// Returns the arena index of the tree holding the step. Time O(1).
+    #[must_use]
+    pub const fn tree(&self) -> TreeIdx {
+        self.tree
+    }
+
+    /// Returns the node index of the step inside its tree. Time O(1).
+    #[must_use]
+    pub const fn node(&self) -> NodeIdx {
+        self.node
+    }
+
+    /// Returns the stable [`NodeId`] of the step. Time O(1).
+    #[must_use]
+    pub const fn node_id(&self) -> NodeId {
+        self.node_id
+    }
+
+    /// Returns the step's own rating, before any ceiling. Time O(1).
+    #[must_use]
+    pub const fn rated(&self) -> FeasibilityLevel {
+        self.rated
+    }
+
+    /// Returns the step's feasibility after its ceilings. Time O(1).
+    #[must_use]
+    pub const fn residual(&self) -> FeasibilityLevel {
+        self.residual
+    }
+
+    /// Returns the ceilings below [`rated`](Self::rated), the deciding
+    /// (lowest) one first. Time O(1).
+    #[must_use]
+    pub fn ceilings(&self) -> &[StepCeiling] {
+        &self.ceilings
+    }
+
+    /// Returns `true` if at least one ceiling lowers the step. Time O(1).
+    #[must_use]
+    pub fn is_capped(&self) -> bool {
+        !self.ceilings.is_empty()
     }
 }
 

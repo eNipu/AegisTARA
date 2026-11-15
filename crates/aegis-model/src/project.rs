@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
-    CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, MAX_CONTROL_RULES,
-    MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl,
-    StepCeiling, StepMitigation,
+    CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
+    MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
+    SecurityControl, StepCeiling, StepMitigation,
 };
 use crate::damage::DamageScenario;
 use crate::description::{
@@ -3324,6 +3324,103 @@ impl Project {
         }
         out.sort_unstable_by_key(|c| (c.feasibility, c.control_id, c.source));
         out
+    }
+
+    /// Returns the attack step that decides the residual feasibility of
+    /// `tree`, with the ceilings that lower it (CFG-07).
+    ///
+    /// `residual` must be the result of
+    /// [`evaluate_residual_tree`](Self::evaluate_residual_tree) for the same
+    /// tree. The step is where the deciding chain ends. Only ceilings below
+    /// the step's own rating are listed, the lowest first.
+    ///
+    /// Returns `None` if `tree` is not a live tree, if `residual` has a
+    /// different node count than the tree (it belongs to another tree), or if
+    /// the chain does not end at an attack step.
+    ///
+    /// Time O(depth + controls), space O(ceilings on the step).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{
+    /// #     AttackTree, ComponentId, ControlId, ItemRef, Methodology, Node, NodeId, Op,
+    /// #     Project, Provenance, TreeId,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let phys = m.attack_type("physical-tampering").ok_or("no physical-tampering")?;
+    /// let (vlow, high) = (
+    ///     m.feasibility_level("very-low").ok_or("no very-low")?,
+    ///     m.feasibility_level("high").ok_or("no high")?,
+    /// );
+    /// let mut project = Project::new(m);
+    /// let comp = ComponentId::new_v7();
+    /// let ctrl = ControlId::new_v7();
+    /// let (tree_id, step) = (TreeId::new_v7(), NodeId::new_v7());
+    /// project.apply(Op::AddComponent {
+    ///     id: comp, name: "ADAS ECU".into(), parent: None, provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::AddSecurityControl {
+    ///     id: ctrl, name: "JTAG disabled".into(), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::ApplyControl {
+    ///     control: ctrl, target: ItemRef::Component(comp), provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetControlRule {
+    ///     control: ctrl, attack_type: phys, ceiling: Some(vlow), provenance: Provenance::default(),
+    /// })?;
+    /// let tree = AttackTree::new(step, Node::step("Dump flash"))?;
+    /// project.apply(Op::AddAttackTree {
+    ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepVia {
+    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(comp)),
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// project.apply(Op::SetStepAttackType {
+    ///     tree: tree_id, node: step, attack_type: Some(phys), provenance: Provenance::default(),
+    /// })?;
+    /// let t_idx = project.attack_tree_idx(&tree_id).ok_or("no tree")?;
+    /// let residual = project.evaluate_residual_tree(tree_id)?;
+    /// let d = project.deciding_step(t_idx, &residual).ok_or("no deciding step")?;
+    /// assert_eq!(d.node_id(), step);
+    /// assert_eq!(d.rated(), high);
+    /// assert_eq!(d.residual(), vlow);
+    /// assert_eq!(d.ceilings().len(), 1);
+    /// assert!(d.is_capped());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn deciding_step(
+        &self,
+        tree: TreeIdx,
+        residual: &Evaluation<FeasibilityLevel>,
+    ) -> Option<DecidingStep> {
+        let entry = self.trees.get(tree)?;
+        if residual.len() != entry.tree.len() {
+            return None;
+        }
+        let node = residual.why_path(entry.tree.root()).last()?;
+        if !matches!(entry.tree.get(node), Some(Node::Step { .. })) {
+            return None;
+        }
+        let node_id = entry.tree.id_of(node)?;
+        let rated = self.effective_step_feasibility(tree, node)?;
+        let residual_level = self.residual_step_feasibility(tree, node)?;
+        let ceilings = self
+            .step_ceilings(tree, node)
+            .into_iter()
+            .filter(|c| c.feasibility() < rated)
+            .collect();
+        Some(DecidingStep {
+            tree,
+            node,
+            node_id,
+            rated,
+            residual: residual_level,
+            ceilings,
+        })
     }
 
     fn item_owner_component(&self, item: ItemIdx) -> Option<ItemIdx> {
