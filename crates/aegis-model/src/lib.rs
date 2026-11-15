@@ -261,9 +261,9 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use asset::{Asset, PropertySet};
 pub use control::{
-    CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, MAX_CONTROL_RULES,
-    MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment, SecurityControl,
-    StepCeiling, StepMitigation,
+    CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
+    MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
+    SecurityControl, StepCeiling, StepMitigation,
 };
 pub use damage::DamageScenario;
 pub use description::{
