@@ -273,7 +273,7 @@ pub use description::{
 pub use diff::{EntityDiff, ProjectDiff, RiskChange, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 pub use element::{
     AttrValue, Element, ElementKind, KINDS, KindDef, LinkTarget, MAX_ATTRIBUTE_TEXT_CHARS,
-    MAX_ELEMENT_ATTRIBUTES, MAX_ELEMENT_LINKS, MAX_ELEMENTS_PER_KIND, TargetKind,
+    MAX_ELEMENT_ATTRIBUTES, MAX_ELEMENT_LINKS, MAX_ELEMENTS_PER_KIND, MAX_SYSTEMS, TargetKind,
 };
 pub use error::{
     EntityKind, MethodologyError, ModelError, PackError, StoreError, WorkspaceProblem,

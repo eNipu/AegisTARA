@@ -158,7 +158,7 @@ pub const MAX_LABEL_BYTES: usize = 4 * MAX_LABEL_CHARS;
 /// project with 2,000 threats has about 2,000 trees.
 ///
 /// ```
-/// assert_eq!(aegis_model::MAX_WORKSPACE_FILES, 10 + 1 + 10_000);
+/// assert_eq!(aegis_model::MAX_WORKSPACE_FILES, 10 + 2 + 10_000);
 /// ```
 pub const MAX_WORKSPACE_FILES: usize = 10 + crate::element::KINDS.len() + 10_000;
 
