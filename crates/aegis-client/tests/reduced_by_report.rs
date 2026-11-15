@@ -9,7 +9,7 @@ use aegis_client::i18n::{Catalog, Language};
 use aegis_client::pages;
 use aegis_client::report::{
     Block, ReportContext, ReportLanguage, ReportOptions, ReportProfile, ReportSections, Style,
-    report_doc, report_doc_with_options, report_pdf,
+    report_doc, report_doc_with_options, report_pdf, report_workbook_xlsx,
 };
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
@@ -411,4 +411,153 @@ fn the_pdf_still_renders() {
     let f = project(true);
     let pdf = report_pdf(&f.ws, &ctx()).expect("pdf");
     assert!(pdf.starts_with(b"%PDF"));
+}
+
+fn sheet(wb: &aegis_client::excel::WorkbookData, name: &str) -> aegis_client::excel::SheetData {
+    wb.sheets
+        .iter()
+        .find(|s| s.name == name)
+        .cloned()
+        .unwrap_or_else(|| panic!("sheet {name}"))
+}
+
+fn workbook(ws: &Workspace) -> aegis_client::excel::WorkbookData {
+    aegis_client::excel::read_workbook(&report_workbook_xlsx(ws)).expect("reads")
+}
+
+fn column(s: &aegis_client::excel::SheetData, key: &str, col: &str) -> String {
+    let c = s.headers.iter().position(|h| h == col).expect("column");
+    s.rows
+        .iter()
+        .find(|(_, r)| r.iter().any(|v| v.contains(key)))
+        .map(|(_, r)| r[c].clone())
+        .expect("row")
+}
+
+#[test]
+fn the_workbook_has_reduced_by_columns() {
+    let f = project(true);
+    let wb = workbook(&f.ws);
+    for name in ["Risk register", "Threat scenarios"] {
+        let s = sheet(&wb, name);
+        assert_eq!(
+            column(&s, "Firmware replaced", "Reduced by"),
+            "Secure boot (ADAS ECU)",
+            "{name}"
+        );
+        assert_eq!(
+            column(&s, "Bus flooded", "Reduced by"),
+            "Not reduced; deciding step: Inject on CAN bus",
+            "{name}"
+        );
+        assert!(s.rows.iter().all(|(_, r)| r.len() == s.headers.len()));
+    }
+}
+
+#[test]
+fn the_workbook_counts_lowered_risks() {
+    let f = project(true);
+    let s = sheet(&workbook(&f.ws), "Security controls");
+    assert_eq!(column(&s, "Secure boot", "Risks lowered"), "1");
+    assert_eq!(column(&s, "Port locked", "Risks lowered"), "0");
+}
+
+#[test]
+fn the_workbook_lists_security_settings() {
+    let f = project(true);
+    let s = sheet(&workbook(&f.ws), "Security settings");
+    assert_eq!(
+        s.headers,
+        ["ID", "Applied to", "Setting ID", "Setting", "Rules"]
+    );
+    assert_eq!(s.rows.len(), 2);
+    assert_eq!(s.rows[0].1[1], "ADAS ECU");
+    assert_eq!(s.rows[1].1[1], "ADAS ECU / USB");
+
+    let f = project(false);
+    let s = sheet(&workbook(&f.ws), "Security settings");
+    assert!(s.rows.is_empty());
+
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let wb = workbook(&Workspace::empty(m));
+    assert!(wb.sheets.iter().all(|s| s.name != "Security settings"));
+}
+
+#[test]
+fn names_that_look_like_formulas_stay_text() {
+    let mut f = project(true);
+    apply(
+        &mut f.ws,
+        &Edit::RenameComponent {
+            component: f.ecu,
+            name: "+ECU".into(),
+        },
+    );
+    let setting = pages::applied_settings(&f.ws, "en")[0].control;
+    apply(
+        &mut f.ws,
+        &Edit::RenameControl {
+            control: setting,
+            name: "=HYPERLINK(\"http://x\",\"y\")".into(),
+        },
+    );
+    let (tree, node) = {
+        let p = f.ws.project();
+        p.attack_trees()
+            .find_map(|(idx, id, t)| {
+                let tr = p.attack_tree(idx)?;
+                let _ = t;
+                tr.iter()
+                    .find(|(_, _, n)| n.label() == "Inject on CAN bus")
+                    .map(|(_, n, _)| (id, n))
+            })
+            .expect("step")
+    };
+    let control = ControlId::new_v7();
+    apply(
+        &mut f.ws,
+        &Edit::AddControl {
+            id: control,
+            name: "@SUM(A1)".into(),
+        },
+    );
+    apply(
+        &mut f.ws,
+        &Edit::SetStepMitigation {
+            tree,
+            node,
+            control,
+            level: Some(1),
+        },
+    );
+    let wb = workbook(&f.ws);
+    let s = sheet(&wb, "Risk register");
+    assert_eq!(column(&s, "Bus flooded", "Reduced by"), "'@SUM(A1)");
+
+    let bytes = report_workbook_xlsx(&f.ws);
+    let raw = String::from_utf8_lossy(&bytes);
+    for needle in ["<t>'=HYPERLINK(", "<t>'+ECU", "<t>'@SUM(A1)"] {
+        assert!(raw.contains(needle), "{needle}");
+    }
+    for bad in ["<t>=", "<t>+", "<t>-", "<t>@"] {
+        assert!(!raw.contains(bad), "{bad}");
+    }
+}
+
+#[test]
+fn the_exported_workbook_still_imports() {
+    use aegis_client::excel::{ExcelMapping, preview_import};
+    let f = project(true);
+    let wb = workbook(&f.ws);
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let empty_ws = Workspace::empty(m);
+    let preview = preview_import(
+        empty_ws.project(),
+        &wb,
+        &ExcelMapping::default(),
+        "mira",
+        1_792_956_600_000,
+    )
+    .expect("preview");
+    assert!(preview.threats_to_add > 0);
 }

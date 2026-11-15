@@ -272,6 +272,17 @@ fn zip_stored(files: &[(String, Vec<u8>)]) -> Vec<u8> {
 
 // ---- the exports ----------------------------------------------------------
 
+/// What reduces a risk, or why nothing does. O(steps).
+fn reduced_by_cell(r: &pages::RiskRow) -> String {
+    if let Some(text) = pages::reduced_by_text(r) {
+        text
+    } else if let Some(step) = &r.deciding_step {
+        format!("Not reduced; deciding step: {}", step.label)
+    } else {
+        String::new()
+    }
+}
+
 fn risk_register_sheet(ws: &Workspace) -> Sheet {
     let names = ws.project().methodology().element_names();
     let header = vec![
@@ -283,6 +294,7 @@ fn risk_register_sheet(ws: &Workspace) -> Sheet {
         names.feasibility.to_string(),
         "Risk before controls".to_owned(),
         "Risk after controls".to_owned(),
+        "Reduced by".to_owned(),
         "Treatment".to_owned(),
         "Goal or claim".to_owned(),
     ];
@@ -291,6 +303,7 @@ fn risk_register_sheet(ws: &Workspace) -> Sheet {
         let risk = |v: Option<&crate::view::RiskView>| {
             v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
         };
+        let reduced = reduced_by_cell(&r);
         rows.push(vec![
             r.visual_id,
             r.threat,
@@ -300,6 +313,7 @@ fn risk_register_sheet(ws: &Workspace) -> Sheet {
             r.feasibility,
             risk(r.inherent.as_ref()),
             risk(r.residual.as_ref()),
+            reduced,
             r.treatment,
             r.backing,
         ]);
@@ -453,6 +467,27 @@ pub fn report_workbook_xlsx_with_figures(
             name: sheet_name(&names.trust_boundary.plural),
             rows: bounds,
         });
+
+        let mut settings = vec![vec![
+            "ID".to_owned(),
+            "Applied to".to_owned(),
+            "Setting ID".to_owned(),
+            "Setting".to_owned(),
+            "Rules".to_owned(),
+        ]];
+        for a in pages::applied_settings(ws, "en") {
+            settings.push(vec![
+                a.target_visual_id,
+                a.target_label,
+                a.control_visual_id,
+                a.name,
+                a.rules,
+            ]);
+        }
+        sheets.push(Sheet {
+            name: "Security settings".to_owned(),
+            rows: settings,
+        });
     }
 
     // Assets.
@@ -520,6 +555,7 @@ pub fn report_workbook_xlsx_with_figures(
         "Scaling reason".to_owned(),
         "Risk before controls".to_owned(),
         "Risk after controls".to_owned(),
+        "Reduced by".to_owned(),
         "Treatment".to_owned(),
     ]];
     for r in pages::risk_rows(ws) {
@@ -535,6 +571,7 @@ pub fn report_workbook_xlsx_with_figures(
         let risk = |v: Option<&crate::view::RiskView>| {
             v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
         };
+        let reduced = reduced_by_cell(&r);
         threats.push(vec![
             r.visual_id,
             r.threat,
@@ -555,6 +592,7 @@ pub fn report_workbook_xlsx_with_figures(
                 .map_or_else(String::new, |t| t.scaling_reason.clone()),
             risk(r.inherent.as_ref()),
             risk(r.residual.as_ref()),
+            reduced,
             r.treatment,
         ]);
     }
@@ -621,6 +659,7 @@ pub fn report_workbook_xlsx_with_figures(
         names.security_control.singular.to_string(),
         "Attack steps".to_owned(),
         "Goals".to_owned(),
+        "Risks lowered".to_owned(),
     ]];
     for c in pages::control_rows(ws) {
         controls.push(vec![
@@ -628,6 +667,7 @@ pub fn report_workbook_xlsx_with_figures(
             c.name,
             c.steps.to_string(),
             c.goals.to_string(),
+            c.lowers.to_string(),
         ]);
     }
     sheets.push(Sheet {
