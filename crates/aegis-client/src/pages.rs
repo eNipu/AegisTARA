@@ -411,6 +411,81 @@ pub struct SettingRow {
     pub from_component: String,
 }
 
+/// One security setting applied directly to a component or an interface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedSettingRow {
+    /// The component or interface.
+    pub target: aegis_model::ItemRef,
+    /// Its short visual ID (`C00`, `IF00`).
+    pub target_visual_id: String,
+    /// Its name; an interface reads `"ADAS ECU / JTAG"`.
+    pub target_label: String,
+    /// The security control.
+    pub control: ControlId,
+    /// The control's short visual ID (`SC00`).
+    pub control_visual_id: String,
+    /// The control's name.
+    pub name: String,
+    /// Its rules in the asked language, e.g. `Debug access → Low`; empty
+    /// when it has none.
+    pub rules: String,
+}
+
+/// Every setting applied directly to a component or an interface: components
+/// in project order, each followed by its interfaces; inherited settings are
+/// not repeated on interfaces. Labels use `lang`. Time O(components + interfaces × controls).
+#[must_use]
+pub fn applied_settings(ws: &Workspace, lang: &str) -> Vec<AppliedSettingRow> {
+    let project = ws.project();
+    let m = project.methodology();
+    let mut out = Vec::new();
+    let mut push = |target: aegis_model::ItemRef, visual_id: String| {
+        for (c_idx, id, c) in project.controls_applied_to(target) {
+            let rules = c
+                .rules()
+                .iter()
+                .map(|r| {
+                    let attack = m
+                        .attack_type_label_for_lang(r.attack_type(), lang)
+                        .or_else(|| m.attack_type_label(r.attack_type()))
+                        .unwrap_or("?");
+                    let ceiling = m
+                        .feasibility_level_label_for_lang(r.ceiling(), lang)
+                        .map_or_else(|| feasibility_label(m, r.ceiling()), str::to_owned);
+                    format!("{attack} \u{2192} {ceiling}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(AppliedSettingRow {
+                target,
+                target_visual_id: visual_id.clone(),
+                target_label: crate::view::through_label(project, target),
+                control: id,
+                control_visual_id: project
+                    .security_control_visual_id(c_idx)
+                    .unwrap_or_default(),
+                name: c.name().to_owned(),
+                rules,
+            });
+        }
+    };
+    for (c_idx, c_id, _) in project.components() {
+        push(
+            aegis_model::ItemRef::Component(c_id),
+            project.component_visual_id(c_idx).unwrap_or_default(),
+        );
+        for (i_idx, i_id, i) in project.interfaces() {
+            if i.component() == c_idx {
+                push(
+                    aegis_model::ItemRef::Interface(i_id),
+                    project.interface_visual_id(i_idx).unwrap_or_default(),
+                );
+            }
+        }
+    }
+    out
+}
+
 /// One rule of a security control: attack type -> feasibility ceiling (CFG-03).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ControlRuleView {
