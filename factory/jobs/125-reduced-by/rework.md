@@ -1,0 +1,3 @@
+## Answers
+
+Owner rule (standing): no new Slint screen work; all future UI is built in GPUI, which is not on master yet. For this job: plan the engine and client side of "Reduced by" (the client rows in why-path order, the `Lowers N risks` count, the column and view data a table needs), the "Security settings" report section per component and interface, the XLSX columns with the formula guard, and all tests at the model, client and report level. Do not plan any change to `.slint` files or to Slint-only glue in `aegis-shell`; where the backlog line asks for a headless column test, test the client's column data instead. List the screen part in the spec as left for the GPUI shell.
