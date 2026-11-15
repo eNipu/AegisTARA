@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use aegis_client::commands::{Edit, EditError};
 use aegis_client::pages;
+use aegis_client::systems;
 use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{ComponentId, ElementId, ElementKind, Methodology, Op, Provenance};
@@ -298,4 +299,109 @@ fn renaming_or_removing_what_is_not_a_system_is_missing() {
             Err(EditError::Missing)
         );
     }
+}
+
+// ---- rows, picker and comparison (119f) ----
+
+#[test]
+fn a_project_without_systems_has_no_system_data() {
+    let mut ws = workspace();
+    let a = add_component(&mut ws, "A", None);
+    add_component(&mut ws, "Child", Some(a));
+    assert!(systems::system_rows(&ws).is_empty());
+    assert!(systems::system_choices(ws.project()).is_empty());
+    for r in pages::component_rows(&ws) {
+        assert_eq!(r.system, "");
+        assert!(!r.no_system);
+    }
+    let d = pages::component_detail(&ws, a).expect("detail");
+    assert!(d.systems.is_empty());
+    assert_eq!(d.system, None);
+    assert_eq!(d.system_from_parent, "");
+}
+
+fn move_to(ws: &mut Workspace, c: ComponentId, s: ElementId) {
+    run(
+        ws,
+        &Edit::MoveToSystem {
+            components: vec![c],
+            system: Some(s),
+        },
+    );
+}
+
+#[test]
+fn rows_names_counts_and_the_system_of_a_child() {
+    let mut ws = workspace();
+    let brake = add_system(&mut ws, "Brake");
+    let gateway = add_system(&mut ws, "Gateway");
+    let ecu = add_component(&mut ws, "ECU", None);
+    let pump = add_component(&mut ws, "Pump", None);
+    let sensor = add_component(&mut ws, "Sensor", Some(ecu));
+    let loose = add_component(&mut ws, "Loose", None);
+    move_to(&mut ws, ecu, brake);
+    move_to(&mut ws, pump, brake);
+
+    let rows = systems::system_rows(&ws);
+    assert_eq!(rows.len(), 2);
+    let by = |id| rows.iter().find(|r| r.id == id).expect("row");
+    assert_eq!(by(brake).name, "Brake");
+    assert_eq!(by(brake).components, vec!["ECU", "Pump"]);
+    assert_eq!(by(brake).component_count, 3);
+    assert!(by(brake).visual_id.starts_with("SYS"));
+    assert!(by(gateway).components.is_empty());
+    assert_eq!(by(gateway).component_count, 0);
+    assert_eq!(systems::system_choices(ws.project()).len(), 2);
+    assert_eq!(
+        systems::system_name(ws.project(), gateway).as_deref(),
+        Some("Gateway")
+    );
+
+    let comp_rows = pages::component_rows(&ws);
+    let row = |id| comp_rows.iter().find(|r| r.id == id).expect("row");
+    assert_eq!(row(sensor).system, "Brake");
+    assert!(!row(sensor).no_system);
+    assert!(row(loose).no_system);
+    assert_eq!(row(loose).system, "");
+
+    let d = pages::component_detail(&ws, sensor).expect("detail");
+    assert_eq!(d.system, Some(brake));
+    assert_eq!(d.system_from_parent, "In Brake, with its parent ECU");
+    assert_eq!(d.systems.len(), 2);
+    let d = pages::component_detail(&ws, loose).expect("detail");
+    assert_eq!(d.system_from_parent, "");
+    let d = pages::component_detail(&ws, ecu).expect("detail");
+    assert_eq!(d.system_from_parent, "");
+}
+
+#[test]
+fn comparison_says_which_system_a_component_moved_to() {
+    let mut ws = workspace();
+    let brake = add_system(&mut ws, "Brake");
+    let gateway = add_system(&mut ws, "Gateway");
+    let ecu = add_component(&mut ws, "ECU", None);
+    move_to(&mut ws, ecu, brake);
+    let base = ws.project().clone();
+
+    let same = pages::comparison(&base, "v1", ws.project()).expect("compares");
+    assert!(same.lines.is_empty(), "{:?}", same.lines);
+
+    move_to(&mut ws, ecu, gateway);
+    let fresh = add_system(&mut ws, "Cloud");
+    let cmp = pages::comparison(&base, "v1", ws.project()).expect("compares");
+    assert!(
+        cmp.lines.iter().any(|l| l.kind == "Changed"
+            && l.text
+                .contains("moved from system \"Brake\" to system \"Gateway\"")),
+        "{:?}",
+        cmp.lines
+    );
+    let vis = ws.project().element_visual_id(fresh).expect("visual id");
+    assert!(
+        cmp.lines
+            .iter()
+            .any(|l| l.kind == "Added" && l.text == format!("System {vis} \"Cloud\"")),
+        "{:?}",
+        cmp.lines
+    );
 }

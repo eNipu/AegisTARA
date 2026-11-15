@@ -16,6 +16,7 @@ pub mod session;
 pub mod settings;
 pub mod state;
 pub mod suggest;
+pub mod systems;
 pub mod time;
 pub mod transport;
 mod tree_diff;

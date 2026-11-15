@@ -956,6 +956,35 @@ async fn item_definition_drafts_wait_for_their_required_fields() {
     server.stop().await;
 }
 
+/// A system is created from a draft (job 119) and the creation is undone.
+#[tokio::test]
+async fn a_system_is_created_from_a_draft_and_undone() {
+    use aegis_client::view::{DraftKind, Page};
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    alice.send(Command::ShowPage(Page::Item)).expect("sent");
+    alice
+        .send(Command::BeginDraft(DraftKind::System))
+        .expect("sent");
+    until(&alice, "draft", |vm| p(vm).draft == Some(DraftKind::System)).await;
+    alice
+        .send(Command::CommitDraft {
+            name: "Brake".into(),
+            next: false,
+        })
+        .expect("sent");
+    until(&alice, "one system", |vm| p(vm).data.systems.len() == 1).await;
+    alice.send(Command::Undo).expect("sent");
+    until(&alice, "no system", |vm| p(vm).data.systems.is_empty()).await;
+    drop(alice);
+    server.stop().await;
+}
+
 /// UI-08.6: when an edit is refused, the draft stays with the user's text and
 /// the reason shows in the draft, not as a toast.
 #[tokio::test]
