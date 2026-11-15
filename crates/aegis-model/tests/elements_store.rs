@@ -561,3 +561,47 @@ fn workspace_refusals() {
         other => panic!("unexpected {other:?}"),
     }
 }
+
+// Systems (119a).
+
+fn add_system(n: u64, name: &str) -> Op {
+    Op::AddElement {
+        id: common::element_id(n),
+        kind: ElementKind::System,
+        name: name.into(),
+        provenance: who(),
+    }
+}
+
+#[test]
+fn systems_round_trip_in_the_snapshot() {
+    let m = common::builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    apply_all(
+        &mut p,
+        vec![add_system(2, "Gateway"), add_system(1, "Brake")],
+    );
+    let bytes = save(&p);
+    let v: Value = serde_json::from_slice(&bytes).expect("json");
+    let kinds = v["elements"].as_object().expect("elements object");
+    assert_eq!(kinds.keys().collect::<Vec<_>>(), ["system"]);
+    assert_eq!(kinds["system"].as_array().map(Vec::len), Some(2));
+    let back = load(&bytes, &m).expect("load");
+    assert_eq!(back, p);
+    assert_eq!(back.element_count(ElementKind::System), 2);
+    assert_eq!(save(&back), bytes);
+}
+
+#[test]
+fn op_log_round_trips_a_system_add() {
+    let m = common::builtin();
+    let ops = vec![add_system(1, "Brake")];
+    let bytes = common::write_log(&m, &ops);
+    let text = String::from_utf8(bytes.clone()).expect("utf8");
+    assert!(text.contains(r#""kind":"system""#), "{text}");
+    let read: Vec<Op> = common::read_log(&m, &bytes)
+        .into_iter()
+        .map(|r| r.op)
+        .collect();
+    assert_eq!(read, ops);
+}
