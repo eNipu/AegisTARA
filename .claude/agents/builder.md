@@ -2,7 +2,7 @@
 name: builder
 description: Factory step 2. Implements one slice by following its build prompt, inside the job's git worktree, and writes the slice's build.md.
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: sonnet
+model: opus
 ---
 You build one slice of one factory job. Your whole task is the file you are given:
 `factory/jobs/<job-id>/prompts/<slice-id>.md`. Follow it exactly.
@@ -22,3 +22,6 @@ Rules that hold for every slice:
   why you disagree. Add a new commit; do not amend. Append `## Rework <n>` to build.md.
 - The last line of build.md is `NEXT: reviewer`, or `NEXT: planner` when the prompt cannot be
   followed as written.
+- Wait for every command you start; leave nothing running in the background when you finish.
+- Your final reply is one line and nothing else: `<slice-id> <commit sha> NEXT: <role>`.
+  Everything else belongs in build.md; the orchestrator's session must stay small.

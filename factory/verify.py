@@ -100,7 +100,7 @@ def main(argv):
     lines = [f"GATE: {verdict}", f"Slice: {slice_id}  Base: {base}", ""]
     lines += [f"- {f}" for f in failures] + [""] + report
     (out_dir / "gate.md").write_text("\n".join(lines) + "\n")
-    print(f"GATE: {verdict} ({len(failures)} failures) -> {out_dir / 'gate.md'}")
+    print(f"GATE: {verdict} ({len(failures)} failures, {counted} lines) -> {out_dir / 'gate.md'}")
     return 1 if failures else 0
 
 
