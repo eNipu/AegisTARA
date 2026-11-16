@@ -244,6 +244,7 @@ fn valid_def() -> impl Strategy<Value = MethodologyDef> {
                     label,
                     element_names: aegis_model::ElementNamesDef::default(),
                     require_rationale: false,
+                    clause_refs: std::collections::BTreeMap::default(),
                     impact_categories: impacts
                         .into_iter()
                         .enumerate()

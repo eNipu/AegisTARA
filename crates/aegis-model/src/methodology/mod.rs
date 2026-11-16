@@ -112,6 +112,7 @@ pub const MAX_KEY_LEN: usize = 64;
 ///     }],
 ///     catalog_schemes: vec![],
 ///     require_rationale: false,
+///     clause_refs: std::collections::BTreeMap::default(),
 ///     attack_potential: None,
 /// };
 /// let m = Methodology::new(def)?;
@@ -154,6 +155,10 @@ pub struct MethodologyDef {
     /// feasibility rating (FND-09): a rating without one is a lint warning.
     /// Off unless the pack sets `"require_rationale": true`.
     pub require_rationale: bool,
+    /// Optional ISO/CRA clause references keyed by page key (for example
+    /// `"threat_scenario"` -> `["ISO 21434 RQ-09-01", "CRA Annex I 1.1"]`).
+    /// Empty unless the pack sets `"clause_refs"`.
+    pub clause_refs: BTreeMap<Arc<str>, Vec<Arc<str>>>,
 }
 
 /// Singular and plural display names for one element kind in a [`MethodologyDef`].
@@ -1286,6 +1291,7 @@ pub struct Methodology {
     factor_by_key: BTreeMap<Arc<str>, u8>,
     potential_bands: Vec<PotentialBand>,
     require_rationale: bool,
+    clause_refs: BTreeMap<Arc<str>, Vec<Arc<str>>>,
     /// Every declared property.
     all_properties: PropertySet,
 }
@@ -1417,6 +1423,7 @@ impl Methodology {
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
     ///     require_rationale: false,
+    ///     clause_refs: std::collections::BTreeMap::new(),
     ///     attack_potential: None,
     /// };
     /// assert_eq!(Methodology::new(def), Err(MethodologyError::InvalidKey("Not-A-Key".into())));
@@ -1494,6 +1501,7 @@ impl Methodology {
             factor_by_key: factors.by_key,
             potential_bands,
             require_rationale: def.require_rationale,
+            clause_refs: def.clause_refs,
             all_properties,
         })
     }
@@ -2118,6 +2126,20 @@ impl Methodology {
     #[must_use]
     pub const fn requires_rationale(&self) -> bool {
         self.require_rationale
+    }
+
+    /// Returns the ISO/CRA clause references declared for `page`, or an empty
+    /// slice when none. Time O(log n) where n is the number of pages with
+    /// refs.
+    #[must_use]
+    pub fn clause_refs(&self, page: &str) -> &[Arc<str>] {
+        self.clause_refs.get(page).map_or(&[], Vec::as_slice)
+    }
+
+    /// Returns the full clause-reference map (page key -> list of refs).
+    #[must_use]
+    pub fn clause_refs_map(&self) -> &BTreeMap<Arc<str>, Vec<Arc<str>>> {
+        &self.clause_refs
     }
 
     // -- Impact categories and levels --------------------------------------
@@ -3955,6 +3977,7 @@ mod tests {
             feasibility_levels: vec![level("f0"), level("f1"), level("f2")],
             risk_levels: vec![level("r0"), level("r1")],
             require_rationale: false,
+            clause_refs: std::collections::BTreeMap::default(),
             attack_potential: None,
             properties: vec![entry_def("c"), entry_def("i"), entry_def("a")],
             threat_categories: vec![threat("leak", &["c"]), threat("wipe", &["i", "a"])],

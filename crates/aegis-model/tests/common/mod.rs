@@ -232,6 +232,7 @@ pub fn second_def() -> MethodologyDef {
             },
         }],
         require_rationale: false,
+        clause_refs: std::collections::BTreeMap::default(),
         attack_potential: Some(AttackPotentialDef {
             factors: vec![
                 FactorDef {
@@ -405,6 +406,7 @@ pub fn wide() -> Methodology {
             .collect(),
         catalog_schemes: vec![scheme("w0"), scheme("w1"), scheme("w2")],
         require_rationale: false,
+        clause_refs: std::collections::BTreeMap::default(),
         attack_potential: Some(AttackPotentialDef {
             factors: (0..16)
                 .map(|i| FactorDef {
@@ -2957,6 +2959,7 @@ pub fn max_def() -> MethodologyDef {
             })
             .collect(),
         require_rationale: false,
+        clause_refs: std::collections::BTreeMap::default(),
         attack_potential: Some(AttackPotentialDef {
             factors: (0..16)
                 .map(|i| {
