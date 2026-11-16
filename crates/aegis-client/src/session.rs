@@ -42,7 +42,7 @@ use std::time::Duration;
 
 use aegis_auth::layer::CredentialProvider;
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
     Methodology, OpCodec, Project, ThreatId, TreeId, TrustBoundaryId,
 };
 use aegis_proto as pb;
@@ -2111,7 +2111,7 @@ impl<P: CredentialProvider> Actor<P> {
             Command::CloseProject => self.close_project(true),
             Command::SelectThreat(position) => {
                 if let Some(open) = self.open.as_mut() {
-                    open.ui.selected_threat = threat_rows(&open.ws).get(position).map(|t| t.id);
+                    open.ui.selected_threat = shown_threats(open).get(position).map(|t| t.id);
                     open.ui.selected_node = None;
                 }
             }
@@ -2119,6 +2119,11 @@ impl<P: CredentialProvider> Actor<P> {
             Command::ShowResidual(on) => {
                 if let Some(open) = self.open.as_mut() {
                     open.ui.show_residual = on;
+                }
+            }
+            Command::SetSystemView(view) => {
+                if let Some(open) = self.open.as_mut() {
+                    open.ui.system_view = view.normalized(open.ws.project());
                 }
             }
             Command::Reload => self.reload(),
@@ -2912,6 +2917,10 @@ impl<P: CredentialProvider> Actor<P> {
                 id: TrustBoundaryId::new_v7(),
                 name,
             },
+            DraftKind::System => Edit::AddSystem {
+                id: ElementId::new_v7(),
+                name,
+            },
         };
         let notice_before = self.next_notice;
         if self.edit(&edit) {
@@ -3053,7 +3062,7 @@ impl<P: CredentialProvider> Actor<P> {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let threats = threat_rows(&open.ws);
+        let threats = shown_threats(open);
         let still_there = open
             .ui
             .selected_threat
@@ -3093,7 +3102,7 @@ impl<P: CredentialProvider> Actor<P> {
             return;
         };
         let project = {
-            let mut threats = threat_rows(&open.ws);
+            let mut threats = shown_threats(open);
             // This engine's numbers are shown, except when it cannot be
             // trusted: it differs from the server's, or disagreed with it.
             let distrust = !engine_ok || self.distrusted.as_deref() == Some(open.id.as_str());
@@ -3239,6 +3248,11 @@ impl<P: CredentialProvider> Actor<P> {
                 draft_interface_kind: open.ui.draft_interface_kind,
                 draft_incomplete: open.ui.draft_incomplete(),
                 show_residual: open.ui.show_residual,
+                view_menu: crate::systems::view_menu(open.ws.project(), &open.ui.system_view),
+                view_commands: crate::systems::view_commands(
+                    open.ws.project(),
+                    &open.ui.system_view,
+                ),
                 confirmed_seq: open.ws.confirmed_seq(),
                 numbers,
                 risks_verified_seq: self
@@ -3285,6 +3299,7 @@ fn page_data(open: &Open) -> PageData {
         Page::Overview => d.overview = Some(pages::overview(ws)),
         Page::Item => {
             d.components = pages::component_rows(ws);
+            d.systems = crate::systems::system_rows(ws);
             d.component = ui
                 .selected_component
                 .and_then(|id| pages::component_detail(ws, id));
@@ -3347,7 +3362,16 @@ fn page_data(open: &Open) -> PageData {
         Page::Problems => d.problems = pages::problems(ws),
         Page::Versions | Page::History | Page::Reports | Page::Admin | Page::Scope => {}
     }
+    crate::systems::filter_page(ws.project(), &ui.system_view, ui.page, &mut d);
     d
+}
+
+/// The threat rows the system view shows; a position in this list always
+/// means the same row.
+fn shown_threats(open: &Open) -> Vec<crate::view::ThreatRow> {
+    let mut rows = threat_rows(&open.ws);
+    crate::systems::filter_threats(open.ws.project(), &open.ui.system_view, &mut rows);
+    rows
 }
 
 /// Keeps the rows `hit` accepts; returns (kept, before). Time O(rows).

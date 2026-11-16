@@ -553,7 +553,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..65,
+        0u8..66,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -762,6 +762,17 @@ impl Gen {
     fn element(&mut self, p: &Project, sel: u16) -> ElementId {
         let existing: Vec<_> = p
             .elements(aegis_model::ElementKind::MisuseCase)
+            .chain(p.elements(aegis_model::ElementKind::System))
+            .map(|(id, _)| id)
+            .collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => element_id(self.fresh()),
+        }
+    }
+    fn system(&mut self, p: &Project, sel: u16) -> ElementId {
+        let existing: Vec<_> = p
+            .elements(aegis_model::ElementKind::System)
             .map(|(id, _)| id)
             .collect();
         match nth(existing, sel / 8) {
@@ -1551,7 +1562,11 @@ impl Gen {
                 } else {
                     element_id(self.fresh())
                 },
-                kind: aegis_model::ElementKind::MisuseCase,
+                kind: if s.c.is_multiple_of(3) {
+                    aegis_model::ElementKind::System
+                } else {
+                    aegis_model::ElementKind::MisuseCase
+                },
                 name: self.name(s.c),
                 provenance,
             },
@@ -1594,7 +1609,7 @@ impl Gen {
                     provenance,
                 }
             }
-            _ => {
+            64 => {
                 if self.m.attack_type_count() == 0 && !s.c.is_multiple_of(4) {
                     Op::ApplyControl {
                         control: self.control(p, s.a),
@@ -1610,6 +1625,11 @@ impl Gen {
                     }
                 }
             }
+            _ => Op::SetComponentSystem {
+                id: self.component(p, s.a),
+                system: (!s.b.is_multiple_of(4)).then(|| self.system(p, s.b)),
+                provenance,
+            },
         }
     }
 }

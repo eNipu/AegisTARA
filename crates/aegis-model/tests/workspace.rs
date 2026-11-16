@@ -442,3 +442,46 @@ fn not_json() {
     let err = read(&all, &m).err();
     assert_eq!(envelope_problem(err, "aegis.json"), WorkspaceProblem::Json);
 }
+
+// Systems (119a).
+
+fn add_system_op(n: u64, name: &str) -> Op {
+    Op::AddElement {
+        id: common::element_id(n),
+        kind: aegis_model::ElementKind::System,
+        name: name.into(),
+        provenance: Provenance::default(),
+    }
+}
+
+#[test]
+fn systems_have_their_own_file() {
+    let m = builtin();
+    let p = project_with(&m, &[add_system_op(1, "Brake"), add_system_op(2, "ADAS")]);
+    let all = files(&p);
+    let f = all
+        .iter()
+        .find(|f| f.path == "systems/main/systems.json")
+        .expect("systems file");
+    assert_eq!(json(f)["kind"], "system");
+    assert_round_trip(&p, &m);
+
+    let none = project_with(&m, &[add_asset(&m, 1, "ECU")]);
+    assert!(
+        files(&none)
+            .iter()
+            .all(|f| f.path != "systems/main/systems.json")
+    );
+}
+
+#[test]
+fn old_fixture_has_no_systems() {
+    let m = builtin();
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/project-v1.json"
+    ))
+    .expect("fixture");
+    let p = Project::load(bytes.as_slice(), m).expect("load");
+    assert_eq!(p.element_count(aegis_model::ElementKind::System), 0);
+}

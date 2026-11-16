@@ -353,6 +353,8 @@ pub enum DraftKind {
     DataFlow,
     /// A new trust boundary.
     TrustBoundary,
+    /// A new system (its name).
+    System,
 }
 
 impl UiState {
@@ -386,7 +388,11 @@ impl DraftKind {
             Self::Threat => Page::Threats,
             Self::Goal | Self::Claim => Page::Goals,
             Self::Tree => Page::Trees,
-            Self::Component | Self::Interface | Self::DataFlow | Self::TrustBoundary => Page::Item,
+            Self::Component
+            | Self::Interface
+            | Self::DataFlow
+            | Self::TrustBoundary
+            | Self::System => Page::Item,
         }
     }
 
@@ -405,6 +411,7 @@ impl DraftKind {
             Self::Interface => "interface",
             Self::DataFlow => "data-flow",
             Self::TrustBoundary => "trust-boundary",
+            Self::System => "system",
         }
     }
 
@@ -423,6 +430,7 @@ impl DraftKind {
             Self::Interface,
             Self::DataFlow,
             Self::TrustBoundary,
+            Self::System,
         ]
         .into_iter()
         .find(|k| k.key() == key)
@@ -465,6 +473,8 @@ pub struct UiState {
     pub selected_node: Option<NodeId>,
     /// Show the residual evaluation instead of the inherent one.
     pub show_residual: bool,
+    /// The systems on show (SYS-03). A display choice: never an op.
+    pub system_view: crate::systems::SystemView,
     /// The selected asset.
     pub selected_asset: Option<AssetId>,
     /// The selected damage scenario.

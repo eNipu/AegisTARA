@@ -27,6 +27,8 @@ pub struct Label {
     target: Option<Selection>,
     /// For a bulk edit (UI-04), how many elements it changed; 0 otherwise.
     count: usize,
+    /// How many components a system removal took out of the system.
+    no_system: usize,
 }
 
 impl Label {
@@ -42,6 +44,7 @@ impl Label {
             lost_via: 0,
             target: None,
             count,
+            no_system: 0,
         }
     }
 
@@ -106,6 +109,7 @@ impl Label {
             "apply" => "applied",
             "remove" => "removed",
             "rename" => "renamed",
+            "move" => "moved",
             "unapply" => "unapplied",
             "unlink" => "unlinked",
             "rate" => "rated",
@@ -136,6 +140,10 @@ impl Label {
 
     /// UI-10.10: one line saying what else the edit changed.
     fn extra(&self) -> String {
+        if self.no_system > 0 {
+            let n = self.no_system;
+            return format!(" and {n} component{} now in no system", plural(n));
+        }
         if self.lost_via > 0 {
             let n = self.lost_via;
             return format!(" and {n} step{} lost their 'through'", plural(n));
@@ -164,6 +172,13 @@ fn shorten(name: &str) -> String {
 /// Describes `ops`, one user edit, against `project` as it is before them.
 #[must_use]
 pub fn describe(ops: &[Op], project: &Project) -> Label {
+    if ops.len() >= 2
+        && ops
+            .iter()
+            .all(|op| matches!(op, Op::SetComponentSystem { .. }))
+    {
+        return Label::bulk("move", "components", ops.len());
+    }
     let parts: Vec<_> = ops.iter().map(|op| parts(op, project)).collect();
     // The edit is named after its removal, else its first addition, else its
     // first op: removing a damage scenario is "remove damage scenario", not
@@ -199,6 +214,13 @@ pub fn describe(ops: &[Op], project: &Project) -> Label {
         },
         target: ops.get(main).and_then(target_of),
         count: 0,
+        no_system: if (verb, noun) == ("remove", "system") {
+            ops.iter()
+                .filter(|op| matches!(op, Op::SetComponentSystem { system: None, .. }))
+                .count()
+        } else {
+            0
+        },
     }
 }
 
@@ -319,6 +341,20 @@ fn parts(op: &Op, p: &Project) -> Parts {
     let boundary = |id: &_| name_of(p, &ElementRef::TrustBoundary(*id));
     let some = |n: &str| Some(n.to_owned());
     match op {
+        Op::AddElement {
+            kind: aegis_model::ElementKind::System,
+            name,
+            ..
+        } => ("add", "system", some(name)),
+        Op::RenameElement { id, .. } => match system_name(p, *id) {
+            Some(n) => ("rename", "system", Some(n)),
+            None => ("change", "project", None),
+        },
+        Op::RemoveElement { id } => match system_name(p, *id) {
+            Some(n) => ("remove", "system", Some(n)),
+            None => ("change", "project", None),
+        },
+        Op::SetComponentSystem { id, .. } => ("move", "component", component(id)),
         Op::AddAsset { name, .. } => ("add", "asset", some(name)),
         Op::RenameAsset { id, .. } => ("rename", "asset", asset(id)),
         Op::SetAssetProperties { id, .. } => ("change", "asset properties of", asset(id)),
@@ -450,4 +486,11 @@ fn name_of(p: &Project, e: &ElementRef) -> Option<String> {
         _ => return None,
     };
     Some(name.to_owned())
+}
+
+/// The name of the system `id`, if it is one.
+fn system_name(p: &Project, id: aegis_model::ElementId) -> Option<String> {
+    p.element(id)
+        .filter(|e| e.kind() == aegis_model::ElementKind::System)
+        .map(|e| e.name().to_owned())
 }

@@ -431,6 +431,36 @@ fn walk_elements(seen: &mut BTreeSet<String>) {
         },
     );
     apply_undo_redo(&mut ws, seen, Op::RemoveElement { id });
+    let (system, component) = (ElementId::new_v7(), ComponentId::new_v7());
+    for op in [
+        Op::AddElement {
+            id: system,
+            kind: ElementKind::System,
+            name: "Powertrain".into(),
+            provenance: who(),
+        },
+        Op::AddComponent {
+            id: component,
+            name: "Gateway".into(),
+            parent: None,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    for system in [Some(system), None] {
+        apply_undo_redo(
+            &mut ws,
+            seen,
+            Op::SetComponentSystem {
+                id: component,
+                system,
+                provenance: who(),
+            },
+        );
+    }
+    apply_undo_redo(&mut ws, seen, Op::RemoveComponent { id: component });
+    apply_undo_redo(&mut ws, seen, Op::RemoveElement { id: system });
 }
 
 #[test]

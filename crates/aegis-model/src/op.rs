@@ -754,6 +754,16 @@ pub enum Op {
         /// Provenance of the parent change.
         provenance: Provenance,
     },
+    /// Puts a top-level component in a system, moves it to another, or
+    /// takes it out (`None`).
+    SetComponentSystem {
+        /// Existing component with no parent.
+        id: ComponentId,
+        /// Existing element of kind `System`, or `None`.
+        system: Option<ElementId>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
     /// Removes a component that has no child components, no interfaces, no
     /// data flows, no trust boundary membership, and no bound assets.
     RemoveComponent {
@@ -1023,6 +1033,7 @@ impl Op {
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }
+            | Self::SetComponentSystem { provenance, .. }
             | Self::AddInterface { provenance, .. }
             | Self::RenameInterface { provenance, .. }
             | Self::SetInterfaceKind { provenance, .. }
@@ -1128,6 +1139,7 @@ impl Op {
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }
+            | Self::SetComponentSystem { provenance, .. }
             | Self::AddInterface { provenance, .. }
             | Self::RenameInterface { provenance, .. }
             | Self::SetInterfaceKind { provenance, .. }
