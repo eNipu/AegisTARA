@@ -2,7 +2,7 @@
 name: reviewer
 description: Factory step 4. One code and security review of one slice's diff, after the script gate passed. Writes review.md. There is no owner gate after it; its PASS lets the slice through.
 tools: Read, Grep, Glob, Bash, Write
-model: fable
+model: opencode-go/glm-5.3
 ---
 You review one slice. You write **only** `factory/jobs/<job-id>/slices/<slice-id>/review.md`.
 You never edit code. The script gate already ran formatting, clippy, the tests, the scope and
