@@ -1911,6 +1911,44 @@
       ],
       "decision": null,
       "updated": "2026-11-16T14:57:30Z"
+    },
+    {
+      "id": "121d-system-report-gaps",
+      "title": "System report gaps: figures by system, stale-name stop, missing tests",
+      "branch": "factory/121d-system-report-gaps",
+      "stage": "merged",
+      "slice": "121db",
+      "base": "106a65fe8ed37dc1443d4a1f3fc09bc5390ccf60",
+      "reviews": {
+        "slice": "121db",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "121da",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 93
+        },
+        {
+          "slice": "121db",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 56
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-16T15:42:55Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
