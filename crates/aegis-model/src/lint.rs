@@ -15,7 +15,8 @@ use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, NodeId,
     ThreatId, TreeId,
 };
-use crate::methodology::Property;
+use crate::item::ItemRef;
+use crate::methodology::{ControlKind, Property};
 
 /// Severity of a [`LintFinding`].
 ///
@@ -245,6 +246,17 @@ pub enum LintCode {
         /// The security control.
         control: ControlId,
     },
+    /// Two settings whose pack presets say they conflict are applied to
+    /// the same component or interface (CFG-09). A warning, never a
+    /// block: the pair may record a real defect.
+    ConflictingSettings {
+        /// The component or interface both settings are applied to.
+        item: ItemRef,
+        /// The preset of one setting; the lower vocabulary index.
+        first: ControlKind,
+        /// The preset of the other setting; the higher vocabulary index.
+        second: ControlKind,
+    },
     /// A cybersecurity goal links to zero security controls.
     CybersecurityGoalWithoutControls {
         /// The cybersecurity goal with an empty control list.
@@ -328,6 +340,7 @@ impl LintCode {
             | Self::RedundantStepFeasibility { .. }
             | Self::SecurityControlUnused { .. }
             | Self::ControlRulesDifferFromKind { .. }
+            | Self::ConflictingSettings { .. }
             | Self::StepSettingsIncomplete { .. }
             | Self::ReduceTreatmentWithoutGoal { .. }
             | Self::RetainOrShareTreatmentWithoutClaim { .. }
@@ -434,6 +447,16 @@ impl fmt::Display for LintCode {
             Self::ControlRulesDifferFromKind { control } => write!(
                 f,
                 "security control {control} has rules that differ from its pack preset"
+            ),
+            Self::ConflictingSettings {
+                item,
+                first,
+                second,
+            } => write!(
+                f,
+                "{item} has settings of kinds {} and {} that the pack says conflict",
+                first.index(),
+                second.index()
             ),
             Self::ReduceTreatmentWithoutGoal { threat } => write!(
                 f,
@@ -606,6 +629,9 @@ mod tests {
         let node = crate::testkit::node_id(5);
         let control = crate::testkit::control_id(6);
         let goal = GoalId::new_v7();
+        let mut kinds = m.control_kinds();
+        let first_kind = kinds.next().expect("kind");
+        let second_kind = kinds.next().expect("kind");
         let claim = ClaimId::new_v7();
         let flow = DataFlowId::new_v7();
 
@@ -642,6 +668,16 @@ mod tests {
             LintCode::SystemNameShared {
                 system: ElementId::new_v7(),
                 first: ElementId::new_v7(),
+            },
+            LintCode::ConflictingSettings {
+                item: ItemRef::Component(crate::testkit::component_id(1)),
+                first: first_kind,
+                second: second_kind,
+            },
+            LintCode::ConflictingSettings {
+                item: ItemRef::Interface(crate::testkit::interface_id(2)),
+                first: first_kind,
+                second: second_kind,
             },
         ];
         for code in warnings {

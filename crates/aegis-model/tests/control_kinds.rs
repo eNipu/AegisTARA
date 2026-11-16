@@ -25,6 +25,7 @@ fn kind(key: &str, interfaces: &[&str], rules: &[(&str, &str)]) -> ControlKindDe
         label: s(&format!("Label {key}")),
         interface_kinds: interfaces.iter().map(|k| s(k)).collect(),
         rules: rules.iter().map(|&(a, l)| (s(a), s(l))).collect(),
+        conflicts_with: Vec::new(),
     }
 }
 
@@ -282,12 +283,14 @@ fn pack_presets() -> MethodologyDef {
             label: "Secure boot".into(),
             interface_kinds: Vec::new(),
             rules: rule_map(&[("bootloader-exploit", &low)]),
+            conflicts_with: Vec::new(),
         },
         ControlKindDef {
             key: "debug-port-locked".into(),
             label: "Debug port locked".into(),
             interface_kinds: vec!["debug".into()],
             rules: rule_map(&[("debug-access", &low), ("bootloader-exploit", &low)]),
+            conflicts_with: Vec::new(),
         },
     ];
     d.element_names.translations.insert(
@@ -297,6 +300,13 @@ fn pack_presets() -> MethodologyDef {
             ..PackTranslationDef::default()
         },
     );
+    d
+}
+
+fn pack_conflicts() -> MethodologyDef {
+    let mut d = pack_presets();
+    // second preset (debug-port-locked, index 1) lists first (secure-boot, index 0)
+    d.element_names.control_kinds[1].conflicts_with = vec!["secure-boot".into()];
     d
 }
 
@@ -354,4 +364,60 @@ fn a_component_preset_has_no_interface_kinds_line() {
 #[test]
 fn no_presets_write_no_control_kinds() {
     assert!(!pack_text(&second_def()).contains("control_kinds"));
+}
+
+#[test]
+fn conflicts_round_trip_and_the_model_resolves_them() {
+    let d = pack_conflicts();
+    let bytes = pack_bytes(&d);
+    let back = MethodologyDef::read_pack(bytes.as_slice()).expect("reads");
+    assert_eq!(back, d);
+    let m = Methodology::new(back).expect("valid");
+    let kinds: Vec<_> = m.control_kinds().collect();
+    let ck1 = kinds[1];
+    let conflicts = m.control_kind_conflicts(ck1);
+    assert_eq!(conflicts, &[kinds[0]]);
+    assert!(m.control_kind_conflicts(kinds[0]).is_empty());
+    assert_eq!(
+        pack_bytes(&MethodologyDef::read_pack(bytes.as_slice()).unwrap()),
+        bytes
+    );
+}
+
+#[test]
+fn conflicts_are_written_after_rules_and_only_when_present() {
+    let t = pack_text(&pack_conflicts());
+    let pos_rules = t.find("\"rules\"").expect("rules");
+    let pos_conflicts = t.find("\"conflicts_with\": [").expect("conflicts");
+    assert!(pos_rules < pos_conflicts);
+    let t2 = pack_text(&pack_presets());
+    assert!(!t2.contains("\"conflicts_with\""));
+}
+
+#[test]
+fn conflicts_refused() {
+    let mut d = pack_presets();
+    d.element_names.control_kinds[0].conflicts_with = vec!["no-such".into()];
+    let e = Methodology::new(d).unwrap_err();
+    assert!(matches!(
+        e,
+        MethodologyError::UnknownControlKindConflict { .. }
+    ));
+
+    let mut d = pack_presets();
+    d.element_names.control_kinds[0].conflicts_with =
+        vec!["debug-port-locked".into(), "debug-port-locked".into()];
+    let e = Methodology::new(d).unwrap_err();
+    assert!(matches!(
+        e,
+        MethodologyError::RepeatedControlKindConflict { .. }
+    ));
+
+    let mut d = pack_presets();
+    d.element_names.control_kinds[0].conflicts_with = vec!["secure-boot".into()];
+    let e = Methodology::new(d).unwrap_err();
+    assert!(matches!(
+        e,
+        MethodologyError::ControlKindConflictsWithItself { .. }
+    ));
 }
