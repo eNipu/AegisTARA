@@ -192,7 +192,7 @@ pub struct LinkRow {
     pub target: Selection,
 }
 
-fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
+pub(crate) fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
     let label = m.risk_level_label(level)?.to_owned();
     let index = m.risk_levels().position(|(l, _, _)| l == level)?;
     Some(RiskView {
@@ -599,6 +599,13 @@ pub struct DataFlowRow {
     pub interface: String,
     /// Whether this flow crosses at least one trust boundary.
     pub crosses_boundary: bool,
+    /// "ADAS → Gateway" when the ends are in different systems, else `None`.
+    pub boundary: Option<String>,
+    /// Threat scenarios on assets bound to either end component.
+    pub threats: usize,
+    /// True when the flow crosses a trust boundary or is a boundary flow and
+    /// `threats` is 0.
+    pub no_threat: bool,
 }
 
 /// The selected data flow.
@@ -624,6 +631,13 @@ pub struct DataFlowDetail {
     pub interfaces: Vec<Choice<InterfaceId>>,
     /// Whether this flow crosses at least one trust boundary.
     pub crosses_boundary: bool,
+    /// "ADAS → Gateway" when the ends are in different systems, else `None`.
+    pub boundary: Option<String>,
+    /// Threat scenarios on assets bound to either end component.
+    pub threats: usize,
+    /// True when the flow crosses a trust boundary or is a boundary flow and
+    /// `threats` is 0.
+    pub no_threat: bool,
     /// Provenance text.
     pub changed: String,
 }
@@ -667,6 +681,23 @@ pub struct TrustBoundaryDetail {
     pub members: Vec<TrustBoundaryMember>,
     /// Provenance text.
     pub changed: String,
+}
+
+/// The "ADAS → Gateway" text, the threat count and the no-threat flag of a flow.
+fn flow_boundary_info(
+    project: &Project,
+    counts: &[usize],
+    idx: aegis_model::DataFlowIdx,
+    df: &aegis_model::DataFlow,
+    crosses: bool,
+) -> (Option<String>, usize, bool) {
+    let boundary = project.boundary_flow(idx).map(|(a, b)| {
+        let name = |s| crate::systems::system_name(project, s).unwrap_or_else(|| "?".to_owned());
+        format!("{} → {}", name(a), name(b))
+    });
+    let threats = crate::combined::flow_threats(counts, df);
+    let no_threat = (crosses || boundary.is_some()) && threats == 0;
+    (boundary, threats, no_threat)
 }
 
 fn flow_crosses_boundary(project: &Project, df: &aegis_model::DataFlow) -> bool {
@@ -1039,23 +1070,32 @@ pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDeta
 #[must_use]
 pub fn data_flow_rows(ws: &Workspace) -> Vec<DataFlowRow> {
     let project = ws.project();
+    let counts = crate::combined::threats_per_component(project);
     project
         .data_flows()
-        .map(|(idx, id, df)| DataFlowRow {
-            id,
-            visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
-            name: df.name().to_owned(),
-            from: project
-                .component(df.from())
-                .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
-            to: project
-                .component(df.to())
-                .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
-            interface: df
-                .interface()
-                .and_then(|i| project.interface(i))
-                .map_or_else(String::new, |i| i.name().to_owned()),
-            crosses_boundary: flow_crosses_boundary(project, df),
+        .map(|(idx, id, df)| {
+            let crosses_boundary = flow_crosses_boundary(project, df);
+            let (boundary, threats, no_threat) =
+                flow_boundary_info(project, &counts, idx, df, crosses_boundary);
+            DataFlowRow {
+                id,
+                visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
+                name: df.name().to_owned(),
+                from: project
+                    .component(df.from())
+                    .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+                to: project
+                    .component(df.to())
+                    .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+                interface: df
+                    .interface()
+                    .and_then(|i| project.interface(i))
+                    .map_or_else(String::new, |i| i.name().to_owned()),
+                crosses_boundary,
+                boundary,
+                threats,
+                no_threat,
+            }
         })
         .collect()
 }
@@ -1066,6 +1106,10 @@ pub fn data_flow_detail(ws: &Workspace, id: DataFlowId) -> Option<DataFlowDetail
     let project = ws.project();
     let idx = project.data_flow_idx(&id)?;
     let df = project.data_flow(idx)?;
+    let crosses_boundary = flow_crosses_boundary(project, df);
+    let counts = crate::combined::threats_per_component(project);
+    let (boundary, threats, no_threat) =
+        flow_boundary_info(project, &counts, idx, df, crosses_boundary);
     Some(DataFlowDetail {
         id,
         visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
@@ -1088,7 +1132,10 @@ pub fn data_flow_detail(ws: &Workspace, id: DataFlowId) -> Option<DataFlowDetail
                 name: i.name().to_owned(),
             })
             .collect(),
-        crosses_boundary: flow_crosses_boundary(project, df),
+        crosses_boundary,
+        boundary,
+        threats,
+        no_threat,
         changed: changed_text(df.provenance()),
     })
 }
@@ -2688,6 +2735,18 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::SystemBoundaryFlowWithoutThreat { flow } => {
+            let s = Selection::DataFlow(flow);
+            (
+                format!(
+                    "{} {} links two systems but has no {}.",
+                    m.element_names().data_flow.singular,
+                    q(s),
+                    m.element_names().threat_scenario.singular.to_lowercase()
+                ),
+                s,
+            )
+        }
         L::BoundaryCrossingDataFlowWithoutThreat { flow } => {
             let s = Selection::DataFlow(flow);
             (
@@ -2753,9 +2812,18 @@ pub struct Overview {
     pub warnings: usize,
     /// The five highest risks.
     pub top: Vec<RiskRow>,
+    /// The systems table; `None` when the project has no systems.
+    pub systems: Option<crate::combined::SystemsOverview>,
+    /// The five easiest attack paths of the view.
+    pub top_paths: Vec<crate::top_paths::PathRow>,
+    /// The five steps on most of the easiest paths.
+    pub choke_points: Vec<crate::top_paths::ChokeRow>,
 }
 
-fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
+/// The systems a view shows: the project's usage and the view's set.
+type Shown<'a> = Option<(&'a aegis_model::SystemUse, aegis_model::SystemSet)>;
+
+fn distribution(ws: &Workspace, residual: bool, shown: Shown<'_>) -> Vec<Count> {
     let project = ws.project();
     let m = project.methodology();
     let levels: Vec<(aegis_model::RiskLevel, String)> = m
@@ -2763,7 +2831,10 @@ fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
         .map(|(l, _, label)| (l, label.to_owned()))
         .collect();
     let mut counts = vec![0usize; levels.len() + 1];
-    for (_, id, _) in project.threat_scenarios() {
+    for (t_idx, id, _) in project.threat_scenarios() {
+        if shown.is_some_and(|(u, v)| !u.threat(t_idx).shows_in(v)) {
+            continue;
+        }
         let r = if residual {
             ws.cache().evaluate_residual_risk(project, id)
         } else {
@@ -2798,33 +2869,99 @@ fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
 /// The overview. Time O(threats log threats + lint).
 #[must_use]
 pub fn overview(ws: &Workspace) -> Overview {
+    overview_in(ws, &crate::systems::SystemView::all())
+}
+
+/// The overview of what `view` shows. With all systems, or a project
+/// with no systems, this is the whole project. Time O(project + threats
+/// log threats + lint).
+#[must_use]
+pub fn overview_in(ws: &Workspace, view: &crate::systems::SystemView) -> Overview {
     let p = ws.project();
+    let view = view.normalized(p);
+    let usage = p.system_use();
+    let v = usage.set_of(view.systems());
+    let filtered = !view.is_all();
+    let shown: Shown<'_> = filtered.then_some((&usage, v));
     let names = p.methodology().element_names();
     let c = |label: &str, count| Count {
         label: label.to_owned(),
         count,
         tone: Tone::Unrated,
     };
-    let lint = p.lint();
-    let errors = lint
-        .iter()
-        .filter(|f| f.severity() == LintSeverity::Error)
-        .count();
+    let n = |total: usize, sets: &mut dyn Iterator<Item = aegis_model::SystemSet>| {
+        if filtered {
+            sets.filter(|s| s.shows_in(v)).count()
+        } else {
+            total
+        }
+    };
+    let mut rows = problems(ws);
+    if filtered {
+        rows.retain(|r| {
+            r.target
+                .and_then(|t| crate::systems::selection_systems(p, &usage, t))
+                .is_none_or(|s| s.shows_in(v))
+        });
+    }
+    let errors = rows.iter().filter(|r| r.error).count();
     let mut top = risk_rows(ws);
+    if filtered {
+        top.retain(|r| {
+            p.threat_scenario_idx(&r.id)
+                .is_none_or(|i| usage.threat(i).shows_in(v))
+        });
+    }
     top.truncate(5);
     let mut counts = vec![
-        c(&names.asset.plural, p.asset_count()),
-        c(&names.damage_scenario.plural, p.damage_scenario_count()),
-        c(&names.threat_scenario.plural, p.threat_scenario_count()),
-        c(&names.attack_tree.plural, p.attack_tree_count()),
-        c(&names.security_control.plural, p.security_control_count()),
+        c(
+            &names.asset.plural,
+            n(
+                p.asset_count(),
+                &mut p.assets().map(|(i, _, _)| usage.asset(i)),
+            ),
+        ),
+        c(
+            &names.damage_scenario.plural,
+            n(
+                p.damage_scenario_count(),
+                &mut p.damage_scenarios().map(|(i, _, _)| usage.damage(i)),
+            ),
+        ),
+        c(
+            &names.threat_scenario.plural,
+            n(
+                p.threat_scenario_count(),
+                &mut p.threat_scenarios().map(|(i, _, _)| usage.threat(i)),
+            ),
+        ),
+        c(
+            &names.attack_tree.plural,
+            n(
+                p.attack_tree_count(),
+                &mut p.attack_trees().map(|(i, _, _)| usage.tree(i)),
+            ),
+        ),
+        c(
+            &names.security_control.plural,
+            n(
+                p.security_control_count(),
+                &mut p.security_controls().map(|(i, _, _)| usage.control(i)),
+            ),
+        ),
         c(
             &names.cybersecurity_goal.plural,
-            p.cybersecurity_goal_count(),
+            n(
+                p.cybersecurity_goal_count(),
+                &mut p.cybersecurity_goals().map(|(i, _, _)| usage.goal(i)),
+            ),
         ),
         c(
             &names.cybersecurity_claim.plural,
-            p.cybersecurity_claim_count(),
+            n(
+                p.cybersecurity_claim_count(),
+                &mut p.cybersecurity_claims().map(|(i, _, _)| usage.claim(i)),
+            ),
         ),
     ];
     if p.component_count() > 0
@@ -2832,18 +2969,48 @@ pub fn overview(ws: &Workspace) -> Overview {
         || p.data_flow_count() > 0
         || p.trust_boundary_count() > 0
     {
-        counts.push(c(&names.component.plural, p.component_count()));
-        counts.push(c(&names.interface.plural, p.interface_count()));
-        counts.push(c(&names.data_flow.plural, p.data_flow_count()));
-        counts.push(c(&names.trust_boundary.plural, p.trust_boundary_count()));
+        counts.push(c(
+            &names.component.plural,
+            n(
+                p.component_count(),
+                &mut p.components().map(|(i, _, _)| usage.component(i)),
+            ),
+        ));
+        counts.push(c(
+            &names.interface.plural,
+            n(
+                p.interface_count(),
+                &mut p.interfaces().map(|(i, _, _)| usage.interface(i)),
+            ),
+        ));
+        counts.push(c(
+            &names.data_flow.plural,
+            n(
+                p.data_flow_count(),
+                &mut p.data_flows().map(|(i, _, _)| usage.data_flow(i)),
+            ),
+        ));
+        counts.push(c(
+            &names.trust_boundary.plural,
+            n(
+                p.trust_boundary_count(),
+                &mut p
+                    .trust_boundaries()
+                    .map(|(i, _, _)| usage.trust_boundary(i)),
+            ),
+        ));
     }
+    let tp = crate::top_paths::top_paths(ws, &view);
     Overview {
         counts,
-        inherent: distribution(ws, false),
-        residual: distribution(ws, true),
+        inherent: distribution(ws, false, shown),
+        residual: distribution(ws, true, shown),
         errors,
-        warnings: lint.len() - errors,
+        warnings: rows.len() - errors,
         top,
+        systems: crate::combined::systems_overview(ws, &view),
+        top_paths: tp.paths,
+        choke_points: tp.choke_points,
     }
 }
 
@@ -3032,6 +3199,11 @@ pub struct Comparison {
     pub summary: String,
     /// The changes, entity kind by kind, then the risks that moved.
     pub lines: Vec<DiffLine>,
+    /// The view's chip text ("Brake", "Brake + ADAS"); `None` for all
+    /// systems.
+    pub scope: Option<String>,
+    /// How many lines the view left out.
+    pub hidden: usize,
 }
 
 fn risk_snapshot_text(m: &Methodology, s: Option<aegis_model::RiskSnapshot>) -> String {
@@ -3055,33 +3227,86 @@ pub fn comparison(
     baseline: &str,
     current: &Project,
 ) -> Result<Comparison, aegis_model::ModelError> {
+    comparison_in(base, baseline, current, &crate::systems::SystemView::all())
+}
+
+/// Compares `base` with `current` and keeps the lines `view` shows.
+/// With all systems this is `comparison`. Time as `comparison`, plus
+/// O(project) for the systems of both projects.
+///
+/// # Errors
+///
+/// The model's error if the two use different methodologies.
+pub fn comparison_in(
+    base: &Project,
+    baseline: &str,
+    current: &Project,
+    view: &crate::systems::SystemView,
+) -> Result<Comparison, aegis_model::ModelError> {
     let diff = base.diff(current)?;
     let m = current.methodology();
+    let all = view.is_all();
+    let (cur_use, base_use) = if all {
+        Default::default()
+    } else {
+        (current.system_use(), base.system_use())
+    };
+    let (v_cur, v_base) = (
+        cur_use.set_of(view.systems()),
+        base_use.set_of(view.systems()),
+    );
+    // An element shows when its systems meet the view; one that cannot be
+    // placed shows.
+    let in_cur = |s: Selection| {
+        all || crate::systems::selection_systems(current, &cur_use, s)
+            .is_none_or(|x| x.shows_in(v_cur))
+    };
+    let in_base = |s: Selection| {
+        all || crate::systems::selection_systems(base, &base_use, s)
+            .is_none_or(|x| x.shows_in(v_base))
+    };
     let mut lines = Vec::new();
-    let mut push = |kind: &str, text: String| {
-        lines.push(DiffLine {
-            kind: kind.to_owned(),
-            text,
-        });
+    let mut hidden = 0usize;
+    let mut push = |kind: &str, text: String, show: bool| {
+        if show {
+            lines.push(DiffLine {
+                kind: kind.to_owned(),
+                text,
+            });
+        } else {
+            hidden += 1;
+        }
     };
     macro_rules! entity {
-        ($what:literal, $set:expr, $cite:expr) => {{
+        ($what:literal, $set:expr, $sel:expr) => {{
             let set = $set;
             for id in set.added() {
-                push("Added", format!("{} {}", $what, $cite(current, *id)));
+                let s = $sel(*id);
+                push(
+                    "Added",
+                    format!("{} {}", $what, cited(current, s)),
+                    in_cur(s),
+                );
             }
             for id in set.removed() {
-                push("Removed", format!("{} {}", $what, $cite(base, *id)));
+                let s = $sel(*id);
+                push(
+                    "Removed",
+                    format!("{} {}", $what, cited(base, s)),
+                    in_base(s),
+                );
             }
             for id in set.modified() {
-                push("Changed", format!("{} {}", $what, $cite(current, *id)));
+                let s = $sel(*id);
+                push(
+                    "Changed",
+                    format!("{} {}", $what, cited(current, s)),
+                    in_cur(s),
+                );
             }
         }};
     }
-    entity!("Component", diff.components(), |p: &Project, id| cited(
-        p,
-        Selection::Component(id)
-    ));
+    entity!("Component", diff.components(), Selection::Component);
     {
         let sys_of =
             |p: &Project, id: ComponentId| p.component_idx(&id).and_then(|i| p.component_system(i));
@@ -3092,6 +3317,9 @@ pub fn comparison(
         for id in diff.components().modified() {
             let (old, new) = (sys_of(base, *id), sys_of(current, *id));
             if old != new {
+                let show = all
+                    || old.is_some_and(|s| view.contains(s))
+                    || new.is_some_and(|s| view.contains(s));
                 push(
                     "Changed",
                     format!(
@@ -3100,22 +3328,17 @@ pub fn comparison(
                         sys_text(base, old),
                         sys_text(current, new)
                     ),
+                    show,
                 );
             }
         }
     }
-    entity!("Interface", diff.interfaces(), |p: &Project, id| cited(
-        p,
-        Selection::Interface(id)
-    ));
-    entity!("Data flow", diff.data_flows(), |p: &Project, id| cited(
-        p,
-        Selection::DataFlow(id)
-    ));
+    entity!("Interface", diff.interfaces(), Selection::Interface);
+    entity!("Data flow", diff.data_flows(), Selection::DataFlow);
     entity!(
         "Trust boundary",
         diff.trust_boundaries(),
-        |p: &Project, id| cited(p, Selection::TrustBoundary(id))
+        Selection::TrustBoundary
     );
     {
         let system = |p: &Project, id: ElementId| {
@@ -3129,38 +3352,32 @@ pub fn comparison(
         let set = diff.elements();
         for id in set.added() {
             if let Some(t) = system(current, *id) {
-                push("Added", t);
+                push("Added", t, all || view.contains(*id));
             }
         }
         for id in set.removed() {
             if let Some(t) = system(base, *id) {
-                push("Removed", t);
+                push("Removed", t, all || view.contains(*id));
             }
         }
         for id in set.modified() {
             if let Some(t) = system(current, *id) {
-                push("Changed", t);
+                push("Changed", t, all || view.contains(*id));
             }
         }
     }
-    entity!("Asset", diff.assets(), |p: &Project, id| cited(
-        p,
-        Selection::Asset(id)
-    ));
+    entity!("Asset", diff.assets(), Selection::Asset);
     entity!(
         "Damage scenario",
         diff.damage_scenarios(),
-        |p: &Project, id| cited(p, Selection::Damage(id))
+        Selection::Damage
     );
     entity!(
         "Threat scenario",
         diff.threat_scenarios(),
-        |p: &Project, id| cited(p, Selection::Threat(id))
+        Selection::Threat
     );
-    entity!("Attack tree", diff.attack_trees(), |p: &Project, id| cited(
-        p,
-        Selection::Tree(id)
-    ));
+    entity!("Attack tree", diff.attack_trees(), Selection::Tree);
     {
         let set = diff.security_controls();
         for id in set.added() {
@@ -3170,12 +3387,14 @@ pub fn comparison(
                     "Security control {}",
                     cited(current, Selection::Control(*id))
                 ),
+                in_cur(Selection::Control(*id)),
             );
         }
         for id in set.removed() {
             push(
                 "Removed",
                 format!("Security control {}", cited(base, Selection::Control(*id))),
+                in_base(Selection::Control(*id)),
             );
         }
         for id in set.modified() {
@@ -3212,23 +3431,26 @@ pub fn comparison(
                 }
                 _ => String::new(),
             };
-            push("Changed", format!("Security control {what}{detail}"));
+            push(
+                "Changed",
+                format!("Security control {what}{detail}"),
+                in_cur(Selection::Control(*id)),
+            );
         }
     }
-    entity!("Goal", diff.cybersecurity_goals(), |p: &Project, id| cited(
-        p,
-        Selection::Goal(id)
-    ));
-    entity!("Claim", diff.cybersecurity_claims(), |p: &Project, id| {
-        cited(p, Selection::Claim(id))
-    });
-    let mut moved = 0;
+    entity!("Goal", diff.cybersecurity_goals(), Selection::Goal);
+    entity!("Claim", diff.cybersecurity_claims(), Selection::Claim);
     for d in diff.changed_risks() {
-        moved += 1;
-        let threat_ref = if current.threat_scenario_idx(&d.threat()).is_some() {
-            cited(current, Selection::Threat(d.threat()))
+        let (threat_ref, show) = if current.threat_scenario_idx(&d.threat()).is_some() {
+            (
+                cited(current, Selection::Threat(d.threat())),
+                in_cur(Selection::Threat(d.threat())),
+            )
         } else {
-            cited(base, Selection::Threat(d.threat()))
+            (
+                cited(base, Selection::Threat(d.threat())),
+                in_base(Selection::Threat(d.threat())),
+            )
         };
         push(
             "Risk",
@@ -3241,23 +3463,34 @@ pub fn comparison(
                 risk_snapshot_text(m, d.residual().after()),
                 d.residual().change().as_str(),
             ),
+            show,
         );
     }
     let count = |k: &str| lines.iter().filter(|l| l.kind == k).count();
-    let summary = if lines.is_empty() {
-        "Nothing changed since this baseline.".to_owned()
-    } else {
-        format!(
+    let mut summary = match (lines.is_empty(), hidden) {
+        (true, 0) => "Nothing changed since this baseline.".to_owned(),
+        (true, _) => "Nothing changed in this view since this baseline.".to_owned(),
+        _ => format!(
             "Since this baseline: {} added, {} removed, {} changed, {} risk(s) moved.",
             count("Added"),
             count("Removed"),
             count("Changed"),
-            moved
-        )
+            count("Risk")
+        ),
+    };
+    if hidden > 0 {
+        summary.push_str(&format!(" {hidden} more outside this view."));
+    }
+    let scope = if all {
+        None
+    } else {
+        crate::systems::view_menu(current, view).map(|v| v.chip)
     };
     Ok(Comparison {
         baseline: baseline.to_owned(),
         summary,
         lines,
+        scope,
+        hidden,
     })
 }

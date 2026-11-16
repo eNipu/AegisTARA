@@ -25,6 +25,10 @@ pub struct SystemRow {
     pub component_count: usize,
     /// Provenance text (`pages::changed_text`).
     pub changed: String,
+    /// Boundary flows with one end in this system.
+    pub boundary_flows: usize,
+    /// Boundary flows and the other systems (`combined::boundary_text`).
+    pub boundary_text: String,
 }
 
 /// Every system in ID order; empty when the project has none. One pass over
@@ -41,6 +45,8 @@ pub fn system_rows(ws: &Workspace) -> Vec<SystemRow> {
             components: Vec::new(),
             component_count: 0,
             changed: changed_text(e.provenance()),
+            boundary_flows: 0,
+            boundary_text: String::new(),
         })
         .collect();
     if rows.is_empty() {
@@ -59,6 +65,26 @@ pub fn system_rows(ws: &Workspace) -> Vec<SystemRow> {
         if c.parent().is_none() {
             row.components.push(c.name().to_owned());
         }
+    }
+    let mut others: Vec<BTreeSet<ElementId>> = vec![BTreeSet::new(); rows.len()];
+    for f in crate::combined::boundary_flows(project) {
+        for (this, other) in [(f.from_system, f.to_system), (f.to_system, f.from_system)] {
+            if let Some(i) = at.get(&this).copied() {
+                if let Some(r) = rows.get_mut(i) {
+                    r.boundary_flows += 1;
+                }
+                if let Some(o) = others.get_mut(i) {
+                    o.insert(other);
+                }
+            }
+        }
+    }
+    for (row, set) in rows.iter_mut().zip(&others) {
+        let names: Vec<String> = set
+            .iter()
+            .filter_map(|s| system_name(project, *s))
+            .collect();
+        row.boundary_text = crate::combined::boundary_text(&names, row.boundary_flows);
     }
     rows
 }
@@ -292,6 +318,54 @@ fn retain_shown<T>(
     rows.retain(|r| set_of(r).is_none_or(|s| s.shows_in(view)));
 }
 
+/// The systems of the element a selection points at; `None` when the
+/// element is gone. Time O(log n).
+#[must_use]
+pub fn selection_systems(
+    project: &Project,
+    usage: &aegis_model::SystemUse,
+    s: Selection,
+) -> Option<aegis_model::SystemSet> {
+    match s {
+        Selection::Component(id) => Some(usage.component(project.component_idx(&id)?)),
+        Selection::Interface(id) => Some(usage.interface(project.interface_idx(&id)?)),
+        Selection::DataFlow(id) => Some(usage.data_flow(project.data_flow_idx(&id)?)),
+        Selection::TrustBoundary(id) => {
+            Some(usage.trust_boundary(project.trust_boundary_idx(&id)?))
+        }
+        Selection::Asset(id) => Some(usage.asset(project.asset_idx(&id)?)),
+        Selection::Damage(id) => Some(usage.damage(project.damage_scenario_idx(&id)?)),
+        Selection::Threat(id) => Some(usage.threat(project.threat_scenario_idx(&id)?)),
+        Selection::Tree(id) | Selection::TreeNode(id, _) => {
+            Some(usage.tree(project.attack_tree_idx(&id)?))
+        }
+        Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
+        Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
+        Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
+    }
+}
+
+/// The view that shows the element `s` points at, with the name of the
+/// system added to get there. `None` when the view already shows it
+/// (all systems, an element in no system, or one of its systems is in
+/// the view) or the element is gone. Adds the element's first system
+/// in ID order. Time O(project) for `system_use`; nothing is computed
+/// when the view is all.
+#[must_use]
+pub fn reveal(project: &Project, view: &SystemView, s: Selection) -> Option<(SystemView, String)> {
+    if view.is_all() {
+        return None;
+    }
+    let usage = project.system_use();
+    let set = selection_systems(project, &usage, s)?;
+    if set.shows_in(usage.set_of(view.systems())) {
+        return None;
+    }
+    let id = usage.ids(set).next()?;
+    let name = system_name(project, id)?;
+    Some((view.toggled(id), name))
+}
+
 /// Keeps the table rows of `page` that show in `view`. Lists that only
 /// feed choices are left alone. Does nothing when the view is all
 /// systems or the project has none. Time O(project) for `system_use`
@@ -341,22 +415,8 @@ pub fn filter_page(project: &Project, view: &SystemView, page: Page, d: &mut Pag
                 Some(usage.claim(project.cybersecurity_claim_idx(&r.id)?))
             });
         }
-        Page::Problems => retain_shown(&mut d.problems, v, |r| match r.target? {
-            Selection::Component(id) => Some(usage.component(project.component_idx(&id)?)),
-            Selection::Interface(id) => Some(usage.interface(project.interface_idx(&id)?)),
-            Selection::DataFlow(id) => Some(usage.data_flow(project.data_flow_idx(&id)?)),
-            Selection::TrustBoundary(id) => {
-                Some(usage.trust_boundary(project.trust_boundary_idx(&id)?))
-            }
-            Selection::Asset(id) => Some(usage.asset(project.asset_idx(&id)?)),
-            Selection::Damage(id) => Some(usage.damage(project.damage_scenario_idx(&id)?)),
-            Selection::Threat(id) => Some(usage.threat(project.threat_scenario_idx(&id)?)),
-            Selection::Tree(id) | Selection::TreeNode(id, _) => {
-                Some(usage.tree(project.attack_tree_idx(&id)?))
-            }
-            Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
-            Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
-            Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
+        Page::Problems => retain_shown(&mut d.problems, v, |r| {
+            selection_systems(project, &usage, r.target?)
         }),
         _ => {}
     }

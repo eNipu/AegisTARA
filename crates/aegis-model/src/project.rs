@@ -5713,7 +5713,8 @@ impl Project {
     }
 
     fn lint_data_flows(&self, findings: &mut Vec<LintFinding>) {
-        if self.trust_boundaries.len() == 0 || self.data_flows.len() == 0 {
+        let has_systems = self.element_count(ElementKind::System) > 0;
+        if self.data_flows.len() == 0 || (self.trust_boundaries.len() == 0 && !has_systems) {
             return;
         }
         let mut comp_has_threat = vec![false; self.components.slot_count()];
@@ -5725,12 +5726,13 @@ impl Project {
                 *slot = true;
             }
         }
-        for (_idx, id, flow) in self.data_flows.iter() {
+        for (idx, id, flow) in self.data_flows.iter() {
             let crosses_boundary = self
                 .trust_boundaries
                 .iter()
                 .any(|(_, _, tb)| tb.contains(flow.from()) != tb.contains(flow.to()));
-            if crosses_boundary {
+            let between_systems = has_systems && self.boundary_flow(idx).is_some();
+            if crosses_boundary || between_systems {
                 let from_threat = comp_has_threat
                     .get(flow.from().index())
                     .copied()
@@ -5740,9 +5742,11 @@ impl Project {
                     .copied()
                     .unwrap_or(false);
                 if !from_threat && !to_threat {
-                    findings.push(LintFinding::new(
-                        LintCode::BoundaryCrossingDataFlowWithoutThreat { flow: id },
-                    ));
+                    findings.push(LintFinding::new(if crosses_boundary {
+                        LintCode::BoundaryCrossingDataFlowWithoutThreat { flow: id }
+                    } else {
+                        LintCode::SystemBoundaryFlowWithoutThreat { flow: id }
+                    }));
                 }
             }
         }

@@ -8,7 +8,7 @@ use aegis_client::pages;
 use aegis_client::systems;
 use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
-use aegis_model::{ComponentId, ElementId, ElementKind, Methodology, Op, Provenance};
+use aegis_model::{ComponentId, DataFlowId, ElementId, ElementKind, Methodology, Op, Provenance};
 
 #[test]
 fn a_component_in_no_system_is_a_problem_once_a_system_exists() {
@@ -53,6 +53,56 @@ fn a_component_in_no_system_is_a_problem_once_a_system_exists() {
         rows[0].text
     );
     assert!(rows[0].text.contains("is in no system"));
+    assert!(!rows[0].error);
+}
+
+#[test]
+fn a_flow_between_two_systems_without_threats_is_a_problem() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let who = || Provenance::human("mira", 1);
+    let (a, b) = (ComponentId::new_v7(), ComponentId::new_v7());
+    let (sa, sb) = (ElementId::new_v7(), ElementId::new_v7());
+    let flow = DataFlowId::new_v7();
+    let mut ops = Vec::new();
+    for (s, name) in [(sa, "Brake"), (sb, "ADAS")] {
+        ops.push(Op::AddElement {
+            id: s,
+            kind: ElementKind::System,
+            name: name.into(),
+            provenance: who(),
+        });
+    }
+    for (c, s) in [(a, sa), (b, sb)] {
+        ops.push(Op::AddComponent {
+            id: c,
+            name: "Part".into(),
+            parent: None,
+            provenance: who(),
+        });
+        ops.push(Op::SetComponentSystem {
+            id: c,
+            system: Some(s),
+            provenance: who(),
+        });
+    }
+    ops.push(Op::AddDataFlow {
+        id: flow,
+        name: "Secret frames".into(),
+        from: a,
+        to: b,
+        interface: None,
+        provenance: who(),
+    });
+    ws.apply(ops, Origin::Edit).expect("setup");
+    let rows: Vec<_> = pages::problems(&ws)
+        .into_iter()
+        .filter(|r| r.target == Some(Selection::DataFlow(flow)))
+        .collect();
+    assert_eq!(rows.len(), 1);
+    let text = &rows[0].text;
+    assert!(text.contains("\"Secret frames\""), "{text}");
+    assert!(text.contains("links two systems but has no"), "{text}");
     assert!(!rows[0].error);
 }
 
