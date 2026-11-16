@@ -2760,12 +2760,33 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::SystemNameShared { system, first } => {
+            return shared_system_name(project, system, first);
+        }
     };
     ProblemRow {
         error: code.severity() == LintSeverity::Error,
         visual_id: selection_visual_id(project, target),
         text,
         target: Some(target),
+    }
+}
+
+/// A system is no [`Selection`], so the row has no target and shows in every
+/// system's report.
+fn shared_system_name(project: &Project, system: ElementId, first: ElementId) -> ProblemRow {
+    let sys = project.element_visual_id(system).unwrap_or_default();
+    let first_vis = project.element_visual_id(first).unwrap_or_default();
+    let name = project
+        .element(system)
+        .map_or("?", aegis_model::Element::name);
+    ProblemRow {
+        error: false,
+        text: format!(
+            "System {sys} \"{name}\" has the same name as {first_vis}; a report profile that names \"{name}\" covers both."
+        ),
+        visual_id: sys,
+        target: None,
     }
 }
 
