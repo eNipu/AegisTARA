@@ -421,7 +421,6 @@ mod tests {
                 },
             ],
             require_rationale: false,
-            clause_refs: std::collections::BTreeMap::default(),
             attack_potential: None,
             properties: vec![PropertyDef {
                 key: "i".into(),

@@ -1259,7 +1259,6 @@ pub enum ModelError {
 ///     threat_categories: vec![],
 ///     catalog_schemes: vec![],
 ///     require_rationale: false,
-///     clause_refs: std::collections::BTreeMap::default(),
 ///     attack_potential: None,
 /// };
 /// assert_eq!(Methodology::new(def), Err(MethodologyError::NoImpactCategory));
@@ -1289,7 +1288,6 @@ pub enum MethodologyError {
     ///     threat_categories: vec![],
     ///     catalog_schemes: vec![],
     ///     require_rationale: false,
-    ///     clause_refs: std::collections::BTreeMap::default(),
     ///     attack_potential: None,
     /// };
     /// let kept = format!("{}...", "K".repeat(61));
