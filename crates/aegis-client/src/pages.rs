@@ -2814,6 +2814,10 @@ pub struct Overview {
     pub top: Vec<RiskRow>,
     /// The systems table; `None` when the project has no systems.
     pub systems: Option<crate::combined::SystemsOverview>,
+    /// The five easiest attack paths of the view.
+    pub top_paths: Vec<crate::top_paths::PathRow>,
+    /// The five steps on most of the easiest paths.
+    pub choke_points: Vec<crate::top_paths::ChokeRow>,
 }
 
 /// The systems a view shows: the project's usage and the view's set.
@@ -2996,6 +3000,7 @@ pub fn overview_in(ws: &Workspace, view: &crate::systems::SystemView) -> Overvie
             ),
         ));
     }
+    let tp = crate::top_paths::top_paths(ws, &view);
     Overview {
         counts,
         inherent: distribution(ws, false, shown),
@@ -3004,6 +3009,8 @@ pub fn overview_in(ws: &Workspace, view: &crate::systems::SystemView) -> Overvie
         warnings: rows.len() - errors,
         top,
         systems: crate::combined::systems_overview(ws, &view),
+        top_paths: tp.paths,
+        choke_points: tp.choke_points,
     }
 }
 
