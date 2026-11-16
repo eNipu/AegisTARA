@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
-use aegis_client::combined::boundary_flows;
+use aegis_client::combined::{boundary_flows, systems_overview};
 use aegis_client::commands::Edit;
-use aegis_client::pages::{data_flow_detail, data_flow_rows, risk_rows};
+use aegis_client::pages::{data_flow_detail, data_flow_rows, overview, risk_rows, vocabulary};
 use aegis_client::state::PageData;
 use aegis_client::systems::{SystemView, filter_page, system_rows};
 use aegis_client::view::{Page, UiState, inspector, tree_scene};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ComponentId, ControlId, DataFlowId, ElementId, InterfaceId, ItemRef, Methodology,
-    NodeId, ThreatId, TreeId,
+    AssetId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, InterfaceId, ItemRef,
+    Methodology, NodeId, ThreatId, TreeId,
 };
 
 fn workspace() -> Workspace {
@@ -421,4 +421,201 @@ fn other_systems_setting_caps_the_step_in_every_view() {
     );
     let kept = d.risks.iter().find(|r| r.id == fx.threat).expect("kept");
     assert!(kept == &all);
+}
+
+// The systems table of the overview (120d).
+
+/// A threat on a new asset bound to `component`, linked to `damage` and
+/// rated with feasibility `level` when given.
+fn rated_threat(
+    ws: &mut Workspace,
+    component: ComponentId,
+    damage: DamageId,
+    level: Option<usize>,
+) -> ThreatId {
+    let asset = AssetId::new_v7();
+    run(
+        ws,
+        &Edit::AddAssetBound {
+            id: asset,
+            name: "Data".into(),
+            properties: (0..6).collect(),
+            component,
+        },
+    );
+    let threat = ThreatId::new_v7();
+    run(
+        ws,
+        &Edit::AddThreat {
+            id: threat,
+            name: "Attack".into(),
+            asset,
+            category: 0,
+        },
+    );
+    run(
+        ws,
+        &Edit::LinkDamage {
+            threat,
+            damage,
+            linked: true,
+        },
+    );
+    run(ws, &Edit::SetThreatFeasibility { threat, level });
+    threat
+}
+
+struct Sys {
+    ws: Workspace,
+    brake: ElementId,
+    adas: ElementId,
+    gateway: ElementId,
+}
+
+/// Three systems, a child component, a component in no system, and
+/// threats: Brake rated, ADAS unrated, Gateway two rated, no system rated.
+fn sys_fixture() -> Sys {
+    let mut ws = workspace();
+    let m = Methodology::iso21434_r155().expect("builtin");
+    let vocab = vocabulary(&m);
+    let damage = DamageId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddDamage {
+            id: damage,
+            name: "Crash".into(),
+        },
+    );
+    let severe = vocab.impact_categories[0].levels.len() - 1;
+    run(
+        &mut ws,
+        &Edit::SetImpact {
+            damage,
+            category: 0,
+            level: Some(severe),
+        },
+    );
+    let brake = add_system(&mut ws, "Brake");
+    let adas = add_system(&mut ws, "ADAS");
+    let gateway = add_system(&mut ws, "Gateway");
+    let esc = add_component(&mut ws, "ESC ECU", None, Some(brake));
+    add_component(&mut ws, "Valve", Some(esc), None);
+    let adas_ecu = add_component(&mut ws, "ADAS ECU", None, Some(adas));
+    let gw = add_component(&mut ws, "GW", None, Some(gateway));
+    let tester = add_component(&mut ws, "Tester", None, None);
+    add_flow(&mut ws, "Brake request", adas_ecu, gw);
+    add_flow(&mut ws, "Brake command", gw, esc);
+    add_flow(&mut ws, "Diag", tester, gw);
+    let top = vocab.feasibility.len() - 1;
+    rated_threat(&mut ws, esc, damage, Some(top));
+    rated_threat(&mut ws, adas_ecu, damage, None);
+    rated_threat(&mut ws, gw, damage, Some(0));
+    rated_threat(&mut ws, gw, damage, Some(top));
+    rated_threat(&mut ws, tester, damage, Some(0));
+    Sys {
+        ws,
+        brake,
+        adas,
+        gateway,
+    }
+}
+
+/// The label of the worst residual risk among the threats of `system`
+/// (`None`: the threats in no system), by the model, uncached.
+fn worst_label(ws: &Workspace, system: Option<ElementId>) -> Option<String> {
+    let p = ws.project();
+    let m = p.methodology();
+    let uses = p.system_use();
+    let mut best: Option<usize> = None;
+    for (idx, id, _) in p.threat_scenarios() {
+        if uses.ids(uses.threat(idx)).next() != system {
+            continue;
+        }
+        let level = p.evaluate_residual_risk(id).ok().and_then(|r| r.max_risk());
+        let pos = level.and_then(|l| m.risk_levels().position(|(x, _, _)| x == l));
+        best = best.max(pos);
+    }
+    let (_, _, label) = m.risk_levels().nth(best?)?;
+    Some(label.to_owned())
+}
+
+#[test]
+fn rows_add_up_to_the_total() {
+    let fx = sys_fixture();
+    let p = fx.ws.project();
+    let o = systems_overview(&fx.ws, &SystemView::all()).expect("systems");
+    assert_eq!(o.total.name, "All");
+    let names: Vec<&str> = o.rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["Brake", "ADAS", "Gateway", "No system"]);
+    assert_eq!(o.rows.iter().map(|r| r.components).sum::<usize>(), 5);
+    assert_eq!(o.total.components, p.component_count());
+    assert_eq!(o.total.assets, p.asset_count());
+    assert_eq!(o.total.threats, p.threat_scenario_count());
+    assert_eq!(
+        o.rows.iter().map(|r| r.assets).sum::<usize>(),
+        o.total.assets
+    );
+    assert_eq!(
+        o.rows.iter().map(|r| r.threats).sum::<usize>(),
+        o.total.threats
+    );
+    let by = |n: &str| o.rows.iter().find(|r| r.name == n).expect("row");
+    assert_eq!(by("Brake").components, 2);
+    assert_eq!(by("Gateway").threats, 2);
+    assert_eq!(by("No system").components, 1);
+    assert_eq!(by("No system").threats, 1);
+}
+
+#[test]
+fn boundary_column_counts_each_flow_at_both_ends() {
+    let fx = sys_fixture();
+    let o = systems_overview(&fx.ws, &SystemView::all()).expect("systems");
+    assert_eq!(o.total.boundary_flows, 2);
+    assert_eq!(o.flows.len(), 2);
+    assert_eq!(o.rows.iter().map(|r| r.boundary_flows).sum::<usize>(), 4);
+    let by = |n: &str| o.rows.iter().find(|r| r.name == n).expect("row");
+    assert_eq!(by("Gateway").boundary_text, "2 systems 2");
+    assert_eq!(by("Brake").boundary_text, "Gateway 1");
+    assert_eq!(by("No system").boundary_text, "");
+    assert_eq!(o.total.boundary_text, "");
+}
+
+#[test]
+fn a_row_shows_its_worst_rated_threat() {
+    let fx = sys_fixture();
+    let o = systems_overview(&fx.ws, &SystemView::all()).expect("systems");
+    for r in &o.rows {
+        let got = r.highest_residual.as_ref().map(|v| v.label.clone());
+        assert_eq!(got, worst_label(&fx.ws, r.system), "{}", r.name);
+    }
+    let by = |n: &str| o.rows.iter().find(|r| r.name == n).expect("row");
+    assert!(by("Brake").highest_residual.is_some());
+    assert!(by("Gateway").highest_residual.is_some());
+    assert_eq!(by("ADAS").highest_residual, None);
+    assert!(o.total.highest_residual.is_some());
+}
+
+#[test]
+fn one_system_view_keeps_no_system_and_its_flows() {
+    let fx = sys_fixture();
+    let o = systems_overview(&fx.ws, &SystemView::only(fx.brake)).expect("systems");
+    assert_eq!(o.total.name, "This view");
+    let names: Vec<&str> = o.rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["Brake", "No system"]);
+    assert_eq!(o.flows.len(), 1);
+    assert_eq!(o.flows[0].name, "Brake command");
+    assert_eq!(o.total.boundary_flows, 1);
+    assert_eq!(o.total.components, 3);
+    assert_eq!(o.total.threats, 2);
+    let _ = (fx.adas, fx.gateway);
+}
+
+#[test]
+fn no_systems_means_no_systems_table() {
+    let mut ws = workspace();
+    add_component(&mut ws, "A", None, None);
+    assert_eq!(systems_overview(&ws, &SystemView::all()), None);
+    assert_eq!(overview(&ws).systems, None);
+    let fx = sys_fixture();
+    assert!(overview(&fx.ws).systems.is_some());
 }
