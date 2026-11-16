@@ -15,6 +15,8 @@ use std::fmt::Write as _;
 use crate::pages;
 use crate::workspace::Workspace;
 
+use aegis_model::{SystemSet, SystemUse};
+
 use super::ReportContext;
 
 /// A sheet: its name and rows; the first row is the header (bold).
@@ -283,9 +285,69 @@ fn reduced_by_cell(r: &pages::RiskRow) -> String {
     }
 }
 
-fn risk_register_sheet(ws: &Workspace) -> Sheet {
-    let names = ws.project().methodology().element_names();
-    let header = vec![
+/// Which rows the workbook keeps and their last "Systems" cell (121b).
+struct Rows<'a> {
+    p: &'a aegis_model::Project,
+    has_systems: bool,
+    usage: SystemUse,
+    scope: crate::systems::Scope,
+}
+
+impl<'a> Rows<'a> {
+    /// Time O(project) when the project has systems, O(1) otherwise.
+    fn new(p: &'a aegis_model::Project, view: &crate::systems::SystemView) -> Self {
+        let has_systems = p
+            .elements(aegis_model::ElementKind::System)
+            .next()
+            .is_some();
+        Self {
+            p,
+            has_systems,
+            usage: if has_systems {
+                p.system_use()
+            } else {
+                SystemUse::default()
+            },
+            scope: crate::systems::Scope::new(p, view),
+        }
+    }
+
+    /// `h` with "Systems" last when the project has systems.
+    fn header(&self, mut h: Vec<String>) -> Vec<String> {
+        if self.has_systems {
+            h.push("Systems".to_owned());
+        }
+        h
+    }
+
+    /// Whether an element shows in the scope. Time O(1) plus `set`.
+    fn shows(&self, set: impl Fn(&SystemUse) -> Option<SystemSet>) -> bool {
+        self.scope.shows(set)
+    }
+
+    /// `row` with its Systems cell when the project has systems, or `None`
+    /// when the element does not show. Time O(s log n) plus `set`.
+    fn row(
+        &self,
+        mut row: Vec<String>,
+        set: impl Fn(&SystemUse) -> Option<SystemSet>,
+    ) -> Option<Vec<String>> {
+        if !self.scope.shows(&set) {
+            return None;
+        }
+        if self.has_systems {
+            row.push(set(&self.usage).map_or_else(String::new, |s| {
+                crate::systems::systems_text(self.p, &self.usage, s)
+            }));
+        }
+        Some(row)
+    }
+}
+
+fn risk_register_sheet(ws: &Workspace, sys: &Rows<'_>) -> Sheet {
+    let p = ws.project();
+    let names = p.methodology().element_names();
+    let header = sys.header(vec![
         "ID".to_owned(),
         names.threat_scenario.singular.to_string(),
         names.asset.singular.to_string(),
@@ -297,26 +359,30 @@ fn risk_register_sheet(ws: &Workspace) -> Sheet {
         "Reduced by".to_owned(),
         "Treatment".to_owned(),
         "Goal or claim".to_owned(),
-    ];
+    ]);
     let mut rows = vec![header];
     for r in pages::risk_rows(ws) {
         let risk = |v: Option<&crate::view::RiskView>| {
             v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
         };
         let reduced = reduced_by_cell(&r);
-        rows.push(vec![
-            r.visual_id,
-            r.threat,
-            r.asset,
-            r.damage,
-            r.impact,
-            r.feasibility,
-            risk(r.inherent.as_ref()),
-            risk(r.residual.as_ref()),
-            reduced,
-            r.treatment,
-            r.backing,
-        ]);
+        let id = r.id;
+        rows.extend(sys.row(
+            vec![
+                r.visual_id,
+                r.threat,
+                r.asset,
+                r.damage,
+                r.impact,
+                r.feasibility,
+                risk(r.inherent.as_ref()),
+                risk(r.residual.as_ref()),
+                reduced,
+                r.treatment,
+                r.backing,
+            ],
+            |u| Some(u.threat(p.threat_scenario_idx(&id)?)),
+        ));
     }
     Sheet {
         name: "Risk register".to_owned(),
@@ -335,12 +401,27 @@ pub fn report_workbook_xlsx(ws: &Workspace) -> Vec<u8> {
 /// optional `Figures` sheet when figure attachments are present (RPT-05,
 /// RPT-06, ARC-01, ARC-02).
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn report_workbook_xlsx_with_figures(
     ws: &Workspace,
     figures: &[super::profile::FigureAttachment],
 ) -> Vec<u8> {
+    report_workbook_xlsx_in(ws, figures, &crate::systems::SystemView::all())
+}
+
+/// The workbook of what `view` shows (121b). When the project has systems,
+/// every element sheet ends with a "Systems" column; with a view of some
+/// systems, rows of other systems are left out and the Overview counts the
+/// rows of each sheet. A project with no systems gives the same bytes as
+/// `report_workbook_xlsx_with_figures`. Time O(project size).
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn report_workbook_xlsx_in(
+    ws: &Workspace,
+    figures: &[super::profile::FigureAttachment],
+    view: &crate::systems::SystemView,
+) -> Vec<u8> {
     let p = ws.project();
+    let sys = Rows::new(p, view);
     let names = p.methodology().element_names();
     let vocab = pages::vocabulary(p.methodology());
     let mut sheets = Vec::new();
@@ -395,73 +476,90 @@ pub fn report_workbook_xlsx_with_figures(
         rows: overview,
     });
 
-    sheets.push(risk_register_sheet(ws));
+    sheets.push(risk_register_sheet(ws, &sys));
 
     if has_item {
-        let mut comps = vec![vec![
+        let mut comps = vec![sys.header(vec![
             "ID".to_owned(),
             names.component.singular.to_string(),
             "Parent".to_owned(),
             names.interface.plural.to_string(),
             names.asset.plural.to_string(),
-        ]];
+        ])];
         for c in pages::component_rows(ws) {
-            comps.push(vec![
-                c.visual_id,
-                c.name,
-                c.parent,
-                c.interfaces.to_string(),
-                c.assets.to_string(),
-            ]);
+            let id = c.id;
+            comps.extend(sys.row(
+                vec![
+                    c.visual_id,
+                    c.name,
+                    c.parent,
+                    c.interfaces.to_string(),
+                    c.assets.to_string(),
+                ],
+                |u| Some(u.component(p.component_idx(&id)?)),
+            ));
         }
         sheets.push(Sheet {
             name: sheet_name(&names.component.plural),
             rows: comps,
         });
 
-        let mut ifaces = vec![vec![
+        let mut ifaces = vec![sys.header(vec![
             "ID".to_owned(),
             names.interface.singular.to_string(),
             names.component.singular.to_string(),
             "Kind".to_owned(),
             names.data_flow.plural.to_string(),
-        ]];
+        ])];
         for i in pages::interface_rows(ws) {
-            ifaces.push(vec![
-                i.visual_id,
-                i.name,
-                i.component,
-                i.kind,
-                i.flows.to_string(),
-            ]);
+            let id = i.id;
+            ifaces.extend(sys.row(
+                vec![
+                    i.visual_id,
+                    i.name,
+                    i.component,
+                    i.kind,
+                    i.flows.to_string(),
+                ],
+                |u| Some(u.interface(p.interface_idx(&id)?)),
+            ));
         }
         sheets.push(Sheet {
             name: sheet_name(&names.interface.plural),
             rows: ifaces,
         });
 
-        let mut flows = vec![vec![
+        let mut flows = vec![sys.header(vec![
             "ID".to_owned(),
             names.data_flow.singular.to_string(),
             "From component".to_owned(),
             "To component".to_owned(),
             names.interface.singular.to_string(),
-        ]];
+        ])];
         for df in pages::data_flow_rows(ws) {
-            flows.push(vec![df.visual_id, df.name, df.from, df.to, df.interface]);
+            let id = df.id;
+            flows.extend(sys.row(
+                vec![df.visual_id, df.name, df.from, df.to, df.interface],
+                |u| Some(u.data_flow(p.data_flow_idx(&id)?)),
+            ));
         }
         sheets.push(Sheet {
             name: sheet_name(&names.data_flow.plural),
             rows: flows,
         });
 
-        let mut bounds = vec![vec![
+        let mut bounds = vec![sys.header(vec![
             "ID".to_owned(),
             names.trust_boundary.singular.to_string(),
             "Members".to_owned(),
-        ]];
+        ])];
         for tb in pages::trust_boundary_rows(ws) {
-            bounds.push(vec![tb.visual_id, tb.name, tb.members.to_string()]);
+            let id = tb.id;
+            bounds.extend(
+                sys.row(vec![tb.visual_id, tb.name, tb.members.to_string()], |u| {
+                    Some(u.trust_boundary(p.trust_boundary_idx(&id)?))
+                }),
+            );
         }
         sheets.push(Sheet {
             name: sheet_name(&names.trust_boundary.plural),
@@ -476,6 +574,13 @@ pub fn report_workbook_xlsx_with_figures(
             "Rules".to_owned(),
         ]];
         for a in pages::applied_settings(ws, "en") {
+            let shows = sys.shows(|u| match &a.target {
+                aegis_model::ItemRef::Component(id) => Some(u.component(p.component_idx(id)?)),
+                aegis_model::ItemRef::Interface(id) => Some(u.interface(p.interface_idx(id)?)),
+            });
+            if !shows {
+                continue;
+            }
             settings.push(vec![
                 a.target_visual_id,
                 a.target_label,
@@ -494,6 +599,7 @@ pub fn report_workbook_xlsx_with_figures(
     let mut assets = vec![vec!["ID".to_owned(), names.asset.singular.to_string()]];
     assets[0].extend(vocab.properties.iter().cloned());
     assets[0].push("Threats".to_owned());
+    assets[0] = sys.header(std::mem::take(&mut assets[0]));
     for a in pages::asset_rows(ws) {
         let mut row = vec![a.visual_id, a.name];
         row.extend(
@@ -502,7 +608,7 @@ pub fn report_workbook_xlsx_with_figures(
                 .map(|p| if *p { "yes" } else { "" }.to_owned()),
         );
         row.push(a.threats.to_string());
-        assets.push(row);
+        assets.extend(sys.row(row, |u| Some(u.asset(p.asset_idx(&a.id)?))));
     }
     sheets.push(Sheet {
         name: sheet_name(&names.asset.plural),
@@ -517,6 +623,7 @@ pub fn report_workbook_xlsx_with_figures(
     damage[0].extend(vocab.impact_categories.iter().map(|c| c.label.clone()));
     damage[0].push("Impact rationale".to_owned());
     damage[0].push("Threats".to_owned());
+    damage[0] = sys.header(std::mem::take(&mut damage[0]));
     for d in pages::damage_rows(ws) {
         let rationale = ws
             .project()
@@ -534,7 +641,7 @@ pub fn report_workbook_xlsx_with_figures(
         }
         row.push(rationale);
         row.push(d.threats.to_string());
-        damage.push(row);
+        damage.extend(sys.row(row, |u| Some(u.damage(p.damage_scenario_idx(&d.id)?))));
     }
     sheets.push(Sheet {
         name: sheet_name(&names.damage_scenario.plural),
@@ -542,7 +649,7 @@ pub fn report_workbook_xlsx_with_figures(
     });
 
     // Threats.
-    let mut threats = vec![vec![
+    let mut threats = vec![sys.header(vec![
         "ID".to_owned(),
         names.threat_scenario.singular.to_string(),
         names.asset.singular.to_string(),
@@ -557,8 +664,9 @@ pub fn report_workbook_xlsx_with_figures(
         "Risk after controls".to_owned(),
         "Reduced by".to_owned(),
         "Treatment".to_owned(),
-    ]];
+    ])];
     for r in pages::risk_rows(ws) {
+        let id = r.id;
         let t = pages::threat_detail(ws, r.id);
         let category = t
             .as_ref()
@@ -572,7 +680,7 @@ pub fn report_workbook_xlsx_with_figures(
             v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
         };
         let reduced = reduced_by_cell(&r);
-        threats.push(vec![
+        let row = vec![
             r.visual_id,
             r.threat,
             r.asset,
@@ -594,7 +702,8 @@ pub fn report_workbook_xlsx_with_figures(
             risk(r.residual.as_ref()),
             reduced,
             r.treatment,
-        ]);
+        ];
+        threats.extend(sys.row(row, |u| Some(u.threat(p.threat_scenario_idx(&id)?))));
     }
     sheets.push(Sheet {
         name: sheet_name(&names.threat_scenario.plural),
@@ -602,21 +711,29 @@ pub fn report_workbook_xlsx_with_figures(
     });
 
     // Attack trees.
-    let mut trees = vec![vec![
+    let mut trees = vec![sys.header(vec![
         "ID".to_owned(),
         "Attack tree".to_owned(),
         "Nodes".to_owned(),
         names.threat_scenario.plural.to_string(),
         names.feasibility.to_string(),
-    ]];
-    for t in pages::tree_rows(ws) {
-        trees.push(vec![
-            t.visual_id,
-            t.title,
-            t.nodes.to_string(),
-            t.threats,
-            t.feasibility,
-        ]);
+    ])];
+    // The trees of the view; the attack steps sheet follows them.
+    let tree_rows: Vec<_> = pages::tree_rows(ws)
+        .into_iter()
+        .filter(|t| sys.shows(|u| Some(u.tree(p.attack_tree_idx(&t.id)?))))
+        .collect();
+    for t in &tree_rows {
+        trees.extend(sys.row(
+            vec![
+                t.visual_id.clone(),
+                t.title.clone(),
+                t.nodes.to_string(),
+                t.threats.clone(),
+                t.feasibility.clone(),
+            ],
+            |u| Some(u.tree(p.attack_tree_idx(&t.id)?)),
+        ));
     }
     sheets.push(Sheet {
         name: sheet_name(&names.attack_tree.plural),
@@ -633,7 +750,7 @@ pub fn report_workbook_xlsx_with_figures(
         "Attack type".to_owned(),
     ]];
     let project = ws.project();
-    for t in pages::tree_rows(ws) {
+    for t in &tree_rows {
         let Some(idx) = project.attack_tree_idx(&t.id) else {
             continue;
         };
@@ -654,21 +771,25 @@ pub fn report_workbook_xlsx_with_figures(
     });
 
     // Controls.
-    let mut controls = vec![vec![
+    let mut controls = vec![sys.header(vec![
         "ID".to_owned(),
         names.security_control.singular.to_string(),
         "Attack steps".to_owned(),
         "Goals".to_owned(),
         "Risks lowered".to_owned(),
-    ]];
+    ])];
     for c in pages::control_rows(ws) {
-        controls.push(vec![
-            c.visual_id,
-            c.name,
-            c.steps.to_string(),
-            c.goals.to_string(),
-            c.lowers.to_string(),
-        ]);
+        let id = c.id;
+        controls.extend(sys.row(
+            vec![
+                c.visual_id,
+                c.name,
+                c.steps.to_string(),
+                c.goals.to_string(),
+                c.lowers.to_string(),
+            ],
+            |u| Some(u.control(p.security_control_idx(&id)?)),
+        ));
     }
     sheets.push(Sheet {
         name: sheet_name(&names.security_control.plural),
@@ -676,32 +797,41 @@ pub fn report_workbook_xlsx_with_figures(
     });
 
     // Goals and claims.
-    let mut goals = vec![vec![
+    let mut goals = vec![sys.header(vec![
         "ID".to_owned(),
         names.cybersecurity_goal.singular.to_string(),
         "Controls".to_owned(),
         names.threat_scenario.plural.to_string(),
-    ]];
+    ])];
     for g in pages::goal_rows(ws) {
-        goals.push(vec![
-            g.visual_id,
-            g.name,
-            g.controls.to_string(),
-            g.threats.to_string(),
-        ]);
+        let id = g.id;
+        goals.extend(sys.row(
+            vec![
+                g.visual_id,
+                g.name,
+                g.controls.to_string(),
+                g.threats.to_string(),
+            ],
+            |u| Some(u.goal(p.cybersecurity_goal_idx(&id)?)),
+        ));
     }
     sheets.push(Sheet {
         name: sheet_name(&names.cybersecurity_goal.plural),
         rows: goals,
     });
 
-    let mut claims = vec![vec![
+    let mut claims = vec![sys.header(vec![
         "ID".to_owned(),
         names.cybersecurity_claim.singular.to_string(),
         names.threat_scenario.plural.to_string(),
-    ]];
+    ])];
     for c in pages::claim_rows(ws) {
-        claims.push(vec![c.visual_id, c.name, c.threats.to_string()]);
+        let id = c.id;
+        claims.extend(
+            sys.row(vec![c.visual_id, c.name, c.threats.to_string()], |u| {
+                Some(u.claim(p.cybersecurity_claim_idx(&id)?))
+            }),
+        );
     }
     sheets.push(Sheet {
         name: sheet_name(&names.cybersecurity_claim.plural),
@@ -710,10 +840,13 @@ pub fn report_workbook_xlsx_with_figures(
 
     // Problems.
     let mut problems = vec![vec!["Severity".to_owned(), "Problem".to_owned()]];
-    for p in pages::problems(ws) {
+    for r in pages::problems(ws) {
+        if !sys.shows(|u| crate::systems::selection_systems(p, u, r.target?)) {
+            continue;
+        }
         problems.push(vec![
-            if p.error { "Blocking" } else { "Warning" }.to_owned(),
-            p.text,
+            if r.error { "Blocking" } else { "Warning" }.to_owned(),
+            r.text,
         ]);
     }
     sheets.push(Sheet {
@@ -752,14 +885,36 @@ pub fn report_workbook_xlsx_with_figures(
         });
     }
 
+    if sys.scope.is_on() {
+        recount(&mut sheets);
+    }
     unique_names(&mut sheets);
     workbook_bytes(&sheets)
+}
+
+/// Sets each Overview count (the first sheet) to the number of data rows
+/// of the sheet named for it, so a filtered workbook agrees with itself.
+/// Time O(sheets^2).
+fn recount(sheets: &mut [Sheet]) {
+    let Some((overview, rest)) = sheets.split_first_mut() else {
+        return;
+    };
+    for row in overview.rows.iter_mut().skip(1) {
+        let Some(label) = row.first().map(|l| sheet_name(l)) else {
+            continue;
+        };
+        if let (Some(sheet), Some(count)) = (rest.iter().find(|s| s.name == label), row.get_mut(1))
+        {
+            *count = sheet.rows.len().saturating_sub(1).to_string();
+        }
+    }
 }
 
 /// The risk register alone, one sheet. Time O(threats log threats).
 #[must_use]
 pub fn risk_register_xlsx(ws: &Workspace, _ctx: &ReportContext) -> Vec<u8> {
-    workbook_bytes(&[risk_register_sheet(ws)])
+    let all = Rows::new(ws.project(), &crate::systems::SystemView::all());
+    workbook_bytes(&[risk_register_sheet(ws, &all)])
 }
 
 #[cfg(test)]

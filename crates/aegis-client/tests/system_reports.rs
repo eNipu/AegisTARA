@@ -521,3 +521,182 @@ fn a_stale_system_name_is_ignored() {
     assert_eq!(html(&["Brake", "Gone"]), html(&["Brake"]));
     assert_ne!(html(&["Brake"]), html(&[]));
 }
+
+// ---- the workbook (121b) ---------------------------------------------------
+
+use aegis_client::excel::{SheetData, WorkbookData, read_workbook};
+use aegis_client::report::{report_workbook_xlsx, report_workbook_xlsx_in};
+use aegis_client::systems::{SystemView, view_of_names};
+
+fn workbook(ws: &Workspace, systems: &[&str]) -> WorkbookData {
+    let names: Vec<String> = systems.iter().map(|s| (*s).to_owned()).collect();
+    let view = view_of_names(ws.project(), &names);
+    read_workbook(&report_workbook_xlsx_in(ws, &[], &view)).expect("reads")
+}
+
+fn sheet<'a>(book: &'a WorkbookData, name: &str) -> &'a SheetData {
+    book.sheets
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("no sheet {name}"))
+}
+
+/// The names of the twelve element sheets of `ws`'s methodology.
+fn element_sheets(ws: &Workspace) -> Vec<String> {
+    let n = ws.project().methodology().element_names();
+    let mut out = vec!["Risk register".to_owned()];
+    for name in [
+        &n.component.plural,
+        &n.interface.plural,
+        &n.data_flow.plural,
+        &n.trust_boundary.plural,
+        &n.asset.plural,
+        &n.damage_scenario.plural,
+        &n.threat_scenario.plural,
+        &n.attack_tree.plural,
+        &n.security_control.plural,
+        &n.cybersecurity_goal.plural,
+        &n.cybersecurity_claim.plural,
+    ] {
+        out.push(name.to_string());
+    }
+    out
+}
+
+fn cell(row: &[String], i: usize) -> &str {
+    row.get(i).map_or("", String::as_str)
+}
+
+/// The Systems cell of the data row whose column 1 is `name`, and how many
+/// rows have that name.
+fn systems_of(sheet: &SheetData, name: &str) -> (usize, String) {
+    let last = sheet.headers.len() - 1;
+    let rows: Vec<&Vec<String>> = sheet
+        .rows
+        .iter()
+        .map(|(_, r)| r)
+        .filter(|r| cell(r, 1) == name)
+        .collect();
+    let text = rows.first().map_or("", |r| cell(r, last)).to_owned();
+    (rows.len(), text)
+}
+
+fn names_in(sheet: &SheetData) -> Vec<String> {
+    sheet
+        .rows
+        .iter()
+        .map(|(_, r)| cell(r, 1).to_owned())
+        .collect()
+}
+
+#[test]
+fn every_element_sheet_has_a_systems_column() {
+    let ws = fixture();
+    let book = workbook(&ws, &[]);
+    let sheets = element_sheets(&ws);
+    assert_eq!(sheets.len(), 12);
+    for name in &sheets {
+        let s = sheet(&book, name);
+        assert_eq!(
+            s.headers.last().map(String::as_str),
+            Some("Systems"),
+            "{name}"
+        );
+    }
+
+    let project = ws.project();
+    let comps = sheet(&book, &sheets[1]);
+    let last = comps.headers.len() - 1;
+    let mut seen = 0;
+    for (idx, _, c) in project.components() {
+        let expected = project
+            .component_system(idx)
+            .and_then(|s| project.element(s))
+            .map_or(String::new(), |e| e.name().to_owned());
+        let row = comps
+            .rows
+            .iter()
+            .find(|(_, r)| cell(r, 1) == c.name())
+            .expect("component row");
+        assert_eq!(cell(&row.1, last), expected, "{}", c.name());
+        seen += 1;
+    }
+    assert_eq!(seen, 3);
+}
+
+#[test]
+fn a_shared_row_names_both_systems_once() {
+    let ws = fixture();
+    let book = workbook(&ws, &[]);
+    let n = ws.project().methodology().element_names();
+    let both: std::collections::BTreeSet<&str> = ["Brake", "ADAS"].into();
+    let damage = sheet(&book, &n.damage_scenario.plural);
+    let controls = sheet(&book, &n.security_control.plural);
+    for (s, name) in [(damage, SHARED[0]), (controls, SHARED[1])] {
+        let (count, text) = systems_of(s, name);
+        assert_eq!(count, 1, "{name}");
+        let got: std::collections::BTreeSet<&str> = text.split(", ").collect();
+        assert_eq!(got, both, "{name}");
+    }
+    assert_eq!(
+        systems_of(damage, "ADAS only lane loss"),
+        (1, "ADAS".into())
+    );
+}
+
+#[test]
+fn an_element_in_no_system_has_an_empty_cell() {
+    let ws = fixture();
+    let book = workbook(&ws, &[]);
+    let comps = sheet(
+        &book,
+        &ws.project().methodology().element_names().component.plural,
+    );
+    assert_eq!(systems_of(comps, NO_SYSTEM[0]), (1, String::new()));
+    assert_eq!(systems_of(comps, BRAKE_ONLY[0]), (1, "Brake".into()));
+}
+
+#[test]
+fn a_project_with_no_systems_exports_as_before() {
+    let mut ws = workspace();
+    let c = add_component(&mut ws, "Lone ECU", None);
+    add_parts(&mut ws, c, "Lone ECU");
+    let bytes = report_workbook_xlsx_in(&ws, &[], &SystemView::all());
+    assert_eq!(bytes, report_workbook_xlsx(&ws));
+    let book = read_workbook(&bytes).expect("reads");
+    for s in &book.sheets {
+        assert!(!s.headers.iter().any(|h| h == "Systems"), "{}", s.name);
+    }
+    // A stale filter changes nothing either.
+    let named = workbook(&ws, &["Brake"]);
+    assert_eq!(named, book);
+}
+
+#[test]
+fn a_filtered_workbook_holds_only_the_filter() {
+    let ws = fixture();
+    let book = workbook(&ws, &["Brake"]);
+    let n = ws.project().methodology().element_names();
+    let overview = sheet(&book, "Overview");
+    for (plural, at) in [
+        (n.component.plural.to_string(), 0),
+        (n.asset.plural.to_string(), 2),
+        (n.threat_scenario.plural.to_string(), 3),
+    ] {
+        let s = sheet(&book, &plural);
+        let names = names_in(s);
+        assert!(names.contains(&BRAKE_ONLY[at].to_owned()), "{plural}");
+        assert!(names.contains(&NO_SYSTEM[at].to_owned()), "{plural}");
+        assert!(!names.contains(&ADAS_ONLY[at].to_owned()), "{plural}");
+        let count = overview
+            .rows
+            .iter()
+            .find(|(_, r)| cell(r, 0) == plural)
+            .map(|(_, r)| cell(r, 1).to_owned())
+            .expect("overview row");
+        assert_eq!(count, s.rows.len().to_string(), "{plural}");
+    }
+    // The whole workbook still holds the ADAS rows.
+    let all = workbook(&ws, &[]);
+    assert!(names_in(sheet(&all, &n.component.plural)).contains(&ADAS_ONLY[0].to_owned()));
+}
