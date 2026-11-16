@@ -412,7 +412,7 @@
     },
     {
       "id": "024-cybersecurity-goals-and-claims",
-      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 §15.4)",
+      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 \u00a715.4)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1121,7 +1121,7 @@
     },
     {
       "id": "115-row-actions",
-      "title": "Row actions in tables: DataTable, + and ⋯ actions, keyboard, read-only, 5,000-row check (UI-09)",
+      "title": "Row actions in tables: DataTable, + and \u22ef actions, keyboard, read-only, 5,000-row check (UI-09)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1755,6 +1755,114 @@
       ],
       "decision": null,
       "updated": "2026-11-16T04:30:35Z"
+    },
+    {
+      "id": "120-system-overview",
+      "title": "Combined view across systems",
+      "branch": "factory/120-system-overview",
+      "stage": "merged",
+      "slice": "120h",
+      "base": "5e49ce1abf2388bc9812c02f64cfe25b4a6f8b40",
+      "reviews": {
+        "slice": "120h",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "120a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 88
+        },
+        {
+          "slice": "120a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 88
+        },
+        {
+          "slice": "120b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "unknown",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 211
+        },
+        {
+          "slice": "120c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 51
+        },
+        {
+          "slice": "120d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 169
+        },
+        {
+          "slice": "120e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 189
+        },
+        {
+          "slice": "120f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 208
+        },
+        {
+          "slice": "120g",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 177
+        },
+        {
+          "slice": "120h",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 32
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-16T11:27:10Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
