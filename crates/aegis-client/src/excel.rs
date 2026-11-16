@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::io::Read as _;
 
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, GoalId, Methodology, Op, Project,
-    PropertySet, Provenance, RiskTreatment, ThreatId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, ElementId, ElementKind, GoalId,
+    Methodology, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
 };
 
 /// Maximum `.xlsx` archive size in bytes (16 MiB).
@@ -80,6 +80,8 @@ pub struct ExcelMapping {
     pub sheet: Option<String>,
     /// Column index for Component name.
     pub component_col: Option<usize>,
+    /// Column index for the System name of the row's component.
+    pub system_col: Option<usize>,
     /// Column index for Asset name.
     pub asset_col: Option<usize>,
     /// Column index for comma-separated security properties.
@@ -119,6 +121,9 @@ impl ExcelMapping {
             match h.as_str() {
                 "component" | "components" | "コンポーネント" => {
                     m.component_col.get_or_insert(idx);
+                }
+                "system" | "systems" | "システム" => {
+                    m.system_col.get_or_insert(idx);
                 }
                 "asset" | "assets" | "資産" => {
                     m.asset_col.get_or_insert(idx);
@@ -248,6 +253,8 @@ pub struct ExcelPreview {
     pub mapped_rows: usize,
     /// Number of new components in the batch.
     pub components_to_add: usize,
+    /// Number of new systems in the batch.
+    pub systems_to_add: usize,
     /// Number of new assets in the batch.
     pub assets_to_add: usize,
     /// Number of new damage scenarios in the batch.
@@ -274,9 +281,10 @@ impl ExcelPreview {
     #[must_use]
     pub fn summary(&self) -> String {
         format!(
-            "{} row(s) mapped ({} component(s), {} asset(s), {} damage(s), {} threat(s), {} control(s), {} goal(s), {} claim(s), {} link/update operation(s)); {} unmapped row(s).",
+            "{} row(s) mapped ({} component(s), {} system(s), {} asset(s), {} damage(s), {} threat(s), {} control(s), {} goal(s), {} claim(s), {} link/update operation(s)); {} unmapped row(s).",
             self.mapped_rows,
             self.components_to_add,
+            self.systems_to_add,
             self.assets_to_add,
             self.damages_to_add,
             self.threats_to_add,
@@ -1008,6 +1016,10 @@ pub fn preview_import(
         .components()
         .map(|(_, id, c)| (c.name().to_lowercase(), id))
         .collect();
+    let mut systems: HashMap<String, ElementId> = project
+        .elements(ElementKind::System)
+        .map(|(id, e)| (e.name().to_lowercase(), id))
+        .collect();
     let mut assets: HashMap<String, AssetId> = project
         .assets()
         .map(|(_, id, a)| (a.name().to_lowercase(), id))
@@ -1045,6 +1057,7 @@ pub fn preview_import(
 
     for (row_num, row) in &sheet.rows {
         let comp_name = cell_at(row, effective_mapping.component_col);
+        let system_name = cell_at(row, effective_mapping.system_col).trim();
         let asset_name = cell_at(row, effective_mapping.asset_col);
         let props_text = cell_at(row, effective_mapping.properties_col);
         let damage_name = cell_at(row, effective_mapping.damage_col);
@@ -1129,6 +1142,38 @@ pub fn preview_import(
         } else {
             None
         };
+
+        let mut system_added = 0usize;
+        let mut system_target = None;
+        if let Some(cid) = comp_id.filter(|_| !system_name.is_empty()) {
+            let target = if let Some(&existing) = systems.get(&system_name.to_lowercase()) {
+                existing
+            } else {
+                let id = ElementId::new_v7();
+                row_ops.push(Op::AddElement {
+                    id,
+                    kind: ElementKind::System,
+                    name: system_name.into(),
+                    provenance: prov.clone(),
+                });
+                system_added += 1;
+                id
+            };
+            let current = if comp_added > 0 {
+                None
+            } else {
+                sim.component_idx(&cid)
+                    .and_then(|i| sim.component_system(i))
+            };
+            if current != Some(target) {
+                row_ops.push(Op::SetComponentSystem {
+                    id: cid,
+                    system: Some(target),
+                    provenance: prov.clone(),
+                });
+            }
+            system_target = Some(target);
+        }
 
         let row_threat_cat = if !threat_name.is_empty() {
             parse_threat_category(m, cat_text)
@@ -1433,6 +1478,9 @@ pub fn preview_import(
         if let Some(cid) = comp_id {
             components.insert(comp_name.to_lowercase(), cid);
         }
+        if let Some(sid) = system_target {
+            systems.insert(system_name.to_lowercase(), sid);
+        }
         if let Some(aid) = asset_id {
             assets.insert(asset_name.to_lowercase(), aid);
             if !threat_name.is_empty() {
@@ -1460,6 +1508,7 @@ pub fn preview_import(
 
         preview.mapped_rows += 1;
         preview.components_to_add += comp_added;
+        preview.systems_to_add += system_added;
         preview.assets_to_add += asset_added;
         preview.damages_to_add += damage_added;
         preview.threats_to_add += threat_added;
@@ -1473,6 +1522,7 @@ pub fn preview_import(
                     op,
                     Op::SetAssetProperties { .. }
                         | Op::SetAssetComponent { .. }
+                        | Op::SetComponentSystem { .. }
                         | Op::SetImpact { .. }
                         | Op::LinkDamage { .. }
                         | Op::SetThreatFeasibility { .. }

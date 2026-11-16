@@ -56,8 +56,8 @@ use crate::error::{ClientError, ServerCode};
 use crate::pages;
 use crate::report::{
     ExportKind, FigureAttachment, ReportContext, ReportOptions, ReportProfile,
-    report_html_with_options, report_pdf_with_options, report_workbook_xlsx_with_figures,
-    risk_register_csv, tree_svg,
+    report_html_with_options, report_pdf_with_options, report_workbook_xlsx_in, risk_register_csv,
+    tree_svg,
 };
 use crate::sample::sample_ops;
 use crate::state::{
@@ -1381,6 +1381,11 @@ impl<P: CredentialProvider> Actor<P> {
         let (epoch, id) = (open.epoch, open.id.clone());
         let conn = self.conn.clone();
         let events = self.events.clone();
+        // Only live systems reach the audit detail and the report.
+        profile.filters.systems = crate::systems::view_names(
+            open.ws.project(),
+            &crate::systems::view_of_names(open.ws.project(), &profile.filters.systems),
+        );
         let detail = profile.audit_summary();
         tokio::spawn(async move {
             // Building and writing are both blocking work (R5).
@@ -1397,9 +1402,10 @@ impl<P: CredentialProvider> Actor<P> {
                     ExportKind::ReportPdf => {
                         Some(report_pdf_with_options(&ws, &ctx, &opts).map_err(|e| e.to_string())?)
                     }
-                    ExportKind::ReportXlsx => Some(report_workbook_xlsx_with_figures(
+                    ExportKind::ReportXlsx => Some(report_workbook_xlsx_in(
                         &ws,
                         &opts.profile.figures,
+                        &crate::systems::view_of_names(ws.project(), &opts.profile.filters.systems),
                     )),
                     ExportKind::RiskRegister => Some(risk_register_csv(&ws, &ctx).into_bytes()),
                     ExportKind::TreeSvg => tree
