@@ -433,6 +433,8 @@ pub fn report_workbook_xlsx_in(
     let names = p.methodology().element_names();
     let vocab = pages::vocabulary(p.methodology());
     let mut sheets = Vec::new();
+    // Data rows of each element sheet, in Overview order (121b).
+    let mut counts: Vec<usize> = Vec::new();
     let has_item = p.component_count() > 0
         || p.interface_count() > 0
         || p.data_flow_count() > 0
@@ -508,6 +510,7 @@ pub fn report_workbook_xlsx_in(
             ]);
             end_row(&mut comps, cell);
         }
+        counts.push(comps.len().saturating_sub(1));
         sheets.push(Sheet {
             name: sheet_name(&names.component.plural),
             rows: comps,
@@ -534,6 +537,7 @@ pub fn report_workbook_xlsx_in(
             ]);
             end_row(&mut ifaces, cell);
         }
+        counts.push(ifaces.len().saturating_sub(1));
         sheets.push(Sheet {
             name: sheet_name(&names.interface.plural),
             rows: ifaces,
@@ -554,6 +558,7 @@ pub fn report_workbook_xlsx_in(
             flows.push(vec![df.visual_id, df.name, df.from, df.to, df.interface]);
             end_row(&mut flows, cell);
         }
+        counts.push(flows.len().saturating_sub(1));
         sheets.push(Sheet {
             name: sheet_name(&names.data_flow.plural),
             rows: flows,
@@ -573,6 +578,7 @@ pub fn report_workbook_xlsx_in(
             bounds.push(vec![tb.visual_id, tb.name, tb.members.to_string()]);
             end_row(&mut bounds, cell);
         }
+        counts.push(bounds.len().saturating_sub(1));
         sheets.push(Sheet {
             name: sheet_name(&names.trust_boundary.plural),
             rows: bounds,
@@ -625,6 +631,7 @@ pub fn report_workbook_xlsx_in(
         assets.push(row);
         end_row(&mut assets, cell);
     }
+    counts.push(assets.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.asset.plural),
         rows: assets,
@@ -662,6 +669,7 @@ pub fn report_workbook_xlsx_in(
         damage.push(row);
         end_row(&mut damage, cell);
     }
+    counts.push(damage.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.damage_scenario.plural),
         rows: damage,
@@ -727,6 +735,7 @@ pub fn report_workbook_xlsx_in(
         ]);
         end_row(&mut threats, cell);
     }
+    counts.push(threats.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.threat_scenario.plural),
         rows: threats,
@@ -754,6 +763,7 @@ pub fn report_workbook_xlsx_in(
         ]);
         end_row(&mut trees, cell);
     }
+    counts.push(trees.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.attack_tree.plural),
         rows: trees,
@@ -814,6 +824,7 @@ pub fn report_workbook_xlsx_in(
         ]);
         end_row(&mut controls, cell);
     }
+    counts.push(controls.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.security_control.plural),
         rows: controls,
@@ -839,6 +850,7 @@ pub fn report_workbook_xlsx_in(
         ]);
         end_row(&mut goals, cell);
     }
+    counts.push(goals.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.cybersecurity_goal.plural),
         rows: goals,
@@ -857,6 +869,7 @@ pub fn report_workbook_xlsx_in(
         claims.push(vec![c.visual_id, c.name, c.threats.to_string()]);
         end_row(&mut claims, cell);
     }
+    counts.push(claims.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.cybersecurity_claim.plural),
         rows: claims,
@@ -909,29 +922,19 @@ pub fn report_workbook_xlsx_in(
         });
     }
 
-    if sys.scope.is_on() {
-        recount(&mut sheets);
+    // Each Overview row (after the header) takes the data-row count of its
+    // own sheet, by position, so repeated methodology names cannot mix them.
+    if sys.scope.is_on()
+        && let Some(overview) = sheets.first_mut()
+    {
+        for (row, count) in overview.rows.iter_mut().skip(1).zip(&counts) {
+            if let Some(cell) = row.get_mut(1) {
+                *cell = count.to_string();
+            }
+        }
     }
     unique_names(&mut sheets);
     workbook_bytes(&sheets)
-}
-
-/// Sets each Overview count (the first sheet) to the number of data rows
-/// of the sheet named for it, so a filtered workbook agrees with itself.
-/// Time O(sheets^2).
-fn recount(sheets: &mut [Sheet]) {
-    let Some((overview, rest)) = sheets.split_first_mut() else {
-        return;
-    };
-    for row in overview.rows.iter_mut().skip(1) {
-        let Some(label) = row.first().map(|l| sheet_name(l)) else {
-            continue;
-        };
-        if let (Some(sheet), Some(count)) = (rest.iter().find(|s| s.name == label), row.get_mut(1))
-        {
-            *count = sheet.rows.len().saturating_sub(1).to_string();
-        }
-    }
 }
 
 /// The risk register alone, one sheet. Time O(threats log threats).

@@ -10,8 +10,9 @@ use aegis_client::report::{
 };
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, ElementKind, GoalId,
-    InterfaceId, ItemRef, Methodology, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, ElementKind,
+    ElementNameDef, GoalId, InterfaceId, ItemRef, Methodology, MethodologyDef, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 
 fn workspace() -> Workspace {
@@ -145,7 +146,11 @@ fn add_control(ws: &mut Workspace, name: &str, targets: &[ComponentId]) {
 /// Brake and ADAS, each with a component, an interface, an asset and a
 /// threat, plus a component in no system with the same.
 fn fixture() -> Workspace {
-    let mut ws = workspace();
+    fixture_in(workspace())
+}
+
+/// The same fixture in `ws`, an empty workspace of any methodology.
+fn fixture_in(mut ws: Workspace) -> Workspace {
     let brake = add_system(&mut ws, "Brake");
     let adas = add_system(&mut ws, "ADAS");
     let brake_ecu = add_component(&mut ws, "Brake ECU", Some(brake));
@@ -674,7 +679,34 @@ fn a_project_with_no_systems_exports_as_before() {
 
 #[test]
 fn a_filtered_workbook_holds_only_the_filter() {
-    let ws = fixture();
+    let mut ws = fixture();
+    // A step under the ADAS-only tree, for the Attack steps sheet.
+    let (_, tree, _) = ws.project().attack_trees().next().expect("tree");
+    run(
+        &mut ws,
+        &Edit::ReplaceTree {
+            tree,
+            outline: "OR ADAS only blinding\n  - Shine a laser at the lens\n".into(),
+        },
+    );
+    // A data flow inside ADAS, for the data flows sheet.
+    let project = ws.project();
+    let (cam, adas) = project
+        .components()
+        .find(|(_, _, c)| c.name() == ADAS_ONLY[0])
+        .map(|(idx, id, _)| (id, project.component_system(idx)))
+        .expect("ADAS camera");
+    let radar = add_component(&mut ws, "ADAS only radar", adas);
+    run(
+        &mut ws,
+        &Edit::AddDataFlow {
+            id: DataFlowId::new_v7(),
+            name: "ADAS only radar feed".into(),
+            from: radar,
+            to: cam,
+            interface: None,
+        },
+    );
     let book = workbook(&ws, &["Brake"]);
     let n = ws.project().methodology().element_names();
     let overview = sheet(&book, "Overview");
@@ -699,4 +731,94 @@ fn a_filtered_workbook_holds_only_the_filter() {
     // The whole workbook still holds the ADAS rows.
     let all = workbook(&ws, &[]);
     assert!(names_in(sheet(&all, &n.component.plural)).contains(&ADAS_ONLY[0].to_owned()));
+
+    // Every sheet but the Overview: an ADAS-only name shows somewhere in the
+    // whole workbook and nowhere in the Brake one.
+    let holds = |book: &WorkbookData, name: &str| -> Vec<String> {
+        let mut at = Vec::new();
+        for s in book.sheets.iter().filter(|s| s.name != "Overview") {
+            for (_, row) in &s.rows {
+                for (col, text) in row.iter().enumerate() {
+                    // The Brake data flow goes to the ADAS camera.
+                    let to_adas = s.name == *n.data_flow.plural && col == 3;
+                    if text == name && !to_adas {
+                        at.push(s.name.clone());
+                    }
+                }
+            }
+        }
+        at
+    };
+    for name in ADAS_ONLY
+        .iter()
+        .chain(&["ADAS only radar", "ADAS only radar feed"])
+    {
+        assert!(
+            !holds(&all, name).is_empty(),
+            "{name} not in the whole book"
+        );
+        assert_eq!(holds(&book, name), Vec::<String>::new(), "{name}");
+    }
+    let tree_rows = |book: &WorkbookData| {
+        sheet(book, "Attack steps")
+            .rows
+            .iter()
+            .filter(|(_, r)| cell(r, 1) == "ADAS only blinding")
+            .count()
+    };
+    assert!(tree_rows(&all) > 0);
+    assert_eq!(tree_rows(&book), 0);
+    // Problems name the element they are about.
+    let adas_problems = |book: &WorkbookData| {
+        sheet(book, "Problems")
+            .rows
+            .iter()
+            .filter(|(_, r)| cell(r, 1).contains(ADAS_ONLY[0]))
+            .count()
+    };
+    assert!(adas_problems(&all) > 0);
+    assert_eq!(adas_problems(&book), 0);
+}
+
+#[test]
+fn each_overview_count_is_its_own_sheet_when_two_kinds_share_a_name() {
+    let mut def =
+        MethodologyDef::read_pack(Methodology::iso21434_r155_pack().as_bytes()).expect("pack");
+    def.element_names.cybersecurity_goal = ElementNameDef::new("Requirement", "Requirements");
+    def.element_names.cybersecurity_claim = ElementNameDef::new("Requirement", "Requirements");
+    let m = Arc::new(Methodology::new(def).expect("valid"));
+    let mut ws = fixture_in(Workspace::empty(m));
+    // A Brake claim: the Brake view keeps one claim and no goal.
+    let brake_t = ws
+        .project()
+        .threat_scenarios()
+        .find(|(_, _, t)| t.name() == "Brake ECU attack")
+        .map(|(_, id, _)| id)
+        .expect("brake threat");
+    let claim = ClaimId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddClaim {
+            id: claim,
+            name: "Brake pads are checked".into(),
+        },
+    );
+    run(
+        &mut ws,
+        &Edit::SetThreatClaim {
+            threat: brake_t,
+            claim: Some(claim),
+        },
+    );
+    let book = workbook(&ws, &["Brake"]);
+    let counts: Vec<String> = sheet(&book, "Overview")
+        .rows
+        .iter()
+        .filter(|(_, r)| cell(r, 0) == "Requirements")
+        .map(|(_, r)| cell(r, 1).to_owned())
+        .collect();
+    let goals = sheet(&book, "Requirements").rows.len();
+    let claims = sheet(&book, "Requirements (2)").rows.len();
+    assert_eq!((goals, claims), (0, 1));
+    assert_eq!(counts, vec![goals.to_string(), claims.to_string()]);
 }
