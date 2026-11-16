@@ -1,7 +1,7 @@
 //! The project: assets, damage scenarios, threat scenarios, and attack
 //! trees over one methodology, changed only through typed [`Op`]s.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::asset::{Asset, PropertySet};
@@ -5435,6 +5435,7 @@ impl Project {
         self.lint_threats(&mut findings);
         self.lint_trees(&mut findings);
         self.lint_controls(&mut findings);
+        self.lint_setting_conflicts(&mut findings);
         self.lint_goals(&mut findings);
         self.lint_claims(&mut findings);
         self.lint_data_flows(&mut findings);
@@ -5670,6 +5671,54 @@ impl Project {
             if self.control_differs_from_kind(idx) {
                 findings.push(LintFinding::new(LintCode::ControlRulesDifferFromKind {
                     control: id,
+                }));
+            }
+        }
+    }
+
+    /// Lints conflicting setting presets applied to the same target (CFG-09).
+    /// Time O(C * T + K * F), C live controls with T <= 64 targets each,
+    /// F <= 64 declared conflicts per preset; space O(K + P), P pairs found.
+    fn lint_setting_conflicts(&self, findings: &mut Vec<LintFinding>) {
+        // Early-return when no preset declares any conflict.
+        let any_conflict = self
+            .methodology
+            .control_kinds()
+            .any(|k| !self.methodology.control_kind_conflicts(k).is_empty());
+        if !any_conflict {
+            return;
+        }
+        // Build per-target set of kinds.
+        let mut by_target: BTreeMap<ItemIdx, BTreeSet<ControlKind>> = BTreeMap::new();
+        for (_idx, _id, control) in self.controls.iter() {
+            if let Some(kind) = control.kind {
+                for &t in &control.targets {
+                    by_target.entry(t).or_default().insert(kind);
+                }
+            }
+        }
+        for (target, kinds) in &by_target {
+            let mut pairs: BTreeSet<(ControlKind, ControlKind)> = BTreeSet::new();
+            for &k in kinds {
+                for &other in self.methodology.control_kind_conflicts(k) {
+                    if kinds.contains(&other) {
+                        let (a, b) = if k.index() < other.index() {
+                            (k, other)
+                        } else {
+                            (other, k)
+                        };
+                        pairs.insert((a, b));
+                    }
+                }
+            }
+            for (first, second) in pairs {
+                let Some(item) = self.item_ref(Some(*target)) else {
+                    continue;
+                };
+                findings.push(LintFinding::new(LintCode::ConflictingSettings {
+                    item,
+                    first,
+                    second,
                 }));
             }
         }

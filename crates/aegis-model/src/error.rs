@@ -1611,6 +1611,30 @@ pub enum MethodologyError {
         /// The repeated interface kind key.
         interface_kind: Arc<str>,
     },
+    /// A control kind names an unknown control kind in `conflicts_with`.
+    #[error(
+        "control kind {control_kind:?} names an unknown control kind {other:?} in conflicts_with"
+    )]
+    UnknownControlKindConflict {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The unknown control kind key, cut like [`InvalidKey`](Self::InvalidKey)'s.
+        other: Arc<str>,
+    },
+    /// A control kind lists the same control kind twice in `conflicts_with`.
+    #[error("control kind {control_kind:?} lists control kind {other:?} twice in conflicts_with")]
+    RepeatedControlKindConflict {
+        /// The preset key.
+        control_kind: Arc<str>,
+        /// The repeated control kind key.
+        other: Arc<str>,
+    },
+    /// A control kind lists itself in `conflicts_with`.
+    #[error("control kind {control_kind:?} lists itself in conflicts_with")]
+    ControlKindConflictsWithItself {
+        /// The preset key.
+        control_kind: Arc<str>,
+    },
     /// More than `max` language translations are declared in a pack.
     #[error("more than {max} pack translations")]
     TooManyTranslations {

@@ -15,8 +15,8 @@ use aegis_client::report::{ReportContext, report_html, risk_register_csv, tree_s
 use aegis_client::view::{Selection, UiState, inspector, shown_tree};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, GoalId, ItemRef, Methodology, NodeId,
-    Project, ThreatId, TreeId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, GoalId, ItemRef, Methodology,
+    MethodologyDef, NodeId, Project, ThreatId, TreeId,
 };
 
 struct Tara {
@@ -500,6 +500,63 @@ fn problems_name_what_is_wrong_and_where() {
         .position(|p| !p.error)
         .unwrap_or(problems.len());
     assert!(problems[first_warning..].iter().all(|p| !p.error));
+}
+
+#[test]
+fn problems_setting_conflicts_row() {
+    let mut def =
+        MethodologyDef::read_pack(Methodology::iso21434_r155_pack().as_bytes()).expect("pack");
+    // pick first two control_kinds with empty interface_kinds
+    let picks: Vec<usize> = def
+        .element_names
+        .control_kinds
+        .iter()
+        .enumerate()
+        .filter(|(_, k)| k.interface_kinds.is_empty())
+        .map(|(i, _)| i)
+        .collect();
+    assert!(picks.len() >= 2);
+    let (a, b) = (picks[0], picks[1]);
+    def.element_names.control_kinds[a].conflicts_with =
+        vec![def.element_names.control_kinds[b].key.clone()];
+    let m = Arc::new(Methodology::new(def).expect("valid"));
+    let mut ws = Workspace::empty(m);
+    let ecu = ComponentId::new_v7();
+    apply(
+        &mut ws,
+        &Edit::AddComponent {
+            id: ecu,
+            name: "Gateway ECU".into(),
+            parent: None,
+        },
+    );
+    let id1 = ControlId::new_v7();
+    let id2 = ControlId::new_v7();
+    apply(
+        &mut ws,
+        &Edit::AddPresetSetting {
+            id: id1,
+            kind: a,
+            name: "s1".into(),
+            target: ItemRef::Component(ecu),
+        },
+    );
+    apply(
+        &mut ws,
+        &Edit::AddPresetSetting {
+            id: id2,
+            kind: b,
+            name: "s2".into(),
+            target: ItemRef::Component(ecu),
+        },
+    );
+    let problems = pages::problems(&ws);
+    let row = problems
+        .iter()
+        .find(|p| p.text.contains("that the pack says conflict"))
+        .expect("row");
+    assert!(!row.error);
+    assert!(matches!(row.target, Some(Selection::Component(_))));
 }
 
 #[test]
