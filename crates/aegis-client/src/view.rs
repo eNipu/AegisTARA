@@ -173,6 +173,58 @@ impl PageGroup {
     }
 }
 
+/// A key naming a relation between two entity kinds, used by `Links` columns.
+pub type RelationKey = &'static str;
+
+/// The kind of a table column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColumnKind {
+    /// Stable ID column.
+    Id,
+    /// Name column.
+    Name,
+    /// A column linking to a related entity kind.
+    Links(RelationKey),
+    /// A computed (read-only) value column.
+    Computed,
+    /// A rating column.
+    Rating,
+    /// Free text column.
+    Text,
+}
+
+impl ColumnKind {
+    /// Whether the column's value can be edited in place.
+    #[must_use]
+    pub fn editable(self) -> bool {
+        !matches!(self, Self::Id | Self::Computed)
+    }
+}
+
+/// Specification of one column in a table page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColumnSpec {
+    /// The column's kind.
+    pub kind: ColumnKind,
+    /// Fluent label key.
+    pub label: &'static str,
+    /// Width in pixels (or arbitrary units).
+    pub width: u16,
+    /// Whether the column is visible.
+    pub visible: bool,
+}
+
+/// The layout a page uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageLayout {
+    /// A table with the given column specification.
+    Table(&'static [ColumnSpec]),
+    /// A free-form canvas.
+    Canvas,
+    /// A custom layout.
+    Custom,
+}
+
 impl Page {
     /// Every page, in menu and sidebar order: the analysis in the order of
     /// its phases, item definition first (UI-13).
@@ -219,6 +271,27 @@ impl Page {
     #[must_use]
     pub fn from_index(i: usize) -> Option<Page> {
         Page::ALL.get(i).copied()
+    }
+
+    /// The page's layout.
+    #[must_use]
+    pub fn layout(self) -> PageLayout {
+        match self {
+            Page::Damage => PageLayout::Table(DAMAGE_COLUMNS),
+            Page::Assets => PageLayout::Table(ASSET_COLUMNS),
+            Page::Threats => PageLayout::Table(THREAT_COLUMNS),
+            Page::Risks => PageLayout::Table(RISK_COLUMNS),
+            Page::Controls => PageLayout::Table(CONTROL_COLUMNS),
+            Page::Goals => PageLayout::Table(GOAL_COLUMNS),
+            Page::Problems => PageLayout::Table(PROBLEM_COLUMNS),
+            Page::Item | Page::Trees => PageLayout::Canvas,
+            Page::Overview
+            | Page::Scope
+            | Page::Reports
+            | Page::Versions
+            | Page::History
+            | Page::Admin => PageLayout::Custom,
+        }
     }
 
     /// The title.
@@ -1503,3 +1576,228 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         can_move_down,
     })
 }
+
+pub static ASSET_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec {
+        kind: ColumnKind::Id,
+        label: "column.id",
+        width: 60,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Name,
+        label: "column.name",
+        width: 160,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Links("asset-component"),
+        label: "column.component",
+        width: 120,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.threats",
+        width: 80,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.worst-risk",
+        width: 100,
+        visible: true,
+    },
+];
+
+pub static DAMAGE_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec {
+        kind: ColumnKind::Id,
+        label: "column.id",
+        width: 60,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Name,
+        label: "column.name",
+        width: 160,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Rating,
+        label: "column.impact",
+        width: 100,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.threats",
+        width: 80,
+        visible: true,
+    },
+];
+
+pub static THREAT_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec {
+        kind: ColumnKind::Id,
+        label: "column.id",
+        width: 60,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Name,
+        label: "column.name",
+        width: 160,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Links("threat-asset"),
+        label: "column.asset",
+        width: 120,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Links("threat-damage"),
+        label: "column.damage",
+        width: 120,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.inherent",
+        width: 90,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.residual",
+        width: 90,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Rating,
+        label: "column.scales",
+        width: 80,
+        visible: true,
+    },
+];
+
+pub static RISK_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec {
+        kind: ColumnKind::Id,
+        label: "column.id",
+        width: 60,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Name,
+        label: "column.name",
+        width: 160,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.inherent",
+        width: 90,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.residual",
+        width: 90,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Text,
+        label: "column.treatment",
+        width: 120,
+        visible: true,
+    },
+];
+
+pub static CONTROL_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec {
+        kind: ColumnKind::Id,
+        label: "column.id",
+        width: 60,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Name,
+        label: "column.name",
+        width: 160,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.steps",
+        width: 80,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.goals",
+        width: 80,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.lowers",
+        width: 80,
+        visible: true,
+    },
+];
+
+pub static GOAL_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec {
+        kind: ColumnKind::Id,
+        label: "column.id",
+        width: 60,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Name,
+        label: "column.name",
+        width: 160,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Links("goal-controls"),
+        label: "column.controls",
+        width: 120,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Computed,
+        label: "column.threats",
+        width: 80,
+        visible: true,
+    },
+];
+
+pub static PROBLEM_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec {
+        kind: ColumnKind::Id,
+        label: "column.id",
+        width: 60,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Name,
+        label: "column.name",
+        width: 160,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Text,
+        label: "column.severity",
+        width: 100,
+        visible: true,
+    },
+    ColumnSpec {
+        kind: ColumnKind::Text,
+        label: "column.message",
+        width: 240,
+        visible: true,
+    },
+];
