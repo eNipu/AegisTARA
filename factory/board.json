@@ -1863,6 +1863,54 @@
       ],
       "decision": null,
       "updated": "2026-11-16T11:33:11Z"
+    },
+    {
+      "id": "121-system-reports",
+      "title": "Reports and exports by system",
+      "branch": "factory/121-system-reports",
+      "stage": "merged",
+      "slice": "121c",
+      "base": "5b11bfb7105efa082c1e9ad0fcb0ed99bc48e39f",
+      "reviews": {
+        "slice": "121c",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "121a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 266
+        },
+        {
+          "slice": "121b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 2,
+          "lines": 219
+        },
+        {
+          "slice": "121c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 56
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-16T14:57:30Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

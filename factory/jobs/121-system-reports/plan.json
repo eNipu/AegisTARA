@@ -1,0 +1,66 @@
+{
+  "job": "121-system-reports",
+  "slices": [
+    {
+      "id": "121a",
+      "title": "A systems filter in the report profile, the audit detail, the cover and every report section",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/report/profile.rs",
+        "crates/aegis-client/src/report/doc.rs",
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/system_reports.rs",
+        "factory/jobs/121-system-reports/slices/121a/*"
+      ],
+      "max_lines": 360,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test system_reports --test report_builder --test reduced_by_report",
+        "cargo check --locked -p aegis-shell"
+      ]
+    },
+    {
+      "id": "121b",
+      "title": "A Systems column and the systems filter in the XLSX workbook",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/report/xlsx.rs",
+        "crates/aegis-client/src/report/mod.rs",
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/tests/system_reports.rs",
+        "factory/jobs/121-system-reports/slices/121b/*"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test system_reports --test report_builder --test reduced_by_report --test pages",
+        "cargo check --locked -p aegis-shell"
+      ]
+    },
+    {
+      "id": "121c",
+      "title": "A System column in the Excel import",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/excel.rs",
+        "crates/aegis-client/tests/system_reports.rs",
+        "factory/jobs/121-system-reports/slices/121c/*"
+      ],
+      "max_lines": 200,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test system_reports --test report_builder --test reduced_by_report",
+        "cargo test --locked -p aegis-client --lib excel"
+      ]
+    }
+  ]
+}
