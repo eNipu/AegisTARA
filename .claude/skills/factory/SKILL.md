@@ -86,7 +86,9 @@ Pass `model` on every spawn; it overrides the agent file.
 | reviewer | opencode-go/qwen4-max (`high` risk), opencode-go/glm-5.3 (`normal`) |
 
 Owner directive 2026-11-16: no Claude models in this factory; pick from the table by the
-slice's `tier` and `risk` in `plan.json`.
+slice's `tier` and `risk` in `plan.json`. If the Go paid quota is exhausted, fall back to a
+free model (for example `opencode-go/longcat-2.5-free`) and note it in the report; the gate
+and reviewer still judge the work.
 
 **Outside models:** a build prompt is a complete task on its own, so the owner can run
 `factory/jobs/<job-id>/prompts/<slice>.md` in any other session or tool, inside
