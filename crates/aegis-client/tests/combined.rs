@@ -4,10 +4,15 @@ use std::sync::Arc;
 
 use aegis_client::combined::boundary_flows;
 use aegis_client::commands::Edit;
-use aegis_client::pages::{data_flow_detail, data_flow_rows};
-use aegis_client::systems::system_rows;
+use aegis_client::pages::{data_flow_detail, data_flow_rows, risk_rows};
+use aegis_client::state::PageData;
+use aegis_client::systems::{SystemView, filter_page, system_rows};
+use aegis_client::view::{Page, UiState, inspector, tree_scene};
 use aegis_client::workspace::{Origin, Workspace};
-use aegis_model::{AssetId, ComponentId, DataFlowId, ElementId, Methodology, ThreatId};
+use aegis_model::{
+    AssetId, ComponentId, ControlId, DataFlowId, ElementId, InterfaceId, ItemRef, Methodology,
+    NodeId, ThreatId, TreeId,
+};
 
 fn workspace() -> Workspace {
     Workspace::empty(Arc::new(Methodology::iso21434_r155().expect("builtin")))
@@ -196,4 +201,224 @@ fn no_systems_means_no_boundary() {
     for r in data_flow_rows(&ws) {
         assert_eq!(r.boundary, None);
     }
+}
+
+// Steps that leave their tree's systems (120c).
+
+struct Via {
+    ws: Workspace,
+    brake: ElementId,
+    tree: TreeId,
+    threat: ThreatId,
+    gw: ComponentId,
+    obd: InterfaceId,
+    brake_ecu: ComponentId,
+    step: NodeId,
+}
+
+/// A tree with one step "Open port", linked to a threat on a Brake component
+/// when `linked`; GW is in Gateway and has an interface OBD.
+fn via_fixture(linked: bool, systems: bool) -> Via {
+    let mut ws = workspace();
+    let (brake, gateway) = if systems {
+        (add_system(&mut ws, "Brake"), add_system(&mut ws, "Gateway"))
+    } else {
+        (ElementId::new_v7(), ElementId::new_v7())
+    };
+    let sys = |id: ElementId| systems.then_some(id);
+    let brake_ecu = add_component(&mut ws, "ESC ECU", None, sys(brake));
+    let gw = add_component(&mut ws, "GW", None, sys(gateway));
+    let obd = InterfaceId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddInterface {
+            id: obd,
+            name: "OBD".into(),
+            component: gw,
+            kind: 0,
+        },
+    );
+    let asset = AssetId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddAssetBound {
+            id: asset,
+            name: "Data".into(),
+            properties: (0..6).collect(),
+            component: brake_ecu,
+        },
+    );
+    let threat = ThreatId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddThreat {
+            id: threat,
+            name: "Attack".into(),
+            asset,
+            category: 0,
+        },
+    );
+    let tree = TreeId::new_v7();
+    run(
+        &mut ws,
+        &Edit::NewTree {
+            id: tree,
+            root: "Goal".into(),
+            threat: linked.then_some(threat),
+        },
+    );
+    run(
+        &mut ws,
+        &Edit::ReplaceTree {
+            tree,
+            outline: "OR Goal\n  - Open port\n".into(),
+        },
+    );
+    let step = {
+        let p = ws.project();
+        let t = p
+            .attack_tree_idx(&tree)
+            .and_then(|i| p.attack_tree(i))
+            .expect("tree");
+        t.iter()
+            .find(|(_, _, n)| n.label() == "Open port")
+            .map(|(_, i, _)| i)
+            .expect("step")
+    };
+    Via {
+        ws,
+        brake,
+        tree,
+        threat,
+        gw,
+        obd,
+        brake_ecu,
+        step,
+    }
+}
+
+fn set_via(fx: &mut Via, via: ItemRef) {
+    run(
+        &mut fx.ws,
+        &Edit::SetStepVia {
+            tree: fx.tree,
+            node: fx.step,
+            via: Some(via),
+        },
+    );
+}
+
+fn chip(fx: &Via) -> Option<String> {
+    let scene = tree_scene(&fx.ws, fx.tree, false).expect("scene");
+    let v = (0..u32::try_from(scene.len()).expect("len"))
+        .find(|&v| scene.label(v) == "Open port")
+        .expect("vertex");
+    scene.style(v).and_then(|s| s.via.clone())
+}
+
+fn through_system(fx: &Via) -> Option<String> {
+    let ui = UiState {
+        selected_tree: Some(fx.tree),
+        selected_node: Some(fx.step),
+        ..Default::default()
+    };
+    inspector(&fx.ws, &ui).expect("inspector").through_system
+}
+
+#[test]
+fn step_via_another_system_names_it() {
+    let mut fx = via_fixture(true, true);
+    let via = ItemRef::Component(fx.gw);
+    set_via(&mut fx, via);
+    assert_eq!(chip(&fx).as_deref(), Some("GW · Gateway"));
+    assert_eq!(through_system(&fx).as_deref(), Some("Gateway"));
+    let via = ItemRef::Interface(fx.obd);
+    set_via(&mut fx, via);
+    assert_eq!(chip(&fx).as_deref(), Some("GW / OBD · Gateway"));
+    assert_eq!(through_system(&fx).as_deref(), Some("Gateway"));
+}
+
+#[test]
+fn step_via_a_component_of_the_tree_system_has_no_suffix() {
+    let mut fx = via_fixture(true, true);
+    let via = ItemRef::Component(fx.brake_ecu);
+    set_via(&mut fx, via);
+    assert_eq!(chip(&fx).as_deref(), Some("ESC ECU"));
+    assert_eq!(through_system(&fx), None);
+}
+
+#[test]
+fn step_in_a_tree_without_a_system_has_no_suffix() {
+    let mut fx = via_fixture(false, true);
+    let via = ItemRef::Component(fx.gw);
+    set_via(&mut fx, via);
+    assert_eq!(chip(&fx).as_deref(), Some("GW"));
+    assert_eq!(through_system(&fx), None);
+}
+
+#[test]
+fn step_in_a_project_without_systems_has_no_suffix() {
+    let mut fx = via_fixture(true, false);
+    let via = ItemRef::Component(fx.gw);
+    set_via(&mut fx, via);
+    assert_eq!(chip(&fx).as_deref(), Some("GW"));
+    assert_eq!(through_system(&fx), None);
+}
+
+#[test]
+fn other_systems_setting_caps_the_step_in_every_view() {
+    let mut fx = via_fixture(true, true);
+    let via = ItemRef::Component(fx.gw);
+    set_via(&mut fx, via);
+    run(
+        &mut fx.ws,
+        &Edit::SetStepFeasibility {
+            tree: fx.tree,
+            node: fx.step,
+            level: Some(3),
+        },
+    );
+    run(
+        &mut fx.ws,
+        &Edit::SetStepAttackType {
+            tree: fx.tree,
+            node: fx.step,
+            attack_type: Some(0),
+        },
+    );
+    run(
+        &mut fx.ws,
+        &Edit::AddCustomSetting {
+            id: ControlId::new_v7(),
+            name: "Port disabled".into(),
+            target: ItemRef::Component(fx.gw),
+            rules: vec![(0, 0)],
+        },
+    );
+    let scene = tree_scene(&fx.ws, fx.tree, true).expect("scene");
+    let v = (0..u32::try_from(scene.len()).expect("len"))
+        .find(|&v| scene.label(v) == "Open port")
+        .expect("vertex");
+    assert_eq!(
+        scene.style(v).and_then(|s| s.capped.as_deref()),
+        Some("Port disabled on GW")
+    );
+    let rows = risk_rows(&fx.ws);
+    let all = rows
+        .iter()
+        .find(|r| r.id == fx.threat)
+        .expect("row")
+        .clone();
+    let mut d = PageData {
+        risks: rows,
+        ..Default::default()
+    };
+    filter_page(
+        fx.ws.project(),
+        &SystemView::only(fx.brake),
+        Page::Risks,
+        &mut d,
+    );
+    let kept = d.risks.iter().find(|r| r.id == fx.threat).expect("kept");
+    assert!(kept == &all);
 }
