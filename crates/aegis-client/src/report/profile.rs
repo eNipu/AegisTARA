@@ -14,6 +14,33 @@ use crate::i18n::{Catalog, Language};
 /// Largest logo kept in a profile, in bytes (R3).
 pub const MAX_LOGO_BYTES: usize = 1024 * 1024;
 
+/// Longest export audit detail the server accepts, in bytes.
+pub const MAX_AUDIT_DETAIL_BYTES: usize = 256;
+
+/// The most system names the audit detail writes out; the rest are counted.
+const MAX_AUDIT_SYSTEMS: usize = 8;
+
+/// `name` as an audit token: ASCII letters, digits, `-` and `_` kept, every
+/// other char `-`, outer `-` trimmed, `x` when nothing is left.
+fn audit_token(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let s = s.trim_matches('-');
+    if s.is_empty() {
+        "x".to_owned()
+    } else {
+        s.to_owned()
+    }
+}
+
 /// The report language: one language or both side by side.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -181,6 +208,9 @@ pub struct ReportFilters {
     /// A baseline name to compare against; the report adds a comparison
     /// section when a baseline project is supplied with it.
     pub baseline: Option<String>,
+    /// System names to keep; empty keeps every system. A name that is no
+    /// system of the project is ignored.
+    pub systems: Vec<String>,
 }
 
 /// Branding on the cover and every page (RPT-04).
@@ -277,6 +307,22 @@ impl ReportProfile {
             parts.push_str(" baseline=1");
             let _ = baseline;
         }
+        let systems = &self.filters.systems;
+        if !systems.is_empty() {
+            let shown: Vec<String> = systems
+                .iter()
+                .take(MAX_AUDIT_SYSTEMS)
+                .map(|s| audit_token(s))
+                .collect();
+            parts.push_str(" systems=");
+            parts.push_str(&shown.join("+"));
+            let left = systems.len().saturating_sub(MAX_AUDIT_SYSTEMS);
+            if left > 0 {
+                parts.push_str(&format!("+{left}"));
+            }
+        }
+        // Every char is ASCII, so cutting at a byte is a char boundary.
+        parts.truncate(MAX_AUDIT_DETAIL_BYTES);
         parts
     }
 }

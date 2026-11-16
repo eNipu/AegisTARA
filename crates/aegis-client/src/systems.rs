@@ -177,6 +177,85 @@ impl SystemView {
     }
 }
 
+/// The view of the systems whose name equals one of `names` exactly; no
+/// match gives all systems. Time O(s * k) for s systems and k names.
+#[must_use]
+pub fn view_of_names(project: &Project, names: &[String]) -> SystemView {
+    if names.is_empty() {
+        return SystemView::all();
+    }
+    SystemView::of(
+        project
+            .elements(ElementKind::System)
+            .filter(|(_, e)| names.iter().any(|n| n == e.name()))
+            .map(|(id, _)| id),
+    )
+}
+
+/// The names of the live systems of `view`, in ID order; empty for all
+/// systems. Time O(k log n) for k systems in the view.
+#[must_use]
+pub fn view_names(project: &Project, view: &SystemView) -> Vec<String> {
+    view.normalized(project)
+        .systems()
+        .filter_map(|id| system_name(project, id))
+        .collect()
+}
+
+/// What a filtered output (the report) keeps: the project's system usage
+/// and the view's set, or nothing when the view is all systems.
+#[derive(Debug)]
+pub struct Scope {
+    usage: aegis_model::SystemUse,
+    view: aegis_model::SystemSet,
+    on: bool,
+}
+
+impl Scope {
+    /// The scope of `view`. Time O(k log n) when the view is all systems,
+    /// O(project) otherwise (it computes the systems of every element).
+    #[must_use]
+    pub fn new(project: &Project, view: &SystemView) -> Self {
+        let view = view.normalized(project);
+        if view.is_all() {
+            return Self {
+                usage: aegis_model::SystemUse::default(),
+                view: aegis_model::SystemSet::EMPTY,
+                on: false,
+            };
+        }
+        let usage = project.system_use();
+        let set = usage.set_of(view.systems());
+        Self {
+            usage,
+            view: set,
+            on: true,
+        }
+    }
+
+    /// True when the scope drops what other systems hold. Time O(1).
+    #[must_use]
+    pub fn is_on(&self) -> bool {
+        self.on
+    }
+
+    /// The systems of every element (empty when the scope is off). Time O(1).
+    #[must_use]
+    pub fn usage(&self) -> &aegis_model::SystemUse {
+        &self.usage
+    }
+
+    /// Whether an element shows: always when the scope is off or `set` gives
+    /// `None` (the element is gone), else when its systems show in the view.
+    /// Time O(1) plus the closure.
+    pub fn shows(
+        &self,
+        set: impl FnOnce(&aegis_model::SystemUse) -> Option<aegis_model::SystemSet>,
+    ) -> bool {
+        !self.on || set(&self.usage).is_none_or(|s| s.shows_in(self.view))
+    }
+}
+
 /// One system in the view menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ViewChoice {
