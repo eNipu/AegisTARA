@@ -12,8 +12,8 @@
 use std::fmt;
 
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, NodeId, ThreatId,
-    TreeId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, NodeId,
+    ThreatId, TreeId,
 };
 use crate::methodology::Property;
 
@@ -285,6 +285,14 @@ pub enum LintCode {
         /// The boundary flow without associated threat scenarios.
         flow: DataFlowId,
     },
+    /// Two systems have the same name, so a report profile that names it
+    /// covers both.
+    SystemNameShared {
+        /// The later system.
+        system: ElementId,
+        /// The system with the lowest ID that has this name.
+        first: ElementId,
+    },
 }
 
 impl LintCode {
@@ -332,6 +340,7 @@ impl LintCode {
             | Self::BoundaryCrossingDataFlowWithoutThreat { .. }
             | Self::ComponentWithoutSystem { .. }
             | Self::SystemBoundaryFlowWithoutThreat { .. }
+            | Self::SystemNameShared { .. }
             | Self::LibraryRatingNotReviewed { .. } => LintSeverity::Warning,
             Self::ThreatWithoutFeasibility { .. }
             | Self::ReduceTreatmentWithoutControls { .. }
@@ -468,6 +477,9 @@ impl fmt::Display for LintCode {
                 f,
                 "data flow {flow} between two systems has no threat scenario on its endpoint components"
             ),
+            Self::SystemNameShared { system, first } => {
+                write!(f, "system {system} has the same name as system {first}")
+            }
         }
     }
 }
@@ -627,6 +639,10 @@ mod tests {
                 component: ComponentId::new_v7(),
             },
             LintCode::SystemBoundaryFlowWithoutThreat { flow },
+            LintCode::SystemNameShared {
+                system: ElementId::new_v7(),
+                first: ElementId::new_v7(),
+            },
         ];
         for code in warnings {
             let f = LintFinding::new(code);

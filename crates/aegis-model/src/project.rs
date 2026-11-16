@@ -5439,6 +5439,7 @@ impl Project {
         self.lint_claims(&mut findings);
         self.lint_data_flows(&mut findings);
         self.lint_components(&mut findings);
+        self.lint_systems(&mut findings);
         findings.sort_unstable();
         findings
     }
@@ -5708,6 +5709,20 @@ impl Project {
                 findings.push(LintFinding::new(LintCode::ComponentWithoutSystem {
                     component: id,
                 }));
+            }
+        }
+    }
+
+    fn lint_systems(&self, findings: &mut Vec<LintFinding>) {
+        let mut first_by_name: BTreeMap<&str, ElementId> = BTreeMap::new();
+        for (id, system) in self.elements(ElementKind::System) {
+            if let Some(&first) = first_by_name.get(system.name()) {
+                findings.push(LintFinding::new(LintCode::SystemNameShared {
+                    system: id,
+                    first,
+                }));
+            } else {
+                first_by_name.insert(system.name(), id);
             }
         }
     }
