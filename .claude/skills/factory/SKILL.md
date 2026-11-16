@@ -202,4 +202,4 @@ gate. `gate` PASS: start at the reviewer.
 ## Done
 
 End every command with one line: job id, slice id, stage, and the next command.
-Dashboard: `cd factory && python3 -m http.server 8000` → http://localhost:8000/dashboard.html
+Dashboard: `cd factory && python3 -m http.server 8010` → http://localhost:8010/dashboard.html (8000 is taken by another server on this machine)
