@@ -28,9 +28,9 @@ use super::{
     AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ControlKindDef, ElementNameDef,
     ElementNamesDef, FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, MAX_ATTACK_TYPES,
     MAX_CATALOG_SCHEMES, MAX_CONTROL_KINDS, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES,
-    MAX_INTERFACE_KINDS, MAX_LEVELS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES,
-    MAX_SEGMENTS, MAX_THREAT_CATEGORIES, Methodology, MethodologyDef, PackTranslationDef,
-    PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
+    MAX_INTERFACE_KINDS, MAX_LEVELS, MAX_PACK_CLAUSE_REFS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN,
+    MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES, Methodology, MethodologyDef,
+    PackTranslationDef, PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
 };
 use crate::error::PackError;
 use crate::store::wire::{
@@ -75,7 +75,7 @@ pack_caps! {
     ControlKindConflictsCap = MAX_CONTROL_KINDS, Limit::CONTROL_KIND_CONFLICTS;
     ControlKindRulesCap = crate::control::MAX_CONTROL_RULES, Limit::CONTROL_RULES;
     PackTranslationsCap = MAX_PACK_TRANSLATIONS, Limit::PACK_TRANSLATIONS;
-    ClauseRefsCap = 32, Limit::IMPACT_CATEGORIES;
+    ClauseRefsCap = MAX_PACK_CLAUSE_REFS, Limit::CLAUSE_REFS;
 }
 
 type Label = BoundedStr<LabelCap>;

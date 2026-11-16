@@ -60,7 +60,8 @@ use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::{
     MAX_ATTACK_TYPES, MAX_CATALOG_SCHEMES, MAX_CONTROL_KINDS, MAX_FEASIBILITY_FACTORS,
     MAX_IMPACT_CATEGORIES, MAX_INTERFACE_KINDS, MAX_KEY_LEN, MAX_LABEL_CHARS, MAX_LEVELS,
-    MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES,
+    MAX_PACK_CLAUSE_REFS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS,
+    MAX_THREAT_CATEGORIES,
 };
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_ATTACK_TREE_NODES;
@@ -391,6 +392,12 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A pack's `clause_refs` lists more than `MAX_PACK_CLAUSE_REFS` refs for
+    /// one page, or lists refs for more pages than that.
+    ClauseRefs {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A snapshot lists more than
     /// [`MAX_ELEMENTS_PER_KIND`](crate::MAX_ELEMENTS_PER_KIND) elements of one kind.
     Elements {
@@ -518,6 +525,9 @@ impl Limit {
     pub(crate) const PACK_TRANSLATIONS: Limit = Limit::PackTranslations {
         max: MAX_PACK_TRANSLATIONS,
     };
+    pub(crate) const CLAUSE_REFS: Limit = Limit::ClauseRefs {
+        max: MAX_PACK_CLAUSE_REFS,
+    };
     pub(crate) const ELEMENTS: Limit = Limit::Elements {
         max: crate::element::MAX_ELEMENTS_PER_KIND,
     };
@@ -607,6 +617,7 @@ impl fmt::Display for Limit {
             Limit::PackTranslations { max } => {
                 write!(f, "more than {max} pack translations")
             }
+            Limit::ClauseRefs { max } => write!(f, "more than {max} clause refs"),
             Limit::Elements { max } => {
                 write!(f, "more than {max} elements of one kind")
             }

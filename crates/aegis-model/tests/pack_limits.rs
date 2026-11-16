@@ -269,6 +269,30 @@ fn impact_category_count_cap() {
 }
 
 #[test]
+fn clause_refs_caps() {
+    let page_refs =
+        |n: usize| -> Vec<Arc<str>> { (0..n).map(|i| format!("REF-{i}").into()).collect() };
+    let mut d = second_def();
+    d.clause_refs = [("page".into(), page_refs(32))].into_iter().collect();
+    at_cap(&d, "32 clause refs for one page");
+    d.clause_refs = [("page".into(), page_refs(33))].into_iter().collect();
+    over_cap(
+        &d,
+        Limit::ClauseRefs { max: 32 },
+        "33 clause refs for one page",
+    );
+    let mut d = second_def();
+    d.clause_refs = (0..33)
+        .map(|i| (key_of_len("pg", i, 6), vec![Arc::from("REF-0")]))
+        .collect();
+    over_cap(
+        &d,
+        Limit::ClauseRefs { max: 32 },
+        "clause refs for 33 pages",
+    );
+}
+
+#[test]
 fn level_count_cap() {
     let level = |i: usize| LevelDef {
         key: key_of_len("l", i, 6),

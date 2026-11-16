@@ -47,6 +47,8 @@ pub const MAX_ATTACK_TYPES: usize = 32;
 pub const MAX_CONTROL_KINDS: usize = 64;
 /// Most per-language translations a methodology pack may declare.
 pub const MAX_PACK_TRANSLATIONS: usize = 16;
+/// Most clause refs a pack may list for one page, and the most pages it may list refs for.
+pub const MAX_PACK_CLAUSE_REFS: usize = 32;
 /// Fewest factors an `attack_potential` scheme may declare.
 pub const MIN_FEASIBILITY_FACTORS: usize = 1;
 /// Most factors an `attack_potential` scheme may declare.
