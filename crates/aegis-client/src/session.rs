@@ -3296,7 +3296,7 @@ fn page_data(open: &Open) -> PageData {
     let ui = &open.ui;
     let mut d = PageData::default();
     match ui.page {
-        Page::Overview => d.overview = Some(pages::overview(ws)),
+        Page::Overview => d.overview = Some(pages::overview_in(ws, &ui.system_view)),
         Page::Item => {
             d.components = pages::component_rows(ws);
             d.systems = crate::systems::system_rows(ws);

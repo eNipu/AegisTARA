@@ -318,6 +318,33 @@ fn retain_shown<T>(
     rows.retain(|r| set_of(r).is_none_or(|s| s.shows_in(view)));
 }
 
+/// The systems of the element a selection points at; `None` when the
+/// element is gone. Time O(log n).
+#[must_use]
+pub fn selection_systems(
+    project: &Project,
+    usage: &aegis_model::SystemUse,
+    s: Selection,
+) -> Option<aegis_model::SystemSet> {
+    match s {
+        Selection::Component(id) => Some(usage.component(project.component_idx(&id)?)),
+        Selection::Interface(id) => Some(usage.interface(project.interface_idx(&id)?)),
+        Selection::DataFlow(id) => Some(usage.data_flow(project.data_flow_idx(&id)?)),
+        Selection::TrustBoundary(id) => {
+            Some(usage.trust_boundary(project.trust_boundary_idx(&id)?))
+        }
+        Selection::Asset(id) => Some(usage.asset(project.asset_idx(&id)?)),
+        Selection::Damage(id) => Some(usage.damage(project.damage_scenario_idx(&id)?)),
+        Selection::Threat(id) => Some(usage.threat(project.threat_scenario_idx(&id)?)),
+        Selection::Tree(id) | Selection::TreeNode(id, _) => {
+            Some(usage.tree(project.attack_tree_idx(&id)?))
+        }
+        Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
+        Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
+        Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
+    }
+}
+
 /// Keeps the table rows of `page` that show in `view`. Lists that only
 /// feed choices are left alone. Does nothing when the view is all
 /// systems or the project has none. Time O(project) for `system_use`
@@ -367,22 +394,8 @@ pub fn filter_page(project: &Project, view: &SystemView, page: Page, d: &mut Pag
                 Some(usage.claim(project.cybersecurity_claim_idx(&r.id)?))
             });
         }
-        Page::Problems => retain_shown(&mut d.problems, v, |r| match r.target? {
-            Selection::Component(id) => Some(usage.component(project.component_idx(&id)?)),
-            Selection::Interface(id) => Some(usage.interface(project.interface_idx(&id)?)),
-            Selection::DataFlow(id) => Some(usage.data_flow(project.data_flow_idx(&id)?)),
-            Selection::TrustBoundary(id) => {
-                Some(usage.trust_boundary(project.trust_boundary_idx(&id)?))
-            }
-            Selection::Asset(id) => Some(usage.asset(project.asset_idx(&id)?)),
-            Selection::Damage(id) => Some(usage.damage(project.damage_scenario_idx(&id)?)),
-            Selection::Threat(id) => Some(usage.threat(project.threat_scenario_idx(&id)?)),
-            Selection::Tree(id) | Selection::TreeNode(id, _) => {
-                Some(usage.tree(project.attack_tree_idx(&id)?))
-            }
-            Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
-            Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
-            Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
+        Page::Problems => retain_shown(&mut d.problems, v, |r| {
+            selection_systems(project, &usage, r.target?)
         }),
         _ => {}
     }

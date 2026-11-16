@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 use aegis_client::combined::systems_overview;
 use aegis_client::commands::Edit;
-use aegis_client::pages::vocabulary;
-use aegis_client::systems::SystemView;
+use aegis_client::pages::{overview_in, risk_rows, vocabulary};
+use aegis_client::state::PageData;
+use aegis_client::systems::{SystemView, filter_page};
+use aegis_client::view::Page;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{AssetId, ComponentId, DamageId, ElementId, Methodology, ThreatId};
 use proptest::prelude::*;
@@ -193,6 +195,31 @@ proptest! {
             let want = best.and_then(|b| m.risk_levels().nth(b)).map(|(_, _, l)| l.to_owned());
             let got = r.highest_residual.as_ref().map(|v| v.label.clone());
             prop_assert_eq!(got, want);
+        }
+    }
+
+    #[test]
+    fn a_risk_number_is_the_same_in_every_view(spec in spec()) {
+        let (ws, view) = build(&spec);
+        let p = ws.project();
+        let whole = risk_rows(&ws);
+        let mut d = PageData { risks: whole.clone(), ..Default::default() };
+        filter_page(p, &view, Page::Risks, &mut d);
+        for row in &d.risks {
+            let same = whole.iter().find(|r| r.id == row.id);
+            prop_assert_eq!(Some(row), same);
+        }
+        for row in &overview_in(&ws, &view).top {
+            let same = whole.iter().find(|r| r.id == row.id);
+            prop_assert_eq!(Some(row), same);
+        }
+        let normalized = view.normalized(p);
+        let uses = p.system_use();
+        let v = uses.set_of(normalized.systems());
+        for (idx, id, _) in p.threat_scenarios() {
+            if normalized.is_all() || uses.threat(idx).shows_in(v) {
+                prop_assert!(d.risks.iter().any(|r| r.id == id));
+            }
         }
     }
 }
