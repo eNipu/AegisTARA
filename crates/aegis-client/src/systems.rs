@@ -345,6 +345,27 @@ pub fn selection_systems(
     }
 }
 
+/// The view that shows the element `s` points at, with the name of the
+/// system added to get there. `None` when the view already shows it
+/// (all systems, an element in no system, or one of its systems is in
+/// the view) or the element is gone. Adds the element's first system
+/// in ID order. Time O(project) for `system_use`; nothing is computed
+/// when the view is all.
+#[must_use]
+pub fn reveal(project: &Project, view: &SystemView, s: Selection) -> Option<(SystemView, String)> {
+    if view.is_all() {
+        return None;
+    }
+    let usage = project.system_use();
+    let set = selection_systems(project, &usage, s)?;
+    if set.shows_in(usage.set_of(view.systems())) {
+        return None;
+    }
+    let id = usage.ids(set).next()?;
+    let name = system_name(project, id)?;
+    Some((view.toggled(id), name))
+}
+
 /// Keeps the table rows of `page` that show in `view`. Lists that only
 /// feed choices are left alone. Does nothing when the view is all
 /// systems or the project has none. Time O(project) for `system_use`
