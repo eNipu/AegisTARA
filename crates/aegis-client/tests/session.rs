@@ -1687,3 +1687,86 @@ async fn row_actions_pass_the_parent_as_draft_context() {
     drop(alice);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn switching_the_system_view_adds_no_op_also_when_read_only() {
+    use aegis_client::systems::SystemView;
+    use aegis_client::view::Page;
+    use aegis_model::{ComponentId, ElementId};
+
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    let (brake, adas) = (ElementId::new_v7(), ElementId::new_v7());
+    let (caliper, camera) = (ComponentId::new_v7(), ComponentId::new_v7());
+    let edits = [
+        Edit::AddSystem {
+            id: brake,
+            name: "Brake".into(),
+        },
+        Edit::AddSystem {
+            id: adas,
+            name: "ADAS".into(),
+        },
+        Edit::AddComponent {
+            id: caliper,
+            name: "Caliper".into(),
+            parent: None,
+        },
+        Edit::AddComponent {
+            id: camera,
+            name: "Camera".into(),
+            parent: None,
+        },
+        Edit::MoveToSystem {
+            components: vec![caliper],
+            system: Some(brake),
+        },
+        Edit::MoveToSystem {
+            components: vec![camera],
+            system: Some(adas),
+        },
+    ];
+    for e in edits {
+        alice.send(Command::Edit(e)).expect("sent");
+    }
+    alice.send(Command::ShowPage(Page::Item)).expect("sent");
+    let view = until(&alice, "two components", |vm| {
+        project_ready(vm) && p(vm).data.components.len() == 2
+    })
+    .await;
+    let seq = p(&view).confirmed_seq;
+    let label = p(&view).undo_label.clone();
+    assert!(label.is_some());
+
+    alice
+        .send(Command::SetSystemView(SystemView::only(brake)))
+        .expect("sent");
+    let view = until(&alice, "one component", |vm| {
+        p(vm).data.components.len() == 1
+    })
+    .await;
+    assert_eq!(p(&view).confirmed_seq, seq);
+    assert_eq!(p(&view).undo_label, label);
+    assert_eq!(
+        p(&view).view_menu.as_ref().map(|m| m.chip.as_str()),
+        Some("Brake")
+    );
+
+    alice.send(Command::EndEdit).expect("sent");
+    until(&alice, "read-only", |vm| p(vm).mode == Mode::ReadOnly).await;
+    alice
+        .send(Command::SetSystemView(SystemView::all()))
+        .expect("sent");
+    let view = until(&alice, "two rows again", |vm| {
+        p(vm).data.components.len() == 2
+    })
+    .await;
+    assert_eq!(p(&view).confirmed_seq, seq);
+    drop(alice);
+    server.stop().await;
+}

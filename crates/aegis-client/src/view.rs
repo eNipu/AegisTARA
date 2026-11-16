@@ -473,6 +473,8 @@ pub struct UiState {
     pub selected_node: Option<NodeId>,
     /// Show the residual evaluation instead of the inherent one.
     pub show_residual: bool,
+    /// The systems on show (SYS-03). A display choice: never an op.
+    pub system_view: crate::systems::SystemView,
     /// The selected asset.
     pub selected_asset: Option<AssetId>,
     /// The selected damage scenario.
