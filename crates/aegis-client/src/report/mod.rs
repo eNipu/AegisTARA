@@ -29,7 +29,10 @@ pub use profile::{
     Classification, FigureAttachment, ReportBranding, ReportFilters, ReportLanguage, ReportOptions,
     ReportProfile, ReportSections, RevisionEntry,
 };
-pub use xlsx::{report_workbook_xlsx, report_workbook_xlsx_with_figures, risk_register_xlsx};
+pub use xlsx::{
+    report_workbook_xlsx, report_workbook_xlsx_in, report_workbook_xlsx_with_figures,
+    risk_register_xlsx,
+};
 
 use crate::time::format_ms;
 

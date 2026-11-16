@@ -14,12 +14,13 @@ use std::sync::Arc;
 use aegis_canvas::{
     RenderOptions, Size as CanvasSize, TileLimits, plan_tiles, render as render_view,
 };
-use aegis_model::{ElementRef, Project, ThreatId, TreeId};
+use aegis_model::{ElementKind, ElementRef, ItemRef, Project, ThreatId, TreeId};
 
 use crate::commands::TREATMENTS;
 use crate::i18n::{Catalog, Language};
 use crate::outline::to_outline;
 use crate::pages::{self, RiskRow, treatment_label};
+use crate::systems::Scope;
 use crate::time::format_ms_lang;
 use crate::view::tree_scene;
 use crate::workspace::Workspace;
@@ -415,12 +416,18 @@ fn matching_threats(
     ws: &Workspace,
     filters: &ReportFilters,
     comp_assets: Option<&BTreeSet<String>>,
+    scope: &Scope,
 ) -> BTreeSet<ThreatId> {
     pages::risk_rows(ws)
         .iter()
-        .filter(|r| row_matches(r, filters, comp_assets))
+        .filter(|r| row_matches(r, filters, comp_assets) && threat_shows(ws.project(), scope, r.id))
         .map(|r| r.id)
         .collect()
+}
+
+/// Whether a threat shows in the report's systems. Time O(log n).
+fn threat_shows(project: &Project, scope: &Scope, id: ThreatId) -> bool {
+    scope.shows(|u| Some(u.threat(project.threat_scenario_idx(&id)?)))
 }
 
 fn has_filter(filters: &ReportFilters) -> bool {
@@ -448,6 +455,8 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     let names = m.element_names_for_lang(lang.code());
     let vocab = pages::vocabulary_for_lang(m, lang.code());
     let meth_line = methodology_line_lang(project, lang.code());
+    let view = crate::systems::view_of_names(project, &profile.filters.systems);
+    let scope = Scope::new(project, &view);
     let mut b: Vec<Block> = Vec::new();
 
     // ---- cover (RPT-04) ----
@@ -471,25 +480,31 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             b.push(Paragraph(catalog.tr("draft-warning"), Style::Draft));
         }
         let branding = &profile.branding;
-        b.push(table(
-            &[catalog.tr("field"), catalog.tr("value")],
+        let mut cover = vec![
             vec![
-                vec![
-                    catalog.tr("document-id"),
-                    if branding.document_id.is_empty() {
-                        "—".to_owned()
-                    } else {
-                        branding.document_id.clone()
-                    },
-                ],
-                vec![
-                    catalog.tr("classification"),
-                    branding.classification.label(&catalog),
-                ],
-                vec![catalog.tr("date"), format_ms_lang(ctx.now_ms, lang)],
-                vec![catalog.tr("methodology"), meth_line],
+                catalog.tr("document-id"),
+                if branding.document_id.is_empty() {
+                    "—".to_owned()
+                } else {
+                    branding.document_id.clone()
+                },
             ],
-        ));
+            vec![
+                catalog.tr("classification"),
+                branding.classification.label(&catalog),
+            ],
+            vec![catalog.tr("date"), format_ms_lang(ctx.now_ms, lang)],
+            vec![catalog.tr("methodology"), meth_line],
+        ];
+        if project.elements(ElementKind::System).next().is_some() {
+            let shown = if view.is_all() {
+                catalog.tr("report-all-systems")
+            } else {
+                crate::systems::view_names(project, &view).join(", ")
+            };
+            cover.push(vec![catalog.tr("report-systems"), shown]);
+        }
+        b.push(table(&[catalog.tr("field"), catalog.tr("value")], cover));
         if !branding.approvers.is_empty() {
             b.push(Heading(3, catalog.tr("approvers")));
             b.push(Paragraph(branding.approvers.join(", "), Style::Normal));
@@ -559,17 +574,33 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     }
 
     let comp_assets = component_assets(ws, &profile.filters);
-    let filtered = matching_threats(ws, &profile.filters, comp_assets.as_ref());
-    let filter_on = has_filter(&profile.filters);
+    let filtered = matching_threats(ws, &profile.filters, comp_assets.as_ref(), &scope);
+    let filter_on = has_filter(&profile.filters) || scope.is_on();
 
     // ---- executive summary ----
     if sections.executive_summary {
-        let ov = pages::overview(ws);
+        let ov = pages::overview_in(ws, &view);
         b.push(Heading(2, catalog.tr("section-executive-summary")));
         let above: usize = ov.residual.iter().take(2).map(|c| c.count).sum();
-        let threats = project.threat_scenario_count().to_string();
+        let (threats, assets) = if scope.is_on() {
+            let u = scope.usage();
+            let shown = |s: aegis_model::SystemSet| scope.shows(|_| Some(s));
+            (
+                project
+                    .threat_scenarios()
+                    .filter(|(i, _, _)| shown(u.threat(*i)))
+                    .count(),
+                project
+                    .assets()
+                    .filter(|(i, _, _)| shown(u.asset(*i)))
+                    .count(),
+            )
+        } else {
+            (project.threat_scenario_count(), project.asset_count())
+        };
+        let threats = threats.to_string();
         let threats_label = names.threat_scenario.plural.to_lowercase();
-        let assets = project.asset_count().to_string();
+        let assets = assets.to_string();
         let assets_label = names.asset.plural.to_lowercase();
         let above = above.to_string();
         let threat_singular = names.threat_scenario.singular.to_lowercase();
@@ -608,7 +639,11 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         let top: Vec<RiskRow> = ov
             .top
             .into_iter()
-            .filter(|r| !filter_on || row_matches(r, &profile.filters, comp_assets.as_ref()))
+            .filter(|r| {
+                !filter_on
+                    || (row_matches(r, &profile.filters, comp_assets.as_ref())
+                        && threat_shows(project, &scope, r.id))
+            })
             .collect();
         b.push(risk_rows_block(&catalog, &top));
     }
@@ -635,7 +670,8 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     }
     if sections.item_definition && item_elements {
         b.push(Heading(3, names.component.plural.to_string()));
-        let comp_rows = pages::component_rows(ws);
+        let mut comp_rows = pages::component_rows(ws);
+        comp_rows.retain(|r| scope.shows(|u| Some(u.component(project.component_idx(&r.id)?))));
         b.push(table(
             &[
                 names.component.singular.to_string(),
@@ -660,7 +696,8 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         }
 
         b.push(Heading(3, names.interface.plural.to_string()));
-        let iface_rows = pages::interface_rows(ws);
+        let mut iface_rows = pages::interface_rows(ws);
+        iface_rows.retain(|r| scope.shows(|u| Some(u.interface(project.interface_idx(&r.id)?))));
         b.push(table(
             &[
                 names.interface.singular.to_string(),
@@ -685,7 +722,8 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         }
 
         b.push(Heading(3, names.data_flow.plural.to_string()));
-        let df_rows = pages::data_flow_rows(ws);
+        let mut df_rows = pages::data_flow_rows(ws);
+        df_rows.retain(|r| scope.shows(|u| Some(u.data_flow(project.data_flow_idx(&r.id)?))));
         b.push(table(
             &[
                 names.data_flow.singular.to_string(),
@@ -710,7 +748,10 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         }
 
         b.push(Heading(3, names.trust_boundary.plural.to_string()));
-        let tb_rows = pages::trust_boundary_rows(ws);
+        let mut tb_rows = pages::trust_boundary_rows(ws);
+        tb_rows.retain(|r| {
+            scope.shows(|u| Some(u.trust_boundary(project.trust_boundary_idx(&r.id)?)))
+        });
         b.push(table(
             &[
                 names.trust_boundary.singular.to_string(),
@@ -729,7 +770,13 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         for tb in &tb_rows {
             push_target_figures(&mut b, &profile.figures, ElementRef::TrustBoundary(tb.id));
         }
-        let settings = pages::applied_settings(ws, lang.code());
+        let mut settings = pages::applied_settings(ws, lang.code());
+        settings.retain(|s| {
+            scope.shows(|u| match s.target {
+                ItemRef::Component(id) => Some(u.component(project.component_idx(&id)?)),
+                ItemRef::Interface(id) => Some(u.interface(project.interface_idx(&id)?)),
+            })
+        });
         if !settings.is_empty() {
             b.push(Heading(3, catalog.tr("security-settings")));
             b.push(Paragraph(
@@ -775,7 +822,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                     .is_none_or(|allowed| allowed.contains(&a.name));
                 let asset_ok = profile.filters.assets.is_empty()
                     || profile.filters.assets.iter().any(|x| x == &a.name);
-                comp_ok && asset_ok
+                comp_ok && asset_ok && scope.shows(|u| Some(u.asset(project.asset_idx(&a.id)?)))
             })
             .collect();
         b.push(table(
@@ -815,6 +862,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             &headers,
             pages::damage_rows(ws)
                 .into_iter()
+                .filter(|d| scope.shows(|u| Some(u.damage(project.damage_scenario_idx(&d.id)?))))
                 .map(|d| {
                     let rationale = project
                         .damage_scenario_idx(&d.id)
@@ -929,7 +977,8 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     // ---- attack trees ----
     if sections.attack_trees {
         b.push(Heading(2, format!("5. {}", names.attack_tree.plural)));
-        let trees = pages::tree_rows(ws);
+        let mut trees = pages::tree_rows(ws);
+        trees.retain(|r| scope.shows(|u| Some(u.tree(project.attack_tree_idx(&r.id)?))));
         if trees.is_empty() {
             b.push(Paragraph(catalog.tr("none"), Style::Muted));
         }
@@ -1001,7 +1050,11 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         b.push(Heading(2, catalog.tr("section-risks")));
         let rows: Vec<RiskRow> = pages::risk_rows(ws)
             .into_iter()
-            .filter(|r| !filter_on || row_matches(r, &profile.filters, comp_assets.as_ref()))
+            .filter(|r| {
+                !filter_on
+                    || (row_matches(r, &profile.filters, comp_assets.as_ref())
+                        && threat_shows(project, &scope, r.id))
+            })
             .collect();
         b.push(risk_rows_block(&catalog, &rows));
     }
@@ -1018,6 +1071,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             pages::control_rows(ws)
                 .into_iter()
+                .filter(|c| scope.shows(|u| Some(u.control(project.security_control_idx(&c.id)?))))
                 .map(|c| {
                     vec![
                         format!("{} · {}", c.visual_id, c.name),
@@ -1047,6 +1101,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             pages::goal_rows(ws)
                 .into_iter()
+                .filter(|g| scope.shows(|u| Some(u.goal(project.cybersecurity_goal_idx(&g.id)?))))
                 .map(|g| {
                     vec![
                         format!("{} · {}", g.visual_id, g.name),
@@ -1069,6 +1124,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             pages::claim_rows(ws)
                 .into_iter()
+                .filter(|c| scope.shows(|u| Some(u.claim(project.cybersecurity_claim_idx(&c.id)?))))
                 .map(|c| {
                     vec![
                         format!("{} · {}", c.visual_id, c.name),
@@ -1091,6 +1147,11 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             &[catalog.tr("severity"), catalog.tr("problem")],
             pages::problems(ws)
                 .into_iter()
+                .filter(|p| {
+                    p.target.is_none_or(|t| {
+                        scope.shows(|u| crate::systems::selection_systems(project, u, t))
+                    })
+                })
                 .map(|p| {
                     vec![
                         if p.error {
@@ -1110,10 +1171,11 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         && profile.filters.baseline.is_some()
     {
         b.push(Heading(2, catalog.tr("section-comparison")));
-        if let Ok(cmp) = pages::comparison(
+        if let Ok(cmp) = pages::comparison_in(
             baseline,
             profile.filters.baseline.as_deref().unwrap_or("baseline"),
             project,
+            &view,
         ) {
             b.push(Paragraph(cmp.summary, Style::Normal));
             b.push(table(
