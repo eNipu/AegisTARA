@@ -192,7 +192,7 @@ pub struct LinkRow {
     pub target: Selection,
 }
 
-fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
+pub(crate) fn risk_view(m: &Methodology, level: aegis_model::RiskLevel) -> Option<RiskView> {
     let label = m.risk_level_label(level)?.to_owned();
     let index = m.risk_levels().position(|(l, _, _)| l == level)?;
     Some(RiskView {
@@ -2812,6 +2812,8 @@ pub struct Overview {
     pub warnings: usize,
     /// The five highest risks.
     pub top: Vec<RiskRow>,
+    /// The systems table; `None` when the project has no systems.
+    pub systems: Option<crate::combined::SystemsOverview>,
 }
 
 fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
@@ -2903,6 +2905,7 @@ pub fn overview(ws: &Workspace) -> Overview {
         errors,
         warnings: lint.len() - errors,
         top,
+        systems: crate::combined::systems_overview(ws, &crate::systems::SystemView::all()),
     }
 }
 

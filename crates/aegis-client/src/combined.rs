@@ -1,8 +1,13 @@
 //! The combined view across systems (job 120): boundary flows and the overview's per-system rows.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use aegis_model::{DataFlow, DataFlowId, ElementId, ElementKind, Project};
 
-use crate::systems::system_name;
+use crate::pages::risk_view;
+use crate::systems::{SystemView, system_name};
+use crate::view::RiskView;
+use crate::workspace::Workspace;
 
 /// One data flow whose ends are in different systems.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,4 +107,161 @@ pub(crate) fn boundary_text(others: &[String], flows: usize) -> String {
         [one] => format!("{one} {flows}"),
         many => format!("{} systems {flows}", many.len()),
     }
+}
+
+/// One row of the overview's systems table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemTotals {
+    /// The system; `None` for the "No system" row and the total row.
+    pub system: Option<ElementId>,
+    /// The system's name, "No system", "All" or "This view".
+    pub name: String,
+    /// Components, children included.
+    pub components: usize,
+    /// Assets.
+    pub assets: usize,
+    /// Threat scenarios.
+    pub threats: usize,
+    /// The highest risk after controls among its threats.
+    pub highest_residual: Option<RiskView>,
+    /// Boundary flows with an end in this system; for the total row,
+    /// the number of different flows.
+    pub boundary_flows: usize,
+    /// "Gateway 2", "3 systems 6"; empty for none and for the total row.
+    pub boundary_text: String,
+}
+
+/// The systems table of the overview and the boundary flows under it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemsOverview {
+    /// One row per system in the view, in ID order, then "No system"
+    /// when a component, asset or threat is in no system.
+    pub rows: Vec<SystemTotals>,
+    /// The sum of the rows: "All", or "This view" for a subset.
+    pub total: SystemTotals,
+    /// The boundary flows with an end in the view, in arena order.
+    pub flows: Vec<BoundaryFlow>,
+}
+
+fn empty_totals(system: Option<ElementId>, name: String) -> SystemTotals {
+    SystemTotals {
+        system,
+        name,
+        components: 0,
+        assets: 0,
+        threats: 0,
+        highest_residual: None,
+        boundary_flows: 0,
+        boundary_text: String::new(),
+    }
+}
+
+/// The systems table, or `None` when the project has no systems. The
+/// view is normalized first. Time O(components x depth + assets +
+/// threats + flows x depth).
+#[must_use]
+pub fn systems_overview(ws: &Workspace, view: &SystemView) -> Option<SystemsOverview> {
+    let project = ws.project();
+    let m = project.methodology();
+    let view = view.normalized(project);
+    let mut rows: Vec<SystemTotals> = Vec::new();
+    let mut at: BTreeMap<ElementId, usize> = BTreeMap::new();
+    for (id, e) in project.elements(ElementKind::System) {
+        if view.is_all() || view.contains(id) {
+            at.insert(id, rows.len());
+            rows.push(empty_totals(Some(id), e.name().to_owned()));
+        }
+    }
+    if project.element_count(ElementKind::System) == 0 {
+        return None;
+    }
+    // The last slot is "No system"; elements of a system outside the view
+    // have no slot.
+    let none_slot = rows.len();
+    rows.push(empty_totals(None, "No system".to_owned()));
+    let outside = |s: Option<ElementId>| s.is_some_and(|s| !at.contains_key(&s));
+    let slot = |s: Option<ElementId>| s.map_or(Some(none_slot), |s| at.get(&s).copied());
+    // Position of the highest residual risk per row, in `m.risk_levels()`.
+    let mut best: Vec<Option<usize>> = vec![None; rows.len()];
+    for (idx, _, _) in project.components() {
+        let s = project.component_system(idx);
+        if let Some(row) = slot(s).and_then(|i| rows.get_mut(i)) {
+            row.components += 1;
+        }
+    }
+    let uses = project.system_use();
+    for (idx, _, _) in project.assets() {
+        let s = uses.ids(uses.asset(idx)).next();
+        if let Some(row) = slot(s).and_then(|i| rows.get_mut(i)) {
+            row.assets += 1;
+        }
+    }
+    for (idx, id, _) in project.threat_scenarios() {
+        let s = uses.ids(uses.threat(idx)).next();
+        let Some(i) = slot(s) else { continue };
+        if let Some(row) = rows.get_mut(i) {
+            row.threats += 1;
+        }
+        let level = ws
+            .cache()
+            .evaluate_residual_risk(project, id)
+            .ok()
+            .and_then(aegis_model::ThreatRisk::max_risk);
+        let pos = level.and_then(|l| m.risk_levels().position(|(x, _, _)| x == l));
+        if let Some(b) = best.get_mut(i) {
+            *b = (*b).max(pos);
+        }
+    }
+    let flows: Vec<BoundaryFlow> = boundary_flows(project)
+        .into_iter()
+        .filter(|f| !outside(Some(f.from_system)) || !outside(Some(f.to_system)))
+        .collect();
+    let mut others: Vec<BTreeSet<ElementId>> = vec![BTreeSet::new(); rows.len()];
+    for f in &flows {
+        for (this, other) in [(f.from_system, f.to_system), (f.to_system, f.from_system)] {
+            let Some(i) = at.get(&this).copied() else {
+                continue;
+            };
+            if let Some(r) = rows.get_mut(i) {
+                r.boundary_flows += 1;
+            }
+            if let Some(o) = others.get_mut(i) {
+                o.insert(other);
+            }
+        }
+    }
+    for (row, set) in rows.iter_mut().zip(&others) {
+        let names: Vec<String> = set
+            .iter()
+            .filter_map(|s| system_name(project, *s))
+            .collect();
+        row.boundary_text = boundary_text(&names, row.boundary_flows);
+    }
+    let levels: Vec<_> = m.risk_levels().map(|(l, _, _)| l).collect();
+    for (row, b) in rows.iter_mut().zip(&best) {
+        row.highest_residual = b
+            .and_then(|p| levels.get(p).copied())
+            .and_then(|l| risk_view(m, l));
+    }
+    let named = rows
+        .pop()
+        .unwrap_or_else(|| empty_totals(None, String::new()));
+    if named.components + named.assets + named.threats > 0 {
+        rows.push(named);
+    }
+    let mut total = empty_totals(
+        None,
+        if view.is_all() { "All" } else { "This view" }.to_owned(),
+    );
+    for r in &rows {
+        total.components += r.components;
+        total.assets += r.assets;
+        total.threats += r.threats;
+    }
+    let top = best.iter().copied().max().flatten();
+    total.highest_residual = top
+        .and_then(|p| levels.get(p).copied())
+        .and_then(|l| risk_view(m, l));
+    total.boundary_flows = flows.len();
+    Some(SystemsOverview { rows, total, flows })
 }
