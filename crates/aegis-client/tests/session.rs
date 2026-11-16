@@ -956,6 +956,35 @@ async fn item_definition_drafts_wait_for_their_required_fields() {
     server.stop().await;
 }
 
+/// A system is created from a draft (job 119) and the creation is undone.
+#[tokio::test]
+async fn a_system_is_created_from_a_draft_and_undone() {
+    use aegis_client::view::{DraftKind, Page};
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    alice.send(Command::ShowPage(Page::Item)).expect("sent");
+    alice
+        .send(Command::BeginDraft(DraftKind::System))
+        .expect("sent");
+    until(&alice, "draft", |vm| p(vm).draft == Some(DraftKind::System)).await;
+    alice
+        .send(Command::CommitDraft {
+            name: "Brake".into(),
+            next: false,
+        })
+        .expect("sent");
+    until(&alice, "one system", |vm| p(vm).data.systems.len() == 1).await;
+    alice.send(Command::Undo).expect("sent");
+    until(&alice, "no system", |vm| p(vm).data.systems.is_empty()).await;
+    drop(alice);
+    server.stop().await;
+}
+
 /// UI-08.6: when an edit is refused, the draft stays with the user's text and
 /// the reason shows in the draft, not as a toast.
 #[tokio::test]
@@ -1655,6 +1684,89 @@ async fn row_actions_pass_the_parent_as_draft_context() {
         "Brake ECU"
     );
 
+    drop(alice);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn switching_the_system_view_adds_no_op_also_when_read_only() {
+    use aegis_client::systems::SystemView;
+    use aegis_client::view::Page;
+    use aegis_model::{ComponentId, ElementId};
+
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    let (brake, adas) = (ElementId::new_v7(), ElementId::new_v7());
+    let (caliper, camera) = (ComponentId::new_v7(), ComponentId::new_v7());
+    let edits = [
+        Edit::AddSystem {
+            id: brake,
+            name: "Brake".into(),
+        },
+        Edit::AddSystem {
+            id: adas,
+            name: "ADAS".into(),
+        },
+        Edit::AddComponent {
+            id: caliper,
+            name: "Caliper".into(),
+            parent: None,
+        },
+        Edit::AddComponent {
+            id: camera,
+            name: "Camera".into(),
+            parent: None,
+        },
+        Edit::MoveToSystem {
+            components: vec![caliper],
+            system: Some(brake),
+        },
+        Edit::MoveToSystem {
+            components: vec![camera],
+            system: Some(adas),
+        },
+    ];
+    for e in edits {
+        alice.send(Command::Edit(e)).expect("sent");
+    }
+    alice.send(Command::ShowPage(Page::Item)).expect("sent");
+    let view = until(&alice, "two components", |vm| {
+        project_ready(vm) && p(vm).data.components.len() == 2
+    })
+    .await;
+    let seq = p(&view).confirmed_seq;
+    let label = p(&view).undo_label.clone();
+    assert!(label.is_some());
+
+    alice
+        .send(Command::SetSystemView(SystemView::only(brake)))
+        .expect("sent");
+    let view = until(&alice, "one component", |vm| {
+        p(vm).data.components.len() == 1
+    })
+    .await;
+    assert_eq!(p(&view).confirmed_seq, seq);
+    assert_eq!(p(&view).undo_label, label);
+    assert_eq!(
+        p(&view).view_menu.as_ref().map(|m| m.chip.as_str()),
+        Some("Brake")
+    );
+
+    alice.send(Command::EndEdit).expect("sent");
+    until(&alice, "read-only", |vm| p(vm).mode == Mode::ReadOnly).await;
+    alice
+        .send(Command::SetSystemView(SystemView::all()))
+        .expect("sent");
+    let view = until(&alice, "two rows again", |vm| {
+        p(vm).data.components.len() == 2
+    })
+    .await;
+    assert_eq!(p(&view).confirmed_seq, seq);
     drop(alice);
     server.stop().await;
 }

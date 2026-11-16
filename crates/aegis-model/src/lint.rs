@@ -12,7 +12,8 @@
 use std::fmt;
 
 use crate::id::{
-    AssetId, ClaimId, ControlId, DamageId, DataFlowId, GoalId, NodeId, ThreatId, TreeId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, NodeId, ThreatId,
+    TreeId,
 };
 use crate::methodology::Property;
 
@@ -272,6 +273,11 @@ pub enum LintCode {
         /// The boundary-crossing data flow without associated threat scenarios.
         flow: DataFlowId,
     },
+    /// The project has systems, but a top-level component is in none.
+    ComponentWithoutSystem {
+        /// The component in no system.
+        component: ComponentId,
+    },
 }
 
 impl LintCode {
@@ -317,6 +323,7 @@ impl LintCode {
             | Self::CybersecurityClaimUnlinked { .. }
             | Self::AssetUnbound { .. }
             | Self::BoundaryCrossingDataFlowWithoutThreat { .. }
+            | Self::ComponentWithoutSystem { .. }
             | Self::LibraryRatingNotReviewed { .. } => LintSeverity::Warning,
             Self::ThreatWithoutFeasibility { .. }
             | Self::ReduceTreatmentWithoutControls { .. }
@@ -446,6 +453,9 @@ impl fmt::Display for LintCode {
                 f,
                 "boundary-crossing data flow {flow} has no threat scenario on its endpoint components"
             ),
+            Self::ComponentWithoutSystem { component } => {
+                write!(f, "component {component} is in no system")
+            }
         }
     }
 }
@@ -601,6 +611,9 @@ mod tests {
             LintCode::CybersecurityClaimUnlinked { claim },
             LintCode::AssetUnbound { asset },
             LintCode::BoundaryCrossingDataFlowWithoutThreat { flow },
+            LintCode::ComponentWithoutSystem {
+                component: ComponentId::new_v7(),
+            },
         ];
         for code in warnings {
             let f = LintFinding::new(code);

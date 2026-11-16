@@ -382,6 +382,8 @@ struct ComponentView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<Required<Text<ComponentId>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<Text<ElementId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
 
@@ -670,6 +672,7 @@ impl Serialize for Components<'_> {
                 parent: c
                     .parent()
                     .map(|par| Required(p.component_id(par).map(Text))),
+                system: c.system().map(Text),
                 provenance: ProvenanceView::of(c.provenance()),
             }
         }))
@@ -970,6 +973,7 @@ impl Project {
         // Add components in two passes (roots first, then parent links) so
         // parent-after-child ID ordering in snapshots never fails.
         let mut pending_parents = Vec::new();
+        let mut pending_systems = Vec::new();
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, c) in snapshot.components.into_iter().enumerate() {
             let vis = claim_visual(c.visual_id, pos, &mut used, &mut next_vis)?;
@@ -983,7 +987,10 @@ impl Project {
             })?;
             project.set_component_loaded_visual(&id, vis, next_vis);
             if let Some(parent) = c.parent {
-                pending_parents.push((id, parent.0, provenance));
+                pending_parents.push((id, parent.0, provenance.clone()));
+            }
+            if let Some(system) = c.system {
+                pending_systems.push((id, system.0, provenance));
             }
         }
         for (id, parent, provenance) in pending_parents {
@@ -1215,6 +1222,14 @@ impl Project {
                 apply_snapshot_element(&mut project, kind, e)?;
                 project.set_element_loaded_visual(id, vis, next_vis);
             }
+        }
+        // Systems are elements, so they are put on components once loaded.
+        for (id, system, provenance) in pending_systems {
+            project.apply(Op::SetComponentSystem {
+                id,
+                system: Some(system),
+                provenance,
+            })?;
         }
         // Marks that name no tree of this snapshot are refused by the model.
         for (tree, node) in marks {

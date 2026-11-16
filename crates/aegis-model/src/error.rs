@@ -351,6 +351,32 @@ pub enum ModelError {
         /// How many links it has.
         count: usize,
     },
+    /// A child component follows its parent's system and has none of its own.
+    #[error("component {component} has a parent and follows its parent's system")]
+    ChildComponentSystem {
+        /// The component.
+        component: ComponentId,
+    },
+    /// A component in a system cannot be given a parent or removed.
+    #[error("component {component} is in a system; take it out first")]
+    ComponentHasSystem {
+        /// The component.
+        component: ComponentId,
+    },
+    /// The element is not of kind `System`.
+    #[error("element {element} is not a system")]
+    NotASystem {
+        /// The element.
+        element: ElementId,
+    },
+    /// Components are still in the system, so it cannot be removed.
+    #[error("system {system} still has {components} component(s); take them out first")]
+    SystemHasComponents {
+        /// The system.
+        system: ElementId,
+        /// How many components are in it.
+        components: usize,
+    },
     /// Elements still link the threat scenario, so it cannot be removed.
     #[error("threat scenario {threat} is still linked from {elements} elements")]
     ThreatLinkedFromElements {

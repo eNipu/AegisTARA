@@ -230,6 +230,8 @@ pub struct PageData {
     pub components: Vec<ComponentRow>,
     /// The selected component.
     pub component: Option<ComponentDetail>,
+    /// Item definition page: systems (job 119).
+    pub systems: Vec<crate::systems::SystemRow>,
     /// Item definition page: interfaces (job 074).
     pub interfaces: Vec<InterfaceRow>,
     /// The selected interface.
@@ -431,6 +433,10 @@ pub struct ProjectView {
     pub redo_label: Option<String>,
     /// Whether the residual evaluation is shown.
     pub show_residual: bool,
+    /// The view menu; `None` when the project has no systems.
+    pub view_menu: Option<crate::systems::ViewMenu>,
+    /// The palette entries that set the view.
+    pub view_commands: Vec<crate::systems::ViewCommand>,
     /// The description boxes of the page on screen (see
     /// [`crate::view::page_descriptions`]).
     pub descriptions: Vec<crate::view::DescriptionView>,

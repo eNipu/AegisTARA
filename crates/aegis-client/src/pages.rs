@@ -14,8 +14,9 @@
 
 use aegis_canvas::Tone;
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId, LintCode,
-    LintSeverity, Methodology, NodeId, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, ElementKind, GoalId,
+    InterfaceId, LintCode, LintSeverity, Methodology, NodeId, Project, Provenance, ThreatId,
+    TreeId, TrustBoundaryId,
 };
 
 use crate::commands::TREATMENTS;
@@ -391,6 +392,11 @@ pub struct ComponentRow {
     pub interfaces: usize,
     /// Number of assets bound to this component.
     pub assets: usize,
+    /// Name of the system the component is in (through its top-level
+    /// ancestor), or empty (job 119).
+    pub system: String,
+    /// The project has a system and this component is in none.
+    pub no_system: bool,
 }
 
 /// One security setting applied to a component or an interface (CFG-03).
@@ -522,6 +528,13 @@ pub struct ComponentDetail {
     pub steps: Vec<crate::view::StepThrough>,
     /// Provenance text.
     pub changed: String,
+    /// The system it is in, through its top-level ancestor (job 119).
+    pub system: Option<ElementId>,
+    /// The systems to choose from; empty when the project has none.
+    pub systems: Vec<Choice<ElementId>>,
+    /// For a child: which system it is in and why, read-only; empty for a
+    /// top-level component.
+    pub system_from_parent: String,
 }
 
 /// One interface in the item definition table.
@@ -667,24 +680,32 @@ fn flow_crosses_boundary(project: &Project, df: &aegis_model::DataFlow) -> bool 
 #[must_use]
 pub fn component_rows(ws: &Workspace) -> Vec<ComponentRow> {
     let project = ws.project();
+    let any_system = project.element_count(ElementKind::System) > 0;
     project
         .components()
-        .map(|(idx, id, c)| ComponentRow {
-            id,
-            visual_id: project.component_visual_id(idx).unwrap_or_default(),
-            name: c.name().to_owned(),
-            parent: c
-                .parent()
-                .and_then(|p| project.component(p))
-                .map_or_else(String::new, |p| p.name().to_owned()),
-            interfaces: project
-                .interfaces()
-                .filter(|(_, _, i)| i.component() == idx)
-                .count(),
-            assets: project
-                .assets()
-                .filter(|(_, _, a)| a.component() == Some(idx))
-                .count(),
+        .map(|(idx, id, c)| {
+            let sys = project.component_system(idx);
+            ComponentRow {
+                id,
+                visual_id: project.component_visual_id(idx).unwrap_or_default(),
+                name: c.name().to_owned(),
+                parent: c
+                    .parent()
+                    .and_then(|p| project.component(p))
+                    .map_or_else(String::new, |p| p.name().to_owned()),
+                interfaces: project
+                    .interfaces()
+                    .filter(|(_, _, i)| i.component() == idx)
+                    .count(),
+                assets: project
+                    .assets()
+                    .filter(|(_, _, a)| a.component() == Some(idx))
+                    .count(),
+                system: sys
+                    .and_then(|s| crate::systems::system_name(project, s))
+                    .unwrap_or_default(),
+                no_system: any_system && sys.is_none(),
+            }
         })
         .collect()
 }
@@ -869,6 +890,24 @@ pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDeta
         }
         true
     };
+    let sys = project.component_system(idx);
+    let system_from_parent = match c.parent() {
+        None => String::new(),
+        Some(_) => {
+            let mut top = c;
+            for _ in 0..=aegis_model::MAX_COMPONENT_DEPTH {
+                match top.parent().and_then(|p| project.component(p)) {
+                    Some(up) => top = up,
+                    None => break,
+                }
+            }
+            let named = sys.and_then(|s| crate::systems::system_name(project, s));
+            match named {
+                Some(n) => format!("In {n}, with its parent {}", top.name()),
+                None => format!("In no system, with its parent {}", top.name()),
+            }
+        }
+    };
     let target = aegis_model::ItemRef::Component(id);
     let settings = project
         .controls_applied_to(target)
@@ -912,6 +951,9 @@ pub fn component_detail(ws: &Workspace, id: ComponentId) -> Option<ComponentDeta
         settings,
         available_controls: available_controls_for(project, target),
         changed: changed_text(c.provenance()),
+        system: sys,
+        systems: crate::systems::system_choices(project),
+        system_from_parent,
     })
 }
 
@@ -2635,6 +2677,17 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::ComponentWithoutSystem { component } => {
+            let s = Selection::Component(component);
+            (
+                format!(
+                    "{} {} is in no system.",
+                    m.element_names().component.singular,
+                    q(s)
+                ),
+                s,
+            )
+        }
         L::BoundaryCrossingDataFlowWithoutThreat { flow } => {
             let s = Selection::DataFlow(flow);
             (
@@ -3029,6 +3082,28 @@ pub fn comparison(
         p,
         Selection::Component(id)
     ));
+    {
+        let sys_of =
+            |p: &Project, id: ComponentId| p.component_idx(&id).and_then(|i| p.component_system(i));
+        let sys_text = |p: &Project, s: Option<ElementId>| {
+            s.and_then(|s| crate::systems::system_name(p, s))
+                .map_or_else(|| "no system".to_owned(), |n| format!("system \"{n}\""))
+        };
+        for id in diff.components().modified() {
+            let (old, new) = (sys_of(base, *id), sys_of(current, *id));
+            if old != new {
+                push(
+                    "Changed",
+                    format!(
+                        "Component {}: moved from {} to {}",
+                        cited(current, Selection::Component(*id)),
+                        sys_text(base, old),
+                        sys_text(current, new)
+                    ),
+                );
+            }
+        }
+    }
     entity!("Interface", diff.interfaces(), |p: &Project, id| cited(
         p,
         Selection::Interface(id)
@@ -3042,6 +3117,32 @@ pub fn comparison(
         diff.trust_boundaries(),
         |p: &Project, id| cited(p, Selection::TrustBoundary(id))
     );
+    {
+        let system = |p: &Project, id: ElementId| {
+            let e = p.element(id).filter(|e| e.kind() == ElementKind::System)?;
+            Some(format!(
+                "System {} \"{}\"",
+                p.element_visual_id(id).unwrap_or_default(),
+                e.name()
+            ))
+        };
+        let set = diff.elements();
+        for id in set.added() {
+            if let Some(t) = system(current, *id) {
+                push("Added", t);
+            }
+        }
+        for id in set.removed() {
+            if let Some(t) = system(base, *id) {
+                push("Removed", t);
+            }
+        }
+        for id in set.modified() {
+            if let Some(t) = system(current, *id) {
+                push("Changed", t);
+            }
+        }
+    }
     entity!("Asset", diff.assets(), |p: &Project, id| cited(
         p,
         Selection::Asset(id)

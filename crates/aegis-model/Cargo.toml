@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "workspace"
 harness = false
+
+[[bench]]
+name = "systems"
+harness = false

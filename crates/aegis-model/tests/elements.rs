@@ -8,7 +8,9 @@ use aegis_model::{
     EntityKind, Methodology, Op, OpLogReader, Project, Provenance, StoreError, VocabKind,
 };
 
-use aegis_model::{ElementId, ElementKind, KINDS, MAX_ELEMENT_LINKS, MAX_ELEMENTS_PER_KIND};
+use aegis_model::{
+    ElementId, ElementKind, KINDS, MAX_ELEMENT_LINKS, MAX_ELEMENTS_PER_KIND, MAX_SYSTEMS,
+};
 use aegis_model::{ModelError, TargetKind, VisualPrefix};
 use std::collections::HashSet;
 
@@ -73,7 +75,7 @@ fn row_caps_fit_the_global_caps() {
         assert!(d.max_elements <= MAX_ELEMENTS_PER_KIND);
         assert!(d.max_links <= MAX_ELEMENT_LINKS);
         assert!(d.max_elements > 0);
-        assert!(!d.targets.is_empty());
+        assert_eq!(d.max_links > 0, !d.targets.is_empty());
     }
 }
 
@@ -885,4 +887,107 @@ fn diff_ignores_an_added_then_removed_element() {
     assert_eq!(p, before);
     assert!(diff(&before, &p).is_empty());
     assert!(diff(&p, &before).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Systems (119a).
+// ---------------------------------------------------------------------------
+
+const SYS: ElementKind = ElementKind::System;
+
+fn add_system(n: u64, name: &str) -> Op {
+    Op::AddElement {
+        id: common::element_id(n),
+        kind: SYS,
+        name: name.into(),
+        provenance: who(),
+    }
+}
+
+#[test]
+fn system_row() {
+    let d = SYS.def();
+    assert_eq!(d.key, "system");
+    assert_eq!(d.prefix, "SYS");
+    assert_eq!(d.file_stem, "systems");
+    assert_eq!(d.label, "system");
+    assert!(d.targets.is_empty());
+    assert_eq!(d.max_elements, MAX_SYSTEMS);
+    assert_eq!(MAX_SYSTEMS, 64);
+    assert_eq!(d.max_links, 0);
+    assert_eq!(ElementKind::from_key("system"), Some(SYS));
+    assert_eq!(SYS.visual_id(3), "SYS03");
+    assert_eq!(SYS.parse_visual("SYS03"), Some(3));
+}
+
+#[test]
+fn system_add_rename_remove_round_trip() {
+    let (_, mut p) = project();
+    let id = common::element_id(1);
+    let rename = Op::RenameElement {
+        id,
+        name: "Gateway".into(),
+        provenance: Provenance::human("bob", 2),
+    };
+    let steps = [
+        (add_system(1, "Brake"), 1),
+        (rename, 1),
+        (Op::RemoveElement { id }, 0),
+    ];
+    for (op, count) in steps {
+        let before = p.clone();
+        let inverse = p.apply(op.clone()).expect("apply");
+        assert_eq!(p.element_count(SYS), count);
+        assert_eq!(p.element_count(MU), 0);
+        let after = p.clone();
+        let again = p.apply(inverse.clone()).expect("inverse");
+        assert_eq!(p, before, "{op:?} then {inverse:?}");
+        assert_eq!(again, op);
+        p.apply(again).expect("redo");
+        assert_eq!(p, after);
+    }
+    let (_, empty) = project();
+    assert_eq!(p, empty);
+}
+
+#[test]
+fn system_and_misuse_visual_numbers_count_separately() {
+    let (_, mut p) = project();
+    p.apply(add(1, "m")).expect("add");
+    p.apply(add_system(2, "s")).expect("add");
+    p.apply(add_system(3, "t")).expect("add");
+    let vis = |n| p.element_visual_id(common::element_id(n));
+    assert_eq!(vis(1).as_deref(), Some("MU00"));
+    assert_eq!(vis(2).as_deref(), Some("SYS00"));
+    assert_eq!(vis(3).as_deref(), Some("SYS01"));
+}
+
+#[test]
+fn systems_are_capped_at_64() {
+    let (_, mut p) = project();
+    for n in 0..MAX_SYSTEMS as u64 {
+        p.apply(add_system(n, "x")).expect("add");
+    }
+    assert_eq!(p.element_count(SYS), 64);
+    assert_eq!(
+        refusal(&mut p, add_system(MAX_SYSTEMS as u64, "x")),
+        ModelError::ProjectCapacityExceeded {
+            kind: EntityKind::Element
+        }
+    );
+    // Misuse cases have their own count.
+    p.apply(add(1000, "m")).expect("misuse case still fits");
+}
+
+#[test]
+fn system_refuses_links() {
+    let (_, mut p) = project_with_threats(1);
+    p.apply(add_system(1, "Brake")).expect("add");
+    assert_eq!(
+        refusal(&mut p, link(1, 0)),
+        ModelError::LinkNotAllowed {
+            element: common::element_id(1),
+            target: TargetKind::Threat,
+        }
+    );
 }

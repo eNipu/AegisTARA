@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::i18n::Language;
 use crate::report::ReportProfile;
+use crate::systems::SystemView;
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -79,6 +80,21 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     ))
 }
 
+/// Most projects whose view is remembered; the oldest is dropped first.
+/// With 16 entries of 64 system IDs the list is about 40 KB, inside
+/// `MAX_SETTINGS_BYTES` (64 KB).
+pub const MAX_REMEMBERED_VIEWS: usize = 16;
+
+/// The systems one user looks at in one project.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SystemViewSetting {
+    /// `Settings::view_key(user, project)`.
+    pub key: String,
+    /// System IDs, as text.
+    pub systems: Vec<String>,
+}
+
 /// Largest settings file read.
 pub const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 
@@ -122,6 +138,9 @@ pub struct Settings {
     pub bottom_panel: u32,
     /// The sidebar groups the user closed, by `PageGroup` key (UI-13).
     pub collapsed_groups: Vec<String>,
+    /// The systems each user looks at in each project (SYS-03); never part
+    /// of a project.
+    pub system_views: Vec<SystemViewSetting>,
 }
 
 /// How the window picks light or dark (UI-07.5).
@@ -274,6 +293,43 @@ impl Settings {
         Appearance::from_code(&self.appearance)
     }
 
+    /// The key of a user's view in a project. `project` is the server
+    /// address plus the project ID, or the folder path in standalone mode.
+    #[must_use]
+    pub fn view_key(user: &str, project: &str) -> String {
+        format!("{user}\n{project}")
+    }
+
+    /// The remembered view, or all systems. Text that is not a valid ID is
+    /// skipped; at most `MAX_SYSTEMS` IDs are read.
+    #[must_use]
+    pub fn system_view(&self, key: &str) -> SystemView {
+        let Some(entry) = self.system_views.iter().find(|v| v.key == key) else {
+            return SystemView::all();
+        };
+        SystemView::of(
+            entry
+                .systems
+                .iter()
+                .take(aegis_model::MAX_SYSTEMS)
+                .filter_map(|t| t.parse::<aegis_model::ElementId>().ok()),
+        )
+    }
+
+    /// Remembers the view for `key`; all systems removes the entry. The
+    /// oldest entries are dropped beyond `MAX_REMEMBERED_VIEWS`.
+    pub fn set_system_view(&mut self, key: &str, view: &SystemView) {
+        self.system_views.retain(|v| v.key != key);
+        if !view.is_all() {
+            self.system_views.push(SystemViewSetting {
+                key: key.to_owned(),
+                systems: view.systems().map(|id| id.to_string()).collect(),
+            });
+        }
+        let extra = self.system_views.len().saturating_sub(MAX_REMEMBERED_VIEWS);
+        self.system_views.drain(..extra);
+    }
+
     /// The export folder to use.
     #[must_use]
     pub fn export_dir(&self) -> PathBuf {
@@ -337,6 +393,7 @@ mod tests {
             right_panel: 420,
             bottom_panel: 0,
             collapsed_groups: vec!["assets-threats".into()],
+            system_views: Vec::new(),
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);
