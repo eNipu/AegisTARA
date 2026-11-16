@@ -3032,10 +3032,19 @@ impl<P: CredentialProvider> Actor<P> {
                     ("Redone", NoticeAction::Undo)
                 };
                 let shown = label.as_ref().and_then(|l| l.selection(open.ws.project()));
-                let text = label.map_or_else(
+                let mut text = label.map_or_else(
                     || format!("{done}."),
                     |l| format!("{done}: {}", l.imperative()),
                 );
+                // The view is a display choice: grow it, add no op.
+                if let Some(sel) = shown
+                    && let Some(open) = self.open.as_mut()
+                    && let Some((view, name)) =
+                        crate::systems::reveal(open.ws.project(), &open.ui.system_view, sel)
+                {
+                    open.ui.system_view = view;
+                    text.push_str(&format!(" View now includes {name}."));
+                }
                 self.notice_with(Severity::Info, text, Some(action));
                 // Open the page of the element and select it.
                 if let Some(sel) = shown

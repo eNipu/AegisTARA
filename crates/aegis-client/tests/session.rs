@@ -1770,3 +1770,152 @@ async fn switching_the_system_view_adds_no_op_also_when_read_only() {
     drop(alice);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn an_undo_outside_the_view_adds_its_system_to_the_view() {
+    use aegis_client::systems::SystemView;
+    use aegis_client::view::Page;
+    use aegis_model::{ComponentId, ElementId};
+
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    fn chip(vm: &ViewModel) -> Option<&str> {
+        p(vm).view_menu.as_ref().map(|m| m.chip.as_str())
+    }
+    fn redo_toast(vm: &ViewModel) -> Option<String> {
+        vm.notices
+            .iter()
+            .find(|n| n.action == Some(NoticeAction::Redo))
+            .map(|n| n.text.clone())
+    }
+    fn undo_toast(vm: &ViewModel) -> Option<String> {
+        vm.notices
+            .iter()
+            .find(|n| n.action == Some(NoticeAction::Undo) && n.text.starts_with("Redone"))
+            .map(|n| n.text.clone())
+    }
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Brake").await;
+    start_editing(&alice).await;
+    let (brake, adas) = (ElementId::new_v7(), ElementId::new_v7());
+    let (caliper, camera) = (ComponentId::new_v7(), ComponentId::new_v7());
+    let edits = [
+        Edit::AddSystem {
+            id: brake,
+            name: "Brake".into(),
+        },
+        Edit::AddSystem {
+            id: adas,
+            name: "ADAS".into(),
+        },
+        Edit::AddComponent {
+            id: caliper,
+            name: "Caliper".into(),
+            parent: None,
+        },
+        Edit::AddComponent {
+            id: camera,
+            name: "Camera".into(),
+            parent: None,
+        },
+        Edit::MoveToSystem {
+            components: vec![caliper],
+            system: Some(brake),
+        },
+        Edit::MoveToSystem {
+            components: vec![camera],
+            system: Some(adas),
+        },
+    ];
+    for e in edits {
+        alice.send(Command::Edit(e)).expect("sent");
+    }
+    alice.send(Command::ShowPage(Page::Item)).expect("sent");
+    until(&alice, "two components", |vm| {
+        project_ready(vm) && p(vm).data.components.len() == 2
+    })
+    .await;
+    let settled = until(&alice, "settled", project_ready).await;
+    let before = p(&settled).confirmed_seq;
+    alice
+        .send(Command::Edit(Edit::RenameComponent {
+            component: camera,
+            name: "Front camera".into(),
+        }))
+        .expect("sent");
+    let view = until(&alice, "renamed", |vm| {
+        project_ready(vm) && p(vm).confirmed_seq > before
+    })
+    .await;
+    let seq = p(&view).confirmed_seq;
+
+    alice
+        .send(Command::SetSystemView(SystemView::only(brake)))
+        .expect("sent");
+    let view = until(&alice, "one component", |vm| {
+        p(vm).data.components.len() == 1
+    })
+    .await;
+    assert_eq!(chip(&view), Some("Brake"));
+    assert_eq!(p(&view).confirmed_seq, seq);
+
+    alice.send(Command::Undo).expect("sent");
+    let view = until(&alice, "undo toast", |vm| {
+        redo_toast(vm).is_some() && project_ready(vm)
+    })
+    .await;
+    let text = redo_toast(&view).expect("toast");
+    assert!(text.starts_with("Undone: "), "{text}");
+    assert!(text.ends_with(" View now includes ADAS."), "{text}");
+    assert_eq!(chip(&view), Some("Brake + ADAS"));
+    assert_eq!(p(&view).page, Page::Item);
+    let detail = p(&view).data.component.as_ref().expect("selected");
+    assert_eq!(detail.id, camera);
+    assert_eq!(detail.name, "Camera");
+    let view = until(&alice, "two rows", |vm| {
+        p(vm).data.components.len() == 2 && project_ready(vm)
+    })
+    .await;
+    let seq = p(&view).confirmed_seq;
+
+    alice
+        .send(Command::SetSystemView(SystemView::only(brake)))
+        .expect("sent");
+    let view = until(&alice, "one row", |vm| p(vm).data.components.len() == 1).await;
+    assert_eq!(p(&view).confirmed_seq, seq, "a view change is never an op");
+
+    alice.send(Command::Redo).expect("sent");
+    let view = until(&alice, "redo toast", |vm| {
+        undo_toast(vm).is_some() && project_ready(vm)
+    })
+    .await;
+    let text = undo_toast(&view).expect("toast");
+    assert!(text.ends_with(" View now includes ADAS."), "{text}");
+    assert_eq!(chip(&view), Some("Brake + ADAS"));
+
+    alice
+        .send(Command::SetSystemView(SystemView::only(adas)))
+        .expect("sent");
+    until(&alice, "adas only", |vm| chip(vm) == Some("ADAS")).await;
+    let settled = until(&alice, "settled", project_ready).await;
+    let before = p(&settled).confirmed_seq;
+    alice
+        .send(Command::Edit(Edit::RenameComponent {
+            component: camera,
+            name: "Rear camera".into(),
+        }))
+        .expect("sent");
+    until(&alice, "renamed again", |vm| {
+        project_ready(vm) && p(vm).confirmed_seq > before
+    })
+    .await;
+    alice.send(Command::Undo).expect("sent");
+    let view = until(&alice, "second undo toast", |vm| redo_toast(vm).is_some()).await;
+    let text = redo_toast(&view).expect("toast");
+    assert!(!text.contains("View now includes"), "{text}");
+    assert_eq!(chip(&view), Some("ADAS"));
+    drop(alice);
+    server.stop().await;
+}

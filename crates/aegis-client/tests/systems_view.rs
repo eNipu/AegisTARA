@@ -5,9 +5,12 @@ use std::sync::Arc;
 
 use aegis_client::commands::Edit;
 use aegis_client::settings::{MAX_REMEMBERED_VIEWS, Settings};
-use aegis_client::systems::{SystemView, view_commands, view_menu};
+use aegis_client::systems::{SystemView, reveal, view_commands, view_menu};
+use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
-use aegis_model::{ComponentId, ElementId, ElementKind, Methodology, Op, Provenance};
+use aegis_model::{
+    ComponentId, ControlId, ElementId, ElementKind, ItemRef, Methodology, Op, Provenance,
+};
 
 fn workspace() -> Workspace {
     Workspace::empty(Arc::new(Methodology::iso21434_r155().expect("builtin")))
@@ -487,4 +490,61 @@ mod filtering {
         assert_eq!(fx.ws.pending_batches(), pending);
         assert_eq!(fx.ws.can_undo(), undo);
     }
+}
+
+fn component_named(ws: &Workspace, name: &str) -> ComponentId {
+    ws.project()
+        .components()
+        .find(|(_, _, c)| c.name() == name)
+        .map(|(_, id, _)| id)
+        .expect("component")
+}
+
+#[test]
+fn reveal_adds_the_first_system_of_a_hidden_element() {
+    let (mut ws, [brake, adas, gateway]) = fixture();
+    let p = ws.project();
+    let camera = Selection::Component(component_named(&ws, "Camera"));
+    let (view, name) = reveal(p, &SystemView::only(brake), camera).expect("grows");
+    assert!(view.contains(brake) && view.contains(adas) && !view.contains(gateway));
+    assert_eq!(name, "ADAS");
+
+    let caliper = Selection::Component(component_named(&ws, "Caliper"));
+    let loose = Selection::Component(component_named(&ws, "Loose"));
+    assert!(reveal(p, &SystemView::only(brake), caliper).is_none());
+    assert!(reveal(p, &SystemView::only(brake), loose).is_none());
+    assert!(reveal(p, &SystemView::all(), camera).is_none());
+    let gone = Selection::Component(ComponentId::new_v7());
+    assert!(reveal(p, &SystemView::only(brake), gone).is_none());
+
+    // A control applied to Camera (ADAS) and a Gateway component.
+    let gate = add_component(&mut ws, "Gate", None, Some(gateway));
+    let control = ControlId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddControl {
+            id: control,
+            name: "Signing".into(),
+        },
+    );
+    for target in [component_named(&ws, "Camera"), gate] {
+        run(
+            &mut ws,
+            &Edit::ApplyControl {
+                control,
+                target: ItemRef::Component(target),
+            },
+        );
+    }
+    let first = adas.min(gateway);
+    let (view, name) = reveal(
+        ws.project(),
+        &SystemView::only(brake),
+        Selection::Control(control),
+    )
+    .expect("grows");
+    assert!(view.contains(first) && view.contains(brake));
+    assert_eq!(view.systems().count(), 2, "only one system is added");
+    let want = if first == adas { "ADAS" } else { "Gateway" };
+    assert_eq!(name, want);
 }
