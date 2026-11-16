@@ -1013,3 +1013,391 @@ fn a_removed_system_behaves_as_all() {
     assert_eq!(after, overview(&fx.ws));
     assert_ne!(counts_of(&before), counts_of(&after));
 }
+
+// ---- the Versions comparison within the view (120g) ----
+
+mod versions {
+    use aegis_client::pages::{Comparison, comparison, comparison_in};
+
+    use super::*;
+
+    /// What one `add_set` made, for later edits.
+    struct Made {
+        first: ComponentId,
+        threat: ThreatId,
+    }
+
+    /// One element of every kind, named after `name`; two components so the
+    /// data flow and the trust boundary stay inside `system`.
+    fn add_set(ws: &mut Workspace, name: &str, system: Option<ElementId>) -> Made {
+        let first = add_component(ws, &format!("{name} part"), None, system);
+        let second = add_component(ws, &format!("{name} other"), None, system);
+        run(
+            ws,
+            &Edit::AddInterface {
+                id: InterfaceId::new_v7(),
+                name: format!("{name} port"),
+                component: first,
+                kind: 0,
+            },
+        );
+        add_flow(ws, &format!("{name} flow"), first, second);
+        let boundary = TrustBoundaryId::new_v7();
+        run(
+            ws,
+            &Edit::AddTrustBoundary {
+                id: boundary,
+                name: format!("{name} zone"),
+            },
+        );
+        for component in [first, second] {
+            run(
+                ws,
+                &Edit::SetTrustBoundaryMember {
+                    boundary,
+                    component,
+                    member: true,
+                },
+            );
+        }
+        let asset = AssetId::new_v7();
+        run(
+            ws,
+            &Edit::AddAssetBound {
+                id: asset,
+                name: format!("{name} data"),
+                properties: (0..6).collect(),
+                component: first,
+            },
+        );
+        let threat = ThreatId::new_v7();
+        run(
+            ws,
+            &Edit::AddThreat {
+                id: threat,
+                name: format!("{name} attack"),
+                asset,
+                category: 0,
+            },
+        );
+        let damage = DamageId::new_v7();
+        run(
+            ws,
+            &Edit::AddDamage {
+                id: damage,
+                name: format!("{name} harm"),
+            },
+        );
+        run(
+            ws,
+            &Edit::LinkDamage {
+                threat,
+                damage,
+                linked: true,
+            },
+        );
+        run(
+            ws,
+            &Edit::NewTree {
+                id: TreeId::new_v7(),
+                root: format!("{name} tree"),
+                threat: Some(threat),
+            },
+        );
+        let (control, goal, claim) = (ControlId::new_v7(), GoalId::new_v7(), ClaimId::new_v7());
+        run(
+            ws,
+            &Edit::AddControl {
+                id: control,
+                name: format!("{name} control"),
+            },
+        );
+        run(
+            ws,
+            &Edit::ApplyControl {
+                control,
+                target: ItemRef::Component(first),
+            },
+        );
+        run(
+            ws,
+            &Edit::AddGoal {
+                id: goal,
+                name: format!("{name} goal"),
+            },
+        );
+        run(
+            ws,
+            &Edit::SetThreatGoal {
+                threat,
+                goal: Some(goal),
+            },
+        );
+        run(
+            ws,
+            &Edit::AddClaim {
+                id: claim,
+                name: format!("{name} claim"),
+            },
+        );
+        run(
+            ws,
+            &Edit::SetThreatClaim {
+                threat,
+                claim: Some(claim),
+            },
+        );
+        Made { first, threat }
+    }
+
+    struct Vx {
+        ws: Workspace,
+        base: aegis_model::Project,
+        brake: ElementId,
+        adas: ElementId,
+        b: Made,
+        a: Made,
+    }
+
+    /// Two systems; `base` is taken before the elements are added.
+    fn fixture() -> Vx {
+        let mut ws = workspace();
+        let brake = add_system(&mut ws, "Brake");
+        let adas = add_system(&mut ws, "ADAS");
+        let base = ws.project().clone();
+        let b = add_set(&mut ws, "Brake", Some(brake));
+        let a = add_set(&mut ws, "ADAS", Some(adas));
+        add_set(&mut ws, "Loose", None);
+        Vx {
+            ws,
+            base,
+            brake,
+            adas,
+            b,
+            a,
+        }
+    }
+
+    fn cmp_in(fx: &Vx, view: &SystemView) -> Comparison {
+        comparison_in(&fx.base, "v1", fx.ws.project(), view).expect("compares")
+    }
+
+    fn has(c: &Comparison, kind: &str, what: &str, name: &str) -> bool {
+        c.lines
+            .iter()
+            .any(|l| l.kind == kind && l.text.starts_with(what) && l.text.contains(name))
+    }
+
+    #[test]
+    fn every_kind_follows_the_view() {
+        let fx = fixture();
+        let full = comparison(&fx.base, "v1", fx.ws.project()).expect("compares");
+        let view = cmp_in(&fx, &SystemView::only(fx.brake));
+        for what in [
+            "Component",
+            "Interface",
+            "Data flow",
+            "Trust boundary",
+            "Asset",
+            "Damage scenario",
+            "Threat scenario",
+            "Attack tree",
+            "Security control",
+            "Goal",
+            "Claim",
+        ] {
+            assert!(has(&view, "Added", what, "Brake"), "{what} Brake");
+            assert!(has(&view, "Added", what, "Loose"), "{what} Loose");
+            assert!(!has(&view, "Added", what, "ADAS"), "{what} ADAS");
+            assert!(has(&full, "Added", what, "ADAS"), "{what} ADAS full");
+        }
+        assert_eq!(view.hidden, full.lines.len() - view.lines.len());
+        assert!(view.hidden > 0);
+    }
+
+    #[test]
+    fn removed_lines_follow_the_base_systems() {
+        let mut fx = fixture();
+        let base = fx.ws.project().clone();
+        for t in [fx.b.threat, fx.a.threat] {
+            run(&mut fx.ws, &Edit::RemoveThreat { threat: t });
+        }
+        let c = comparison_in(&base, "v1", fx.ws.project(), &SystemView::only(fx.brake))
+            .expect("compares");
+        assert!(has(&c, "Removed", "Threat scenario", "Brake attack"));
+        assert!(!has(&c, "Removed", "Threat scenario", "ADAS attack"));
+    }
+
+    #[test]
+    fn a_moved_component_shows_in_both_systems() {
+        let mut fx = fixture();
+        let gateway = add_system(&mut fx.ws, "Gateway");
+        let base = fx.ws.project().clone();
+        run(
+            &mut fx.ws,
+            &Edit::MoveToSystem {
+                components: vec![fx.a.first],
+                system: Some(fx.brake),
+            },
+        );
+        let moved = |view: &SystemView| {
+            let c = comparison_in(&base, "v1", fx.ws.project(), view).expect("compares");
+            c.lines.iter().any(|l| l.text.contains("moved from"))
+        };
+        assert!(moved(&SystemView::only(fx.brake)));
+        assert!(moved(&SystemView::only(fx.adas)));
+        assert!(!moved(&SystemView::only(gateway)));
+    }
+
+    #[test]
+    fn a_renamed_system_shows_in_its_own_view() {
+        let mut fx = fixture();
+        let base = fx.ws.project().clone();
+        run(
+            &mut fx.ws,
+            &Edit::RenameSystem {
+                system: fx.adas,
+                name: "Driver assist".into(),
+            },
+        );
+        let sys_line = |view: &SystemView| {
+            comparison_in(&base, "v1", fx.ws.project(), view)
+                .expect("compares")
+                .lines
+                .iter()
+                .any(|l| l.kind == "Changed" && l.text.starts_with("System"))
+        };
+        assert!(sys_line(&SystemView::only(fx.adas)));
+        assert!(!sys_line(&SystemView::only(fx.brake)));
+    }
+
+    /// A damage scenario and a threat on a component, without a tree (a
+    /// tree would give the threat its feasibility).
+    fn plain_threat(ws: &mut Workspace, name: &str, system: ElementId) -> (DamageId, ThreatId) {
+        let comp = add_component(ws, name, None, Some(system));
+        let asset = AssetId::new_v7();
+        run(
+            ws,
+            &Edit::AddAssetBound {
+                id: asset,
+                name: format!("{name} data"),
+                properties: (0..6).collect(),
+                component: comp,
+            },
+        );
+        let (threat, damage) = (ThreatId::new_v7(), DamageId::new_v7());
+        run(
+            ws,
+            &Edit::AddThreat {
+                id: threat,
+                name: format!("{name} attack"),
+                asset,
+                category: 0,
+            },
+        );
+        run(
+            ws,
+            &Edit::AddDamage {
+                id: damage,
+                name: format!("{name} harm"),
+            },
+        );
+        run(
+            ws,
+            &Edit::LinkDamage {
+                threat,
+                damage,
+                linked: true,
+            },
+        );
+        (damage, threat)
+    }
+
+    #[test]
+    fn risks_follow_their_threat() {
+        let mut ws = workspace();
+        let brake = add_system(&mut ws, "Brake");
+        let adas = add_system(&mut ws, "ADAS");
+        let rated = [
+            plain_threat(&mut ws, "Brake", brake),
+            plain_threat(&mut ws, "ADAS", adas),
+        ];
+        let base = ws.project().clone();
+        for (d, t) in rated {
+            run(
+                &mut ws,
+                &Edit::SetImpact {
+                    damage: d,
+                    category: 0,
+                    level: Some(2),
+                },
+            );
+            run(
+                &mut ws,
+                &Edit::SetThreatFeasibility {
+                    threat: t,
+                    level: Some(1),
+                },
+            );
+        }
+        let all = comparison(&base, "v1", ws.project()).expect("compares");
+        let risks = |c: &Comparison| c.lines.iter().filter(|l| l.kind == "Risk").count();
+        assert_eq!(risks(&all), 2);
+        let c =
+            comparison_in(&base, "v1", ws.project(), &SystemView::only(brake)).expect("compares");
+        assert_eq!(risks(&c), 1);
+        assert!(has(&c, "Risk", "", "Brake attack"));
+    }
+
+    #[test]
+    fn the_summary_counts_the_shown_lines() {
+        let fx = fixture();
+        let c = cmp_in(&fx, &SystemView::only(fx.brake));
+        let n = |k: &str| c.lines.iter().filter(|l| l.kind == k).count();
+        assert_eq!(c.scope.as_deref(), Some("Brake"));
+        let want = format!(
+            "Since this baseline: {} added, {} removed, {} changed, {} risk(s) moved. {} more outside this view.",
+            n("Added"),
+            n("Removed"),
+            n("Changed"),
+            n("Risk"),
+            c.hidden
+        );
+        assert_eq!(c.summary, want);
+        assert!(
+            c.summary
+                .ends_with(&format!(" {} more outside this view.", c.hidden))
+        );
+    }
+
+    #[test]
+    fn nothing_shown_still_counts_what_is_hidden() {
+        let mut ws = workspace();
+        let brake = add_system(&mut ws, "Brake");
+        let adas = add_system(&mut ws, "ADAS");
+        let base = ws.project().clone();
+        add_set(&mut ws, "ADAS", Some(adas));
+        let full = comparison(&base, "v1", ws.project()).expect("compares");
+        let c =
+            comparison_in(&base, "v1", ws.project(), &SystemView::only(brake)).expect("compares");
+        assert!(c.lines.is_empty(), "{:?}", c.lines);
+        assert_eq!(c.hidden, full.lines.len());
+        assert_eq!(
+            c.summary,
+            format!(
+                "Nothing changed in this view since this baseline. {} more outside this view.",
+                c.hidden
+            )
+        );
+    }
+
+    #[test]
+    fn all_systems_is_the_plain_comparison() {
+        let fx = fixture();
+        let plain = comparison(&fx.base, "v1", fx.ws.project()).expect("compares");
+        let all = cmp_in(&fx, &SystemView::all());
+        assert_eq!(all, plain);
+        assert_eq!(all.scope, None);
+        assert_eq!(all.hidden, 0);
+    }
+}
