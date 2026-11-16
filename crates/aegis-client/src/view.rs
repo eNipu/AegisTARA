@@ -857,6 +857,33 @@ pub fn through_label(project: &Project, item: ItemRef) -> String {
     }
 }
 
+/// The name of the system a step leaves its tree's systems for: the step
+/// goes via a component or interface of a system that is not among the
+/// systems of its tree. `None` when the step has no via, the via
+/// component is in no system, the tree is in no system, or the via
+/// system is one of the tree's. Time O(depth + log systems).
+#[must_use]
+pub fn step_other_system(
+    project: &Project,
+    usage: &aegis_model::SystemUse,
+    tree: TreeIdx,
+    node: NodeIdx,
+) -> Option<String> {
+    let tree_systems = usage.tree(tree);
+    if tree_systems.is_empty() {
+        return None;
+    }
+    let comp = match project.step_via(tree, node)? {
+        ItemRef::Component(id) => project.component_idx(&id)?,
+        ItemRef::Interface(id) => project.interface(project.interface_idx(&id)?)?.component(),
+    };
+    let system = project.component_system(comp)?;
+    if usage.set_of([system]).intersects(tree_systems) {
+        return None;
+    }
+    crate::systems::system_name(project, system)
+}
+
 /// The steps that go through a component (including through its interfaces)
 /// or through an interface, in tree then node order. Time O(total nodes).
 #[must_use]
@@ -933,6 +960,9 @@ pub struct Inspector {
     pub through_options: Vec<ThroughChoice>,
     /// The chosen item's position in `through_options`.
     pub through: Option<usize>,
+    /// The other system the chosen item belongs to, when the step leaves its
+    /// tree's systems.
+    pub through_system: Option<String>,
     /// The pack's attack types (steps only).
     pub attack_types: Vec<Choice>,
     /// The chosen attack type's position in `attack_types`.
@@ -1091,6 +1121,8 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
     let ghost_overlay = ws
         .suggestions()
         .and_then(|branch| branch.preview_tree(project, tree_id));
+    let usage =
+        (project.element_count(aegis_model::ElementKind::System) > 0).then(|| project.system_use());
     let style = |idx: NodeIdx| -> NodeStyle {
         if let Some((ref preview_tree, ref ghosts)) = ghost_overlay
             && let Some(nid) = preview_tree.id_of(idx)
@@ -1144,9 +1176,16 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
             tone: value.map_or(Tone::Unrated, |v| level_tone(m, v)),
             critical: false,
             ghost: false,
-            via: project
-                .step_via(tree_idx, idx)
-                .map(|item| through_label(project, item)),
+            via: project.step_via(tree_idx, idx).map(|item| {
+                let label = through_label(project, item);
+                match usage
+                    .as_ref()
+                    .and_then(|u| step_other_system(project, u, tree_idx, idx))
+                {
+                    Some(sys) => format!("{label} · {sys}"),
+                    None => label,
+                }
+            }),
             capped,
         }
     };
@@ -1394,6 +1433,11 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
     let through = project
         .step_via(tree_idx, idx)
         .and_then(|v| through_options.iter().position(|o| o.item == v));
+    let through_system = if project.element_count(aegis_model::ElementKind::System) > 0 {
+        step_other_system(project, &project.system_use(), tree_idx, idx)
+    } else {
+        None
+    };
     let attack_types: Vec<Choice> = if is_step {
         m.attack_types()
             .map(|a| Choice {
@@ -1445,6 +1489,7 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         why,
         through_options,
         through,
+        through_system,
         attack_types,
         attack_type,
         mitigations,
