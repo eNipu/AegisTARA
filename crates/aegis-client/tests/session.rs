@@ -1919,3 +1919,96 @@ async fn an_undo_outside_the_view_adds_its_system_to_the_view() {
     drop(alice);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn a_stale_system_name_stops_the_report_export() {
+    use aegis_client::report::{ExportKind, ReportFilters, ReportProfile};
+    use aegis_client::view::Page;
+    use aegis_model::{ComponentId, ElementId};
+
+    fn export(session: &Session, dir: &std::path::Path, file: &str, systems: &[&str]) {
+        session
+            .send(Command::Export {
+                kind: ExportKind::Report,
+                path: dir.join(file),
+                profile: Box::new(ReportProfile {
+                    filters: ReportFilters {
+                        systems: systems.iter().map(|s| (*s).to_owned()).collect(),
+                        ..ReportFilters::default()
+                    },
+                    ..ReportProfile::default()
+                }),
+            })
+            .expect("sent");
+    }
+    async fn saved(session: &Session, file: &str) {
+        until(session, file, |vm| {
+            vm.notices
+                .iter()
+                .any(|n| n.text.starts_with("Saved") && n.text.ends_with(file))
+        })
+        .await;
+    }
+    let dir = std::env::temp_dir().join(format!("aegis-stale-{}", std::process::id()));
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    create_and_open(&alice, "Vehicle").await;
+
+    // A project with no systems exports as before.
+    export(&alice, &dir, "plain.html", &["Brake"]);
+    saved(&alice, "plain.html").await;
+    assert!(dir.join("plain.html").exists());
+
+    start_editing(&alice).await;
+    let (brake, caliper) = (ElementId::new_v7(), ComponentId::new_v7());
+    let edits = [
+        Edit::AddSystem {
+            id: brake,
+            name: "Brake".into(),
+        },
+        Edit::AddComponent {
+            id: caliper,
+            name: "Caliper".into(),
+            parent: None,
+        },
+        Edit::MoveToSystem {
+            components: vec![caliper],
+            system: Some(brake),
+        },
+    ];
+    for e in edits {
+        alice.send(Command::Edit(e)).expect("sent");
+    }
+    alice.send(Command::ShowPage(Page::Item)).expect("sent");
+    until(&alice, "one component", |vm| {
+        project_ready(vm)
+            && vm
+                .project
+                .as_ref()
+                .is_some_and(|p| p.data.components.len() == 1)
+    })
+    .await;
+
+    export(&alice, &dir, "stale.html", &["Brake", "Gone"]);
+    let view = until(&alice, "stale warning", |vm| {
+        vm.notices
+            .iter()
+            .any(|n| n.severity == Severity::Warning && n.text.contains("\"Gone\""))
+    })
+    .await;
+    let warning = view
+        .notices
+        .iter()
+        .find(|n| n.severity == Severity::Warning && n.text.contains("\"Gone\""))
+        .expect("warning");
+    assert!(!warning.text.contains("\"Brake\""), "{}", warning.text);
+    assert!(!dir.join("stale.html").exists());
+
+    export(&alice, &dir, "brake.html", &["Brake"]);
+    saved(&alice, "brake.html").await;
+    assert!(dir.join("brake.html").exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+    drop(alice);
+    server.stop().await;
+}
