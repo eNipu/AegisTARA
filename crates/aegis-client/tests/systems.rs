@@ -405,3 +405,49 @@ fn comparison_says_which_system_a_component_moved_to() {
         cmp.lines
     );
 }
+
+#[test]
+fn renaming_a_component_and_its_system_is_not_a_move() {
+    let mut ws = workspace();
+    let brake = add_system(&mut ws, "Brake");
+    let ecu = add_component(&mut ws, "ECU", None);
+    move_to(&mut ws, ecu, brake);
+    let base = ws.project().clone();
+    run(
+        &mut ws,
+        &Edit::RenameSystem {
+            system: brake,
+            name: "Brakes".into(),
+        },
+    );
+    run(
+        &mut ws,
+        &Edit::RenameComponent {
+            component: ecu,
+            name: "Brake ECU".into(),
+        },
+    );
+    let cmp = pages::comparison(&base, "v1", ws.project()).expect("compares");
+    assert!(
+        !cmp.lines.iter().any(|l| l.text.contains("moved from")),
+        "{:?}",
+        cmp.lines
+    );
+}
+
+#[test]
+fn a_move_between_systems_with_the_same_name_is_reported() {
+    let mut ws = workspace();
+    let a = add_system(&mut ws, "Brake");
+    let b = add_system(&mut ws, "Brake");
+    let ecu = add_component(&mut ws, "ECU", None);
+    move_to(&mut ws, ecu, a);
+    let base = ws.project().clone();
+    move_to(&mut ws, ecu, b);
+    let cmp = pages::comparison(&base, "v1", ws.project()).expect("compares");
+    assert!(
+        cmp.lines.iter().any(|l| l.text.contains("moved from")),
+        "{:?}",
+        cmp.lines
+    );
+}

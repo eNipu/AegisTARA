@@ -3083,21 +3083,22 @@ pub fn comparison(
         Selection::Component(id)
     ));
     {
-        let sys_text = |p: &Project, id: ComponentId| {
-            let s = p
-                .component_idx(&id)
-                .and_then(|i| p.component_system(i))
-                .and_then(|s| crate::systems::system_name(p, s));
-            s.map_or_else(|| "no system".to_owned(), |n| format!("system \"{n}\""))
+        let sys_of =
+            |p: &Project, id: ComponentId| p.component_idx(&id).and_then(|i| p.component_system(i));
+        let sys_text = |p: &Project, s: Option<ElementId>| {
+            s.and_then(|s| crate::systems::system_name(p, s))
+                .map_or_else(|| "no system".to_owned(), |n| format!("system \"{n}\""))
         };
         for id in diff.components().modified() {
-            let (old, new) = (sys_text(base, *id), sys_text(current, *id));
+            let (old, new) = (sys_of(base, *id), sys_of(current, *id));
             if old != new {
                 push(
                     "Changed",
                     format!(
-                        "Component {}: moved from {old} to {new}",
-                        cited(current, Selection::Component(*id))
+                        "Component {}: moved from {} to {}",
+                        cited(current, Selection::Component(*id)),
+                        sys_text(base, old),
+                        sys_text(current, new)
                     ),
                 );
             }
