@@ -108,6 +108,21 @@ pub fn system_name(project: &Project, id: ElementId) -> Option<String> {
     project.element(id).map(|e| e.name().to_owned())
 }
 
+/// The names of the systems in `set`, in ID order, joined with ", "; empty
+/// for the empty set. Time O(s log n) for s systems.
+#[must_use]
+pub fn systems_text(
+    project: &Project,
+    usage: &aegis_model::SystemUse,
+    set: aegis_model::SystemSet,
+) -> String {
+    usage
+        .ids(set)
+        .filter_map(|id| system_name(project, id))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Which systems the user looks at. Empty means all systems. A display
 /// choice: never an op, never stored in the project (SYS-03).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
