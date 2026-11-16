@@ -18,6 +18,7 @@ pub mod settings;
 pub mod state;
 pub mod suggest;
 pub mod systems;
+pub mod table;
 pub mod time;
 pub mod top_paths;
 pub mod transport;
