@@ -38,3 +38,9 @@ deploy/license.aegis
 
 # CycloneDX SBOMs (cargo cyclonedx, the CI sbom job)
 *.cdx.json
+
+# macOS Finder metadata
+.DS_Store
+
+# graphify knowledge graph: generated from the code, rebuild with /graphify
+graphify-out/
