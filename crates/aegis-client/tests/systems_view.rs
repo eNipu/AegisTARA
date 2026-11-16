@@ -241,9 +241,13 @@ mod filtering {
 
     use aegis_client::pages;
     use aegis_client::state::PageData;
-    use aegis_client::systems::{SystemView, filter_page};
+    use aegis_client::systems::{SystemView, filter_page, filter_threats};
+    use aegis_client::view;
     use aegis_client::view::Page;
-    use aegis_model::{AssetId, DamageId, InterfaceId, Project, ThreatId, TreeId};
+    use aegis_model::{
+        AssetId, ClaimId, ControlId, DamageId, GoalId, InterfaceId, ItemRef, Project, ThreatId,
+        TreeId,
+    };
 
     use super::*;
 
@@ -300,6 +304,49 @@ mod filtering {
                     category: 0,
                 },
             );
+            let (control, goal, claim) = (ControlId::new_v7(), GoalId::new_v7(), ClaimId::new_v7());
+            run(
+                &mut ws,
+                &Edit::AddControl {
+                    id: control,
+                    name: format!("{name} control"),
+                },
+            );
+            run(
+                &mut ws,
+                &Edit::ApplyControl {
+                    control,
+                    target: ItemRef::Component(comp),
+                },
+            );
+            run(
+                &mut ws,
+                &Edit::AddGoal {
+                    id: goal,
+                    name: format!("{name} goal"),
+                },
+            );
+            run(
+                &mut ws,
+                &Edit::SetThreatGoal {
+                    threat,
+                    goal: Some(goal),
+                },
+            );
+            run(
+                &mut ws,
+                &Edit::AddClaim {
+                    id: claim,
+                    name: format!("{name} claim"),
+                },
+            );
+            run(
+                &mut ws,
+                &Edit::SetThreatClaim {
+                    threat,
+                    claim: Some(claim),
+                },
+            );
             if system.is_some() {
                 run(
                     &mut ws,
@@ -334,6 +381,9 @@ mod filtering {
             Page::Damage,
             Page::Risks,
             Page::Trees,
+            Page::Controls,
+            Page::Goals,
+            Page::Problems,
         ] {
             let mut d = PageData::default();
             match page {
@@ -344,7 +394,13 @@ mod filtering {
                 Page::Assets => d.assets = pages::asset_rows(ws),
                 Page::Damage => d.damages = pages::damage_rows(ws),
                 Page::Risks => d.risks = pages::risk_rows(ws),
-                _ => d.trees = pages::tree_rows(ws),
+                Page::Trees => d.trees = pages::tree_rows(ws),
+                Page::Controls => d.controls = pages::control_rows(ws),
+                Page::Goals => {
+                    d.goals = pages::goal_rows(ws);
+                    d.claims = pages::claim_rows(ws);
+                }
+                _ => d.problems = pages::problems(ws),
             }
             filter_page(project, view, page, &mut d);
             let mut put = |kind: &str, id: String| {
@@ -364,7 +420,23 @@ mod filtering {
                 .for_each(|r| put("d", format!("{:?}", r.id)));
             d.risks.iter().for_each(|r| put("r", format!("{:?}", r.id)));
             d.trees.iter().for_each(|r| put("t", format!("{:?}", r.id)));
+            d.controls
+                .iter()
+                .for_each(|r| put("k", format!("{:?}", r.id)));
+            d.goals.iter().for_each(|r| put("g", format!("{:?}", r.id)));
+            d.claims
+                .iter()
+                .for_each(|r| put("m", format!("{:?}", r.id)));
+            d.problems
+                .iter()
+                .for_each(|r| put("p", format!("{}|{}", r.visual_id, r.text)));
         }
+        let put_threat = |out: &mut BTreeSet<String>, id: ThreatId| {
+            out.insert(format!("th:{id:?}"));
+        };
+        let mut rows = view::threat_rows(ws);
+        filter_threats(project, view, &mut rows);
+        rows.iter().for_each(|r| put_threat(&mut out, r.id));
         out
     }
 
@@ -372,16 +444,22 @@ mod filtering {
     fn a_view_keeps_its_rows_and_the_rows_of_no_system() {
         let fx = fixture();
         let everything = shown(&fx.ws, &SystemView::all());
-        // 3 components, 3 interfaces, 3 assets, 1 damage, 3 risks, 1 tree.
-        assert_eq!(everything.len(), 14);
+        let count =
+            |set: &BTreeSet<String>, kind: &str| set.iter().filter(|r| r.starts_with(kind)).count();
+        // Per kind: components, interfaces, assets, damages, risks, trees,
+        // controls, goals, claims and threats (the Threats list).
+        let kinds = ["c:", "i:", "a:", "d:", "r:", "t:", "k:", "g:", "m:", "th:"];
+        let all_counts = [3, 3, 3, 1, 3, 1, 3, 3, 3, 3];
+        // Brake: its own rows and those of "Loose"; the shared damage; its tree.
+        let brake_counts = [2, 2, 2, 1, 2, 1, 2, 2, 2, 2];
         let brake = shown(&fx.ws, &SystemView::only(fx.brake));
         let adas = shown(&fx.ws, &SystemView::only(fx.adas));
-        // Brake: 2 components, 2 interfaces, 2 assets, 2 risks (its own and
-        // "Loose"), the shared damage and its tree.
-        assert_eq!(brake.len(), 10, "{brake:?}");
-        assert!(brake.iter().filter(|r| r.starts_with("d:")).count() == 1);
-        assert!(brake.iter().any(|r| r.starts_with("t:")));
-        assert!(adas.iter().all(|r| !r.starts_with("t:")));
+        for (i, kind) in kinds.iter().enumerate() {
+            assert_eq!(count(&everything, kind), all_counts[i], "all {kind}");
+            assert_eq!(count(&brake, kind), brake_counts[i], "brake {kind}");
+        }
+        assert!(count(&everything, "p:") > count(&brake, "p:"));
+        assert!(count(&adas, "t:") == 0);
         assert_ne!(brake, adas);
         assert!(brake.is_subset(&everything) && adas.is_subset(&everything));
         let both = shown(&fx.ws, &SystemView::of([fx.brake, fx.adas]));
