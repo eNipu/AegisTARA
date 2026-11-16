@@ -645,11 +645,10 @@ fn control_kind_conflicts_cap() {
         d
     };
     at_cap(&many(64), "64 conflicts");
-    // over_cap: 65 keys in list
+    // The cap is checked at decode, before the keys are resolved.
     let mut d = with_preset(0, 1);
     d.element_names.control_kinds[0].conflicts_with =
         (0..65).map(|i| key_of_len("ck", i + 1, 8)).collect();
-    // need keys declared? over_cap decodes; keys must be valid? The cap check happens during decode before key resolution? Actually BoundedVec cap checked at decode. Keys can be anything syntactically. But key_of_len valid. However conflict keys must exist? Cap check first. Fine.
     over_cap(&d, Limit::ControlKindConflicts { max: 64 }, "65 conflicts");
 }
 
