@@ -7,10 +7,13 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    ComponentId, ElementId, ElementKind, LintCode, Methodology, ModelError, Op, Project,
-    Provenance, StoreError,
+    ComponentId, DataFlowId, ElementId, ElementKind, LintCode, Methodology, ModelError, Op,
+    Project, Provenance, StoreError,
 };
-use common::{builtin, component_id, element_id, read_log, save, write_log};
+use common::{
+    asset_id, builtin, cat, component_id, damage_id, element_id, lvl, read_log, save, threat_cat,
+    threat_id, write_log,
+};
 use serde_json::{Value, json};
 
 const SYS_A: u64 = 1;
@@ -399,4 +402,146 @@ fn top_level_components_in_no_system_are_reported_and_children_follow_their_pare
     assert!(without_system(&p).is_empty());
     p.apply(put(12, None)).expect("clear");
     assert_eq!(without_system(&p), vec![component_id(12)]);
+}
+
+// ---- boundary flows (120a) ----
+
+fn add_flow(p: &mut Project, from: u64, to: u64) -> DataFlowId {
+    let id = DataFlowId::new_v7();
+    p.apply(Op::AddDataFlow {
+        id,
+        name: "Secret flow".into(),
+        from: component_id(from),
+        to: component_id(to),
+        interface: None,
+        provenance: who(),
+    })
+    .expect("flow");
+    id
+}
+
+fn flow_findings(p: &Project, flow: DataFlowId) -> Vec<LintCode> {
+    p.lint()
+        .iter()
+        .map(|f| f.code())
+        .filter(|c| {
+            matches!(
+                c,
+                LintCode::SystemBoundaryFlowWithoutThreat { flow: f }
+                    | LintCode::BoundaryCrossingDataFlowWithoutThreat { flow: f } if *f == flow
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn boundary_flow_names_the_two_systems() {
+    let (_, mut p) = project();
+    // 10 (child 11) and 12 are top-level.
+    let across = add_flow(&mut p, 11, 12);
+    let idx = p.data_flow_idx(&across).expect("idx");
+    assert_eq!(p.boundary_flow(idx), None, "no system yet");
+    p.apply(put(10, Some(SYS_A))).expect("put");
+    assert_eq!(p.boundary_flow(idx), None, "one end in no system");
+    p.apply(put(12, Some(SYS_B))).expect("put");
+    // The child 11 counts as its top-level ancestor's system.
+    assert_eq!(
+        p.boundary_flow(idx),
+        Some((element_id(SYS_A), element_id(SYS_B)))
+    );
+    p.apply(put(12, Some(SYS_A))).expect("put");
+    assert_eq!(p.boundary_flow(idx), None, "same system");
+    let inside = add_flow(&mut p, 10, 11);
+    let inside = p.data_flow_idx(&inside).expect("idx");
+    assert_eq!(p.boundary_flow(inside), None);
+}
+
+/// Binds a new asset to a component and adds a threat scenario on it.
+fn add_threat_on(p: &mut Project, m: &Methodology, component: u64) {
+    let safety = cat(m, "safety");
+    for op in [
+        Op::AddAsset {
+            id: asset_id(50),
+            name: "Secret asset".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        },
+        Op::SetAssetComponent {
+            asset: asset_id(50),
+            component: Some(component_id(component)),
+            provenance: who(),
+        },
+        Op::AddDamageScenario {
+            id: damage_id(51),
+            name: "Secret damage".into(),
+            impacts: vec![(safety, lvl(m, safety, "severe"))],
+            provenance: who(),
+        },
+        Op::AddThreatScenario {
+            id: threat_id(52),
+            name: "Secret threat".into(),
+            asset: asset_id(50),
+            category: threat_cat(m, "spoofing"),
+            catalog_refs: vec![],
+            damages: vec![damage_id(51)],
+            provenance: who(),
+        },
+    ] {
+        p.apply(op).expect("threat");
+    }
+}
+
+#[test]
+fn a_boundary_flow_without_threats_is_reported_once_and_cleared_by_a_threat() {
+    let (m, mut p) = project();
+    let inside = add_flow(&mut p, 10, 11);
+    let across = add_flow(&mut p, 11, 12);
+    // No systems assigned: nothing.
+    assert!(flow_findings(&p, across).is_empty());
+    p.apply(put(10, Some(SYS_A))).expect("put");
+    p.apply(put(12, Some(SYS_B))).expect("put");
+    assert_eq!(
+        flow_findings(&p, across),
+        vec![LintCode::SystemBoundaryFlowWithoutThreat { flow: across }]
+    );
+    assert!(flow_findings(&p, inside).is_empty());
+    assert!(
+        p.lint()
+            .iter()
+            .find(|f| f.code() == LintCode::SystemBoundaryFlowWithoutThreat { flow: across })
+            .expect("finding")
+            .is_warning()
+    );
+    add_threat_on(&mut p, &m, 11);
+    assert!(flow_findings(&p, across).is_empty());
+}
+
+#[test]
+fn a_project_without_systems_has_no_boundary_flow_finding() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    for op in [add_component(10, "A", None), add_component(12, "B", None)] {
+        p.apply(op).expect("setup");
+    }
+    let flow = add_flow(&mut p, 10, 12);
+    assert!(flow_findings(&p, flow).is_empty());
+}
+
+#[test]
+fn a_flow_across_a_trust_boundary_and_two_systems_gives_one_finding() {
+    let (_, mut p) = project();
+    p.apply(put(10, Some(SYS_A))).expect("put");
+    p.apply(put(12, Some(SYS_B))).expect("put");
+    let flow = add_flow(&mut p, 10, 12);
+    p.apply(Op::AddTrustBoundary {
+        id: aegis_model::TrustBoundaryId::new_v7(),
+        name: "Secret boundary".into(),
+        components: vec![component_id(10)],
+        provenance: who(),
+    })
+    .expect("boundary");
+    assert_eq!(
+        flow_findings(&p, flow),
+        vec![LintCode::BoundaryCrossingDataFlowWithoutThreat { flow }]
+    );
 }

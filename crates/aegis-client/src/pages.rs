@@ -2688,6 +2688,18 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::SystemBoundaryFlowWithoutThreat { flow } => {
+            let s = Selection::DataFlow(flow);
+            (
+                format!(
+                    "{} {} links two systems but has no {}.",
+                    m.element_names().data_flow.singular,
+                    q(s),
+                    m.element_names().threat_scenario.singular.to_lowercase()
+                ),
+                s,
+            )
+        }
         L::BoundaryCrossingDataFlowWithoutThreat { flow } => {
             let s = Selection::DataFlow(flow);
             (
