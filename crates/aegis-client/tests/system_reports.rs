@@ -10,8 +10,8 @@ use aegis_client::report::{
 };
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, ElementKind, InterfaceId,
-    ItemRef, Methodology, ThreatId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, ElementKind, GoalId,
+    InterfaceId, ItemRef, Methodology, ThreatId, TreeId, TrustBoundaryId,
 };
 
 fn workspace() -> Workspace {
@@ -172,7 +172,67 @@ fn fixture() -> Workspace {
         &[brake_ecu, adas_cam],
     );
     add_control(&mut ws, "ADAS only lens check", &[adas_cam]);
+    add_adas_only(&mut ws, adas_cam, adas_t);
     ws
+}
+
+/// A trust boundary around the ADAS component, and an attack tree, a goal
+/// and a claim linked to the ADAS threat only.
+fn add_adas_only(ws: &mut Workspace, adas_cam: ComponentId, adas_t: ThreatId) {
+    let boundary = TrustBoundaryId::new_v7();
+    run(
+        ws,
+        &Edit::AddTrustBoundary {
+            id: boundary,
+            name: "ADAS only zone".into(),
+        },
+    );
+    run(
+        ws,
+        &Edit::SetTrustBoundaryMember {
+            boundary,
+            component: adas_cam,
+            member: true,
+        },
+    );
+    run(
+        ws,
+        &Edit::NewTree {
+            id: TreeId::new_v7(),
+            root: "ADAS only blinding".into(),
+            threat: Some(adas_t),
+        },
+    );
+    let goal = GoalId::new_v7();
+    run(
+        ws,
+        &Edit::AddGoal {
+            id: goal,
+            name: "ADAS only clear view".into(),
+        },
+    );
+    run(
+        ws,
+        &Edit::SetThreatGoal {
+            threat: adas_t,
+            goal: Some(goal),
+        },
+    );
+    let claim = ClaimId::new_v7();
+    run(
+        ws,
+        &Edit::AddClaim {
+            id: claim,
+            name: "ADAS only lens is sealed".into(),
+        },
+    );
+    run(
+        ws,
+        &Edit::SetThreatClaim {
+            threat: adas_t,
+            claim: Some(claim),
+        },
+    );
 }
 
 const BRAKE_ONLY: [&str; 5] = [
@@ -188,13 +248,17 @@ const NO_SYSTEM: [&str; 4] = [
     "Loose gateway data",
     "Loose gateway attack",
 ];
-const ADAS_ONLY: [&str; 6] = [
+const ADAS_ONLY: [&str; 10] = [
     "ADAS camera",
     "ADAS camera port",
     "ADAS camera data",
     "ADAS camera attack",
     "ADAS only lane loss",
     "ADAS only lens check",
+    "ADAS only zone",
+    "ADAS only blinding",
+    "ADAS only clear view",
+    "ADAS only lens is sealed",
 ];
 const SHARED: [&str; 2] = [
     "Brake and ADAS shared crash",
@@ -253,10 +317,15 @@ fn cover_row(doc: &ReportDoc, label: &str) -> Option<Vec<String>> {
 
 /// The first table after the level-2 heading that starts with `prefix`.
 fn table_under(doc: &ReportDoc, prefix: &str) -> Vec<Vec<String>> {
+    table_after(doc, 2, prefix)
+}
+
+/// The first table after the heading of `level` that starts with `prefix`.
+fn table_after(doc: &ReportDoc, level: u8, prefix: &str) -> Vec<Vec<String>> {
     let start = doc
         .blocks
         .iter()
-        .position(|b| matches!(b, Block::Heading(2, t) if t.starts_with(prefix)))
+        .position(|b| matches!(b, Block::Heading(l, t) if *l == level && t.starts_with(prefix)))
         .expect("heading");
     doc.blocks[start..]
         .iter()
@@ -376,6 +445,43 @@ fn a_report_for_one_system_holds_only_that_system() {
     for name in ADAS_ONLY {
         assert!(has_entry(&all, name), "full report misses {name}");
     }
+
+    // The security settings table: its setting cell names the control, so
+    // the control table cannot stand in for it.
+    let applies = |d: &ReportDoc, name: &str| {
+        let suffix = format!(" · {name}");
+        table_after(d, 3, "Security settings")
+            .iter()
+            .any(|r| r.get(1).is_some_and(|c| c.ends_with(&suffix)))
+    };
+    let brake = doc(&ws, &["Brake"]);
+    let full = doc(&ws, &[]);
+    assert!(applies(&brake, "Brake and ADAS shared filter"));
+    assert!(!applies(&brake, "ADAS only lens check"));
+    assert!(applies(&full, "ADAS only lens check"));
+
+    // The executive summary counts what shows: Brake plus no system.
+    assert_eq!(summary_counts(&brake), (2, 2));
+    assert_eq!(summary_counts(&full), (3, 3));
+}
+
+/// The threat and asset numbers of the executive summary's counts line.
+fn summary_counts(doc: &ReportDoc) -> (usize, usize) {
+    let line = doc
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Paragraph(t, _) if t.starts_with("The project has") => {
+                Some(t.replace(['\u{2068}', '\u{2069}'], ""))
+            }
+            _ => None,
+        })
+        .expect("summary counts");
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let threats = words[3].parse().expect("threats");
+    let on = words.iter().position(|w| *w == "on").expect("on");
+    let assets = words[on + 1].parse().expect("assets");
+    (threats, assets)
 }
 
 #[test]
@@ -405,4 +511,13 @@ fn a_stale_system_name_is_ignored() {
     let stale = report_html_with_options(&ws, &ctx, &options(&["Brake"], ReportLanguage::English));
     let plain = report_html_with_options(&ws, &ctx, &options(&[], ReportLanguage::English));
     assert_eq!(stale, plain);
+
+    // With systems in the project, a stale name is dropped from the filter.
+    let ws = fixture();
+    let html = |systems: &[&str]| {
+        report_html_with_options(&ws, &ctx, &options(systems, ReportLanguage::English))
+    };
+    assert_eq!(html(&["Gone"]), html(&[]));
+    assert_eq!(html(&["Brake", "Gone"]), html(&["Brake"]));
+    assert_ne!(html(&["Brake"]), html(&[]));
 }
