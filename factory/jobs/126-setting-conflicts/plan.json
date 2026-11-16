@@ -1,0 +1,34 @@
+{
+  "job": "126-setting-conflicts",
+  "slices": [
+    {
+      "id": "126a",
+      "title": "Pack conflicts_with on setting presets and the conflicting-settings lint",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/methodology/mod.rs",
+        "crates/aegis-model/src/methodology/pack.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/src/item.rs",
+        "crates/aegis-model/src/lint.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/tests/control_kinds.rs",
+        "crates/aegis-model/tests/setting_conflicts.rs",
+        "crates/aegis-model/tests/pack_limits.rs",
+        "crates/aegis-model/tests/builtin_pack.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/tests/pages.rs"
+      ],
+      "max_lines": 320,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test control_kinds --test setting_conflicts --test pack_limits",
+        "cargo test --locked -p aegis-model --test control_presets --test control_settings --test builtin_pack --test stride_pack",
+        "cargo test --locked -p aegis-client --test pages"
+      ]
+    }
+  ]
+}
