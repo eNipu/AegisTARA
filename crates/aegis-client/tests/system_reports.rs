@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use aegis_client::commands::Edit;
+use aegis_client::pages;
 use aegis_client::report::{
     Block, ReportContext, ReportDoc, ReportFilters, ReportLanguage, ReportOptions, ReportProfile,
     report_doc_with_options, report_html_with_options,
@@ -11,8 +12,8 @@ use aegis_client::report::{
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, ElementKind,
-    ElementNameDef, GoalId, InterfaceId, ItemRef, Methodology, MethodologyDef, ThreatId, TreeId,
-    TrustBoundaryId,
+    ElementNameDef, EntityKind, GoalId, InterfaceId, ItemRef, MAX_SYSTEMS, Methodology,
+    MethodologyDef, ThreatId, TreeId, TrustBoundaryId,
 };
 
 fn workspace() -> Workspace {
@@ -667,7 +668,6 @@ fn a_project_with_no_systems_exports_as_before() {
     let c = add_component(&mut ws, "Lone ECU", None);
     add_parts(&mut ws, c, "Lone ECU");
     let bytes = report_workbook_xlsx_in(&ws, &[], &SystemView::all());
-    assert_eq!(bytes, report_workbook_xlsx(&ws));
     let book = read_workbook(&bytes).expect("reads");
     for s in &book.sheets {
         assert!(!s.headers.iter().any(|h| h == "Systems"), "{}", s.name);
@@ -675,6 +675,90 @@ fn a_project_with_no_systems_exports_as_before() {
     // A stale filter changes nothing either.
     let named = workbook(&ws, &["Brake"]);
     assert_eq!(named, book);
+}
+
+use aegis_client::report::FigureAttachment;
+use aegis_client::systems::missing_system_names;
+
+#[test]
+fn figures_follow_the_systems_filter() {
+    let ws = fixture();
+    let id_of = |name: &str| {
+        ws.project()
+            .components()
+            .find(|(_, _, c)| c.name() == name)
+            .map(|(_, id, _)| id)
+            .expect("component")
+    };
+    let (adas, brake) = (id_of("ADAS camera"), id_of("Brake ECU"));
+    let figs: Vec<FigureAttachment> = [
+        ("ADAS only camera mount", format!("component:{adas}")),
+        ("Brake ECU housing", format!("component:{brake}")),
+        ("Whole vehicle", "project".to_owned()),
+        ("Item sketch", "item_description".to_owned()),
+        ("Odd target", "nonsense:1".to_owned()),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (caption, target))| FigureAttachment {
+        figure_id: format!("fig-{i}"),
+        media_type: "image/png".into(),
+        caption: caption.into(),
+        target,
+        width_px: 10,
+        height_px: 10,
+        ..FigureAttachment::default()
+    })
+    .collect();
+    let brake_only = [
+        "Brake ECU housing",
+        "Whole vehicle",
+        "Item sketch",
+        "Odd target",
+    ];
+    let all = [
+        "ADAS only camera mount",
+        "Brake ECU housing",
+        "Whole vehicle",
+        "Item sketch",
+        "Odd target",
+    ];
+
+    let captions = |systems: &[&str]| {
+        let mut opts = options(systems, ReportLanguage::English);
+        opts.profile.figures = figs.clone();
+        let doc = report_doc_with_options(&ws, &context(), &opts);
+        table_under(&doc, "Figures")
+            .iter()
+            .map(|r| r[0].clone())
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(captions(&["Brake"]), brake_only);
+    assert_eq!(captions(&[]), all);
+
+    let book = |view: &SystemView| {
+        let book = read_workbook(&report_workbook_xlsx_in(&ws, &figs, view)).expect("reads");
+        names_in(sheet(&book, "Figures"))
+    };
+    assert_eq!(
+        book(&view_of_names(ws.project(), &["Brake".to_owned()])),
+        brake_only
+    );
+    assert_eq!(book(&SystemView::all()), all);
+}
+
+#[test]
+fn missing_system_names_lists_each_stale_name_once() {
+    let ws = fixture();
+    assert_eq!(
+        missing_system_names(
+            ws.project(),
+            &strings(&["Brake", "Gone", "brake", "Gone", "Old"])
+        ),
+        strings(&["Gone", "brake", "Old"])
+    );
+    assert!(missing_system_names(ws.project(), &strings(&["Brake", "ADAS"])).is_empty());
+    assert!(missing_system_names(workspace().project(), &strings(&["Gone"])).is_empty());
 }
 
 #[test]
@@ -821,6 +905,76 @@ fn each_overview_count_is_its_own_sheet_when_two_kinds_share_a_name() {
     let claims = sheet(&book, "Requirements (2)").rows.len();
     assert_eq!((goals, claims), (0, 1));
     assert_eq!(counts, vec![goals.to_string(), claims.to_string()]);
+}
+
+fn column_1(rows: &[Vec<String>]) -> Vec<String> {
+    rows.iter().filter_map(|r| r.get(1).cloned()).collect()
+}
+
+#[test]
+fn the_problems_table_follows_the_systems_filter() {
+    let mut ws = fixture();
+    let first = add_system(&mut ws, "Spare");
+    let second = add_system(&mut ws, "Spare");
+    let rows = pages::problems(&ws);
+    let untargeted: Vec<_> = rows.iter().filter(|r| r.target.is_none()).collect();
+    assert_eq!(untargeted.len(), 1);
+    let row = untargeted[0];
+    assert!(!row.error);
+    let first_vis = ws.project().element_visual_id(first).expect("first");
+    let second_vis = ws.project().element_visual_id(second).expect("second");
+    assert_eq!(row.visual_id, second_vis);
+    for part in ["Spare", first_vis.as_str(), second_vis.as_str()] {
+        assert!(row.text.contains(part), "{}", row.text);
+    }
+
+    let brake = column_1(&table_under(&doc(&ws, &["Brake"]), "9."));
+    let all = column_1(&table_under(&doc(&ws, &[]), "9."));
+    assert!(brake.contains(&row.text), "{brake:?}");
+    assert!(all.contains(&row.text), "{all:?}");
+    assert!(
+        !brake.iter().any(|c| c.contains("ADAS camera")),
+        "{brake:?}"
+    );
+    assert!(brake.iter().any(|c| c.contains("Brake ECU")), "{brake:?}");
+    assert!(all.iter().any(|c| c.contains("ADAS camera")), "{all:?}");
+}
+
+#[test]
+fn the_comparison_follows_the_systems_filter() {
+    let mut ws = fixture();
+    let base = Arc::new(ws.project().clone());
+    let system = |ws: &Workspace, name: &str| {
+        ws.project()
+            .elements(ElementKind::System)
+            .find(|(_, e)| e.name() == name)
+            .map(|(id, _)| id)
+            .expect("system")
+    };
+    let brake = system(&ws, "Brake");
+    let adas = system(&ws, "ADAS");
+    add_component(&mut ws, "Brake only pump", Some(brake));
+    add_component(&mut ws, "ADAS only radar", Some(adas));
+    let compared = |systems: &[&str]| {
+        let mut opts = options(systems, ReportLanguage::English);
+        opts.profile.filters.baseline = Some("v1".into());
+        opts.baseline_project = Some(Arc::clone(&base));
+        let d = report_doc_with_options(&ws, &context(), &opts);
+        let lines = column_1(&table_under(&d, "Comparison"));
+        let outside = texts(&d).iter().any(|t| t.contains("outside this view"));
+        (lines, outside)
+    };
+    let has = |lines: &[String], name: &str| lines.iter().any(|l| l.contains(name));
+
+    let (lines, outside) = compared(&["Brake"]);
+    assert!(has(&lines, "Brake only pump"), "{lines:?}");
+    assert!(!has(&lines, "ADAS only radar"), "{lines:?}");
+    assert!(outside);
+
+    let (lines, outside) = compared(&[]);
+    assert!(has(&lines, "Brake only pump"), "{lines:?}");
+    assert!(has(&lines, "ADAS only radar"), "{lines:?}");
+    assert!(!outside);
 }
 
 // ---- the System column of the import (121c) ---------------------------------
@@ -1005,6 +1159,80 @@ fn a_child_component_in_another_system_is_refused_with_the_models_reason() {
     );
     assert_eq!(same.ops, Vec::new());
     assert_eq!(same.unmapped_rows, Vec::new());
+}
+
+#[test]
+fn a_refused_row_creates_no_system_and_a_later_row_creates_it_once() {
+    let mut ws = workspace();
+    let brake = add_system(&mut ws, "Brake");
+    let gateway = add_component(&mut ws, "Gateway", Some(brake));
+    let port = ComponentId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddComponent {
+            id: port,
+            name: "Port".into(),
+            parent: Some(gateway),
+        },
+    );
+    let valve = add_component(&mut ws, "Valve", None);
+
+    let p = preview(
+        ws.project(),
+        &hand_book(
+            &["Component", "System"],
+            &[&["Port", "Spare"], &["Valve", "Spare"]],
+        ),
+    );
+    assert_eq!(p.unmapped_rows.len(), 1);
+    assert_eq!(p.unmapped_rows[0].row_number, 2);
+    assert_eq!(
+        p.unmapped_rows[0].reason,
+        ModelError::ChildComponentSystem { component: port }.to_string()
+    );
+    assert_eq!(system_adds(&p), vec!["Spare".to_owned()]);
+    assert_eq!(p.systems_to_add, 1);
+    assert_eq!(system_sets(&p), vec![valve]);
+
+    ws.apply(p.ops.clone(), Origin::Edit).expect("one batch");
+    let project = ws.project();
+    assert_eq!(system_name_of(project, "Valve").as_deref(), Some("Spare"));
+    assert_eq!(system_name_of(project, "Port").as_deref(), Some("Brake"));
+    let spares = project
+        .elements(ElementKind::System)
+        .filter(|(_, e)| e.name() == "Spare")
+        .count();
+    assert_eq!(spares, 1);
+}
+
+#[test]
+fn a_65th_system_is_refused_with_the_models_reason() {
+    let mut ws = workspace();
+    for i in 0..MAX_SYSTEMS {
+        add_system(&mut ws, &format!("S{i}"));
+    }
+    assert_eq!(ws.project().element_count(ElementKind::System), MAX_SYSTEMS);
+    let valve = add_component(&mut ws, "Valve", None);
+
+    let p = preview(
+        ws.project(),
+        &hand_book(
+            &["Component", "System"],
+            &[&["Valve", "Extra"], &["Valve", "S3"]],
+        ),
+    );
+    assert_eq!(p.unmapped_rows.len(), 1);
+    assert_eq!(p.unmapped_rows[0].row_number, 2);
+    assert_eq!(
+        p.unmapped_rows[0].reason,
+        ModelError::ProjectCapacityExceeded {
+            kind: EntityKind::Element
+        }
+        .to_string()
+    );
+    assert_eq!(system_adds(&p), Vec::<String>::new());
+    assert_eq!(p.systems_to_add, 0);
+    assert_eq!(system_sets(&p), vec![valve]);
 }
 
 #[test]

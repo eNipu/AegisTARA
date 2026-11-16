@@ -404,6 +404,51 @@ fn top_level_components_in_no_system_are_reported_and_children_follow_their_pare
     assert_eq!(without_system(&p), vec![component_id(12)]);
 }
 
+fn shared_names(p: &Project) -> Vec<(ElementId, ElementId)> {
+    p.lint()
+        .iter()
+        .filter_map(|f| match f.code() {
+            LintCode::SystemNameShared { system, first } => Some((system, first)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_shared_system_name_warns_once_each_after_the_first() {
+    let mut p = Project::new(builtin());
+    for op in [
+        add_system(1, "Brake"),
+        add_system(2, "Brake"),
+        add_system(3, "brake"),
+        add_system(4, "ADAS"),
+    ] {
+        p.apply(op).expect("add");
+    }
+    assert_eq!(shared_names(&p), vec![(element_id(2), element_id(1))]);
+    let f = p
+        .lint()
+        .into_iter()
+        .find(|f| matches!(f.code(), LintCode::SystemNameShared { .. }))
+        .expect("finding");
+    assert!(f.is_warning());
+    assert!(!f.is_error());
+
+    p.apply(add_system(5, "Brake")).expect("add");
+    assert_eq!(
+        shared_names(&p),
+        vec![
+            (element_id(2), element_id(1)),
+            (element_id(5), element_id(1))
+        ]
+    );
+}
+
+#[test]
+fn distinct_system_names_give_no_shared_name_finding() {
+    assert!(shared_names(&project().1).is_empty());
+}
+
 // ---- boundary flows (120a) ----
 
 fn add_flow(p: &mut Project, from: u64, to: u64) -> DataFlowId {
