@@ -1949,6 +1949,34 @@
       ],
       "decision": null,
       "updated": "2026-11-16T15:42:55Z"
+    },
+    {
+      "id": "126-setting-conflicts",
+      "title": "Conflicting settings: conflicts_with on pack presets, lint warning (CFG-09)",
+      "branch": "factory/126-setting-conflicts",
+      "stage": "merged",
+      "slice": "126a",
+      "base": "0182a0577c5ed1523da439ed45118c0e48e7ef83",
+      "reviews": {
+        "slice": "126a",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "126a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "beam-free",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 220
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-16T21:38:14Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
