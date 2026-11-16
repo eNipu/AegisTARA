@@ -3199,6 +3199,11 @@ pub struct Comparison {
     pub summary: String,
     /// The changes, entity kind by kind, then the risks that moved.
     pub lines: Vec<DiffLine>,
+    /// The view's chip text ("Brake", "Brake + ADAS"); `None` for all
+    /// systems.
+    pub scope: Option<String>,
+    /// How many lines the view left out.
+    pub hidden: usize,
 }
 
 fn risk_snapshot_text(m: &Methodology, s: Option<aegis_model::RiskSnapshot>) -> String {
@@ -3222,33 +3227,86 @@ pub fn comparison(
     baseline: &str,
     current: &Project,
 ) -> Result<Comparison, aegis_model::ModelError> {
+    comparison_in(base, baseline, current, &crate::systems::SystemView::all())
+}
+
+/// Compares `base` with `current` and keeps the lines `view` shows.
+/// With all systems this is `comparison`. Time as `comparison`, plus
+/// O(project) for the systems of both projects.
+///
+/// # Errors
+///
+/// The model's error if the two use different methodologies.
+pub fn comparison_in(
+    base: &Project,
+    baseline: &str,
+    current: &Project,
+    view: &crate::systems::SystemView,
+) -> Result<Comparison, aegis_model::ModelError> {
     let diff = base.diff(current)?;
     let m = current.methodology();
+    let all = view.is_all();
+    let (cur_use, base_use) = if all {
+        Default::default()
+    } else {
+        (current.system_use(), base.system_use())
+    };
+    let (v_cur, v_base) = (
+        cur_use.set_of(view.systems()),
+        base_use.set_of(view.systems()),
+    );
+    // An element shows when its systems meet the view; one that cannot be
+    // placed shows.
+    let in_cur = |s: Selection| {
+        all || crate::systems::selection_systems(current, &cur_use, s)
+            .is_none_or(|x| x.shows_in(v_cur))
+    };
+    let in_base = |s: Selection| {
+        all || crate::systems::selection_systems(base, &base_use, s)
+            .is_none_or(|x| x.shows_in(v_base))
+    };
     let mut lines = Vec::new();
-    let mut push = |kind: &str, text: String| {
-        lines.push(DiffLine {
-            kind: kind.to_owned(),
-            text,
-        });
+    let mut hidden = 0usize;
+    let mut push = |kind: &str, text: String, show: bool| {
+        if show {
+            lines.push(DiffLine {
+                kind: kind.to_owned(),
+                text,
+            });
+        } else {
+            hidden += 1;
+        }
     };
     macro_rules! entity {
-        ($what:literal, $set:expr, $cite:expr) => {{
+        ($what:literal, $set:expr, $sel:expr) => {{
             let set = $set;
             for id in set.added() {
-                push("Added", format!("{} {}", $what, $cite(current, *id)));
+                let s = $sel(*id);
+                push(
+                    "Added",
+                    format!("{} {}", $what, cited(current, s)),
+                    in_cur(s),
+                );
             }
             for id in set.removed() {
-                push("Removed", format!("{} {}", $what, $cite(base, *id)));
+                let s = $sel(*id);
+                push(
+                    "Removed",
+                    format!("{} {}", $what, cited(base, s)),
+                    in_base(s),
+                );
             }
             for id in set.modified() {
-                push("Changed", format!("{} {}", $what, $cite(current, *id)));
+                let s = $sel(*id);
+                push(
+                    "Changed",
+                    format!("{} {}", $what, cited(current, s)),
+                    in_cur(s),
+                );
             }
         }};
     }
-    entity!("Component", diff.components(), |p: &Project, id| cited(
-        p,
-        Selection::Component(id)
-    ));
+    entity!("Component", diff.components(), Selection::Component);
     {
         let sys_of =
             |p: &Project, id: ComponentId| p.component_idx(&id).and_then(|i| p.component_system(i));
@@ -3259,6 +3317,9 @@ pub fn comparison(
         for id in diff.components().modified() {
             let (old, new) = (sys_of(base, *id), sys_of(current, *id));
             if old != new {
+                let show = all
+                    || old.is_some_and(|s| view.contains(s))
+                    || new.is_some_and(|s| view.contains(s));
                 push(
                     "Changed",
                     format!(
@@ -3267,22 +3328,17 @@ pub fn comparison(
                         sys_text(base, old),
                         sys_text(current, new)
                     ),
+                    show,
                 );
             }
         }
     }
-    entity!("Interface", diff.interfaces(), |p: &Project, id| cited(
-        p,
-        Selection::Interface(id)
-    ));
-    entity!("Data flow", diff.data_flows(), |p: &Project, id| cited(
-        p,
-        Selection::DataFlow(id)
-    ));
+    entity!("Interface", diff.interfaces(), Selection::Interface);
+    entity!("Data flow", diff.data_flows(), Selection::DataFlow);
     entity!(
         "Trust boundary",
         diff.trust_boundaries(),
-        |p: &Project, id| cited(p, Selection::TrustBoundary(id))
+        Selection::TrustBoundary
     );
     {
         let system = |p: &Project, id: ElementId| {
@@ -3296,38 +3352,32 @@ pub fn comparison(
         let set = diff.elements();
         for id in set.added() {
             if let Some(t) = system(current, *id) {
-                push("Added", t);
+                push("Added", t, all || view.contains(*id));
             }
         }
         for id in set.removed() {
             if let Some(t) = system(base, *id) {
-                push("Removed", t);
+                push("Removed", t, all || view.contains(*id));
             }
         }
         for id in set.modified() {
             if let Some(t) = system(current, *id) {
-                push("Changed", t);
+                push("Changed", t, all || view.contains(*id));
             }
         }
     }
-    entity!("Asset", diff.assets(), |p: &Project, id| cited(
-        p,
-        Selection::Asset(id)
-    ));
+    entity!("Asset", diff.assets(), Selection::Asset);
     entity!(
         "Damage scenario",
         diff.damage_scenarios(),
-        |p: &Project, id| cited(p, Selection::Damage(id))
+        Selection::Damage
     );
     entity!(
         "Threat scenario",
         diff.threat_scenarios(),
-        |p: &Project, id| cited(p, Selection::Threat(id))
+        Selection::Threat
     );
-    entity!("Attack tree", diff.attack_trees(), |p: &Project, id| cited(
-        p,
-        Selection::Tree(id)
-    ));
+    entity!("Attack tree", diff.attack_trees(), Selection::Tree);
     {
         let set = diff.security_controls();
         for id in set.added() {
@@ -3337,12 +3387,14 @@ pub fn comparison(
                     "Security control {}",
                     cited(current, Selection::Control(*id))
                 ),
+                in_cur(Selection::Control(*id)),
             );
         }
         for id in set.removed() {
             push(
                 "Removed",
                 format!("Security control {}", cited(base, Selection::Control(*id))),
+                in_base(Selection::Control(*id)),
             );
         }
         for id in set.modified() {
@@ -3379,23 +3431,26 @@ pub fn comparison(
                 }
                 _ => String::new(),
             };
-            push("Changed", format!("Security control {what}{detail}"));
+            push(
+                "Changed",
+                format!("Security control {what}{detail}"),
+                in_cur(Selection::Control(*id)),
+            );
         }
     }
-    entity!("Goal", diff.cybersecurity_goals(), |p: &Project, id| cited(
-        p,
-        Selection::Goal(id)
-    ));
-    entity!("Claim", diff.cybersecurity_claims(), |p: &Project, id| {
-        cited(p, Selection::Claim(id))
-    });
-    let mut moved = 0;
+    entity!("Goal", diff.cybersecurity_goals(), Selection::Goal);
+    entity!("Claim", diff.cybersecurity_claims(), Selection::Claim);
     for d in diff.changed_risks() {
-        moved += 1;
-        let threat_ref = if current.threat_scenario_idx(&d.threat()).is_some() {
-            cited(current, Selection::Threat(d.threat()))
+        let (threat_ref, show) = if current.threat_scenario_idx(&d.threat()).is_some() {
+            (
+                cited(current, Selection::Threat(d.threat())),
+                in_cur(Selection::Threat(d.threat())),
+            )
         } else {
-            cited(base, Selection::Threat(d.threat()))
+            (
+                cited(base, Selection::Threat(d.threat())),
+                in_base(Selection::Threat(d.threat())),
+            )
         };
         push(
             "Risk",
@@ -3408,23 +3463,34 @@ pub fn comparison(
                 risk_snapshot_text(m, d.residual().after()),
                 d.residual().change().as_str(),
             ),
+            show,
         );
     }
     let count = |k: &str| lines.iter().filter(|l| l.kind == k).count();
-    let summary = if lines.is_empty() {
-        "Nothing changed since this baseline.".to_owned()
-    } else {
-        format!(
+    let mut summary = match (lines.is_empty(), hidden) {
+        (true, 0) => "Nothing changed since this baseline.".to_owned(),
+        (true, _) => "Nothing changed in this view since this baseline.".to_owned(),
+        _ => format!(
             "Since this baseline: {} added, {} removed, {} changed, {} risk(s) moved.",
             count("Added"),
             count("Removed"),
             count("Changed"),
-            moved
-        )
+            count("Risk")
+        ),
+    };
+    if hidden > 0 {
+        summary.push_str(&format!(" {hidden} more outside this view."));
+    }
+    let scope = if all {
+        None
+    } else {
+        crate::systems::view_menu(current, view).map(|v| v.chip)
     };
     Ok(Comparison {
         baseline: baseline.to_owned(),
         summary,
         lines,
+        scope,
+        hidden,
     })
 }

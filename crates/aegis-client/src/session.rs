@@ -3182,7 +3182,8 @@ impl<P: CredentialProvider> Actor<P> {
             let comparison = (open.ui.page == Page::Versions)
                 .then(|| {
                     open.compare.as_ref().and_then(|(name, base)| {
-                        pages::comparison(base, name, open.ws.project()).ok()
+                        pages::comparison_in(base, name, open.ws.project(), &open.ui.system_view)
+                            .ok()
                     })
                 })
                 .flatten();
