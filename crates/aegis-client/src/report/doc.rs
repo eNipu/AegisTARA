@@ -540,7 +540,12 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         desc_blocks(&mut b, &notes);
     }
 
-    if sections.figures && !profile.figures.is_empty() {
+    let figures: Vec<&FigureAttachment> = profile
+        .figures
+        .iter()
+        .filter(|f| crate::systems::figure_shows(project, &scope, &f.target))
+        .collect();
+    if sections.figures && !figures.is_empty() {
         b.push(Heading(2, catalog.tr("section-figures")));
         b.push(table(
             &[
@@ -549,8 +554,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 catalog.tr("format"),
                 catalog.tr("dimensions"),
             ],
-            profile
-                .figures
+            figures
                 .iter()
                 .map(|f| {
                     vec![

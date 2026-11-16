@@ -891,6 +891,10 @@ pub fn report_workbook_xlsx_in(
         rows: problems,
     });
 
+    let figures: Vec<&super::profile::FigureAttachment> = figures
+        .iter()
+        .filter(|f| crate::systems::figure_shows(p, &sys.scope, &f.target))
+        .collect();
     if !figures.is_empty() {
         let mut fig_rows = vec![vec![
             "Figure ID".to_owned(),

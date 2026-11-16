@@ -439,6 +439,59 @@ pub fn selection_systems(
     }
 }
 
+/// The selection of an element a figure can sit on; `None` for the project,
+/// the item description and the item scope.
+fn element_selection(r: aegis_model::ElementRef) -> Option<Selection> {
+    use aegis_model::ElementRef as R;
+    match r {
+        R::Component(id) => Some(Selection::Component(id)),
+        R::Interface(id) => Some(Selection::Interface(id)),
+        R::DataFlow(id) => Some(Selection::DataFlow(id)),
+        R::TrustBoundary(id) => Some(Selection::TrustBoundary(id)),
+        R::Asset(id) => Some(Selection::Asset(id)),
+        R::Damage(id) => Some(Selection::Damage(id)),
+        R::Threat(id) => Some(Selection::Threat(id)),
+        R::Tree(id) => Some(Selection::Tree(id)),
+        R::Control(id) => Some(Selection::Control(id)),
+        R::Goal(id) => Some(Selection::Goal(id)),
+        R::Claim(id) => Some(Selection::Claim(id)),
+        R::Project | R::ItemDescription | R::ItemScope => None,
+    }
+}
+
+/// Whether a figure on `target` shows in `scope`. Always shows for the
+/// project, the item description, the item scope, an unreadable target and
+/// a gone element. Time O(log n).
+#[must_use]
+pub fn figure_shows(project: &Project, scope: &Scope, target: &str) -> bool {
+    match crate::view::target_to_element_ref(target).and_then(element_selection) {
+        None => true,
+        Some(s) => scope.shows(|u| selection_systems(project, u, s)),
+    }
+}
+
+/// The names in `names` that equal no live system's name exactly, each once,
+/// in input order; empty when the project has no systems. Time O(k * s) for
+/// k names and s systems, plus O(k log k) for the repeats.
+#[must_use]
+pub fn missing_system_names(project: &Project, names: &[String]) -> Vec<String> {
+    if project.elements(ElementKind::System).next().is_none() {
+        return Vec::new();
+    }
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for n in names {
+        if !project
+            .elements(ElementKind::System)
+            .any(|(_, e)| e.name() == n)
+            && seen.insert(n.as_str())
+        {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
 /// The view that shows the element `s` points at, with the name of the
 /// system added to get there. `None` when the view already shows it
 /// (all systems, an element in no system, or one of its systems is in

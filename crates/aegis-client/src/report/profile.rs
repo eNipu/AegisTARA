@@ -208,8 +208,9 @@ pub struct ReportFilters {
     /// A baseline name to compare against; the report adds a comparison
     /// section when a baseline project is supplied with it.
     pub baseline: Option<String>,
-    /// System names to keep; empty keeps every system. A name that is no
-    /// system of the project is ignored.
+    /// System names to keep; empty keeps every system. The report builders
+    /// ignore a name that is no system of the project; the session's export
+    /// of a report or workbook stops instead (121da).
     pub systems: Vec<String>,
 }
 

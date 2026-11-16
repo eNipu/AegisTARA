@@ -1376,6 +1376,27 @@ impl<P: CredentialProvider> Actor<P> {
             self.notice(Severity::Warning, "Open an attack tree first.");
             return;
         }
+        if matches!(
+            kind,
+            ExportKind::Report | ExportKind::ReportPdf | ExportKind::ReportXlsx
+        ) {
+            let missing =
+                crate::systems::missing_system_names(open.ws.project(), &profile.filters.systems);
+            if !missing.is_empty() {
+                let names = missing
+                    .iter()
+                    .map(|n| format!("\"{n}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.notice(
+                    Severity::Warning,
+                    format!(
+                        "Nothing was exported: no system of this project is named {names}. Change the systems in the report profile."
+                    ),
+                );
+                return;
+            }
+        }
         let project = open.ws.project().clone();
         let seq = open.ws.confirmed_seq();
         let (epoch, id) = (open.epoch, open.id.clone());

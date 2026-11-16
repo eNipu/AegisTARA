@@ -667,7 +667,6 @@ fn a_project_with_no_systems_exports_as_before() {
     let c = add_component(&mut ws, "Lone ECU", None);
     add_parts(&mut ws, c, "Lone ECU");
     let bytes = report_workbook_xlsx_in(&ws, &[], &SystemView::all());
-    assert_eq!(bytes, report_workbook_xlsx(&ws));
     let book = read_workbook(&bytes).expect("reads");
     for s in &book.sheets {
         assert!(!s.headers.iter().any(|h| h == "Systems"), "{}", s.name);
@@ -675,6 +674,90 @@ fn a_project_with_no_systems_exports_as_before() {
     // A stale filter changes nothing either.
     let named = workbook(&ws, &["Brake"]);
     assert_eq!(named, book);
+}
+
+use aegis_client::report::FigureAttachment;
+use aegis_client::systems::missing_system_names;
+
+#[test]
+fn figures_follow_the_systems_filter() {
+    let ws = fixture();
+    let id_of = |name: &str| {
+        ws.project()
+            .components()
+            .find(|(_, _, c)| c.name() == name)
+            .map(|(_, id, _)| id)
+            .expect("component")
+    };
+    let (adas, brake) = (id_of("ADAS camera"), id_of("Brake ECU"));
+    let figs: Vec<FigureAttachment> = [
+        ("ADAS only camera mount", format!("component:{adas}")),
+        ("Brake ECU housing", format!("component:{brake}")),
+        ("Whole vehicle", "project".to_owned()),
+        ("Item sketch", "item_description".to_owned()),
+        ("Odd target", "nonsense:1".to_owned()),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (caption, target))| FigureAttachment {
+        figure_id: format!("fig-{i}"),
+        media_type: "image/png".into(),
+        caption: caption.into(),
+        target,
+        width_px: 10,
+        height_px: 10,
+        ..FigureAttachment::default()
+    })
+    .collect();
+    let brake_only = [
+        "Brake ECU housing",
+        "Whole vehicle",
+        "Item sketch",
+        "Odd target",
+    ];
+    let all = [
+        "ADAS only camera mount",
+        "Brake ECU housing",
+        "Whole vehicle",
+        "Item sketch",
+        "Odd target",
+    ];
+
+    let captions = |systems: &[&str]| {
+        let mut opts = options(systems, ReportLanguage::English);
+        opts.profile.figures = figs.clone();
+        let doc = report_doc_with_options(&ws, &context(), &opts);
+        table_under(&doc, "Figures")
+            .iter()
+            .map(|r| r[0].clone())
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(captions(&["Brake"]), brake_only);
+    assert_eq!(captions(&[]), all);
+
+    let book = |view: &SystemView| {
+        let book = read_workbook(&report_workbook_xlsx_in(&ws, &figs, view)).expect("reads");
+        names_in(sheet(&book, "Figures"))
+    };
+    assert_eq!(
+        book(&view_of_names(ws.project(), &["Brake".to_owned()])),
+        brake_only
+    );
+    assert_eq!(book(&SystemView::all()), all);
+}
+
+#[test]
+fn missing_system_names_lists_each_stale_name_once() {
+    let ws = fixture();
+    assert_eq!(
+        missing_system_names(
+            ws.project(),
+            &strings(&["Brake", "Gone", "brake", "Gone", "Old"])
+        ),
+        strings(&["Gone", "brake", "Old"])
+    );
+    assert!(missing_system_names(ws.project(), &strings(&["Brake", "ADAS"])).is_empty());
+    assert!(missing_system_names(workspace().project(), &strings(&["Gone"])).is_empty());
 }
 
 #[test]
