@@ -1657,6 +1657,104 @@
       ],
       "decision": null,
       "updated": "2026-11-15T18:27:24Z"
+    },
+    {
+      "id": "119-systems",
+      "title": "Systems, one per component",
+      "branch": "factory/119-systems",
+      "stage": "merged",
+      "slice": "119h",
+      "base": "11736f05491b35e1e00fd1e6b29227d56cec855d",
+      "reviews": {
+        "slice": "119h",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "PASS"
+      },
+      "history": [
+        {
+          "slice": "119a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 29
+        },
+        {
+          "slice": "119b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 208
+        },
+        {
+          "slice": "119c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 356
+        },
+        {
+          "slice": "119d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 40
+        },
+        {
+          "slice": "119e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 191
+        },
+        {
+          "slice": "119f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 227
+        },
+        {
+          "slice": "119g",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 259
+        },
+        {
+          "slice": "119h",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "PASS",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 128
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-16T04:30:35Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

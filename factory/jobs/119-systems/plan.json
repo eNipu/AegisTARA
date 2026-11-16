@@ -1,0 +1,201 @@
+{
+  "job": "119-systems",
+  "slices": [
+    {
+      "id": "119a",
+      "title": "A system kind in the element store",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/tests/elements.rs",
+        "crates/aegis-model/tests/elements_store.rs",
+        "crates/aegis-model/tests/workspace.rs",
+        "crates/aegis-model/tests/workspace_limits.rs",
+        "factory/jobs/119-systems/slices/119a/*"
+      ],
+      "max_lines": 120,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test elements --test elements_store --test workspace --test workspace_limits"
+      ]
+    },
+    {
+      "id": "119b",
+      "title": "Put a top-level component in a system",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/item.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/store/snapshot.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/workspace.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/tests/systems.rs",
+        "crates/aegis-model/tests/common/mod.rs",
+        "crates/aegis-model/tests/ops_properties.rs",
+        "crates/aegis-client/tests/undo_every_op.rs",
+        "factory/jobs/119-systems/slices/119b/*"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test systems --test ops_properties --test store --test workspace --test store_properties --test workspace_properties",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "119c",
+      "title": "Derive the systems of every element",
+      "tier": "hard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/system.rs",
+        "crates/aegis-model/src/element.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/Cargo.toml",
+        "crates/aegis-model/tests/systems_properties.rs",
+        "crates/aegis-model/benches/systems.rs",
+        "factory/jobs/119-systems/slices/119c/*"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test systems_properties",
+        "cargo test --locked -p aegis-model --bench systems"
+      ]
+    },
+    {
+      "id": "119d",
+      "title": "Flag a component in no system",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/lint.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/tests/systems.rs",
+        "crates/aegis-model/tests/ops_properties.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/tests/systems.rs",
+        "factory/jobs/119-systems/slices/119d/*"
+      ],
+      "max_lines": 120,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test systems --test ops_properties",
+        "cargo test --locked -p aegis-client --test systems --test pages"
+      ]
+    },
+    {
+      "id": "119e",
+      "title": "Edits for systems: add, rename, remove, move to system",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/tests/systems.rs",
+        "factory/jobs/119-systems/slices/119e/*"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test systems --test undo_labels --test pages",
+        "cargo check --locked -p aegis-shell"
+      ]
+    },
+    {
+      "id": "119f",
+      "title": "Rows for the Systems table, the picker and the comparison",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/state.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/tests/systems.rs",
+        "crates/aegis-client/tests/session.rs",
+        "factory/jobs/119-systems/slices/119f/*"
+      ],
+      "max_lines": 320,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test systems --test pages --test session",
+        "cargo check --locked -p aegis-shell"
+      ]
+    },
+    {
+      "id": "119g",
+      "title": "The view: menu, chip text, palette entries, remembered per user and project",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/src/settings.rs",
+        "crates/aegis-client/tests/systems_view.rs",
+        "factory/jobs/119-systems/slices/119g/*"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test systems_view",
+        "cargo check --locked -p aegis-shell"
+      ]
+    },
+    {
+      "id": "119h",
+      "title": "Filter every page by the view without an op",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/state.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/tests/systems_view.rs",
+        "crates/aegis-client/tests/session.rs",
+        "factory/jobs/119-systems/slices/119h/*"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test systems_view --test session --test systems"
+      ]
+    }
+  ]
+}
