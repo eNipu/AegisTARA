@@ -278,6 +278,13 @@ pub enum LintCode {
         /// The component in no system.
         component: ComponentId,
     },
+    /// A data flow links components of two systems, but neither its source
+    /// nor its destination component has any bound asset with a threat
+    /// scenario.
+    SystemBoundaryFlowWithoutThreat {
+        /// The boundary flow without associated threat scenarios.
+        flow: DataFlowId,
+    },
 }
 
 impl LintCode {
@@ -324,6 +331,7 @@ impl LintCode {
             | Self::AssetUnbound { .. }
             | Self::BoundaryCrossingDataFlowWithoutThreat { .. }
             | Self::ComponentWithoutSystem { .. }
+            | Self::SystemBoundaryFlowWithoutThreat { .. }
             | Self::LibraryRatingNotReviewed { .. } => LintSeverity::Warning,
             Self::ThreatWithoutFeasibility { .. }
             | Self::ReduceTreatmentWithoutControls { .. }
@@ -456,6 +464,10 @@ impl fmt::Display for LintCode {
             Self::ComponentWithoutSystem { component } => {
                 write!(f, "component {component} is in no system")
             }
+            Self::SystemBoundaryFlowWithoutThreat { flow } => write!(
+                f,
+                "data flow {flow} between two systems has no threat scenario on its endpoint components"
+            ),
         }
     }
 }
@@ -614,6 +626,7 @@ mod tests {
             LintCode::ComponentWithoutSystem {
                 component: ComponentId::new_v7(),
             },
+            LintCode::SystemBoundaryFlowWithoutThreat { flow },
         ];
         for code in warnings {
             let f = LintFinding::new(code);

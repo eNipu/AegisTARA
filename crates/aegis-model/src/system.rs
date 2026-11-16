@@ -250,6 +250,53 @@ impl Project {
         None
     }
 
+    /// The systems at the two ends of a boundary flow, source first: both end
+    /// components have a system and the two differ. `None` for every other
+    /// flow (same system, an end in no system, an unknown index). Time
+    /// O(depth).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{
+    ///     ComponentId, DataFlowId, ElementId, ElementKind, Methodology, Op, Project, Provenance,
+    /// };
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let (brake, adas) = (ElementId::new_v7(), ElementId::new_v7());
+    /// for (id, name) in [(brake, "Brake"), (adas, "ADAS")] {
+    ///     project.apply(Op::AddElement {
+    ///         id, kind: ElementKind::System, name: name.into(),
+    ///         provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let (ecu, camera) = (ComponentId::new_v7(), ComponentId::new_v7());
+    /// for (id, system) in [(ecu, brake), (camera, adas)] {
+    ///     project.apply(Op::AddComponent {
+    ///         id, name: "Part".into(), parent: None, provenance: Provenance::default(),
+    ///     })?;
+    ///     project.apply(Op::SetComponentSystem {
+    ///         id, system: Some(system), provenance: Provenance::default(),
+    ///     })?;
+    /// }
+    /// let flow = DataFlowId::new_v7();
+    /// project.apply(Op::AddDataFlow {
+    ///     id: flow, name: "Frames".into(), from: camera, to: ecu, interface: None,
+    ///     provenance: Provenance::default(),
+    /// })?;
+    /// let idx = project.data_flow_idx(&flow).ok_or("missing")?;
+    /// assert_eq!(project.boundary_flow(idx), Some((adas, brake)));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn boundary_flow(&self, idx: DataFlowIdx) -> Option<(ElementId, ElementId)> {
+        let flow = self.data_flow(idx)?;
+        let from = self.component_system(flow.from())?;
+        let to = self.component_system(flow.to())?;
+        (from != to).then_some((from, to))
+    }
+
     /// Derives the systems of every element from the links the project
     /// already has. A component has the system of its top-level ancestor;
     /// an interface and an asset have their component's; a threat has its
