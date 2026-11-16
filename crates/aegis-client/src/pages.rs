@@ -2674,6 +2674,30 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::ConflictingSettings {
+            item,
+            first,
+            second,
+        } => {
+            let s = match item {
+                aegis_model::ItemRef::Component(id) => Selection::Component(id),
+                aegis_model::ItemRef::Interface(id) => Selection::Interface(id),
+            };
+            let noun = match item {
+                aegis_model::ItemRef::Component(_) => &m.element_names().component.singular,
+                aegis_model::ItemRef::Interface(_) => &m.element_names().interface.singular,
+            };
+            let a = m.control_kind_label(first).unwrap_or("?");
+            let b = m.control_kind_label(second).unwrap_or("?");
+            (
+                format!(
+                    "{} {} has settings \"{a}\" and \"{b}\" that the pack says conflict.",
+                    noun,
+                    q(s)
+                ),
+                s,
+            )
+        }
         L::CybersecurityGoalWithoutControls { goal } => {
             let s = Selection::Goal(goal);
             (

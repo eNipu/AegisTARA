@@ -379,6 +379,12 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A pack preset lists more than [`MAX_CONTROL_KINDS`](crate::MAX_CONTROL_KINDS)
+    /// presets it conflicts with.
+    ControlKindConflicts {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A pack declares more than [`MAX_PACK_TRANSLATIONS`](crate::MAX_PACK_TRANSLATIONS)
     /// language translations.
     PackTranslations {
@@ -506,6 +512,9 @@ impl Limit {
     pub(crate) const CONTROL_KINDS: Limit = Limit::ControlKinds {
         max: MAX_CONTROL_KINDS,
     };
+    pub(crate) const CONTROL_KIND_CONFLICTS: Limit = Limit::ControlKindConflicts {
+        max: MAX_CONTROL_KINDS,
+    };
     pub(crate) const PACK_TRANSLATIONS: Limit = Limit::PackTranslations {
         max: MAX_PACK_TRANSLATIONS,
     };
@@ -591,6 +600,9 @@ impl fmt::Display for Limit {
             }
             Limit::ControlKinds { max } => {
                 write!(f, "more than {max} control kinds")
+            }
+            Limit::ControlKindConflicts { max } => {
+                write!(f, "more than {max} presets in one conflicts_with list")
             }
             Limit::PackTranslations { max } => {
                 write!(f, "more than {max} pack translations")

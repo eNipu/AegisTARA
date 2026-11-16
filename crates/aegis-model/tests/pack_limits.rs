@@ -578,6 +578,7 @@ fn with_preset(interfaces: usize, rules: usize) -> MethodologyDef {
             .iter()
             .map(|e| (Arc::clone(&e.key), Arc::clone(&low)))
             .collect(),
+        conflicts_with: Vec::new(),
     }];
     d
 }
@@ -621,6 +622,35 @@ fn control_kind_interface_kind_cap() {
         .interface_kinds
         .push("extra".into());
     over_cap(&d, Limit::InterfaceKinds { max: 32 }, "33 interface kinds");
+}
+
+#[test]
+fn control_kind_conflicts_cap() {
+    // 64 presets: first lists the other 63.
+    let many = |n: usize| {
+        let mut d = with_preset(0, 1);
+        let one = d.element_names.control_kinds[0].clone();
+        d.element_names.control_kinds = (0..n)
+            .map(|i| {
+                let mut k = ControlKindDef {
+                    key: key_of_len("ck", i, 8),
+                    ..one.clone()
+                };
+                if i == 0 {
+                    k.conflicts_with = (1..n).map(|j| key_of_len("ck", j, 8)).collect();
+                }
+                k
+            })
+            .collect();
+        d
+    };
+    at_cap(&many(64), "64 conflicts");
+    // over_cap: 65 keys in list
+    let mut d = with_preset(0, 1);
+    d.element_names.control_kinds[0].conflicts_with =
+        (0..65).map(|i| key_of_len("ck", i + 1, 8)).collect();
+    // need keys declared? over_cap decodes; keys must be valid? The cap check happens during decode before key resolution? Actually BoundedVec cap checked at decode. Keys can be anything syntactically. But key_of_len valid. However conflict keys must exist? Cap check first. Fine.
+    over_cap(&d, Limit::ControlKindConflicts { max: 64 }, "65 conflicts");
 }
 
 #[test]

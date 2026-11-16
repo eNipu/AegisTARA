@@ -15,7 +15,7 @@ mod iso21434;
 mod pack;
 mod stride;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -232,6 +232,7 @@ pub struct PackTranslationDef {
 ///     label: "Secure boot".into(),
 ///     interface_kinds: Vec::new(),
 ///     rules: [("firmware-modification".into(), "very-low".into())].into(),
+///     conflicts_with: Vec::new(),
 /// };
 /// assert!(d.interface_kinds.is_empty());
 /// ```
@@ -245,6 +246,9 @@ pub struct ControlKindDef {
     pub interface_kinds: Vec<Arc<str>>,
     /// Default rules: attack type key to feasibility level key. 1 to 16 entries.
     pub rules: BTreeMap<Arc<str>, Arc<str>>,
+    /// Keys of presets this one conflicts with; empty for none. One-sided
+    /// declaration is enough: the lint treats it symmetrically (CFG-09).
+    pub conflicts_with: Vec<Arc<str>>,
 }
 
 /// Pack-defined display names for the model's element types and the
@@ -804,6 +808,7 @@ struct ControlKindData {
     entry: Entry,
     interface_kinds: Vec<InterfaceKind>,
     rules: Vec<ControlRule>,
+    conflicts_with: Vec<ControlKind>,
 }
 
 /// One validated score band in a [`Methodology`]'s attack potential scheme.
@@ -1558,8 +1563,8 @@ impl Methodology {
     }
 
     /// Validates the setting presets and resolves their keys. Time
-    /// O(K * (I + R)) with K <= 64 presets, I <= 32 interface kinds and
-    /// R <= 16 rules each.
+    /// O(K * (I + R + F)), F <= 64 conflicts per preset, with K <= 64
+    /// presets, I <= 32 interface kinds and R <= 16 rules each.
     fn build_control_kinds(
         defs: &[ControlKindDef],
         interface_by_key: &BTreeMap<Arc<str>, u8>,
@@ -1626,7 +1631,35 @@ impl Methodology {
                 entry,
                 interface_kinds,
                 rules,
+                conflicts_with: Vec::new(),
             });
+        }
+        // Resolve conflicts_with now that by_key is complete.
+        for (pos, d) in defs.iter().enumerate() {
+            let mut resolved: Vec<ControlKind> = Vec::with_capacity(d.conflicts_with.len());
+            let mut seen: BTreeSet<u8> = BTreeSet::new();
+            for other_key in &d.conflicts_with {
+                if other_key.as_ref() == d.key.as_ref() {
+                    return Err(MethodologyError::ControlKindConflictsWithItself {
+                        control_kind: Arc::clone(&d.key),
+                    });
+                }
+                let Some(&other_pos) = by_key.get(other_key) else {
+                    return Err(MethodologyError::UnknownControlKindConflict {
+                        control_kind: Arc::clone(&d.key),
+                        other: error_key_text(other_key),
+                    });
+                };
+                if !seen.insert(other_pos) {
+                    return Err(MethodologyError::RepeatedControlKindConflict {
+                        control_kind: Arc::clone(&d.key),
+                        other: error_key_text(other_key),
+                    });
+                }
+                resolved.push(ControlKind(other_pos));
+            }
+            resolved.sort_unstable();
+            out[pos].conflicts_with = resolved;
         }
         Ok(Vocab { items: out, by_key })
     }
@@ -3406,6 +3439,25 @@ impl Methodology {
         self.control_kinds
             .get(kind.index())
             .map_or(&[], |d| d.interface_kinds.as_slice())
+    }
+
+    /// Returns the presets this one conflicts with, sorted by index. Empty
+    /// when out of range. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Methodology;
+    ///
+    /// # fn main() -> Result<(), aegis_model::PackError> {
+    /// let m = Methodology::iso21434_r155()?;
+    /// assert!(m.control_kinds().all(|k| m.control_kind_conflicts(k).is_empty()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn control_kind_conflicts(&self, kind: ControlKind) -> &[ControlKind] {
+        self.control_kinds
+            .get(kind.index())
+            .map_or(&[], |d| d.conflicts_with.as_slice())
     }
 
     // -- Translations (L10N-07) -----------------------------------------------
