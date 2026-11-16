@@ -822,3 +822,251 @@ fn each_overview_count_is_its_own_sheet_when_two_kinds_share_a_name() {
     assert_eq!((goals, claims), (0, 1));
     assert_eq!(counts, vec![goals.to_string(), claims.to_string()]);
 }
+
+// ---- the System column of the import (121c) ---------------------------------
+
+use aegis_client::excel::{ExcelMapping, ExcelPreview, preview_import};
+use aegis_model::{ModelError, Op, Project};
+
+fn strings(cells: &[&str]) -> Vec<String> {
+    cells.iter().map(|c| (*c).to_owned()).collect()
+}
+
+/// A one-sheet workbook with `headers` and `rows`.
+fn hand_book(headers: &[&str], rows: &[&[&str]]) -> WorkbookData {
+    WorkbookData {
+        sheets: vec![SheetData {
+            name: "Sheet1".into(),
+            headers: strings(headers),
+            rows: rows
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (i + 2, strings(r)))
+                .collect(),
+        }],
+    }
+}
+
+fn preview(project: &Project, book: &WorkbookData) -> ExcelPreview {
+    preview_import(project, book, &ExcelMapping::default(), "mira", 1).expect("previews")
+}
+
+fn system_adds(p: &ExcelPreview) -> Vec<String> {
+    p.ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::AddElement {
+                kind: ElementKind::System,
+                name,
+                ..
+            } => Some(name.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn system_sets(p: &ExcelPreview) -> Vec<ComponentId> {
+    p.ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::SetComponentSystem { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The name of the system of the component named `name`, if any.
+fn system_name_of(project: &Project, name: &str) -> Option<String> {
+    let (idx, _, _) = project.components().find(|(_, _, c)| c.name() == name)?;
+    let system = project.component_system(idx)?;
+    project.element(system).map(|e| e.name().to_owned())
+}
+
+#[test]
+fn a_system_column_is_detected() {
+    for headers in [
+        ["Component", "System"],
+        ["Component", "Systems"],
+        ["コンポーネント", "システム"],
+    ] {
+        let m = ExcelMapping::auto_detect(&strings(&headers));
+        assert_eq!(m.system_col, Some(1), "{headers:?}");
+        assert_eq!(m.component_col, Some(0), "{headers:?}");
+    }
+}
+
+#[test]
+fn the_preview_creates_systems_and_places_components() {
+    let mut ws = workspace();
+    let book = hand_book(
+        &["Component", "System"],
+        &[
+            &["ECU", "Brake"],
+            &["Valve", "brake"],
+            &["Camera", "ADAS"],
+            &["Tool", ""],
+        ],
+    );
+    let p = preview(ws.project(), &book);
+    assert_eq!(p.unmapped_rows, Vec::new());
+    assert_eq!(p.systems_to_add, 2);
+    assert_eq!(p.components_to_add, 4);
+    assert_eq!(system_adds(&p), vec!["Brake".to_owned(), "ADAS".to_owned()]);
+    assert_eq!(system_sets(&p).len(), 3);
+    assert!(p.summary().contains("2 system(s)"), "{}", p.summary());
+    // The dry run changes nothing.
+    assert_eq!(ws.project().components().count(), 0);
+    assert_eq!(ws.project().elements(ElementKind::System).count(), 0);
+
+    ws.apply(p.ops.clone(), Origin::Edit).expect("one batch");
+    let project = ws.project();
+    assert_eq!(system_name_of(project, "ECU").as_deref(), Some("Brake"));
+    assert_eq!(system_name_of(project, "Valve").as_deref(), Some("Brake"));
+    assert_eq!(system_name_of(project, "Camera").as_deref(), Some("ADAS"));
+    assert_eq!(system_name_of(project, "Tool"), None);
+    assert!(project.components().any(|(_, _, c)| c.name() == "Tool"));
+
+    ws.undo().expect("undoes");
+    assert_eq!(ws.project().components().count(), 0);
+    assert_eq!(ws.project().elements(ElementKind::System).count(), 0);
+}
+
+#[test]
+fn an_existing_system_and_membership_are_reused() {
+    let mut ws = workspace();
+    let brake = add_system(&mut ws, "Brake");
+    add_component(&mut ws, "ECU", Some(brake));
+    let valve = add_component(&mut ws, "Valve", None);
+    let book = hand_book(
+        &["Component", "System"],
+        &[&["ECU", "Brake"], &["Valve", "Brake"]],
+    );
+    let p = preview(ws.project(), &book);
+    assert_eq!(p.unmapped_rows, Vec::new());
+    assert_eq!(p.systems_to_add, 0);
+    assert_eq!(system_adds(&p), Vec::<String>::new());
+    assert!(!p.ops.iter().any(|op| matches!(op, Op::AddElement { .. })));
+    assert_eq!(system_sets(&p), vec![valve]);
+    assert!(p.ops.iter().any(|op| matches!(
+        op,
+        Op::SetComponentSystem { system: Some(s), .. } if *s == brake
+    )));
+}
+
+#[test]
+fn a_system_without_a_component_is_ignored() {
+    let ws = workspace();
+    // The model refuses an asset with no security property, so the row
+    // names one.
+    let book = hand_book(
+        &["Asset", "Properties", "Systems"],
+        &[&["Brake pressure", "Integrity", "Brake, ADAS"]],
+    );
+    let p = preview(ws.project(), &book);
+    assert_eq!(p.mapping.system_col, Some(2));
+    assert_eq!(p.unmapped_rows, Vec::new());
+    assert_eq!(p.systems_to_add, 0);
+    assert_eq!(system_adds(&p), Vec::<String>::new());
+    assert_eq!(system_sets(&p), Vec::new());
+    assert_eq!(p.assets_to_add, 1);
+}
+
+#[test]
+fn a_child_component_in_another_system_is_refused_with_the_models_reason() {
+    let mut ws = workspace();
+    let brake = add_system(&mut ws, "Brake");
+    add_system(&mut ws, "ADAS");
+    let gateway = add_component(&mut ws, "Gateway", Some(brake));
+    let port = ComponentId::new_v7();
+    run(
+        &mut ws,
+        &Edit::AddComponent {
+            id: port,
+            name: "Port".into(),
+            parent: Some(gateway),
+        },
+    );
+
+    let refused = preview(
+        ws.project(),
+        &hand_book(&["Component", "System"], &[&["Port", "ADAS"]]),
+    );
+    assert_eq!(refused.ops, Vec::new());
+    assert_eq!(refused.systems_to_add, 0);
+    assert_eq!(refused.unmapped_rows.len(), 1);
+    assert_eq!(
+        refused.unmapped_rows[0].reason,
+        ModelError::ChildComponentSystem { component: port }.to_string()
+    );
+
+    let same = preview(
+        ws.project(),
+        &hand_book(&["Component", "System"], &[&["Port", "Brake"]]),
+    );
+    assert_eq!(same.ops, Vec::new());
+    assert_eq!(same.unmapped_rows, Vec::new());
+}
+
+#[test]
+fn an_exported_workbook_imports_with_its_systems() {
+    let ws = fixture();
+    let book = read_workbook(&report_workbook_xlsx(&ws)).expect("reads");
+    let source = ws.project();
+    let comps_name = source
+        .methodology()
+        .element_names()
+        .component
+        .plural
+        .to_string();
+    let comps = sheet(&book, &comps_name);
+    let system_col = comps
+        .headers
+        .iter()
+        .position(|h| h == "Systems")
+        .expect("Systems header");
+    let mapping = ExcelMapping {
+        sheet: Some(comps_name.clone()),
+        component_col: Some(1),
+        system_col: Some(system_col),
+        ..ExcelMapping::default()
+    };
+    let mut target = Workspace::empty(Arc::clone(source.methodology()));
+    let p = preview_import(target.project(), &book, &mapping, "mira", 1).expect("previews");
+    assert_eq!(p.unmapped_rows, Vec::new());
+    assert_eq!(p.systems_to_add, 2);
+    target.apply(p.ops.clone(), Origin::Edit).expect("applies");
+
+    let mut seen = 0;
+    for (idx, _, c) in source.components() {
+        if c.parent().is_some() {
+            continue;
+        }
+        let expected = source
+            .component_system(idx)
+            .and_then(|s| source.element(s))
+            .map(|e| e.name().to_owned());
+        assert!(
+            target
+                .project()
+                .components()
+                .any(|(_, _, t)| t.name() == c.name()),
+            "{}",
+            c.name()
+        );
+        assert_eq!(
+            system_name_of(target.project(), c.name()),
+            expected,
+            "{}",
+            c.name()
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 3);
+
+    let default = preview(
+        Workspace::empty(Arc::clone(source.methodology())).project(),
+        &book,
+    );
+    assert_eq!(default.active_sheet, "Risk register");
+    assert_eq!(default.systems_to_add, 0);
+}
