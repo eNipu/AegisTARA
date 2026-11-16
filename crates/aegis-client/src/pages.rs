@@ -2816,7 +2816,10 @@ pub struct Overview {
     pub systems: Option<crate::combined::SystemsOverview>,
 }
 
-fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
+/// The systems a view shows: the project's usage and the view's set.
+type Shown<'a> = Option<(&'a aegis_model::SystemUse, aegis_model::SystemSet)>;
+
+fn distribution(ws: &Workspace, residual: bool, shown: Shown<'_>) -> Vec<Count> {
     let project = ws.project();
     let m = project.methodology();
     let levels: Vec<(aegis_model::RiskLevel, String)> = m
@@ -2824,7 +2827,10 @@ fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
         .map(|(l, _, label)| (l, label.to_owned()))
         .collect();
     let mut counts = vec![0usize; levels.len() + 1];
-    for (_, id, _) in project.threat_scenarios() {
+    for (t_idx, id, _) in project.threat_scenarios() {
+        if shown.is_some_and(|(u, v)| !u.threat(t_idx).shows_in(v)) {
+            continue;
+        }
         let r = if residual {
             ws.cache().evaluate_residual_risk(project, id)
         } else {
@@ -2859,33 +2865,99 @@ fn distribution(ws: &Workspace, residual: bool) -> Vec<Count> {
 /// The overview. Time O(threats log threats + lint).
 #[must_use]
 pub fn overview(ws: &Workspace) -> Overview {
+    overview_in(ws, &crate::systems::SystemView::all())
+}
+
+/// The overview of what `view` shows. With all systems, or a project
+/// with no systems, this is the whole project. Time O(project + threats
+/// log threats + lint).
+#[must_use]
+pub fn overview_in(ws: &Workspace, view: &crate::systems::SystemView) -> Overview {
     let p = ws.project();
+    let view = view.normalized(p);
+    let usage = p.system_use();
+    let v = usage.set_of(view.systems());
+    let filtered = !view.is_all();
+    let shown: Shown<'_> = filtered.then_some((&usage, v));
     let names = p.methodology().element_names();
     let c = |label: &str, count| Count {
         label: label.to_owned(),
         count,
         tone: Tone::Unrated,
     };
-    let lint = p.lint();
-    let errors = lint
-        .iter()
-        .filter(|f| f.severity() == LintSeverity::Error)
-        .count();
+    let n = |total: usize, sets: &mut dyn Iterator<Item = aegis_model::SystemSet>| {
+        if filtered {
+            sets.filter(|s| s.shows_in(v)).count()
+        } else {
+            total
+        }
+    };
+    let mut rows = problems(ws);
+    if filtered {
+        rows.retain(|r| {
+            r.target
+                .and_then(|t| crate::systems::selection_systems(p, &usage, t))
+                .is_none_or(|s| s.shows_in(v))
+        });
+    }
+    let errors = rows.iter().filter(|r| r.error).count();
     let mut top = risk_rows(ws);
+    if filtered {
+        top.retain(|r| {
+            p.threat_scenario_idx(&r.id)
+                .is_none_or(|i| usage.threat(i).shows_in(v))
+        });
+    }
     top.truncate(5);
     let mut counts = vec![
-        c(&names.asset.plural, p.asset_count()),
-        c(&names.damage_scenario.plural, p.damage_scenario_count()),
-        c(&names.threat_scenario.plural, p.threat_scenario_count()),
-        c(&names.attack_tree.plural, p.attack_tree_count()),
-        c(&names.security_control.plural, p.security_control_count()),
+        c(
+            &names.asset.plural,
+            n(
+                p.asset_count(),
+                &mut p.assets().map(|(i, _, _)| usage.asset(i)),
+            ),
+        ),
+        c(
+            &names.damage_scenario.plural,
+            n(
+                p.damage_scenario_count(),
+                &mut p.damage_scenarios().map(|(i, _, _)| usage.damage(i)),
+            ),
+        ),
+        c(
+            &names.threat_scenario.plural,
+            n(
+                p.threat_scenario_count(),
+                &mut p.threat_scenarios().map(|(i, _, _)| usage.threat(i)),
+            ),
+        ),
+        c(
+            &names.attack_tree.plural,
+            n(
+                p.attack_tree_count(),
+                &mut p.attack_trees().map(|(i, _, _)| usage.tree(i)),
+            ),
+        ),
+        c(
+            &names.security_control.plural,
+            n(
+                p.security_control_count(),
+                &mut p.security_controls().map(|(i, _, _)| usage.control(i)),
+            ),
+        ),
         c(
             &names.cybersecurity_goal.plural,
-            p.cybersecurity_goal_count(),
+            n(
+                p.cybersecurity_goal_count(),
+                &mut p.cybersecurity_goals().map(|(i, _, _)| usage.goal(i)),
+            ),
         ),
         c(
             &names.cybersecurity_claim.plural,
-            p.cybersecurity_claim_count(),
+            n(
+                p.cybersecurity_claim_count(),
+                &mut p.cybersecurity_claims().map(|(i, _, _)| usage.claim(i)),
+            ),
         ),
     ];
     if p.component_count() > 0
@@ -2893,19 +2965,45 @@ pub fn overview(ws: &Workspace) -> Overview {
         || p.data_flow_count() > 0
         || p.trust_boundary_count() > 0
     {
-        counts.push(c(&names.component.plural, p.component_count()));
-        counts.push(c(&names.interface.plural, p.interface_count()));
-        counts.push(c(&names.data_flow.plural, p.data_flow_count()));
-        counts.push(c(&names.trust_boundary.plural, p.trust_boundary_count()));
+        counts.push(c(
+            &names.component.plural,
+            n(
+                p.component_count(),
+                &mut p.components().map(|(i, _, _)| usage.component(i)),
+            ),
+        ));
+        counts.push(c(
+            &names.interface.plural,
+            n(
+                p.interface_count(),
+                &mut p.interfaces().map(|(i, _, _)| usage.interface(i)),
+            ),
+        ));
+        counts.push(c(
+            &names.data_flow.plural,
+            n(
+                p.data_flow_count(),
+                &mut p.data_flows().map(|(i, _, _)| usage.data_flow(i)),
+            ),
+        ));
+        counts.push(c(
+            &names.trust_boundary.plural,
+            n(
+                p.trust_boundary_count(),
+                &mut p
+                    .trust_boundaries()
+                    .map(|(i, _, _)| usage.trust_boundary(i)),
+            ),
+        ));
     }
     Overview {
         counts,
-        inherent: distribution(ws, false),
-        residual: distribution(ws, true),
+        inherent: distribution(ws, false, shown),
+        residual: distribution(ws, true, shown),
         errors,
-        warnings: lint.len() - errors,
+        warnings: rows.len() - errors,
         top,
-        systems: crate::combined::systems_overview(ws, &crate::systems::SystemView::all()),
+        systems: crate::combined::systems_overview(ws, &view),
     }
 }
 
