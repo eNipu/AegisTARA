@@ -1381,6 +1381,11 @@ impl<P: CredentialProvider> Actor<P> {
         let (epoch, id) = (open.epoch, open.id.clone());
         let conn = self.conn.clone();
         let events = self.events.clone();
+        // Only live systems reach the audit detail and the report.
+        profile.filters.systems = crate::systems::view_names(
+            open.ws.project(),
+            &crate::systems::view_of_names(open.ws.project(), &profile.filters.systems),
+        );
         let detail = profile.audit_summary();
         tokio::spawn(async move {
             // Building and writing are both blocking work (R5).
