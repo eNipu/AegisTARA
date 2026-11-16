@@ -53,7 +53,7 @@ impl fmt::Display for ItemRef {
 }
 
 /// [`ItemRef`] in the arena index form kept inside a project. 8 bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ItemIdx {
     Component(ComponentIdx),
     Interface(InterfaceIdx),

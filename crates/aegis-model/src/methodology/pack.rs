@@ -72,6 +72,7 @@ pack_caps! {
     InterfaceKindsCap = MAX_INTERFACE_KINDS, Limit::INTERFACE_KINDS;
     AttackTypesCap = MAX_ATTACK_TYPES, Limit::ATTACK_TYPES;
     ControlKindsCap = MAX_CONTROL_KINDS, Limit::CONTROL_KINDS;
+    ControlKindConflictsCap = MAX_CONTROL_KINDS, Limit::CONTROL_KIND_CONFLICTS;
     ControlKindRulesCap = crate::control::MAX_CONTROL_RULES, Limit::CONTROL_RULES;
     PackTranslationsCap = MAX_PACK_TRANSLATIONS, Limit::PACK_TRANSLATIONS;
 }
@@ -247,6 +248,8 @@ struct ControlKindWire {
     #[serde(default)]
     interface_kinds: BoundedVec<Key, InterfaceKindsCap>,
     rules: BoundedKeyMap<Key, ControlKindRulesCap>,
+    #[serde(default)]
+    conflicts_with: BoundedVec<Key, ControlKindConflictsCap>,
 }
 
 /// A level or a property: a key and a label.
@@ -447,6 +450,7 @@ impl From<ControlKindWire> for ControlKindDef {
             label: k.label.0,
             interface_kinds: k.interface_kinds.0.into_iter().map(|i| i.0).collect(),
             rules: k.rules.0.into_iter().map(|(a, l)| (a, l.0)).collect(),
+            conflicts_with: k.conflicts_with.0.into_iter().map(|i| i.0).collect(),
         }
     }
 }
@@ -650,7 +654,7 @@ impl Serialize for View<'_, MethodologyDef> {
 impl Serialize for View<'_, ControlKindDef> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let k = self.0;
-        let mut st = s.serialize_struct("control_kind", 4)?;
+        let mut st = s.serialize_struct("control_kind", 5)?;
         st.serialize_field("key", &*k.key)?;
         st.serialize_field("label", &*k.label)?;
         if k.interface_kinds.is_empty() {
@@ -659,6 +663,11 @@ impl Serialize for View<'_, ControlKindDef> {
             st.serialize_field("interface_kinds", &View(&k.interface_kinds))?;
         }
         st.serialize_field("rules", &View(&k.rules))?;
+        if k.conflicts_with.is_empty() {
+            st.skip_field("conflicts_with")?;
+        } else {
+            st.serialize_field("conflicts_with", &View(&k.conflicts_with))?;
+        }
         st.end()
     }
 }

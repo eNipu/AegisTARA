@@ -400,6 +400,7 @@ fn expected() -> MethodologyDef {
                     label: s(label),
                     interface_kinds: kinds.iter().map(|&k| s(k)).collect(),
                     rules: rules.iter().map(|&(a, l)| (s(a), s(l))).collect(),
+                    conflicts_with: Vec::new(),
                 })
                 .collect(),
             translations: BTreeMap::from([(s("ja"), ja_translation())]),
