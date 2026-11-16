@@ -120,7 +120,7 @@ async function poll() {
     render();
     document.getElementById("status").textContent = "updated " + new Date().toLocaleTimeString();
   } catch (e) {
-    document.getElementById("status").textContent = "can't read board.json (serve this folder with python3 -m http.server)";
+    document.getElementById("status").textContent = "can't read board.json (serve this folder with python3 -m http.server 8010)";
   }
 }
 
