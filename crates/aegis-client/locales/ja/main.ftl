@@ -111,3 +111,9 @@ security-settings-note = コンポーネントの設定は、そのインター�
 applied-to = 適用先
 setting = 設定
 rules = ルール
+
+# Table column headings (UI-14).
+id = ID
+properties = 特性
+worst-risk = 最大リスク
+controls = 対策

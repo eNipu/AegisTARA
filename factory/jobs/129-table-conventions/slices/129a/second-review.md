@@ -27,3 +27,7 @@ CI: scripts/ci.sh green on master including this merge (run during 126b).
 Same pattern as job 126: the review returned "Findings: none" and "Risk: none". It checked that the types exist, not that anything can use them. The planner's reduced spec also turned "pages moved onto the convention" into "constants published", which removed every check that the specs are true.
 
 NEXT: planner (follow-up 129c-table-convention-rework)
+
+## Correction (2026-11-17, while building 129c)
+
+Findings 3 and 4 overstated one point. The asset and damage pages show one "Properties" and one "Impact" column today, not one per pack entry, so no table shown today needs columns that expand with the pack; only the attack tree table (job 152) does. The missing "Properties" column and the other mismatches stand. In finding 5, a threat's name on the risk register is the threat itself, so it may be edited there; the Problems columns were the real fault.

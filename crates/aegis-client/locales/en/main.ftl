@@ -120,3 +120,9 @@ security-settings-note = A component's settings also apply to its interfaces.
 applied-to = Applied to
 setting = Setting
 rules = Rules
+
+# Table column headings (UI-14).
+id = ID
+properties = Properties
+worst-risk = Worst risk
+controls = Controls
