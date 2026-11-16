@@ -81,9 +81,12 @@ Pass `model` on every spawn; it overrides the agent file.
 
 | Agent | Model |
 |---|---|
-| planner | fable |
-| builder | opus |
-| reviewer | fable |
+| planner | opencode-go/glm-5.3 |
+| builder | opencode-go/qwen4-max (`hard` tier or `high` risk), opencode-go/glm-5.3 (`standard`/`small`) |
+| reviewer | opencode-go/qwen4-max (`high` risk), opencode-go/glm-5.3 (`normal`) |
+
+Owner directive 2026-11-16: no Claude models in this factory; pick from the table by the
+slice's `tier` and `risk` in `plan.json`.
 
 **Outside models:** a build prompt is a complete task on its own, so the owner can run
 `factory/jobs/<job-id>/prompts/<slice>.md` in any other session or tool, inside

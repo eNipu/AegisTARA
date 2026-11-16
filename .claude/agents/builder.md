@@ -2,7 +2,7 @@
 name: builder
 description: Factory step 2. Implements one slice by following its build prompt, inside the job's git worktree, and writes the slice's build.md.
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: opus
+model: opencode-go/qwen4-max
 ---
 You build one slice of one factory job. Your whole task is the file you are given:
 `factory/jobs/<job-id>/prompts/<slice-id>.md`. Follow it exactly.
