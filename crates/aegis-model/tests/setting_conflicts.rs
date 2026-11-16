@@ -1,68 +1,104 @@
-mod common;
+//! Conflicting setting presets on one component or interface (CFG-09).
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use aegis_model::{
-    ComponentId, ControlId, ControlKind, InterfaceId, ItemRef, LintCode, Methodology,
-    MethodologyDef, Op, Project, Provenance,
+    ComponentId, ControlId, ControlKind, ControlKindDef, InterfaceId, ItemRef, LintCode,
+    Methodology, MethodologyDef, Op, Project, Provenance,
 };
 
-fn methodology() -> Arc<Methodology> {
+/// Key, interface kinds (empty = for components), conflicts_with.
+type Preset = (
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+);
+
+/// Index 0 lists 1 (declared on the lower side), 3 lists 2 (declared on
+/// the higher side), 4 lists 1, so a target with 0, 1 and 4 has two pairs.
+const PRESETS: &[Preset] = &[
+    ("fused-a", &[], &["open-b"]),
+    ("open-b", &[], &[]),
+    ("fused-c", &["debug"], &[]),
+    ("open-d", &["debug"], &["fused-c"]),
+    ("sealed-e", &[], &["open-b"]),
+];
+
+struct Fx {
+    p: Project,
+    k: Vec<ControlKind>,
+    ecu: ComponentId,
+    ecu2: ComponentId,
+    jtag: InterfaceId,
+}
+
+/// Two components, a debug interface on the first, and the given presets.
+fn fixture(presets: &[Preset]) -> Fx {
     let mut def =
         MethodologyDef::read_pack(Methodology::iso21434_r155_pack().as_bytes()).expect("pack");
     let low = Arc::clone(&def.feasibility_levels[0].key);
-    // Need debug-access attack type present (it is). Use low level.
-    let rule = |_: &str| -> BTreeMap<Arc<str>, Arc<str>> {
-        let mut m = BTreeMap::new();
-        m.insert("debug-access".into(), Arc::clone(&low));
-        m
-    };
-    let mut presets = Vec::new();
-    // fused-a, open-b for components
-    for key in ["fused-a", "open-b"] {
-        presets.push(aegis_model::ControlKindDef {
+    def.element_names.control_kinds = presets
+        .iter()
+        .map(|&(key, interfaces, conflicts)| ControlKindDef {
             key: key.into(),
             label: key.into(),
-            interface_kinds: Vec::new(),
-            rules: rule(key),
-            conflicts_with: Vec::new(),
-        });
+            interface_kinds: interfaces.iter().map(|&i| i.into()).collect(),
+            rules: [("debug-access".into(), Arc::clone(&low))].into(),
+            conflicts_with: conflicts.iter().map(|&c| c.into()).collect(),
+        })
+        .collect();
+    let m = Arc::new(Methodology::new(def).expect("valid"));
+    let k = m.control_kinds().collect();
+    let debug = m.interface_kind("debug").expect("debug");
+    let mut p = Project::new(m);
+    let (ecu, ecu2, jtag) = (
+        ComponentId::new_v7(),
+        ComponentId::new_v7(),
+        InterfaceId::new_v7(),
+    );
+    for (id, name) in [(ecu, "Gateway ECU"), (ecu2, "Telematics ECU")] {
+        p.apply(Op::AddComponent {
+            id,
+            name: name.into(),
+            parent: None,
+            provenance: Provenance::default(),
+        })
+        .expect("component");
     }
-    // fused-c, open-d for debug interface
-    for key in ["fused-c", "open-d"] {
-        presets.push(aegis_model::ControlKindDef {
-            key: key.into(),
-            label: key.into(),
-            interface_kinds: vec!["debug".into()],
-            rules: rule(key),
-            conflicts_with: Vec::new(),
-        });
+    p.apply(Op::AddInterface {
+        id: jtag,
+        name: "JTAG".into(),
+        component: ecu,
+        kind: debug,
+        provenance: Provenance::default(),
+    })
+    .expect("interface");
+    Fx {
+        p,
+        k,
+        ecu,
+        ecu2,
+        jtag,
     }
-    // set conflicts
-    presets[0].conflicts_with = vec!["open-b".into()]; // fused-a lists open-b
-    presets[3].conflicts_with = vec!["fused-c".into()]; // open-d lists fused-c
-    def.element_names.control_kinds = presets;
-    Arc::new(Methodology::new(def).expect("valid"))
 }
 
-// helper to add a preset setting
-fn add_setting(p: &mut Project, id: ControlId, kind_idx: usize, target: ItemRef) {
-    let m = p.methodology();
-    let kinds: Vec<ControlKind> = m.control_kinds().collect();
-    let kind = kinds[kind_idx];
+/// Applies a new setting to `target`; `kind` is `None` for a custom one.
+fn add_setting(p: &mut Project, kind: Option<ControlKind>, target: ItemRef) {
+    let id = ControlId::new_v7();
     p.apply(Op::AddSecurityControl {
         id,
         name: "s".into(),
         provenance: Provenance::default(),
     })
-    .expect("add ctrl");
-    p.apply(Op::SetControlKind {
-        control: id,
-        kind: Some(kind),
-        provenance: Provenance::default(),
-    })
-    .expect("set kind");
+    .expect("add");
+    if kind.is_some() {
+        p.apply(Op::SetControlKind {
+            control: id,
+            kind,
+            provenance: Provenance::default(),
+        })
+        .expect("kind");
+    }
     p.apply(Op::ApplyControl {
         control: id,
         target,
@@ -71,430 +107,100 @@ fn add_setting(p: &mut Project, id: ControlId, kind_idx: usize, target: ItemRef)
     .expect("apply");
 }
 
-#[test]
-fn basic() {
-    let m = methodology();
-    let mut p = Project::new(m);
-    let ecu = ComponentId::new_v7();
-    p.apply(Op::AddComponent {
-        id: ecu,
-        name: "Gateway ECU".into(),
-        parent: None,
-        provenance: Provenance::default(),
-    })
-    .expect("comp");
-    // interface
-    let iface_kind = p.methodology().interface_kind("debug").expect("debug");
-    let jtag = InterfaceId::new_v7();
-    p.apply(Op::AddInterface {
-        id: jtag,
-        name: "JTAG".into(),
-        component: ecu,
-        kind: iface_kind,
-        provenance: Provenance::default(),
-    })
-    .expect("iface");
-
-    // fused-a idx 0, open-b idx 1, fused-c idx 2, open-d idx 3
-    let c1 = ControlId::new_v7();
-    let c2 = ControlId::new_v7();
-    add_setting(&mut p, c1, 0, ItemRef::Component(ecu));
-    add_setting(&mut p, c2, 1, ItemRef::Component(ecu));
-
-    let findings: Vec<_> = p
-        .lint()
+/// Every conflicting-settings finding, in lint order (sorted).
+fn conflicts(p: &Project) -> Vec<LintCode> {
+    p.lint()
         .into_iter()
         .filter(|f| matches!(f.code(), LintCode::ConflictingSettings { .. }))
-        .collect();
-    assert_eq!(findings.len(), 1);
-    if let LintCode::ConflictingSettings {
+        .inspect(|f| assert!(f.is_warning() && !f.is_error(), "never a block"))
+        .map(|f| f.code())
+        .collect()
+}
+
+fn pair(item: ItemRef, first: ControlKind, second: ControlKind) -> LintCode {
+    LintCode::ConflictingSettings {
         item,
         first,
         second,
-    } = findings[0].code()
-    {
-        assert_eq!(item, ItemRef::Component(ecu));
-        assert!(first.index() < second.index());
-    }
-    assert!(findings[0].is_warning());
-    assert!(!findings[0].is_error());
-}
-
-#[test]
-fn second_component_two_findings() {
-    let m = methodology();
-    let mut p = Project::new(m);
-    let ecu = ComponentId::new_v7();
-    let ecu2 = ComponentId::new_v7();
-    p.apply(Op::AddComponent {
-        id: ecu,
-        name: "G1".into(),
-        parent: None,
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::AddComponent {
-        id: ecu2,
-        name: "G2".into(),
-        parent: None,
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-
-    for ecu in [ecu, ecu2] {
-        let c1 = ControlId::new_v7();
-        let c2 = ControlId::new_v7();
-        // add settings
-        let m = p.methodology();
-        let kinds: Vec<ControlKind> = m.control_kinds().collect();
-        p.apply(Op::AddSecurityControl {
-            id: c1,
-            name: "s".into(),
-            provenance: Provenance::default(),
-        })
-        .unwrap();
-        p.apply(Op::SetControlKind {
-            control: c1,
-            kind: Some(kinds[0]),
-            provenance: Provenance::default(),
-        })
-        .unwrap();
-        p.apply(Op::ApplyControl {
-            control: c1,
-            target: ItemRef::Component(ecu),
-            provenance: Provenance::default(),
-        })
-        .unwrap();
-        p.apply(Op::AddSecurityControl {
-            id: c2,
-            name: "s".into(),
-            provenance: Provenance::default(),
-        })
-        .unwrap();
-        p.apply(Op::SetControlKind {
-            control: c2,
-            kind: Some(kinds[1]),
-            provenance: Provenance::default(),
-        })
-        .unwrap();
-        p.apply(Op::ApplyControl {
-            control: c2,
-            target: ItemRef::Component(ecu),
-            provenance: Provenance::default(),
-        })
-        .unwrap();
-    }
-
-    let findings: Vec<_> = p
-        .lint()
-        .into_iter()
-        .filter(|f| matches!(f.code(), LintCode::ConflictingSettings { .. }))
-        .collect();
-    assert_eq!(findings.len(), 2);
-}
-
-#[test]
-fn no_findings_cases() {
-    let m = methodology();
-    let mut p = Project::new(m);
-    let ecu = ComponentId::new_v7();
-    let ecu2 = ComponentId::new_v7();
-    p.apply(Op::AddComponent {
-        id: ecu,
-        name: "G1".into(),
-        parent: None,
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::AddComponent {
-        id: ecu2,
-        name: "G2".into(),
-        parent: None,
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-
-    // only one of two
-    let c1 = ControlId::new_v7();
-    p.apply(Op::AddSecurityControl {
-        id: c1,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    let kinds: Vec<ControlKind> = p.methodology().control_kinds().collect();
-    p.apply(Op::SetControlKind {
-        control: c1,
-        kind: Some(kinds[0]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c1,
-        target: ItemRef::Component(ecu),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    let findings: Vec<_> = p
-        .lint()
-        .into_iter()
-        .filter(|f| matches!(f.code(), LintCode::ConflictingSettings { .. }))
-        .collect();
-    assert!(findings.is_empty());
-
-    // two same kind
-    let c2 = ControlId::new_v7();
-    let c3 = ControlId::new_v7();
-    p.apply(Op::AddSecurityControl {
-        id: c2,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c2,
-        kind: Some(kinds[0]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c2,
-        target: ItemRef::Component(ecu),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::AddSecurityControl {
-        id: c3,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c3,
-        kind: Some(kinds[0]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c3,
-        target: ItemRef::Component(ecu),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    let findings: Vec<_> = p
-        .lint()
-        .into_iter()
-        .filter(|f| matches!(f.code(), LintCode::ConflictingSettings { .. }))
-        .collect();
-    assert!(findings.is_empty());
-
-    // different components
-    // presets do not conflict: use fused-a (0) and fused-c (2) (not conflicting) on same target
-    let c4 = ControlId::new_v7();
-    let c5 = ControlId::new_v7();
-    p.apply(Op::AddSecurityControl {
-        id: c4,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c4,
-        kind: Some(kinds[0]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c4,
-        target: ItemRef::Component(ecu),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::AddSecurityControl {
-        id: c5,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c5,
-        kind: Some(kinds[2]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c5,
-        target: ItemRef::Component(ecu2),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    let findings: Vec<_> = p
-        .lint()
-        .into_iter()
-        .filter(|f| matches!(f.code(), LintCode::ConflictingSettings { .. }))
-        .collect();
-    assert!(findings.is_empty());
-}
-
-#[test]
-fn declared_higher_side_interface() {
-    let m = methodology();
-    let mut p = Project::new(m);
-    let ecu = ComponentId::new_v7();
-    p.apply(Op::AddComponent {
-        id: ecu,
-        name: "Gateway ECU".into(),
-        parent: None,
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    let iface_kind = p.methodology().interface_kind("debug").unwrap();
-    let jtag = InterfaceId::new_v7();
-    p.apply(Op::AddInterface {
-        id: jtag,
-        name: "JTAG".into(),
-        component: ecu,
-        kind: iface_kind,
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-
-    let kinds: Vec<ControlKind> = p.methodology().control_kinds().collect();
-    // fused-c idx2, open-d idx3; open-d lists fused-c
-    let c1 = ControlId::new_v7();
-    let c2 = ControlId::new_v7();
-    p.apply(Op::AddSecurityControl {
-        id: c1,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c1,
-        kind: Some(kinds[2]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c1,
-        target: ItemRef::Interface(jtag),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::AddSecurityControl {
-        id: c2,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c2,
-        kind: Some(kinds[3]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c2,
-        target: ItemRef::Interface(jtag),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-
-    let findings: Vec<_> = p
-        .lint()
-        .into_iter()
-        .filter(|f| matches!(f.code(), LintCode::ConflictingSettings { .. }))
-        .collect();
-    assert_eq!(findings.len(), 1);
-    if let LintCode::ConflictingSettings {
-        item,
-        first,
-        second,
-    } = findings[0].code()
-    {
-        assert_eq!(item, ItemRef::Interface(jtag));
-        assert!(first.index() < second.index());
     }
 }
 
 #[test]
-fn both_sides_one_finding() {
-    // modify methodology so both list each other
-    let mut def =
-        MethodologyDef::read_pack(Methodology::iso21434_r155_pack().as_bytes()).expect("pack");
-    let low = Arc::clone(&def.feasibility_levels[0].key);
-    let mut presets = Vec::new();
-    for key in ["fused-a", "open-b"] {
-        presets.push(aegis_model::ControlKindDef {
-            key: key.into(),
-            label: key.into(),
-            interface_kinds: Vec::new(),
-            rules: {
-                let mut m = BTreeMap::new();
-                m.insert("debug-access".into(), Arc::clone(&low));
-                m
-            },
-            conflicts_with: Vec::new(),
-        });
+fn both_presets_on_a_component_warn_once() {
+    let mut fx = fixture(PRESETS);
+    let ecu = ItemRef::Component(fx.ecu);
+    // Applied higher index first: the finding is still lowest first.
+    add_setting(&mut fx.p, Some(fx.k[1]), ecu);
+    add_setting(&mut fx.p, Some(fx.k[0]), ecu);
+    assert_eq!(conflicts(&fx.p), [pair(ecu, fx.k[0], fx.k[1])]);
+}
+
+#[test]
+fn the_same_pair_on_two_targets_warns_once_per_target() {
+    let mut fx = fixture(PRESETS);
+    let (ecu, ecu2) = (ItemRef::Component(fx.ecu), ItemRef::Component(fx.ecu2));
+    for target in [ecu, ecu2] {
+        add_setting(&mut fx.p, Some(fx.k[0]), target);
+        add_setting(&mut fx.p, Some(fx.k[1]), target);
     }
-    presets[0].conflicts_with = vec!["open-b".into()];
-    presets[1].conflicts_with = vec!["fused-a".into()];
-    def.element_names.control_kinds = presets;
-    let m = Arc::new(Methodology::new(def).expect("valid"));
+    let mut want = [pair(ecu, fx.k[0], fx.k[1]), pair(ecu2, fx.k[0], fx.k[1])];
+    want.sort_unstable();
+    assert_eq!(conflicts(&fx.p), want);
+}
 
-    let mut p = Project::new(m);
-    let ecu = ComponentId::new_v7();
-    p.apply(Op::AddComponent {
-        id: ecu,
-        name: "G".into(),
-        parent: None,
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    let kinds: Vec<ControlKind> = p.methodology().control_kinds().collect();
-    let c1 = ControlId::new_v7();
-    let c2 = ControlId::new_v7();
-    p.apply(Op::AddSecurityControl {
-        id: c1,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c1,
-        kind: Some(kinds[0]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c1,
-        target: ItemRef::Component(ecu),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::AddSecurityControl {
-        id: c2,
-        name: "s".into(),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::SetControlKind {
-        control: c2,
-        kind: Some(kinds[1]),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
-    p.apply(Op::ApplyControl {
-        control: c2,
-        target: ItemRef::Component(ecu),
-        provenance: Provenance::default(),
-    })
-    .unwrap();
+#[test]
+fn no_warning_without_both_presets_on_one_target() {
+    let mut fx = fixture(PRESETS);
+    let (ecu, ecu2) = (ItemRef::Component(fx.ecu), ItemRef::Component(fx.ecu2));
 
-    let findings: Vec<_> = p
-        .lint()
-        .into_iter()
-        .filter(|f| matches!(f.code(), LintCode::ConflictingSettings { .. }))
-        .collect();
-    assert_eq!(findings.len(), 1);
+    add_setting(&mut fx.p, Some(fx.k[0]), ecu);
+    assert_eq!(conflicts(&fx.p), [], "only one of the pair");
+
+    add_setting(&mut fx.p, Some(fx.k[0]), ecu);
+    assert_eq!(conflicts(&fx.p), [], "two settings of the same preset");
+
+    add_setting(&mut fx.p, Some(fx.k[1]), ecu2);
+    assert_eq!(conflicts(&fx.p), [], "the pair on different targets");
+
+    add_setting(&mut fx.p, None, ecu);
+    add_setting(&mut fx.p, None, ecu2);
+    assert_eq!(conflicts(&fx.p), [], "a custom setting has no preset");
+
+    add_setting(&mut fx.p, Some(fx.k[4]), ecu);
+    assert_eq!(conflicts(&fx.p), [], "presets that do not conflict");
+
+    // The fixture can fire: completing the pair on one target warns.
+    add_setting(&mut fx.p, Some(fx.k[0]), ecu2);
+    assert_eq!(conflicts(&fx.p), [pair(ecu2, fx.k[0], fx.k[1])]);
+}
+
+#[test]
+fn declared_on_the_higher_side_warns_on_an_interface() {
+    let mut fx = fixture(PRESETS);
+    let jtag = ItemRef::Interface(fx.jtag);
+    add_setting(&mut fx.p, Some(fx.k[2]), jtag);
+    add_setting(&mut fx.p, Some(fx.k[3]), jtag);
+    assert_eq!(conflicts(&fx.p), [pair(jtag, fx.k[2], fx.k[3])]);
+}
+
+#[test]
+fn declared_on_both_sides_warns_once() {
+    let mut fx = fixture(&[("fused-a", &[], &["open-b"]), ("open-b", &[], &["fused-a"])]);
+    let ecu = ItemRef::Component(fx.ecu);
+    add_setting(&mut fx.p, Some(fx.k[0]), ecu);
+    add_setting(&mut fx.p, Some(fx.k[1]), ecu);
+    assert_eq!(conflicts(&fx.p), [pair(ecu, fx.k[0], fx.k[1])]);
+}
+
+#[test]
+fn two_conflicting_pairs_on_one_target_warn_once_per_pair() {
+    let mut fx = fixture(PRESETS);
+    let ecu = ItemRef::Component(fx.ecu);
+    for i in [0, 1, 4] {
+        add_setting(&mut fx.p, Some(fx.k[i]), ecu);
+    }
+    assert_eq!(
+        conflicts(&fx.p),
+        [pair(ecu, fx.k[0], fx.k[1]), pair(ecu, fx.k[1], fx.k[4])]
+    );
 }
