@@ -599,6 +599,13 @@ pub struct DataFlowRow {
     pub interface: String,
     /// Whether this flow crosses at least one trust boundary.
     pub crosses_boundary: bool,
+    /// "ADAS → Gateway" when the ends are in different systems, else `None`.
+    pub boundary: Option<String>,
+    /// Threat scenarios on assets bound to either end component.
+    pub threats: usize,
+    /// True when the flow crosses a trust boundary or is a boundary flow and
+    /// `threats` is 0.
+    pub no_threat: bool,
 }
 
 /// The selected data flow.
@@ -624,6 +631,13 @@ pub struct DataFlowDetail {
     pub interfaces: Vec<Choice<InterfaceId>>,
     /// Whether this flow crosses at least one trust boundary.
     pub crosses_boundary: bool,
+    /// "ADAS → Gateway" when the ends are in different systems, else `None`.
+    pub boundary: Option<String>,
+    /// Threat scenarios on assets bound to either end component.
+    pub threats: usize,
+    /// True when the flow crosses a trust boundary or is a boundary flow and
+    /// `threats` is 0.
+    pub no_threat: bool,
     /// Provenance text.
     pub changed: String,
 }
@@ -667,6 +681,23 @@ pub struct TrustBoundaryDetail {
     pub members: Vec<TrustBoundaryMember>,
     /// Provenance text.
     pub changed: String,
+}
+
+/// The "ADAS → Gateway" text, the threat count and the no-threat flag of a flow.
+fn flow_boundary_info(
+    project: &Project,
+    counts: &[usize],
+    idx: aegis_model::DataFlowIdx,
+    df: &aegis_model::DataFlow,
+    crosses: bool,
+) -> (Option<String>, usize, bool) {
+    let boundary = project.boundary_flow(idx).map(|(a, b)| {
+        let name = |s| crate::systems::system_name(project, s).unwrap_or_else(|| "?".to_owned());
+        format!("{} → {}", name(a), name(b))
+    });
+    let threats = crate::combined::flow_threats(counts, df);
+    let no_threat = (crosses || boundary.is_some()) && threats == 0;
+    (boundary, threats, no_threat)
 }
 
 fn flow_crosses_boundary(project: &Project, df: &aegis_model::DataFlow) -> bool {
@@ -1039,23 +1070,32 @@ pub fn interface_detail(ws: &Workspace, id: InterfaceId) -> Option<InterfaceDeta
 #[must_use]
 pub fn data_flow_rows(ws: &Workspace) -> Vec<DataFlowRow> {
     let project = ws.project();
+    let counts = crate::combined::threats_per_component(project);
     project
         .data_flows()
-        .map(|(idx, id, df)| DataFlowRow {
-            id,
-            visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
-            name: df.name().to_owned(),
-            from: project
-                .component(df.from())
-                .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
-            to: project
-                .component(df.to())
-                .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
-            interface: df
-                .interface()
-                .and_then(|i| project.interface(i))
-                .map_or_else(String::new, |i| i.name().to_owned()),
-            crosses_boundary: flow_crosses_boundary(project, df),
+        .map(|(idx, id, df)| {
+            let crosses_boundary = flow_crosses_boundary(project, df);
+            let (boundary, threats, no_threat) =
+                flow_boundary_info(project, &counts, idx, df, crosses_boundary);
+            DataFlowRow {
+                id,
+                visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
+                name: df.name().to_owned(),
+                from: project
+                    .component(df.from())
+                    .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+                to: project
+                    .component(df.to())
+                    .map_or_else(|| "?".to_owned(), |c| c.name().to_owned()),
+                interface: df
+                    .interface()
+                    .and_then(|i| project.interface(i))
+                    .map_or_else(String::new, |i| i.name().to_owned()),
+                crosses_boundary,
+                boundary,
+                threats,
+                no_threat,
+            }
         })
         .collect()
 }
@@ -1066,6 +1106,10 @@ pub fn data_flow_detail(ws: &Workspace, id: DataFlowId) -> Option<DataFlowDetail
     let project = ws.project();
     let idx = project.data_flow_idx(&id)?;
     let df = project.data_flow(idx)?;
+    let crosses_boundary = flow_crosses_boundary(project, df);
+    let counts = crate::combined::threats_per_component(project);
+    let (boundary, threats, no_threat) =
+        flow_boundary_info(project, &counts, idx, df, crosses_boundary);
     Some(DataFlowDetail {
         id,
         visual_id: project.data_flow_visual_id(idx).unwrap_or_default(),
@@ -1088,7 +1132,10 @@ pub fn data_flow_detail(ws: &Workspace, id: DataFlowId) -> Option<DataFlowDetail
                 name: i.name().to_owned(),
             })
             .collect(),
-        crosses_boundary: flow_crosses_boundary(project, df),
+        crosses_boundary,
+        boundary,
+        threats,
+        no_threat,
         changed: changed_text(df.provenance()),
     })
 }

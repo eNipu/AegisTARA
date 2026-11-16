@@ -25,6 +25,10 @@ pub struct SystemRow {
     pub component_count: usize,
     /// Provenance text (`pages::changed_text`).
     pub changed: String,
+    /// Boundary flows with one end in this system.
+    pub boundary_flows: usize,
+    /// Boundary flows and the other systems (`combined::boundary_text`).
+    pub boundary_text: String,
 }
 
 /// Every system in ID order; empty when the project has none. One pass over
@@ -41,6 +45,8 @@ pub fn system_rows(ws: &Workspace) -> Vec<SystemRow> {
             components: Vec::new(),
             component_count: 0,
             changed: changed_text(e.provenance()),
+            boundary_flows: 0,
+            boundary_text: String::new(),
         })
         .collect();
     if rows.is_empty() {
@@ -59,6 +65,26 @@ pub fn system_rows(ws: &Workspace) -> Vec<SystemRow> {
         if c.parent().is_none() {
             row.components.push(c.name().to_owned());
         }
+    }
+    let mut others: Vec<BTreeSet<ElementId>> = vec![BTreeSet::new(); rows.len()];
+    for f in crate::combined::boundary_flows(project) {
+        for (this, other) in [(f.from_system, f.to_system), (f.to_system, f.from_system)] {
+            if let Some(i) = at.get(&this).copied() {
+                if let Some(r) = rows.get_mut(i) {
+                    r.boundary_flows += 1;
+                }
+                if let Some(o) = others.get_mut(i) {
+                    o.insert(other);
+                }
+            }
+        }
+    }
+    for (row, set) in rows.iter_mut().zip(&others) {
+        let names: Vec<String> = set
+            .iter()
+            .filter_map(|s| system_name(project, *s))
+            .collect();
+        row.boundary_text = crate::combined::boundary_text(&names, row.boundary_flows);
     }
     rows
 }
