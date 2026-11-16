@@ -78,7 +78,7 @@
 <script>
 const STAGES = [
   ["spec", "Spec"], ["build", "Build"], ["review", "Review"],
-  ["approve", "Approve"], ["merged", "Merged"], ["needs-human", "Needs human"],
+  ["merged", "Merged"], ["needs-human", "Needs human"],
 ];
 const KINDS = ["security", "ux", "ui", "code"]; // jobs before 162; newer jobs carry gate, review, owner
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
