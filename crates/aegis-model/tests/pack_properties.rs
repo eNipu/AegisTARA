@@ -339,6 +339,30 @@ fn round_trip_fixed_defs() {
     }
 }
 
+#[test]
+fn round_trip_clause_refs() {
+    let mut def = second_def();
+    def.clause_refs = [
+        (
+            "assets".into(),
+            vec!["ISO 21434 RQ-09-01".into(), "CRA Annex I 1.2".into()],
+        ),
+        ("threat_scenario".into(), vec!["CRA Annex I 1.2".into()]),
+    ]
+    .into_iter()
+    .collect();
+    if let Err(e) = check_round_trip(&def) {
+        panic!("{e}");
+    }
+    let m = Methodology::new(def).expect("valid def with clause refs");
+    assert_eq!(
+        m.clause_refs("threat_scenario"),
+        &["CRA Annex I 1.2".into()][..]
+    );
+    assert!(m.clause_refs("no_such_page").is_empty());
+    assert_eq!(m.clause_refs_map().len(), 2);
+}
+
 // ---------------------------------------------------------------------------
 // Hostile input.
 // ---------------------------------------------------------------------------
