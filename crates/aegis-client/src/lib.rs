@@ -19,6 +19,7 @@ pub mod state;
 pub mod suggest;
 pub mod systems;
 pub mod time;
+pub mod top_paths;
 pub mod transport;
 mod tree_diff;
 pub mod undo_label;
