@@ -136,7 +136,7 @@ Every job follows the element recipe in [architecture.md](../architecture.md) II
 | 182-workbench-skeleton | New crate `aegis-workbench`: WBX-02, WBX-03, WBX-04, WBX-10 | L | 181, 164 | The sample workspace opens; any element is reached from the palette |
 | 187-tree-tab | WBX-05 | L | 182 | A tree is edited, undone and saved with no mouse |
 | 188-inspector | WBX-06 | M | 187 | Go to cause from a risk lands on the deciding step |
-| 189-table-tabs | WBX-07 (uses the open relation registry and table convention jobs) | L | 182 | Assets, threats and the risk register are edited in tabs |
+| 189-table-tabs | WBX-07 (uses the open relation registry and table convention jobs); carries the screen part of UI-14 that job 129 left out: UI-14.1 computed header mark and cell text, UI-14.2 link chips, UI-14.3 excluded-row hatch (needed by 135), every table rendered from `TableId::columns` and `table_rows` with no visible loss | L | 182 | Assets, threats and the risk register are edited in tabs |
 | 190-settings-layers | WBX-08 | M | 171, 172, 182 | The settings mock-up works on the sample; reset removes an override |
 | 191-bottom-dock | WBX-09 | M | 165, 185, 182 | A hand edit, a task proposal and a lint finding each appear and can be acted on |
 | 203-embedded-versions | A git library inside the app: save version, mark baseline, restore; license check; no git installation needed (D40) | M | 164 | A machine with no git saves, tags, compares and restores |

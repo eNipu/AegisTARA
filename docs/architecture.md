@@ -2226,10 +2226,16 @@ Project`) and `layout() -> PageLayout` (`Table(&'static [ColumnSpec])`,
 `Canvas`, `Custom`). `Page::ALL` stays the one ordered list; the sidebar, the
 menu bar and the command palette read it. A pack may hide pages through an
 optional `pages` list (hidden pages keep their data). A `Table` page is a
-`ColumnSpec` list (`kind: Id | Name | Links(RelationKey) | Computed | Rating |
-Text`, label key, default width, visible by default), so most new pages need
-no new `.slint` layout: `ElementTablePage` in `app.slint` renders any of them
-on `DataTable`.
+`ColumnSpec` list (stable `key`, `kind: Id | Name | Links(RelationKey) |
+Computed | Rating | Text`, a label that is a catalog message id or a
+pack-named element type, default width, visible by default). `TableId` names
+each table and owns its columns; `Page::tables()` lists a page's tables (the
+goals page has two) and `aegis-client/src/table.rs` `table_rows` builds every
+cell from the spec, so no table has its own column code and the GPUI
+workbench (job 189) renders any of them. No Slint screen is built on it
+(owner rule, 2026-11-11). Columns whose number depends on the pack (one per
+attack factor) come with job 152; a `Links` cell is text until the relation
+registry (job 149) resolves its targets.
 
 ### III.9.2 Relation registry
 
