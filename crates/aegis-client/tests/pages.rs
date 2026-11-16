@@ -517,6 +517,7 @@ fn problems_setting_conflicts_row() {
         .collect();
     assert!(picks.len() >= 2);
     let (a, b) = (picks[0], picks[1]);
+    let labels = [a, b].map(|i| def.element_names.control_kinds[i].label.clone());
     def.element_names.control_kinds[a].conflicts_with =
         vec![def.element_names.control_kinds[b].key.clone()];
     let m = Arc::new(Methodology::new(def).expect("valid"));
@@ -556,7 +557,11 @@ fn problems_setting_conflicts_row() {
         .find(|p| p.text.contains("that the pack says conflict"))
         .expect("row");
     assert!(!row.error);
-    assert!(matches!(row.target, Some(Selection::Component(_))));
+    for label in &labels {
+        assert!(row.text.contains(&format!("\"{label}\"")), "{}", row.text);
+    }
+    assert!(row.text.contains("Gateway ECU"), "{}", row.text);
+    assert_eq!(row.target, Some(Selection::Component(ecu)));
 }
 
 #[test]

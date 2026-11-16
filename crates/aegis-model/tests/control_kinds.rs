@@ -401,7 +401,8 @@ fn conflicts_refused() {
     let e = Methodology::new(d).unwrap_err();
     assert!(matches!(
         e,
-        MethodologyError::UnknownControlKindConflict { .. }
+        MethodologyError::UnknownControlKindConflict { control_kind, other }
+            if &*control_kind == "secure-boot" && &*other == "no-such"
     ));
 
     let mut d = pack_presets();
@@ -410,7 +411,8 @@ fn conflicts_refused() {
     let e = Methodology::new(d).unwrap_err();
     assert!(matches!(
         e,
-        MethodologyError::RepeatedControlKindConflict { .. }
+        MethodologyError::RepeatedControlKindConflict { control_kind, other }
+            if &*control_kind == "secure-boot" && &*other == "debug-port-locked"
     ));
 
     let mut d = pack_presets();
@@ -418,6 +420,19 @@ fn conflicts_refused() {
     let e = Methodology::new(d).unwrap_err();
     assert!(matches!(
         e,
-        MethodologyError::ControlKindConflictsWithItself { .. }
+        MethodologyError::ControlKindConflictsWithItself { control_kind }
+            if &*control_kind == "secure-boot"
     ));
+}
+
+#[test]
+fn a_conflict_may_name_a_preset_declared_later() {
+    let mut d = pack_presets();
+    d.element_names.control_kinds[0].conflicts_with = vec!["debug-port-locked".into()];
+    let back = MethodologyDef::read_pack(pack_bytes(&d).as_slice()).expect("reads");
+    assert_eq!(back, d);
+    let m = Methodology::new(back).expect("valid");
+    let kinds: Vec<_> = m.control_kinds().collect();
+    assert_eq!(m.control_kind_conflicts(kinds[0]), &[kinds[1]]);
+    assert!(m.control_kind_conflicts(kinds[1]).is_empty());
 }
