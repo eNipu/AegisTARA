@@ -1,0 +1,21 @@
+{
+  "job": "129-table-conventions",
+  "slices": [
+    {
+      "id": "129a",
+      "title": "ColumnSpec, PageLayout and per-page column specs in aegis-client",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/tests/table_conventions.rs"
+      ],
+      "max_lines": 360,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test table_conventions"
+      ]
+    }
+  ]
+}

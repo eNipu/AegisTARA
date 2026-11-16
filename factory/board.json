@@ -1975,8 +1975,48 @@
           "lines": 220
         }
       ],
+      "decision": "Second review: CHANGES, tests only. Follow-up 126b-setting-conflict-tests; see slices/126a/second-review.md",
+      "updated": "2026-11-16T22:05:59Z"
+    },
+    {
+      "id": "129-table-conventions",
+      "title": "One table convention: ColumnSpec and ElementTablePage (UI-14)",
+      "branch": "factory/129-table-conventions",
+      "stage": "merged",
+      "slice": "129a",
+      "base": "5478abfdf2919e166767ba5127388489fea9b1ae",
+      "reviews": {
+        "slice": "129a",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "129a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "beam-free",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 298
+        }
+      ],
       "decision": null,
-      "updated": "2026-11-16T21:38:14Z"
+      "updated": "2026-11-16T22:08:38Z"
+    },
+    {
+      "id": "126b-setting-conflict-tests",
+      "title": "Conflicting settings test gaps (CFG-09), tests only",
+      "branch": "factory/126b-setting-conflict-tests",
+      "stage": "spec",
+      "slice": null,
+      "base": null,
+      "reviews": {},
+      "history": [],
+      "decision": null,
+      "updated": "2026-11-16T22:05:59Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
