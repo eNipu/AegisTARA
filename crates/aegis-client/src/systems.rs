@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use aegis_model::{ElementId, ElementKind, Project};
 
 use crate::pages::{Choice, changed_text};
+use crate::state::PageData;
+use crate::view::{Page, Selection, ThreatRow};
 use crate::workspace::Workspace;
 
 /// One system in the Systems table of the item definition page.
@@ -278,4 +280,97 @@ pub fn view_commands(project: &Project, view: &SystemView) -> Vec<ViewCommand> {
         }
     }
     out
+}
+
+/// Keeps the rows whose systems show in `view`; a row `set_of` cannot place
+/// (its ID is gone) is kept.
+fn retain_shown<T>(
+    rows: &mut Vec<T>,
+    view: aegis_model::SystemSet,
+    set_of: impl Fn(&T) -> Option<aegis_model::SystemSet>,
+) {
+    rows.retain(|r| set_of(r).is_none_or(|s| s.shows_in(view)));
+}
+
+/// Keeps the table rows of `page` that show in `view`. Lists that only
+/// feed choices are left alone. Does nothing when the view is all
+/// systems or the project has none. Time O(project) for `system_use`
+/// plus O(rows log n).
+pub fn filter_page(project: &Project, view: &SystemView, page: Page, d: &mut PageData) {
+    let view = view.normalized(project);
+    if view.is_all() {
+        return;
+    }
+    let usage = project.system_use();
+    let v = usage.set_of(view.systems());
+    match page {
+        Page::Item => {
+            retain_shown(&mut d.components, v, |r| {
+                Some(usage.component(project.component_idx(&r.id)?))
+            });
+            retain_shown(&mut d.interfaces, v, |r| {
+                Some(usage.interface(project.interface_idx(&r.id)?))
+            });
+            retain_shown(&mut d.data_flows, v, |r| {
+                Some(usage.data_flow(project.data_flow_idx(&r.id)?))
+            });
+            retain_shown(&mut d.trust_boundaries, v, |r| {
+                Some(usage.trust_boundary(project.trust_boundary_idx(&r.id)?))
+            });
+        }
+        Page::Assets => retain_shown(&mut d.assets, v, |r| {
+            Some(usage.asset(project.asset_idx(&r.id)?))
+        }),
+        Page::Damage => retain_shown(&mut d.damages, v, |r| {
+            Some(usage.damage(project.damage_scenario_idx(&r.id)?))
+        }),
+        Page::Risks => retain_shown(&mut d.risks, v, |r| {
+            Some(usage.threat(project.threat_scenario_idx(&r.id)?))
+        }),
+        Page::Trees => retain_shown(&mut d.trees, v, |r| {
+            Some(usage.tree(project.attack_tree_idx(&r.id)?))
+        }),
+        Page::Controls => retain_shown(&mut d.controls, v, |r| {
+            Some(usage.control(project.security_control_idx(&r.id)?))
+        }),
+        Page::Goals => {
+            retain_shown(&mut d.goals, v, |r| {
+                Some(usage.goal(project.cybersecurity_goal_idx(&r.id)?))
+            });
+            retain_shown(&mut d.claims, v, |r| {
+                Some(usage.claim(project.cybersecurity_claim_idx(&r.id)?))
+            });
+        }
+        Page::Problems => retain_shown(&mut d.problems, v, |r| match r.target? {
+            Selection::Component(id) => Some(usage.component(project.component_idx(&id)?)),
+            Selection::Interface(id) => Some(usage.interface(project.interface_idx(&id)?)),
+            Selection::DataFlow(id) => Some(usage.data_flow(project.data_flow_idx(&id)?)),
+            Selection::TrustBoundary(id) => {
+                Some(usage.trust_boundary(project.trust_boundary_idx(&id)?))
+            }
+            Selection::Asset(id) => Some(usage.asset(project.asset_idx(&id)?)),
+            Selection::Damage(id) => Some(usage.damage(project.damage_scenario_idx(&id)?)),
+            Selection::Threat(id) => Some(usage.threat(project.threat_scenario_idx(&id)?)),
+            Selection::Tree(id) | Selection::TreeNode(id, _) => {
+                Some(usage.tree(project.attack_tree_idx(&id)?))
+            }
+            Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
+            Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
+            Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
+        }),
+        _ => {}
+    }
+}
+
+/// The same for the threat rows of the Threats and Risks pages.
+pub fn filter_threats(project: &Project, view: &SystemView, rows: &mut Vec<ThreatRow>) {
+    let view = view.normalized(project);
+    if view.is_all() {
+        return;
+    }
+    let usage = project.system_use();
+    let v = usage.set_of(view.systems());
+    retain_shown(rows, v, |r| {
+        Some(usage.threat(project.threat_scenario_idx(&r.id)?))
+    });
 }

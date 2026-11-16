@@ -233,3 +233,180 @@ fn remembered_view() {
     assert!(old.system_views.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- filtering rows (119h) ----
+
+mod filtering {
+    use std::collections::BTreeSet;
+
+    use aegis_client::pages;
+    use aegis_client::state::PageData;
+    use aegis_client::systems::{SystemView, filter_page};
+    use aegis_client::view::Page;
+    use aegis_model::{AssetId, DamageId, InterfaceId, Project, ThreatId, TreeId};
+
+    use super::*;
+
+    struct Fx {
+        ws: Workspace,
+        brake: ElementId,
+        adas: ElementId,
+    }
+
+    fn fixture() -> Fx {
+        let mut ws = workspace();
+        let brake = add_system(&mut ws, "Brake");
+        let adas = add_system(&mut ws, "ADAS");
+        let damage = DamageId::new_v7();
+        run(
+            &mut ws,
+            &Edit::AddDamage {
+                id: damage,
+                name: "Harm".into(),
+            },
+        );
+        for (name, system) in [
+            ("Caliper", Some(brake)),
+            ("Camera", Some(adas)),
+            ("Loose", None),
+        ] {
+            let comp = add_component(&mut ws, name, None, system);
+            run(
+                &mut ws,
+                &Edit::AddInterface {
+                    id: InterfaceId::new_v7(),
+                    name: format!("{name} port"),
+                    component: comp,
+                    kind: 0,
+                },
+            );
+            let asset = AssetId::new_v7();
+            run(
+                &mut ws,
+                &Edit::AddAssetBound {
+                    id: asset,
+                    name: format!("{name} data"),
+                    properties: (0..6).collect(),
+                    component: comp,
+                },
+            );
+            let threat = ThreatId::new_v7();
+            run(
+                &mut ws,
+                &Edit::AddThreat {
+                    id: threat,
+                    name: format!("{name} attack"),
+                    asset,
+                    category: 0,
+                },
+            );
+            if system.is_some() {
+                run(
+                    &mut ws,
+                    &Edit::LinkDamage {
+                        threat,
+                        damage,
+                        linked: true,
+                    },
+                );
+            }
+            if system == Some(brake) {
+                run(
+                    &mut ws,
+                    &Edit::NewTree {
+                        id: TreeId::new_v7(),
+                        root: "Goal".into(),
+                        threat: Some(threat),
+                    },
+                );
+            }
+        }
+        Fx { ws, brake, adas }
+    }
+
+    /// Every table row of the pages the view filters, as `page:id` text.
+    fn shown(ws: &Workspace, view: &SystemView) -> BTreeSet<String> {
+        let project: &Project = ws.project();
+        let mut out = BTreeSet::new();
+        for page in [
+            Page::Item,
+            Page::Assets,
+            Page::Damage,
+            Page::Risks,
+            Page::Trees,
+        ] {
+            let mut d = PageData::default();
+            match page {
+                Page::Item => {
+                    d.components = pages::component_rows(ws);
+                    d.interfaces = pages::interface_rows(ws);
+                }
+                Page::Assets => d.assets = pages::asset_rows(ws),
+                Page::Damage => d.damages = pages::damage_rows(ws),
+                Page::Risks => d.risks = pages::risk_rows(ws),
+                _ => d.trees = pages::tree_rows(ws),
+            }
+            filter_page(project, view, page, &mut d);
+            let mut put = |kind: &str, id: String| {
+                out.insert(format!("{kind}:{id}"));
+            };
+            d.components
+                .iter()
+                .for_each(|r| put("c", format!("{:?}", r.id)));
+            d.interfaces
+                .iter()
+                .for_each(|r| put("i", format!("{:?}", r.id)));
+            d.assets
+                .iter()
+                .for_each(|r| put("a", format!("{:?}", r.id)));
+            d.damages
+                .iter()
+                .for_each(|r| put("d", format!("{:?}", r.id)));
+            d.risks.iter().for_each(|r| put("r", format!("{:?}", r.id)));
+            d.trees.iter().for_each(|r| put("t", format!("{:?}", r.id)));
+        }
+        out
+    }
+
+    #[test]
+    fn a_view_keeps_its_rows_and_the_rows_of_no_system() {
+        let fx = fixture();
+        let everything = shown(&fx.ws, &SystemView::all());
+        // 3 components, 3 interfaces, 3 assets, 1 damage, 3 risks, 1 tree.
+        assert_eq!(everything.len(), 14);
+        let brake = shown(&fx.ws, &SystemView::only(fx.brake));
+        let adas = shown(&fx.ws, &SystemView::only(fx.adas));
+        // Brake: 2 components, 2 interfaces, 2 assets, 2 risks (its own and
+        // "Loose"), the shared damage and its tree.
+        assert_eq!(brake.len(), 10, "{brake:?}");
+        assert!(brake.iter().filter(|r| r.starts_with("d:")).count() == 1);
+        assert!(brake.iter().any(|r| r.starts_with("t:")));
+        assert!(adas.iter().all(|r| !r.starts_with("t:")));
+        assert_ne!(brake, adas);
+        assert!(brake.is_subset(&everything) && adas.is_subset(&everything));
+        let both = shown(&fx.ws, &SystemView::of([fx.brake, fx.adas]));
+        assert_eq!(both, brake.union(&adas).cloned().collect());
+        assert_eq!(both, everything);
+    }
+
+    #[test]
+    fn a_removed_system_behaves_as_all() {
+        let fx = fixture();
+        let gone = ElementId::new_v7();
+        assert_eq!(
+            shown(&fx.ws, &SystemView::only(gone)),
+            shown(&fx.ws, &SystemView::all())
+        );
+    }
+
+    #[test]
+    fn filtering_changes_nothing_in_the_workspace() {
+        let fx = fixture();
+        let before = fx.ws.project().clone();
+        let (pending, undo) = (fx.ws.pending_batches(), fx.ws.can_undo());
+        let _ = shown(&fx.ws, &SystemView::only(fx.brake));
+        assert_eq!(*fx.ws.project(), before);
+        assert_eq!(fx.ws.pending_batches(), pending);
+        assert_eq!(fx.ws.can_undo(), undo);
+    }
+}

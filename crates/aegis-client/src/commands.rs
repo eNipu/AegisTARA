@@ -2825,6 +2825,8 @@ pub enum Command {
     SelectNode(Option<usize>),
     /// Show the residual (after controls) evaluation instead of the inherent one.
     ShowResidual(bool),
+    /// Show these systems only; empty shows all. Sends nothing to the server.
+    SetSystemView(crate::systems::SystemView),
     /// Reload the open project from the server (a read-only view whose
     /// project has a newer version).
     Reload,
