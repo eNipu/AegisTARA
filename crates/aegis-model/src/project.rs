@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use crate::applicability::{Condition, MAX_CONDITIONS};
+use crate::applicability::{Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
     CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
@@ -191,19 +191,22 @@ struct TreeEntry {
     provenance: Provenance,
 }
 
-/// Per node: the component or interface a step goes through, and its
-/// pack-defined attack type. Both vectors have one slot per node, and at
-/// least one slot is `Some` while the value exists, so equal trees compare
-/// equal however they got there.
+/// Per node: the component or interface a step goes through, its
+/// pack-defined attack type, and the conditions the step needs. All vectors
+/// have one slot per node, and at least one slot is populated while the value
+/// exists, so equal trees compare equal however they got there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StepLinks {
     via: Vec<Option<ItemIdx>>,
     attack_type: Vec<Option<AttackType>>,
+    condition: Vec<Vec<ConditionIdx>>,
 }
 
 impl StepLinks {
     fn is_empty(&self) -> bool {
-        self.via.iter().all(Option::is_none) && self.attack_type.iter().all(Option::is_none)
+        self.via.iter().all(Option::is_none)
+            && self.attack_type.iter().all(Option::is_none)
+            && self.condition.iter().all(Vec::is_empty)
     }
 }
 
@@ -256,6 +259,7 @@ impl TreeEntry {
             Box::new(StepLinks {
                 via: vec![None; len],
                 attack_type: vec![None; len],
+                condition: vec![Vec::new(); len],
             })
         });
         let old = field(links)
@@ -271,6 +275,7 @@ impl TreeEntry {
         if let Some(l) = self.step_links.as_mut() {
             l.via.insert(i, None);
             l.attack_type.insert(i, None);
+            l.condition.insert(i, Vec::new());
         }
     }
 
@@ -278,6 +283,34 @@ impl TreeEntry {
         if let Some(l) = self.step_links.as_mut() {
             l.via.remove(i);
             l.attack_type.remove(i);
+            l.condition.remove(i);
+        }
+    }
+
+    /// The condition indices needed by node `i`.
+    fn condition_at(&self, i: usize) -> &[ConditionIdx] {
+        self.step_links
+            .as_ref()
+            .and_then(|l| l.condition.get(i))
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// Edits one node's condition list, keeping `step_links` canonical: the
+    /// block is dropped again when every slot is empty.
+    fn edit_condition_link(&mut self, i: usize, edit: impl FnOnce(&mut Vec<ConditionIdx>)) {
+        let len = self.tree.len();
+        let links = self.step_links.get_or_insert_with(|| {
+            Box::new(StepLinks {
+                via: vec![None; len],
+                attack_type: vec![None; len],
+                condition: vec![Vec::new(); len],
+            })
+        });
+        if let Some(slot) = links.condition.get_mut(i) {
+            edit(slot);
+        }
+        if links.is_empty() {
+            self.step_links = None;
         }
     }
 
@@ -601,6 +634,9 @@ pub struct Project {
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
     parties: Arena<PartyId, PartyIdx, Party>,
     conditions: Arena<ConditionId, ConditionIdx, Condition>,
+    /// Conditions needed by each element (job 133). Sparse: an element with
+    /// no conditions has no entry. Lists are sorted by public `ConditionId`.
+    condition_links: BTreeMap<ElementRef, Vec<ConditionIdx>>,
     components: Arena<ComponentId, ComponentIdx, Component>,
     interfaces: Arena<InterfaceId, InterfaceIdx, Interface>,
     data_flows: Arena<DataFlowId, DataFlowIdx, DataFlow>,
@@ -754,6 +790,7 @@ impl Project {
             claims: Arena::new(),
             parties: Arena::new(),
             conditions: Arena::new(),
+            condition_links: BTreeMap::new(),
             components: Arena::new(),
             interfaces: Arena::new(),
             data_flows: Arena::new(),
@@ -2086,6 +2123,51 @@ impl Project {
     pub fn condition_visual_id(&self, idx: ConditionIdx) -> Option<String> {
         self.condition_visual_num(idx)
             .map(|n| VisualPrefix::Condition.format(n))
+    }
+
+    /// The condition indices this element needs, in `ConditionId` order. The
+    /// client resolves them to public IDs; time O(1).
+    #[must_use]
+    pub fn condition_link_ids(&self, element: ElementRef) -> &[ConditionIdx] {
+        self.condition_links
+            .get(&element)
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// The condition indices this step needs, in `ConditionId` order. The
+    /// client resolves them to public IDs; time O(1) per slot.
+    #[must_use]
+    pub fn step_condition_link_ids(&self, tree: TreeId, node: NodeId) -> &[ConditionIdx] {
+        self.attack_tree_idx(&tree)
+            .and_then(|t| self.trees.get(t))
+            .and_then(|entry| {
+                let idx = entry.tree.idx_of(&node)?;
+                entry.step_links.as_ref()?.condition.get(idx.index())
+            })
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// How many elements and steps need `condition`. Time O(e + t).
+    #[must_use]
+    pub fn condition_usages(&self, condition: ConditionId) -> (usize, usize) {
+        let Some(idx) = self.conditions.idx(&condition) else {
+            return (0, 0);
+        };
+        let elements = self
+            .condition_links
+            .values()
+            .filter(|list| list.contains(&idx))
+            .count();
+        let steps = self
+            .trees
+            .iter()
+            .map(|(_, _, e)| {
+                e.step_links.as_ref().map_or(0, |l| {
+                    l.condition.iter().filter(|c| c.contains(&idx)).count()
+                })
+            })
+            .sum();
+        (elements, steps)
     }
 
     // -- Components (ARC-02) -----------------------------------------------------
@@ -6117,6 +6199,7 @@ impl Project {
             languages_changed: self.languages() != other.languages(),
         };
         self.merge_description_changes(other, &mut diff);
+        self.merge_condition_link_changes(other, &mut diff);
         Ok(diff)
     }
 
@@ -6166,6 +6249,72 @@ impl Project {
         merge_modified(&mut diff.interfaces, interfaces);
         merge_modified(&mut diff.data_flows, data_flows);
         merge_modified(&mut diff.trust_boundaries, trust_boundaries);
+    }
+
+    /// Condition links as public IDs, so raw indices never reach `eq`/diff.
+    fn link_map(&self) -> BTreeMap<ElementRef, Vec<ConditionId>> {
+        self.condition_links
+            .iter()
+            .map(|(&t, l)| (t, l.iter().filter_map(|&i| self.conditions.id(i)).collect()))
+            .collect()
+    }
+
+    /// Step condition links as public IDs, keyed by tree and node order.
+    fn step_link_map(&self) -> BTreeMap<TreeId, Vec<Vec<ConditionId>>> {
+        self.trees
+            .iter()
+            .map(|(_, id, e)| {
+                let lists = e.step_links.as_ref().map_or_else(Vec::new, |l| {
+                    l.condition
+                        .iter()
+                        .map(|c| c.iter().filter_map(|&i| self.conditions.id(i)).collect())
+                        .collect()
+                });
+                (id, lists)
+            })
+            .collect()
+    }
+
+    /// Compares every element and step condition link by public ID (L06, L29).
+    fn same_condition_links(&self, other: &Project) -> bool {
+        self.link_map() == other.link_map() && self.step_link_map() == other.step_link_map()
+    }
+
+    /// Marks elements and trees whose condition links changed. A link changes
+    /// no risk number, so this runs after the risk deltas like descriptions.
+    fn merge_condition_link_changes(&self, other: &Project, diff: &mut ProjectDiff) {
+        let (a, b) = (self.link_map(), other.link_map());
+        let (sa, sb) = (self.step_link_map(), other.step_link_map());
+        let (mut assets, mut components, mut interfaces, mut threats) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut goals, mut claims, mut trees) = (Vec::new(), Vec::new(), Vec::new());
+        for target in a.keys().chain(b.keys()) {
+            if a.get(target) == b.get(target) {
+                continue;
+            }
+            match *target {
+                ElementRef::Asset(id) => assets.push(id),
+                ElementRef::Component(id) => components.push(id),
+                ElementRef::Interface(id) => interfaces.push(id),
+                ElementRef::Threat(id) => threats.push(id),
+                ElementRef::Goal(id) => goals.push(id),
+                ElementRef::Claim(id) => claims.push(id),
+                ElementRef::Tree(id) => trees.push(id),
+                _ => {}
+            }
+        }
+        for tree in sa.keys().chain(sb.keys()) {
+            if sa.get(tree) != sb.get(tree) {
+                trees.push(*tree);
+            }
+        }
+        merge_modified(&mut diff.assets, assets);
+        merge_modified(&mut diff.components, components);
+        merge_modified(&mut diff.interfaces, interfaces);
+        merge_modified(&mut diff.threat_scenarios, threats);
+        merge_modified(&mut diff.cybersecurity_goals, goals);
+        merge_modified(&mut diff.cybersecurity_claims, claims);
+        merge_modified(&mut diff.attack_trees, trees);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6771,8 +6920,49 @@ impl Project {
                 self.condition_index(*id)?;
                 check_condition_name(name)?;
             }
-            Op::SetConditionPresent { id, .. } | Op::RemoveCondition { id } => {
+            Op::SetConditionPresent { id, .. } => {
                 self.condition_index(*id)?;
+            }
+            Op::RemoveCondition { id } => {
+                self.condition_index(*id)?;
+                let (elements, steps) = self.condition_usages(*id);
+                if elements > 0 || steps > 0 {
+                    return Err(ModelError::ConditionInUse {
+                        condition: *id,
+                        elements,
+                        steps,
+                    });
+                }
+            }
+            Op::NeedCondition {
+                element,
+                condition,
+                provenance,
+            } => {
+                return self.check_condition_link(*element, *condition, true, provenance);
+            }
+            Op::UnneedCondition {
+                element,
+                condition,
+                provenance,
+            } => {
+                return self.check_condition_link(*element, *condition, false, provenance);
+            }
+            Op::NeedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => {
+                return self.check_step_condition_link(*tree, *node, *condition, true, provenance);
+            }
+            Op::UnneedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => {
+                return self.check_step_condition_link(*tree, *node, *condition, false, provenance);
             }
             Op::AddElement { .. }
             | Op::RenameElement { .. }
@@ -7312,6 +7502,28 @@ impl Project {
                 provenance,
             } => self.commit_set_condition_present(id, present, provenance),
             Op::RemoveCondition { id } => self.commit_remove_condition(id),
+            Op::NeedCondition {
+                element,
+                condition,
+                provenance,
+            } => self.commit_condition_link(element, condition, provenance, true),
+            Op::UnneedCondition {
+                element,
+                condition,
+                provenance,
+            } => self.commit_condition_link(element, condition, provenance, false),
+            Op::NeedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => self.commit_step_condition_link(tree, node, condition, provenance, true),
+            Op::UnneedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => self.commit_step_condition_link(tree, node, condition, provenance, false),
             Op::AddElement {
                 id,
                 kind,
@@ -7651,6 +7863,52 @@ impl Project {
         self.conditions
             .idx(&id)
             .ok_or(ModelError::UnknownCondition(id))
+    }
+
+    /// Whether `element` is a live, supported condition-link target.
+    fn check_condition_target(&self, element: ElementRef) -> Result<(), ModelError> {
+        match element {
+            ElementRef::Asset(id) => self.asset_index(id).map(|_| ()),
+            ElementRef::Component(id) => self.component_index(id).map(|_| ()),
+            ElementRef::Interface(id) => self.interface_index(id).map(|_| ()),
+            ElementRef::Threat(id) => self.threat_index(id).map(|_| ()),
+            ElementRef::Tree(id) => self.tree_index(id).map(|_| ()),
+            ElementRef::Goal(id) => self.goal_index(id).map(|_| ()),
+            ElementRef::Claim(id) => self.claim_index(id).map(|_| ()),
+            _ => Err(ModelError::UnsupportedConditionTarget { element }),
+        }
+    }
+
+    /// Where `id` belongs in a list sorted by public `ConditionId`.
+    fn condition_insert_pos(&self, list: &[ConditionIdx], id: ConditionId) -> usize {
+        list.iter()
+            .position(|&i| self.conditions.id(i).is_some_and(|o| o > id))
+            .unwrap_or(list.len())
+    }
+
+    /// Adds `idx` to `element`'s list, keeping it sorted and unique.
+    fn link_condition(&mut self, element: ElementRef, idx: ConditionIdx) {
+        if let Some(id) = self.conditions.id(idx) {
+            let pos = self.condition_insert_pos(self.condition_link_ids(element), id);
+            self.condition_links
+                .entry(element)
+                .or_default()
+                .insert(pos, idx);
+        }
+    }
+
+    /// Removes `idx` from `element`'s list, dropping an empty sparse entry.
+    fn unlink_condition(&mut self, element: ElementRef, idx: ConditionIdx) {
+        if let std::collections::btree_map::Entry::Occupied(mut e) =
+            self.condition_links.entry(element)
+        {
+            if let Some(p) = e.get().iter().position(|&i| i == idx) {
+                e.get_mut().remove(p);
+            }
+            if e.get().is_empty() {
+                e.remove();
+            }
+        }
     }
 
     fn component_index(&self, id: ComponentId) -> Result<ComponentIdx, ModelError> {
@@ -9246,6 +9504,70 @@ impl Project {
             });
         }
         Ok(())
+    }
+
+    /// Checks an element-level need/unneed op. `link` picks the need side.
+    fn check_condition_link(
+        &self,
+        element: ElementRef,
+        condition: ConditionId,
+        link: bool,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let idx = self.condition_index(condition)?;
+        self.check_condition_target(element)?;
+        let list = self.condition_link_ids(element);
+        match (link, list.contains(&idx)) {
+            (true, true) => return Err(ModelError::ConditionAlreadyNeeded { element, condition }),
+            (true, false) if list.len() >= MAX_CONDITIONS_PER_ELEMENT => {
+                return Err(ModelError::TooManyConditionLinks {
+                    max: MAX_CONDITIONS_PER_ELEMENT,
+                });
+            }
+            (false, false) => return Err(ModelError::ConditionNotLinked { element, condition }),
+            _ => {}
+        }
+        check_provenance(provenance)
+    }
+
+    /// Checks a step-level need/unneed op. `link` picks the need side.
+    fn check_step_condition_link(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        condition: ConditionId,
+        link: bool,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let idx = self.condition_index(condition)?;
+        let (entry, node_idx) = self.tree_node(tree, node)?;
+        if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
+            return Err(ModelError::NotAStep { tree, node });
+        }
+        let list = entry.condition_at(node_idx.index());
+        match (link, list.contains(&idx)) {
+            (true, true) => {
+                return Err(ModelError::StepConditionAlreadyNeeded {
+                    tree,
+                    node,
+                    condition,
+                });
+            }
+            (true, false) if list.len() >= MAX_CONDITIONS_PER_ELEMENT => {
+                return Err(ModelError::TooManyConditionLinks {
+                    max: MAX_CONDITIONS_PER_ELEMENT,
+                });
+            }
+            (false, false) => {
+                return Err(ModelError::StepConditionNotLinked {
+                    tree,
+                    node,
+                    condition,
+                });
+            }
+            _ => {}
+        }
+        check_provenance(provenance)
     }
 
     fn check_set_threat_goal(
@@ -10925,6 +11247,84 @@ impl Project {
         })
     }
 
+    fn commit_condition_link(
+        &mut self,
+        element: ElementRef,
+        condition: ConditionId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(condition)?;
+        if link {
+            self.link_condition(element, idx);
+            Ok(Op::UnneedCondition {
+                element,
+                condition,
+                provenance,
+            })
+        } else {
+            self.unlink_condition(element, idx);
+            Ok(Op::NeedCondition {
+                element,
+                condition,
+                provenance,
+            })
+        }
+    }
+
+    fn commit_step_condition_link(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        condition: ConditionId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(condition)?;
+        let id = self
+            .conditions
+            .id(idx)
+            .ok_or(ModelError::UnknownCondition(condition))?;
+        // Resolve the sort position before mutably borrowing the tree.
+        let (pos, present) = {
+            let list = self.step_condition_link_ids(tree, node);
+            (
+                list.iter()
+                    .position(|&i| self.conditions.id(i).is_some_and(|o| o > id))
+                    .unwrap_or(list.len()),
+                list.contains(&idx),
+            )
+        };
+        let entry = self.tree_mut(tree)?;
+        let i = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?
+            .index();
+        entry.edit_condition_link(i, |list| {
+            if link && !present {
+                list.insert(pos, idx);
+            } else if !link && let Some(p) = list.iter().position(|&other| other == idx) {
+                list.remove(p);
+            }
+        });
+        if link {
+            Ok(Op::UnneedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            })
+        } else {
+            Ok(Op::NeedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            })
+        }
+    }
+
     fn commit_set_threat_goal(
         &mut self,
         threat: ThreatId,
@@ -11549,6 +11949,7 @@ impl PartialEq for Project {
             && self.interfaces.len() == other.interfaces.len()
             && self.data_flows.len() == other.data_flows.len()
             && self.trust_boundaries.len() == other.trust_boundaries.len()
+            && self.same_condition_links(other)
             && self
                 .assets()
                 .zip(other.assets())
@@ -12706,6 +13107,10 @@ impl ProjectEvalCache {
             | Op::RenameCondition { .. }
             | Op::SetConditionPresent { .. }
             | Op::RemoveCondition { .. }
+            | Op::NeedCondition { .. }
+            | Op::UnneedCondition { .. }
+            | Op::NeedStepCondition { .. }
+            | Op::UnneedStepCondition { .. }
             | Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }

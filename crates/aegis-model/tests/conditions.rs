@@ -7,8 +7,9 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    ConditionId, ConditionIdx, MAX_CONDITIONS, MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, Methodology,
-    ModelError, Op, OpCodec, OpLogReader, OpLogWriter, Project, Provenance, VisualPrefix,
+    AssetId, AttackTree, ConditionId, ConditionIdx, ElementRef, GateKind, MAX_CONDITIONS,
+    MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, Methodology, ModelError, Node, NodeId, Op, OpCodec,
+    OpLogReader, OpLogWriter, Project, Provenance, TreeId, VisualPrefix,
 };
 
 fn project() -> Project {
@@ -418,4 +419,542 @@ fn op_log_round_trips_every_condition_op() {
     let restored = p.condition_idx(&ids[100]).expect("restored idx");
     assert_ne!(restored, last_idx);
     assert_eq!(p.condition_visual_id(restored).as_deref(), Some("CF100"));
+}
+
+// -- Condition links (133b) --------------------------------------------------------
+
+/// A project with `count` conditions, one asset, and one tree with a step.
+fn linked_project(
+    m: &Arc<Methodology>,
+    count: usize,
+) -> (Project, Vec<ConditionId>, AssetId, TreeId, NodeId) {
+    let mut p = Project::new(Arc::clone(m));
+    let conditions: Vec<_> = (0..count).map(|_| ConditionId::new_v7()).collect();
+    for (i, id) in conditions.iter().enumerate() {
+        add(&mut p, *id, &format!("C{i}"), "desc", true);
+    }
+    let asset = AssetId::new_v7();
+    p.apply(Op::AddAsset {
+        id: asset,
+        name: "ECU".into(),
+        properties: m.all_properties(),
+        provenance: who(),
+    })
+    .expect("asset");
+    let (tree, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut at = AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree");
+    at.add_child(at.root(), step, Node::step("Step"))
+        .expect("step");
+    p.apply(Op::AddAttackTree {
+        id: tree,
+        tree: at,
+        step_feasibility: vec![],
+        provenance: who(),
+    })
+    .expect("tree");
+    (p, conditions, asset, tree, step)
+}
+
+#[test]
+fn every_condition_link_op_has_an_exact_inverse() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let (mut p, conditions, asset, tree, step) = linked_project(&m, 1);
+    let c = conditions[0];
+    let element = ElementRef::Asset(asset);
+
+    let before_link = saved(&p);
+    inverse_round_trip(
+        &mut p,
+        Op::NeedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        },
+        Op::UnneedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        },
+    );
+    // Links are not snapshot fields yet (133c): applying one changes no byte.
+    assert_eq!(saved(&p), before_link);
+    assert_eq!(p.condition_link_ids(element), &[]);
+
+    inverse_round_trip(
+        &mut p,
+        Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        },
+        Op::UnneedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        },
+    );
+    assert_eq!(p.step_condition_link_ids(tree, step), &[]);
+
+    // Seed both links, then check the unlink ops invert back to need ops.
+    p.apply(Op::NeedCondition {
+        element,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("need");
+    p.apply(Op::NeedStepCondition {
+        tree,
+        node: step,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("need step");
+    inverse_round_trip(
+        &mut p,
+        Op::UnneedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        },
+        Op::NeedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        },
+    );
+    inverse_round_trip(
+        &mut p,
+        Op::UnneedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        },
+        Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        },
+    );
+    // Undoing an unlink restores its link.
+    assert_eq!(p.condition_usages(c), (1, 1));
+}
+
+#[test]
+fn each_link_guard_refuses_only_its_own_input() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let (mut p, conditions, asset, tree, step) = linked_project(&m, 17);
+    let c = conditions[0];
+    let element = ElementRef::Asset(asset);
+    let missing = ConditionId::new_v7();
+
+    // Unknown condition, on both element and step ops.
+    assert_eq!(
+        p.apply(Op::NeedCondition {
+            element,
+            condition: missing,
+            provenance: who(),
+        }),
+        Err(ModelError::UnknownCondition(missing))
+    );
+    assert_eq!(
+        p.apply(Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: missing,
+            provenance: who(),
+        }),
+        Err(ModelError::UnknownCondition(missing))
+    );
+
+    // Unsupported target: everything else is valid.
+    assert_eq!(
+        p.apply(Op::NeedCondition {
+            element: ElementRef::Project,
+            condition: c,
+            provenance: who(),
+        }),
+        Err(ModelError::UnsupportedConditionTarget {
+            element: ElementRef::Project,
+        })
+    );
+    let absent_asset = AssetId::new_v7();
+    assert_eq!(
+        p.apply(Op::NeedCondition {
+            element: ElementRef::Asset(absent_asset),
+            condition: c,
+            provenance: who(),
+        }),
+        Err(ModelError::UnknownAsset(absent_asset))
+    );
+
+    // Not a step: the tree root is a gate.
+    let root = p
+        .attack_tree_idx(&tree)
+        .and_then(|t| p.attack_tree(t))
+        .and_then(|t| t.id_of(t.root()))
+        .expect("root");
+    assert_eq!(
+        p.apply(Op::NeedStepCondition {
+            tree,
+            node: root,
+            condition: c,
+            provenance: who(),
+        }),
+        Err(ModelError::NotAStep { tree, node: root })
+    );
+
+    // A blank actor is refused even when the link itself is valid (L15).
+    assert_eq!(
+        p.apply(Op::NeedCondition {
+            element,
+            condition: c,
+            provenance: Provenance::human("  ", 1),
+        }),
+        Err(ModelError::EmptyActor)
+    );
+
+    // Duplicate need and unlink of a missing link, on both element and step.
+    p.apply(Op::NeedCondition {
+        element,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("need");
+    assert_eq!(
+        p.apply(Op::NeedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        }),
+        Err(ModelError::ConditionAlreadyNeeded {
+            element,
+            condition: c,
+        })
+    );
+    p.apply(Op::UnneedCondition {
+        element,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("unneed");
+    assert_eq!(
+        p.apply(Op::UnneedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        }),
+        Err(ModelError::ConditionNotLinked {
+            element,
+            condition: c,
+        })
+    );
+
+    p.apply(Op::NeedStepCondition {
+        tree,
+        node: step,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("need step");
+    assert_eq!(
+        p.apply(Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        }),
+        Err(ModelError::StepConditionAlreadyNeeded {
+            tree,
+            node: step,
+            condition: c,
+        })
+    );
+    p.apply(Op::UnneedStepCondition {
+        tree,
+        node: step,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("unneed step");
+    assert_eq!(
+        p.apply(Op::UnneedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        }),
+        Err(ModelError::StepConditionNotLinked {
+            tree,
+            node: step,
+            condition: c,
+        })
+    );
+
+    // A 17th link is refused on both an element and a step.
+    for id in &conditions[..16] {
+        p.apply(Op::NeedCondition {
+            element,
+            condition: *id,
+            provenance: who(),
+        })
+        .expect("need up to cap");
+        p.apply(Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: *id,
+            provenance: who(),
+        })
+        .expect("need step up to cap");
+    }
+    let overflow = conditions[16];
+    assert_eq!(
+        p.apply(Op::NeedCondition {
+            element,
+            condition: overflow,
+            provenance: who(),
+        }),
+        Err(ModelError::TooManyConditionLinks { max: 16 })
+    );
+    assert_eq!(
+        p.apply(Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: overflow,
+            provenance: who(),
+        }),
+        Err(ModelError::TooManyConditionLinks { max: 16 })
+    );
+}
+
+#[test]
+fn condition_in_use_refuses_removal_until_links_clear() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let (mut p, conditions, asset, tree, step) = linked_project(&m, 1);
+    let c = conditions[0];
+    let element = ElementRef::Asset(asset);
+
+    p.apply(Op::NeedCondition {
+        element,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("need");
+    p.apply(Op::NeedStepCondition {
+        tree,
+        node: step,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("need step");
+    assert_eq!(p.condition_usages(c), (1, 1));
+    assert_eq!(
+        p.apply(Op::RemoveCondition { id: c }),
+        Err(ModelError::ConditionInUse {
+            condition: c,
+            elements: 1,
+            steps: 1,
+        })
+    );
+
+    // One step link alone still blocks removal.
+    p.apply(Op::UnneedCondition {
+        element,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("unneed");
+    assert_eq!(
+        p.apply(Op::RemoveCondition { id: c }),
+        Err(ModelError::ConditionInUse {
+            condition: c,
+            elements: 0,
+            steps: 1,
+        })
+    );
+
+    // One element link alone still blocks removal.
+    p.apply(Op::NeedCondition {
+        element,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("need");
+    p.apply(Op::UnneedStepCondition {
+        tree,
+        node: step,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("unneed step");
+    assert_eq!(
+        p.apply(Op::RemoveCondition { id: c }),
+        Err(ModelError::ConditionInUse {
+            condition: c,
+            elements: 1,
+            steps: 0,
+        })
+    );
+
+    // Once both links are cleared, removal succeeds.
+    p.apply(Op::UnneedCondition {
+        element,
+        condition: c,
+        provenance: who(),
+    })
+    .expect("unneed");
+    assert_eq!(p.condition_usages(c), (0, 0));
+    p.apply(Op::RemoveCondition { id: c }).expect("remove");
+    assert_eq!(p.conditions().count(), 0);
+}
+
+#[test]
+fn links_are_sorted_unique_and_compared_by_public_id() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let conditions: Vec<_> = (0..4).map(|_| ConditionId::new_v7()).collect();
+    let mut a = linked_project(&m, 0).0;
+    let asset = AssetId::new_v7();
+    let (tree, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut at = AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree");
+    at.add_child(at.root(), step, Node::step("Step"))
+        .expect("step");
+    for p in [&mut a] {
+        for id in &conditions {
+            add(p, *id, "C", "desc", true);
+        }
+        p.apply(Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        })
+        .expect("asset");
+        p.apply(Op::AddAttackTree {
+            id: tree,
+            tree: at.clone(),
+            step_feasibility: vec![],
+            provenance: who(),
+        })
+        .expect("tree");
+    }
+    let mut b = a.clone();
+    let element = ElementRef::Asset(asset);
+
+    // Same three links in opposite insertion orders compare equal.
+    for id in conditions[..3].iter() {
+        a.apply(Op::NeedCondition {
+            element,
+            condition: *id,
+            provenance: who(),
+        })
+        .expect("need a");
+    }
+    for id in conditions[..3].iter().rev() {
+        b.apply(Op::NeedCondition {
+            element,
+            condition: *id,
+            provenance: who(),
+        })
+        .expect("need b");
+    }
+    assert_eq!(a, b);
+    assert!(a.diff(&b).expect("diff").is_empty());
+    assert_eq!(a.condition_link_ids(element).len(), 3);
+
+    // The stored list is sorted by public ConditionId, not arena index.
+    let listed: Vec<_> = b
+        .condition_link_ids(element)
+        .iter()
+        .map(|&idx| {
+            b.conditions()
+                .find(|(i, _, _)| *i == idx)
+                .map(|(_, id, _)| id)
+                .expect("resolved id")
+        })
+        .collect();
+    let mut sorted = listed.clone();
+    sorted.sort_unstable();
+    assert_eq!(listed, sorted);
+
+    // Adding a link to only one project marks the owning element modified.
+    b.apply(Op::NeedCondition {
+        element,
+        condition: conditions[3],
+        provenance: who(),
+    })
+    .expect("need b extra");
+    assert_ne!(a, b);
+    let diff = a.diff(&b).expect("diff");
+    assert_eq!(diff.assets().modified(), [asset]);
+    assert!(diff.attack_trees().modified().is_empty());
+
+    // A step link marks its tree modified and changes no risk number.
+    let before = saved(&b);
+    b.apply(Op::NeedStepCondition {
+        tree,
+        node: step,
+        condition: conditions[3],
+        provenance: who(),
+    })
+    .expect("need step");
+    assert_eq!(saved(&b), before);
+    assert_ne!(a, b);
+    let diff = a.diff(&b).expect("diff");
+    assert_eq!(diff.attack_trees().modified(), [tree]);
+    assert_eq!(b.step_condition_link_ids(tree, step).len(), 1);
+}
+
+#[test]
+fn link_ops_round_trip_through_the_op_log() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let (_, conditions, asset, tree, step) = linked_project(&m, 1);
+    let c = conditions[0];
+    let element = ElementRef::Asset(asset);
+    let ops = vec![
+        Op::NeedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        },
+        Op::UnneedCondition {
+            element,
+            condition: c,
+            provenance: who(),
+        },
+        Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        },
+        Op::UnneedStepCondition {
+            tree,
+            node: step,
+            condition: c,
+            provenance: who(),
+        },
+    ];
+    let codec = OpCodec::new(Arc::clone(&m));
+    for op in &ops {
+        assert_eq!(
+            codec
+                .decode(&codec.encode(op).expect("encode"))
+                .expect("decode"),
+            *op
+        );
+    }
+    let mut log = Vec::new();
+    let mut w = OpLogWriter::create(&mut log, Arc::clone(&m)).expect("writer");
+    for op in &ops {
+        w.append(op).expect("append");
+    }
+    drop(w);
+    let read: Vec<_> = OpLogReader::open(log.as_slice(), Arc::clone(&m))
+        .expect("header")
+        .map(|r| r.expect("record").op)
+        .collect();
+    assert_eq!(read, ops);
 }

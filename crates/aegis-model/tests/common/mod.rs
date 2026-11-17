@@ -2734,6 +2734,38 @@ pub fn second_every_op(m: Arc<Methodology>) {
         }
     );
     p.apply(inv).expect("undo set condition present");
+
+    // Condition links (133b): exercise all four link ops while the condition
+    // exists, then clear them so `RemoveCondition` stays valid. Like the
+    // condition ops above, these have no snapshot fields yet (133c).
+    let target = aegis_model::ElementRef::Asset(pump);
+    p.apply(Op::NeedCondition {
+        element: target,
+        condition,
+        provenance: p_human.clone(),
+    })
+    .expect("need condition");
+    p.apply(Op::NeedStepCondition {
+        tree,
+        node: s1,
+        condition,
+        provenance: p_human.clone(),
+    })
+    .expect("need step condition");
+    p.apply(Op::UnneedCondition {
+        element: target,
+        condition,
+        provenance: p_human.clone(),
+    })
+    .expect("unneed condition");
+    p.apply(Op::UnneedStepCondition {
+        tree,
+        node: s1,
+        condition,
+        provenance: p_human.clone(),
+    })
+    .expect("unneed step condition");
+
     let inv = p
         .apply(Op::RemoveCondition { id: condition })
         .expect("remove condition");

@@ -561,8 +561,35 @@ fn walk_parties(seen: &mut BTreeSet<String>) {
 
 fn walk_conditions(seen: &mut BTreeSet<String>) {
     let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
-    let mut ws = Workspace::empty(m);
+    let mut ws = Workspace::empty(Arc::clone(&m));
     let id = ConditionId::new_v7();
+    let asset = AssetId::new_v7();
+    let (tree, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    for op in [
+        Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
+            step_feasibility: vec![],
+            provenance: who(),
+        },
+        Op::AddTreeNode {
+            tree,
+            parent: root,
+            id: step,
+            node: Node::step("Step"),
+            index: 1,
+            position: 0,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
     for op in [
         Op::AddCondition {
             id,
@@ -579,6 +606,33 @@ fn walk_conditions(seen: &mut BTreeSet<String>) {
         Op::SetConditionPresent {
             id,
             present: false,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    let element = ElementRef::Asset(asset);
+    for op in [
+        Op::NeedCondition {
+            element,
+            condition: id,
+            provenance: who(),
+        },
+        Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: id,
+            provenance: who(),
+        },
+        Op::UnneedCondition {
+            element,
+            condition: id,
+            provenance: who(),
+        },
+        Op::UnneedStepCondition {
+            tree,
+            node: step,
+            condition: id,
             provenance: who(),
         },
     ] {

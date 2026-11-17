@@ -442,6 +442,32 @@ enum OpView<'a> {
     RemoveCondition {
         id: Text<ConditionId>,
     },
+    NeedCondition {
+        element: TargetView,
+        condition: Text<ConditionId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnneedCondition {
+        element: TargetView,
+        condition: Text<ConditionId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    NeedStepCondition {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        condition: Text<ConditionId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnneedStepCondition {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        condition: Text<ConditionId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetThreatGoal {
         threat: Text<ThreatId>,
         goal: Option<Text<GoalId>>,
@@ -1317,6 +1343,46 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveCondition { id } => OpView::RemoveCondition { id: Text(*id) },
+        Op::NeedCondition {
+            element,
+            condition,
+            provenance,
+        } => OpView::NeedCondition {
+            element: (*element).into(),
+            condition: Text(*condition),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnneedCondition {
+            element,
+            condition,
+            provenance,
+        } => OpView::UnneedCondition {
+            element: (*element).into(),
+            condition: Text(*condition),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::NeedStepCondition {
+            tree,
+            node,
+            condition,
+            provenance,
+        } => OpView::NeedStepCondition {
+            tree: Text(*tree),
+            node: Text(*node),
+            condition: Text(*condition),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnneedStepCondition {
+            tree,
+            node,
+            condition,
+            provenance,
+        } => OpView::UnneedStepCondition {
+            tree: Text(*tree),
+            node: Text(*node),
+            condition: Text(*condition),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::SetThreatGoal {
             threat,
             goal,
@@ -2180,6 +2246,46 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveCondition { id } => Op::RemoveCondition { id: id.0 },
+        OpWire::NeedCondition {
+            element,
+            condition,
+            provenance,
+        } => Op::NeedCondition {
+            element: element.into_ref(),
+            condition: condition.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnneedCondition {
+            element,
+            condition,
+            provenance,
+        } => Op::UnneedCondition {
+            element: element.into_ref(),
+            condition: condition.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::NeedStepCondition {
+            tree,
+            node,
+            condition,
+            provenance,
+        } => Op::NeedStepCondition {
+            tree: tree.0,
+            node: node.0,
+            condition: condition.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnneedStepCondition {
+            tree,
+            node,
+            condition,
+            provenance,
+        } => Op::UnneedStepCondition {
+            tree: tree.0,
+            node: node.0,
+            condition: condition.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::SetThreatGoal {
             threat,
             goal,

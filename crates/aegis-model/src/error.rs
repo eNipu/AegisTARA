@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::control::RiskTreatment;
+use crate::description::ElementRef;
 use crate::id::{
     AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
     InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
@@ -634,6 +635,64 @@ pub enum ModelError {
     TooManyConditions {
         /// The limit.
         max: usize,
+    },
+    /// The element does not need this condition.
+    #[error("element {element:?} does not need condition {condition}")]
+    ConditionNotLinked {
+        /// The element.
+        element: ElementRef,
+        /// The condition.
+        condition: ConditionId,
+    },
+    /// The step does not need this condition.
+    #[error("step {node} of tree {tree} does not need condition {condition}")]
+    StepConditionNotLinked {
+        /// The tree.
+        tree: TreeId,
+        /// The step node.
+        node: NodeId,
+        /// The condition.
+        condition: ConditionId,
+    },
+    /// The element already needs this condition.
+    #[error("element {element:?} already needs condition {condition}")]
+    ConditionAlreadyNeeded {
+        /// The element.
+        element: ElementRef,
+        /// The repeated condition.
+        condition: ConditionId,
+    },
+    /// The step already needs this condition.
+    #[error("step {node} of tree {tree} already needs condition {condition}")]
+    StepConditionAlreadyNeeded {
+        /// The tree.
+        tree: TreeId,
+        /// The step node.
+        node: NodeId,
+        /// The repeated condition.
+        condition: ConditionId,
+    },
+    /// Condition links reject this target kind; carries IDs, never a name.
+    #[error("condition links do not support target {element:?}")]
+    UnsupportedConditionTarget {
+        /// The unsupported target.
+        element: ElementRef,
+    },
+    /// An element or step would need more than `max` conditions.
+    #[error("element or step would need more than {max} conditions")]
+    TooManyConditionLinks {
+        /// The limit.
+        max: usize,
+    },
+    /// A condition cannot be removed while an element or step needs it.
+    #[error("condition {condition} is needed by {elements} element(s) and {steps} step(s)")]
+    ConditionInUse {
+        /// The condition still needed.
+        condition: ConditionId,
+        /// How many elements need it.
+        elements: usize,
+        /// How many steps need it.
+        steps: usize,
     },
     /// A non-empty provenance actor string contains only whitespace.
     ///
