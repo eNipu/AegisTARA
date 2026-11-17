@@ -448,10 +448,21 @@ struct TrustBoundaryView<'a> {
     provenance: Option<ProvenanceView<'a>>,
 }
 
-/// A threat's damage links as public IDs, in stored (ID) order.
+/// A threat's damage links as public IDs, in stored (ID) order, together
+/// with its sparse link rationales (only non-empty texts, by public ID).
 struct LinkedDamages<'a> {
     p: &'a Project,
     links: &'a [crate::id::DamageIdx],
+    rationales: &'a [(crate::id::DamageIdx, Arc<str>)],
+}
+
+/// One damage link in the object form: `damage` then `rationale`. The
+/// rationale is always written, even when empty, so the bytes are
+/// deterministic.
+#[derive(Serialize)]
+struct DamageLinkView<'a> {
+    damage: Required<Text<DamageId>>,
+    rationale: &'a str,
 }
 
 /// A goal's control links as public IDs, in stored (ID) order.
@@ -548,6 +559,7 @@ impl Serialize for Threats<'_> {
                 damages: LinkedDamages {
                     p,
                     links: t.damages(),
+                    rationales: &t.damage_rationales,
                 },
                 direct_feasibility: t
                     .direct_feasibility()
@@ -815,11 +827,26 @@ impl Serialize for TrustBoundaries<'_> {
 
 impl Serialize for LinkedDamages<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_seq(
-            self.links
-                .iter()
-                .map(|&d| Required(self.p.damage_scenario_id(d).map(Text))),
-        )
+        // Keep the exact v1 bytes when no link has a rationale: a plain
+        // sequence of ID strings. Only switch to the object form when at
+        // least one rationale is non-empty.
+        if !self.rationales.iter().any(|(_, text)| !text.is_empty()) {
+            return s.collect_seq(
+                self.links
+                    .iter()
+                    .map(|&d| Required(self.p.damage_scenario_id(d).map(Text))),
+            );
+        }
+        s.collect_seq(self.links.iter().map(|&d| {
+            DamageLinkView {
+                damage: Required(self.p.damage_scenario_id(d).map(Text)),
+                rationale: self
+                    .rationales
+                    .iter()
+                    .find(|(idx, _)| *idx == d)
+                    .map_or("", |(_, text)| text.as_ref()),
+            }
+        }))
     }
 }
 
@@ -1434,15 +1461,39 @@ fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(
     let scales = t.scales;
     let scaling_reason = t.scaling_reason.map(|w| w.0);
     let feasibility_rationale = t.feasibility_rationale.map(|w| w.0);
+    let (damage_ids, damage_rationales): (Vec<DamageId>, Vec<(DamageId, Arc<str>)>) = match t
+        .damages
+    {
+        wire::DamageLinksWire::Ids(ids) => (ids.0.into_iter().map(|d| d.0).collect(), Vec::new()),
+        wire::DamageLinksWire::Links(links) => {
+            let mut ids = Vec::with_capacity(links.0.len());
+            let mut rationales = Vec::new();
+            for link in links.0 {
+                ids.push(link.damage.0);
+                if let Some(text) = link.rationale {
+                    rationales.push((link.damage.0, text.0));
+                }
+            }
+            (ids, rationales)
+        }
+    };
     project.apply(Op::AddThreatScenario {
         id,
         name: t.name.0,
         asset: t.asset.0,
         category: t.category.0,
         catalog_refs: t.catalog_refs.0.into_iter().map(|r| r.0).collect(),
-        damages: t.damages.0.into_iter().map(|d| d.0).collect(),
+        damages: damage_ids,
         provenance: provenance.clone(),
     })?;
+    for (damage, text) in damage_rationales {
+        project.apply(Op::SetDamageLinkRationale {
+            threat: id,
+            damage,
+            text,
+            provenance: provenance.clone(),
+        })?;
+    }
     if let Some(level) = direct_feasibility {
         project.apply(Op::SetThreatFeasibility {
             threat: id,

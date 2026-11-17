@@ -1747,6 +1747,26 @@ pub(super) struct DamageWire {
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
+/// One damage link in the object form of a threat's `damages`: a public ID
+/// and its optional rationale. The old string-array form has no rationale.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WireDamageLink {
+    pub(super) damage: WireId<DamageId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) rationale: Option<DescriptionText>,
+}
+
+/// A threat's damage links: either the v1 string array of IDs, or the object
+/// array used only when at least one link carries a rationale. Both variants
+/// keep the same [`LinksCap`] cap.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub(super) enum DamageLinksWire {
+    Ids(BoundedVec<WireId<DamageId>, LinksCap>),
+    Links(BoundedVec<WireDamageLink, LinksCap>),
+}
+
 /// A snapshot threat scenario.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1758,7 +1778,7 @@ pub(super) struct ThreatWire {
     pub(super) asset: WireId<AssetId>,
     pub(super) category: ThreatCategoryKey,
     pub(super) catalog_refs: BoundedVec<CatalogRefText, RefsCap>,
-    pub(super) damages: BoundedVec<WireId<DamageId>, LinksCap>,
+    pub(super) damages: DamageLinksWire,
     #[serde(default, deserialize_with = "some")]
     pub(super) direct_feasibility: Option<FeasibilityLevelKey>,
     #[serde(default, deserialize_with = "some")]

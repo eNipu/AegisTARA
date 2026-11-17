@@ -251,3 +251,78 @@ fn set_damage_link_rationale_survives_op_log_round_trip() {
     }
     assert_eq!(back[0], op);
 }
+
+#[test]
+fn v1_fixture_resaves_byte_for_byte_without_rationale_key() {
+    let m = methodology();
+    let bytes = std::fs::read("tests/fixtures/project-v1.json").expect("v1 fixture");
+    let p = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("load v1");
+    assert_eq!(save(&p), bytes);
+    assert!(!String::from_utf8_lossy(&bytes).contains("rationale"));
+}
+
+#[test]
+fn object_form_round_trips_byte_for_byte() {
+    let m = methodology();
+    let (mut p, threat, damages) = fixture(&m);
+    for d in damages {
+        p.apply(Op::LinkDamage {
+            threat,
+            damage: d,
+            provenance: Provenance::default(),
+        })
+        .expect("link");
+    }
+    p.apply(pair(threat, damages[0], "Safety relevant", who()))
+        .expect("rationale");
+
+    let bytes = save(&p);
+    let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    let arr = json["threat_scenarios"][0]["damages"]
+        .as_array()
+        .expect("damages is an array");
+    assert_eq!(arr.len(), 2);
+    for (i, d) in damages.iter().enumerate() {
+        assert_eq!(
+            arr[i]["damage"].as_str().expect("damage is a string"),
+            d.to_string()
+        );
+        assert!(arr[i].get("rationale").is_some(), "rationale key present");
+    }
+    assert_eq!(arr[0]["rationale"].as_str(), Some("Safety relevant"));
+    assert_eq!(arr[1]["rationale"].as_str(), Some(""));
+
+    let loaded = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("load");
+    assert_eq!(loaded, p);
+    assert_eq!(save(&loaded), bytes);
+}
+
+#[test]
+fn empty_rationale_reverts_to_v1_string_array_form() {
+    let m = methodology();
+    let (mut p, threat, damages) = fixture(&m);
+    for d in damages {
+        p.apply(Op::LinkDamage {
+            threat,
+            damage: d,
+            provenance: Provenance::default(),
+        })
+        .expect("link");
+    }
+    p.apply(pair(threat, damages[0], "temporary", who()))
+        .expect("set");
+    p.apply(pair(threat, damages[0], "", Provenance::default()))
+        .expect("clear");
+
+    let bytes = save(&p);
+    let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    let arr = json["threat_scenarios"][0]["damages"]
+        .as_array()
+        .expect("damages is an array");
+    assert_eq!(arr.len(), 2);
+    assert!(
+        arr.iter().all(serde_json::Value::is_string),
+        "damages are plain ID strings"
+    );
+    assert!(!String::from_utf8_lossy(&bytes).contains("rationale"));
+}
