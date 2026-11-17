@@ -54,3 +54,7 @@ harness = false
 [[bench]]
 name = "systems"
 harness = false
+
+[[bench]]
+name = "applicability"
+harness = false
