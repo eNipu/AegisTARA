@@ -493,6 +493,9 @@ fn restructuring_a_loaded_step_undoes_byte_for_byte() {
         ws.apply(ops, Origin::Edit)
             .unwrap_or_else(|e| panic!("{what}: model refused: {e:?}"));
         ws.undo().expect("undo");
-        assert!(saved(&ws) == before, "{what}: undo did not restore the saved bytes");
+        assert!(
+            saved(&ws) == before,
+            "{what}: undo did not restore the saved bytes"
+        );
     }
 }
