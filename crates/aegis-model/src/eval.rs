@@ -849,6 +849,55 @@ impl<V> Evaluation<V> {
             }
         }
     }
+
+    /// Converts a lifted evaluation: `Value` slots keep their value,
+    /// `Excluded` slots have none. `None` when the root is excluded.
+    /// Time O(V), space O(V).
+    pub(crate) fn from_lifted(src: &Evaluation<Lifted<V>>) -> Option<Self>
+    where
+        V: Clone,
+    {
+        let root_value = src.root_value.value()?.clone();
+        Some(Self {
+            values: src
+                .values
+                .iter()
+                .map(|v| v.as_ref().and_then(Lifted::value).cloned())
+                .collect(),
+            derivations: src.derivations.clone(),
+            root: src.root,
+            root_value,
+        })
+    }
+
+    /// Like [`sync_nodes`](Self::sync_nodes), converting lifted slots as
+    /// [`from_lifted`](Self::from_lifted) does. Returns `false`, leaving
+    /// `self` unchanged, when the source root is excluded (the caller must
+    /// rebuild). Time O(|nodes|).
+    pub(crate) fn sync_lifted_nodes(
+        &mut self,
+        src: &Evaluation<Lifted<V>>,
+        nodes: &[NodeIdx],
+    ) -> bool
+    where
+        V: Clone,
+    {
+        let Some(root_value) = src.root_value.value() else {
+            return false;
+        };
+        self.root = src.root;
+        self.root_value = root_value.clone();
+        for &idx in nodes {
+            let i = idx.index();
+            if let (Some(dst), Some(s)) = (self.values.get_mut(i), src.values.get(i)) {
+                *dst = s.as_ref().and_then(Lifted::value).cloned();
+            }
+            if let (Some(dst), Some(s)) = (self.derivations.get_mut(i), src.derivations.get(i)) {
+                *dst = *s;
+            }
+        }
+        true
+    }
 }
 
 /// The explanation of one node's value, from [`Evaluation::explain`].

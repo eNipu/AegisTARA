@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use crate::applicability::{Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
+use crate::applicability::{Applicability, Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
     CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
@@ -19,7 +19,7 @@ use crate::description::{
 use crate::diff::{EntityDiff, ProjectDiff, RiskDelta, RiskSnapshot, ThreatRiskDelta};
 use crate::element::ElementKind;
 use crate::error::{EntityKind, ModelError};
-use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
+use crate::eval::{Applicable, Evaluation, Lifted, MaxMin, TreeEvalCache, evaluate};
 use crate::id::{
     ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ConditionId,
     ConditionIdx, ControlId, ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId,
@@ -3795,10 +3795,93 @@ impl Project {
     /// # }
     /// ```
     pub fn evaluate_tree(&self, id: TreeId) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
-        let (_, entry) = self.live_tree(id)?;
-        evaluate(&entry.tree, &MaxMin::<FeasibilityLevel>::new(), |idx| {
+        self.evaluate_tree_with(&self.applicability(), id, false)
+    }
+
+    /// The rating of step `idx` of tree `id` (inherent or residual), or
+    /// `Excluded` when applicability excludes it. Time O(log n + m).
+    fn lifted_leaf(
+        &self,
+        app: &Applicability,
+        id: TreeId,
+        entry: &TreeEntry,
+        idx: NodeIdx,
+        residual: bool,
+    ) -> Option<Lifted<FeasibilityLevel>> {
+        if app.node_excluded_at(id, idx) {
+            return Some(Lifted::Excluded);
+        }
+        let rating = if residual {
+            self.entry_residual_step_feasibility(entry, idx)
+        } else {
             entry.effective_step_feasibility(&self.methodology, idx)
-        })
+        };
+        rating.map(Lifted::Value)
+    }
+
+    /// Evaluates tree `id` under `app`, leaving excluded steps out.
+    /// Time O(V * m + E), space O(V).
+    fn evaluate_tree_with(
+        &self,
+        app: &Applicability,
+        id: TreeId,
+        residual: bool,
+    ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
+        let (_, entry) = self.live_tree(id)?;
+        if app.is_excluded(ElementRef::Tree(id)) {
+            return Err(ModelError::TreeNotApplicable(id));
+        }
+        let eval = evaluate(&entry.tree, &Applicable(MaxMin::new()), |idx| {
+            self.lifted_leaf(app, id, entry, idx, residual)
+        })?;
+        Evaluation::from_lifted(&eval).ok_or(ModelError::TreeNotApplicable(id))
+    }
+
+    /// Evaluates the tree of threat `id` under `app`. Time O(log n + V * m + E).
+    fn evaluate_threat_with(
+        &self,
+        app: &Applicability,
+        id: ThreatId,
+        residual: bool,
+    ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
+        let t = self.threat_ref(id)?;
+        if app.is_excluded(ElementRef::Threat(id)) {
+            return Err(ModelError::ThreatNotApplicable(id));
+        }
+        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
+        let tree_id = self
+            .trees
+            .id(tree_idx)
+            .ok_or(ModelError::UnknownThreatScenario(id))?;
+        self.evaluate_tree_with(app, tree_id, residual)
+    }
+
+    /// The risk of threat `id` under `app`; an excluded threat or tree gives
+    /// [`ModelError::ThreatNotApplicable`]. Time O(log n + V * m + E + d * c).
+    fn evaluate_risk_with(
+        &self,
+        app: &Applicability,
+        id: ThreatId,
+        residual: bool,
+    ) -> Result<ThreatRisk, ModelError> {
+        let t = self.threat_ref(id)?;
+        if app.is_excluded(ElementRef::Threat(id)) {
+            return Err(ModelError::ThreatNotApplicable(id));
+        }
+        let (feasibility, tree_evaluation) = if let Some(tree_idx) = t.attack_tree {
+            let tree_id = self
+                .trees
+                .id(tree_idx)
+                .ok_or(ModelError::UnknownThreatScenario(id))?;
+            let eval = self
+                .evaluate_tree_with(app, tree_id, residual)
+                .map_err(|e| not_applicable_threat(e, id))?;
+            (*eval.root_value(), Some(eval))
+        } else {
+            let level = t.direct_feasibility.ok_or(ModelError::NoAttackTree(id))?;
+            (level, None)
+        };
+        Ok(self.risk_from_feasibility(t, feasibility, tree_evaluation))
     }
 
     /// Evaluates the attack tree linked to threat scenario `id` using
@@ -3853,13 +3936,7 @@ impl Project {
         &self,
         id: ThreatId,
     ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
-        let t = self.threat_ref(id)?;
-        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
-        let tree_id = self
-            .trees
-            .id(tree_idx)
-            .ok_or(ModelError::UnknownThreatScenario(id))?;
-        self.evaluate_tree(tree_id)
+        self.evaluate_threat_with(&self.applicability(), id, false)
     }
 
     /// Evaluates the risk of threat scenario `id` across all of its linked
@@ -3930,19 +4007,7 @@ impl Project {
     /// # }
     /// ```
     pub fn evaluate_risk(&self, id: ThreatId) -> Result<ThreatRisk, ModelError> {
-        let t = self.threat_ref(id)?;
-        let (feasibility, tree_evaluation) = if let Some(tree_idx) = t.attack_tree {
-            let tree_id = self
-                .trees
-                .id(tree_idx)
-                .ok_or(ModelError::UnknownThreatScenario(id))?;
-            let eval = self.evaluate_tree(tree_id)?;
-            (*eval.root_value(), Some(eval))
-        } else {
-            let level = t.direct_feasibility.ok_or(ModelError::NoAttackTree(id))?;
-            (level, None)
-        };
-        Ok(self.risk_from_feasibility(t, feasibility, tree_evaluation))
+        self.evaluate_risk_with(&self.applicability(), id, false)
     }
 
     /// Evaluates attack tree `id` bottom-up using
@@ -4010,10 +4075,7 @@ impl Project {
         &self,
         id: TreeId,
     ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
-        let (_, entry) = self.live_tree(id)?;
-        evaluate(&entry.tree, &MaxMin::<FeasibilityLevel>::new(), |idx| {
-            self.entry_residual_step_feasibility(entry, idx)
-        })
+        self.evaluate_tree_with(&self.applicability(), id, true)
     }
 
     /// Evaluates the attack tree linked to threat scenario `id` using
@@ -4078,13 +4140,7 @@ impl Project {
         &self,
         id: ThreatId,
     ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
-        let t = self.threat_ref(id)?;
-        let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
-        let tree_id = self
-            .trees
-            .id(tree_idx)
-            .ok_or(ModelError::UnknownThreatScenario(id))?;
-        self.evaluate_residual_tree(tree_id)
+        self.evaluate_threat_with(&self.applicability(), id, true)
     }
 
     /// Evaluates the residual risk of threat scenario `id` across all of its
@@ -4163,19 +4219,7 @@ impl Project {
     /// # }
     /// ```
     pub fn evaluate_residual_risk(&self, id: ThreatId) -> Result<ThreatRisk, ModelError> {
-        let t = self.threat_ref(id)?;
-        let (feasibility, tree_evaluation) = if let Some(tree_idx) = t.attack_tree {
-            let tree_id = self
-                .trees
-                .id(tree_idx)
-                .ok_or(ModelError::UnknownThreatScenario(id))?;
-            let eval = self.evaluate_residual_tree(tree_id)?;
-            (*eval.root_value(), Some(eval))
-        } else {
-            let level = t.direct_feasibility.ok_or(ModelError::NoAttackTree(id))?;
-            (level, None)
-        };
-        Ok(self.risk_from_feasibility(t, feasibility, tree_evaluation))
+        self.evaluate_risk_with(&self.applicability(), id, true)
     }
 
     /// Evaluates attack tree `id` using inherent step feasibility ratings and
@@ -4939,7 +4983,7 @@ impl Project {
     /// ```
     pub fn tree_tipping_points(&self, id: TreeId) -> Result<Vec<StepTippingPoint>, ModelError> {
         let (_, entry) = self.live_tree(id)?;
-        let (_, tips) = self.entry_tipping_points(entry, false)?;
+        let (_, tips) = self.entry_tipping_points(&self.applicability(), id, entry, false)?;
         Ok(tips)
     }
 
@@ -4999,7 +5043,7 @@ impl Project {
         id: TreeId,
     ) -> Result<Vec<StepTippingPoint>, ModelError> {
         let (_, entry) = self.live_tree(id)?;
-        let (_, tips) = self.entry_tipping_points(entry, true)?;
+        let (_, tips) = self.entry_tipping_points(&self.applicability(), id, entry, true)?;
         Ok(tips)
     }
 
@@ -5146,51 +5190,53 @@ impl Project {
         self.threat_sensitivity_inner(id, true)
     }
 
+    /// Single-step tipping points of tree `id` under `app`; excluded steps
+    /// have none. Time O((V + E) + S * depth * fan-out).
     fn entry_tipping_points(
         &self,
+        app: &Applicability,
+        id: TreeId,
         entry: &TreeEntry,
         residual: bool,
     ) -> Result<(FeasibilityLevel, Vec<StepTippingPoint>), ModelError> {
-        let domain = MaxMin::<FeasibilityLevel>::new();
-        let mut cache = TreeEvalCache::new(&entry.tree, &domain, |idx| {
-            if residual {
-                self.entry_residual_step_feasibility(entry, idx)
-            } else {
-                entry.effective_step_feasibility(&self.methodology, idx)
-            }
-        })?;
-        let baseline_root = *cache.evaluation().root_value();
+        if app.is_excluded(ElementRef::Tree(id)) {
+            return Err(ModelError::TreeNotApplicable(id));
+        }
+        let domain = Applicable(MaxMin::<FeasibilityLevel>::new());
+        let leaf = |idx| self.lifted_leaf(app, id, entry, idx, residual);
+        let mut cache = TreeEvalCache::new(&entry.tree, &domain, leaf)?;
+        let Lifted::Value(baseline_root) = *cache.evaluation().root_value() else {
+            return Err(ModelError::TreeNotApplicable(id));
+        };
         let feas_count = self.methodology.feasibility_levels().len();
         let mut out = Vec::new();
         for (step_idx, node_id, node) in entry.tree.iter() {
             if !matches!(node, Node::Step { .. }) {
                 continue;
             }
-            let Some(&from_step) = cache.evaluation().get(step_idx) else {
+            let Some(&Lifted::Value(from_step)) = cache.evaluation().get(step_idx) else {
                 continue;
             };
             let neighbors = adjacent_feasibility(from_step, feas_count);
             for to_step in neighbors.into_iter().flatten() {
                 cache.recompute_steps(&entry.tree, &domain, [step_idx], |idx| {
                     if idx == step_idx {
-                        Some(to_step)
-                    } else if residual {
-                        self.entry_residual_step_feasibility(entry, idx)
+                        Some(Lifted::Value(to_step))
                     } else {
-                        entry.effective_step_feasibility(&self.methodology, idx)
+                        leaf(idx)
                     }
                 })?;
                 let to_root = *cache.evaluation().root_value();
                 cache.recompute_steps(&entry.tree, &domain, [step_idx], |idx| {
                     if idx == step_idx {
-                        Some(from_step)
-                    } else if residual {
-                        self.entry_residual_step_feasibility(entry, idx)
+                        Some(Lifted::Value(from_step))
                     } else {
-                        entry.effective_step_feasibility(&self.methodology, idx)
+                        leaf(idx)
                     }
                 })?;
-                if to_root != baseline_root {
+                if let Lifted::Value(to_root) = to_root
+                    && to_root != baseline_root
+                {
                     out.push(StepTippingPoint {
                         step: step_idx,
                         node: node_id,
@@ -5234,15 +5280,21 @@ impl Project {
         residual: bool,
     ) -> Result<ThreatSensitivity, ModelError> {
         let t = self.threat_ref(id)?;
+        let app = self.applicability();
+        if app.is_excluded(ElementRef::Threat(id)) {
+            return Err(ModelError::ThreatNotApplicable(id));
+        }
         let feas_count = self.methodology.feasibility_levels().len();
         let mut feasibility_tipping_points = Vec::new();
 
         let (baseline_feasibility, baseline_risk) = if let Some(tree_idx) = t.attack_tree {
-            let entry = self
-                .trees
-                .get(tree_idx)
-                .ok_or(ModelError::UnknownThreatScenario(id))?;
-            let (base_f, step_tips) = self.entry_tipping_points(entry, residual)?;
+            let (Some(entry), Some(tree_id)) = (self.trees.get(tree_idx), self.trees.id(tree_idx))
+            else {
+                return Err(ModelError::UnknownThreatScenario(id));
+            };
+            let (base_f, step_tips) = self
+                .entry_tipping_points(&app, tree_id, entry, residual)
+                .map_err(|e| not_applicable_threat(e, id))?;
             let base_r = self.max_risk_for_feasibility(t, base_f);
             if let Some(from_risk) = base_r {
                 for st in step_tips {
@@ -6374,6 +6426,7 @@ impl Project {
         goals: &EntityDiff<GoalId>,
         claims: &EntityDiff<ClaimId>,
     ) -> Box<[ThreatRiskDelta]> {
+        let (app_a, app_b) = (self.applicability(), other.applicability());
         let mut deltas = Vec::new();
         let mut base_iter = self.threats.iter().peekable();
         let mut curr_iter = other.threats.iter().peekable();
@@ -6403,10 +6456,13 @@ impl Project {
                             break;
                         };
                         curr_iter.next();
-                        if self.is_threat_affected(
-                            other, id_a, t_a, assets, damages, threats, trees, controls, goals,
-                            claims,
-                        ) {
+                        let tree_a = t_a.attack_tree.and_then(|i| self.trees.id(i));
+                        if !app_a.same_for_threat(&app_b, id_a, tree_a)
+                            || self.is_threat_affected(
+                                other, id_a, t_a, assets, damages, threats, trees, controls, goals,
+                                claims,
+                            )
+                        {
                             let (inh_a, res_a) = self.threat_risk_snapshots(id_a);
                             let (inh_b, res_b) = other.threat_risk_snapshots(id_a);
                             deltas.push(ThreatRiskDelta::new(
@@ -12907,10 +12963,27 @@ fn arena_invariants<Id: Copy + Ord + std::fmt::Display, Idx: ArenaIndex, T>(
 // Incremental evaluation cache (rules A1, D10).
 // ---------------------------------------------------------------------------
 
+/// A tree evaluated with applicability: the lifted cache that updates
+/// incrementally, and its plain view that callers borrow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LiftedTree {
+    cache: TreeEvalCache<Lifted<FeasibilityLevel>>,
+    view: Evaluation<FeasibilityLevel>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CachedTreeEval {
-    inherent: Result<TreeEvalCache<FeasibilityLevel>, ModelError>,
-    residual: Result<TreeEvalCache<FeasibilityLevel>, ModelError>,
+    inherent: Result<LiftedTree, ModelError>,
+    residual: Result<LiftedTree, ModelError>,
+}
+
+/// Maps a tree's [`ModelError::TreeNotApplicable`] to
+/// [`ModelError::ThreatNotApplicable`] for threat `id`; other errors pass.
+fn not_applicable_threat(e: ModelError, id: ThreatId) -> ModelError {
+    match e {
+        ModelError::TreeNotApplicable(_) => ModelError::ThreatNotApplicable(id),
+        other => other,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13018,6 +13091,7 @@ struct CachedThreatEval {
 /// ```
 #[derive(Clone, Debug)]
 pub struct ProjectEvalCache {
+    applicability: Applicability,
     trees: Vec<Option<CachedTreeEval>>,
     threats: Vec<Option<CachedThreatEval>>,
     tree_threats: Vec<Vec<ThreatIdx>>,
@@ -13028,7 +13102,8 @@ pub struct ProjectEvalCache {
 
 impl PartialEq for ProjectEvalCache {
     fn eq(&self, other: &Self) -> bool {
-        self.trees == other.trees
+        self.applicability == other.applicability
+            && self.trees == other.trees
             && self.threats == other.threats
             && self.tree_threats == other.tree_threats
             && self.damage_threats == other.damage_threats
@@ -13057,6 +13132,7 @@ impl ProjectEvalCache {
     #[must_use]
     pub fn new(project: &Project) -> Self {
         let mut cache = Self {
+            applicability: Applicability::default(),
             trees: Vec::new(),
             threats: Vec::new(),
             tree_threats: Vec::new(),
@@ -13087,6 +13163,7 @@ impl ProjectEvalCache {
     /// # }
     /// ```
     pub fn rebuild(&mut self, project: &Project) {
+        self.applicability = project.applicability();
         self.trees.clear();
         self.trees.resize_with(project.trees.slot_count(), || None);
         self.tree_threats.clear();
@@ -13101,9 +13178,10 @@ impl ProjectEvalCache {
         self.recomputed_nodes = 0;
         self.recomputed_threats = 0;
 
-        for (idx, maybe_entry) in project.trees.slots.iter().enumerate() {
-            if let Some(entry) = maybe_entry {
-                self.trees[idx] = Some(Self::build_tree_eval(project, entry));
+        for (idx, id, entry) in project.trees.iter() {
+            let cached = self.build_tree_eval(project, id, entry);
+            if let Some(slot) = self.trees.get_mut(idx.index()) {
+                *slot = Some(cached);
             }
         }
 
@@ -13192,6 +13270,12 @@ impl ProjectEvalCache {
     #[allow(clippy::too_many_lines)] // one arm per op kind
     pub fn update(&mut self, project: &Project, op: &Op) {
         if !self.arenas_compatible(project, op) {
+            self.rebuild(project);
+            return;
+        }
+        // Not incremental for applicability changes yet (slice 134c).
+        let next = project.applicability();
+        if next != self.applicability {
             self.rebuild(project);
             return;
         }
@@ -13363,7 +13447,7 @@ impl ProjectEvalCache {
             .ok_or(ModelError::UnknownAttackTree(id))?;
         slot.inherent
             .as_ref()
-            .map(TreeEvalCache::evaluation)
+            .map(|lt| &lt.view)
             .map_err(Clone::clone)
     }
 
@@ -13419,7 +13503,7 @@ impl ProjectEvalCache {
             .ok_or(ModelError::UnknownAttackTree(id))?;
         slot.residual
             .as_ref()
-            .map(TreeEvalCache::evaluation)
+            .map(|lt| &lt.view)
             .map_err(Clone::clone)
     }
 
@@ -13473,6 +13557,9 @@ impl ProjectEvalCache {
         id: ThreatId,
     ) -> Result<&Evaluation<FeasibilityLevel>, ModelError> {
         let t = project.threat_ref(id)?;
+        if self.applicability.is_excluded(ElementRef::Threat(id)) {
+            return Err(ModelError::ThreatNotApplicable(id));
+        }
         let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
         let tree_id = project
             .trees
@@ -13542,6 +13629,9 @@ impl ProjectEvalCache {
         id: ThreatId,
     ) -> Result<&Evaluation<FeasibilityLevel>, ModelError> {
         let t = project.threat_ref(id)?;
+        if self.applicability.is_excluded(ElementRef::Threat(id)) {
+            return Err(ModelError::ThreatNotApplicable(id));
+        }
         let tree_idx = t.attack_tree.ok_or(ModelError::NoAttackTree(id))?;
         let tree_id = project
             .trees
@@ -13750,6 +13840,25 @@ impl ProjectEvalCache {
         self.recomputed_threats = 0;
     }
 
+    /// The applicability the cached evaluations were built with (equal to
+    /// [`Project::applicability`] of the project last given). Time O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Project, ProjectEvalCache};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let cache = ProjectEvalCache::new(&project);
+    /// assert_eq!(cache.applicability(), &project.applicability());
+    /// assert!(cache.applicability().is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn applicability(&self) -> &Applicability {
+        &self.applicability
+    }
+
     fn arenas_compatible(&self, project: &Project, op: &Op) -> bool {
         let trees_ok = match op {
             Op::AddAttackTree { .. } | Op::RemoveAttackTree { .. } => {
@@ -13772,15 +13881,31 @@ impl ProjectEvalCache {
         trees_ok && threats_ok && damages_ok && self.tree_threats.len() == self.trees.len()
     }
 
-    fn build_tree_eval(project: &Project, entry: &TreeEntry) -> CachedTreeEval {
-        let domain = MaxMin::<FeasibilityLevel>::new();
-        let inherent = TreeEvalCache::new(&entry.tree, &domain, |idx| {
-            entry.effective_step_feasibility(&project.methodology, idx)
-        });
-        let residual = TreeEvalCache::new(&entry.tree, &domain, |idx| {
-            project.entry_residual_step_feasibility(entry, idx)
-        });
-        CachedTreeEval { inherent, residual }
+    fn build_tree_eval(&self, project: &Project, id: TreeId, entry: &TreeEntry) -> CachedTreeEval {
+        CachedTreeEval {
+            inherent: self.build_lifted_tree(project, id, entry, false),
+            residual: self.build_lifted_tree(project, id, entry, true),
+        }
+    }
+
+    /// Evaluates one mode of `entry` under the cached applicability, as
+    /// [`Project::evaluate_tree`] does. Time O(V * m + E).
+    fn build_lifted_tree(
+        &self,
+        project: &Project,
+        id: TreeId,
+        entry: &TreeEntry,
+        residual: bool,
+    ) -> Result<LiftedTree, ModelError> {
+        if self.applicability.is_excluded(ElementRef::Tree(id)) {
+            return Err(ModelError::TreeNotApplicable(id));
+        }
+        let cache = TreeEvalCache::new(&entry.tree, &Applicable(MaxMin::new()), |idx| {
+            project.lifted_leaf(&self.applicability, id, entry, idx, residual)
+        })?;
+        let view =
+            Evaluation::from_lifted(cache.evaluation()).ok_or(ModelError::TreeNotApplicable(id))?;
+        Ok(LiftedTree { cache, view })
     }
 
     fn build_threat_eval(
@@ -13801,6 +13926,12 @@ impl ProjectEvalCache {
         t: &ThreatScenario,
         residual: bool,
     ) -> Result<ThreatRisk, ModelError> {
+        if self
+            .applicability
+            .is_excluded(ElementRef::Threat(threat_id))
+        {
+            return Err(ModelError::ThreatNotApplicable(threat_id));
+        }
         if let Some(tree_idx) = t.attack_tree {
             let slot = self
                 .trees
@@ -13813,12 +13944,12 @@ impl ProjectEvalCache {
                 &slot.inherent
             };
             match tree_res {
-                Ok(tc) => {
-                    let eval = tc.evaluation().clone();
+                Ok(lt) => {
+                    let eval = lt.view.clone();
                     let feas = *eval.root_value();
                     Ok(project.risk_from_feasibility(t, feas, Some(eval)))
                 }
-                Err(e) => Err(e.clone()),
+                Err(e) => Err(not_applicable_threat(e.clone(), threat_id)),
             }
         } else {
             let level = t
@@ -13832,11 +13963,12 @@ impl ProjectEvalCache {
         self.trees.resize_with(project.trees.slot_count(), || None);
         self.tree_threats
             .resize_with(project.trees.slot_count(), Vec::new);
-        if let Some(entry) = project.trees.get(tree_idx) {
+        if let (Some(entry), Some(id)) = (project.trees.get(tree_idx), project.trees.id(tree_idx)) {
             let n = u64::try_from(entry.tree.len()).unwrap_or(u64::MAX);
             self.recomputed_nodes = self.recomputed_nodes.saturating_add(n.saturating_mul(2));
+            let cached = self.build_tree_eval(project, id, entry);
             if let Some(slot) = self.trees.get_mut(tree_idx.index()) {
-                *slot = Some(Self::build_tree_eval(project, entry));
+                *slot = Some(cached);
             }
         }
     }
@@ -13962,18 +14094,14 @@ impl ProjectEvalCache {
         node_indices: &[NodeIdx],
         residual: bool,
     ) {
-        let domain = MaxMin::<FeasibilityLevel>::new();
-        let all_rated = node_indices.iter().all(|&node_idx| {
-            if residual {
-                project
-                    .entry_residual_step_feasibility(entry, node_idx)
-                    .is_some()
-            } else {
-                entry
-                    .effective_step_feasibility(&project.methodology, node_idx)
-                    .is_some()
-            }
-        });
+        let domain = Applicable(MaxMin::<FeasibilityLevel>::new());
+        let Some(tree_id) = project.trees.id(tree_idx) else {
+            self.rebuild(project);
+            return;
+        };
+        let app = &self.applicability;
+        let leaf = |i| project.lifted_leaf(app, tree_id, entry, i, residual);
+        let all_rated = node_indices.iter().all(|&i| leaf(i).is_some());
         let mut touched = Vec::new();
 
         let Some(Some(cached_tree)) = self.trees.get_mut(tree_idx.index()) else {
@@ -13986,50 +14114,40 @@ impl ProjectEvalCache {
             &mut cached_tree.inherent
         };
 
-        let (full_rebuild, tree_changed) = if let (true, Ok(tc)) = (all_rated, tree_res.as_mut()) {
-            let res = if residual {
-                tc.recompute_steps_recording(
-                    &entry.tree,
-                    &domain,
-                    node_indices.iter().copied(),
-                    |i| project.entry_residual_step_feasibility(entry, i),
-                    &mut touched,
-                )
-            } else {
-                tc.recompute_steps_recording(
-                    &entry.tree,
-                    &domain,
-                    node_indices.iter().copied(),
-                    |i| entry.effective_step_feasibility(&project.methodology, i),
-                    &mut touched,
-                )
-            };
+        let mut synced = false;
+        let (full_rebuild, tree_changed) = if let (true, Ok(lt)) = (all_rated, tree_res.as_mut()) {
+            let res = lt.cache.recompute_steps_recording(
+                &entry.tree,
+                &domain,
+                node_indices.iter().copied(),
+                leaf,
+                &mut touched,
+            );
             match res {
                 Ok((count, rebuilt)) => {
                     self.recomputed_nodes = self
                         .recomputed_nodes
                         .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
-                    (rebuilt, rebuilt || !touched.is_empty())
+                    synced = !rebuilt && lt.view.sync_lifted_nodes(lt.cache.evaluation(), &touched);
+                    (!synced, !synced || !touched.is_empty())
                 }
-                Err(err) => {
-                    *tree_res = Err(err);
-                    (true, true)
-                }
+                Err(_) => (true, true),
             }
         } else {
             let n = u64::try_from(entry.tree.len()).unwrap_or(u64::MAX);
             self.recomputed_nodes = self.recomputed_nodes.saturating_add(n);
-            *tree_res = if residual {
-                TreeEvalCache::new(&entry.tree, &domain, |i| {
-                    project.entry_residual_step_feasibility(entry, i)
-                })
-            } else {
-                TreeEvalCache::new(&entry.tree, &domain, |i| {
-                    entry.effective_step_feasibility(&project.methodology, i)
-                })
-            };
             (true, true)
         };
+        if !synced {
+            let rebuilt = self.build_lifted_tree(project, tree_id, entry, residual);
+            if let Some(Some(cached_tree)) = self.trees.get_mut(tree_idx.index()) {
+                if residual {
+                    cached_tree.residual = rebuilt;
+                } else {
+                    cached_tree.inherent = rebuilt;
+                }
+            }
+        }
 
         if !tree_changed {
             return;
@@ -14077,7 +14195,7 @@ impl ProjectEvalCache {
                         ct.inherent.as_ref().ok()
                     }
                 })
-                .map(TreeEvalCache::evaluation);
+                .map(|lt| &lt.view);
             if let Some(src_eval) = tree_eval {
                 let new_feas = *src_eval.root_value();
                 if let Some(Some(threat_slot)) = self.threats.get_mut(threat_idx.index()) {
