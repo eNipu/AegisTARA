@@ -16,6 +16,9 @@ use crate::provenance::Provenance;
 /// ```
 pub const MAX_CONDITIONS: usize = 256;
 
+/// Maximum number of conditions one element or step may need (job 133).
+pub const MAX_CONDITIONS_PER_ELEMENT: usize = 16;
+
 /// A condition in a [`Project`](crate::Project), changed only through
 /// [`Project::apply`](crate::Project::apply).
 ///

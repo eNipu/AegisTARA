@@ -96,6 +96,10 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `RenameCondition` | the same with the old name and provenance | O(log n) |
 /// | `SetConditionPresent` | the same with the old presence and provenance | O(log n) |
 /// | `RemoveCondition` | `AddCondition` with the old fields and provenance | O(log n) |
+/// | `NeedCondition` | `UnneedCondition` with the same provenance | O(log n) |
+/// | `UnneedCondition` | `NeedCondition` with the same provenance | O(log n) |
+/// | `NeedStepCondition` | `UnneedStepCondition` with the same provenance | O(log n) |
+/// | `UnneedStepCondition` | `NeedStepCondition` with the same provenance | O(log n) |
 /// | `SetThreatGoal` | the same with the old goal and provenance | O(log n) |
 /// | `SetThreatClaim` | the same with the old claim and provenance | O(log n) |
 /// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
@@ -789,6 +793,47 @@ pub enum Op {
         /// Existing condition.
         id: ConditionId,
     },
+    /// Records that an element needs a condition, capped at
+    /// `MAX_CONDITIONS_PER_ELEMENT` and stored sorted by public ID.
+    NeedCondition {
+        /// The element that needs the condition.
+        element: ElementRef,
+        /// Existing condition.
+        condition: ConditionId,
+        /// Provenance of linking the condition.
+        provenance: Provenance,
+    },
+    /// Stops an element from needing a condition.
+    UnneedCondition {
+        /// The element that no longer needs the condition.
+        element: ElementRef,
+        /// A condition the element needs.
+        condition: ConditionId,
+        /// Provenance of unlinking the condition.
+        provenance: Provenance,
+    },
+    /// Records that one attack-tree step needs a condition.
+    NeedStepCondition {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// An existing step node in `tree`.
+        node: NodeId,
+        /// Existing condition.
+        condition: ConditionId,
+        /// Provenance of linking the condition.
+        provenance: Provenance,
+    },
+    /// Stops one attack-tree step from needing a condition.
+    UnneedStepCondition {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// An existing step node in `tree`.
+        node: NodeId,
+        /// A condition the step needs.
+        condition: ConditionId,
+        /// Provenance of unlinking the condition.
+        provenance: Provenance,
+    },
     /// Links a threat scenario to a cybersecurity goal, replaces its linked
     /// goal, or unlinks it (`None`).
     SetThreatGoal {
@@ -1164,6 +1209,10 @@ impl Op {
             | Self::AddCondition { provenance, .. }
             | Self::RenameCondition { provenance, .. }
             | Self::SetConditionPresent { provenance, .. }
+            | Self::NeedCondition { provenance, .. }
+            | Self::UnneedCondition { provenance, .. }
+            | Self::NeedStepCondition { provenance, .. }
+            | Self::UnneedStepCondition { provenance, .. }
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }
@@ -1226,6 +1275,7 @@ impl Op {
     ///     Some(ProvenanceSource::Ai)
     /// );
     /// ```
+    #[allow(clippy::too_many_lines)] // one arm per op kind
     #[must_use]
     pub fn with_provenance(mut self, new_provenance: Provenance) -> Self {
         match &mut self {
@@ -1283,6 +1333,10 @@ impl Op {
             | Self::AddCondition { provenance, .. }
             | Self::RenameCondition { provenance, .. }
             | Self::SetConditionPresent { provenance, .. }
+            | Self::NeedCondition { provenance, .. }
+            | Self::UnneedCondition { provenance, .. }
+            | Self::NeedStepCondition { provenance, .. }
+            | Self::UnneedStepCondition { provenance, .. }
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }

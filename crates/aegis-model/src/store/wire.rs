@@ -2477,6 +2477,32 @@ pub(super) enum OpWire {
     RemoveCondition {
         id: WireId<ConditionId>,
     },
+    NeedCondition {
+        element: TargetWire,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnneedCondition {
+        element: TargetWire,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    NeedStepCondition {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnneedStepCondition {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetThreatGoal {
         threat: WireId<ThreatId>,
         #[serde(deserialize_with = "Option::deserialize")]
