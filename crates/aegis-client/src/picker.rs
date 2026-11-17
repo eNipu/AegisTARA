@@ -298,6 +298,7 @@ impl MultiLinkPicker {
 
     /// The `(visual_id, name)` of a selection. Stale indices yield empty strings
     /// via `unwrap_or_default()`; this never panics.
+    #[rustfmt::skip]
     fn option_text(project: &Project, selection: Selection) -> (String, String) {
         macro_rules! named {
             ($idx:expr, $visual:expr, $get:expr, $name:expr) => {{
@@ -308,87 +309,25 @@ impl MultiLinkPicker {
             }};
         }
         match selection {
-            Selection::Asset(id) => named!(
-                project.asset_idx(&id),
-                |i| project.asset_visual_id(i),
-                |i| project.asset(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::Damage(id) => named!(
-                project.damage_scenario_idx(&id),
-                |i| project.damage_scenario_visual_id(i),
-                |i| project.damage_scenario(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::Threat(id) => named!(
-                project.threat_scenario_idx(&id),
-                |i| project.threat_scenario_visual_id(i),
-                |i| project.threat_scenario(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::Tree(id) => named!(
-                project.attack_tree_idx(&id),
-                |i| project.attack_tree_visual_id(i),
-                |i| project.attack_tree(i),
-                |t| t
-                    .get(t.root())
-                    .map_or_else(String::new, |n| n.label().to_owned())
-            ),
-            Selection::Control(id) => named!(
-                project.security_control_idx(&id),
-                |i| project.security_control_visual_id(i),
-                |i| project.security_control(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::Goal(id) => named!(
-                project.cybersecurity_goal_idx(&id),
-                |i| project.cybersecurity_goal_visual_id(i),
-                |i| project.cybersecurity_goal(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::Claim(id) => named!(
-                project.cybersecurity_claim_idx(&id),
-                |i| project.cybersecurity_claim_visual_id(i),
-                |i| project.cybersecurity_claim(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::Component(id) => named!(
-                project.component_idx(&id),
-                |i| project.component_visual_id(i),
-                |i| project.component(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::Interface(id) => named!(
-                project.interface_idx(&id),
-                |i| project.interface_visual_id(i),
-                |i| project.interface(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::DataFlow(id) => named!(
-                project.data_flow_idx(&id),
-                |i| project.data_flow_visual_id(i),
-                |i| project.data_flow(i),
-                |e| e.name().to_owned()
-            ),
-            Selection::TrustBoundary(id) => named!(
-                project.trust_boundary_idx(&id),
-                |i| project.trust_boundary_visual_id(i),
-                |i| project.trust_boundary(i),
-                |e| e.name().to_owned()
-            ),
+            Selection::Asset(id) => named!(project.asset_idx(&id), |i| project.asset_visual_id(i), |i| project.asset(i), |e| e.name().to_owned()),
+            Selection::Damage(id) => named!(project.damage_scenario_idx(&id), |i| project.damage_scenario_visual_id(i), |i| project.damage_scenario(i), |e| e.name().to_owned()),
+            Selection::Threat(id) => named!(project.threat_scenario_idx(&id), |i| project.threat_scenario_visual_id(i), |i| project.threat_scenario(i), |e| e.name().to_owned()),
+            Selection::Tree(id) => named!(project.attack_tree_idx(&id), |i| project.attack_tree_visual_id(i), |i| project.attack_tree(i), |t| t.get(t.root()).map_or_else(String::new, |n| n.label().to_owned())),
+            Selection::Control(id) => named!(project.security_control_idx(&id), |i| project.security_control_visual_id(i), |i| project.security_control(i), |e| e.name().to_owned()),
+            Selection::Goal(id) => named!(project.cybersecurity_goal_idx(&id), |i| project.cybersecurity_goal_visual_id(i), |i| project.cybersecurity_goal(i), |e| e.name().to_owned()),
+            Selection::Claim(id) => named!(project.cybersecurity_claim_idx(&id), |i| project.cybersecurity_claim_visual_id(i), |i| project.cybersecurity_claim(i), |e| e.name().to_owned()),
+            Selection::Component(id) => named!(project.component_idx(&id), |i| project.component_visual_id(i), |i| project.component(i), |e| e.name().to_owned()),
+            Selection::Interface(id) => named!(project.interface_idx(&id), |i| project.interface_visual_id(i), |i| project.interface(i), |e| e.name().to_owned()),
+            Selection::DataFlow(id) => named!(project.data_flow_idx(&id), |i| project.data_flow_visual_id(i), |i| project.data_flow(i), |e| e.name().to_owned()),
+            Selection::TrustBoundary(id) => named!(project.trust_boundary_idx(&id), |i| project.trust_boundary_visual_id(i), |i| project.trust_boundary(i), |e| e.name().to_owned()),
             Selection::TreeNode(tree_id, node_id) => {
                 let Some(tree_idx) = project.attack_tree_idx(&tree_id) else {
                     return (String::new(), String::new());
                 };
                 let visual_id = project.attack_tree_visual_id(tree_idx).unwrap_or_default();
-                let label = project
-                    .attack_tree(tree_idx)
-                    .and_then(|tree| {
-                        tree.idx_of(&node_id)
-                            .and_then(|node_idx| tree.get(node_idx))
-                            .map(|node| node.label().to_owned())
-                    })
-                    .unwrap_or_default();
+                let label = project.attack_tree(tree_idx).and_then(|tree| {
+                    tree.idx_of(&node_id).and_then(|i| tree.get(i)).map(|n| n.label().to_owned())
+                }).unwrap_or_default();
                 (visual_id, label)
             }
         }
