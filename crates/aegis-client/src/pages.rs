@@ -21,7 +21,7 @@ use aegis_model::{
 
 use crate::commands::TREATMENTS;
 use crate::time::format_ms;
-use crate::view::{RiskView, Selection, UiState};
+use crate::view::{Page, PageGroup, RiskView, Selection, UiState};
 use crate::workspace::Workspace;
 
 /// The labels of the project's methodology, in the order edits refer to
@@ -3056,6 +3056,109 @@ pub fn overview_in(ws: &Workspace, view: &crate::systems::SystemView) -> Overvie
         systems: crate::combined::systems_overview(ws, &view),
         top_paths: tp.paths,
         choke_points: tp.choke_points,
+    }
+}
+
+/// One box of the process map: a sidebar group with its size, its lint
+/// findings and the pack's clause references (UI-18).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProcessMapBox {
+    /// The sidebar group.
+    pub group: PageGroup,
+    /// A human-readable group name.
+    pub label: String,
+    /// Elements on the group's pages, by the sidebar's counts.
+    pub count: usize,
+    /// Lint findings whose target page is in the group.
+    pub findings: usize,
+    /// Those findings that block evaluation or treatment.
+    pub errors: usize,
+    /// `"✓"` without findings, otherwise `"⚠ n"`.
+    pub mark: String,
+    /// The pack's distinct clause references for the group's pages, in page
+    /// order.
+    pub clause_refs: Vec<String>,
+    /// What a screen reader says: label, count and mark.
+    pub accessible_name: String,
+    /// The page the box opens: the group's first page.
+    pub target: Page,
+}
+
+/// The process map: one box per sidebar group, in sidebar order, with the
+/// group's element count, its lint findings and the pack's clause references
+/// (UI-18). Time O(project) for the lint.
+#[must_use]
+pub fn process_map(ws: &Workspace) -> Vec<ProcessMapBox> {
+    let project = ws.project();
+    let methodology = project.methodology();
+    let rows = problems(ws);
+    let lint = project.lint().len();
+    PageGroup::ALL
+        .iter()
+        .map(|group| {
+            let pages: Vec<Page> = Page::ALL
+                .iter()
+                .copied()
+                .filter(|p| p.group() == Some(*group))
+                .collect();
+            let count = pages.iter().map(|p| page_count(project, *p, lint)).sum();
+            let (mut findings, mut errors) = (0usize, 0usize);
+            for row in &rows {
+                if row
+                    .target
+                    .is_some_and(|s| page_of(s).group() == Some(*group))
+                {
+                    findings += 1;
+                    errors += usize::from(row.error);
+                }
+            }
+            let mut clause_refs: Vec<String> = Vec::new();
+            for page in &pages {
+                for r in methodology.clause_refs(page.key()) {
+                    if !clause_refs.iter().any(|known| known.as_str() == &**r) {
+                        clause_refs.push(r.to_string());
+                    }
+                }
+            }
+            let mark = if findings == 0 {
+                "✓".to_owned()
+            } else {
+                format!("⚠ {findings}")
+            };
+            let label = group.label().to_owned();
+            ProcessMapBox {
+                group: *group,
+                accessible_name: format!("{label} {count} {mark}"),
+                label,
+                count,
+                findings,
+                errors,
+                mark,
+                clause_refs,
+                target: Page::first_in_group(*group),
+            }
+        })
+        .collect()
+}
+
+/// The sidebar count of one page, by the rules of `nav_counts` in the
+/// session. Baselines are server state, so the versions page counts 0 here.
+fn page_count(p: &Project, page: Page, lint: usize) -> usize {
+    match page {
+        Page::Item => {
+            p.component_count()
+                + p.interface_count()
+                + p.data_flow_count()
+                + p.trust_boundary_count()
+        }
+        Page::Assets => p.asset_count(),
+        Page::Damage => p.damage_scenario_count(),
+        Page::Threats | Page::Risks => p.threat_scenario_count(),
+        Page::Trees => p.attack_tree_count(),
+        Page::Controls => p.security_control_count(),
+        Page::Goals => p.cybersecurity_goal_count() + p.cybersecurity_claim_count(),
+        Page::Problems => lint,
+        _ => 0,
     }
 }
 
