@@ -189,9 +189,9 @@ impl PageGroup {
 }
 
 /// A key naming a relation between two entity kinds, used by `Links`
-/// columns. The relation registry (job 149) owns the keys and resolves a
-/// row's link targets; until then a `Links` cell carries the names as text.
-pub type RelationKey = &'static str;
+/// columns. The relation registry owns the keys and resolves a row's link
+/// targets; this re-export keeps the key in one place.
+pub use crate::relations::RelationKey;
 
 /// The kind of a table column (UI-14.1): one look and one editing rule each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -366,7 +366,12 @@ impl TableId {
                 const C: &[ColumnSpec] = &[
                     ID,
                     name(E::Asset),
-                    hidden("component", Links("asset-component"), msg("component"), 160),
+                    hidden(
+                        "component",
+                        Links(RelationKey::ASSET_COMPONENT),
+                        msg("component"),
+                        160,
+                    ),
                     col("properties", Rating, msg("properties"), 200),
                     THREATS,
                     col("worst-risk", Computed, msg("worst-risk"), 110),
@@ -386,7 +391,12 @@ impl TableId {
                 const C: &[ColumnSpec] = &[
                     ID,
                     name(E::ThreatScenario),
-                    col("asset", Links("threat-asset"), element(E::Asset), 160),
+                    col(
+                        "asset",
+                        Links(RelationKey::THREAT_ASSET),
+                        element(E::Asset),
+                        160,
+                    ),
                     col("scales", Rating, msg("scales"), 64),
                     BEFORE,
                     AFTER,
@@ -397,7 +407,12 @@ impl TableId {
                 const C: &[ColumnSpec] = &[
                     ID,
                     name(E::ThreatScenario),
-                    hidden("asset", Links("threat-asset"), element(E::Asset), 160),
+                    hidden(
+                        "asset",
+                        Links(RelationKey::THREAT_ASSET),
+                        element(E::Asset),
+                        160,
+                    ),
                     col("damage", Computed, msg("deciding-damage"), 160),
                     col("impact", Computed, msg("impact"), 110),
                     col("feasibility", Computed, msg("feasibility"), 110),

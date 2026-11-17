@@ -118,3 +118,17 @@ id = ⟦ÎD␣⟧
 properties = ⟦Prôpértîés␣⟧
 worst-risk = ⟦Wôrst rîsk␣⟧
 controls = ⟦Côntrôls␣⟧
+
+# Relation labels (job 149).
+relation-asset-component = ⟦Cômpônént␣⟧
+relation-threat-asset = ⟦Àssét␣⟧
+relation-threat-damages = ⟦Dâmâgé scénârîôs␣⟧
+relation-threat-tree = ⟦Attâck tréé␣⟧
+relation-threat-goal = ⟦Gôâl␣⟧
+relation-threat-claim = ⟦Clâîm␣⟧
+relation-goal-controls = ⟦Côntrôls␣⟧
+relation-control-targets = ⟦Applîéd tô␣⟧
+relation-step-via = ⟦Gôés thrôûgh␣⟧
+relation-step-mitigations = ⟦Mîtîgâtîôns␣⟧
+relation-dataflow-from = ⟦Flôw sôûrcé␣⟧
+relation-dataflow-to = ⟦Flôw dés tînâtîôn␣⟧
