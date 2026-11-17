@@ -1,0 +1,71 @@
+{
+  "job": "146-pair-rationale",
+  "slices": [
+    {
+      "id": "146a",
+      "title": "DamageLink view, rationale op and op-log codec",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/threat.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/tests/pair_rationale.rs",
+        "crates/aegis-model/tests/common/mod.rs"
+      ],
+      "max_lines": 360,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --lib",
+        "cargo test --locked -p aegis-model --test pair_rationale",
+        "cargo test --locked -p aegis-model --test store_properties"
+      ]
+    },
+    {
+      "id": "146b",
+      "title": "Snapshot damage-link forms and v1 byte compatibility",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/snapshot.rs",
+        "crates/aegis-model/tests/pair_rationale.rs"
+      ],
+      "max_lines": 190,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test store",
+        "cargo test --locked -p aegis-model --test pair_rationale"
+      ]
+    },
+    {
+      "id": "146c",
+      "title": "Client rationale data, risk column, report/XLSX and locales",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/table.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/src/report/doc.rs",
+        "crates/aegis-client/src/report/xlsx.rs",
+        "crates/aegis-client/locales/en/main.ftl",
+        "crates/aegis-client/locales/ja/main.ftl",
+        "crates/aegis-client/locales/pseudo/main.ftl",
+        "crates/aegis-client/tests/146-pair-rationale.rs",
+        "crates/aegis-client/tests/table_conventions.rs",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 260,
+      "new_deps": false,
+      "ci": [],
+      "checks": ["cargo test --locked -p aegis-client --test 146-pair-rationale"]
+    }
+  ]
+}
