@@ -15,6 +15,9 @@ use crate::provenance::Provenance;
 /// ```
 pub const MAX_PARTIES: usize = 256;
 
+/// Maximum number of parties a goal or claim may list as responsible.
+pub const MAX_RESPONSIBLE: usize = 16;
+
 /// The role a [`Party`] plays in a project's TARA.
 ///
 /// ```
