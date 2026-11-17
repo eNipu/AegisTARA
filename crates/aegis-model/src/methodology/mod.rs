@@ -1679,9 +1679,7 @@ impl Methodology {
 
     /// The pack format's caps and key/label rules for `clause_refs`, so a def
     /// built in code cannot produce a pack that `read_pack` then refuses.
-    fn check_clause_refs(
-        refs: &BTreeMap<Arc<str>, Vec<Arc<str>>>,
-    ) -> Result<(), MethodologyError> {
+    fn check_clause_refs(refs: &BTreeMap<Arc<str>, Vec<Arc<str>>>) -> Result<(), MethodologyError> {
         let too_many = || MethodologyError::TooManyClauseRefs {
             max: MAX_PACK_CLAUSE_REFS,
         };
