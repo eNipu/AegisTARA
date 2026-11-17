@@ -2077,6 +2077,44 @@
       "history": [],
       "decision": "Built and checked by Fable in one pass; ci.sh green; no separate review",
       "updated": "2026-11-16T23:18:00Z"
+    },
+    {
+      "id": "149-relation-registry",
+      "title": "Relation registry in aegis-client: one row per link kind (NFR-12)",
+      "branch": "factory/149-relation-registry",
+      "stage": "merged",
+      "slice": "149b",
+      "base": "aa591238a121b84ce1d7e3328425592b4477ab5f",
+      "reviews": {
+        "slice": "149b",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "149a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 440
+        },
+        {
+          "slice": "149b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 0
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-17T14:12:45Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
