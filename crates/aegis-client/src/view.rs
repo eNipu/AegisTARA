@@ -23,6 +23,7 @@ use aegis_model::{
 
 use aegis_proto as pb;
 
+use crate::i18n::Catalog;
 use crate::workspace::Workspace;
 
 /// One pending AI or catalog suggestion item shown in the UI (job 089).
@@ -187,51 +188,266 @@ impl PageGroup {
     }
 }
 
-/// A key naming a relation between two entity kinds, used by `Links` columns.
+/// A key naming a relation between two entity kinds, used by `Links`
+/// columns. The relation registry (job 149) owns the keys and resolves a
+/// row's link targets; until then a `Links` cell carries the names as text.
 pub type RelationKey = &'static str;
 
-/// The kind of a table column.
+/// The kind of a table column (UI-14.1): one look and one editing rule each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ColumnKind {
-    /// Stable ID column.
+    /// The visual ID. Never edited.
     Id,
-    /// Name column.
+    /// The row's name.
     Name,
-    /// A column linking to a related entity kind.
+    /// Links to related elements.
     Links(RelationKey),
-    /// A computed (read-only) value column.
+    /// A value the app works out from other data. Never edited in place.
     Computed,
-    /// A rating column.
+    /// A value picked from a fixed or pack-defined list.
     Rating,
-    /// Free text column.
+    /// Free text.
     Text,
 }
 
 impl ColumnKind {
-    /// Whether the column's value can be edited in place.
+    /// Whether a cell of this kind can be edited in place.
     #[must_use]
     pub fn editable(self) -> bool {
         !matches!(self, Self::Id | Self::Computed)
     }
 }
 
-/// Specification of one column in a table page.
+/// An element type the methodology pack names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ElementType {
+    /// Asset.
+    Asset,
+    /// Damage scenario.
+    DamageScenario,
+    /// Threat scenario.
+    ThreatScenario,
+    /// Security control.
+    SecurityControl,
+    /// Cybersecurity goal.
+    CybersecurityGoal,
+    /// Cybersecurity claim.
+    CybersecurityClaim,
+}
+
+/// Where a column heading comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColumnLabel {
+    /// A message id in the client catalog (`locales/*/main.ftl`).
+    Catalog(&'static str),
+    /// The singular name the methodology pack gives an element type, so a
+    /// pack that renames "Damage scenario" also renames the heading.
+    Element(ElementType),
+}
+
+/// One column of a table page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColumnSpec {
+    /// Stable key, unique in its table. Settings (column chooser, job 129b)
+    /// and the cell lookup of [`crate::table`] refer to a column by it.
+    pub key: &'static str,
     /// The column's kind.
     pub kind: ColumnKind,
-    /// Fluent label key.
-    pub label: &'static str,
-    /// Width in pixels (or arbitrary units).
+    /// The heading.
+    pub label: ColumnLabel,
+    /// Default width in logical pixels, before the user resizes.
     pub width: u16,
-    /// Whether the column is visible.
+    /// Whether the column is shown by default.
     pub visible: bool,
+}
+
+impl ColumnSpec {
+    /// The heading text. `names` are the pack's element names in the wanted
+    /// language (`Vocabulary::element_names`). A missing catalog id shows
+    /// as `[id]`, as everywhere else.
+    #[must_use]
+    pub fn heading(&self, names: &aegis_model::ElementNamesDef, catalog: &Catalog) -> String {
+        let name = match self.label {
+            ColumnLabel::Catalog(id) => return catalog.tr(id),
+            ColumnLabel::Element(ElementType::Asset) => &names.asset,
+            ColumnLabel::Element(ElementType::DamageScenario) => &names.damage_scenario,
+            ColumnLabel::Element(ElementType::ThreatScenario) => &names.threat_scenario,
+            ColumnLabel::Element(ElementType::SecurityControl) => &names.security_control,
+            ColumnLabel::Element(ElementType::CybersecurityGoal) => &names.cybersecurity_goal,
+            ColumnLabel::Element(ElementType::CybersecurityClaim) => &names.cybersecurity_claim,
+        };
+        name.singular.to_string()
+    }
+}
+
+/// A shown-by-default column.
+const fn col(key: &'static str, kind: ColumnKind, label: ColumnLabel, width: u16) -> ColumnSpec {
+    ColumnSpec {
+        key,
+        kind,
+        label,
+        width,
+        visible: true,
+    }
+}
+
+/// A column the user can switch on.
+const fn hidden(key: &'static str, kind: ColumnKind, label: ColumnLabel, width: u16) -> ColumnSpec {
+    ColumnSpec {
+        key,
+        kind,
+        label,
+        width,
+        visible: false,
+    }
+}
+
+const fn msg(id: &'static str) -> ColumnLabel {
+    ColumnLabel::Catalog(id)
+}
+
+const fn element(e: ElementType) -> ColumnLabel {
+    ColumnLabel::Element(e)
+}
+
+const ID: ColumnSpec = col("id", ColumnKind::Id, msg("id"), 76);
+const THREATS: ColumnSpec = col("threats", ColumnKind::Computed, msg("threats"), 90);
+const BEFORE: ColumnSpec = col("before", ColumnKind::Computed, msg("risk-before"), 100);
+const AFTER: ColumnSpec = col("after", ColumnKind::Computed, msg("risk-after"), 100);
+
+const fn name(e: ElementType) -> ColumnSpec {
+    col("name", ColumnKind::Name, element(e), 240)
+}
+
+/// One table of the app. Its columns are the single declaration every
+/// renderer, the column chooser and the cell lookup read (UI-14, D30).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TableId {
+    /// Assets.
+    Assets,
+    /// Damage scenarios.
+    Damage,
+    /// Threat scenarios.
+    Threats,
+    /// The risk register; one row per threat scenario.
+    Risks,
+    /// Security controls.
+    Controls,
+    /// Cybersecurity goals.
+    Goals,
+    /// Cybersecurity claims.
+    Claims,
+    /// Lint findings.
+    Problems,
+}
+
+impl TableId {
+    /// Every table.
+    pub const ALL: [TableId; 8] = [
+        TableId::Assets,
+        TableId::Damage,
+        TableId::Threats,
+        TableId::Risks,
+        TableId::Controls,
+        TableId::Goals,
+        TableId::Claims,
+        TableId::Problems,
+    ];
+
+    /// The table's columns, in default order. Columns whose number depends
+    /// on the pack (one per attack factor, job 152) are not expressible
+    /// here yet; no table shown today has any.
+    #[must_use]
+    pub fn columns(self) -> &'static [ColumnSpec] {
+        use ColumnKind::{Computed, Links, Rating};
+        use ElementType as E;
+        match self {
+            TableId::Assets => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    name(E::Asset),
+                    hidden("component", Links("asset-component"), msg("component"), 160),
+                    col("properties", Rating, msg("properties"), 200),
+                    THREATS,
+                    col("worst-risk", Computed, msg("worst-risk"), 110),
+                ];
+                C
+            }
+            TableId::Damage => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    name(E::DamageScenario),
+                    col("impact", Rating, msg("impact"), 200),
+                    THREATS,
+                ];
+                C
+            }
+            TableId::Threats => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    name(E::ThreatScenario),
+                    col("asset", Links("threat-asset"), element(E::Asset), 160),
+                    col("scales", Rating, msg("scales"), 64),
+                    BEFORE,
+                    AFTER,
+                ];
+                C
+            }
+            TableId::Risks => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    name(E::ThreatScenario),
+                    hidden("asset", Links("threat-asset"), element(E::Asset), 160),
+                    col("damage", Computed, msg("deciding-damage"), 160),
+                    col("impact", Computed, msg("impact"), 110),
+                    col("feasibility", Computed, msg("feasibility"), 110),
+                    BEFORE,
+                    AFTER,
+                    col("treatment", Rating, msg("treatment"), 110),
+                    hidden("backing", Computed, msg("goal-or-claim"), 160),
+                    hidden("reduced-by", Computed, msg("reduced-by"), 200),
+                ];
+                C
+            }
+            TableId::Controls => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    name(E::SecurityControl),
+                    col("steps", Computed, msg("attack-steps"), 100),
+                    col("goals", Computed, msg("goals"), 90),
+                    hidden("lowers", Computed, msg("risks-lowered"), 110),
+                ];
+                C
+            }
+            TableId::Goals => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    name(E::CybersecurityGoal),
+                    col("controls", Computed, msg("controls"), 90),
+                    THREATS,
+                ];
+                C
+            }
+            TableId::Claims => {
+                const C: &[ColumnSpec] = &[ID, name(E::CybersecurityClaim), THREATS];
+                C
+            }
+            TableId::Problems => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    col("severity", Computed, msg("severity"), 100),
+                    col("problem", Computed, msg("problem"), 480),
+                ];
+                C
+            }
+        }
+    }
 }
 
 /// The layout a page uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageLayout {
-    /// A table with the given column specification.
+    /// A table page; the columns of its first table ([`Page::tables`]).
     Table(&'static [ColumnSpec]),
     /// A free-form canvas.
     Canvas,
@@ -320,24 +536,36 @@ impl Page {
         }
     }
 
+    /// The tables the page shows, main one first; empty for a page that
+    /// is not a table page.
+    #[must_use]
+    pub fn tables(self) -> &'static [TableId] {
+        match self {
+            Page::Assets => &[TableId::Assets],
+            Page::Damage => &[TableId::Damage],
+            Page::Threats => &[TableId::Threats],
+            Page::Risks => &[TableId::Risks],
+            Page::Controls => &[TableId::Controls],
+            Page::Goals => &[TableId::Goals, TableId::Claims],
+            Page::Problems => &[TableId::Problems],
+            Page::Overview
+            | Page::Trees
+            | Page::Versions
+            | Page::History
+            | Page::Reports
+            | Page::Admin
+            | Page::Item
+            | Page::Scope => &[],
+        }
+    }
+
     /// The page's layout.
     #[must_use]
     pub fn layout(self) -> PageLayout {
-        match self {
-            Page::Damage => PageLayout::Table(DAMAGE_COLUMNS),
-            Page::Assets => PageLayout::Table(ASSET_COLUMNS),
-            Page::Threats => PageLayout::Table(THREAT_COLUMNS),
-            Page::Risks => PageLayout::Table(RISK_COLUMNS),
-            Page::Controls => PageLayout::Table(CONTROL_COLUMNS),
-            Page::Goals => PageLayout::Table(GOAL_COLUMNS),
-            Page::Problems => PageLayout::Table(PROBLEM_COLUMNS),
-            Page::Item | Page::Trees => PageLayout::Canvas,
-            Page::Overview
-            | Page::Scope
-            | Page::Reports
-            | Page::Versions
-            | Page::History
-            | Page::Admin => PageLayout::Custom,
+        match (self.tables().first(), self) {
+            (Some(table), _) => PageLayout::Table(table.columns()),
+            (None, Page::Item | Page::Trees) => PageLayout::Canvas,
+            (None, _) => PageLayout::Custom,
         }
     }
 
@@ -1623,228 +1851,3 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
         can_move_down,
     })
 }
-
-pub static ASSET_COLUMNS: &[ColumnSpec] = &[
-    ColumnSpec {
-        kind: ColumnKind::Id,
-        label: "column.id",
-        width: 60,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Name,
-        label: "column.name",
-        width: 160,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Links("asset-component"),
-        label: "column.component",
-        width: 120,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.threats",
-        width: 80,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.worst-risk",
-        width: 100,
-        visible: true,
-    },
-];
-
-pub static DAMAGE_COLUMNS: &[ColumnSpec] = &[
-    ColumnSpec {
-        kind: ColumnKind::Id,
-        label: "column.id",
-        width: 60,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Name,
-        label: "column.name",
-        width: 160,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Rating,
-        label: "column.impact",
-        width: 100,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.threats",
-        width: 80,
-        visible: true,
-    },
-];
-
-pub static THREAT_COLUMNS: &[ColumnSpec] = &[
-    ColumnSpec {
-        kind: ColumnKind::Id,
-        label: "column.id",
-        width: 60,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Name,
-        label: "column.name",
-        width: 160,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Links("threat-asset"),
-        label: "column.asset",
-        width: 120,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Links("threat-damage"),
-        label: "column.damage",
-        width: 120,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.inherent",
-        width: 90,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.residual",
-        width: 90,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Rating,
-        label: "column.scales",
-        width: 80,
-        visible: true,
-    },
-];
-
-pub static RISK_COLUMNS: &[ColumnSpec] = &[
-    ColumnSpec {
-        kind: ColumnKind::Id,
-        label: "column.id",
-        width: 60,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Name,
-        label: "column.name",
-        width: 160,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.inherent",
-        width: 90,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.residual",
-        width: 90,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Text,
-        label: "column.treatment",
-        width: 120,
-        visible: true,
-    },
-];
-
-pub static CONTROL_COLUMNS: &[ColumnSpec] = &[
-    ColumnSpec {
-        kind: ColumnKind::Id,
-        label: "column.id",
-        width: 60,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Name,
-        label: "column.name",
-        width: 160,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.steps",
-        width: 80,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.goals",
-        width: 80,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.lowers",
-        width: 80,
-        visible: true,
-    },
-];
-
-pub static GOAL_COLUMNS: &[ColumnSpec] = &[
-    ColumnSpec {
-        kind: ColumnKind::Id,
-        label: "column.id",
-        width: 60,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Name,
-        label: "column.name",
-        width: 160,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Links("goal-controls"),
-        label: "column.controls",
-        width: 120,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Computed,
-        label: "column.threats",
-        width: 80,
-        visible: true,
-    },
-];
-
-pub static PROBLEM_COLUMNS: &[ColumnSpec] = &[
-    ColumnSpec {
-        kind: ColumnKind::Id,
-        label: "column.id",
-        width: 60,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Name,
-        label: "column.name",
-        width: 160,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Text,
-        label: "column.severity",
-        width: 100,
-        visible: true,
-    },
-    ColumnSpec {
-        kind: ColumnKind::Text,
-        label: "column.message",
-        width: 240,
-        visible: true,
-    },
-];
