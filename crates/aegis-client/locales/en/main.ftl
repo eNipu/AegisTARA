@@ -126,3 +126,17 @@ id = ID
 properties = Properties
 worst-risk = Worst risk
 controls = Controls
+
+# Relation labels (job 149).
+relation-asset-component = Component
+relation-threat-asset = Asset
+relation-threat-damages = Damage scenarios
+relation-threat-tree = Attack tree
+relation-threat-goal = Goal
+relation-threat-claim = Claim
+relation-goal-controls = Controls
+relation-control-targets = Applied to
+relation-step-via = Goes through
+relation-step-mitigations = Mitigations
+relation-dataflow-from = Flow source
+relation-dataflow-to = Flow destination

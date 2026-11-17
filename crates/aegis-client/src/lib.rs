@@ -11,6 +11,7 @@ pub mod i18n;
 pub mod library;
 pub mod outline;
 pub mod pages;
+pub mod relations;
 pub mod report;
 pub mod sample;
 pub mod session;
