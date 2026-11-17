@@ -28,9 +28,9 @@ use super::{
     AttackPotentialDef, CatalogSchemeDef, CatalogSyntax, ControlKindDef, ElementNameDef,
     ElementNamesDef, FactorDef, FactorLevelDef, ImpactCategoryDef, LevelDef, MAX_ATTACK_TYPES,
     MAX_CATALOG_SCHEMES, MAX_CONTROL_KINDS, MAX_FEASIBILITY_FACTORS, MAX_IMPACT_CATEGORIES,
-    MAX_INTERFACE_KINDS, MAX_LEVELS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES,
-    MAX_SEGMENTS, MAX_THREAT_CATEGORIES, Methodology, MethodologyDef, PackTranslationDef,
-    PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
+    MAX_INTERFACE_KINDS, MAX_LEVELS, MAX_PACK_CLAUSE_REFS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN,
+    MAX_PROPERTIES, MAX_SEGMENTS, MAX_THREAT_CATEGORIES, Methodology, MethodologyDef,
+    PackTranslationDef, PotentialBandDef, PropertyDef, SegmentDef, ThreatCategoryDef,
 };
 use crate::error::PackError;
 use crate::store::wire::{
@@ -75,6 +75,7 @@ pack_caps! {
     ControlKindConflictsCap = MAX_CONTROL_KINDS, Limit::CONTROL_KIND_CONFLICTS;
     ControlKindRulesCap = crate::control::MAX_CONTROL_RULES, Limit::CONTROL_RULES;
     PackTranslationsCap = MAX_PACK_TRANSLATIONS, Limit::PACK_TRANSLATIONS;
+    ClauseRefsCap = MAX_PACK_CLAUSE_REFS, Limit::CLAUSE_REFS;
 }
 
 type Label = BoundedStr<LabelCap>;
@@ -163,6 +164,8 @@ struct DefWire {
     attack_potential: Option<Object<AttackPotentialWire>>,
     #[serde(default)]
     require_rationale: bool,
+    #[serde(default)]
+    clause_refs: Option<BoundedKeyMap<BoundedVec<Label, ClauseRefsCap>, ClauseRefsCap>>,
     properties: BoundedVec<Object<EntryWire>, PropertiesCap>,
     threat_categories: BoundedVec<Object<ThreatCategoryWire>, ThreatCategoriesCap>,
     catalog_schemes: BoundedVec<Object<CatalogSchemeWire>, CatalogSchemesCap>,
@@ -457,6 +460,7 @@ impl From<ControlKindWire> for ControlKindDef {
 
 /// Moves the decoded values into a definition: no string is copied, only
 /// the `Arc<str>` handles move. Time O(m), m = vocabulary entries.
+#[allow(clippy::too_many_lines)]
 impl From<DefWire> for MethodologyDef {
     fn from(w: DefWire) -> Self {
         let entry = |e: Object<EntryWire>| LevelDef {
@@ -507,6 +511,14 @@ impl From<DefWire> for MethodologyDef {
             risk_levels: w.risk_levels.0.into_iter().map(entry).collect(),
             attack_potential: w.attack_potential.map(|Object(ap)| ap.into()),
             require_rationale: w.require_rationale,
+            clause_refs: w
+                .clause_refs
+                .map(|m| {
+                    m.0.into_iter()
+                        .map(|(k, v)| (k, v.0.into_iter().map(|l| l.0).collect()))
+                        .collect()
+                })
+                .unwrap_or_default(),
             properties: w
                 .properties
                 .0
@@ -614,6 +626,11 @@ impl Serialize for View<'_, MethodologyDef> {
             st.serialize_field("require_rationale", &true)?;
         } else {
             st.skip_field("require_rationale")?;
+        }
+        if d.clause_refs.is_empty() {
+            st.skip_field("clause_refs")?;
+        } else {
+            st.serialize_field("clause_refs", &View(&d.clause_refs))?;
         }
         st.serialize_field("properties", &View(d.properties.as_slice()))?;
         st.serialize_field("threat_categories", &View(d.threat_categories.as_slice()))?;
@@ -724,6 +741,16 @@ impl Serialize for View<'_, BTreeMap<Arc<str>, Arc<str>>> {
         let mut map = s.serialize_map(Some(self.0.len()))?;
         for (k, v) in self.0 {
             map.serialize_entry(&**k, &**v)?;
+        }
+        map.end()
+    }
+}
+
+impl Serialize for View<'_, BTreeMap<Arc<str>, Vec<Arc<str>>>> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(Some(self.0.len()))?;
+        for (k, v) in self.0 {
+            map.serialize_entry(&**k, &View(v.as_slice()))?;
         }
         map.end()
     }
