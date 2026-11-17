@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, DamageId, MAX_DESCRIPTION_CHARS, Methodology, ModelError, Op, Project, Provenance,
-    ProvenanceSource, ThreatId,
+    AssetId, DamageId, MAX_DESCRIPTION_CHARS, Methodology, ModelError, Op, OpLogReader,
+    OpLogWriter, Project, Provenance, ProvenanceSource, ThreatId,
 };
 
 fn methodology() -> Arc<Methodology> {
@@ -211,4 +211,43 @@ fn one_rationale_marks_only_that_threat_modified() {
     let diff = base.diff(&current).expect("diff");
     assert_eq!(diff.threat_scenarios().modified(), [threat]);
     assert!(diff.damage_scenarios().modified().is_empty());
+}
+
+#[test]
+fn set_damage_link_rationale_survives_op_log_round_trip() {
+    let m = methodology();
+    let (mut p, threat, damages) = fixture(&m);
+    p.apply(Op::LinkDamage {
+        threat,
+        damage: damages[0],
+        provenance: Provenance::default(),
+    })
+    .expect("link 0");
+
+    let text = "Brake line corroded";
+    let op = pair(threat, damages[0], text, who());
+    let mut bytes = Vec::new();
+    let mut log = OpLogWriter::create(&mut bytes, Arc::clone(&m)).expect("header");
+    log.append(&op).expect("append");
+    drop(log);
+    let back: Vec<_> = OpLogReader::open(bytes.as_slice(), Arc::clone(&m))
+        .expect("open")
+        .map(|r| r.expect("record").op)
+        .collect();
+    assert_eq!(back.len(), 1);
+    match &back[0] {
+        Op::SetDamageLinkRationale {
+            threat: t,
+            damage: d,
+            text: x,
+            provenance: pr,
+        } => {
+            assert_eq!(t, &threat);
+            assert_eq!(d, &damages[0]);
+            assert_eq!(x.as_ref(), text);
+            assert_eq!(pr, &who());
+        }
+        other => panic!("unexpected op: {other:?}"),
+    }
+    assert_eq!(back[0], op);
 }

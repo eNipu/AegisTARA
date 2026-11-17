@@ -2461,6 +2461,13 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    SetDamageLinkRationale {
+        threat: WireId<ThreatId>,
+        damage: WireId<DamageId>,
+        text: DescriptionText,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetFeasibilityRationale {
         threat: WireId<ThreatId>,
         text: DescriptionText,
