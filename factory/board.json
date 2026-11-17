@@ -2003,20 +2003,70 @@
           "lines": 298
         }
       ],
-      "decision": null,
-      "updated": "2026-11-16T22:08:38Z"
+      "decision": "Second review: CHANGES. Convention not usable as built; follow-up 129c-table-convention-rework; see slices/129a/second-review.md",
+      "updated": "2026-11-16T22:33:31Z"
     },
     {
       "id": "126b-setting-conflict-tests",
       "title": "Conflicting settings test gaps (CFG-09), tests only",
       "branch": "factory/126b-setting-conflict-tests",
-      "stage": "spec",
+      "stage": "merged",
       "slice": null,
       "base": null,
       "reviews": {},
       "history": [],
+      "decision": "Tests only, written and checked by Fable in one pass; ci.sh green; no separate review",
+      "updated": "2026-11-16T22:28:04Z"
+    },
+    {
+      "id": "131-process-map",
+      "title": "Process map on the Overview: page-group boxes, clause_refs in packs (UI-18)",
+      "branch": "factory/131-process-map",
+      "stage": "review",
+      "slice": "131b",
+      "base": "a9b2cbce41f92f2efc1f5dce4de6d262a2ed03b6",
+      "reviews": {
+        "slice": "131b",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "131a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "qwen4-max",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 74
+        },
+        {
+          "slice": "131b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "deepseek-v4.1-flash",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 170
+        }
+      ],
       "decision": null,
-      "updated": "2026-11-16T22:05:59Z"
+      "updated": "2026-11-17T09:00:03Z"
+    },
+    {
+      "id": "129c-table-convention-rework",
+      "title": "Table convention rework: usable ColumnSpec (UI-14, client level)",
+      "branch": "factory/129c-table-convention-rework",
+      "stage": "merged",
+      "slice": null,
+      "base": null,
+      "reviews": {},
+      "history": [],
+      "decision": "Built and checked by Fable in one pass; ci.sh green; no separate review",
+      "updated": "2026-11-16T23:18:00Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

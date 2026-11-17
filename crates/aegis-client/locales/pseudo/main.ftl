@@ -112,3 +112,9 @@ security-settings-note = ⟦Â cômpônént's séttîngs âlsô âpplý tô îts
 applied-to = ⟦Âpplîéd tô␣⟧
 setting = ⟦Séttîng␣⟧
 rules = ⟦Rûlés␣⟧
+
+# Table column headings (UI-14).
+id = ⟦ÎD␣⟧
+properties = ⟦Prôpértîés␣⟧
+worst-risk = ⟦Wôrst rîsk␣⟧
+controls = ⟦Côntrôls␣⟧
