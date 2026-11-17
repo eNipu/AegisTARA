@@ -153,22 +153,9 @@ impl Applicability {
     /// Whether element `e` is excluded. Time O(log n).
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use aegis_model::{ComponentId, ConditionId, ElementRef, Methodology, Op, Project, Provenance, Reason};
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
-    /// let prov = Provenance::human("alice", 1_700_000_000_000);
-    /// let (c, cf) = (ComponentId::new_v7(), ConditionId::new_v7());
-    /// p.apply(Op::AddComponent { id: c, name: "ECU".into(), parent: None, provenance: prov.clone() })?;
-    /// p.apply(Op::AddCondition {
-    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
-    /// })?;
-    /// p.apply(Op::NeedCondition { element: ElementRef::Component(c), condition: cf, provenance: prov })?;
-    /// let a = p.applicability();
-    /// assert!(a.is_excluded(ElementRef::Component(c)));
-    /// assert!(!a.is_excluded(ElementRef::Project));
-    /// # Ok(())
-    /// # }
+    /// use aegis_model::{Applicability, ElementRef};
+    ///
+    /// assert!(!Applicability::default().is_excluded(ElementRef::Project));
     /// ```
     #[must_use]
     pub fn is_excluded(&self, e: ElementRef) -> bool {
@@ -179,22 +166,9 @@ impl Applicability {
     /// Time O(log n).
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use aegis_model::{ComponentId, ConditionId, ElementRef, Methodology, Op, Project, Provenance, Reason};
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
-    /// let prov = Provenance::human("alice", 1_700_000_000_000);
-    /// let (c, cf) = (ComponentId::new_v7(), ConditionId::new_v7());
-    /// p.apply(Op::AddComponent { id: c, name: "ECU".into(), parent: None, provenance: prov.clone() })?;
-    /// p.apply(Op::AddCondition {
-    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
-    /// })?;
-    /// p.apply(Op::NeedCondition { element: ElementRef::Component(c), condition: cf, provenance: prov })?;
-    /// let a = p.applicability();
-    /// assert_eq!(a.reasons(ElementRef::Component(c)), &[Reason::ConditionOff(cf)]);
-    /// assert!(a.reasons(ElementRef::Project).is_empty());
-    /// # Ok(())
-    /// # }
+    /// use aegis_model::{Applicability, ElementRef};
+    ///
+    /// assert!(Applicability::default().reasons(ElementRef::Project).is_empty());
     /// ```
     #[must_use]
     pub fn reasons(&self, e: ElementRef) -> &[Reason] {
@@ -204,25 +178,9 @@ impl Applicability {
     /// Whether node `node` of `tree` is excluded. Time O(log n).
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use aegis_model::{AttackTree, ConditionId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
-    /// let prov = Provenance::human("alice", 1_700_000_000_000);
-    /// let (t, step, cf) = (TreeId::new_v7(), NodeId::new_v7(), ConditionId::new_v7());
-    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
-    /// tree.add_child(tree.root(), step, Node::step("open"))?;
-    /// tree.add_child(tree.root(), NodeId::new_v7(), Node::step("other"))?;
-    /// p.apply(Op::AddAttackTree { id: t, tree, step_feasibility: vec![], provenance: prov.clone() })?;
-    /// p.apply(Op::AddCondition {
-    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
-    /// })?;
-    /// p.apply(Op::NeedStepCondition { tree: t, node: step, condition: cf, provenance: prov })?;
-    /// let a = p.applicability();
-    /// assert!(a.is_node_excluded(t, step));
-    /// assert!(!a.is_node_excluded(t, NodeId::new_v7()));
-    /// # Ok(())
-    /// # }
+    /// use aegis_model::{Applicability, NodeId, TreeId};
+    ///
+    /// assert!(!Applicability::default().is_node_excluded(TreeId::new_v7(), NodeId::new_v7()));
     /// ```
     #[must_use]
     pub fn is_node_excluded(&self, tree: TreeId, node: NodeId) -> bool {
@@ -251,6 +209,8 @@ impl Applicability {
     /// let a = p.applicability();
     /// assert_eq!(a.node_reasons(t, step), &[Reason::ConditionOff(cf)]);
     /// assert_eq!(a.node_reasons(t, root), &[Reason::AllPathsExcluded]);
+    /// assert!(a.is_node_excluded(t, step));
+    /// assert_eq!(a.excluded_nodes().count(), 2);
     /// # Ok(())
     /// # }
     /// ```
@@ -281,6 +241,7 @@ impl Applicability {
     /// })?;
     /// p.apply(Op::NeedCondition { element: ElementRef::Component(c), condition: cf, provenance: prov })?;
     /// let a = p.applicability();
+    /// assert!(a.is_excluded(ElementRef::Interface(i)));
     /// let all: Vec<_> = a.excluded_elements().collect();
     /// assert_eq!(all, vec![
     ///     (ElementRef::Component(c), &[Reason::ConditionOff(cf)][..]),
@@ -297,25 +258,9 @@ impl Applicability {
     /// Time O(1) per item.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use aegis_model::{AttackTree, ConditionId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, Reason, TreeId};
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
-    /// let prov = Provenance::human("alice", 1_700_000_000_000);
-    /// let (t, step, cf) = (TreeId::new_v7(), NodeId::new_v7(), ConditionId::new_v7());
-    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
-    /// tree.add_child(tree.root(), step, Node::step("open"))?;
-    /// tree.add_child(tree.root(), NodeId::new_v7(), Node::step("other"))?;
-    /// p.apply(Op::AddAttackTree { id: t, tree, step_feasibility: vec![], provenance: prov.clone() })?;
-    /// p.apply(Op::AddCondition {
-    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
-    /// })?;
-    /// p.apply(Op::NeedStepCondition { tree: t, node: step, condition: cf, provenance: prov })?;
-    /// let a = p.applicability();
-    /// let nodes: Vec<_> = a.excluded_nodes().collect();
-    /// assert_eq!(nodes, vec![(t, step, &[Reason::ConditionOff(cf)][..])]);
-    /// # Ok(())
-    /// # }
+    /// use aegis_model::{Applicability};
+    ///
+    /// assert_eq!(Applicability::default().excluded_nodes().count(), 0);
     /// ```
     pub fn excluded_nodes(&self) -> impl Iterator<Item = (TreeId, NodeId, &[Reason])> {
         self.trees
