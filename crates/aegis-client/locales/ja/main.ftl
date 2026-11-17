@@ -135,6 +135,9 @@ relation-step-via = 経由
 relation-step-mitigations = 緩和策
 relation-dataflow-from = フロー元
 relation-dataflow-to = フロー先
+relation-dataflow-interface = フローのインターフェース
+relation-interface-component = 所属コンポーネント
+relation-boundary-members = メンバーコンポーネント
 
 # Party roles (job 145).
 party-us = 自社
