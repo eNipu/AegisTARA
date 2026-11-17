@@ -1377,6 +1377,8 @@ pub struct ThreatDetail {
     pub scaling_reason: String,
     /// Why the direct feasibility is rated as it is (FND-09).
     pub feasibility_rationale: String,
+    /// Why the deciding damage link exists (FND-09); empty when unset.
+    pub rationale: String,
     /// The feasibility the engine uses (from the tree, else direct).
     pub feasibility: Option<String>,
     /// Residual feasibility (after controls).
@@ -1469,6 +1471,23 @@ fn ceiling_lines(ws: &Workspace, id: ThreatId) -> Vec<String> {
         lines.push(format!("and {} more on that step.", ceilings.len() - SHOWN));
     }
     lines
+}
+
+/// The rationale on the damage link that decides this threat's risk, empty
+/// when there is no deciding damage or no rationale on its link. Both the
+/// risk register and the threat inspector use this so they agree.
+fn pair_rationale(
+    ws: &Workspace,
+    project: &Project,
+    t: &aegis_model::ThreatScenario,
+    id: ThreatId,
+) -> String {
+    ws.cache()
+        .evaluate_risk(project, id)
+        .ok()
+        .and_then(|r| r.deciding_entry().copied())
+        .and_then(|e| project.damage_scenario_idx(&e.damage()))
+        .map_or_else(String::new, |idx| t.damage_rationale(idx).to_owned())
 }
 
 /// The selected threat's details. Time O(damage + trees + goals + claims).
@@ -1584,6 +1603,7 @@ pub fn threat_detail(ws: &Workspace, id: ThreatId) -> Option<ThreatDetail> {
         scales: t.scales(),
         scaling_reason: t.scaling_reason().to_owned(),
         feasibility_rationale: t.feasibility_rationale().to_owned(),
+        rationale: pair_rationale(ws, project, t, id),
         feasibility,
         residual_feasibility,
         inherent,
@@ -1606,6 +1626,8 @@ pub struct RiskRow {
     pub asset: String,
     /// The damage scenario that decides the risk.
     pub damage: String,
+    /// Why the deciding damage link exists (FND-09); empty when unset.
+    pub rationale: String,
     /// Its impact, for example `Safety: Severe`.
     pub impact: String,
     /// Attack feasibility used.
@@ -1821,6 +1843,7 @@ pub fn risk_rows(ws: &Workspace) -> Vec<RiskRow> {
                         .map(|a| a.name().to_owned())
                         .unwrap_or_default(),
                     damage,
+                    rationale: pair_rationale(ws, project, t, id),
                     impact,
                     feasibility: ws
                         .cache()

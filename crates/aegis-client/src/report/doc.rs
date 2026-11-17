@@ -188,6 +188,7 @@ fn risk_rows_block(catalog: &Catalog, rows: &[RiskRow]) -> Block {
             catalog.tr("deciding-damage"),
             catalog.tr("impact"),
             catalog.tr("feasibility"),
+            catalog.tr("pair-rationale"),
             catalog.tr("risk-before"),
             catalog.tr("risk-after"),
             catalog.tr("reduced-by"),
@@ -202,6 +203,7 @@ fn risk_rows_block(catalog: &Catalog, rows: &[RiskRow]) -> Block {
                     r.damage.clone(),
                     r.impact.clone(),
                     r.feasibility.clone(),
+                    r.rationale.clone(),
                     risk_cell_text(catalog, r.inherent.as_ref()),
                     risk_cell_text(catalog, r.residual.as_ref()),
                     pages::reduced_by_text(r).unwrap_or_else(|| {

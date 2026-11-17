@@ -159,6 +159,7 @@ pub fn table_rows(
                 "damage" => text(&r.damage),
                 "impact" => text(&r.impact),
                 "feasibility" => text(&r.feasibility),
+                "rationale" => text(&r.rationale),
                 "before" => risk(r.inherent.as_ref(), unrated()),
                 "after" => risk(r.residual.as_ref(), unrated()),
                 "treatment" => text(&r.treatment),
