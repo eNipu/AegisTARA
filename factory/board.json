@@ -412,7 +412,7 @@
     },
     {
       "id": "024-cybersecurity-goals-and-claims",
-      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 §15.4)",
+      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 \u00a715.4)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1121,7 +1121,7 @@
     },
     {
       "id": "115-row-actions",
-      "title": "Row actions in tables: DataTable, + and ⋯ actions, keyboard, read-only, 5,000-row check (UI-09)",
+      "title": "Row actions in tables: DataTable, + and \u22ef actions, keyboard, read-only, 5,000-row check (UI-09)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -2335,6 +2335,54 @@
       ],
       "decision": "133b fixed and 133c/133d built by Claude after opencode was stopped; ci.sh green; see second-review.md",
       "updated": "2026-11-17T21:00:00Z"
+    },
+    {
+      "id": "134-applicability-engine",
+      "title": "Applicability engine",
+      "branch": "factory/134-applicability-engine",
+      "stage": "merged",
+      "slice": "134c",
+      "base": "14d7573cdc3f9fa270608e01065d6165ea948253",
+      "reviews": {
+        "slice": "134c",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "134a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 590
+        },
+        {
+          "slice": "134b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 500
+        },
+        {
+          "slice": "134c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 224
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-17T23:54:46Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

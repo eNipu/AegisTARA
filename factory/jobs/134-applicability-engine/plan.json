@@ -1,0 +1,77 @@
+{
+  "job": "134-applicability-engine",
+  "slices": [
+    {
+      "id": "134a",
+      "title": "Applicable lifted domain and derived Applicability with reasons",
+      "tier": "hard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/eval.rs",
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/tests/applicable_domain.rs",
+        "crates/aegis-model/tests/applicability.rs"
+      ],
+      "max_lines": 600,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test applicable_domain",
+        "cargo test --locked -p aegis-model --test applicability"
+      ]
+    },
+    {
+      "id": "134b",
+      "title": "Evaluate trees and risks with exclusions; not-applicable errors; cache holds Applicability",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/eval.rs",
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/paths.rs",
+        "crates/aegis-model/tests/applicability_eval.rs",
+        "crates/aegis-model/tests/ops_properties.rs",
+        "crates/aegis-model/tests/common/mod.rs"
+      ],
+      "max_lines": 580,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test applicability_eval",
+        "cargo test --locked -p aegis-model --test ops_properties",
+        "cargo test --locked -p aegis-model --test project --test eval --test explain"
+      ]
+    },
+    {
+      "id": "134c",
+      "title": "Incremental invalidation for condition switches, shuffled-order property test, 5 ms bench",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/eval.rs",
+        "crates/aegis-model/Cargo.toml",
+        "crates/aegis-model/benches/applicability.rs",
+        "crates/aegis-model/tests/applicability_cache.rs"
+      ],
+      "max_lines": 360,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test applicability_cache",
+        "cargo test --locked -p aegis-model --test ops_properties",
+        "cargo bench --locked -p aegis-model --bench applicability"
+      ]
+    }
+  ]
+}
