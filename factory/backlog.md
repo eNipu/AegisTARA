@@ -2,6 +2,24 @@
 
 `/factory next` runs the first unchecked item. Add one feature per line.
 
+## Top priority: replace Slint with GPUI (owner 2026-11-18)
+
+Owner rule (2026-11-18): this group comes before every other open line; only the job already in flight (134) finishes first. Every Slint screen is replaced by GPUI, then Slint is removed. The GPUI spike passed every budget on macOS (`spikes/gpui-shell/RESULTS.md`), so the Windows measurement (Phase 7 line) no longer blocks 182; it runs when a Windows machine is there. Build lines stay `[design]` until the owner signs off the mockup (206). Spec: `factory/jobs/207-gpui-spec/spec.md`.
+
+- [ ] [design] GPUI screen mockups: login and every screen on one canvas, agreed with the owner before any build (206-gpui-mockups; canvas https://claude.ai/artifact/XrQjbEY2w4tXkgiumEN89m)
+- [ ] [design] GPUI spec: which core and server features each screen needs, what exists, what is missing, the job order and the test scale (207-gpui-spec)
+- [design] Standalone workspace: open and save a workspace folder through the file set (164-standalone-workspace; `docs/design/workbench-breakdown.md` group 1)
+- [design] Workbench skeleton: crate `aegis-workbench`, docks, project tree, command palette and one command table, themes, keyboard (WBX-02 to WBX-04, WBX-10, WBX-11) (182-workbench-skeleton)
+- [design] Sign-in and project list in GPUI: server choice, company sign-in, user name and password, standalone folder and license, the five connection states, the project list and new workspace (208-gpui-sign-in)
+- [design] Grids: every element table from `ColumnSpec`, inline edit, multi-cell edit, fill down, paste from Excel, column filters, link chips, the multi-link picker (WBX-07, UI-14, UI-15) (189-table-tabs)
+- [design] Inspector with explain-why and go to cause (WBX-06) (188-inspector)
+- [design] Attack tree canvas tab with the right-click menu and keyboard (WBX-05) (187-tree-tab)
+- [design] Item definition editor: sections with light text, systems table, diagram (195-item-tab)
+- [design] Bottom dock: problems, changes, task output (WBX-09) (191-bottom-dock)
+- [design] Versions timeline: save version, baseline, compare, restore (203-embedded-versions)
+- [design] Reports, settings and administration screens in GPUI (209-gpui-outputs-admin)
+- [design] Retire Slint: remove `aegis-shell`, the `.slint` files and the Slint license exception (192-retire-slint)
+
 - [x] Create the `aegis-model` crate: arena-based attack tree with typed `NodeIdx(u32)` IDs and a UUIDv7-to-index map (standards D1–D3) (001-aegis-model)
 - [x] Add cycle detection to `aegis-model` with Kahn's algorithm, reporting the cycle path as an error (A3) (002-cycle-detection)
 - [x] Add a `cargo-deny` config that enforces the license policy from decision D5 (003-cargo-deny)
@@ -144,7 +162,7 @@ Small model additions:
 Applicability (D27; architecture III.6):
 
 - [x] Conditions in the model (APL-01): `Condition` (visual ID `CF`) and the sparse `condition_links` side table on `Project`, step conditions in the `step_links` block, the ops from III.6 with exact inverses, removal guards (`ConditionInUse`) with the client batch clearing links first, store with decode caps, diff lines; no page and no engine effect yet; tests: every op applied and undone, v1 fixtures load, a store round trip with links on every element kind (133-conditions-model)
-- [ ] Applicability engine (APL-02, APL-06): `Applicability` derived in the evaluation cache with direct reasons and propagation in the III.6 order, the `Applicable<D>` lifted domain (OR ignores excluded, AND excluded with any child), the `NotApplicable` risk, explain-why reasons at steps and `AllPathsExcluded` at gates, incremental invalidation for `SetConditionPresent`; tests: hand-built cases for each reason and each gate kind, a shuffled-order property test against a full evaluation, the 5 ms edit budget at the large reference size; after 133 (134-applicability-engine)
+- [x] Applicability engine (APL-02, APL-06): `Applicability` derived in the evaluation cache with direct reasons and propagation in the III.6 order, the `Applicable<D>` lifted domain (OR ignores excluded, AND excluded with any child), the `NotApplicable` risk, explain-why reasons at steps and `AllPathsExcluded` at gates, incremental invalidation for `SetConditionPresent`; tests: hand-built cases for each reason and each gate kind, a shuffled-order property test against a full evaluation, the 5 ms edit budget at the large reference size; after 133 (134-applicability-engine)
 - [ ] Applicability in the app (APL-01, APL-03, APL-06): a Configuration page in group 1 with present switches and the explainer line with "N excluded", a Conditions link column and picker on assets, components, interfaces, threats, trees, goals and claims and in the step inspector, the inspector banner with reasons, hatched rows and canvas nodes with the reasons as accessible text, the undo toast that counts excluded steps and names moved risks, the report cover line and a "Configuration and assumptions" section, XLSX columns; tests: headless switch and undo, banner text, canvas accessible name, report preview; after 129, 134, 150 (135-applicability-ui)
 - [ ] Assumptions (APL-04): `Assumption` (visual ID `AS`) with holds, conditions and excluded steps and trees, claims linking assumptions, the reasons `AssumptionHolds`, an Assumptions page in group 1, "Create claim" from an assumption as a draft (UI-08), the lint `AssumptionWithoutClaim`, an "excluded while it holds" list in its inspector; tests: recipe items, switching holds excludes and restores the steps, lint, headless create claim; after 135 (136-assumptions)
 - [ ] Attacker profile (APL-05): `AttackFilter` on the project from the pack's attack potential factors, `Op::SetAttackFilter` with the old value as inverse, the `OutsideProfile` and `Scalability` reasons (unrated factors never exclude), an Attacker profile page in group 4 with toggle chips per factor, select all per column and the excluded count, a sidebar dot while not default, the profile on the report cover and in the method section; tests: each factor excludes only rated steps, scalability uses 138, full recheck within the edit budget, report preview; after 134 and 138 (137-attacker-profile)
