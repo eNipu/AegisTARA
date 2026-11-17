@@ -2466,6 +2466,20 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
+                // Unlink responsible parties first, so undo restores them.
+                let g = project
+                    .cybersecurity_goal(g_idx)
+                    .ok_or(EditError::Missing)?;
+                ops.extend(
+                    g.responsible()
+                        .iter()
+                        .filter_map(|&i| project.party_id(i))
+                        .map(|party| Op::UnlinkGoalParty {
+                            goal: *goal,
+                            party,
+                            provenance: p.clone(),
+                        }),
+                );
                 ops.push(Op::RemoveCybersecurityGoal { id: *goal });
                 ops
             }
@@ -2492,6 +2506,20 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
+                // Unlink responsible parties first, so undo restores them.
+                let c = project
+                    .cybersecurity_claim(c_idx)
+                    .ok_or(EditError::Missing)?;
+                ops.extend(
+                    c.responsible()
+                        .iter()
+                        .filter_map(|&i| project.party_id(i))
+                        .map(|party| Op::UnlinkClaimParty {
+                            claim: *claim,
+                            party,
+                            provenance: p.clone(),
+                        }),
+                );
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
             }

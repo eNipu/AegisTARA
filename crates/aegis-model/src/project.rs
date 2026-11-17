@@ -2013,7 +2013,7 @@ impl Project {
 
     /// Resolves a live party's arena index to its public ID. Time O(1).
     #[must_use]
-    pub(crate) fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
+    pub fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
         self.parties.id(idx)
     }
 
@@ -9059,10 +9059,16 @@ impl Project {
 
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
-        let (idx, _) = self.live_goal(id)?;
+        let (idx, g) = self.live_goal(id)?;
         let threats = self.refs.goals.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::CybersecurityGoalInUse { goal: id, threats });
+        }
+        if !g.responsible.is_empty() {
+            return Err(ModelError::CybersecurityGoalHasParties {
+                goal: id,
+                parties: g.responsible.len(),
+            });
         }
         Ok(())
     }
@@ -9092,6 +9098,10 @@ impl Project {
         let threats = self.refs.claims.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::CybersecurityClaimInUse { claim: id, threats });
+        }
+        let parties = self.live_claim_ref(id)?.responsible.len();
+        if parties > 0 {
+            return Err(ModelError::CybersecurityClaimHasParties { claim: id, parties });
         }
         Ok(())
     }

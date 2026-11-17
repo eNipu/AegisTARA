@@ -1016,6 +1016,24 @@ pub enum ModelError {
         /// How many threat scenarios reference it.
         threats: u32,
     },
+    /// The cybersecurity goal cannot be removed while it lists responsible
+    /// parties, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity goal {goal} still lists {parties} responsible part(ies)")]
+    CybersecurityGoalHasParties {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// How many parties it lists.
+        parties: usize,
+    },
+    /// The cybersecurity claim cannot be removed while it lists responsible
+    /// parties, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity claim {claim} still lists {parties} responsible part(ies)")]
+    CybersecurityClaimHasParties {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// How many parties it lists.
+        parties: usize,
+    },
     /// The threat scenario cannot be removed while it still references an
     /// attack tree; unlink the tree first.
     #[error("threat scenario {threat} still references attack tree {tree}")]
