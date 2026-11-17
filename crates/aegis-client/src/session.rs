@@ -3481,28 +3481,19 @@ fn lint_counts(p: &Project) -> (usize, usize) {
 /// The sidebar counts. Time O(project) for the lint; the rest O(1).
 fn nav_counts(open: &Open) -> Vec<Option<usize>> {
     let p = open.ws.project();
+    let lint = open
+        .cached_lint_count
+        .map_or_else(|| p.lint().len(), |(e, w)| e + w);
+    // One counting rule for the sidebar and the process map (`pages::page_count`).
     Page::ALL
         .iter()
-        .map(|page| match page {
-            Page::Item => Some(
-                p.component_count()
-                    + p.interface_count()
-                    + p.data_flow_count()
-                    + p.trust_boundary_count(),
-            )
-            .filter(|n| *n > 0),
-            Page::Assets => Some(p.asset_count()),
-            Page::Damage => Some(p.damage_scenario_count()),
-            Page::Threats | Page::Risks => Some(p.threat_scenario_count()),
-            Page::Trees => Some(p.attack_tree_count()),
-            Page::Controls => Some(p.security_control_count()),
-            Page::Goals => Some(p.cybersecurity_goal_count() + p.cybersecurity_claim_count()),
-            Page::Problems => Some(
-                open.cached_lint_count
-                    .map_or_else(|| p.lint().len(), |(e, w)| e + w),
-            ),
-            Page::Versions => Some(open.baselines.len()).filter(|n| *n > 0),
-            _ => None,
+        .map(|&page| {
+            let n = pages::page_count(p, page, open.baselines.len(), lint);
+            match page {
+                Page::Overview | Page::Scope | Page::Reports | Page::History | Page::Admin => None,
+                Page::Item | Page::Versions => Some(n).filter(|n| *n > 0),
+                _ => Some(n),
+            }
         })
         .collect()
 }

@@ -1475,6 +1475,7 @@ impl Methodology {
             &feasibility.by_key,
         )?;
         Self::check_translations(&def.element_names.translations)?;
+        Self::check_clause_refs(&def.clause_refs)?;
         let translations = def.element_names.translations.clone();
 
         Ok(Methodology {
@@ -1674,6 +1675,25 @@ impl Methodology {
             out[pos].conflicts_with = resolved;
         }
         Ok(Vocab { items: out, by_key })
+    }
+
+    /// The pack format's caps and key/label rules for `clause_refs`, so a def
+    /// built in code cannot produce a pack that `read_pack` then refuses.
+    fn check_clause_refs(
+        refs: &BTreeMap<Arc<str>, Vec<Arc<str>>>,
+    ) -> Result<(), MethodologyError> {
+        let too_many = || MethodologyError::TooManyClauseRefs {
+            max: MAX_PACK_CLAUSE_REFS,
+        };
+        check_count(refs.len(), 0, MAX_PACK_CLAUSE_REFS, too_many)?;
+        for (page, list) in refs {
+            check_key(page)?;
+            check_count(list.len(), 0, MAX_PACK_CLAUSE_REFS, too_many)?;
+            for r in list {
+                check_label(page, r)?;
+            }
+        }
+        Ok(())
     }
 
     fn check_translations(

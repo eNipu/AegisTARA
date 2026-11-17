@@ -1780,6 +1780,13 @@ pub enum MethodologyError {
         /// The limit.
         max: usize,
     },
+    /// A pack lists clause refs for more than `max` pages, or more than
+    /// `max` refs for one page.
+    #[error("more than {max} clause refs")]
+    TooManyClauseRefs {
+        /// The limit.
+        max: usize,
+    },
 }
 
 /// Errors from saving and loading: [`Project::save`](crate::Project::save),
