@@ -2115,6 +2115,54 @@
       ],
       "decision": null,
       "updated": "2026-11-17T14:12:45Z"
+    },
+    {
+      "id": "150-multi-link-picker",
+      "title": "Multi-link picker: client-level selection model on FilterPicker (UI-15)",
+      "branch": "factory/150-multi-link-picker",
+      "stage": "merged",
+      "slice": "150b",
+      "base": "8ed03a8e97b04bea632607135db18ef5f027a293",
+      "reviews": {
+        "slice": "150b",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "150a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 500
+        },
+        {
+          "slice": "150a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 2,
+          "review_tries": 2,
+          "lines": 561
+        },
+        {
+          "slice": "150b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 0
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-17T14:50:36Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

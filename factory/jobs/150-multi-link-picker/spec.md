@@ -1,0 +1,40 @@
+## Title
+Multi-link picker (UI-15) at the client state/behavior level, driven by a relation registry row (after 149)
+
+## Design Reference
+- `docs/design/workbench-breakdown.md` section 3 (row: "multi-link picker in `widgets.slint` → **Drop from Slint**; requirement moves to the workbench jobs"), group 5 WBX-07 / job 189 (table link chips) and WBX-06 / job 188 (inspector). The visual widget belongs to the GPUI workbench, not this job.
+- `docs/architecture.md` III.9.2 (relation registry: `Relation` with `read`/`link`/`unlink`; line 2260 names the multi-link picker, UI-15, as a reader), III.9.1 line 2236 (owner rule, 2026-11-11: no Slint screen built on the new tables).
+- `docs/decisions.md` D37 (lines 288-294): workbench, GPUI spike, GPUI is neither chosen nor rejected for the shell but all future UI is GPUI; owner rule 2026-11-11 (no new Slint work; GPUI for all future UI).
+- `factory/backlog.md` job 150 line (line 134), and the dependent lines 139 (145-parties), 148 (135-applicability-ui), 172 (161-threat-goals) that will use the picker.
+- Code: `crates/aegis-client/src/relations.rs` (merged in 149: `RelationKey`, `ElementKind`, `RELATIONS`, `related`, `reverse_related`, `link`/`unlink` fns), `src/commands.rs` (`Edit::LinkDamage` line 390, `Edit::LinkGoalControl` line 723, `Edit::to_ops` line 1147), `src/view.rs` (`Selection` line 612), `src/find.rs` (filter cap and lowercased plain match, lines 9-13 / 43-70), `tests/step_via.rs` lines 13-25 / 89-118 (apply-an-edit, one-undo-step test pattern).
+- Predecessor: `factory/jobs/149-relation-registry/` (registry merged, client-level only).
+
+## Problem & Goal
+The backlog asks for a `MultiLinkPicker` on top of `FilterPicker`, but the owner ruled on 2026-11-11 that no new Slint work is done and all future UI is GPUI; jobs 129 and 149 were therefore scoped to the toolkit-independent client level. This job supplies the picker's *state and behavior* in `aegis-client`: a filtered option list built from a relation registry row, Space-style toggle, chips with remove, Escape/close, an IME-capable text filter (committed text plus preedit), and bounded windowing over 200 items. Pick and unpick for a threat's damage scenarios and a goal's controls are typed `Edit`s (`LinkDamage`, `LinkGoalControl`), each one undo step. Business value: the two first consumers (threat damages, goal controls) and the later ones (parties, conditions, several goals per threat) share one behavior layer, so the GPUI workbench only renders it (P7: the client state earns its complexity by being reused by every picker and by tests that run without a window; no screen code is added). This is delivered with no visible change.
+
+## Acceptance Criteria
+1. `aegis-client::picker` is registered in `lib.rs` and exports `PickerOption`, `PickerFilter`, `MultiLinkPicker` and `MAX_PICKER_FILTER_CHARS`.
+2. `MultiLinkPicker::open(project, key, from)` builds exactly one `PickerOption` per candidate of the row's `to` kind, using `relations::candidates`, in stable project order. Each option carries its `Selection`, `visual_id`, `label`, and `linked` (true iff it is in `relations::related(project, key, from)`); `chips()` returns the linked options in that same order.
+3. `relations::elements_of_kind(project, kind) -> Vec<Selection>` covers every `ElementKind` variant and is reused by `reverse_related`; `relations::candidates(project, key) -> Vec<Selection>` enumerates a row's `to` kind and is empty for an unknown key. Their cost is documented as O(elements).
+4. `PickerFilter` holds committed text and an IME composition separately: `set_committed`/`set_composition`/`commit`, `MAX_PICKER_FILTER_CHARS` char cap, and `matches(visual_id, label)` that is case-insensitive, Unicode/CJK safe, and matches against both fields. Composition text never filters until `commit` moves it into the committed text; an empty committed text matches all options.
+5. Keyboard state: `cursor`, `set_cursor`, `move_cursor` (clamped), `active()`, `visible()` (indices recomputed on a committed-filter change), and `window(capacity)` returning at most `capacity` contiguous visible indices around the cursor. With 200 candidates and any capacity >= 1 no method panics and the cursor stays inside `visible()`.
+6. `toggle_active()` and `remove_chip(index)` return the typed `Edit` from the row's `link`/`unlink` function (`None` for a non-linkable row or a wrong-kind selection); `close()` clears the IME composition and sets the picker closed while keeping the committed filter, with no modal behavior.
+7. For `RelationKey::THREAT_DAMAGES` a toggle yields `Edit::LinkDamage { threat, damage, linked }` and for `RelationKey::GOAL_CONTROLS` it yields `Edit::LinkGoalControl { goal, control, linked }`; each `to_ops` produces exactly one `Op`, and applying then undoing restores the project, so pick and unpick are one undo step each.
+8. `crates/aegis-client/tests/multi_link_picker.rs` builds a project with 200 damage scenarios and 200 controls and checks: keyboard pick and unpick (one undo step each) for both relations, chip removal, Escape close, a CJK IME filter whose preedit does not filter until committed, and a bounded window over the 200 items.
+9. No `.slint` or `aegis-shell` edit, no new dependency, no snapshot/op-log/format change; `cargo test --locked -p aegis-client` and `scripts/ci.sh` pass.
+
+## Out of scope
+- The visual `MultiLinkPicker` widget, `FilterPicker`, chips and their mouse/keyboard bindings, the 900 x 600 pixel window and virtualized painting: all GPUI workbench work (jobs 182/188/189). This job delivers state and behavior only, with no rendered change.
+- New link kinds or model/ops changes (jobs 145, 135, 161). The picker works for every row that has a `link`/`unlink` function but is first used for the two named above.
+- Session protocol changes: no new `Command` variants and no new undo labels (the two `Edit`s already have both).
+- Locale keys: option labels come from project element names and visual IDs, so no new Fluent strings are needed.
+
+## Decisions
+- **Scope is the client state/behavior layer only, following the owner's 2026-11-11 ruling ("no new Slint work, GPUI for all future UI") and the 129/149 client-only reworks: no `.slint`, no `aegis-shell`, no screen work; the visual widget comes with the GPUI workbench.** Reason: the same decision that dropped job 085 and scoped 149; the picker's behavior is toolkit-independent and testable without a window.
+- "Through typed commands" means the existing `Command::Edit(Edit)` carrying the registry row's typed `Edit` (`LinkDamage` / `LinkGoalControl`). No new `Command` variants or undo labels are added because the picker is local client state, not a session message, and both edits already have one-op inverses and labels.
+- The picker is generic on `RelationKey` but its first uses are `THREAT_DAMAGES` and `GOAL_CONTROLS`. Reason: D30/one registry — adding a future picker only needs a registry row with `link`/`unlink`, not new picker code.
+- IME is modeled as committed text plus a separate preedit string; only committed text filters. Reason: this is how an input method composes, and filtering on every preedit keystroke would thrash the list; the GPUI widget still owns the actual IME events.
+- "200 items in a 900 x 600 window" is modeled at this level as a bounded logical window (`window(capacity)`) over 200 options plus an O(n) refilter on commit; pixel dimensions and painted rows are the workbench's. Reason: there is no UI in this job (owner rule).
+- A shared `relations::elements_of_kind` enumerator is added and reused by `reverse_related`, rather than duplicating arena iteration in the picker. Reason: one enumeration per kind keeps the O(elements) cost documented in one place.
+- Nothing here changes a stored format, security, licensing or user data, and every choice is reversible inside one crate.
+- Keep the readable `option_text` match; the 520-line cap was wrong, not the code, so slice 150a's `max_lines` is raised to 620 rather than compressing the match onto `#[rustfmt::skip]` lines. Reason: readability of the match outweighs meeting a mis-set cap.

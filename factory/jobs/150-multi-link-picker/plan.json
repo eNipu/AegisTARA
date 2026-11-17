@@ -1,0 +1,38 @@
+{
+  "job": "150-multi-link-picker",
+  "slices": [
+    {
+      "id": "150a",
+      "title": "Client-level multi-link picker state and relation candidate enumeration",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/relations.rs",
+        "crates/aegis-client/src/picker.rs"
+      ],
+      "max_lines": 620,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --lib picker",
+        "cargo test --locked -p aegis-client --lib relations"
+      ]
+    },
+    {
+      "id": "150b",
+      "title": "Picker integration tests: pick/unpick undo steps, 200 items, IME filter",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/tests/multi_link_picker.rs"
+      ],
+      "max_lines": 260,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test multi_link_picker"
+      ]
+    }
+  ]
+}
