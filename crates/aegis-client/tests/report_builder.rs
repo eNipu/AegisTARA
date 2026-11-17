@@ -252,6 +252,7 @@ fn the_xlsx_workbook_has_a_sheet_per_element_type_and_guards_formulas() {
         "Security controls",
         "Cybersecurity goals",
         "Cybersecurity claims",
+        "Parties",
         "Problems",
     ] {
         assert!(text.contains(name), "{name} sheet missing");
@@ -262,6 +263,32 @@ fn the_xlsx_workbook_has_a_sheet_per_element_type_and_guards_formulas() {
         text.contains("&apos;") || text.contains("&quot;") || !text.contains("=SUM("),
         "no live formula"
     );
+}
+
+#[test]
+fn goals_and_claim_report_tables_carry_the_responsible_header() {
+    let doc = report_doc(&workspace(), &context());
+    let headers: Vec<&Vec<String>> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Table { headers, .. } => Some(headers),
+            _ => None,
+        })
+        .collect();
+    let goals = headers
+        .iter()
+        .find(|h| h.first().is_some_and(|x| x.to_lowercase().contains("goal")))
+        .expect("goals table");
+    assert_eq!(goals.last().map(String::as_str), Some("Responsible"));
+    let claims = headers
+        .iter()
+        .find(|h| {
+            h.first()
+                .is_some_and(|x| x.to_lowercase().contains("claim"))
+        })
+        .expect("claims table");
+    assert_eq!(claims.last().map(String::as_str), Some("Responsible"));
 }
 
 #[test]

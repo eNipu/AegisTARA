@@ -1102,6 +1102,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 names.cybersecurity_goal.singular.to_string(),
                 catalog.tr("control"),
                 names.threat_scenario.plural.to_string(),
+                catalog.tr("responsible"),
             ],
             pages::goal_rows(ws)
                 .into_iter()
@@ -1111,6 +1112,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                         format!("{} · {}", g.visual_id, g.name),
                         g.controls.to_string(),
                         g.threats.to_string(),
+                        g.responsible.join(", "),
                     ]
                 })
                 .collect(),
@@ -1125,6 +1127,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             &[
                 names.cybersecurity_claim.singular.to_string(),
                 names.threat_scenario.plural.to_string(),
+                catalog.tr("responsible"),
             ],
             pages::claim_rows(ws)
                 .into_iter()
@@ -1133,6 +1136,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                     vec![
                         format!("{} · {}", c.visual_id, c.name),
                         c.threats.to_string(),
+                        c.responsible.join(", "),
                     ]
                 })
                 .collect(),
