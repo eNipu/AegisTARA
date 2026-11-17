@@ -3087,8 +3087,12 @@ pub struct ProcessMapBox {
 /// The process map: one box per sidebar group, in sidebar order, with the
 /// group's element count, its lint findings and the pack's clause references
 /// (UI-18). Time O(project) for the lint.
+///
+/// `baselines` is the Versions page count the sidebar shows: the caller passes
+/// `open.baselines.len()`, because only `session::Open` holds the baseline
+/// list, and the Project box must agree with its sidebar group.
 #[must_use]
-pub fn process_map(ws: &Workspace) -> Vec<ProcessMapBox> {
+pub fn process_map(ws: &Workspace, baselines: usize) -> Vec<ProcessMapBox> {
     let project = ws.project();
     let methodology = project.methodology();
     let rows = problems(ws);
@@ -3101,7 +3105,10 @@ pub fn process_map(ws: &Workspace) -> Vec<ProcessMapBox> {
                 .copied()
                 .filter(|p| p.group() == Some(*group))
                 .collect();
-            let count = pages.iter().map(|p| page_count(project, *p, lint)).sum();
+            let count = pages
+                .iter()
+                .map(|p| page_count(project, *p, baselines, lint))
+                .sum();
             let (mut findings, mut errors) = (0usize, 0usize);
             for row in &rows {
                 if row
@@ -3142,23 +3149,28 @@ pub fn process_map(ws: &Workspace) -> Vec<ProcessMapBox> {
 }
 
 /// The sidebar count of one page, by the rules of `nav_counts` in the
-/// session. Baselines are server state, so the versions page counts 0 here.
-fn page_count(p: &Project, page: Page, lint: usize) -> usize {
+/// session. Every page has an arm, so a new page cannot fall into a silent 0.
+fn page_count(p: &Project, page: Page, baselines: usize, lint: usize) -> usize {
     match page {
+        Page::Overview => 0,
         Page::Item => {
             p.component_count()
                 + p.interface_count()
                 + p.data_flow_count()
                 + p.trust_boundary_count()
         }
-        Page::Assets => p.asset_count(),
+        Page::Scope => 0,
         Page::Damage => p.damage_scenario_count(),
+        Page::Assets => p.asset_count(),
         Page::Threats | Page::Risks => p.threat_scenario_count(),
         Page::Trees => p.attack_tree_count(),
         Page::Controls => p.security_control_count(),
         Page::Goals => p.cybersecurity_goal_count() + p.cybersecurity_claim_count(),
+        Page::Reports => 0,
         Page::Problems => lint,
-        _ => 0,
+        Page::Versions => baselines,
+        Page::History => 0,
+        Page::Admin => 0,
     }
 }
 
