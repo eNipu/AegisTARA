@@ -158,8 +158,10 @@ pub struct MethodologyDef {
     /// Off unless the pack sets `"require_rationale": true`.
     pub require_rationale: bool,
     /// Optional ISO/CRA clause references keyed by page key (for example
-    /// `"threat_scenario"` -> `["ISO 21434 RQ-09-01", "CRA Annex I 1.1"]`).
-    /// Empty unless the pack sets `"clause_refs"`.
+    /// `"assets"` or `"threats"` -> `["ISO 21434 RQ-09-01", "CRA Annex I 1.1"]`).
+    /// A page key is a value of `Page::key()` in `aegis-client`
+    /// (`crates/aegis-client/src/view.rs`). Empty unless the pack sets
+    /// `"clause_refs"`.
     pub clause_refs: BTreeMap<Arc<str>, Vec<Arc<str>>>,
 }
 
