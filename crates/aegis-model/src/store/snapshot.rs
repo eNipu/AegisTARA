@@ -16,8 +16,9 @@ use super::wire::{
 use crate::element::{AttrValue, ElementKind};
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    PartyId, PartyIdx, ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
+    AssetId, ClaimId, ComponentId, ConditionId, ConditionIdx, ControlId, DamageId, DataFlowId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, PartyIdx, ThreatId, TreeId, TrustBoundaryId,
+    VisualPrefix,
 };
 use crate::methodology::Methodology;
 use crate::op::Op;
@@ -59,6 +60,82 @@ struct SnapshotView<'a> {
     elements: Elements<'a>,
     #[serde(skip_serializing_if = "Parties::is_empty")]
     parties: Parties<'a>,
+    #[serde(skip_serializing_if = "Conditions::is_empty")]
+    conditions: Conditions<'a>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    condition_links: Vec<ConditionLinkView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    step_conditions: Vec<StepConditionView>,
+}
+
+struct Conditions<'a>(&'a Project);
+
+impl Conditions<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.conditions().next().is_none()
+    }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+#[derive(Serialize)]
+struct ConditionView<'a> {
+    id: Text<ConditionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
+    name: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    description: &'a str,
+    #[serde(skip_serializing_if = "is_true")]
+    present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+impl Serialize for Conditions<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(
+            p.conditions()
+                .enumerate()
+                .map(|(pos, (idx, id, c))| ConditionView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Condition,
+                        p.condition_visual_num(idx),
+                        pos,
+                    ),
+                    name: c.name(),
+                    description: c.description(),
+                    present: c.present(),
+                    provenance: ProvenanceView::of(c.provenance()),
+                }),
+        )
+    }
+}
+
+/// The conditions one element needs, as public IDs in stored (ID) order.
+#[derive(Serialize)]
+struct ConditionLinkView {
+    target: TargetView,
+    conditions: Vec<Text<ConditionId>>,
+}
+
+/// The conditions one attack step needs.
+#[derive(Serialize)]
+struct StepConditionView {
+    tree: Text<TreeId>,
+    node: Text<NodeId>,
+    conditions: Vec<Text<ConditionId>>,
+}
+
+fn condition_ids(p: &Project, list: &[ConditionIdx]) -> Vec<Text<ConditionId>> {
+    list.iter()
+        .filter_map(|&i| p.condition_id(i).map(Text))
+        .collect()
 }
 
 /// What every entity view needs.
@@ -982,6 +1059,23 @@ impl Project {
             languages: self.languages().iter().map(|l| &**l).collect(),
             elements: Elements(self),
             parties: Parties(self),
+            conditions: Conditions(self),
+            condition_links: self
+                .condition_link_entries()
+                .map(|(target, list)| ConditionLinkView {
+                    target: target.into(),
+                    conditions: condition_ids(self, list),
+                })
+                .collect(),
+            step_conditions: self
+                .step_condition_entries()
+                .into_iter()
+                .map(|(tree, node, list)| StepConditionView {
+                    tree: Text(tree),
+                    node: Text(node),
+                    conditions: condition_ids(self, list),
+                })
+                .collect(),
         };
         f(&view)
     }
@@ -1375,6 +1469,41 @@ impl Project {
             langs: snapshot.languages.into_iter().map(|l| l.0).collect(),
             provenance: crate::provenance::Provenance::default(),
         })?;
+        // Conditions and their links: every element and step exists by now.
+        // Links carry no provenance of their own, so replay uses the default.
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, c) in snapshot.conditions.0.into_iter().enumerate() {
+            let vis = claim_visual(c.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = c.id.0;
+            project.apply(Op::AddCondition {
+                id,
+                name: c.name.0,
+                description: c.description.map_or_else(|| Arc::from(""), |d| d.0),
+                present: c.present,
+                provenance: wire::unwrap_provenance(c.provenance),
+            })?;
+            project.set_condition_loaded_visual(&id, vis, next_vis);
+        }
+        for link in snapshot.condition_links {
+            let element = link.target.into_ref();
+            for condition in link.conditions.0 {
+                project.apply(Op::NeedCondition {
+                    element,
+                    condition: condition.0,
+                    provenance: crate::provenance::Provenance::default(),
+                })?;
+            }
+        }
+        for step in snapshot.step_conditions {
+            for condition in step.conditions.0 {
+                project.apply(Op::NeedStepCondition {
+                    tree: step.tree.0,
+                    node: step.node.0,
+                    condition: condition.0,
+                    provenance: crate::provenance::Provenance::default(),
+                })?;
+            }
+        }
         // Descriptions last: every element they name exists by now.
         for d in snapshot.descriptions {
             let target = d.target.into_ref();

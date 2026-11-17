@@ -34,6 +34,12 @@ const LAYOUT: &[(&str, &str, &[&str])] = &[
     ("shared/controls.json", "controls", &["security_controls"]),
     ("shared/goals.json", "goals", &["cybersecurity_goals"]),
     ("shared/claims.json", "claims", &["cybersecurity_claims"]),
+    ("shared/parties.json", "parties", &["parties"]),
+    (
+        "shared/conditions.json",
+        "conditions",
+        &["conditions", "condition_links", "step_conditions"],
+    ),
     (
         "systems/main/item.json",
         "item",

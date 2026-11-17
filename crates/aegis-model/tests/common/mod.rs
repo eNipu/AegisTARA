@@ -492,6 +492,10 @@ pub fn interface_id(n: u64) -> InterfaceId {
     InterfaceId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn condition_id(n: u64) -> ConditionId {
+    ConditionId::from_uuid(v7(n)).expect("v7")
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -559,7 +563,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..74,
+        0u8..83,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -770,6 +774,105 @@ impl Gen {
         match nth(existing, sel / 8) {
             Some(id) if !sel.is_multiple_of(8) => id,
             _ => party_id(self.fresh()),
+        }
+    }
+
+    fn condition(&mut self, p: &Project, sel: u16) -> ConditionId {
+        let existing: Vec<_> = p.conditions().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => condition_id(self.fresh()),
+        }
+    }
+
+    /// An element a condition link may name, of each supported kind in turn.
+    fn condition_target(&mut self, p: &Project, kind: u16, sel: u16) -> aegis_model::ElementRef {
+        match kind % 7 {
+            0 => aegis_model::ElementRef::Asset(self.asset(p, sel)),
+            1 => aegis_model::ElementRef::Component(self.component(p, sel)),
+            2 => aegis_model::ElementRef::Interface(self.interface(p, sel)),
+            3 => aegis_model::ElementRef::Threat(self.threat(p, sel)),
+            4 => aegis_model::ElementRef::Tree(self.tree(p, sel)),
+            5 => aegis_model::ElementRef::Goal(self.goal(p, sel)),
+            _ => aegis_model::ElementRef::Claim(self.claim(p, sel)),
+        }
+    }
+
+    /// Every element a condition link may name, in kind then arena order.
+    fn condition_targets(p: &Project) -> Vec<aegis_model::ElementRef> {
+        use aegis_model::ElementRef as E;
+        p.assets()
+            .map(|(_, id, _)| E::Asset(id))
+            .chain(p.components().map(|(_, id, _)| E::Component(id)))
+            .chain(p.interfaces().map(|(_, id, _)| E::Interface(id)))
+            .chain(p.threat_scenarios().map(|(_, id, _)| E::Threat(id)))
+            .chain(p.attack_trees().map(|(_, id, _)| E::Tree(id)))
+            .chain(p.cybersecurity_goals().map(|(_, id, _)| E::Goal(id)))
+            .chain(p.cybersecurity_claims().map(|(_, id, _)| E::Claim(id)))
+            .collect()
+    }
+
+    /// An existing element-condition link, if any, picked by `sel`.
+    fn condition_link(p: &Project, sel: u16) -> Option<(aegis_model::ElementRef, ConditionId)> {
+        let links: Vec<_> = Self::condition_targets(p)
+            .into_iter()
+            .flat_map(|e| {
+                p.condition_link_ids(e)
+                    .iter()
+                    .filter_map(move |&i| p.condition_id(i).map(|c| (e, c)))
+            })
+            .collect();
+        nth(links, sel)
+    }
+
+    /// An existing step-condition link, if any, picked by `sel`.
+    fn step_condition_link(p: &Project, sel: u16) -> Option<(TreeId, NodeId, ConditionId)> {
+        let links: Vec<_> = p
+            .attack_trees()
+            .flat_map(|(_, tree, t)| {
+                t.iter()
+                    .map(move |(_, node, _)| (tree, node))
+                    .collect::<Vec<_>>()
+            })
+            .flat_map(|(tree, node)| {
+                p.step_condition_link_ids(tree, node)
+                    .iter()
+                    .filter_map(move |&i| p.condition_id(i).map(|c| (tree, node, c)))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        nth(links, sel)
+    }
+
+    /// A need op that succeeds often: it first adds a condition or a goal
+    /// when the project has none, as the party link arms do.
+    fn need_condition(&mut self, p: &Project, s: &Seed, provenance: Provenance) -> Op {
+        if p.conditions().next().is_none() {
+            return Op::AddCondition {
+                id: condition_id(self.fresh()),
+                name: self.name(s.c),
+                description: "".into(),
+                present: true,
+                provenance,
+            };
+        }
+        match nth(Self::condition_targets(p), s.b / 8) {
+            Some(element) if !s.b.is_multiple_of(8) => Op::NeedCondition {
+                element,
+                condition: self.condition(p, s.c),
+                provenance,
+            },
+            None => Op::AddCybersecurityGoal {
+                id: goal_id(self.fresh()),
+                name: self.name(s.c),
+                controls: vec![],
+                provenance,
+            },
+            Some(_) => Op::NeedCondition {
+                element: self.condition_target(p, s.a, s.b),
+                condition: self.condition(p, s.c),
+                provenance,
+            },
         }
     }
 
@@ -1165,6 +1268,19 @@ impl Gen {
                     .filter(|(_, _, t)| !t.damages().is_empty())
                     .map(|(_, id, _)| id)
                     .collect();
+                // No link yet but a threat and a damage exist: seed one, so a
+                // later unlink can succeed.
+                if with_damages.is_empty()
+                    && p.threat_scenario_count() > 0
+                    && p.damage_scenario_count() > 0
+                    && !s.c.is_multiple_of(3)
+                {
+                    return Op::LinkDamage {
+                        threat: self.threat(p, s.a | 1),
+                        damage: self.damage(p, s.b | 1),
+                        provenance,
+                    };
+                }
                 let threat = match nth(with_damages, s.a) {
                     Some(id) if !s.c.is_multiple_of(3) => id,
                     _ => self.threat(p, s.a),
@@ -1173,8 +1289,10 @@ impl Gen {
                     .threat_scenario_idx(&threat)
                     .and_then(|t| p.threat_scenario(t))
                     .map(|t| {
+                        // A link with a rationale cannot be unlinked (job 146).
                         t.damages()
                             .iter()
+                            .filter(|&&d| t.damage_rationale(d).is_empty())
                             .filter_map(|&d| p.damage_scenario_id(d))
                             .collect()
                     })
@@ -1858,6 +1976,82 @@ impl Gen {
                     },
                 }
             }
+            74 => Op::AddCondition {
+                id: if s.a.is_multiple_of(16) {
+                    self.condition(p, s.b)
+                } else {
+                    condition_id(self.fresh())
+                },
+                name: self.name(s.c),
+                description: if s.bits.is_multiple_of(2) {
+                    "".into()
+                } else {
+                    self.name(s.b)
+                },
+                present: !s.bits.is_multiple_of(3),
+                provenance,
+            },
+            75 => Op::RenameCondition {
+                id: self.condition(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            76 => Op::SetConditionPresent {
+                id: self.condition(p, s.a),
+                present: s.b.is_multiple_of(2),
+                provenance,
+            },
+            77 => Op::RemoveCondition {
+                id: self.condition(p, s.a),
+            },
+            78 => self.need_condition(p, s, provenance),
+            79 => {
+                // Mostly a link that exists, so the unneed succeeds sometimes.
+                let (element, condition) = match Self::condition_link(p, s.a) {
+                    Some(link) if !s.c.is_multiple_of(4) => link,
+                    None if !s.c.is_multiple_of(4) => return self.need_condition(p, s, provenance),
+                    _ => (self.condition_target(p, s.a, s.b), self.condition(p, s.c)),
+                };
+                Op::UnneedCondition {
+                    element,
+                    condition,
+                    provenance,
+                }
+            }
+            80 => {
+                let (tree, node) = self.step_node(p, s.a, s.b);
+                Op::NeedStepCondition {
+                    tree,
+                    node,
+                    condition: self.condition(p, s.c),
+                    provenance,
+                }
+            }
+            81 => {
+                let (tree, node, condition) = match Self::step_condition_link(p, s.a) {
+                    Some(link) if !s.c.is_multiple_of(4) => link,
+                    // No step link yet: make one, so a later unneed can succeed.
+                    None if p.conditions().next().is_some() && !s.c.is_multiple_of(4) => {
+                        let (tree, node) = self.step_node(p, s.a, s.b | 2);
+                        return Op::NeedStepCondition {
+                            tree,
+                            node,
+                            condition: self.condition(p, s.c | 1),
+                            provenance,
+                        };
+                    }
+                    _ => {
+                        let (tree, node) = self.step_node(p, s.a, s.b);
+                        (tree, node, self.condition(p, s.c))
+                    }
+                };
+                Op::UnneedStepCondition {
+                    tree,
+                    node,
+                    condition,
+                    provenance,
+                }
+            }
             _ => Op::SetComponentSystem {
                 id: self.component(p, s.a),
                 system: (!s.b.is_multiple_of(4)).then(|| self.system(p, s.b)),
@@ -2058,24 +2252,6 @@ pub fn reordered(mut def: MethodologyDef) -> MethodologyDef {
     def
 }
 
-/// True for the eight party ops added in job 145. The workspace exchange
-/// format has no party file yet (a later slice), so property tests that save
-/// a project as workspace files must not apply these ops. The generator still
-/// covers them through `replay`, which drives the coverage test directly.
-fn is_party_op(op: &Op) -> bool {
-    matches!(
-        op,
-        Op::AddParty { .. }
-            | Op::RenameParty { .. }
-            | Op::SetPartyKind { .. }
-            | Op::RemoveParty { .. }
-            | Op::LinkGoalParty { .. }
-            | Op::UnlinkGoalParty { .. }
-            | Op::LinkClaimParty { .. }
-            | Op::UnlinkClaimParty { .. }
-    )
-}
-
 /// Replays `seeds` on a fresh project over `m` and calls `f(project, op,
 /// inverse)` after every accepted op, with the project after the op.
 /// Returns the final project.
@@ -2088,9 +2264,6 @@ pub fn accepted(
     let mut project = Project::new(Arc::clone(m));
     for s in seeds {
         let op = generator.op(&project, s);
-        if is_party_op(&op) {
-            continue;
-        }
         if let Ok(inverse) = project.apply(op.clone()) {
             f(&project, &op, &inverse)?;
         }

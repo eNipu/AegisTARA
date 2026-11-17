@@ -900,7 +900,7 @@ fn links_are_sorted_unique_and_compared_by_public_id() {
         provenance: who(),
     })
     .expect("need step");
-    assert_eq!(saved(&b), before);
+    assert_ne!(saved(&b), before, "the step link is saved (133c)");
     assert_ne!(a, b);
     let diff = a.diff(&b).expect("diff");
     assert_eq!(diff.attack_trees().modified(), [tree]);
