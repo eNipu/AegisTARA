@@ -284,6 +284,22 @@ impl Applicability {
             })
     }
 
+    /// Trees with a tree-level or node-level exclusion, possibly repeated.
+    /// Time O(1) per item.
+    pub(crate) fn touched_trees(&self) -> impl Iterator<Item = TreeId> + '_ {
+        let whole = self.elements.keys().filter_map(|e| match e {
+            ElementRef::Tree(t) => Some(*t),
+            _ => None,
+        });
+        self.trees.keys().copied().chain(whole)
+    }
+
+    /// The per-`NodeIdx` exclusion flags of `tree`, `None` when no node of
+    /// it is excluded. Time O(log n).
+    pub(crate) fn node_flags(&self, tree: TreeId) -> Option<&[bool]> {
+        self.trees.get(&tree).map(|t| t.excluded.as_slice())
+    }
+
     /// Whether the node at `idx` of `tree` is excluded. Time O(log n).
     pub(crate) fn node_excluded_at(&self, tree: TreeId, idx: NodeIdx) -> bool {
         self.trees

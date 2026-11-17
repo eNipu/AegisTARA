@@ -12986,6 +12986,125 @@ fn not_applicable_threat(e: ModelError, id: ThreatId) -> ModelError {
     }
 }
 
+/// Whether `op` can change [`Project::applicability`]. Exhaustive, so a new
+/// op kind forces a decision. Time O(1).
+#[allow(clippy::too_many_lines)] // one line per op kind
+const fn may_change_applicability(op: &Op) -> bool {
+    match op {
+        Op::AddCondition { .. }
+        | Op::SetConditionPresent { .. }
+        | Op::RemoveCondition { .. }
+        | Op::NeedCondition { .. }
+        | Op::UnneedCondition { .. }
+        | Op::NeedStepCondition { .. }
+        | Op::UnneedStepCondition { .. }
+        | Op::AddComponent { .. }
+        | Op::SetComponentParent { .. }
+        | Op::RemoveComponent { .. }
+        | Op::AddInterface { .. }
+        | Op::RemoveInterface { .. }
+        | Op::SetAssetComponent { .. }
+        | Op::RemoveAsset { .. }
+        | Op::AddThreatScenario { .. }
+        | Op::RemoveThreatScenario { .. }
+        | Op::SetThreatAttackTree { .. }
+        | Op::SetStepVia { .. }
+        | Op::AddAttackTree { .. }
+        | Op::RemoveAttackTree { .. }
+        | Op::AddTreeNode { .. }
+        | Op::RemoveTreeNode { .. }
+        | Op::LinkTreeNode { .. }
+        | Op::UnlinkTreeNode { .. }
+        | Op::SetTreeNodeGate { .. }
+        | Op::RemoveCybersecurityGoal { .. }
+        | Op::RemoveCybersecurityClaim { .. } => true,
+        Op::SetReviewMark { .. }
+        | Op::SetDescription { .. }
+        | Op::SetDescriptionTranslation { .. }
+        | Op::SetProjectLanguages { .. }
+        | Op::RenameTreeNode { .. }
+        | Op::AddAsset { .. }
+        | Op::RenameAsset { .. }
+        | Op::SetAssetProperties { .. }
+        | Op::AddDamageScenario { .. }
+        | Op::RenameDamageScenario { .. }
+        | Op::SetImpact { .. }
+        | Op::RemoveDamageScenario { .. }
+        | Op::RenameThreatScenario { .. }
+        | Op::SetThreatCategory { .. }
+        | Op::AddCatalogRef { .. }
+        | Op::RemoveCatalogRef { .. }
+        | Op::LinkDamage { .. }
+        | Op::UnlinkDamage { .. }
+        | Op::SetStepFeasibility { .. }
+        | Op::SetStepFactor { .. }
+        | Op::SetStepAttackType { .. }
+        | Op::SetThreatFeasibility { .. }
+        | Op::SetRiskTreatment { .. }
+        | Op::AddSecurityControl { .. }
+        | Op::RenameSecurityControl { .. }
+        | Op::RemoveSecurityControl { .. }
+        | Op::ApplyControl { .. }
+        | Op::UnapplyControl { .. }
+        | Op::SetControlRule { .. }
+        | Op::SetControlKind { .. }
+        | Op::SetStepMitigation { .. }
+        | Op::AddCybersecurityGoal { .. }
+        | Op::RenameCybersecurityGoal { .. }
+        | Op::LinkGoalControl { .. }
+        | Op::UnlinkGoalControl { .. }
+        | Op::LinkGoalParty { .. }
+        | Op::UnlinkGoalParty { .. }
+        | Op::AddCybersecurityClaim { .. }
+        | Op::RenameCybersecurityClaim { .. }
+        | Op::LinkClaimParty { .. }
+        | Op::UnlinkClaimParty { .. }
+        | Op::AddParty { .. }
+        | Op::RenameParty { .. }
+        | Op::SetPartyKind { .. }
+        | Op::RemoveParty { .. }
+        | Op::RenameCondition { .. }
+        | Op::SetThreatGoal { .. }
+        | Op::SetThreatClaim { .. }
+        | Op::SetImpactRationale { .. }
+        | Op::SetFeasibilityRationale { .. }
+        | Op::SetDamageLinkRationale { .. }
+        | Op::SetThreatScaling { .. }
+        | Op::RenameComponent { .. }
+        | Op::SetComponentSystem { .. }
+        | Op::RenameInterface { .. }
+        | Op::SetInterfaceKind { .. }
+        | Op::AddDataFlow { .. }
+        | Op::RenameDataFlow { .. }
+        | Op::SetDataFlowInterface { .. }
+        | Op::RemoveDataFlow { .. }
+        | Op::AddTrustBoundary { .. }
+        | Op::RenameTrustBoundary { .. }
+        | Op::AddBoundaryComponent { .. }
+        | Op::RemoveBoundaryComponent { .. }
+        | Op::RemoveTrustBoundary { .. }
+        | Op::AddElement { .. }
+        | Op::RenameElement { .. }
+        | Op::RemoveElement { .. }
+        | Op::SetElementAttribute { .. }
+        | Op::LinkElement { .. }
+        | Op::UnlinkElement { .. } => false,
+    }
+}
+
+/// The tree whose node indices or gates `op` changes, if any. Time O(1).
+const fn structure_tree(op: &Op) -> Option<TreeId> {
+    match op {
+        Op::AddTreeNode { tree, .. }
+        | Op::RemoveTreeNode { tree, .. }
+        | Op::LinkTreeNode { tree, .. }
+        | Op::UnlinkTreeNode { tree, .. }
+        | Op::SetTreeNodeGate { tree, .. } => Some(*tree),
+        Op::AddAttackTree { id, .. } | Op::RemoveAttackTree { id } => Some(*id),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CachedThreatEval {
     inherent: Result<ThreatRisk, ModelError>,
@@ -13273,11 +13392,11 @@ impl ProjectEvalCache {
             self.rebuild(project);
             return;
         }
-        // Not incremental for applicability changes yet (slice 134c).
-        let next = project.applicability();
-        if next != self.applicability {
-            self.rebuild(project);
-            return;
+        if may_change_applicability(op) {
+            let next = project.applicability();
+            if next != self.applicability {
+                self.apply_applicability_change(project, next, structure_tree(op));
+            }
         }
         match op {
             Op::SetDescription { .. }
@@ -13989,6 +14108,81 @@ impl ProjectEvalCache {
         for threat_idx in linked {
             for residual in [false, true] {
                 self.sync_threat_from_tree(project, threat_idx, tree_idx, residual, &[], true);
+            }
+        }
+    }
+
+    /// Swaps in `next` and re-evaluates only what its difference from the
+    /// cached applicability touches: steps whose exclusion flipped (and
+    /// their ancestors), trees whose own exclusion flipped or whose node
+    /// count changed (rebuilt), and threats whose exclusion flipped. Tree
+    /// `skip` changed shape under the op; its own arm rebuilds it.
+    /// Time O(changed steps x depth + changed threats + n) for n nodes of
+    /// the trees with any exclusion.
+    fn apply_applicability_change(
+        &mut self,
+        project: &Project,
+        next: Applicability,
+        skip: Option<TreeId>,
+    ) {
+        let old = std::mem::replace(&mut self.applicability, next);
+        let trees: BTreeSet<TreeId> = old
+            .touched_trees()
+            .chain(self.applicability.touched_trees())
+            .filter(|t| Some(*t) != skip)
+            .collect();
+        for id in trees {
+            let Some(tree_idx) = project.attack_tree_idx(&id) else {
+                continue;
+            };
+            let Some(entry) = project.trees.get(tree_idx) else {
+                continue;
+            };
+            let e = ElementRef::Tree(id);
+            let (before, after) = (old.node_flags(id), self.applicability.node_flags(id));
+            let len = entry.tree.len();
+            let fits = |f: Option<&[bool]>| f.is_none_or(|f| f.len() == len);
+            if old.is_excluded(e) != self.applicability.is_excluded(e)
+                || !fits(before)
+                || !fits(after)
+            {
+                self.update_tree_structure(project, id);
+                continue;
+            }
+            let flag = |f: Option<&[bool]>, i: usize| f.and_then(|f| f.get(i)).copied();
+            let dirty: Vec<NodeIdx> = (0..len)
+                .filter(|&i| flag(before, i).unwrap_or(false) != flag(after, i).unwrap_or(false))
+                .filter_map(NodeIdx::try_from_usize)
+                .filter(|&i| entry.tree.get(i).is_some_and(|n| n.gate_kind().is_none()))
+                .collect();
+            if !dirty.is_empty() {
+                self.update_tree_mode(project, tree_idx, entry, &dirty, false);
+                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+            }
+        }
+        let threats: BTreeSet<ThreatId> = old
+            .excluded_elements()
+            .chain(self.applicability.excluded_elements())
+            .filter_map(|(e, _)| match e {
+                ElementRef::Threat(t) => Some(t),
+                _ => None,
+            })
+            .filter(|&t| {
+                let e = ElementRef::Threat(t);
+                old.is_excluded(e) != self.applicability.is_excluded(e)
+            })
+            .collect();
+        for id in threats {
+            let Some(idx) = project.threat_scenario_idx(&id) else {
+                continue;
+            };
+            let Some(t) = project.threats.get(idx) else {
+                continue;
+            };
+            let eval = self.build_threat_eval(project, id, t);
+            if let Some(slot) = self.threats.get_mut(idx.index()) {
+                *slot = Some(eval);
+                self.recomputed_threats = self.recomputed_threats.saturating_add(2);
             }
         }
     }
