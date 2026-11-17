@@ -2,12 +2,20 @@
 //! element links may name as needed.
 //!
 //! A condition is a named, described boolean fact. Conditions change only
-//! through [`Op`](crate::Op)s on a [`Project`](crate::Project); they carry no
-//! risk number and have no links in this slice.
+//! through [`Op`](crate::Op)s on a [`Project`](crate::Project). Elements and
+//! steps may need conditions; [`Project::applicability`] derives which of
+//! them are excluded while a needed condition is off, and why (job 134).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::description::ElementRef;
+use crate::eval::{Applicable, AttributeDomain, Lifted, evaluate};
+use crate::id::{ConditionId, ConditionIdx, NodeId, NodeIdx, TreeId, TreeIdx};
+use crate::item::{Component, ItemRef, MAX_COMPONENT_DEPTH};
+use crate::project::Project;
 use crate::provenance::Provenance;
+use crate::tree::AttackTree;
 
 /// Maximum number of live conditions in one project.
 ///
@@ -78,5 +86,474 @@ impl Condition {
     #[must_use]
     pub fn provenance(&self) -> &Provenance {
         &self.provenance
+    }
+}
+
+/// Why an element or attack tree node is excluded. Variants are ordered, so
+/// reason lists sort the same way every time.
+///
+/// ```
+/// use aegis_model::{ConditionId, Reason};
+///
+/// assert!(Reason::ConditionOff(ConditionId::new_v7()) < Reason::AllPathsExcluded);
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Reason {
+    /// Any element or step: it needs this condition and the condition is off.
+    ConditionOff(ConditionId),
+    /// A child component, interface, asset, threat or tree: its owner is
+    /// excluded (the parent component, component, asset or threat).
+    OwnerExcluded(ElementRef),
+    /// A step: the component or interface it goes through is excluded.
+    ViaExcluded(ItemRef),
+    /// A gate, or a tree through its root: no path through it applies.
+    AllPathsExcluded,
+}
+
+/// Which elements and attack tree nodes are excluded, and why. Derived from
+/// a [`Project`] by [`Project::applicability`] and never stored (D10). Only
+/// excluded elements and nodes have entries; reason lists are sorted and
+/// unique.
+///
+/// ```
+/// use aegis_model::Applicability;
+///
+/// let none = Applicability::default();
+/// assert!(none.is_empty());
+/// assert_eq!(none.excluded_elements().count(), 0);
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Applicability {
+    elements: BTreeMap<ElementRef, Vec<Reason>>,
+    trees: BTreeMap<TreeId, TreeExclusions>,
+}
+
+/// The excluded nodes of one tree.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TreeExclusions {
+    nodes: BTreeMap<NodeId, Vec<Reason>>,
+    /// One slot per `NodeIdx`, for O(1) lookups.
+    excluded: Vec<bool>,
+}
+
+impl Applicability {
+    /// Whether nothing is excluded. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Applicability;
+    ///
+    /// assert!(Applicability::default().is_empty());
+    /// ```
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty() && self.trees.is_empty()
+    }
+
+    /// Whether element `e` is excluded. Time O(log n).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ComponentId, ConditionId, ElementRef, Methodology, Op, Project, Provenance, Reason};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// let (c, cf) = (ComponentId::new_v7(), ConditionId::new_v7());
+    /// p.apply(Op::AddComponent { id: c, name: "ECU".into(), parent: None, provenance: prov.clone() })?;
+    /// p.apply(Op::AddCondition {
+    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
+    /// })?;
+    /// p.apply(Op::NeedCondition { element: ElementRef::Component(c), condition: cf, provenance: prov })?;
+    /// let a = p.applicability();
+    /// assert!(a.is_excluded(ElementRef::Component(c)));
+    /// assert!(!a.is_excluded(ElementRef::Project));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn is_excluded(&self, e: ElementRef) -> bool {
+        self.elements.contains_key(&e)
+    }
+
+    /// Why element `e` is excluded: sorted, unique, empty when it is not.
+    /// Time O(log n).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ComponentId, ConditionId, ElementRef, Methodology, Op, Project, Provenance, Reason};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// let (c, cf) = (ComponentId::new_v7(), ConditionId::new_v7());
+    /// p.apply(Op::AddComponent { id: c, name: "ECU".into(), parent: None, provenance: prov.clone() })?;
+    /// p.apply(Op::AddCondition {
+    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
+    /// })?;
+    /// p.apply(Op::NeedCondition { element: ElementRef::Component(c), condition: cf, provenance: prov })?;
+    /// let a = p.applicability();
+    /// assert_eq!(a.reasons(ElementRef::Component(c)), &[Reason::ConditionOff(cf)]);
+    /// assert!(a.reasons(ElementRef::Project).is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn reasons(&self, e: ElementRef) -> &[Reason] {
+        self.elements.get(&e).map_or(&[][..], Vec::as_slice)
+    }
+
+    /// Whether node `node` of `tree` is excluded. Time O(log n).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{AttackTree, ConditionId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// let (t, step, cf) = (TreeId::new_v7(), NodeId::new_v7(), ConditionId::new_v7());
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// tree.add_child(tree.root(), step, Node::step("open"))?;
+    /// tree.add_child(tree.root(), NodeId::new_v7(), Node::step("other"))?;
+    /// p.apply(Op::AddAttackTree { id: t, tree, step_feasibility: vec![], provenance: prov.clone() })?;
+    /// p.apply(Op::AddCondition {
+    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
+    /// })?;
+    /// p.apply(Op::NeedStepCondition { tree: t, node: step, condition: cf, provenance: prov })?;
+    /// let a = p.applicability();
+    /// assert!(a.is_node_excluded(t, step));
+    /// assert!(!a.is_node_excluded(t, NodeId::new_v7()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn is_node_excluded(&self, tree: TreeId, node: NodeId) -> bool {
+        self.trees
+            .get(&tree)
+            .is_some_and(|t| t.nodes.contains_key(&node))
+    }
+
+    /// Why node `node` of `tree` is excluded: sorted, unique, empty when it
+    /// is not. Time O(log n).
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{AttackTree, ConditionId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, Reason, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// let (t, root, step, cf) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7(), ConditionId::new_v7());
+    /// let mut tree = AttackTree::new(root, Node::gate(GateKind::And, "root"))?;
+    /// tree.add_child(tree.root(), step, Node::step("open"))?;
+    /// p.apply(Op::AddAttackTree { id: t, tree, step_feasibility: vec![], provenance: prov.clone() })?;
+    /// p.apply(Op::AddCondition {
+    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
+    /// })?;
+    /// p.apply(Op::NeedStepCondition { tree: t, node: step, condition: cf, provenance: prov })?;
+    /// let a = p.applicability();
+    /// assert_eq!(a.node_reasons(t, step), &[Reason::ConditionOff(cf)]);
+    /// assert_eq!(a.node_reasons(t, root), &[Reason::AllPathsExcluded]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn node_reasons(&self, tree: TreeId, node: NodeId) -> &[Reason] {
+        self.trees
+            .get(&tree)
+            .and_then(|t| t.nodes.get(&node))
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// Every excluded element with its reasons, in `ElementRef` order.
+    /// Time O(1) per item.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ComponentId, ConditionId, ElementRef, InterfaceId, Methodology, Op, Project, Provenance, Reason};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let m = Arc::new(Methodology::iso21434_r155()?);
+    /// let mut p = Project::new(Arc::clone(&m));
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// let (c, i, cf) = (ComponentId::new_v7(), InterfaceId::new_v7(), ConditionId::new_v7());
+    /// p.apply(Op::AddComponent { id: c, name: "ECU".into(), parent: None, provenance: prov.clone() })?;
+    /// let kind = m.interface_kinds().next().ok_or("kind")?;
+    /// p.apply(Op::AddInterface { id: i, name: "CAN".into(), component: c, kind, provenance: prov.clone() })?;
+    /// p.apply(Op::AddCondition {
+    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
+    /// })?;
+    /// p.apply(Op::NeedCondition { element: ElementRef::Component(c), condition: cf, provenance: prov })?;
+    /// let a = p.applicability();
+    /// let all: Vec<_> = a.excluded_elements().collect();
+    /// assert_eq!(all, vec![
+    ///     (ElementRef::Component(c), &[Reason::ConditionOff(cf)][..]),
+    ///     (ElementRef::Interface(i), &[Reason::OwnerExcluded(ElementRef::Component(c))][..]),
+    /// ]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn excluded_elements(&self) -> impl Iterator<Item = (ElementRef, &[Reason])> {
+        self.elements.iter().map(|(e, r)| (*e, r.as_slice()))
+    }
+
+    /// Every excluded node with its reasons, in tree then node ID order.
+    /// Time O(1) per item.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{AttackTree, ConditionId, GateKind, Methodology, Node, NodeId, Op, Project, Provenance, Reason, TreeId};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// let (t, step, cf) = (TreeId::new_v7(), NodeId::new_v7(), ConditionId::new_v7());
+    /// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+    /// tree.add_child(tree.root(), step, Node::step("open"))?;
+    /// tree.add_child(tree.root(), NodeId::new_v7(), Node::step("other"))?;
+    /// p.apply(Op::AddAttackTree { id: t, tree, step_feasibility: vec![], provenance: prov.clone() })?;
+    /// p.apply(Op::AddCondition {
+    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
+    /// })?;
+    /// p.apply(Op::NeedStepCondition { tree: t, node: step, condition: cf, provenance: prov })?;
+    /// let a = p.applicability();
+    /// let nodes: Vec<_> = a.excluded_nodes().collect();
+    /// assert_eq!(nodes, vec![(t, step, &[Reason::ConditionOff(cf)][..])]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn excluded_nodes(&self) -> impl Iterator<Item = (TreeId, NodeId, &[Reason])> {
+        self.trees
+            .iter()
+            .flat_map(|(t, x)| x.nodes.iter().map(move |(n, r)| (*t, *n, r.as_slice())))
+    }
+
+    /// Whether the node at `idx` of `tree` is excluded. Time O(log n).
+    #[allow(dead_code)] // used by evaluation in slice 134b
+    pub(crate) fn node_excluded_at(&self, tree: TreeId, idx: NodeIdx) -> bool {
+        self.trees
+            .get(&tree)
+            .and_then(|t| t.excluded.get(idx.index()))
+            .copied()
+            .unwrap_or(false)
+    }
+}
+
+/// The unit domain: every node has the value `()`. Lifted by [`Applicable`],
+/// it computes only which gates are excluded.
+struct Presence;
+
+impl AttributeDomain for Presence {
+    type Value = ();
+    fn or(&self, (): (), (): &()) {}
+    fn and(&self, (): (), (): &()) {}
+}
+
+/// Adds `reason` to `e`'s list.
+fn push(map: &mut BTreeMap<ElementRef, Vec<Reason>>, e: ElementRef, reason: Reason) {
+    map.entry(e).or_default().push(reason);
+}
+
+/// Adds `OwnerExcluded(owner)` to `child` when `owner` is excluded.
+fn inherit(
+    ex: &mut BTreeMap<ElementRef, Vec<Reason>>,
+    child: ElementRef,
+    owner: Option<ElementRef>,
+) {
+    if let Some(owner) = owner.filter(|o| ex.contains_key(o)) {
+        push(ex, child, Reason::OwnerExcluded(owner));
+    }
+}
+
+impl Project {
+    /// Which elements and attack tree nodes are excluded because a needed
+    /// condition is off, and why. Derived, never stored (D10); the result
+    /// depends only on public IDs.
+    ///
+    /// Rules: an element or step is excluded by its own off conditions; an
+    /// excluded component excludes its child components, interfaces and
+    /// bound assets; an excluded asset excludes its threats; a tree is
+    /// excluded when every threat using it is; a step through an excluded
+    /// component or interface is excluded; a gate is excluded when no path
+    /// through it applies (OR: every child, AND/SAND: any child), and the
+    /// tree too when its root is. Goals and claims are excluded only by
+    /// their own conditions.
+    ///
+    /// Time O(c) when every condition is present, else O(e log e + n) for
+    /// e elements and n tree nodes.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use aegis_model::{ComponentId, ConditionId, ElementRef, Methodology, Op, Project, Provenance, Reason};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// let prov = Provenance::human("alice", 1_700_000_000_000);
+    /// let (parent, child, cf) = (ComponentId::new_v7(), ComponentId::new_v7(), ConditionId::new_v7());
+    /// p.apply(Op::AddComponent { id: parent, name: "Body".into(), parent: None, provenance: prov.clone() })?;
+    /// p.apply(Op::AddComponent { id: child, name: "Door".into(), parent: Some(parent), provenance: prov.clone() })?;
+    /// p.apply(Op::AddCondition {
+    ///     id: cf, name: "Option fitted".into(), description: "".into(), present: true, provenance: prov.clone(),
+    /// })?;
+    /// p.apply(Op::NeedCondition { element: ElementRef::Component(parent), condition: cf, provenance: prov.clone() })?;
+    /// assert!(p.applicability().is_empty());
+    ///
+    /// p.apply(Op::SetConditionPresent { id: cf, present: false, provenance: prov })?;
+    /// let a = p.applicability();
+    /// assert_eq!(a.reasons(ElementRef::Component(child)), &[Reason::OwnerExcluded(ElementRef::Component(parent))]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn applicability(&self) -> Applicability {
+        if self.conditions().all(|(_, _, c)| c.present()) {
+            return Applicability::default();
+        }
+        let off = |list: &[_]| -> Vec<Reason> {
+            list.iter()
+                .filter(|&&i| self.condition(i).is_some_and(|c| !c.present()))
+                .filter_map(|&i| self.condition_id(i).map(Reason::ConditionOff))
+                .collect()
+        };
+        let mut elements: BTreeMap<ElementRef, Vec<Reason>> = BTreeMap::new();
+        for (e, list) in self.condition_link_entries() {
+            for r in off(list) {
+                push(&mut elements, e, r);
+            }
+        }
+        self.propagate_owners(&mut elements);
+        let mut trees = BTreeMap::new();
+        for (t, id, tree) in self.attack_trees() {
+            if let Some(x) = self.tree_exclusions(t, tree, &elements, &off) {
+                if x.excluded
+                    .get(tree.root().index())
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    push(
+                        &mut elements,
+                        ElementRef::Tree(id),
+                        Reason::AllPathsExcluded,
+                    );
+                }
+                trees.insert(id, x);
+            }
+        }
+        for list in elements.values_mut() {
+            list.sort_unstable();
+            list.dedup();
+        }
+        Applicability { elements, trees }
+    }
+
+    /// Rule c: owner edges, parents before children.
+    fn propagate_owners(&self, ex: &mut BTreeMap<ElementRef, Vec<Reason>>) {
+        let mut comps: Vec<_> = self
+            .components()
+            .map(|(i, id, c)| {
+                let mut depth = 0;
+                let mut at = c.parent();
+                while let Some(p) = at.filter(|_| depth <= MAX_COMPONENT_DEPTH) {
+                    depth += 1;
+                    at = self.component(p).and_then(Component::parent);
+                }
+                (depth, i, id)
+            })
+            .collect();
+        comps.sort_unstable();
+        for (_, i, id) in comps {
+            let parent = self.component(i).and_then(Component::parent);
+            let owner = parent.and_then(|p| self.component_id(p));
+            inherit(
+                ex,
+                ElementRef::Component(id),
+                owner.map(ElementRef::Component),
+            );
+        }
+        for (_, id, iface) in self.interfaces() {
+            let owner = self.component_id(iface.component());
+            inherit(
+                ex,
+                ElementRef::Interface(id),
+                owner.map(ElementRef::Component),
+            );
+        }
+        for (_, id, asset) in self.assets() {
+            let owner = asset.component().and_then(|c| self.component_id(c));
+            inherit(ex, ElementRef::Asset(id), owner.map(ElementRef::Component));
+        }
+        let mut users: BTreeMap<TreeIdx, Vec<ElementRef>> = BTreeMap::new();
+        for (_, id, threat) in self.threat_scenarios() {
+            let owner = self.asset_id(threat.asset()).map(ElementRef::Asset);
+            inherit(ex, ElementRef::Threat(id), owner);
+            if let Some(t) = threat.attack_tree() {
+                users.entry(t).or_default().push(ElementRef::Threat(id));
+            }
+        }
+        for (t, threats) in users {
+            let Some(tree) = self.attack_tree_id(t).map(ElementRef::Tree) else {
+                continue;
+            };
+            if threats.iter().all(|th| ex.contains_key(th)) {
+                for th in threats {
+                    push(ex, tree, Reason::OwnerExcluded(th));
+                }
+            }
+        }
+    }
+
+    /// Rules d and e for one tree: steps, then gates. `None` when no node
+    /// is excluded.
+    fn tree_exclusions(
+        &self,
+        t: TreeIdx,
+        tree: &AttackTree,
+        ex: &BTreeMap<ElementRef, Vec<Reason>>,
+        off: &impl Fn(&[ConditionIdx]) -> Vec<Reason>,
+    ) -> Option<TreeExclusions> {
+        let mut out = TreeExclusions {
+            nodes: BTreeMap::new(),
+            excluded: vec![false; tree.len()],
+        };
+        for (n, nid, node) in tree.iter() {
+            if node.gate_kind().is_some() {
+                continue;
+            }
+            let mut reasons = off(self.step_conditions(t, n));
+            if let Some(via) = self.step_via(t, n) {
+                let owner = match via {
+                    ItemRef::Component(c) => ElementRef::Component(c),
+                    ItemRef::Interface(i) => ElementRef::Interface(i),
+                };
+                if ex.contains_key(&owner) {
+                    reasons.push(Reason::ViaExcluded(via));
+                }
+            }
+            if !reasons.is_empty() {
+                reasons.sort_unstable();
+                reasons.dedup();
+                out.nodes.insert(nid, reasons);
+                if let Some(slot) = out.excluded.get_mut(n.index()) {
+                    *slot = true;
+                }
+            }
+        }
+        if out.nodes.is_empty() {
+            return None;
+        }
+        let leaf = |i: NodeIdx| {
+            let excluded = out.excluded.get(i.index()).copied().unwrap_or(false);
+            Some(if excluded {
+                Lifted::Excluded
+            } else {
+                Lifted::Value(())
+            })
+        };
+        if let Ok(eval) = evaluate(tree, &Applicable(Presence), leaf) {
+            for (n, nid, node) in tree.iter() {
+                let gate_off = eval.get(n).is_some_and(Lifted::is_excluded);
+                if node.gate_kind().is_some() && gate_off {
+                    out.nodes.insert(nid, vec![Reason::AllPathsExcluded]);
+                    if let Some(slot) = out.excluded.get_mut(n.index()) {
+                        *slot = true;
+                    }
+                }
+            }
+        }
+        Some(out)
     }
 }
