@@ -82,14 +82,15 @@ Pass `model` on every spawn; it overrides the agent file.
 | Agent | Model |
 |---|---|
 | planner | opencode-go/glm-5.3 |
-| builder | opencode-go/qwen4-max (`hard` tier or `high` risk), opencode-go/glm-5.3 (`standard`/`small`) |
-| reviewer | opencode-go/qwen4-max (`high` risk), opencode-go/glm-5.3 (`normal`) |
+| builder | opencode-go/glm-5.3 (`hard` tier or `high` risk), opencode-go/deepseek-v4.1-flash (`standard`/`small`) |
+| reviewer | opencode-go/glm-5.3 (`high` risk), opencode-go/deepseek-v4.1-flash (`normal`) |
 
-Owner directive 2026-11-16: no Claude models in this factory; pick from the table by the
+Owner directives 2026-11-16/17: no Claude models in this factory; allowed models are GLM 5.3,
+DeepSeek V4.1 (fallback) or HY4 (included in the Go subscription at no extra cost); pick by the
 slice's `tier` and `risk` in `plan.json`. If the Go paid quota is exhausted or a model is
-region-blocked, fall back to DeepSeek 4.1 Flash (`opencode-go/deepseek-v4.1-flash`, confirmed
-working 2026-11-16) or the most capable model available (owner rule 2026-11-16); note the
-fallback in the report. The gate and reviewer still judge the work.
+region-blocked, fall back to `opencode-go/deepseek-v4.1-flash` (confirmed working 2026-11-16)
+or an HY4 model (`opencode-go/hy4-flash-free`); note the fallback in the report. The gate
+and reviewer still judge the work.
 
 **Outside models:** a build prompt is a complete task on its own, so the owner can run
 `factory/jobs/<job-id>/prompts/<slice>.md` in any other session or tool, inside
