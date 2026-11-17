@@ -7,6 +7,7 @@ use std::sync::Arc;
 use aegis_client::commands::Edit;
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::pages::{self, Vocabulary};
+use aegis_client::relations::RelationKey;
 use aegis_client::sample::sample_ops;
 use aegis_client::table::table_rows;
 use aegis_client::view::{
@@ -156,13 +157,21 @@ fn every_table_shows_what_its_page_shows_today() {
 
     let goals = pages::goal_rows(&ws)
         .into_iter()
-        .map(|g| vec![g.visual_id, g.name, n(g.controls), n(g.threats)])
+        .map(|g| {
+            vec![
+                g.visual_id,
+                g.name,
+                g.responsible.join(", "),
+                n(g.controls),
+                n(g.threats),
+            ]
+        })
         .collect();
     assert_eq!(shown(&ws, TableId::Goals), filled(goals));
 
     let claims = pages::claim_rows(&ws)
         .into_iter()
-        .map(|c| vec![c.visual_id, c.name, n(c.threats)])
+        .map(|c| vec![c.visual_id, c.name, c.responsible.join(", "), n(c.threats)])
         .collect();
     assert_eq!(shown(&ws, TableId::Claims), filled(claims));
 
@@ -289,8 +298,8 @@ fn only_inputs_are_editable() {
     assert_eq!(editable(TableId::Threats), ["name", "asset", "scales"]);
     assert_eq!(editable(TableId::Risks), ["name", "asset", "treatment"]);
     assert_eq!(editable(TableId::Controls), ["name"]);
-    assert_eq!(editable(TableId::Goals), ["name"]);
-    assert_eq!(editable(TableId::Claims), ["name"]);
+    assert_eq!(editable(TableId::Goals), ["name", "responsible"]);
+    assert_eq!(editable(TableId::Claims), ["name", "responsible"]);
     assert_eq!(editable(TableId::Problems), [""; 0]);
 }
 
@@ -313,4 +322,25 @@ fn every_table_belongs_to_one_page_and_layouts_agree() {
         HashSet::from(TableId::ALL)
     );
     assert_eq!(Page::Goals.tables(), [TableId::Goals, TableId::Claims]);
+}
+
+/// The Responsible column sits after the name on both tables and points at
+/// the two registry rows added for party links.
+#[test]
+fn responsible_column_is_a_links_column_on_both_tables() {
+    for (table, key) in [
+        (TableId::Goals, RelationKey::GOAL_RESPONSIBLE),
+        (TableId::Claims, RelationKey::CLAIM_RESPONSIBLE),
+    ] {
+        let columns = table.columns();
+        let c = columns
+            .iter()
+            .find(|c| c.key == "responsible")
+            .unwrap_or_else(|| panic!("{table:?} has no responsible column"));
+        assert_eq!(c.kind, ColumnKind::Links(key), "{table:?}");
+        assert_eq!(c.label, ColumnLabel::Catalog("responsible"), "{table:?}");
+        assert_eq!(c.width, 160, "{table:?}");
+        assert!(c.visible, "{table:?}");
+        assert_eq!(columns[2].key, "responsible", "{table:?}");
+    }
 }

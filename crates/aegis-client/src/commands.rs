@@ -728,6 +728,24 @@ pub enum Edit {
         /// Link or unlink.
         linked: bool,
     },
+    /// Lists or unlists a party as responsible for a goal.
+    LinkGoalParty {
+        /// The goal.
+        goal: GoalId,
+        /// The party.
+        party: aegis_model::PartyId,
+        /// Link or unlink.
+        linked: bool,
+    },
+    /// Lists or unlists a party as responsible for a claim.
+    LinkClaimParty {
+        /// The claim.
+        claim: ClaimId,
+        /// The party.
+        party: aegis_model::PartyId,
+        /// Link or unlink.
+        linked: bool,
+    },
     /// Removes a goal, unlinking it from threats first.
     RemoveGoal {
         /// The goal.
@@ -2382,6 +2400,40 @@ impl Edit {
                     provenance: p,
                 }
             }],
+            Edit::LinkGoalParty {
+                goal,
+                party,
+                linked,
+            } => vec![if *linked {
+                Op::LinkGoalParty {
+                    goal: *goal,
+                    party: *party,
+                    provenance: p,
+                }
+            } else {
+                Op::UnlinkGoalParty {
+                    goal: *goal,
+                    party: *party,
+                    provenance: p,
+                }
+            }],
+            Edit::LinkClaimParty {
+                claim,
+                party,
+                linked,
+            } => vec![if *linked {
+                Op::LinkClaimParty {
+                    claim: *claim,
+                    party: *party,
+                    provenance: p,
+                }
+            } else {
+                Op::UnlinkClaimParty {
+                    claim: *claim,
+                    party: *party,
+                    provenance: p,
+                }
+            }],
             Edit::RemoveGoal { goal } => {
                 let g_idx = project
                     .cybersecurity_goal_idx(goal)
@@ -2742,6 +2794,8 @@ impl Edit {
             Edit::AddControl { id, .. } => Some(Selection::Control(*id)),
             Edit::AddGoal { id, .. } | Edit::AddGoalFor { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),
+            Edit::LinkGoalParty { goal, .. } => Some(Selection::Goal(*goal)),
+            Edit::LinkClaimParty { claim, .. } => Some(Selection::Claim(*claim)),
             Edit::DuplicateComponent { id, .. } => Some(Selection::Component(*id)),
             Edit::DuplicateInterface { id, .. } => Some(Selection::Interface(*id)),
             Edit::DuplicateDataFlow { id, .. } => Some(Selection::DataFlow(*id)),

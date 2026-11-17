@@ -436,6 +436,8 @@ pub fn selection_systems(
         Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
         Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
         Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
+        // Parties belong to the project, not to any item system.
+        Selection::Party(_) => None,
     }
 }
 
