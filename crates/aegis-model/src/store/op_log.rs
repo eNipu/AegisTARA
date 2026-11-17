@@ -2127,6 +2127,17 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             text: text.0,
             provenance: wire::unwrap_provenance(provenance),
         },
+        OpWire::SetDamageLinkRationale {
+            threat,
+            damage,
+            text,
+            provenance,
+        } => Op::SetDamageLinkRationale {
+            threat: threat.0,
+            damage: damage.0,
+            text: text.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::SetFeasibilityRationale {
             threat,
             text,
