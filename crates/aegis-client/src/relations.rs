@@ -133,23 +133,51 @@ pub fn related(project: &Project, key: RelationKey, from: Selection) -> Vec<Sele
     }
 }
 
-/// Sources that link to `to` under `key`. Scans every source of the row's
-/// `from` kind and keeps those whose `read` contains `to`: O(elements x
-/// relations), with no index because the table has tens of rows.
+/// Every element of `kind` in the project, as a stable [`Selection`]; empty for
+/// a kind with no elements. A tree node (step) is `(TreeId, NodeId)` from every
+/// tree's `iter()`. O(elements).
 #[must_use]
 #[rustfmt::skip]
-pub fn reverse_related(project: &Project, key: RelationKey, to: Selection) -> Vec<Selection> {
-    let Some(row) = relation(key) else { return Vec::new() };
-    let sources: Vec<Selection> = match row.from {
+pub fn elements_of_kind(project: &Project, kind: ElementKind) -> Vec<Selection> {
+    match kind {
         ElementKind::Asset => project.assets().map(|(_, id, _)| Selection::Asset(id)).collect(),
+        ElementKind::Damage => project.damage_scenarios().map(|(_, id, _)| Selection::Damage(id)).collect(),
         ElementKind::Threat => project.threat_scenarios().map(|(_, id, _)| Selection::Threat(id)).collect(),
-        ElementKind::Goal => project.cybersecurity_goals().map(|(_, id, _)| Selection::Goal(id)).collect(),
-        ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
-        ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
+        ElementKind::Tree => project.attack_trees().map(|(_, id, _)| Selection::Tree(id)).collect(),
         ElementKind::Step => project.attack_trees().flat_map(|(_, id, t)| t.iter().map(move |(_, n, _)| Selection::TreeNode(id, n))).collect(),
-        _ => Vec::new(),
+        ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
+        ElementKind::Goal => project.cybersecurity_goals().map(|(_, id, _)| Selection::Goal(id)).collect(),
+        ElementKind::Claim => project.cybersecurity_claims().map(|(_, id, _)| Selection::Claim(id)).collect(),
+        ElementKind::Component => project.components().map(|(_, id, _)| Selection::Component(id)).collect(),
+        ElementKind::Interface => project.interfaces().map(|(_, id, _)| Selection::Interface(id)).collect(),
+        ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
+        ElementKind::TrustBoundary => project.trust_boundaries().map(|(_, id, _)| Selection::TrustBoundary(id)).collect(),
+    }
+}
+
+/// Sources that link to `to` under `key`. Scans every source of the row's
+/// `from` kind via [`elements_of_kind`] and keeps those whose `read` contains
+/// `to`: O(elements x relations), with no index because the table has tens of
+/// rows.
+#[must_use]
+pub fn reverse_related(project: &Project, key: RelationKey, to: Selection) -> Vec<Selection> {
+    let Some(row) = relation(key) else {
+        return Vec::new();
     };
-    sources.into_iter().filter(|s| (row.read)(project, *s).contains(&to)).collect()
+    elements_of_kind(project, row.from)
+        .into_iter()
+        .filter(|s| (row.read)(project, *s).contains(&to))
+        .collect()
+}
+
+/// Every possible target of `key`: all elements of the row's `to` kind, empty
+/// for an unknown key. O(elements).
+#[must_use]
+pub fn candidates(project: &Project, key: RelationKey) -> Vec<Selection> {
+    match relation(key) {
+        Some(row) => elements_of_kind(project, row.to),
+        None => Vec::new(),
+    }
 }
 
 /// Every non-empty group for `target`: forward groups (rows whose `from`
@@ -326,11 +354,14 @@ fn unlink_step_via(from: Selection, to: Selection) -> Option<Edit> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     use aegis_model::{
         AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId,
-        NodeId, ThreatId, TreeId, TrustBoundaryId,
+        Methodology, NodeId, ThreatId, TreeId, TrustBoundaryId,
     };
+
+    use crate::workspace::{Origin, Workspace};
 
     use super::*;
 
@@ -366,5 +397,47 @@ mod tests {
         for row in RELATIONS {
             assert!(!row.label.is_empty(), "{:?}", row.key);
         }
+    }
+
+    #[test]
+    fn candidates_lists_every_target_of_the_row() {
+        let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+        let mut ws = Workspace::empty(m);
+        let (d1, d2, c1) = (DamageId::new_v7(), DamageId::new_v7(), ControlId::new_v7());
+        for edit in [
+            Edit::AddDamage {
+                id: d1,
+                name: "Crash".into(),
+            },
+            Edit::AddDamage {
+                id: d2,
+                name: "Brake".into(),
+            },
+            Edit::AddControl {
+                id: c1,
+                name: "ABS".into(),
+            },
+        ] {
+            let ops = edit.to_ops(ws.project(), "alice", 1).expect("ops");
+            ws.apply(ops, Origin::Edit).expect("applies");
+        }
+        let damages: Vec<Selection> = ws
+            .project()
+            .damage_scenarios()
+            .map(|(_, id, _)| Selection::Damage(id))
+            .collect();
+        let controls: Vec<Selection> = ws
+            .project()
+            .security_controls()
+            .map(|(_, id, _)| Selection::Control(id))
+            .collect();
+        assert_eq!(
+            candidates(ws.project(), RelationKey::THREAT_DAMAGES),
+            damages
+        );
+        assert_eq!(
+            candidates(ws.project(), RelationKey::GOAL_CONTROLS),
+            controls
+        );
     }
 }
