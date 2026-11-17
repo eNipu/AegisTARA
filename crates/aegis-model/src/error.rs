@@ -684,6 +684,15 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// The element cannot be removed while it still needs conditions; the
+    /// removal's inverse could not restore them. Unneed them first.
+    #[error("element {element:?} still needs {conditions} condition(s)")]
+    ElementNeedsConditions {
+        /// The element.
+        element: ElementRef,
+        /// How many conditions it needs.
+        conditions: usize,
+    },
     /// A condition cannot be removed while an element or step needs it.
     #[error("condition {condition} is needed by {elements} element(s) and {steps} step(s)")]
     ConditionInUse {

@@ -238,7 +238,8 @@ impl TreeEntry {
             l.via
                 .iter()
                 .zip(&l.attack_type)
-                .filter(|(v, t)| v.is_some() || t.is_some())
+                .zip(&l.condition)
+                .filter(|((v, t), c)| v.is_some() || t.is_some() || !c.is_empty())
                 .count()
         })
     }
@@ -8280,7 +8281,8 @@ impl Project {
                 .get(idx.index())
                 .is_some_and(|m| !m.is_empty())
             || entry.via_at(idx.index()).is_some()
-            || entry.attack_type_at(idx.index()).is_some();
+            || entry.attack_type_at(idx.index()).is_some()
+            || !entry.condition_at(idx.index()).is_empty();
         if rated {
             return Err(ModelError::NodeIsRated(id));
         }
@@ -8472,6 +8474,19 @@ impl Project {
     }
 
     /// An element with a description must have it cleared first.
+    /// Refuses removing an element that still needs conditions: the removal's
+    /// inverse cannot carry the links, so undo would lose them.
+    fn require_no_conditions(&self, element: ElementRef) -> Result<(), ModelError> {
+        let conditions = self.condition_link_ids(element).len();
+        if conditions > 0 {
+            return Err(ModelError::ElementNeedsConditions {
+                element,
+                conditions,
+            });
+        }
+        Ok(())
+    }
+
     fn require_no_description(
         &self,
         target: ElementRef,
@@ -8686,6 +8701,7 @@ impl Project {
 
     fn check_remove_asset(&self, id: AssetId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Asset(id), EntityKind::Asset)?;
+        self.require_no_conditions(ElementRef::Asset(id))?;
         let (idx, asset) = self.live_asset(id)?;
         if let Some(comp_idx) = asset.component {
             let component = self
@@ -8924,6 +8940,7 @@ impl Project {
 
     fn check_remove_threat(&self, id: ThreatId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Threat(id), EntityKind::ThreatScenario)?;
+        self.require_no_conditions(ElementRef::Threat(id))?;
         let t = self.threat_ref(id)?;
         if let Some(tree_idx) = t.attack_tree {
             let tree = self
@@ -9176,6 +9193,7 @@ impl Project {
             });
         }
         self.require_no_description(ElementRef::Tree(id), EntityKind::AttackTree)?;
+        self.require_no_conditions(ElementRef::Tree(id))?;
         let (idx, entry) = self.live_tree(id)?;
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -9430,6 +9448,7 @@ impl Project {
 
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
+        self.require_no_conditions(ElementRef::Goal(id))?;
         let (idx, g) = self.live_goal(id)?;
         let threats = self.refs.goals.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -9465,6 +9484,7 @@ impl Project {
 
     fn check_remove_claim(&self, id: ClaimId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Claim(id), EntityKind::CybersecurityClaim)?;
+        self.require_no_conditions(ElementRef::Claim(id))?;
         let idx = self.live_claim(id)?;
         let threats = self.refs.claims.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -9770,6 +9790,7 @@ impl Project {
 
     fn check_remove_component(&self, id: ComponentId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Component(id), EntityKind::Component)?;
+        self.require_no_conditions(ElementRef::Component(id))?;
         let (idx, c) = self.live_component(id)?;
         if c.system.is_some() {
             return Err(ModelError::ComponentHasSystem { component: id });
@@ -9862,6 +9883,7 @@ impl Project {
 
     fn check_remove_interface(&self, id: InterfaceId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Interface(id), EntityKind::Interface)?;
+        self.require_no_conditions(ElementRef::Interface(id))?;
         let (idx, _) = self.live_interface(id)?;
         let flows = self.refs.interfaces.get(idx.index()).copied().unwrap_or(0);
         if flows > 0 {
