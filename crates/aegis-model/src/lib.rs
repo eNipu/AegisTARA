@@ -238,6 +238,7 @@ pub mod library;
 mod lint;
 mod methodology;
 mod op;
+mod party;
 mod paths;
 mod project;
 mod provenance;
@@ -286,8 +287,8 @@ pub use eval::{
 pub use id::{
     AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId, ControlIdx,
     DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx, InterfaceId,
-    InterfaceIdx, NodeId, NodeIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx,
-    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix, format_visual_id,
+    InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, SuggestionId, ThreatId, ThreatIdx, TreeId,
+    TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix, format_visual_id,
 };
 pub use item::{
     Component, DataFlow, Interface, ItemRef, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS,
@@ -305,6 +306,7 @@ pub use methodology::{
     RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
+pub use party::{MAX_PARTIES, MAX_RESPONSIBLE, Party, PartyKind};
 pub use paths::{AttackPath, AttackPaths, ChokePoint};
 pub use project::{MAX_NAME_CHARS, Project, ProjectEvalCache};
 pub use provenance::{Provenance, ProvenanceSource};

@@ -118,6 +118,7 @@ id = ⟦ÎD␣⟧
 properties = ⟦Prôpértîés␣⟧
 worst-risk = ⟦Wôrst rîsk␣⟧
 controls = ⟦Côntrôls␣⟧
+responsible = ⟦Réspônsîblé␣⟧
 
 # Relation labels (job 149).
 relation-asset-component = ⟦Cômpônént␣⟧
@@ -127,8 +128,16 @@ relation-threat-tree = ⟦Attâck tréé␣⟧
 relation-threat-goal = ⟦Gôâl␣⟧
 relation-threat-claim = ⟦Clâîm␣⟧
 relation-goal-controls = ⟦Côntrôls␣⟧
+relation-goal-responsible = ⟦Réspônsîblé␣⟧
+relation-claim-responsible = ⟦Réspônsîblé␣⟧
 relation-control-targets = ⟦Applîéd tô␣⟧
 relation-step-via = ⟦Gôés thrôûgh␣⟧
 relation-step-mitigations = ⟦Mîtîgâtîôns␣⟧
 relation-dataflow-from = ⟦Flôw sôûrcé␣⟧
 relation-dataflow-to = ⟦Flôw dés tînâtîôn␣⟧
+
+# Party roles (job 145).
+party-us = ⟦Ûs␣⟧
+party-customer = ⟦Cûstômér␣⟧
+party-supplier = ⟦Sûpplîér␣⟧
+party-other = ⟦Ôthér␣⟧

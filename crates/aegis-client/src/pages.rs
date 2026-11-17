@@ -15,8 +15,8 @@
 use aegis_canvas::Tone;
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, ElementKind, GoalId,
-    InterfaceId, LintCode, LintSeverity, Methodology, NodeId, Project, Provenance, ThreatId,
-    TreeId, TrustBoundaryId,
+    InterfaceId, LintCode, LintSeverity, Methodology, NodeId, Party, PartyId, PartyIdx, Project,
+    Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 use crate::commands::TREATMENTS;
@@ -2113,6 +2113,21 @@ pub struct GoalRowOf<Id> {
     pub controls: usize,
     /// Threats that reference it.
     pub threats: usize,
+    /// Responsible parties as `visual id — name`, in stored order.
+    pub responsible: Vec<String>,
+}
+
+/// A party as seen from a goal or claim's responsible list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartyLink {
+    /// The party.
+    pub id: PartyId,
+    /// Short visual ID (`P00`, `P01`, ...).
+    pub visual_id: String,
+    /// Its name.
+    pub name: String,
+    /// Whether the goal or claim lists it as responsible.
+    pub linked: bool,
 }
 
 /// A control as seen from a goal.
@@ -2139,10 +2154,37 @@ pub struct GoalDetail<Id> {
     pub name: String,
     /// Every control and whether it is linked (goals only).
     pub controls: Vec<ControlLink>,
+    /// Every party and whether it is responsible, for the picker.
+    pub responsible: Vec<PartyLink>,
     /// Threats that reference it.
     pub threats: Vec<LinkRow>,
     /// Provenance text.
     pub changed: String,
+}
+
+/// Responsible parties as `P00 — Bosch`, in stored order. O(parties) per id.
+fn responsible_text(project: &Project, parties: &[PartyIdx]) -> Vec<String> {
+    parties
+        .iter()
+        .filter_map(|&idx| {
+            let visual = project.party_visual_id(idx)?;
+            let name = project.party(idx).map_or("", Party::name);
+            Some(format!("{visual} — {name}"))
+        })
+        .collect()
+}
+
+/// Every party and whether `linked` names it, for the inspector picker.
+fn party_links(project: &Project, linked: &[PartyIdx]) -> Vec<PartyLink> {
+    project
+        .parties()
+        .map(|(idx, id, party)| PartyLink {
+            id,
+            visual_id: project.party_visual_id(idx).unwrap_or_default(),
+            name: party.name().to_owned(),
+            linked: linked.contains(&idx),
+        })
+        .collect()
 }
 
 /// Every goal. Time O(goals + threats).
@@ -2162,6 +2204,7 @@ pub fn goal_rows(ws: &Workspace) -> Vec<GoalRow> {
                 .threat_scenarios()
                 .filter(|(_, _, t)| t.goal() == Some(idx))
                 .count(),
+            responsible: responsible_text(project, g.responsible()),
         })
         .collect()
 }
@@ -2183,6 +2226,7 @@ pub fn claim_rows(ws: &Workspace) -> Vec<ClaimRow> {
                 .threat_scenarios()
                 .filter(|(_, _, t)| t.claim() == Some(idx))
                 .count(),
+            responsible: responsible_text(project, c.responsible()),
         })
         .collect()
 }
@@ -2210,6 +2254,7 @@ pub fn goal_detail(ws: &Workspace, id: GoalId) -> Option<GoalDetail<GoalId>> {
                 linked: g.controls().contains(&c_idx),
             })
             .collect(),
+        responsible: party_links(project, g.responsible()),
         threats: project
             .threat_scenarios()
             .filter(|(_, _, t)| t.goal() == Some(idx))
@@ -2241,6 +2286,7 @@ pub fn claim_detail(ws: &Workspace, id: ClaimId) -> Option<GoalDetail<ClaimId>> 
             .unwrap_or_default(),
         name: c.name().to_owned(),
         controls: Vec::new(),
+        responsible: party_links(project, c.responsible()),
         threats: project
             .threat_scenarios()
             .filter(|(_, _, t)| t.claim() == Some(idx))
@@ -2313,6 +2359,9 @@ pub fn selection_visual_id(project: &Project, s: Selection) -> String {
         Selection::Claim(id) => project
             .cybersecurity_claim_idx(&id)
             .and_then(|i| project.cybersecurity_claim_visual_id(i)),
+        Selection::Party(id) => project
+            .party_idx(&id)
+            .and_then(|i| project.party_visual_id(i)),
     }
     .unwrap_or_default()
 }
@@ -2369,6 +2418,10 @@ fn named(project: &Project, s: Selection) -> &str {
             .cybersecurity_claim_idx(&id)
             .and_then(|i| project.cybersecurity_claim(i))
             .map(aegis_model::CybersecurityClaim::name),
+        Selection::Party(id) => project
+            .party_idx(&id)
+            .and_then(|i| project.party(i))
+            .map(aegis_model::Party::name),
     }
     .unwrap_or("?")
 }
@@ -2533,6 +2586,21 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
             (
                 format!(
                     "{} {} is retained or shared but has no {}.",
+                    m.element_names().threat_scenario.singular,
+                    q(s),
+                    m.element_names()
+                        .cybersecurity_claim
+                        .singular
+                        .to_lowercase()
+                ),
+                s,
+            )
+        }
+        L::ShareTreatmentWithoutOtherParty { threat } => {
+            let s = Selection::Threat(threat);
+            (
+                format!(
+                    "{} {} is shared but its {} names no party other than us.",
                     m.element_names().threat_scenario.singular,
                     q(s),
                     m.element_names()
@@ -3188,7 +3256,7 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Threat(_) => Page::Threats,
         Selection::Tree(_) | Selection::TreeNode(_, _) => Page::Trees,
         Selection::Control(_) => Page::Controls,
-        Selection::Goal(_) | Selection::Claim(_) => Page::Goals,
+        Selection::Goal(_) | Selection::Claim(_) | Selection::Party(_) => Page::Goals,
     }
 }
 
@@ -3217,6 +3285,8 @@ pub fn select(ui: &mut UiState, s: Selection) {
         Selection::Control(id) => ui.selected_control = Some(id),
         Selection::Goal(id) => ui.selected_goal = Some(id),
         Selection::Claim(id) => ui.selected_claim = Some(id),
+        // Parties have no editor view of their own; selection stays on Goals.
+        Selection::Party(_) => {}
     }
 }
 

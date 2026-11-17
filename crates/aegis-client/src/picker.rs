@@ -352,6 +352,12 @@ impl MultiLinkPicker {
                 |i| project.cybersecurity_claim(i),
                 |e| e.name().to_owned()
             ),
+            Selection::Party(id) => named!(
+                project.party_idx(&id),
+                |i| project.party_visual_id(i),
+                |i| project.party(i),
+                |e| e.name().to_owned()
+            ),
             Selection::Component(id) => named!(
                 project.component_idx(&id),
                 |i| project.component_visual_id(i),

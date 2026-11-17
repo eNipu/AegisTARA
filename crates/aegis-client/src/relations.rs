@@ -2,7 +2,7 @@
 //! link that exists in the model. `Links` columns, the inspector, traceability
 //! views and reports all read the same table. Data level only.
 
-use aegis_model::{ItemRef, NodeIdx, Project, ThreatScenario, TreeIdx};
+use aegis_model::{ItemRef, NodeIdx, PartyId, PartyIdx, Project, ThreatScenario, TreeIdx};
 
 use crate::commands::Edit;
 use crate::view::Selection;
@@ -27,6 +27,8 @@ impl RelationKey {
     pub const THREAT_GOAL: Self = Self("threat-goal");
     pub const THREAT_CLAIM: Self = Self("threat-claim");
     pub const GOAL_CONTROLS: Self = Self("goal-controls");
+    pub const GOAL_RESPONSIBLE: Self = Self("goal-responsible");
+    pub const CLAIM_RESPONSIBLE: Self = Self("claim-responsible");
     pub const CONTROL_TARGETS: Self = Self("control-targets");
     pub const STEP_VIA: Self = Self("step-via");
     pub const STEP_MITIGATIONS: Self = Self("step-mitigations");
@@ -51,6 +53,7 @@ pub enum ElementKind {
     Control,
     Goal,
     Claim,
+    Party,
 }
 
 impl ElementKind {
@@ -70,6 +73,7 @@ impl ElementKind {
             Selection::Control(_) => Self::Control,
             Selection::Goal(_) => Self::Goal,
             Selection::Claim(_) => Self::Claim,
+            Selection::Party(_) => Self::Party,
         })
     }
 }
@@ -110,6 +114,8 @@ pub static RELATIONS: &[Relation] = &[
     rel(RelationKey::THREAT_GOAL, ElementKind::Threat, ElementKind::Goal, "relation-threat-goal", false, read_threat_goal, Some(link_threat_goal), Some(unlink_threat_goal)),
     rel(RelationKey::THREAT_CLAIM, ElementKind::Threat, ElementKind::Claim, "relation-threat-claim", false, read_threat_claim, Some(link_threat_claim), Some(unlink_threat_claim)),
     rel(RelationKey::GOAL_CONTROLS, ElementKind::Goal, ElementKind::Control, "relation-goal-controls", true, read_goal_controls, Some(link_goal_controls), Some(unlink_goal_controls)),
+    rel(RelationKey::GOAL_RESPONSIBLE, ElementKind::Goal, ElementKind::Party, "relation-goal-responsible", true, read_goal_responsible, Some(link_goal_responsible), Some(unlink_goal_responsible)),
+    rel(RelationKey::CLAIM_RESPONSIBLE, ElementKind::Claim, ElementKind::Party, "relation-claim-responsible", true, read_claim_responsible, Some(link_claim_responsible), Some(unlink_claim_responsible)),
     rel(RelationKey::CONTROL_TARGETS, ElementKind::Control, ElementKind::Component, "relation-control-targets", true, read_control_targets, Some(link_control_targets), Some(unlink_control_targets)),
     rel(RelationKey::STEP_VIA, ElementKind::Step, ElementKind::Component, "relation-step-via", false, read_step_via, Some(link_step_via), Some(unlink_step_via)),
     rel(RelationKey::STEP_MITIGATIONS, ElementKind::Step, ElementKind::Control, "relation-step-mitigations", true, read_step_mitigations, None, None),
@@ -148,6 +154,7 @@ pub fn elements_of_kind(project: &Project, kind: ElementKind) -> Vec<Selection> 
         ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
         ElementKind::Goal => project.cybersecurity_goals().map(|(_, id, _)| Selection::Goal(id)).collect(),
         ElementKind::Claim => project.cybersecurity_claims().map(|(_, id, _)| Selection::Claim(id)).collect(),
+        ElementKind::Party => project.parties().map(|(_, id, _)| Selection::Party(id)).collect(),
         ElementKind::Component => project.components().map(|(_, id, _)| Selection::Component(id)).collect(),
         ElementKind::Interface => project.interfaces().map(|(_, id, _)| Selection::Interface(id)).collect(),
         ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
@@ -226,6 +233,13 @@ fn step(project: &Project, from: Selection) -> Option<(TreeIdx, NodeIdx)> {
     Some((tree, project.attack_tree(tree)?.idx_of(&node_id)?))
 }
 
+/// Resolves a stored party index to its stable public ID. The model keeps
+/// `party_id` private, so we scan `parties()`; O(elements).
+#[rustfmt::skip]
+fn party_id(project: &Project, idx: PartyIdx) -> Option<PartyId> {
+    project.parties().find(|(i, _, _)| *i == idx).map(|(_, id, _)| id)
+}
+
 // -- forward reads ----------------------------------------------------------
 
 #[rustfmt::skip]
@@ -259,6 +273,18 @@ fn read_goal_controls(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::Goal(id) = from else { return Vec::new() };
     let Some(goal) = project.cybersecurity_goal_idx(&id).and_then(|i| project.cybersecurity_goal(i)) else { return Vec::new() };
     goal.controls().iter().filter_map(|&c| project.security_control_id(c)).map(Selection::Control).collect()
+}
+#[rustfmt::skip]
+fn read_goal_responsible(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::Goal(id) = from else { return Vec::new() };
+    let Some(idx) = project.cybersecurity_goal_idx(&id) else { return Vec::new() };
+    project.cybersecurity_goal(idx).map_or_else(Vec::new, |g| g.responsible().iter().filter_map(|&p| party_id(project, p).map(Selection::Party)).collect())
+}
+#[rustfmt::skip]
+fn read_claim_responsible(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::Claim(id) = from else { return Vec::new() };
+    let Some(idx) = project.cybersecurity_claim_idx(&id) else { return Vec::new() };
+    project.cybersecurity_claim(idx).map_or_else(Vec::new, |c| c.responsible().iter().filter_map(|&p| party_id(project, p).map(Selection::Party)).collect())
 }
 #[rustfmt::skip]
 fn read_control_targets(project: &Project, from: Selection) -> Vec<Selection> {
@@ -335,6 +361,22 @@ fn unlink_goal_controls(from: Selection, to: Selection) -> Option<Edit> {
     match (from, to) { (Selection::Goal(g), Selection::Control(c)) => Some(Edit::LinkGoalControl { goal: g, control: c, linked: false }), _ => None }
 }
 #[rustfmt::skip]
+fn link_goal_responsible(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Goal(g), Selection::Party(p)) => Some(Edit::LinkGoalParty { goal: g, party: p, linked: true }), _ => None }
+}
+#[rustfmt::skip]
+fn unlink_goal_responsible(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Goal(g), Selection::Party(p)) => Some(Edit::LinkGoalParty { goal: g, party: p, linked: false }), _ => None }
+}
+#[rustfmt::skip]
+fn link_claim_responsible(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Claim(c), Selection::Party(p)) => Some(Edit::LinkClaimParty { claim: c, party: p, linked: true }), _ => None }
+}
+#[rustfmt::skip]
+fn unlink_claim_responsible(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Claim(c), Selection::Party(p)) => Some(Edit::LinkClaimParty { claim: c, party: p, linked: false }), _ => None }
+}
+#[rustfmt::skip]
 fn link_control_targets(from: Selection, to: Selection) -> Option<Edit> {
     match (from, selection_item(to)) { (Selection::Control(c), Some(target)) => Some(Edit::ApplyControl { control: c, target }), _ => None }
 }
@@ -358,7 +400,7 @@ mod tests {
 
     use aegis_model::{
         AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId,
-        Methodology, NodeId, ThreatId, TreeId, TrustBoundaryId,
+        Methodology, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
     };
 
     use crate::workspace::{Origin, Workspace};
@@ -386,6 +428,7 @@ mod tests {
             Selection::Control(ControlId::new_v7()),
             Selection::Goal(GoalId::new_v7()),
             Selection::Claim(ClaimId::new_v7()),
+            Selection::Party(PartyId::new_v7()),
         ];
         for selection in selections {
             assert!(ElementKind::kind_of(selection).is_some(), "{selection:?}");

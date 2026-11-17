@@ -4,9 +4,11 @@
 use std::sync::Arc;
 
 use aegis_client::commands::Edit;
+use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ComponentId, DamageId, DataFlowId, InterfaceId, Methodology, ThreatId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, DamageId, DataFlowId, GoalId, InterfaceId, Methodology, Op,
+    PartyId, PartyKind, Provenance, ThreatId, TrustBoundaryId,
 };
 
 fn apply(ws: &mut Workspace, edit: &Edit) {
@@ -181,4 +183,85 @@ fn item_definition_removals_undo_exactly() {
         ws.undo().expect("undo");
     }
     assert!(ws.project() == &full, "undo did not restore every link");
+}
+
+/// The four party-link ops name the goal or claim they change and resolve to
+/// its selection; none falls through to the "change project" catch-all.
+#[test]
+fn party_link_ops_name_the_goal_or_claim() {
+    let mut ws = workspace();
+    let (goal, claim, party) = (GoalId::new_v7(), ClaimId::new_v7(), PartyId::new_v7());
+    let prov = || Provenance::human("mira", 1_792_956_600_000);
+    ws.apply(
+        vec![
+            Op::AddCybersecurityGoal {
+                id: goal,
+                name: "Sign firmware".into(),
+                controls: vec![],
+                provenance: prov(),
+            },
+            Op::AddCybersecurityClaim {
+                id: claim,
+                name: "Supplier signs".into(),
+                provenance: prov(),
+            },
+            Op::AddParty {
+                id: party,
+                name: "Bosch".into(),
+                kind: PartyKind::Supplier,
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("applies");
+
+    let cases = [
+        (
+            Edit::LinkGoalParty {
+                goal,
+                party,
+                linked: true,
+            },
+            Selection::Goal(goal),
+            "change responsible parties of cybersecurity goal 'Sign firmware'",
+        ),
+        (
+            Edit::LinkGoalParty {
+                goal,
+                party,
+                linked: false,
+            },
+            Selection::Goal(goal),
+            "unlink responsible party from cybersecurity goal 'Sign firmware'",
+        ),
+        (
+            Edit::LinkClaimParty {
+                claim,
+                party,
+                linked: true,
+            },
+            Selection::Claim(claim),
+            "change responsible parties of cybersecurity claim 'Supplier signs'",
+        ),
+        (
+            Edit::LinkClaimParty {
+                claim,
+                party,
+                linked: false,
+            },
+            Selection::Claim(claim),
+            "unlink responsible party from cybersecurity claim 'Supplier signs'",
+        ),
+    ];
+    for (edit, selection, expected) in &cases {
+        apply(&mut ws, edit);
+        let label = ws.undo_label().expect("label");
+        assert_eq!(label.imperative(), *expected);
+        assert!(label.imperative().contains("responsible"));
+        assert_eq!(label.selection(ws.project()), Some(*selection));
+    }
+    for _ in 0..cases.len() {
+        ws.undo().expect("undo");
+    }
 }
