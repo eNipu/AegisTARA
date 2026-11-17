@@ -200,3 +200,46 @@ fn an_empty_rationale_gives_empty_cells() {
     );
     assert_eq!(xlsx_rationale(&f.ws, "Firmware replaced"), "");
 }
+
+/// Unlinking a damage, removing the damage, or removing the threat each undo
+/// back to a project that still has the link rationale.
+#[test]
+fn unlink_and_removals_undo_with_the_rationale() {
+    for removal in 0..3 {
+        let mut fx = fixture();
+        apply(
+            &mut fx.ws,
+            &Edit::SetDamageLinkRationale {
+                threat: fx.threat,
+                damage: fx.damage,
+                text: "Firmware swap reaches the brake ECU".into(),
+            },
+        );
+        if removal == 2 {
+            // A threat with a rating cannot go in one step; clear it first.
+            apply(
+                &mut fx.ws,
+                &Edit::SetThreatFeasibility {
+                    threat: fx.threat,
+                    level: None,
+                },
+            );
+        }
+        let before = fx.ws.project().clone();
+        let edit = match removal {
+            0 => Edit::LinkDamage {
+                threat: fx.threat,
+                damage: fx.damage,
+                linked: false,
+            },
+            1 => Edit::RemoveDamage { damage: fx.damage },
+            _ => Edit::RemoveThreat { threat: fx.threat },
+        };
+        apply(&mut fx.ws, &edit);
+        fx.ws.undo().expect("undo");
+        assert!(
+            *fx.ws.project() == before,
+            "removal {removal} lost the rationale"
+        );
+    }
+}

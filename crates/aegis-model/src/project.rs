@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use crate::applicability::{Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
     CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
@@ -20,10 +21,10 @@ use crate::element::ElementKind;
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
 use crate::id::{
-    ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId,
-    ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx,
-    InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, ThreatId, ThreatIdx, TreeId,
-    TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
+    ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ConditionId,
+    ConditionIdx, ControlId, ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId,
+    GoalId, GoalIdx, InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, ThreatId,
+    ThreatIdx, TreeId, TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
@@ -190,19 +191,22 @@ struct TreeEntry {
     provenance: Provenance,
 }
 
-/// Per node: the component or interface a step goes through, and its
-/// pack-defined attack type. Both vectors have one slot per node, and at
-/// least one slot is `Some` while the value exists, so equal trees compare
-/// equal however they got there.
+/// Per node: the component or interface a step goes through, its
+/// pack-defined attack type, and the conditions the step needs. All vectors
+/// have one slot per node, and at least one slot is populated while the value
+/// exists, so equal trees compare equal however they got there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StepLinks {
     via: Vec<Option<ItemIdx>>,
     attack_type: Vec<Option<AttackType>>,
+    condition: Vec<Vec<ConditionIdx>>,
 }
 
 impl StepLinks {
     fn is_empty(&self) -> bool {
-        self.via.iter().all(Option::is_none) && self.attack_type.iter().all(Option::is_none)
+        self.via.iter().all(Option::is_none)
+            && self.attack_type.iter().all(Option::is_none)
+            && self.condition.iter().all(Vec::is_empty)
     }
 }
 
@@ -234,7 +238,8 @@ impl TreeEntry {
             l.via
                 .iter()
                 .zip(&l.attack_type)
-                .filter(|(v, t)| v.is_some() || t.is_some())
+                .zip(&l.condition)
+                .filter(|((v, t), c)| v.is_some() || t.is_some() || !c.is_empty())
                 .count()
         })
     }
@@ -255,6 +260,7 @@ impl TreeEntry {
             Box::new(StepLinks {
                 via: vec![None; len],
                 attack_type: vec![None; len],
+                condition: vec![Vec::new(); len],
             })
         });
         let old = field(links)
@@ -270,6 +276,7 @@ impl TreeEntry {
         if let Some(l) = self.step_links.as_mut() {
             l.via.insert(i, None);
             l.attack_type.insert(i, None);
+            l.condition.insert(i, Vec::new());
         }
     }
 
@@ -277,6 +284,34 @@ impl TreeEntry {
         if let Some(l) = self.step_links.as_mut() {
             l.via.remove(i);
             l.attack_type.remove(i);
+            l.condition.remove(i);
+        }
+    }
+
+    /// The condition indices needed by node `i`.
+    fn condition_at(&self, i: usize) -> &[ConditionIdx] {
+        self.step_links
+            .as_ref()
+            .and_then(|l| l.condition.get(i))
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// Edits one node's condition list, keeping `step_links` canonical: the
+    /// block is dropped again when every slot is empty.
+    fn edit_condition_link(&mut self, i: usize, edit: impl FnOnce(&mut Vec<ConditionIdx>)) {
+        let len = self.tree.len();
+        let links = self.step_links.get_or_insert_with(|| {
+            Box::new(StepLinks {
+                via: vec![None; len],
+                attack_type: vec![None; len],
+                condition: vec![Vec::new(); len],
+            })
+        });
+        if let Some(slot) = links.condition.get_mut(i) {
+            edit(slot);
+        }
+        if links.is_empty() {
+            self.step_links = None;
         }
     }
 
@@ -599,6 +634,10 @@ pub struct Project {
     goals: Arena<GoalId, GoalIdx, CybersecurityGoal>,
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
     parties: Arena<PartyId, PartyIdx, Party>,
+    conditions: Arena<ConditionId, ConditionIdx, Condition>,
+    /// Conditions needed by each element (job 133). Sparse: an element with
+    /// no conditions has no entry. Lists are sorted by public `ConditionId`.
+    condition_links: BTreeMap<ElementRef, Vec<ConditionIdx>>,
     components: Arena<ComponentId, ComponentIdx, Component>,
     interfaces: Arena<InterfaceId, InterfaceIdx, Interface>,
     data_flows: Arena<DataFlowId, DataFlowIdx, DataFlow>,
@@ -652,6 +691,20 @@ fn check_party_name(name: &str) -> Result<(), ModelError> {
     }
     if name.chars().count() > MAX_NAME_CHARS {
         return Err(ModelError::PartyNameTooLong {
+            max: MAX_NAME_CHARS,
+        });
+    }
+    Ok(())
+}
+
+/// Checks a condition name without putting the name in the error text.
+/// Time O(name length).
+fn check_condition_name(name: &str) -> Result<(), ModelError> {
+    if name.trim().is_empty() {
+        return Err(ModelError::ConditionNameEmpty);
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(ModelError::ConditionNameTooLong {
             max: MAX_NAME_CHARS,
         });
     }
@@ -737,6 +790,8 @@ impl Project {
             goals: Arena::new(),
             claims: Arena::new(),
             parties: Arena::new(),
+            conditions: Arena::new(),
+            condition_links: BTreeMap::new(),
             components: Arena::new(),
             interfaces: Arena::new(),
             data_flows: Arena::new(),
@@ -2013,7 +2068,7 @@ impl Project {
 
     /// Resolves a live party's arena index to its public ID. Time O(1).
     #[must_use]
-    pub(crate) fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
+    pub fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
         self.parties.id(idx)
     }
 
@@ -2036,6 +2091,84 @@ impl Project {
         self.parties
             .visual_num(idx)
             .map(|n| VisualPrefix::Party.format(n))
+    }
+
+    /// Resolves a live condition's public ID to its arena index. Time O(log n).
+    #[must_use]
+    pub fn condition_idx(&self, id: &ConditionId) -> Option<ConditionIdx> {
+        self.conditions.idx(id)
+    }
+
+    /// Returns a live condition in O(1), or `None` if `idx` is out of range or
+    /// tombstoned.
+    #[must_use]
+    pub fn condition(&self, idx: ConditionIdx) -> Option<&Condition> {
+        self.conditions.get(idx)
+    }
+
+    /// Iterates live conditions in deterministic `ConditionId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    pub fn conditions(&self) -> impl Iterator<Item = (ConditionIdx, ConditionId, &Condition)> {
+        self.conditions.iter()
+    }
+
+    /// Returns a live condition's 0-based visual number for snapshot IDs.
+    #[must_use]
+    pub(crate) fn condition_visual_num(&self, idx: ConditionIdx) -> Option<u32> {
+        self.conditions.visual_num(idx)
+    }
+
+    /// Returns a live condition's human-readable visual ID (`CF00`, `CF01`, ...)
+    /// in O(1), or `None` if `idx` is out of range or tombstoned.
+    #[must_use]
+    pub fn condition_visual_id(&self, idx: ConditionIdx) -> Option<String> {
+        self.condition_visual_num(idx)
+            .map(|n| VisualPrefix::Condition.format(n))
+    }
+
+    /// The condition indices this element needs, in `ConditionId` order. The
+    /// client resolves them to public IDs; time O(1).
+    #[must_use]
+    pub fn condition_link_ids(&self, element: ElementRef) -> &[ConditionIdx] {
+        self.condition_links
+            .get(&element)
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// The condition indices this step needs, in `ConditionId` order. The
+    /// client resolves them to public IDs; time O(1) per slot.
+    #[must_use]
+    pub fn step_condition_link_ids(&self, tree: TreeId, node: NodeId) -> &[ConditionIdx] {
+        self.attack_tree_idx(&tree)
+            .and_then(|t| self.trees.get(t))
+            .and_then(|entry| {
+                let idx = entry.tree.idx_of(&node)?;
+                entry.step_links.as_ref()?.condition.get(idx.index())
+            })
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// How many elements and steps need `condition`. Time O(e + t).
+    #[must_use]
+    pub fn condition_usages(&self, condition: ConditionId) -> (usize, usize) {
+        let Some(idx) = self.conditions.idx(&condition) else {
+            return (0, 0);
+        };
+        let elements = self
+            .condition_links
+            .values()
+            .filter(|list| list.contains(&idx))
+            .count();
+        let steps = self
+            .trees
+            .iter()
+            .map(|(_, _, e)| {
+                e.step_links.as_ref().map_or(0, |l| {
+                    l.condition.iter().filter(|c| c.contains(&idx)).count()
+                })
+            })
+            .sum();
+        (elements, steps)
     }
 
     // -- Components (ARC-02) -----------------------------------------------------
@@ -3090,6 +3223,43 @@ impl Project {
 
     pub(crate) fn set_party_loaded_visual(&mut self, id: &PartyId, vis: u32, next: u32) {
         self.parties.set_loaded_visual(id, vis, next);
+    }
+
+    /// The public ID of the condition at `idx`. Time O(1).
+    #[must_use]
+    pub fn condition_id(&self, idx: ConditionIdx) -> Option<ConditionId> {
+        self.conditions.id(idx)
+    }
+
+    pub(crate) fn set_condition_loaded_visual(&mut self, id: &ConditionId, vis: u32, next: u32) {
+        self.conditions.set_loaded_visual(id, vis, next);
+    }
+
+    /// Every element's needed conditions, in `ElementRef` order; for the
+    /// snapshot. Time O(1) per entry.
+    pub(crate) fn condition_link_entries(
+        &self,
+    ) -> impl Iterator<Item = (ElementRef, &[ConditionIdx])> {
+        self.condition_links.iter().map(|(t, l)| (*t, l.as_slice()))
+    }
+
+    /// Every step's needed conditions, in tree then node order; for the
+    /// snapshot. Time O(steps).
+    pub(crate) fn step_condition_entries(&self) -> Vec<(TreeId, NodeId, &[ConditionIdx])> {
+        let mut out = Vec::new();
+        for (_, tree_id, entry) in self.trees.iter() {
+            let Some(links) = entry.step_links.as_ref() else {
+                continue;
+            };
+            for (idx, node, _) in entry.tree.iter() {
+                if let Some(list) = links.condition.get(idx.index())
+                    && !list.is_empty()
+                {
+                    out.push((tree_id, node, list.as_slice()));
+                }
+            }
+        }
+        out
     }
 
     pub(crate) fn set_component_loaded_visual(&mut self, id: &ComponentId, vis: u32, next: u32) {
@@ -6014,6 +6184,7 @@ impl Project {
             self.same_claim(x, other, y)
         });
         let parties = diff_arena(&self.parties, &other.parties, |x, y| x == y);
+        let conditions = diff_arena(&self.conditions, &other.conditions, |x, y| x == y);
         let components = diff_arena(&self.components, &other.components, |x, y| {
             self.same_component(x, other, y)
         });
@@ -6054,6 +6225,7 @@ impl Project {
             cybersecurity_goals,
             cybersecurity_claims,
             parties,
+            conditions,
             elements: self.elements.diff(&other.elements),
             components,
             interfaces,
@@ -6065,6 +6237,7 @@ impl Project {
             languages_changed: self.languages() != other.languages(),
         };
         self.merge_description_changes(other, &mut diff);
+        self.merge_condition_link_changes(other, &mut diff);
         Ok(diff)
     }
 
@@ -6114,6 +6287,72 @@ impl Project {
         merge_modified(&mut diff.interfaces, interfaces);
         merge_modified(&mut diff.data_flows, data_flows);
         merge_modified(&mut diff.trust_boundaries, trust_boundaries);
+    }
+
+    /// Condition links as public IDs, so raw indices never reach `eq`/diff.
+    fn link_map(&self) -> BTreeMap<ElementRef, Vec<ConditionId>> {
+        self.condition_links
+            .iter()
+            .map(|(&t, l)| (t, l.iter().filter_map(|&i| self.conditions.id(i)).collect()))
+            .collect()
+    }
+
+    /// Step condition links as public IDs, keyed by tree and node order.
+    fn step_link_map(&self) -> BTreeMap<TreeId, Vec<Vec<ConditionId>>> {
+        self.trees
+            .iter()
+            .map(|(_, id, e)| {
+                let lists = e.step_links.as_ref().map_or_else(Vec::new, |l| {
+                    l.condition
+                        .iter()
+                        .map(|c| c.iter().filter_map(|&i| self.conditions.id(i)).collect())
+                        .collect()
+                });
+                (id, lists)
+            })
+            .collect()
+    }
+
+    /// Compares every element and step condition link by public ID (L06, L29).
+    fn same_condition_links(&self, other: &Project) -> bool {
+        self.link_map() == other.link_map() && self.step_link_map() == other.step_link_map()
+    }
+
+    /// Marks elements and trees whose condition links changed. A link changes
+    /// no risk number, so this runs after the risk deltas like descriptions.
+    fn merge_condition_link_changes(&self, other: &Project, diff: &mut ProjectDiff) {
+        let (a, b) = (self.link_map(), other.link_map());
+        let (sa, sb) = (self.step_link_map(), other.step_link_map());
+        let (mut assets, mut components, mut interfaces, mut threats) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut goals, mut claims, mut trees) = (Vec::new(), Vec::new(), Vec::new());
+        for target in a.keys().chain(b.keys()) {
+            if a.get(target) == b.get(target) {
+                continue;
+            }
+            match *target {
+                ElementRef::Asset(id) => assets.push(id),
+                ElementRef::Component(id) => components.push(id),
+                ElementRef::Interface(id) => interfaces.push(id),
+                ElementRef::Threat(id) => threats.push(id),
+                ElementRef::Goal(id) => goals.push(id),
+                ElementRef::Claim(id) => claims.push(id),
+                ElementRef::Tree(id) => trees.push(id),
+                _ => {}
+            }
+        }
+        for tree in sa.keys().chain(sb.keys()) {
+            if sa.get(tree) != sb.get(tree) {
+                trees.push(*tree);
+            }
+        }
+        merge_modified(&mut diff.assets, assets);
+        merge_modified(&mut diff.components, components);
+        merge_modified(&mut diff.interfaces, interfaces);
+        merge_modified(&mut diff.threat_scenarios, threats);
+        merge_modified(&mut diff.cybersecurity_goals, goals);
+        merge_modified(&mut diff.cybersecurity_claims, claims);
+        merge_modified(&mut diff.attack_trees, trees);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6588,7 +6827,10 @@ impl Project {
                 ..
             } => self.check_catalog_ref_change(*threat, catalog_ref, false)?,
             Op::LinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, true)?,
-            Op::UnlinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, false)?,
+            Op::UnlinkDamage { threat, damage, .. } => {
+                self.check_link(*threat, *damage, false)?;
+                self.require_no_link_rationale(*threat, Some(*damage))?;
+            }
             Op::RemoveThreatScenario { id } => return self.check_remove_threat(*id),
             Op::AddAttackTree {
                 id,
@@ -6708,6 +6950,61 @@ impl Project {
                 self.party_index(*id)?;
             }
             Op::RemoveParty { id } => return self.check_remove_party(*id),
+            Op::AddCondition {
+                id,
+                name,
+                description,
+                provenance,
+                ..
+            } => return self.check_add_condition(*id, name, description, provenance),
+            Op::RenameCondition { id, name, .. } => {
+                self.condition_index(*id)?;
+                check_condition_name(name)?;
+            }
+            Op::SetConditionPresent { id, .. } => {
+                self.condition_index(*id)?;
+            }
+            Op::RemoveCondition { id } => {
+                self.condition_index(*id)?;
+                let (elements, steps) = self.condition_usages(*id);
+                if elements > 0 || steps > 0 {
+                    return Err(ModelError::ConditionInUse {
+                        condition: *id,
+                        elements,
+                        steps,
+                    });
+                }
+            }
+            Op::NeedCondition {
+                element,
+                condition,
+                provenance,
+            } => {
+                return self.check_condition_link(*element, *condition, true, provenance);
+            }
+            Op::UnneedCondition {
+                element,
+                condition,
+                provenance,
+            } => {
+                return self.check_condition_link(*element, *condition, false, provenance);
+            }
+            Op::NeedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => {
+                return self.check_step_condition_link(*tree, *node, *condition, true, provenance);
+            }
+            Op::UnneedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => {
+                return self.check_step_condition_link(*tree, *node, *condition, false, provenance);
+            }
             Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
@@ -7228,6 +7525,46 @@ impl Project {
                 provenance,
             } => self.commit_set_party_kind(id, kind, provenance),
             Op::RemoveParty { id } => self.commit_remove_party(id),
+            Op::AddCondition {
+                id,
+                name,
+                description,
+                present,
+                provenance,
+            } => self.commit_add_condition(id, name, description, present, provenance),
+            Op::RenameCondition {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_condition(id, name, provenance),
+            Op::SetConditionPresent {
+                id,
+                present,
+                provenance,
+            } => self.commit_set_condition_present(id, present, provenance),
+            Op::RemoveCondition { id } => self.commit_remove_condition(id),
+            Op::NeedCondition {
+                element,
+                condition,
+                provenance,
+            } => self.commit_condition_link(element, condition, provenance, true),
+            Op::UnneedCondition {
+                element,
+                condition,
+                provenance,
+            } => self.commit_condition_link(element, condition, provenance, false),
+            Op::NeedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => self.commit_step_condition_link(tree, node, condition, provenance, true),
+            Op::UnneedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            } => self.commit_step_condition_link(tree, node, condition, provenance, false),
             Op::AddElement {
                 id,
                 kind,
@@ -7561,6 +7898,58 @@ impl Project {
 
     fn party_index(&self, id: PartyId) -> Result<PartyIdx, ModelError> {
         self.parties.idx(&id).ok_or(ModelError::UnknownParty(id))
+    }
+
+    fn condition_index(&self, id: ConditionId) -> Result<ConditionIdx, ModelError> {
+        self.conditions
+            .idx(&id)
+            .ok_or(ModelError::UnknownCondition(id))
+    }
+
+    /// Whether `element` is a live, supported condition-link target.
+    fn check_condition_target(&self, element: ElementRef) -> Result<(), ModelError> {
+        match element {
+            ElementRef::Asset(id) => self.asset_index(id).map(|_| ()),
+            ElementRef::Component(id) => self.component_index(id).map(|_| ()),
+            ElementRef::Interface(id) => self.interface_index(id).map(|_| ()),
+            ElementRef::Threat(id) => self.threat_index(id).map(|_| ()),
+            ElementRef::Tree(id) => self.tree_index(id).map(|_| ()),
+            ElementRef::Goal(id) => self.goal_index(id).map(|_| ()),
+            ElementRef::Claim(id) => self.claim_index(id).map(|_| ()),
+            _ => Err(ModelError::UnsupportedConditionTarget { element }),
+        }
+    }
+
+    /// Where `id` belongs in a list sorted by public `ConditionId`.
+    fn condition_insert_pos(&self, list: &[ConditionIdx], id: ConditionId) -> usize {
+        list.iter()
+            .position(|&i| self.conditions.id(i).is_some_and(|o| o > id))
+            .unwrap_or(list.len())
+    }
+
+    /// Adds `idx` to `element`'s list, keeping it sorted and unique.
+    fn link_condition(&mut self, element: ElementRef, idx: ConditionIdx) {
+        if let Some(id) = self.conditions.id(idx) {
+            let pos = self.condition_insert_pos(self.condition_link_ids(element), id);
+            self.condition_links
+                .entry(element)
+                .or_default()
+                .insert(pos, idx);
+        }
+    }
+
+    /// Removes `idx` from `element`'s list, dropping an empty sparse entry.
+    fn unlink_condition(&mut self, element: ElementRef, idx: ConditionIdx) {
+        if let std::collections::btree_map::Entry::Occupied(mut e) =
+            self.condition_links.entry(element)
+        {
+            if let Some(p) = e.get().iter().position(|&i| i == idx) {
+                e.get_mut().remove(p);
+            }
+            if e.get().is_empty() {
+                e.remove();
+            }
+        }
     }
 
     fn component_index(&self, id: ComponentId) -> Result<ComponentIdx, ModelError> {
@@ -7929,7 +8318,8 @@ impl Project {
                 .get(idx.index())
                 .is_some_and(|m| !m.is_empty())
             || entry.via_at(idx.index()).is_some()
-            || entry.attack_type_at(idx.index()).is_some();
+            || entry.attack_type_at(idx.index()).is_some()
+            || !entry.condition_at(idx.index()).is_empty();
         if rated {
             return Err(ModelError::NodeIsRated(id));
         }
@@ -8121,6 +8511,19 @@ impl Project {
     }
 
     /// An element with a description must have it cleared first.
+    /// Refuses removing an element that still needs conditions: the removal's
+    /// inverse cannot carry the links, so undo would lose them.
+    fn require_no_conditions(&self, element: ElementRef) -> Result<(), ModelError> {
+        let conditions = self.condition_link_ids(element).len();
+        if conditions > 0 {
+            return Err(ModelError::ElementNeedsConditions {
+                element,
+                conditions,
+            });
+        }
+        Ok(())
+    }
+
     fn require_no_description(
         &self,
         target: ElementRef,
@@ -8335,6 +8738,7 @@ impl Project {
 
     fn check_remove_asset(&self, id: AssetId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Asset(id), EntityKind::Asset)?;
+        self.require_no_conditions(ElementRef::Asset(id))?;
         let (idx, asset) = self.live_asset(id)?;
         if let Some(comp_idx) = asset.component {
             let component = self
@@ -8552,8 +8956,28 @@ impl Project {
         }
     }
 
+    /// Refuses when the threat's link to `damage` (or any of its links, for
+    /// `None`) has a rationale: unlink and remove inverses cannot carry it.
+    fn require_no_link_rationale(
+        &self,
+        threat: ThreatId,
+        damage: Option<DamageId>,
+    ) -> Result<(), ModelError> {
+        let t = self.threat_ref(threat)?;
+        for (d, _) in &t.damage_rationales {
+            let Some(id) = self.damage_key(*d) else {
+                continue;
+            };
+            if damage.is_none_or(|want| want == id) {
+                return Err(ModelError::DamageLinkHasRationale { threat, damage: id });
+            }
+        }
+        Ok(())
+    }
+
     fn check_remove_threat(&self, id: ThreatId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Threat(id), EntityKind::ThreatScenario)?;
+        self.require_no_conditions(ElementRef::Threat(id))?;
         let t = self.threat_ref(id)?;
         if let Some(tree_idx) = t.attack_tree {
             let tree = self
@@ -8594,6 +9018,7 @@ impl Project {
         if !t.feasibility_rationale.is_empty() {
             return Err(ModelError::ThreatHasRationale { threat: id });
         }
+        self.require_no_link_rationale(id, None)?;
         let elements = self
             .elements
             .inbound(crate::element::LinkTarget::Threat(id));
@@ -8805,6 +9230,7 @@ impl Project {
             });
         }
         self.require_no_description(ElementRef::Tree(id), EntityKind::AttackTree)?;
+        self.require_no_conditions(ElementRef::Tree(id))?;
         let (idx, entry) = self.live_tree(id)?;
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
@@ -9059,10 +9485,17 @@ impl Project {
 
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
-        let (idx, _) = self.live_goal(id)?;
+        self.require_no_conditions(ElementRef::Goal(id))?;
+        let (idx, g) = self.live_goal(id)?;
         let threats = self.refs.goals.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::CybersecurityGoalInUse { goal: id, threats });
+        }
+        if !g.responsible.is_empty() {
+            return Err(ModelError::CybersecurityGoalHasParties {
+                goal: id,
+                parties: g.responsible.len(),
+            });
         }
         Ok(())
     }
@@ -9088,10 +9521,15 @@ impl Project {
 
     fn check_remove_claim(&self, id: ClaimId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Claim(id), EntityKind::CybersecurityClaim)?;
+        self.require_no_conditions(ElementRef::Claim(id))?;
         let idx = self.live_claim(id)?;
         let threats = self.refs.claims.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::CybersecurityClaimInUse { claim: id, threats });
+        }
+        let parties = self.live_claim_ref(id)?.responsible.len();
+        if parties > 0 {
+            return Err(ModelError::CybersecurityClaimHasParties { claim: id, parties });
         }
         Ok(())
     }
@@ -9109,6 +9547,29 @@ impl Project {
         check_provenance(provenance)?;
         if self.parties.len() >= MAX_PARTIES || self.parties.next_idx(self.slot_limit).is_none() {
             return Err(ModelError::TooManyParties { max: MAX_PARTIES });
+        }
+        Ok(())
+    }
+
+    fn check_add_condition(
+        &self,
+        id: ConditionId,
+        name: &str,
+        description: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.conditions.idx(&id).is_some() {
+            return Err(ModelError::DuplicateConditionId(id));
+        }
+        check_condition_name(name)?;
+        check_text(description, MAX_DESCRIPTION_CHARS)?;
+        check_provenance(provenance)?;
+        if self.conditions.len() >= MAX_CONDITIONS
+            || self.conditions.next_idx(self.slot_limit).is_none()
+        {
+            return Err(ModelError::TooManyConditions {
+                max: MAX_CONDITIONS,
+            });
         }
         Ok(())
     }
@@ -9133,6 +9594,70 @@ impl Project {
             });
         }
         Ok(())
+    }
+
+    /// Checks an element-level need/unneed op. `link` picks the need side.
+    fn check_condition_link(
+        &self,
+        element: ElementRef,
+        condition: ConditionId,
+        link: bool,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let idx = self.condition_index(condition)?;
+        self.check_condition_target(element)?;
+        let list = self.condition_link_ids(element);
+        match (link, list.contains(&idx)) {
+            (true, true) => return Err(ModelError::ConditionAlreadyNeeded { element, condition }),
+            (true, false) if list.len() >= MAX_CONDITIONS_PER_ELEMENT => {
+                return Err(ModelError::TooManyConditionLinks {
+                    max: MAX_CONDITIONS_PER_ELEMENT,
+                });
+            }
+            (false, false) => return Err(ModelError::ConditionNotLinked { element, condition }),
+            _ => {}
+        }
+        check_provenance(provenance)
+    }
+
+    /// Checks a step-level need/unneed op. `link` picks the need side.
+    fn check_step_condition_link(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        condition: ConditionId,
+        link: bool,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let idx = self.condition_index(condition)?;
+        let (entry, node_idx) = self.tree_node(tree, node)?;
+        if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
+            return Err(ModelError::NotAStep { tree, node });
+        }
+        let list = entry.condition_at(node_idx.index());
+        match (link, list.contains(&idx)) {
+            (true, true) => {
+                return Err(ModelError::StepConditionAlreadyNeeded {
+                    tree,
+                    node,
+                    condition,
+                });
+            }
+            (true, false) if list.len() >= MAX_CONDITIONS_PER_ELEMENT => {
+                return Err(ModelError::TooManyConditionLinks {
+                    max: MAX_CONDITIONS_PER_ELEMENT,
+                });
+            }
+            (false, false) => {
+                return Err(ModelError::StepConditionNotLinked {
+                    tree,
+                    node,
+                    condition,
+                });
+            }
+            _ => {}
+        }
+        check_provenance(provenance)
     }
 
     fn check_set_threat_goal(
@@ -9302,6 +9827,7 @@ impl Project {
 
     fn check_remove_component(&self, id: ComponentId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Component(id), EntityKind::Component)?;
+        self.require_no_conditions(ElementRef::Component(id))?;
         let (idx, c) = self.live_component(id)?;
         if c.system.is_some() {
             return Err(ModelError::ComponentHasSystem { component: id });
@@ -9394,6 +9920,7 @@ impl Project {
 
     fn check_remove_interface(&self, id: InterfaceId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Interface(id), EntityKind::Interface)?;
+        self.require_no_conditions(ElementRef::Interface(id))?;
         let (idx, _) = self.live_interface(id)?;
         let flows = self.refs.interfaces.get(idx.index()).copied().unwrap_or(0);
         if flows > 0 {
@@ -10735,6 +11262,161 @@ impl Project {
         })
     }
 
+    fn commit_add_condition(
+        &mut self,
+        id: ConditionId,
+        name: Arc<str>,
+        description: Arc<str>,
+        present: bool,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let condition = Condition {
+            name,
+            description,
+            present,
+            provenance,
+        };
+        self.conditions.push(id, condition, self.slot_limit).ok_or(
+            ModelError::TooManyConditions {
+                max: MAX_CONDITIONS,
+            },
+        )?;
+        Ok(Op::RemoveCondition { id })
+    }
+
+    fn commit_rename_condition(
+        &mut self,
+        id: ConditionId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(id)?;
+        let c = self
+            .conditions
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownCondition(id))?;
+        let name = std::mem::replace(&mut c.name, name);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::RenameCondition {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_condition_present(
+        &mut self,
+        id: ConditionId,
+        present: bool,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(id)?;
+        let c = self
+            .conditions
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownCondition(id))?;
+        let present = std::mem::replace(&mut c.present, present);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::SetConditionPresent {
+            id,
+            present,
+            provenance,
+        })
+    }
+
+    fn commit_remove_condition(&mut self, id: ConditionId) -> Result<Op, ModelError> {
+        let idx = self.condition_index(id)?;
+        let c = self
+            .conditions
+            .remove(idx)
+            .ok_or(ModelError::UnknownCondition(id))?;
+        Ok(Op::AddCondition {
+            id,
+            name: c.name,
+            description: c.description,
+            present: c.present,
+            provenance: c.provenance,
+        })
+    }
+
+    fn commit_condition_link(
+        &mut self,
+        element: ElementRef,
+        condition: ConditionId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(condition)?;
+        if link {
+            self.link_condition(element, idx);
+            Ok(Op::UnneedCondition {
+                element,
+                condition,
+                provenance,
+            })
+        } else {
+            self.unlink_condition(element, idx);
+            Ok(Op::NeedCondition {
+                element,
+                condition,
+                provenance,
+            })
+        }
+    }
+
+    fn commit_step_condition_link(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        condition: ConditionId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(condition)?;
+        let id = self
+            .conditions
+            .id(idx)
+            .ok_or(ModelError::UnknownCondition(condition))?;
+        // Resolve the sort position before mutably borrowing the tree.
+        let (pos, present) = {
+            let list = self.step_condition_link_ids(tree, node);
+            (
+                list.iter()
+                    .position(|&i| self.conditions.id(i).is_some_and(|o| o > id))
+                    .unwrap_or(list.len()),
+                list.contains(&idx),
+            )
+        };
+        let entry = self.tree_mut(tree)?;
+        let i = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?
+            .index();
+        entry.edit_condition_link(i, |list| {
+            if link && !present {
+                list.insert(pos, idx);
+            } else if !link && let Some(p) = list.iter().position(|&other| other == idx) {
+                list.remove(p);
+            }
+        });
+        if link {
+            Ok(Op::UnneedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            })
+        } else {
+            Ok(Op::NeedStepCondition {
+                tree,
+                node,
+                condition,
+                provenance,
+            })
+        }
+    }
+
     fn commit_set_threat_goal(
         &mut self,
         threat: ThreatId,
@@ -11354,10 +12036,12 @@ impl PartialEq for Project {
             && self.goals.len() == other.goals.len()
             && self.claims.len() == other.claims.len()
             && self.parties.len() == other.parties.len()
+            && self.conditions.len() == other.conditions.len()
             && self.components.len() == other.components.len()
             && self.interfaces.len() == other.interfaces.len()
             && self.data_flows.len() == other.data_flows.len()
             && self.trust_boundaries.len() == other.trust_boundaries.len()
+            && self.same_condition_links(other)
             && self
                 .assets()
                 .zip(other.assets())
@@ -11381,6 +12065,10 @@ impl PartialEq for Project {
             && self
                 .parties()
                 .zip(other.parties())
+                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+            && self
+                .conditions()
+                .zip(other.conditions())
                 .all(|((_, a, x), (_, b, y))| a == b && x == y)
             && self
                 .components()
@@ -11554,6 +12242,35 @@ impl Project {
                 .all(|((a, ta), (b, tb))| self.damage_key(*a) == other.damage_key(*b) && ta == tb)
     }
 
+    #[cfg(test)]
+    /// Condition links name live elements and live conditions, sorted and
+    /// unique by `ConditionId`, with no empty list kept (job 133).
+    fn condition_invariants(&self) -> Result<(), String> {
+        let sorted = |list: &[ConditionIdx]| {
+            let ids: Vec<_> = list.iter().map(|&i| self.conditions.id(i)).collect();
+            ids.iter().all(Option::is_some) && ids.windows(2).all(|w| w[0] < w[1])
+        };
+        for (element, list) in &self.condition_links {
+            if list.is_empty() || !sorted(list) {
+                return Err(format!(
+                    "{element:?} has an empty or unsorted condition list"
+                ));
+            }
+            if self.check_condition_target(*element).is_err() {
+                return Err(format!("{element:?} needs conditions but does not exist"));
+            }
+        }
+        for (_, id, entry) in self.trees.iter() {
+            let Some(links) = &entry.step_links else {
+                continue;
+            };
+            if links.condition.iter().any(|l| !l.is_empty() && !sorted(l)) {
+                return Err(format!("tree {id} has an unsorted step condition list"));
+            }
+        }
+        Ok(())
+    }
+
     /// Checks every structural invariant and returns a description of the
     /// first one broken. Time O(n log n + L + m).
     #[cfg(test)]
@@ -11569,6 +12286,8 @@ impl Project {
         arena_invariants("interface", &self.interfaces)?;
         arena_invariants("data_flow", &self.data_flows)?;
         arena_invariants("trust_boundary", &self.trust_boundaries)?;
+        arena_invariants("condition", &self.conditions)?;
+        self.condition_invariants()?;
         let (control_goals, component_assets, component_controls, interface_controls) =
             self.entity_invariants()?;
         let (
@@ -11945,6 +12664,7 @@ impl Project {
         if let Some(links) = &entry.step_links
             && (links.via.len() != entry.tree.len()
                 || links.attack_type.len() != entry.tree.len()
+                || links.condition.len() != entry.tree.len()
                 || links.is_empty())
         {
             return Err(format!("tree {id} has malformed via slots"));
@@ -11953,6 +12673,9 @@ impl Project {
             let (via, attack_type) = (entry.via_at(i), entry.attack_type_at(i));
             if matches!(node, Node::Gate { .. }) && (via.is_some() || attack_type.is_some()) {
                 return Err(format!("tree {id} gate {node_id} has a via or attack type"));
+            }
+            if matches!(node, Node::Gate { .. }) && !entry.condition_at(i).is_empty() {
+                return Err(format!("tree {id} gate {node_id} needs a condition"));
             }
             if via.is_some() && self.item_ref(via).is_none() {
                 return Err(format!("tree {id} node {node_id} goes via a dead item"));
@@ -12507,6 +13230,14 @@ impl ProjectEvalCache {
             | Op::RenameParty { .. }
             | Op::SetPartyKind { .. }
             | Op::RemoveParty { .. }
+            | Op::AddCondition { .. }
+            | Op::RenameCondition { .. }
+            | Op::SetConditionPresent { .. }
+            | Op::RemoveCondition { .. }
+            | Op::NeedCondition { .. }
+            | Op::UnneedCondition { .. }
+            | Op::NeedStepCondition { .. }
+            | Op::UnneedStepCondition { .. }
             | Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }

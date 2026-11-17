@@ -650,6 +650,8 @@ pub enum Selection {
     Claim(ClaimId),
     /// A responsible party in the project's party list.
     Party(PartyId),
+    /// An applicability condition (APL-01).
+    Condition(aegis_model::ConditionId),
 }
 
 /// A user administration request (admins, password login).

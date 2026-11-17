@@ -1032,3 +1032,51 @@ fn project_eq_ignores_party_insertion_order_for_claims() {
     assert!(a == b);
     assert!(a.diff(&b).expect("diff").cybersecurity_claims().is_empty());
 }
+
+/// A goal or claim listing parties cannot be removed: its inverse (`Add…`)
+/// carries no responsible list, so undo would silently drop the links.
+#[test]
+fn removing_a_goal_or_claim_with_parties_is_refused() {
+    let mut p = project();
+    let (party, goal, claim) = (PartyId::new_v7(), GoalId::new_v7(), ClaimId::new_v7());
+    add(&mut p, party, "Bosch", PartyKind::Supplier);
+    add_goal(&mut p, goal);
+    add_claim(&mut p, claim);
+    p.apply(Op::LinkGoalParty {
+        goal,
+        party,
+        provenance: who(),
+    })
+    .expect("link goal");
+    p.apply(Op::LinkClaimParty {
+        claim,
+        party,
+        provenance: who(),
+    })
+    .expect("link claim");
+
+    assert_eq!(
+        p.apply(Op::RemoveCybersecurityGoal { id: goal }),
+        Err(ModelError::CybersecurityGoalHasParties { goal, parties: 1 })
+    );
+    assert_eq!(
+        p.apply(Op::RemoveCybersecurityClaim { id: claim }),
+        Err(ModelError::CybersecurityClaimHasParties { claim, parties: 1 })
+    );
+    p.apply(Op::UnlinkGoalParty {
+        goal,
+        party,
+        provenance: who(),
+    })
+    .expect("unlink goal");
+    p.apply(Op::UnlinkClaimParty {
+        claim,
+        party,
+        provenance: who(),
+    })
+    .expect("unlink claim");
+    p.apply(Op::RemoveCybersecurityGoal { id: goal })
+        .expect("goal removes once unlinked");
+    p.apply(Op::RemoveCybersecurityClaim { id: claim })
+        .expect("claim removes once unlinked");
+}

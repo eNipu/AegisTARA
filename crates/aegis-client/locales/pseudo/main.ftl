@@ -136,6 +136,19 @@ relation-step-via = ⟦Gôés thrôûgh␣⟧
 relation-step-mitigations = ⟦Mîtîgâtîôns␣⟧
 relation-dataflow-from = ⟦Flôw sôûrcé␣⟧
 relation-dataflow-to = ⟦Flôw dés tînâtîôn␣⟧
+relation-dataflow-interface = ⟦Flôw îñtérfâcé␣⟧
+relation-interface-component = ⟦Ôwñîñg cômpôñéñt␣⟧
+relation-boundary-members = ⟦Mémbér cômpôñéñts␣⟧
+condition = ⟦Çôñdîtîôñ␣⟧
+condition-present = ⟦Préseñt␣⟧
+relation-asset-conditions = ⟦Âsset çôñdîtîôñs␣⟧
+relation-component-conditions = ⟦Çômpôñéñt çôñdîtîôñs␣⟧
+relation-interface-conditions = ⟦Îñtérfâcé çôñdîtîôñs␣⟧
+relation-threat-conditions = ⟦Thréât çôñdîtîôñs␣⟧
+relation-tree-conditions = ⟦Tréé çôñdîtîôñs␣⟧
+relation-goal-conditions = ⟦Gôâl çôñdîtîôñs␣⟧
+relation-claim-conditions = ⟦Çlâîm çôñdîtîôñs␣⟧
+relation-step-conditions = ⟦Stép çôñdîtîôñs␣⟧
 
 # Party roles (job 145).
 party-us = ⟦Ûs␣⟧

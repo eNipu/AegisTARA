@@ -2385,6 +2385,9 @@ pub fn selection_visual_id(project: &Project, s: Selection) -> String {
         Selection::Party(id) => project
             .party_idx(&id)
             .and_then(|i| project.party_visual_id(i)),
+        Selection::Condition(id) => project
+            .condition_idx(&id)
+            .and_then(|i| project.condition_visual_id(i)),
     }
     .unwrap_or_default()
 }
@@ -2445,6 +2448,10 @@ fn named(project: &Project, s: Selection) -> &str {
             .party_idx(&id)
             .and_then(|i| project.party(i))
             .map(aegis_model::Party::name),
+        Selection::Condition(id) => project
+            .condition_idx(&id)
+            .and_then(|i| project.condition(i))
+            .map(aegis_model::Condition::name),
     }
     .unwrap_or("?")
 }
@@ -3187,7 +3194,7 @@ pub fn process_map(ws: &Workspace, baselines: usize) -> Vec<ProcessMapBox> {
     let project = ws.project();
     let methodology = project.methodology();
     let rows = problems(ws);
-    let lint = project.lint().len();
+    let lint = rows.len();
     PageGroup::ALL
         .iter()
         .map(|group| {
@@ -3241,7 +3248,7 @@ pub fn process_map(ws: &Workspace, baselines: usize) -> Vec<ProcessMapBox> {
 
 /// The sidebar count of one page, by the rules of `nav_counts` in the
 /// session. Every page has an arm, so a new page cannot fall into a silent 0.
-fn page_count(p: &Project, page: Page, baselines: usize, lint: usize) -> usize {
+pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize) -> usize {
     match page {
         Page::Overview => 0,
         Page::Item => {
@@ -3280,6 +3287,8 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Tree(_) | Selection::TreeNode(_, _) => Page::Trees,
         Selection::Control(_) => Page::Controls,
         Selection::Goal(_) | Selection::Claim(_) | Selection::Party(_) => Page::Goals,
+        // The Configuration page that lists conditions is job 135.
+        Selection::Condition(_) => Page::Overview,
     }
 }
 
@@ -3310,6 +3319,8 @@ pub fn select(ui: &mut UiState, s: Selection) {
         Selection::Claim(id) => ui.selected_claim = Some(id),
         // Parties have no editor view of their own; selection stays on Goals.
         Selection::Party(_) => {}
+        // Conditions get their page in job 135.
+        Selection::Condition(_) => {}
     }
 }
 

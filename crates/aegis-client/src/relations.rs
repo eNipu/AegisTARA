@@ -2,7 +2,7 @@
 //! link that exists in the model. `Links` columns, the inspector, traceability
 //! views and reports all read the same table. Data level only.
 
-use aegis_model::{ItemRef, NodeIdx, PartyId, PartyIdx, Project, ThreatScenario, TreeIdx};
+use aegis_model::{ItemRef, NodeIdx, Project, ThreatScenario, TreeIdx};
 
 use crate::commands::Edit;
 use crate::view::Selection;
@@ -29,11 +29,22 @@ impl RelationKey {
     pub const GOAL_CONTROLS: Self = Self("goal-controls");
     pub const GOAL_RESPONSIBLE: Self = Self("goal-responsible");
     pub const CLAIM_RESPONSIBLE: Self = Self("claim-responsible");
+    pub const ASSET_CONDITIONS: Self = Self("asset-conditions");
+    pub const COMPONENT_CONDITIONS: Self = Self("component-conditions");
+    pub const INTERFACE_CONDITIONS: Self = Self("interface-conditions");
+    pub const THREAT_CONDITIONS: Self = Self("threat-conditions");
+    pub const TREE_CONDITIONS: Self = Self("tree-conditions");
+    pub const GOAL_CONDITIONS: Self = Self("goal-conditions");
+    pub const CLAIM_CONDITIONS: Self = Self("claim-conditions");
+    pub const STEP_CONDITIONS: Self = Self("step-conditions");
     pub const CONTROL_TARGETS: Self = Self("control-targets");
     pub const STEP_VIA: Self = Self("step-via");
     pub const STEP_MITIGATIONS: Self = Self("step-mitigations");
     pub const DATAFLOW_FROM: Self = Self("dataflow-from");
     pub const DATAFLOW_TO: Self = Self("dataflow-to");
+    pub const DATAFLOW_INTERFACE: Self = Self("dataflow-interface");
+    pub const INTERFACE_COMPONENT: Self = Self("interface-component");
+    pub const BOUNDARY_MEMBERS: Self = Self("boundary-members");
 }
 
 /// The kind of element at one end of a relation, distinct from
@@ -54,6 +65,7 @@ pub enum ElementKind {
     Goal,
     Claim,
     Party,
+    Condition,
 }
 
 impl ElementKind {
@@ -74,6 +86,7 @@ impl ElementKind {
             Selection::Goal(_) => Self::Goal,
             Selection::Claim(_) => Self::Claim,
             Selection::Party(_) => Self::Party,
+            Selection::Condition(_) => Self::Condition,
         })
     }
 }
@@ -84,8 +97,9 @@ pub struct Relation {
     pub key: RelationKey,
     /// Kind of the source element.
     pub from: ElementKind,
-    /// Kind of the target element.
-    pub to: ElementKind,
+    /// Kinds a target may have (control targets and step vias are a
+    /// component or an interface).
+    pub to: &'static [ElementKind],
     /// Fluent key of the label shown for this relation.
     pub label: &'static str,
     /// Whether a source may have more than one target.
@@ -100,27 +114,44 @@ pub struct Relation {
 
 #[rustfmt::skip]
 #[allow(clippy::too_many_arguments)] // mirrors the eight public Relation fields
-const fn rel(key: RelationKey, from: ElementKind, to: ElementKind, label: &'static str, many: bool, read: Read, link: Link, unlink: Link) -> Relation {
+const fn rel(key: RelationKey, from: ElementKind, to: &'static [ElementKind], label: &'static str, many: bool, read: Read, link: Link, unlink: Link) -> Relation {
     Relation { key, from, to, label, many, read, link, unlink }
 }
+
+/// A component or an interface: the targets an `ItemRef` can name.
+const ITEM: &[ElementKind] = &[ElementKind::Component, ElementKind::Interface];
+
+/// The target of every condition row.
+const CONDITION: &[ElementKind] = &[ElementKind::Condition];
 
 /// The registry: exactly one row per link that exists in the model.
 #[rustfmt::skip]
 pub static RELATIONS: &[Relation] = &[
-    rel(RelationKey::ASSET_COMPONENT, ElementKind::Asset, ElementKind::Component, "relation-asset-component", false, read_asset_component, Some(link_asset_component), Some(unlink_asset_component)),
-    rel(RelationKey::THREAT_ASSET, ElementKind::Threat, ElementKind::Asset, "relation-threat-asset", false, read_threat_asset, None, None),
-    rel(RelationKey::THREAT_DAMAGES, ElementKind::Threat, ElementKind::Damage, "relation-threat-damages", true, read_threat_damages, Some(link_threat_damages), Some(unlink_threat_damages)),
-    rel(RelationKey::THREAT_TREE, ElementKind::Threat, ElementKind::Tree, "relation-threat-tree", false, read_threat_tree, Some(link_threat_tree), Some(unlink_threat_tree)),
-    rel(RelationKey::THREAT_GOAL, ElementKind::Threat, ElementKind::Goal, "relation-threat-goal", false, read_threat_goal, Some(link_threat_goal), Some(unlink_threat_goal)),
-    rel(RelationKey::THREAT_CLAIM, ElementKind::Threat, ElementKind::Claim, "relation-threat-claim", false, read_threat_claim, Some(link_threat_claim), Some(unlink_threat_claim)),
-    rel(RelationKey::GOAL_CONTROLS, ElementKind::Goal, ElementKind::Control, "relation-goal-controls", true, read_goal_controls, Some(link_goal_controls), Some(unlink_goal_controls)),
-    rel(RelationKey::GOAL_RESPONSIBLE, ElementKind::Goal, ElementKind::Party, "relation-goal-responsible", true, read_goal_responsible, Some(link_goal_responsible), Some(unlink_goal_responsible)),
-    rel(RelationKey::CLAIM_RESPONSIBLE, ElementKind::Claim, ElementKind::Party, "relation-claim-responsible", true, read_claim_responsible, Some(link_claim_responsible), Some(unlink_claim_responsible)),
-    rel(RelationKey::CONTROL_TARGETS, ElementKind::Control, ElementKind::Component, "relation-control-targets", true, read_control_targets, Some(link_control_targets), Some(unlink_control_targets)),
-    rel(RelationKey::STEP_VIA, ElementKind::Step, ElementKind::Component, "relation-step-via", false, read_step_via, Some(link_step_via), Some(unlink_step_via)),
-    rel(RelationKey::STEP_MITIGATIONS, ElementKind::Step, ElementKind::Control, "relation-step-mitigations", true, read_step_mitigations, None, None),
-    rel(RelationKey::DATAFLOW_FROM, ElementKind::DataFlow, ElementKind::Component, "relation-dataflow-from", false, read_dataflow_from, None, None),
-    rel(RelationKey::DATAFLOW_TO, ElementKind::DataFlow, ElementKind::Component, "relation-dataflow-to", false, read_dataflow_to, None, None),
+    rel(RelationKey::ASSET_COMPONENT, ElementKind::Asset, &[ElementKind::Component], "relation-asset-component", false, read_asset_component, Some(link_asset_component), Some(unlink_asset_component)),
+    rel(RelationKey::THREAT_ASSET, ElementKind::Threat, &[ElementKind::Asset], "relation-threat-asset", false, read_threat_asset, None, None),
+    rel(RelationKey::THREAT_DAMAGES, ElementKind::Threat, &[ElementKind::Damage], "relation-threat-damages", true, read_threat_damages, Some(link_threat_damages), Some(unlink_threat_damages)),
+    rel(RelationKey::THREAT_TREE, ElementKind::Threat, &[ElementKind::Tree], "relation-threat-tree", false, read_threat_tree, Some(link_threat_tree), Some(unlink_threat_tree)),
+    rel(RelationKey::THREAT_GOAL, ElementKind::Threat, &[ElementKind::Goal], "relation-threat-goal", false, read_threat_goal, Some(link_threat_goal), Some(unlink_threat_goal)),
+    rel(RelationKey::THREAT_CLAIM, ElementKind::Threat, &[ElementKind::Claim], "relation-threat-claim", false, read_threat_claim, Some(link_threat_claim), Some(unlink_threat_claim)),
+    rel(RelationKey::GOAL_CONTROLS, ElementKind::Goal, &[ElementKind::Control], "relation-goal-controls", true, read_goal_controls, Some(link_goal_controls), Some(unlink_goal_controls)),
+    rel(RelationKey::GOAL_RESPONSIBLE, ElementKind::Goal, &[ElementKind::Party], "relation-goal-responsible", true, read_goal_responsible, Some(link_goal_responsible), Some(unlink_goal_responsible)),
+    rel(RelationKey::CLAIM_RESPONSIBLE, ElementKind::Claim, &[ElementKind::Party], "relation-claim-responsible", true, read_claim_responsible, Some(link_claim_responsible), Some(unlink_claim_responsible)),
+    rel(RelationKey::CONTROL_TARGETS, ElementKind::Control, ITEM, "relation-control-targets", true, read_control_targets, Some(link_control_targets), Some(unlink_control_targets)),
+    rel(RelationKey::STEP_VIA, ElementKind::Step, ITEM, "relation-step-via", false, read_step_via, Some(link_step_via), Some(unlink_step_via)),
+    rel(RelationKey::STEP_MITIGATIONS, ElementKind::Step, &[ElementKind::Control], "relation-step-mitigations", true, read_step_mitigations, None, None),
+    rel(RelationKey::DATAFLOW_FROM, ElementKind::DataFlow, &[ElementKind::Component], "relation-dataflow-from", false, read_dataflow_from, None, None),
+    rel(RelationKey::DATAFLOW_TO, ElementKind::DataFlow, &[ElementKind::Component], "relation-dataflow-to", false, read_dataflow_to, None, None),
+    rel(RelationKey::DATAFLOW_INTERFACE, ElementKind::DataFlow, &[ElementKind::Interface], "relation-dataflow-interface", false, read_dataflow_interface, Some(link_dataflow_interface), Some(unlink_dataflow_interface)),
+    rel(RelationKey::INTERFACE_COMPONENT, ElementKind::Interface, &[ElementKind::Component], "relation-interface-component", false, read_interface_component, None, None),
+    rel(RelationKey::BOUNDARY_MEMBERS, ElementKind::TrustBoundary, &[ElementKind::Component], "relation-boundary-members", true, read_boundary_members, Some(link_boundary_members), Some(unlink_boundary_members)),
+    rel(RelationKey::ASSET_CONDITIONS, ElementKind::Asset, CONDITION, "relation-asset-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::COMPONENT_CONDITIONS, ElementKind::Component, CONDITION, "relation-component-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::INTERFACE_CONDITIONS, ElementKind::Interface, CONDITION, "relation-interface-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::THREAT_CONDITIONS, ElementKind::Threat, CONDITION, "relation-threat-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::TREE_CONDITIONS, ElementKind::Tree, CONDITION, "relation-tree-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::GOAL_CONDITIONS, ElementKind::Goal, CONDITION, "relation-goal-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::CLAIM_CONDITIONS, ElementKind::Claim, CONDITION, "relation-claim-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::STEP_CONDITIONS, ElementKind::Step, CONDITION, "relation-step-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
 ];
 
 /// The registry row for `key`, or `None` if the key is unknown.
@@ -155,6 +186,7 @@ pub fn elements_of_kind(project: &Project, kind: ElementKind) -> Vec<Selection> 
         ElementKind::Goal => project.cybersecurity_goals().map(|(_, id, _)| Selection::Goal(id)).collect(),
         ElementKind::Claim => project.cybersecurity_claims().map(|(_, id, _)| Selection::Claim(id)).collect(),
         ElementKind::Party => project.parties().map(|(_, id, _)| Selection::Party(id)).collect(),
+        ElementKind::Condition => project.conditions().map(|(_, id, _)| Selection::Condition(id)).collect(),
         ElementKind::Component => project.components().map(|(_, id, _)| Selection::Component(id)).collect(),
         ElementKind::Interface => project.interfaces().map(|(_, id, _)| Selection::Interface(id)).collect(),
         ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
@@ -182,7 +214,11 @@ pub fn reverse_related(project: &Project, key: RelationKey, to: Selection) -> Ve
 #[must_use]
 pub fn candidates(project: &Project, key: RelationKey) -> Vec<Selection> {
     match relation(key) {
-        Some(row) => elements_of_kind(project, row.to),
+        Some(row) => row
+            .to
+            .iter()
+            .flat_map(|&k| elements_of_kind(project, k))
+            .collect(),
         None => Vec::new(),
     }
 }
@@ -233,13 +269,6 @@ fn step(project: &Project, from: Selection) -> Option<(TreeIdx, NodeIdx)> {
     Some((tree, project.attack_tree(tree)?.idx_of(&node_id)?))
 }
 
-/// Resolves a stored party index to its stable public ID. The model keeps
-/// `party_id` private, so we scan `parties()`; O(elements).
-#[rustfmt::skip]
-fn party_id(project: &Project, idx: PartyIdx) -> Option<PartyId> {
-    project.parties().find(|(i, _, _)| *i == idx).map(|(_, id, _)| id)
-}
-
 // -- forward reads ----------------------------------------------------------
 
 #[rustfmt::skip]
@@ -278,13 +307,13 @@ fn read_goal_controls(project: &Project, from: Selection) -> Vec<Selection> {
 fn read_goal_responsible(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::Goal(id) = from else { return Vec::new() };
     let Some(idx) = project.cybersecurity_goal_idx(&id) else { return Vec::new() };
-    project.cybersecurity_goal(idx).map_or_else(Vec::new, |g| g.responsible().iter().filter_map(|&p| party_id(project, p).map(Selection::Party)).collect())
+    project.cybersecurity_goal(idx).map_or_else(Vec::new, |g| g.responsible().iter().filter_map(|&p| project.party_id(p).map(Selection::Party)).collect())
 }
 #[rustfmt::skip]
 fn read_claim_responsible(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::Claim(id) = from else { return Vec::new() };
     let Some(idx) = project.cybersecurity_claim_idx(&id) else { return Vec::new() };
-    project.cybersecurity_claim(idx).map_or_else(Vec::new, |c| c.responsible().iter().filter_map(|&p| party_id(project, p).map(Selection::Party)).collect())
+    project.cybersecurity_claim(idx).map_or_else(Vec::new, |c| c.responsible().iter().filter_map(|&p| project.party_id(p).map(Selection::Party)).collect())
 }
 #[rustfmt::skip]
 fn read_control_targets(project: &Project, from: Selection) -> Vec<Selection> {
@@ -308,6 +337,83 @@ fn read_dataflow_from(project: &Project, from: Selection) -> Vec<Selection> {
 fn read_dataflow_to(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::DataFlow(id) = from else { return Vec::new() };
     project.data_flow_idx(&id).and_then(|i| project.data_flow(i)).map_or_else(Vec::new, |f| project.component_id(f.to()).map(Selection::Component).into_iter().collect())
+}
+
+#[rustfmt::skip]
+fn read_dataflow_interface(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::DataFlow(id) = from else { return Vec::new() };
+    project.data_flow_idx(&id).and_then(|i| project.data_flow(i)).and_then(|f| f.interface()).and_then(|i| project.interface_id(i)).map(Selection::Interface).into_iter().collect()
+}
+#[rustfmt::skip]
+fn read_interface_component(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::Interface(id) = from else { return Vec::new() };
+    project.interface_idx(&id).and_then(|i| project.interface(i)).and_then(|f| project.component_id(f.component())).map(Selection::Component).into_iter().collect()
+}
+#[rustfmt::skip]
+fn read_boundary_members(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::TrustBoundary(id) = from else { return Vec::new() };
+    project.trust_boundary_idx(&id).and_then(|i| project.trust_boundary(i)).map_or_else(Vec::new, |b| b.components().iter().filter_map(|&c| project.component_id(c)).map(Selection::Component).collect())
+}
+
+/// Where a selection keeps its condition links: an element, or a step.
+enum ConditionHolder {
+    Element(aegis_model::ElementRef),
+    Step(aegis_model::TreeId, aegis_model::NodeId),
+}
+
+fn condition_holder(s: Selection) -> Option<ConditionHolder> {
+    use aegis_model::ElementRef as E;
+    Some(match s {
+        Selection::Asset(id) => ConditionHolder::Element(E::Asset(id)),
+        Selection::Component(id) => ConditionHolder::Element(E::Component(id)),
+        Selection::Interface(id) => ConditionHolder::Element(E::Interface(id)),
+        Selection::Threat(id) => ConditionHolder::Element(E::Threat(id)),
+        Selection::Tree(id) => ConditionHolder::Element(E::Tree(id)),
+        Selection::Goal(id) => ConditionHolder::Element(E::Goal(id)),
+        Selection::Claim(id) => ConditionHolder::Element(E::Claim(id)),
+        Selection::TreeNode(tree, node) => ConditionHolder::Step(tree, node),
+        _ => return None,
+    })
+}
+
+/// The conditions an element or step needs; shared by the eight condition rows.
+fn read_conditions(project: &Project, from: Selection) -> Vec<Selection> {
+    let list = match condition_holder(from) {
+        Some(ConditionHolder::Element(e)) => project.condition_link_ids(e),
+        Some(ConditionHolder::Step(tree, node)) => project.step_condition_link_ids(tree, node),
+        None => return Vec::new(),
+    };
+    list.iter()
+        .filter_map(|&i| project.condition_id(i))
+        .map(Selection::Condition)
+        .collect()
+}
+
+fn condition_edit(from: Selection, to: Selection, linked: bool) -> Option<Edit> {
+    let Selection::Condition(condition) = to else {
+        return None;
+    };
+    Some(match condition_holder(from)? {
+        ConditionHolder::Element(element) => Edit::SetConditionLink {
+            element,
+            condition,
+            linked,
+        },
+        ConditionHolder::Step(tree, node) => Edit::SetStepConditionLink {
+            tree,
+            node,
+            condition,
+            linked,
+        },
+    })
+}
+
+fn need_condition(from: Selection, to: Selection) -> Option<Edit> {
+    condition_edit(from, to, true)
+}
+
+fn unneed_condition(from: Selection, to: Selection) -> Option<Edit> {
+    condition_edit(from, to, false)
 }
 
 // -- link / unlink ----------------------------------------------------------
@@ -393,6 +499,23 @@ fn unlink_step_via(from: Selection, to: Selection) -> Option<Edit> {
     match (from, selection_item(to)) { (Selection::TreeNode(tree, node), Some(_)) => Some(Edit::SetStepVia { tree, node, via: None }), _ => None }
 }
 
+#[rustfmt::skip]
+fn link_dataflow_interface(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::DataFlow(f), Selection::Interface(i)) => Some(Edit::SetDataFlowInterface { data_flow: f, interface: Some(i) }), _ => None }
+}
+#[rustfmt::skip]
+fn unlink_dataflow_interface(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::DataFlow(f), Selection::Interface(_)) => Some(Edit::SetDataFlowInterface { data_flow: f, interface: None }), _ => None }
+}
+#[rustfmt::skip]
+fn link_boundary_members(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::TrustBoundary(b), Selection::Component(c)) => Some(Edit::SetTrustBoundaryMember { boundary: b, component: c, member: true }), _ => None }
+}
+#[rustfmt::skip]
+fn unlink_boundary_members(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::TrustBoundary(b), Selection::Component(c)) => Some(Edit::SetTrustBoundaryMember { boundary: b, component: c, member: false }), _ => None }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -429,6 +552,7 @@ mod tests {
             Selection::Goal(GoalId::new_v7()),
             Selection::Claim(ClaimId::new_v7()),
             Selection::Party(PartyId::new_v7()),
+            Selection::Condition(aegis_model::ConditionId::new_v7()),
         ];
         for selection in selections {
             assert!(ElementKind::kind_of(selection).is_some(), "{selection:?}");

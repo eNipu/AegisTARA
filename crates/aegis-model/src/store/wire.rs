@@ -56,8 +56,9 @@ use crate::control::{
 };
 use crate::error::{PackError, StoreError};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
+    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
+    InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
+    VisualPrefix,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -329,6 +330,8 @@ caps! {
     GoalControlsCap = MAX_GOAL_CONTROLS, Limit::GOAL_CONTROLS;
     ResponsibleCap = crate::party::MAX_RESPONSIBLE, Limit::RESPONSIBLE;
     PartiesCap = crate::party::MAX_PARTIES, Limit::PARTIES;
+    ConditionsCap = crate::applicability::MAX_CONDITIONS, Limit::CONDITIONS;
+    ConditionLinksCap = crate::applicability::MAX_CONDITIONS_PER_ELEMENT, Limit::CONDITION_LINKS;
     BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
     ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
     ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
@@ -1421,6 +1424,7 @@ visual_kinds! {
     GoalVisual = VisualPrefix::Goal;
     ClaimVisual = VisualPrefix::Claim;
     PartyVisual = VisualPrefix::Party;
+    ConditionVisual = VisualPrefix::Condition;
     ComponentVisual = VisualPrefix::Component;
     InterfaceVisual = VisualPrefix::Interface;
     DataFlowVisual = VisualPrefix::DataFlow;
@@ -1558,6 +1562,49 @@ pub(super) struct SnapshotWire {
     pub(super) languages: Vec<LangText>,
     #[serde(default)]
     pub(super) elements: ElementsByKind,
+    #[serde(default)]
+    pub(super) conditions: BoundedVec<ConditionWire, ConditionsCap>,
+    #[serde(default)]
+    pub(super) condition_links: Vec<ConditionLinkWire>,
+    #[serde(default)]
+    pub(super) step_conditions: Vec<StepConditionWire>,
+}
+
+/// A snapshot condition (APL-01). `present` is written only when false.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ConditionWire {
+    pub(super) id: WireId<ConditionId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<ConditionVisual>>,
+    pub(super) name: Name,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) description: Option<DescriptionText>,
+    #[serde(default = "present_default")]
+    pub(super) present: bool,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+fn present_default() -> bool {
+    true
+}
+
+/// The conditions one element needs, as public IDs.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ConditionLinkWire {
+    pub(super) target: TargetWire,
+    pub(super) conditions: BoundedVec<WireId<ConditionId>, ConditionLinksCap>,
+}
+
+/// The conditions one attack step needs, as public IDs.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StepConditionWire {
+    pub(super) tree: WireId<TreeId>,
+    pub(super) node: WireId<NodeId>,
+    pub(super) conditions: BoundedVec<WireId<ConditionId>, ConditionLinksCap>,
 }
 
 /// A snapshot element of a generic kind.
@@ -2452,6 +2499,55 @@ pub(super) enum OpWire {
     },
     RemoveParty {
         id: WireId<PartyId>,
+    },
+    AddCondition {
+        id: WireId<ConditionId>,
+        name: Name,
+        description: DescriptionText,
+        present: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameCondition {
+        id: WireId<ConditionId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetConditionPresent {
+        id: WireId<ConditionId>,
+        present: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveCondition {
+        id: WireId<ConditionId>,
+    },
+    NeedCondition {
+        element: TargetWire,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnneedCondition {
+        element: TargetWire,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    NeedStepCondition {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnneedStepCondition {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        condition: WireId<ConditionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
     },
     SetThreatGoal {
         threat: WireId<ThreatId>,

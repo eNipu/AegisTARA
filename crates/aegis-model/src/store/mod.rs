@@ -53,6 +53,7 @@ use std::fmt;
 pub use op_log::{LoggedOp, OpCodec, OpLogReader, OpLogWriter};
 pub use workspace::WorkspaceFile;
 
+use crate::applicability::{MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
 use crate::control::{
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS,
 };
@@ -307,6 +308,19 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A snapshot lists more than [`MAX_CONDITIONS`](crate::MAX_CONDITIONS)
+    /// conditions.
+    Conditions {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// An element or step needs more than
+    /// [`MAX_CONDITIONS_PER_ELEMENT`](crate::MAX_CONDITIONS_PER_ELEMENT)
+    /// conditions.
+    ConditionLinks {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A security control lists more than
     /// [`MAX_CONTROL_TARGETS`](crate::MAX_CONTROL_TARGETS) applied targets.
     ControlTargets {
@@ -494,6 +508,12 @@ impl Limit {
     pub(crate) const RESPONSIBLE: Limit = Limit::Responsible {
         max: MAX_RESPONSIBLE,
     };
+    pub(crate) const CONDITIONS: Limit = Limit::Conditions {
+        max: MAX_CONDITIONS,
+    };
+    pub(crate) const CONDITION_LINKS: Limit = Limit::ConditionLinks {
+        max: MAX_CONDITIONS_PER_ELEMENT,
+    };
     pub(crate) const CONTROL_TARGETS: Limit = Limit::ControlTargets {
         max: MAX_CONTROL_TARGETS,
     };
@@ -596,6 +616,8 @@ impl fmt::Display for Limit {
             }
             Limit::Parties { max } => write!(f, "more than {max} parties"),
             Limit::Responsible { max } => write!(f, "more than {max} responsible parties"),
+            Limit::Conditions { max } => write!(f, "more than {max} conditions"),
+            Limit::ConditionLinks { max } => write!(f, "more than {max} conditions on one element"),
             Limit::ControlTargets { max } => {
                 write!(f, "more than {max} control targets")
             }
@@ -739,6 +761,8 @@ mod tests {
             Limit::GOAL_CONTROLS,
             Limit::PARTIES,
             Limit::RESPONSIBLE,
+            Limit::CONDITIONS,
+            Limit::CONDITION_LINKS,
             Limit::CONTROL_TARGETS,
             Limit::CONTROL_RULES,
             Limit::CONTROL_KINDS,
