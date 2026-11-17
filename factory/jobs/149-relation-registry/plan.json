@@ -1,0 +1,42 @@
+{
+  "job": "149-relation-registry",
+  "slices": [
+    {
+      "id": "149a",
+      "title": "RelationKey, ElementKind and the RELATIONS table in aegis-client",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/relations.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/tests/table_conventions.rs",
+        "crates/aegis-client/locales/en/main.ftl",
+        "crates/aegis-client/locales/ja/main.ftl",
+        "crates/aegis-client/locales/pseudo/main.ftl"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test table_conventions",
+        "cargo test --locked -p aegis-client --lib relations"
+      ]
+    },
+    {
+      "id": "149b",
+      "title": "Bidirectional reachability test for every link kind",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/tests/relations.rs"
+      ],
+      "max_lines": 40,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test relations"
+      ]
+    }
+  ]
+}
