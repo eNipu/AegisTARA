@@ -12242,6 +12242,35 @@ impl Project {
                 .all(|((a, ta), (b, tb))| self.damage_key(*a) == other.damage_key(*b) && ta == tb)
     }
 
+    #[cfg(test)]
+    /// Condition links name live elements and live conditions, sorted and
+    /// unique by `ConditionId`, with no empty list kept (job 133).
+    fn condition_invariants(&self) -> Result<(), String> {
+        let sorted = |list: &[ConditionIdx]| {
+            let ids: Vec<_> = list.iter().map(|&i| self.conditions.id(i)).collect();
+            ids.iter().all(Option::is_some) && ids.windows(2).all(|w| w[0] < w[1])
+        };
+        for (element, list) in &self.condition_links {
+            if list.is_empty() || !sorted(list) {
+                return Err(format!(
+                    "{element:?} has an empty or unsorted condition list"
+                ));
+            }
+            if self.check_condition_target(*element).is_err() {
+                return Err(format!("{element:?} needs conditions but does not exist"));
+            }
+        }
+        for (_, id, entry) in self.trees.iter() {
+            let Some(links) = &entry.step_links else {
+                continue;
+            };
+            if links.condition.iter().any(|l| !l.is_empty() && !sorted(l)) {
+                return Err(format!("tree {id} has an unsorted step condition list"));
+            }
+        }
+        Ok(())
+    }
+
     /// Checks every structural invariant and returns a description of the
     /// first one broken. Time O(n log n + L + m).
     #[cfg(test)]
@@ -12257,6 +12286,8 @@ impl Project {
         arena_invariants("interface", &self.interfaces)?;
         arena_invariants("data_flow", &self.data_flows)?;
         arena_invariants("trust_boundary", &self.trust_boundaries)?;
+        arena_invariants("condition", &self.conditions)?;
+        self.condition_invariants()?;
         let (control_goals, component_assets, component_controls, interface_controls) =
             self.entity_invariants()?;
         let (
@@ -12633,6 +12664,7 @@ impl Project {
         if let Some(links) = &entry.step_links
             && (links.via.len() != entry.tree.len()
                 || links.attack_type.len() != entry.tree.len()
+                || links.condition.len() != entry.tree.len()
                 || links.is_empty())
         {
             return Err(format!("tree {id} has malformed via slots"));
@@ -12641,6 +12673,9 @@ impl Project {
             let (via, attack_type) = (entry.via_at(i), entry.attack_type_at(i));
             if matches!(node, Node::Gate { .. }) && (via.is_some() || attack_type.is_some()) {
                 return Err(format!("tree {id} gate {node_id} has a via or attack type"));
+            }
+            if matches!(node, Node::Gate { .. }) && !entry.condition_at(i).is_empty() {
+                return Err(format!("tree {id} gate {node_id} needs a condition"));
             }
             if via.is_some() && self.item_ref(via).is_none() {
                 return Err(format!("tree {id} node {node_id} goes via a dead item"));
