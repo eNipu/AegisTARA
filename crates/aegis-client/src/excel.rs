@@ -6,12 +6,13 @@
 //! entries) under strict size, entry, and cell caps so an untrusted file
 //! cannot exhaust memory or CPU (rule P2).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, ElementId, ElementKind, GoalId,
-    Methodology, Op, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
+    MAX_RESPONSIBLE, Methodology, Op, PartyId, PartyKind, Project, PropertySet, Provenance,
+    RiskTreatment, ThreatId,
 };
 
 /// Maximum `.xlsx` archive size in bytes (16 MiB).
@@ -108,6 +109,8 @@ pub struct ExcelMapping {
     pub scales_col: Option<usize>,
     /// Column index for the reasoning behind the scaling rating.
     pub scaling_reason_col: Option<usize>,
+    /// Column index for comma-separated responsible party names.
+    pub responsible_col: Option<usize>,
 }
 
 impl ExcelMapping {
@@ -205,6 +208,14 @@ impl ExcelMapping {
                 | "スケーラビリティ根拠" => {
                     m.scaling_reason_col.get_or_insert(idx);
                 }
+                "responsible"
+                | "responsibles"
+                | "responsible parties"
+                | "ownership"
+                | "責任者"
+                | "担当" => {
+                    m.responsible_col.get_or_insert(idx);
+                }
                 _ => {}
             }
         }
@@ -221,6 +232,7 @@ impl ExcelMapping {
             && self.control_col.is_none()
             && self.goal_col.is_none()
             && self.claim_col.is_none()
+            && self.responsible_col.is_none()
     }
 }
 
@@ -1046,6 +1058,10 @@ pub fn preview_import(
         .cybersecurity_claims()
         .map(|(_, id, c)| (c.name().to_lowercase(), id))
         .collect();
+    let mut parties: HashMap<String, PartyId> = project
+        .parties()
+        .map(|(_, id, p)| (p.name().to_lowercase(), id))
+        .collect();
 
     let mut preview = ExcelPreview {
         sheet_names,
@@ -1071,6 +1087,7 @@ pub fn preview_import(
         let raw_claim = cell_at(row, effective_mapping.claim_col);
         let scales_text = cell_at(row, effective_mapping.scales_col);
         let scaling_reason = cell_at(row, effective_mapping.scaling_reason_col);
+        let responsible_text = cell_at(row, effective_mapping.responsible_col);
 
         // Allow `Goal: ...` or `Claim: ...` in the goal column (as exported by
         // the Risk register sheet).
@@ -1369,6 +1386,52 @@ pub fn preview_import(
             None
         };
 
+        // Responsible parties. Excel carries no party kind, so new parties use
+        // `PartyKind::Other` (the documented default). Names are deduplicated
+        // case-insensitively and the list stops at `MAX_RESPONSIBLE`, matching
+        // the model's link guards so the whole row validates as one batch.
+        let mut responsible_added: Vec<(String, PartyId)> = Vec::new();
+        let mut responsible_seen: HashSet<String> = HashSet::new();
+        let mut responsible_count = 0usize;
+        for part in responsible_text.split([',', '、']) {
+            let name = part.trim();
+            if name.is_empty() || responsible_count >= MAX_RESPONSIBLE {
+                continue;
+            }
+            let key = name.to_lowercase();
+            if !responsible_seen.insert(key.clone()) {
+                continue;
+            }
+            let party_id = if let Some(&existing) = parties.get(&key) {
+                existing
+            } else {
+                let id = PartyId::new_v7();
+                row_ops.push(Op::AddParty {
+                    id,
+                    name: name.into(),
+                    kind: PartyKind::Other,
+                    provenance: prov.clone(),
+                });
+                responsible_added.push((key, id));
+                id
+            };
+            if let Some(gid) = goal_id {
+                row_ops.push(Op::LinkGoalParty {
+                    goal: gid,
+                    party: party_id,
+                    provenance: prov.clone(),
+                });
+            }
+            if let Some(cid) = claim_id {
+                row_ops.push(Op::LinkClaimParty {
+                    claim: cid,
+                    party: party_id,
+                    provenance: prov.clone(),
+                });
+            }
+            responsible_count += 1;
+        }
+
         if !threat_name.is_empty()
             && let Some(aid) = asset_id
         {
@@ -1505,6 +1568,9 @@ pub fn preview_import(
         if let Some(cid) = claim_id {
             claims.insert(claim_name.to_lowercase(), cid);
         }
+        for (name, id) in responsible_added {
+            parties.insert(name, id);
+        }
 
         preview.mapped_rows += 1;
         preview.components_to_add += comp_added;
@@ -1528,6 +1594,8 @@ pub fn preview_import(
                         | Op::SetThreatFeasibility { .. }
                         | Op::SetRiskTreatment { .. }
                         | Op::LinkGoalControl { .. }
+                        | Op::LinkGoalParty { .. }
+                        | Op::LinkClaimParty { .. }
                         | Op::SetThreatGoal { .. }
                         | Op::SetThreatClaim { .. }
                         | Op::SetThreatScaling { .. }
@@ -1654,6 +1722,110 @@ mod tests {
         assert_eq!(preview.unmapped_rows.len(), 1);
         assert_eq!(preview.unmapped_rows[0].row_number, 5);
         assert!(preview.unmapped_rows[0].reason.contains("scaling"));
+    }
+
+    #[test]
+    fn responsible_headers_and_import_link_parties_to_goals_and_claims() {
+        // Auto-detection accepts both the English and Japanese headings.
+        let en = ExcelMapping::auto_detect(&["Goal".into(), "Claim".into(), "Responsible".into()]);
+        assert_eq!(en.responsible_col, Some(2));
+        let ja = ExcelMapping::auto_detect(&[
+            "目標".into(),
+            "主張".into(),
+            "責任者".into(),
+            "担当".into(),
+        ]);
+        assert_eq!(ja.responsible_col, Some(2), "the first alias wins");
+        assert!(!en.is_empty());
+
+        let m = std::sync::Arc::new(Methodology::iso21434_r155().expect("builtin"));
+        let project = Project::new(std::sync::Arc::clone(&m));
+        // Two unique names (one joined with `、`, one with `,`), a duplicate of
+        // the first, and enough further names to exceed the cap; the last name
+        // must be skipped.
+        let tail = (3..=17)
+            .map(|i| format!("P{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let responsible = format!("Bosch、Denso, bosch, {tail}");
+        let wb = WorkbookData {
+            sheets: vec![SheetData {
+                name: "Goals".into(),
+                headers: ["Goal".into(), "Claim".into(), "Responsible".into()].to_vec(),
+                rows: vec![(2, vec!["My Goal".into(), "My Claim".into(), responsible])],
+            }],
+        };
+        let preview =
+            preview_import(&project, &wb, &ExcelMapping::default(), "mira", 1).expect("preview");
+        assert_eq!(preview.unmapped_rows.len(), 0);
+
+        let mut added: Vec<(PartyId, String, PartyKind)> = Vec::new();
+        for op in &preview.ops {
+            if let Op::AddParty { id, name, kind, .. } = op {
+                added.push((*id, name.to_string(), *kind));
+            }
+        }
+        assert_eq!(added.len(), MAX_RESPONSIBLE, "cap stops further parties");
+        assert!(added.iter().any(|(_, n, _)| n == "Bosch"));
+        assert!(added.iter().any(|(_, n, _)| n == "Denso"));
+        assert!(
+            !added.iter().any(|(_, n, _)| n == "bosch"),
+            "duplicate skipped"
+        );
+        assert!(
+            !added.iter().any(|(_, n, _)| n == "P17"),
+            "over-cap name skipped"
+        );
+        assert!(added.iter().all(|(_, _, k)| *k == PartyKind::Other));
+
+        let goal_id = preview
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Op::AddCybersecurityGoal { id, .. } => Some(*id),
+                _ => None,
+            })
+            .expect("goal");
+        let claim_id = preview
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Op::AddCybersecurityClaim { id, .. } => Some(*id),
+                _ => None,
+            })
+            .expect("claim");
+        let goal_links: Vec<PartyId> = preview
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::LinkGoalParty { goal, party, .. } if *goal == goal_id => Some(*party),
+                _ => None,
+            })
+            .collect();
+        let claim_links: Vec<PartyId> = preview
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::LinkClaimParty { claim, party, .. } if *claim == claim_id => Some(*party),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(goal_links.len(), MAX_RESPONSIBLE);
+        assert_eq!(claim_links.len(), MAX_RESPONSIBLE);
+        let bosch = added
+            .iter()
+            .find(|(_, n, _)| n == "Bosch")
+            .map(|(id, _, _)| *id)
+            .expect("Bosch party");
+        let denso = added
+            .iter()
+            .find(|(_, n, _)| n == "Denso")
+            .map(|(id, _, _)| *id)
+            .expect("Denso party");
+        for id in [bosch, denso] {
+            assert!(goal_links.contains(&id), "linked to the goal");
+            assert!(claim_links.contains(&id), "linked to the claim");
+        }
     }
 
     fn col_ref(mut n: usize) -> String {

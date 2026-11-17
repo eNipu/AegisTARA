@@ -836,6 +836,7 @@ pub fn report_workbook_xlsx_in(
         names.cybersecurity_goal.singular.to_string(),
         "Controls".to_owned(),
         names.threat_scenario.plural.to_string(),
+        "Responsible".to_owned(),
     ]];
     sys.head(&mut goals);
     for g in pages::goal_rows(ws) {
@@ -847,6 +848,7 @@ pub fn report_workbook_xlsx_in(
             g.name,
             g.controls.to_string(),
             g.threats.to_string(),
+            g.responsible.join(", "),
         ]);
         end_row(&mut goals, cell);
     }
@@ -860,19 +862,41 @@ pub fn report_workbook_xlsx_in(
         "ID".to_owned(),
         names.cybersecurity_claim.singular.to_string(),
         names.threat_scenario.plural.to_string(),
+        "Responsible".to_owned(),
     ]];
     sys.head(&mut claims);
     for c in pages::claim_rows(ws) {
         let Some(cell) = sys.cell(|u| Some(u.claim(p.cybersecurity_claim_idx(&c.id)?))) else {
             continue;
         };
-        claims.push(vec![c.visual_id, c.name, c.threats.to_string()]);
+        claims.push(vec![
+            c.visual_id,
+            c.name,
+            c.threats.to_string(),
+            c.responsible.join(", "),
+        ]);
         end_row(&mut claims, cell);
     }
     counts.push(claims.len().saturating_sub(1));
     sheets.push(Sheet {
         name: sheet_name(&names.cybersecurity_claim.plural),
         rows: claims,
+    });
+
+    // Parties (FND-08). Built from the whole project, not a system view, so
+    // the count equals the rows of this sheet (L22).
+    let mut parties = vec![vec!["ID".to_owned(), "Name".to_owned(), "Kind".to_owned()]];
+    for (idx, _, party) in p.parties() {
+        parties.push(vec![
+            p.party_visual_id(idx).unwrap_or_default(),
+            party.name().to_owned(),
+            party.kind().as_str().to_owned(),
+        ]);
+    }
+    counts.push(parties.len().saturating_sub(1));
+    sheets.push(Sheet {
+        name: "Parties".to_owned(),
+        rows: parties,
     });
 
     // Problems.
@@ -992,5 +1016,98 @@ mod tests {
         assert_eq!(xml_escape("a\u{0000}b"), "ab");
         assert_eq!(cell_text("=cmd()"), "'=cmd()");
         assert_eq!(cell_text("<x>"), "&lt;x&gt;");
+    }
+
+    #[test]
+    fn parties_sheet_and_responsible_columns_are_exported_and_guarded() {
+        use aegis_model::{ClaimId, GoalId, Methodology, Op, PartyId, PartyKind, Provenance};
+
+        use crate::excel::read_workbook;
+        use crate::workspace::Origin;
+
+        let m = std::sync::Arc::new(Methodology::iso21434_r155().expect("builtin"));
+        let mut ws = Workspace::empty(std::sync::Arc::clone(&m));
+        let party = PartyId::new_v7();
+        let goal = GoalId::new_v7();
+        let claim = ClaimId::new_v7();
+        let prov = Provenance::human("mira", 1_792_956_600_000);
+        ws.apply(
+            vec![
+                Op::AddParty {
+                    id: party,
+                    name: "=Bosch Corp".into(),
+                    kind: PartyKind::Supplier,
+                    provenance: prov.clone(),
+                },
+                Op::AddCybersecurityGoal {
+                    id: goal,
+                    name: "Firmware authenticity".into(),
+                    controls: vec![],
+                    provenance: prov.clone(),
+                },
+                Op::AddCybersecurityClaim {
+                    id: claim,
+                    name: "Secure boot enforced".into(),
+                    provenance: prov.clone(),
+                },
+                Op::LinkGoalParty {
+                    goal,
+                    party,
+                    provenance: prov.clone(),
+                },
+                Op::LinkClaimParty {
+                    claim,
+                    party,
+                    provenance: prov,
+                },
+            ],
+            Origin::Edit,
+        )
+        .expect("applies");
+
+        let wb = read_workbook(&report_workbook_xlsx(&ws)).expect("reads workbook");
+
+        let parties = wb
+            .sheets
+            .iter()
+            .find(|s| s.name == "Parties")
+            .expect("Parties sheet");
+        assert_eq!(parties.headers, vec!["ID", "Name", "Kind"]);
+        assert_eq!(parties.rows.len(), 1);
+        assert_eq!(parties.rows[0].1[0], "P00");
+        assert_eq!(parties.rows[0].1[1], "'=Bosch Corp", "formula guarded");
+        assert_eq!(parties.rows[0].1[2], "supplier");
+
+        let goals = wb
+            .sheets
+            .iter()
+            .find(|s| s.name == "Cybersecurity goals")
+            .expect("goals sheet");
+        assert_eq!(
+            goals.headers.last().map(String::as_str),
+            Some("Responsible")
+        );
+        let grow = goals
+            .rows
+            .iter()
+            .find(|(_, r)| r[1] == "Firmware authenticity")
+            .expect("goal row");
+        assert!(grow.1.last().is_some_and(|c| c.contains("Bosch Corp")));
+
+        let claims = wb
+            .sheets
+            .iter()
+            .find(|s| s.name == "Cybersecurity claims")
+            .expect("claims sheet");
+        assert_eq!(
+            claims.headers.last().map(String::as_str),
+            Some("Responsible")
+        );
+        let crow = claims
+            .rows
+            .iter()
+            .find(|(_, r)| r[1] == "Secure boot enforced")
+            .expect("claim row");
+        assert!(crow.1.last().is_some_and(|c| c.contains("Bosch Corp")));
     }
 }
