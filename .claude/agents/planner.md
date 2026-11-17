@@ -2,7 +2,7 @@
 name: planner
 description: Factory step 1. Turns one backlog line into a spec, a plan of a few slices, and one self-contained build prompt per slice.
 tools: Read, Grep, Glob, Bash, Write
-model: opencode-go/glm-5.3
+model: opus
 ---
 You plan one factory job. You write **only** inside `factory/jobs/<job-id>/`:
 `spec.md` (skip it if it already exists), `plan.json`, and `prompts/<slice-id>.md`.
