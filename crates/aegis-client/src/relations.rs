@@ -2,7 +2,7 @@
 //! link that exists in the model. `Links` columns, the inspector, traceability
 //! views and reports all read the same table. Data level only.
 
-use aegis_model::{ItemRef, NodeIdx, PartyId, PartyIdx, Project, ThreatScenario, TreeIdx};
+use aegis_model::{ItemRef, NodeIdx, Project, ThreatScenario, TreeIdx};
 
 use crate::commands::Edit;
 use crate::view::Selection;
@@ -247,13 +247,6 @@ fn step(project: &Project, from: Selection) -> Option<(TreeIdx, NodeIdx)> {
     Some((tree, project.attack_tree(tree)?.idx_of(&node_id)?))
 }
 
-/// Resolves a stored party index to its stable public ID. The model keeps
-/// `party_id` private, so we scan `parties()`; O(elements).
-#[rustfmt::skip]
-fn party_id(project: &Project, idx: PartyIdx) -> Option<PartyId> {
-    project.parties().find(|(i, _, _)| *i == idx).map(|(_, id, _)| id)
-}
-
 // -- forward reads ----------------------------------------------------------
 
 #[rustfmt::skip]
@@ -292,13 +285,13 @@ fn read_goal_controls(project: &Project, from: Selection) -> Vec<Selection> {
 fn read_goal_responsible(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::Goal(id) = from else { return Vec::new() };
     let Some(idx) = project.cybersecurity_goal_idx(&id) else { return Vec::new() };
-    project.cybersecurity_goal(idx).map_or_else(Vec::new, |g| g.responsible().iter().filter_map(|&p| party_id(project, p).map(Selection::Party)).collect())
+    project.cybersecurity_goal(idx).map_or_else(Vec::new, |g| g.responsible().iter().filter_map(|&p| project.party_id(p).map(Selection::Party)).collect())
 }
 #[rustfmt::skip]
 fn read_claim_responsible(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::Claim(id) = from else { return Vec::new() };
     let Some(idx) = project.cybersecurity_claim_idx(&id) else { return Vec::new() };
-    project.cybersecurity_claim(idx).map_or_else(Vec::new, |c| c.responsible().iter().filter_map(|&p| party_id(project, p).map(Selection::Party)).collect())
+    project.cybersecurity_claim(idx).map_or_else(Vec::new, |c| c.responsible().iter().filter_map(|&p| project.party_id(p).map(Selection::Party)).collect())
 }
 #[rustfmt::skip]
 fn read_control_targets(project: &Project, from: Selection) -> Vec<Selection> {
