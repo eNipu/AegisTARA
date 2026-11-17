@@ -171,6 +171,20 @@ impl PageGroup {
     pub fn is_phase(self) -> bool {
         !matches!(self, PageGroup::Outputs | PageGroup::Project)
     }
+
+    /// A human-readable name, for the process map (UI-18).
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            PageGroup::ItemDefinition => "Item definition",
+            PageGroup::Impact => "Impact",
+            PageGroup::AssetsThreats => "Assets and threats",
+            PageGroup::Feasibility => "Attack feasibility",
+            PageGroup::Risk => "Risk and treatment",
+            PageGroup::Outputs => "Outputs",
+            PageGroup::Project => "Project",
+        }
+    }
 }
 
 /// A key naming a relation between two entity kinds, used by `Links` columns.
@@ -271,6 +285,39 @@ impl Page {
     #[must_use]
     pub fn from_index(i: usize) -> Option<Page> {
         Page::ALL.get(i).copied()
+    }
+
+    /// The first page in [`Page::ALL`] of group `g`, or the overview when the
+    /// group has none.
+    #[must_use]
+    pub fn first_in_group(g: PageGroup) -> Page {
+        Page::ALL
+            .iter()
+            .copied()
+            .find(|p| p.group() == Some(g))
+            .unwrap_or(Page::Overview)
+    }
+
+    /// A stable key, used as the page key of the pack's `clause_refs`.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            Page::Overview => "overview",
+            Page::Item => "item",
+            Page::Scope => "scope",
+            Page::Damage => "damage",
+            Page::Assets => "assets",
+            Page::Threats => "threats",
+            Page::Trees => "trees",
+            Page::Risks => "risks",
+            Page::Controls => "controls",
+            Page::Goals => "goals",
+            Page::Reports => "reports",
+            Page::Problems => "problems",
+            Page::Versions => "versions",
+            Page::History => "history",
+            Page::Admin => "admin",
+        }
     }
 
     /// The page's layout.
