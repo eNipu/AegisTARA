@@ -470,6 +470,15 @@ pub enum Edit {
         /// The rationale; empty clears it.
         text: String,
     },
+    /// Sets why a threat is linked to a damage scenario (FND-09).
+    SetDamageLinkRationale {
+        /// The threat.
+        threat: ThreatId,
+        /// The damage scenario already linked to the threat.
+        damage: DamageId,
+        /// The rationale; empty clears it.
+        text: String,
+    },
     /// Removes a threat scenario, clearing what blocks the removal first
     /// (tree link, ratings, treatment, goal, claim).
     RemoveThreat {
@@ -1851,6 +1860,16 @@ impl Edit {
                 text: text.trim().into(),
                 provenance: p,
             }],
+            Edit::SetDamageLinkRationale {
+                threat,
+                damage,
+                text,
+            } => vec![Op::SetDamageLinkRationale {
+                threat: *threat,
+                damage: *damage,
+                text: text.trim().into(),
+                provenance: p,
+            }],
             Edit::SetThreatScaling {
                 threat,
                 scales,
@@ -2705,6 +2724,15 @@ impl Edit {
             Edit::SetFeasibilityRationale { threat: id, text } => {
                 threat(id).is_some_and(|t| t.feasibility_rationale() == text.trim())
             }
+            Edit::SetDamageLinkRationale {
+                threat: id,
+                damage,
+                text,
+            } => threat(id).is_some_and(|t| {
+                project
+                    .damage_scenario_idx(damage)
+                    .is_some_and(|i| t.damage_rationale(i) == text.trim())
+            }),
             Edit::SetImpactRationale { damage, text } => project
                 .damage_scenario_idx(damage)
                 .and_then(|i| project.damage_scenario(i))

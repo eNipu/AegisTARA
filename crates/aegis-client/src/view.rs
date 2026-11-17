@@ -428,6 +428,7 @@ impl TableId {
                     col("damage", Computed, msg("deciding-damage"), 160),
                     col("impact", Computed, msg("impact"), 110),
                     col("feasibility", Computed, msg("feasibility"), 110),
+                    col("rationale", Computed, msg("pair-rationale"), 200),
                     BEFORE,
                     AFTER,
                     col("treatment", Rating, msg("treatment"), 110),

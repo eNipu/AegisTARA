@@ -141,6 +141,7 @@ fn every_table_shows_what_its_page_shows_today() {
                 r.damage,
                 r.impact,
                 r.feasibility,
+                r.rationale,
                 before,
                 after,
                 r.treatment,
