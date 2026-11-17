@@ -667,3 +667,52 @@ fn a_whole_session_of_edits_undoes_back_to_empty() {
     assert!(!ws.can_undo());
     assert!(ws.project() == &Project::new(m));
 }
+
+/// Removing a goal or claim that lists a party is one undo step that brings
+/// the party links back.
+#[test]
+fn removing_a_goal_or_claim_with_parties_undoes_the_links() {
+    use aegis_client::commands::Edit;
+    use aegis_model::{ClaimId, GoalId};
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let (party, goal, claim) = (PartyId::new_v7(), GoalId::new_v7(), ClaimId::new_v7());
+    let setup = vec![
+        Op::AddParty {
+            id: party,
+            name: "Bosch".into(),
+            kind: PartyKind::Supplier,
+            provenance: who(),
+        },
+        Op::AddCybersecurityGoal {
+            id: goal,
+            name: "G".into(),
+            controls: vec![],
+            provenance: who(),
+        },
+        Op::AddCybersecurityClaim {
+            id: claim,
+            name: "C".into(),
+            provenance: who(),
+        },
+        Op::LinkGoalParty {
+            goal,
+            party,
+            provenance: who(),
+        },
+        Op::LinkClaimParty {
+            claim,
+            party,
+            provenance: who(),
+        },
+    ];
+    ws.apply(setup, Origin::Edit).expect("setup");
+    let before = ws.project().clone();
+    for edit in [Edit::RemoveGoal { goal }, Edit::RemoveClaim { claim }] {
+        let ops = edit.to_ops(ws.project(), "alice", 1).expect("ops");
+        ws.apply(ops, Origin::Edit).expect("removes");
+    }
+    ws.undo().expect("undo claim removal");
+    ws.undo().expect("undo goal removal");
+    assert!(*ws.project() == before, "party links restored");
+}

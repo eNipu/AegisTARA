@@ -443,3 +443,27 @@ fn ascii_filter_is_case_insensitive() {
         assert!(picker.options()[idx].label.to_lowercase().contains("data"));
     }
 }
+
+/// The picker stays open across picks: after an edit, `refresh` re-reads the
+/// links, keeps the filter and cursor, and the same key press now unlinks.
+#[test]
+fn refresh_keeps_the_picker_open_across_picks() {
+    let mut fx = fixture();
+    let from = Selection::Threat(fx.threat);
+    let mut picker = MultiLinkPicker::open(fx.ws.project(), RelationKey::THREAT_DAMAGES, from);
+    picker.move_cursor(1);
+    let filter = picker.filter().committed().to_owned();
+    let pick = picker.toggle_active().expect("pick");
+    assert!(matches!(pick, Edit::LinkDamage { linked: true, .. }));
+    let ops = pick.to_ops(fx.ws.project(), "alice", 1).expect("ops");
+    fx.ws.apply(ops, Origin::Edit).expect("applies");
+
+    picker.refresh(fx.ws.project());
+    assert_eq!(picker.cursor(), 1, "cursor kept");
+    assert_eq!(picker.filter().committed(), filter, "filter kept");
+    assert_eq!(picker.chips().len(), 1, "the pick shows as a chip");
+    assert!(matches!(
+        picker.toggle_active(),
+        Some(Edit::LinkDamage { linked: false, .. })
+    ));
+}

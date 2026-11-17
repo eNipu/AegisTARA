@@ -144,6 +144,9 @@ relation-step-via = Goes through
 relation-step-mitigations = Mitigations
 relation-dataflow-from = Flow source
 relation-dataflow-to = Flow destination
+relation-dataflow-interface = Flow interface
+relation-interface-component = Owning component
+relation-boundary-members = Member components
 
 # Party roles (job 145).
 party-us = Us

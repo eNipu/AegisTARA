@@ -1122,6 +1122,24 @@ pub enum ModelError {
         /// How many threat scenarios reference it.
         threats: u32,
     },
+    /// The cybersecurity goal cannot be removed while it lists responsible
+    /// parties, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity goal {goal} still lists {parties} responsible part(ies)")]
+    CybersecurityGoalHasParties {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// How many parties it lists.
+        parties: usize,
+    },
+    /// The cybersecurity claim cannot be removed while it lists responsible
+    /// parties, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity claim {claim} still lists {parties} responsible part(ies)")]
+    CybersecurityClaimHasParties {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// How many parties it lists.
+        parties: usize,
+    },
     /// The threat scenario cannot be removed while it still references an
     /// attack tree; unlink the tree first.
     #[error("threat scenario {threat} still references attack tree {tree}")]
@@ -1184,6 +1202,18 @@ pub enum ModelError {
     ThreatHasRationale {
         /// The threat scenario.
         threat: ThreatId,
+    },
+    /// The threat-damage link cannot be removed, nor its threat scenario,
+    /// while the link still has a rationale (FND-09), because the inverse
+    /// could not restore it; clear it first.
+    #[error(
+        "the link from threat scenario {threat} to damage scenario {damage} still has a rationale"
+    )]
+    DamageLinkHasRationale {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The damage scenario.
+        damage: DamageId,
     },
     /// The damage scenario cannot be removed while it still has an impact
     /// rationale (FND-09); clear it first.
@@ -1883,6 +1913,13 @@ pub enum MethodologyError {
     /// More than `max` language translations are declared in a pack.
     #[error("more than {max} pack translations")]
     TooManyTranslations {
+        /// The limit.
+        max: usize,
+    },
+    /// A pack lists clause refs for more than `max` pages, or more than
+    /// `max` refs for one page.
+    #[error("more than {max} clause refs")]
+    TooManyClauseRefs {
         /// The limit.
         max: usize,
     },
