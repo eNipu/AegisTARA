@@ -20,7 +20,7 @@ use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, AttackTree, AttrValue, ComponentId, ControlId, DamageId, DataFlowId, ElementId,
     ElementKind, ElementRef, GateKind, InterfaceId, LinkTarget, Methodology, Node, NodeId, Op,
-    Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    PartyId, PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -463,6 +463,35 @@ fn walk_elements(seen: &mut BTreeSet<String>) {
     apply_undo_redo(&mut ws, seen, Op::RemoveElement { id: system });
 }
 
+/// The four party ops, over an empty workspace.
+fn walk_parties(seen: &mut BTreeSet<String>) {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let id = PartyId::new_v7();
+    for op in [
+        Op::AddParty {
+            id,
+            name: "Bosch".into(),
+            kind: PartyKind::Supplier,
+            provenance: who(),
+        },
+        Op::RenameParty {
+            id,
+            name: "Bosch Mobility".into(),
+            provenance: who(),
+        },
+        Op::SetPartyKind {
+            id,
+            kind: PartyKind::Customer,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    // The add above is still applied after its undo/redo, so the party exists.
+    apply_undo_redo(&mut ws, seen, Op::RemoveParty { id });
+}
+
 #[test]
 fn every_op_kind_is_undone_and_redone_exactly() {
     let m = common::second();
@@ -473,6 +502,7 @@ fn every_op_kind_is_undone_and_redone_exactly() {
     }
     walk_item_definition_trees_and_descriptions(&mut seen);
     walk_elements(&mut seen);
+    walk_parties(&mut seen);
     assert_eq!(seen, declared_variants(), "an Op variant is not exercised");
 }
 

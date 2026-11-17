@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::control::RiskTreatment;
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, NodeIdx, ThreatId, TreeId, TrustBoundaryId,
+    NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -284,6 +284,15 @@ pub enum ModelError {
     /// A cybersecurity claim with this ID already exists in the project.
     #[error("cybersecurity claim {0} already exists in the project")]
     DuplicateCybersecurityClaim(ClaimId),
+    /// A party with this ID already exists in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, PartyId};
+    /// let id = PartyId::new_v7();
+    /// assert_eq!(ModelError::DuplicatePartyId(id).to_string(), format!("party {id} already exists in the project"));
+    /// ```
+    #[error("party {0} already exists in the project")]
+    DuplicatePartyId(PartyId),
     /// An element with this ID already exists in the project.
     #[error("element {0} already exists in the project")]
     DuplicateElement(ElementId),
@@ -418,6 +427,15 @@ pub enum ModelError {
     /// No cybersecurity claim with this ID is in the project.
     #[error("cybersecurity claim {0} is not in the project")]
     UnknownCybersecurityClaim(ClaimId),
+    /// No party with this ID is in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, PartyId};
+    /// let id = PartyId::new_v7();
+    /// assert_eq!(ModelError::UnknownParty(id).to_string(), format!("party {id} is not in the project"));
+    /// ```
+    #[error("party {0} is not in the project")]
+    UnknownParty(PartyId),
     /// No element with this ID is in the project.
     #[error("element {0} is not in the project")]
     UnknownElement(ElementId),
@@ -539,6 +557,35 @@ pub enum ModelError {
         /// Which entity kind had a name that was too long.
         kind: EntityKind,
         /// The limit, in chars.
+        max: usize,
+    },
+    /// A party name is empty or only whitespace. Carries no name text.
+    ///
+    /// ```
+    /// assert_eq!(aegis_model::ModelError::PartyNameEmpty.to_string(), "party name is empty");
+    /// ```
+    #[error("party name is empty")]
+    PartyNameEmpty,
+    /// A party name is longer than `max` chars. Carries no name text.
+    ///
+    /// ```
+    /// let err = aegis_model::ModelError::PartyNameTooLong { max: 256 };
+    /// assert_eq!(err.to_string(), "party name is longer than 256 chars");
+    /// ```
+    #[error("party name is longer than {max} chars")]
+    PartyNameTooLong {
+        /// The limit, in chars.
+        max: usize,
+    },
+    /// A project holds at most `max` parties.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, MAX_PARTIES};
+    /// assert_eq!(ModelError::TooManyParties { max: MAX_PARTIES }.to_string(), "project holds more than 256 parties");
+    /// ```
+    #[error("project holds more than {max} parties")]
+    TooManyParties {
+        /// The limit.
         max: usize,
     },
     /// A non-empty provenance actor string contains only whitespace.
