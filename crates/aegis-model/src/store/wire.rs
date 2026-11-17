@@ -327,6 +327,8 @@ caps! {
     LinksCap = crate::threat::MAX_DAMAGE_LINKS, Limit::DAMAGE_LINKS;
     AttackTreeNodesCap = crate::tree::MAX_ATTACK_TREE_NODES, Limit::ATTACK_TREE_NODES;
     GoalControlsCap = MAX_GOAL_CONTROLS, Limit::GOAL_CONTROLS;
+    ResponsibleCap = crate::party::MAX_RESPONSIBLE, Limit::RESPONSIBLE;
+    PartiesCap = crate::party::MAX_PARTIES, Limit::PARTIES;
     BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
     ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
     ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
@@ -1418,6 +1420,7 @@ visual_kinds! {
     ControlVisual = VisualPrefix::Control;
     GoalVisual = VisualPrefix::Goal;
     ClaimVisual = VisualPrefix::Claim;
+    PartyVisual = VisualPrefix::Party;
     ComponentVisual = VisualPrefix::Component;
     InterfaceVisual = VisualPrefix::Interface;
     DataFlowVisual = VisualPrefix::DataFlow;
@@ -1537,6 +1540,8 @@ pub(super) struct SnapshotWire {
     pub(super) cybersecurity_goals: Vec<GoalWire>,
     #[serde(default)]
     pub(super) cybersecurity_claims: Vec<ClaimWire>,
+    #[serde(default)]
+    pub(super) parties: BoundedVec<PartyWire, PartiesCap>,
     #[serde(default)]
     pub(super) components: Vec<ComponentWire>,
     #[serde(default)]
@@ -1936,6 +1941,8 @@ pub(super) struct GoalWire {
     pub(super) visual_id: Option<WireVisual<GoalVisual>>,
     pub(super) name: Name,
     pub(super) controls: BoundedVec<WireId<ControlId>, GoalControlsCap>,
+    #[serde(default)]
+    pub(super) responsible: BoundedVec<WireId<PartyId>, ResponsibleCap>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -1948,6 +1955,21 @@ pub(super) struct ClaimWire {
     #[serde(default, deserialize_with = "some")]
     pub(super) visual_id: Option<WireVisual<ClaimVisual>>,
     pub(super) name: Name,
+    #[serde(default)]
+    pub(super) responsible: BoundedVec<WireId<PartyId>, ResponsibleCap>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// A snapshot party.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PartyWire {
+    pub(super) id: WireId<PartyId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<PartyVisual>>,
+    pub(super) name: Name,
+    pub(super) kind: crate::party::PartyKind,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }

@@ -2011,6 +2011,18 @@ impl Project {
         self.parties.get(idx)
     }
 
+    /// Resolves a live party's arena index to its public ID. Time O(1).
+    #[must_use]
+    pub(crate) fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
+        self.parties.id(idx)
+    }
+
+    /// Returns a live party's 0-based visual number for snapshot IDs.
+    #[must_use]
+    pub(crate) fn party_visual_num(&self, idx: PartyIdx) -> Option<u32> {
+        self.parties.visual_num(idx)
+    }
+
     /// Iterates live parties in deterministic `PartyId` order.
     /// Time O(1) per item, O(n) for the whole walk; space O(1).
     pub fn parties(&self) -> impl Iterator<Item = (PartyIdx, PartyId, &Party)> {
@@ -3074,6 +3086,10 @@ impl Project {
 
     pub(crate) fn set_claim_loaded_visual(&mut self, id: &ClaimId, vis: u32, next: u32) {
         self.claims.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_party_loaded_visual(&mut self, id: &PartyId, vis: u32, next: u32) {
+        self.parties.set_loaded_visual(id, vis, next);
     }
 
     pub(crate) fn set_component_loaded_visual(&mut self, id: &ComponentId, vis: u32, next: u32) {
@@ -5612,7 +5628,11 @@ impl Project {
                     }
                 }
                 Some(RiskTreatment::Share | RiskTreatment::Retain) => {
-                    if threat.claim().is_none() {
+                    if let Some(claim_idx) = threat.claim() {
+                        if threat.treatment() == Some(RiskTreatment::Share) {
+                            self.lint_share_party(id, claim_idx, findings);
+                        }
+                    } else {
                         findings.push(LintFinding::new(
                             LintCode::RetainOrShareTreatmentWithoutClaim { threat: id },
                         ));
@@ -5645,6 +5665,26 @@ impl Project {
                     claim,
                 }));
             }
+        }
+    }
+
+    /// A `Share` threat whose claim names no party other than `Us` warns.
+    fn lint_share_party(
+        &self,
+        threat: ThreatId,
+        claim_idx: ClaimIdx,
+        findings: &mut Vec<LintFinding>,
+    ) {
+        let has_other = self.claims.get(claim_idx).is_some_and(|claim| {
+            claim.responsible().iter().any(|&party_idx| {
+                self.party(party_idx)
+                    .is_some_and(|party| party.kind() != PartyKind::Us)
+            })
+        });
+        if !has_other {
+            findings.push(LintFinding::new(
+                LintCode::ShareTreatmentWithoutOtherParty { threat },
+            ));
         }
     }
 
