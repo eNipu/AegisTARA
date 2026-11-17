@@ -2135,6 +2135,13 @@ impl Project {
             .map_or(&[][..], Vec::as_slice)
     }
 
+    /// The condition indices node `node` of `tree` needs. Time O(1).
+    pub(crate) fn step_conditions(&self, tree: TreeIdx, node: NodeIdx) -> &[ConditionIdx] {
+        self.trees
+            .get(tree)
+            .map_or(&[][..], |e| e.condition_at(node.index()))
+    }
+
     /// The condition indices this step needs, in `ConditionId` order. The
     /// client resolves them to public IDs; time O(1) per slot.
     #[must_use]
