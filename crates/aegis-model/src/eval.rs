@@ -849,6 +849,55 @@ impl<V> Evaluation<V> {
             }
         }
     }
+
+    /// Converts a lifted evaluation: `Value` slots keep their value,
+    /// `Excluded` slots have none. `None` when the root is excluded.
+    /// Time O(V), space O(V).
+    pub(crate) fn from_lifted(src: &Evaluation<Lifted<V>>) -> Option<Self>
+    where
+        V: Clone,
+    {
+        let root_value = src.root_value.value()?.clone();
+        Some(Self {
+            values: src
+                .values
+                .iter()
+                .map(|v| v.as_ref().and_then(Lifted::value).cloned())
+                .collect(),
+            derivations: src.derivations.clone(),
+            root: src.root,
+            root_value,
+        })
+    }
+
+    /// Like [`sync_nodes`](Self::sync_nodes), converting lifted slots as
+    /// [`from_lifted`](Self::from_lifted) does. Returns `false`, leaving
+    /// `self` unchanged, when the source root is excluded (the caller must
+    /// rebuild). Time O(|nodes|).
+    pub(crate) fn sync_lifted_nodes(
+        &mut self,
+        src: &Evaluation<Lifted<V>>,
+        nodes: &[NodeIdx],
+    ) -> bool
+    where
+        V: Clone,
+    {
+        let Some(root_value) = src.root_value.value() else {
+            return false;
+        };
+        self.root = src.root;
+        self.root_value = root_value.clone();
+        for &idx in nodes {
+            let i = idx.index();
+            if let (Some(dst), Some(s)) = (self.values.get_mut(i), src.values.get(i)) {
+                *dst = s.as_ref().and_then(Lifted::value).cloned();
+            }
+            if let (Some(dst), Some(s)) = (self.derivations.get_mut(i), src.derivations.get(i)) {
+                *dst = *s;
+            }
+        }
+        true
+    }
 }
 
 /// The explanation of one node's value, from [`Evaluation::explain`].
@@ -1736,6 +1785,155 @@ impl AttributeDomain for MinTime {
     /// Time O(1).
     fn seq_and_kept(&self, acc: u64, next: &u64) -> (u64, Kept) {
         (acc.saturating_add(*next), Kept::Both)
+    }
+}
+
+/// A value of the lifted domain [`Applicable`]: a value of the inner domain,
+/// or `Excluded` when the node does not apply to the analysed variant.
+///
+/// `Copy` when `V` is. Building or matching one is O(1).
+///
+/// ```
+/// use aegis_model::Lifted;
+///
+/// let v: Lifted<u8> = Lifted::Value(3);
+/// assert_eq!(v.value(), Some(&3));
+/// assert!(Lifted::<u8>::Excluded.is_excluded());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Lifted<V> {
+    /// A value of the inner domain.
+    Value(V),
+    /// The node does not apply: no value.
+    Excluded,
+}
+
+impl<V> Lifted<V> {
+    /// The inner value, or `None` when excluded. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Lifted;
+    ///
+    /// assert_eq!(Lifted::Value(2_u8).value(), Some(&2));
+    /// assert_eq!(Lifted::<u8>::Excluded.value(), None);
+    /// ```
+    #[must_use]
+    pub fn value(&self) -> Option<&V> {
+        match self {
+            Self::Value(v) => Some(v),
+            Self::Excluded => None,
+        }
+    }
+
+    /// Whether this is [`Lifted::Excluded`]. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::Lifted;
+    ///
+    /// assert!(Lifted::<u8>::Excluded.is_excluded());
+    /// assert!(!Lifted::Value(0_u8).is_excluded());
+    /// ```
+    #[must_use]
+    pub fn is_excluded(&self) -> bool {
+        matches!(self, Self::Excluded)
+    }
+}
+
+/// Lifts any domain `D` by one extra value, [`Lifted::Excluded`], for nodes
+/// that do not apply (job 134).
+///
+/// - OR skips excluded children: `Excluded or x = x or Excluded = x`, so an OR
+///   gate is excluded only when every child is.
+/// - AND and SAND are excluded when any child is.
+/// - Two values combine with `D`'s own operation.
+///
+/// The `*_kept` answers follow the same rules, so an OR gate's
+/// [`Derivation::Selected`] never names an excluded child while a
+/// non-excluded one exists. Each combine costs O(1) plus one call of `D`'s
+/// operation or one clone of a value.
+///
+/// ```
+/// use aegis_model::{evaluate, Applicable, AttackTree, GateKind, Lifted, MaxMin, Node, NodeId};
+///
+/// # fn main() -> Result<(), aegis_model::ModelError> {
+/// let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root"))?;
+/// let a = tree.add_child(tree.root(), NodeId::new_v7(), Node::step("a"))?;
+/// tree.add_child(tree.root(), NodeId::new_v7(), Node::step("b"))?;
+/// let leaf = |i| Some(if i == a { Lifted::Excluded } else { Lifted::Value(2_u8) });
+/// let eval = evaluate(&tree, &Applicable(MaxMin::new()), leaf)?;
+/// assert_eq!(*eval.root_value(), Lifted::Value(2));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Applicable<D>(pub D);
+
+/// OR on lifted values: `Excluded` is skipped; two values use `inner`.
+fn lift_or<V: Clone>(
+    acc: Lifted<V>,
+    next: &Lifted<V>,
+    inner: impl FnOnce(V, &V) -> (V, Kept),
+) -> (Lifted<V>, Kept) {
+    match (acc, next) {
+        (Lifted::Value(a), Lifted::Value(n)) => {
+            let (v, kept) = inner(a, n);
+            (Lifted::Value(v), kept)
+        }
+        (Lifted::Excluded, Lifted::Value(n)) => (Lifted::Value(n.clone()), Kept::Next),
+        (acc, Lifted::Excluded) => (acc, Kept::Acc),
+    }
+}
+
+/// AND / SAND on lifted values: `Excluded` wins; two values use `inner`.
+fn lift_and<V: Clone>(
+    acc: Lifted<V>,
+    next: &Lifted<V>,
+    inner: impl FnOnce(V, &V) -> (V, Kept),
+) -> (Lifted<V>, Kept) {
+    match (acc, next) {
+        (Lifted::Value(a), Lifted::Value(n)) => {
+            let (v, kept) = inner(a, n);
+            (Lifted::Value(v), kept)
+        }
+        (Lifted::Excluded, _) => (Lifted::Excluded, Kept::Acc),
+        (Lifted::Value(_), Lifted::Excluded) => (Lifted::Excluded, Kept::Next),
+    }
+}
+
+impl<D: AttributeDomain> AttributeDomain for Applicable<D> {
+    type Value = Lifted<D::Value>;
+
+    /// `D::or`, skipping excluded inputs. Time O(1) plus one inner call.
+    fn or(&self, acc: Self::Value, next: &Self::Value) -> Self::Value {
+        lift_or(acc, next, |a, n| (self.0.or(a, n), Kept::Both)).0
+    }
+
+    /// `D::and`, excluded if either input is. Time O(1) plus one inner call.
+    fn and(&self, acc: Self::Value, next: &Self::Value) -> Self::Value {
+        lift_and(acc, next, |a, n| (self.0.and(a, n), Kept::Both)).0
+    }
+
+    /// `D::seq_and`, excluded if either input is. Time O(1) plus one inner
+    /// call.
+    fn seq_and(&self, acc: Self::Value, next: &Self::Value) -> Self::Value {
+        lift_and(acc, next, |a, n| (self.0.seq_and(a, n), Kept::Both)).0
+    }
+
+    /// Excluded `acc` gives [`Kept::Next`] for a value `next`; excluded
+    /// `next` gives [`Kept::Acc`]; two values give `D::or_kept`'s answer.
+    fn or_kept(&self, acc: Self::Value, next: &Self::Value) -> (Self::Value, Kept) {
+        lift_or(acc, next, |a, n| self.0.or_kept(a, n))
+    }
+
+    /// Excluded `acc` gives [`Kept::Acc`]; else excluded `next` gives
+    /// [`Kept::Next`]; two values give `D::and_kept`'s answer.
+    fn and_kept(&self, acc: Self::Value, next: &Self::Value) -> (Self::Value, Kept) {
+        lift_and(acc, next, |a, n| self.0.and_kept(a, n))
+    }
+
+    /// As [`and_kept`](Self::and_kept), with `D::seq_and_kept`.
+    fn seq_and_kept(&self, acc: Self::Value, next: &Self::Value) -> (Self::Value, Kept) {
+        lift_and(acc, next, |a, n| self.0.seq_and_kept(a, n))
     }
 }
 

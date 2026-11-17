@@ -11,6 +11,17 @@ use proptest::test_runner::{Config, TestRunner};
 
 use common::{Stats, accepted, builtin, replay, second, seeds};
 
+/// `Ok`, or excluded by applicability (job 134): lint does not report an
+/// excluded tree or threat as an error.
+fn applies_or_ok<T>(r: &Result<T, aegis_model::ModelError>) -> bool {
+    matches!(
+        r,
+        Ok(_)
+            | Err(aegis_model::ModelError::TreeNotApplicable(_)
+                | aegis_model::ModelError::ThreatNotApplicable(_))
+    )
+}
+
 fn check_lint_invariants(p: &aegis_model::Project) -> Result<(), TestCaseError> {
     let findings = p.lint();
     prop_assert!(
@@ -20,16 +31,16 @@ fn check_lint_invariants(p: &aegis_model::Project) -> Result<(), TestCaseError> 
     let has_errors = findings.iter().any(|f| f.is_error());
     if !has_errors {
         for (_, id, _) in p.attack_trees() {
-            prop_assert!(p.evaluate_tree(id).is_ok());
-            prop_assert!(p.evaluate_residual_tree(id).is_ok());
+            prop_assert!(applies_or_ok(&p.evaluate_tree(id)));
+            prop_assert!(applies_or_ok(&p.evaluate_residual_tree(id)));
         }
         for (_, id, t) in p.threat_scenarios() {
             if t.attack_tree().is_some() {
-                prop_assert!(p.evaluate_threat(id).is_ok());
-                prop_assert!(p.evaluate_residual_threat(id).is_ok());
+                prop_assert!(applies_or_ok(&p.evaluate_threat(id)));
+                prop_assert!(applies_or_ok(&p.evaluate_residual_threat(id)));
             }
-            prop_assert!(p.evaluate_risk(id).is_ok());
-            prop_assert!(p.evaluate_residual_risk(id).is_ok());
+            prop_assert!(applies_or_ok(&p.evaluate_risk(id)));
+            prop_assert!(applies_or_ok(&p.evaluate_residual_risk(id)));
         }
     }
     Ok(())
@@ -99,6 +110,7 @@ fn check_sensitivity_and_choke_points(p: &aegis_model::Project) -> Result<(), Te
     let m = p.methodology();
     let feas_levels: Vec<_> = m.feasibility_levels().map(|(l, _, _)| l).collect();
 
+    let app = p.applicability();
     for (tree_idx, tree_id, tree) in p.attack_trees() {
         if let Ok(eval) = p.evaluate_tree(tree_id) {
             prop_assert_eq!(
@@ -115,19 +127,31 @@ fn check_sensitivity_and_choke_points(p: &aegis_model::Project) -> Result<(), Te
             for tip in &tips {
                 prop_assert_eq!(tip.from_root(), *eval.root_value());
                 prop_assert_ne!(tip.to_root(), tip.from_root());
+                // Excluded steps stay out of the oracle too (job 134).
                 let perturbed = aegis_model::evaluate(
                     tree,
-                    &aegis_model::MaxMin::<aegis_model::FeasibilityLevel>::new(),
+                    &aegis_model::Applicable(
+                        aegis_model::MaxMin::<aegis_model::FeasibilityLevel>::new(),
+                    ),
                     |idx| {
+                        let excluded = tree
+                            .id_of(idx)
+                            .is_some_and(|n| app.is_node_excluded(tree_id, n));
                         if idx == tip.step() {
-                            Some(tip.to_step())
+                            Some(aegis_model::Lifted::Value(tip.to_step()))
+                        } else if excluded {
+                            Some(aegis_model::Lifted::Excluded)
                         } else {
                             p.effective_step_feasibility(tree_idx, idx)
+                                .map(aegis_model::Lifted::Value)
                         }
                     },
                 )
                 .map_err(|e| TestCaseError::fail(format!("perturbed eval: {e}")))?;
-                prop_assert_eq!(*perturbed.root_value(), tip.to_root());
+                prop_assert_eq!(
+                    *perturbed.root_value(),
+                    aegis_model::Lifted::Value(tip.to_root())
+                );
             }
         }
         if let Ok(res_eval) = p.evaluate_residual_tree(tree_id) {

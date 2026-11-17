@@ -612,9 +612,12 @@ fn satisfies_root(tree: &AttackTree, topo: &[NodeIdx], active: &[bool], sat: &mu
     sat.get(tree.root().index()).copied().unwrap_or(false)
 }
 
-/// Checks that `tree` structurally matches `eval`: identical node count and
-/// root, every step has `Derivation::Leaf`, and every gate has non-empty
-/// children and a matching gate rule in `eval`. Time O(V).
+/// Checks that `tree` structurally matches `eval`: identical node count, the
+/// root has a value, every step has `Derivation::Leaf`, and every gate has
+/// non-empty children and a matching gate rule in `eval`. Other nodes may have
+/// no value (an excluded node, APL-02); such nodes are never on a path, because
+/// OR skips children without a value and every child of a valued AND/SAND gate
+/// has a value. Time O(V).
 fn matches_tree<V>(tree: &AttackTree, eval: &Evaluation<V>) -> bool {
     if tree.len() != eval.len() || eval.get(tree.root()).is_none() {
         return false;
@@ -623,9 +626,6 @@ fn matches_tree<V>(tree: &AttackTree, eval: &Evaluation<V>) -> bool {
         let Some(derivation) = eval.derivation(idx) else {
             return false;
         };
-        if eval.get(idx).is_none() {
-            return false;
-        }
         match (node, derivation) {
             (Node::Step { .. }, Derivation::Leaf) => {}
             (
