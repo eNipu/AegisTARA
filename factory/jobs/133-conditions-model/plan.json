@@ -1,0 +1,119 @@
+{
+  "job": "133-conditions-model",
+  "slices": [
+    {
+      "id": "133a",
+      "title": "Condition element: CF ids, arena, add/rename/set-present/remove ops, wire/op-log, diff",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/id.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/diff.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/tests/conditions.rs",
+        "crates/aegis-model/tests/common/mod.rs",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 640,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --lib id",
+        "cargo test --locked -p aegis-model --test conditions",
+        "cargo test --locked -p aegis-model --test store",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "133b",
+      "title": "Condition links: sparse side table, step_links slot, four link ops, ConditionInUse guard",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/diff.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/tests/conditions.rs",
+        "crates/aegis-model/tests/common/mod.rs",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 600,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test conditions",
+        "cargo test --locked -p aegis-model --test store",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "133c",
+      "title": "Snapshot fields, decode caps, v1 byte identity and a round trip with links on every kind",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/snapshot.rs",
+        "crates/aegis-model/tests/common/mod.rs",
+        "crates/aegis-model/tests/conditions.rs",
+        "crates/aegis-model/tests/store.rs",
+        "crates/aegis-model/tests/store_limits.rs",
+        "crates/aegis-model/tests/ops_properties.rs",
+        "crates/aegis-model/tests/store_properties.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test store",
+        "cargo test --locked -p aegis-model --test store_limits",
+        "cargo test --locked -p aegis-model --test ops_properties --test store_properties"
+      ]
+    },
+    {
+      "id": "133d",
+      "title": "Client data: Condition selection, relation rows, edits, undo labels and trilingual keys",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/relations.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/picker.rs",
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/locales/en/main.ftl",
+        "crates/aegis-client/locales/ja/main.ftl",
+        "crates/aegis-client/locales/pseudo/main.ftl",
+        "crates/aegis-client/tests/relations.rs",
+        "crates/aegis-client/tests/table_conventions.rs",
+        "crates/aegis-client/tests/undo_every_op.rs",
+        "crates/aegis-client/tests/undo_labels.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test relations",
+        "cargo test --locked -p aegis-client --lib relations",
+        "cargo test --locked -p aegis-client --test undo_every_op",
+        "cargo test --locked -p aegis-client --test table_conventions"
+      ]
+    }
+  ]
+}
