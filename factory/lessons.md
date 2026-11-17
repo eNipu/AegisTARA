@@ -5,7 +5,6 @@ orchestrator writes this file; agents only read the lines with their tag. One li
 lesson: the cause, not the symptom. At most 25. `seen: 3` gets `PROMOTE`, and `/factory retro`
 then proposes to turn it into a check or a rule.
 
-- L04 [planner] A removal op needs its guard decided in the spec: what blocks removal and how the inverse stays exact. Evidence: job 138 needed a follow-up fix commit. seen: 1
 - L05 [reviewer] Ask of every test: would it fail if the change were removed? A wait or assertion on the wrong condition passes for the wrong reason. Evidence: job 128 (find-in-page test waited on the wrong error). seen: 1
 - L06 [reviewer] `Project ==` does not compare visual IDs or order. A round-trip test must compare `save()` bytes, and must include more than 100 of an element whose file name or sort key carries a zero-padded number. Evidence: job 162 slice 162b (101 trees changed IDs on read-back). seen: 1
 - L07 [builder] When asked to replace a literal with a constant, change only the use that was named; two formats must not share one constant by accident. Evidence: job 162 slice 162b (workspace envelope version tied to the snapshot version). seen: 1
@@ -30,3 +29,4 @@ then proposes to turn it into a check or a rule.
 - L26 [orchestrator] The owner's session can move master while a job is in flight; before Merge, check `git merge-base master factory/<job>` and integrate master into the branch (builder, both sides kept) and re-gate against the new master, instead of merging into a moved master. Evidence: job 131 (129c landed mid-job, merge conflict in view.rs, integration round). seen: 1
 - L27 [planner] Name Fluent message ids with hyphens: Fluent cannot parse dotted ids, so a prompt that uses them forces a deviation. Evidence: job 149 slice 149a. seen: 1
 - L28 [builder] Do not meet a source-line cap by compressing code onto `#[rustfmt::skip]` lines; it passes the gate and fails review. Ask the planner to raise a wrong cap instead. Evidence: job 150 slice 150a (rework compressed, reviewer flagged, planner raised the cap and the rework was reverted). seen: 1
+- L29 [builder] A new reference-typed field on a goal or claim must be resolved by public ID in BOTH `Project::eq` and every `diff_arena` closure; a derived `PartialEq` on raw indices breaks the slot-layout contract and yields spurious diff lines. Evidence: job 145 slice 145b (three review rounds). seen: 1

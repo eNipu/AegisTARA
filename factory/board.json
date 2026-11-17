@@ -2163,6 +2163,74 @@
       ],
       "decision": null,
       "updated": "2026-11-17T14:50:36Z"
+    },
+    {
+      "id": "145-parties",
+      "title": "Parties and responsible links on goals and claims (FND-08)",
+      "branch": "factory/145-parties",
+      "stage": "merged",
+      "slice": "145e",
+      "base": "43caab9d6cec3ce91ca56e83fd00ee97ca87bc4b",
+      "reviews": {
+        "slice": "145e",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "145a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 598
+        },
+        {
+          "slice": "145b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 3,
+          "lines": 507
+        },
+        {
+          "slice": "145c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 206
+        },
+        {
+          "slice": "145d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 338
+        },
+        {
+          "slice": "145e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 299
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-17T17:37:12Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

@@ -1,0 +1,138 @@
+{
+  "job": "145-parties",
+  "slices": [
+    {
+      "id": "145a",
+      "title": "Party element: typed ids, arena, add/rename/set-kind/remove ops, diff",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/party.rs",
+        "crates/aegis-model/src/id.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/diff.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/tests/parties.rs",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 600,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --lib id",
+        "cargo test --locked -p aegis-model --test parties",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "145b",
+      "title": "Responsible links on goals and claims, with the party removal guard",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/party.rs",
+        "crates/aegis-model/src/control.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/tests/parties.rs",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 540,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test parties",
+        "cargo test --locked -p aegis-model --test store",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "145c",
+      "title": "Snapshot persistence, decode caps, v1 fixtures and the share-treatment lint",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/snapshot.rs",
+        "crates/aegis-model/src/lint.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/tests/common/mod.rs",
+        "crates/aegis-model/tests/store.rs",
+        "crates/aegis-model/tests/store_limits.rs",
+        "crates/aegis-model/tests/store_properties.rs",
+        "crates/aegis-model/tests/ops_properties.rs",
+        "crates/aegis-model/tests/party_lint.rs"
+      ],
+      "max_lines": 520,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test store",
+        "cargo test --locked -p aegis-model --test store_limits",
+        "cargo test --locked -p aegis-model --test party_lint",
+        "cargo test --locked -p aegis-model --test ops_properties --test store_properties"
+      ]
+    },
+    {
+      "id": "145d",
+      "title": "Client data: relation rows, responsible column, edits, undo labels and locales",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/relations.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/table.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/src/picker.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/locales/en/main.ftl",
+        "crates/aegis-client/locales/ja/main.ftl",
+        "crates/aegis-client/locales/pseudo/main.ftl",
+        "crates/aegis-client/tests/relations.rs",
+        "crates/aegis-client/tests/table_conventions.rs",
+        "crates/aegis-client/tests/undo_labels.rs"
+      ],
+      "max_lines": 620,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test relations",
+        "cargo test --locked -p aegis-client --test table_conventions",
+        "cargo test --locked -p aegis-client --lib relations",
+        "cargo test --locked -p aegis-client --test undo_labels"
+      ]
+    },
+    {
+      "id": "145e",
+      "title": "Parties and Responsible in XLSX, the report and Excel import",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/excel.rs",
+        "crates/aegis-client/src/report/xlsx.rs",
+        "crates/aegis-client/src/report/doc.rs",
+        "crates/aegis-client/tests/report_builder.rs"
+      ],
+      "max_lines": 520,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --lib excel",
+        "cargo test --locked -p aegis-client --lib report::xlsx",
+        "cargo test --locked -p aegis-client --test report_builder"
+      ]
+    }
+  ]
+}
