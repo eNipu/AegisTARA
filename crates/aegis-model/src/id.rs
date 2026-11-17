@@ -599,6 +599,50 @@ entity_ids! {
 }
 
 entity_ids! {
+    /// Internal index of a condition in a [`Project`](crate::Project) arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::ConditionIdx>(), 4);
+    /// ```
+    pub struct ConditionIdx;
+    index_example {
+        /// ```
+        /// use std::sync::Arc;
+        /// use aegis_model::{ConditionId, Methodology, Op, Project, Provenance};
+        ///
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// let mut project = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// let id = ConditionId::new_v7();
+        /// project.apply(Op::AddCondition {
+        ///     id,
+        ///     name: "Airbag deploys".into(),
+        ///     description: "The airbag deploys in a frontal crash".into(),
+        ///     present: true,
+        ///     provenance: Provenance::default(),
+        /// })?;
+        /// assert_eq!(project.condition_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a condition: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::ConditionId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = ConditionId::new_v7();
+    /// assert_eq!(id.to_string().parse::<ConditionId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct ConditionId;
+}
+
+entity_ids! {
     /// Internal index of a cybersecurity claim in a [`Project`](crate::Project)
     /// arena.
     ///
@@ -1046,7 +1090,7 @@ impl fmt::Display for ElementId {
 /// Fixed human-readable prefix for an element kind's visual ID (FND-06).
 ///
 /// Every numbered element kind has a short uppercase prefix (`A`, `D`, `T`,
-/// `AT`, `SC`, `G`, `CL`, `P`, `C`, `IF`, `DF`, `TB`). Combined with a 0-based
+/// `AT`, `SC`, `G`, `CF`, `CL`, `P`, `C`, `IF`, `DF`, `TB`). Combined with a 0-based
 /// sequence number zero-padded to at least two digits (`00`..`99`, growing
 /// to `100`+), it forms a stable human-readable visual ID such as `A00`,
 /// `T01`, or `DF12`.
@@ -1062,6 +1106,8 @@ impl fmt::Display for ElementId {
 /// assert_eq!(VisualPrefix::Threat.parse_num("T007"), None);
 /// assert_eq!(VisualPrefix::Party.format(0), "P00");
 /// assert_eq!(VisualPrefix::Party.format(100), "P100");
+/// assert_eq!(VisualPrefix::Condition.format(0), "CF00");
+/// assert_eq!(VisualPrefix::Condition.format(100), "CF100");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VisualPrefix {
@@ -1077,6 +1123,8 @@ pub enum VisualPrefix {
     Control,
     /// Cybersecurity goal (`G00`, `G01`, ...).
     Goal,
+    /// Applicability condition (`CF00`, `CF01`, ...).
+    Condition,
     /// Cybersecurity claim (`CL00`, `CL01`, ...).
     Claim,
     /// Party (`P00`, `P01`, ...).
@@ -1093,7 +1141,8 @@ pub enum VisualPrefix {
 
 impl VisualPrefix {
     /// The uppercase ASCII prefix string (`"A"`, `"D"`, `"T"`, `"AT"`,
-    /// `"SC"`, `"G"`, `"CL"`, `"P"`, `"C"`, `"IF"`, `"DF"`, `"TB"`). Time O(1).
+    /// `"SC"`, `"G"`, `"CF"`, `"CL"`, `"P"`, `"C"`, `"IF"`, `"DF"`, `"TB"`).
+    /// Time O(1).
     ///
     /// ```
     /// use aegis_model::VisualPrefix;
@@ -1111,6 +1160,7 @@ impl VisualPrefix {
             Self::Tree => "AT",
             Self::Control => "SC",
             Self::Goal => "G",
+            Self::Condition => "CF",
             Self::Claim => "CL",
             Self::Party => "P",
             Self::Component => "C",

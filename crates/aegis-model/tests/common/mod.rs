@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 use aegis_model::{
     AssetId, AttackPotentialDef, AttackTree, AttackType, CatalogRef, CatalogScheme,
-    CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ControlId, DamageId, ElementId,
-    FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel, GateKind, GoalId,
-    ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef, Methodology,
-    MethodologyDef, Node, NodeId, Op, PartyId, PartyKind, PotentialBandDef, Project, Property,
-    PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment, SegmentDef,
-    ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
+    ElementId, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel,
+    GateKind, GoalId, ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef,
+    Methodology, MethodologyDef, Node, NodeId, Op, PartyId, PartyKind, PotentialBandDef, Project,
+    Property, PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment,
+    SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -2686,6 +2686,66 @@ pub fn second_every_op(m: Arc<Methodology>) {
             reason: "One sniffer reads every car on the road".into(),
             provenance: p_human.clone(),
         },
+    );
+
+    // Applicability conditions (133a): exercise every condition op in this
+    // walk and undo it immediately. These ops are not recorded because this
+    // slice has no snapshot fields for conditions yet (133c adds persistence).
+    let condition = ConditionId::new_v7();
+    let inv = p
+        .apply(Op::AddCondition {
+            id: condition,
+            name: "Airbag deploys".into(),
+            description: "Frontal crash".into(),
+            present: true,
+            provenance: p_human.clone(),
+        })
+        .expect("add condition");
+    assert_eq!(inv, Op::RemoveCondition { id: condition });
+    let inv = p
+        .apply(Op::RenameCondition {
+            id: condition,
+            name: "Airbag deploys in a crash".into(),
+            provenance: p_human.clone(),
+        })
+        .expect("rename condition");
+    assert_eq!(
+        inv,
+        Op::RenameCondition {
+            id: condition,
+            name: "Airbag deploys".into(),
+            provenance: p_human.clone(),
+        }
+    );
+    p.apply(inv).expect("undo rename condition");
+    let inv = p
+        .apply(Op::SetConditionPresent {
+            id: condition,
+            present: false,
+            provenance: p_human.clone(),
+        })
+        .expect("set condition present");
+    assert_eq!(
+        inv,
+        Op::SetConditionPresent {
+            id: condition,
+            present: true,
+            provenance: p_human.clone(),
+        }
+    );
+    p.apply(inv).expect("undo set condition present");
+    let inv = p
+        .apply(Op::RemoveCondition { id: condition })
+        .expect("remove condition");
+    assert_eq!(
+        inv,
+        Op::AddCondition {
+            id: condition,
+            name: "Airbag deploys".into(),
+            description: "Frontal crash".into(),
+            present: true,
+            provenance: p_human.clone(),
+        }
     );
 
     // Check the state.

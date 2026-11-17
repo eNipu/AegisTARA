@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use crate::applicability::{Condition, MAX_CONDITIONS};
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
     CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
@@ -20,10 +21,10 @@ use crate::element::ElementKind;
 use crate::error::{EntityKind, ModelError};
 use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
 use crate::id::{
-    ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId,
-    ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx,
-    InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, ThreatId, ThreatIdx, TreeId,
-    TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
+    ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ConditionId,
+    ConditionIdx, ControlId, ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId,
+    GoalId, GoalIdx, InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, ThreatId,
+    ThreatIdx, TreeId, TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
@@ -599,6 +600,7 @@ pub struct Project {
     goals: Arena<GoalId, GoalIdx, CybersecurityGoal>,
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
     parties: Arena<PartyId, PartyIdx, Party>,
+    conditions: Arena<ConditionId, ConditionIdx, Condition>,
     components: Arena<ComponentId, ComponentIdx, Component>,
     interfaces: Arena<InterfaceId, InterfaceIdx, Interface>,
     data_flows: Arena<DataFlowId, DataFlowIdx, DataFlow>,
@@ -652,6 +654,20 @@ fn check_party_name(name: &str) -> Result<(), ModelError> {
     }
     if name.chars().count() > MAX_NAME_CHARS {
         return Err(ModelError::PartyNameTooLong {
+            max: MAX_NAME_CHARS,
+        });
+    }
+    Ok(())
+}
+
+/// Checks a condition name without putting the name in the error text.
+/// Time O(name length).
+fn check_condition_name(name: &str) -> Result<(), ModelError> {
+    if name.trim().is_empty() {
+        return Err(ModelError::ConditionNameEmpty);
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(ModelError::ConditionNameTooLong {
             max: MAX_NAME_CHARS,
         });
     }
@@ -737,6 +753,7 @@ impl Project {
             goals: Arena::new(),
             claims: Arena::new(),
             parties: Arena::new(),
+            conditions: Arena::new(),
             components: Arena::new(),
             interfaces: Arena::new(),
             data_flows: Arena::new(),
@@ -2036,6 +2053,39 @@ impl Project {
         self.parties
             .visual_num(idx)
             .map(|n| VisualPrefix::Party.format(n))
+    }
+
+    /// Resolves a live condition's public ID to its arena index. Time O(log n).
+    #[must_use]
+    pub fn condition_idx(&self, id: &ConditionId) -> Option<ConditionIdx> {
+        self.conditions.idx(id)
+    }
+
+    /// Returns a live condition in O(1), or `None` if `idx` is out of range or
+    /// tombstoned.
+    #[must_use]
+    pub fn condition(&self, idx: ConditionIdx) -> Option<&Condition> {
+        self.conditions.get(idx)
+    }
+
+    /// Iterates live conditions in deterministic `ConditionId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    pub fn conditions(&self) -> impl Iterator<Item = (ConditionIdx, ConditionId, &Condition)> {
+        self.conditions.iter()
+    }
+
+    /// Returns a live condition's 0-based visual number for snapshot IDs.
+    #[must_use]
+    pub(crate) fn condition_visual_num(&self, idx: ConditionIdx) -> Option<u32> {
+        self.conditions.visual_num(idx)
+    }
+
+    /// Returns a live condition's human-readable visual ID (`CF00`, `CF01`, ...)
+    /// in O(1), or `None` if `idx` is out of range or tombstoned.
+    #[must_use]
+    pub fn condition_visual_id(&self, idx: ConditionIdx) -> Option<String> {
+        self.condition_visual_num(idx)
+            .map(|n| VisualPrefix::Condition.format(n))
     }
 
     // -- Components (ARC-02) -----------------------------------------------------
@@ -6014,6 +6064,7 @@ impl Project {
             self.same_claim(x, other, y)
         });
         let parties = diff_arena(&self.parties, &other.parties, |x, y| x == y);
+        let conditions = diff_arena(&self.conditions, &other.conditions, |x, y| x == y);
         let components = diff_arena(&self.components, &other.components, |x, y| {
             self.same_component(x, other, y)
         });
@@ -6054,6 +6105,7 @@ impl Project {
             cybersecurity_goals,
             cybersecurity_claims,
             parties,
+            conditions,
             elements: self.elements.diff(&other.elements),
             components,
             interfaces,
@@ -6708,6 +6760,20 @@ impl Project {
                 self.party_index(*id)?;
             }
             Op::RemoveParty { id } => return self.check_remove_party(*id),
+            Op::AddCondition {
+                id,
+                name,
+                description,
+                provenance,
+                ..
+            } => return self.check_add_condition(*id, name, description, provenance),
+            Op::RenameCondition { id, name, .. } => {
+                self.condition_index(*id)?;
+                check_condition_name(name)?;
+            }
+            Op::SetConditionPresent { id, .. } | Op::RemoveCondition { id } => {
+                self.condition_index(*id)?;
+            }
             Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
@@ -7228,6 +7294,24 @@ impl Project {
                 provenance,
             } => self.commit_set_party_kind(id, kind, provenance),
             Op::RemoveParty { id } => self.commit_remove_party(id),
+            Op::AddCondition {
+                id,
+                name,
+                description,
+                present,
+                provenance,
+            } => self.commit_add_condition(id, name, description, present, provenance),
+            Op::RenameCondition {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_condition(id, name, provenance),
+            Op::SetConditionPresent {
+                id,
+                present,
+                provenance,
+            } => self.commit_set_condition_present(id, present, provenance),
+            Op::RemoveCondition { id } => self.commit_remove_condition(id),
             Op::AddElement {
                 id,
                 kind,
@@ -7561,6 +7645,12 @@ impl Project {
 
     fn party_index(&self, id: PartyId) -> Result<PartyIdx, ModelError> {
         self.parties.idx(&id).ok_or(ModelError::UnknownParty(id))
+    }
+
+    fn condition_index(&self, id: ConditionId) -> Result<ConditionIdx, ModelError> {
+        self.conditions
+            .idx(&id)
+            .ok_or(ModelError::UnknownCondition(id))
     }
 
     fn component_index(&self, id: ComponentId) -> Result<ComponentIdx, ModelError> {
@@ -9109,6 +9199,29 @@ impl Project {
         check_provenance(provenance)?;
         if self.parties.len() >= MAX_PARTIES || self.parties.next_idx(self.slot_limit).is_none() {
             return Err(ModelError::TooManyParties { max: MAX_PARTIES });
+        }
+        Ok(())
+    }
+
+    fn check_add_condition(
+        &self,
+        id: ConditionId,
+        name: &str,
+        description: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.conditions.idx(&id).is_some() {
+            return Err(ModelError::DuplicateConditionId(id));
+        }
+        check_condition_name(name)?;
+        check_text(description, MAX_DESCRIPTION_CHARS)?;
+        check_provenance(provenance)?;
+        if self.conditions.len() >= MAX_CONDITIONS
+            || self.conditions.next_idx(self.slot_limit).is_none()
+        {
+            return Err(ModelError::TooManyConditions {
+                max: MAX_CONDITIONS,
+            });
         }
         Ok(())
     }
@@ -10735,6 +10848,83 @@ impl Project {
         })
     }
 
+    fn commit_add_condition(
+        &mut self,
+        id: ConditionId,
+        name: Arc<str>,
+        description: Arc<str>,
+        present: bool,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let condition = Condition {
+            name,
+            description,
+            present,
+            provenance,
+        };
+        self.conditions.push(id, condition, self.slot_limit).ok_or(
+            ModelError::TooManyConditions {
+                max: MAX_CONDITIONS,
+            },
+        )?;
+        Ok(Op::RemoveCondition { id })
+    }
+
+    fn commit_rename_condition(
+        &mut self,
+        id: ConditionId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(id)?;
+        let c = self
+            .conditions
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownCondition(id))?;
+        let name = std::mem::replace(&mut c.name, name);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::RenameCondition {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_condition_present(
+        &mut self,
+        id: ConditionId,
+        present: bool,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.condition_index(id)?;
+        let c = self
+            .conditions
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownCondition(id))?;
+        let present = std::mem::replace(&mut c.present, present);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::SetConditionPresent {
+            id,
+            present,
+            provenance,
+        })
+    }
+
+    fn commit_remove_condition(&mut self, id: ConditionId) -> Result<Op, ModelError> {
+        let idx = self.condition_index(id)?;
+        let c = self
+            .conditions
+            .remove(idx)
+            .ok_or(ModelError::UnknownCondition(id))?;
+        Ok(Op::AddCondition {
+            id,
+            name: c.name,
+            description: c.description,
+            present: c.present,
+            provenance: c.provenance,
+        })
+    }
+
     fn commit_set_threat_goal(
         &mut self,
         threat: ThreatId,
@@ -11354,6 +11544,7 @@ impl PartialEq for Project {
             && self.goals.len() == other.goals.len()
             && self.claims.len() == other.claims.len()
             && self.parties.len() == other.parties.len()
+            && self.conditions.len() == other.conditions.len()
             && self.components.len() == other.components.len()
             && self.interfaces.len() == other.interfaces.len()
             && self.data_flows.len() == other.data_flows.len()
@@ -11381,6 +11572,10 @@ impl PartialEq for Project {
             && self
                 .parties()
                 .zip(other.parties())
+                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+            && self
+                .conditions()
+                .zip(other.conditions())
                 .all(|((_, a, x), (_, b, y))| a == b && x == y)
             && self
                 .components()
@@ -12507,6 +12702,10 @@ impl ProjectEvalCache {
             | Op::RenameParty { .. }
             | Op::SetPartyKind { .. }
             | Op::RemoveParty { .. }
+            | Op::AddCondition { .. }
+            | Op::RenameCondition { .. }
+            | Op::SetConditionPresent { .. }
+            | Op::RemoveCondition { .. }
             | Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }

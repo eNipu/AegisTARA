@@ -18,9 +18,10 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, AttrValue, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
-    ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, LinkTarget, Methodology,
-    Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
+    DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, LinkTarget,
+    Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -558,6 +559,34 @@ fn walk_parties(seen: &mut BTreeSet<String>) {
     apply_undo_redo(&mut ws, seen, Op::RemoveParty { id });
 }
 
+fn walk_conditions(seen: &mut BTreeSet<String>) {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let id = ConditionId::new_v7();
+    for op in [
+        Op::AddCondition {
+            id,
+            name: "Airbag deploys".into(),
+            description: "Frontal crash".into(),
+            present: true,
+            provenance: who(),
+        },
+        Op::RenameCondition {
+            id,
+            name: "Airbag deploys in a crash".into(),
+            provenance: who(),
+        },
+        Op::SetConditionPresent {
+            id,
+            present: false,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    apply_undo_redo(&mut ws, seen, Op::RemoveCondition { id });
+}
+
 #[test]
 fn every_op_kind_is_undone_and_redone_exactly() {
     let m = common::second();
@@ -569,6 +598,7 @@ fn every_op_kind_is_undone_and_redone_exactly() {
     walk_item_definition_trees_and_descriptions(&mut seen);
     walk_elements(&mut seen);
     walk_parties(&mut seen);
+    walk_conditions(&mut seen);
     assert_eq!(seen, declared_variants(), "an Op variant is not exercised");
 }
 

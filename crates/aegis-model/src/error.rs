@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::control::RiskTreatment;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
+    InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -293,6 +293,15 @@ pub enum ModelError {
     /// ```
     #[error("party {0} already exists in the project")]
     DuplicatePartyId(PartyId),
+    /// A condition with this ID already exists in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, ConditionId};
+    /// let id = ConditionId::new_v7();
+    /// assert_eq!(ModelError::DuplicateConditionId(id).to_string(), format!("condition {id} already exists in the project"));
+    /// ```
+    #[error("condition {0} already exists in the project")]
+    DuplicateConditionId(ConditionId),
     /// An element with this ID already exists in the project.
     #[error("element {0} already exists in the project")]
     DuplicateElement(ElementId),
@@ -436,6 +445,15 @@ pub enum ModelError {
     /// ```
     #[error("party {0} is not in the project")]
     UnknownParty(PartyId),
+    /// No condition with this ID is in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, ConditionId};
+    /// let id = ConditionId::new_v7();
+    /// assert_eq!(ModelError::UnknownCondition(id).to_string(), format!("condition {id} is not in the project"));
+    /// ```
+    #[error("condition {0} is not in the project")]
+    UnknownCondition(ConditionId),
     /// No element with this ID is in the project.
     #[error("element {0} is not in the project")]
     UnknownElement(ElementId),
@@ -566,6 +584,13 @@ pub enum ModelError {
     /// ```
     #[error("party name is empty")]
     PartyNameEmpty,
+    /// A condition name is empty or only whitespace. Carries no name text.
+    ///
+    /// ```
+    /// assert_eq!(aegis_model::ModelError::ConditionNameEmpty.to_string(), "condition name is empty");
+    /// ```
+    #[error("condition name is empty")]
+    ConditionNameEmpty,
     /// A party name is longer than `max` chars. Carries no name text.
     ///
     /// ```
@@ -577,6 +602,17 @@ pub enum ModelError {
         /// The limit, in chars.
         max: usize,
     },
+    /// A condition name is longer than `max` chars. Carries no name text.
+    ///
+    /// ```
+    /// let err = aegis_model::ModelError::ConditionNameTooLong { max: 256 };
+    /// assert_eq!(err.to_string(), "condition name is longer than 256 chars");
+    /// ```
+    #[error("condition name is longer than {max} chars")]
+    ConditionNameTooLong {
+        /// The limit, in chars.
+        max: usize,
+    },
     /// A project holds at most `max` parties.
     ///
     /// ```
@@ -585,6 +621,17 @@ pub enum ModelError {
     /// ```
     #[error("project holds more than {max} parties")]
     TooManyParties {
+        /// The limit.
+        max: usize,
+    },
+    /// A project holds at most `max` conditions.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, MAX_CONDITIONS};
+    /// assert_eq!(ModelError::TooManyConditions { max: MAX_CONDITIONS }.to_string(), "project holds more than 256 conditions");
+    /// ```
+    #[error("project holds more than {max} conditions")]
+    TooManyConditions {
         /// The limit.
         max: usize,
     },
