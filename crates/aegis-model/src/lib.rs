@@ -262,7 +262,9 @@ mod tree;
 /// ```
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use applicability::{Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
+pub use applicability::{
+    Applicability, Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, Reason,
+};
 pub use asset::{Asset, PropertySet};
 pub use control::{
     CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
@@ -283,8 +285,8 @@ pub use error::{
     EntityKind, MethodologyError, ModelError, PackError, StoreError, WorkspaceProblem,
 };
 pub use eval::{
-    AttributeDomain, Derivation, Evaluation, Explanation, Kept, MaxMin, MinTime, TreeEvalCache,
-    evaluate,
+    Applicable, AttributeDomain, Derivation, Evaluation, Explanation, Kept, Lifted, MaxMin,
+    MinTime, TreeEvalCache, evaluate,
 };
 pub use id::{
     AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ConditionId, ConditionIdx,
