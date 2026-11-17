@@ -7,8 +7,8 @@ use crate::control::RiskTreatment;
 use crate::description::ElementRef;
 use crate::element::{AttrValue, ElementKind, LinkTarget};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
+    InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -92,6 +92,10 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `RenameParty` | the same with the old name and provenance | O(log n) |
 /// | `SetPartyKind` | the same with the old kind and provenance | O(log n) |
 /// | `RemoveParty` | `AddParty` with the old fields and provenance | O(log n + goals + claims) |
+/// | `AddCondition` | `RemoveCondition` | O(log n) |
+/// | `RenameCondition` | the same with the old name and provenance | O(log n) |
+/// | `SetConditionPresent` | the same with the old presence and provenance | O(log n) |
+/// | `RemoveCondition` | `AddCondition` with the old fields and provenance | O(log n) |
 /// | `SetThreatGoal` | the same with the old goal and provenance | O(log n) |
 /// | `SetThreatClaim` | the same with the old claim and provenance | O(log n) |
 /// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
@@ -749,6 +753,42 @@ pub enum Op {
         /// Existing party.
         id: PartyId,
     },
+    /// Adds a condition to the project's condition list.
+    AddCondition {
+        /// Unused condition ID.
+        id: ConditionId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Plain-text description, at most `MAX_DESCRIPTION_CHARS` chars.
+        description: Arc<str>,
+        /// Whether the condition is present in the project.
+        present: bool,
+        /// Provenance of the condition creation.
+        provenance: Provenance,
+    },
+    /// Renames a condition.
+    RenameCondition {
+        /// Existing condition.
+        id: ConditionId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Sets whether a condition is present.
+    SetConditionPresent {
+        /// Existing condition.
+        id: ConditionId,
+        /// New presence.
+        present: bool,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Removes a condition. The inverse restores all fields and provenance.
+    RemoveCondition {
+        /// Existing condition.
+        id: ConditionId,
+    },
     /// Links a threat scenario to a cybersecurity goal, replaces its linked
     /// goal, or unlinks it (`None`).
     SetThreatGoal {
@@ -1048,9 +1088,10 @@ pub enum Op {
 
 impl Op {
     /// Returns the provenance carried by this operation, or `None` for the
-    /// eight entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
+    /// entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
     /// `RemoveThreatScenario`, `RemoveAttackTree`, `RemoveSecurityControl`,
-    /// `RemoveCybersecurityGoal`, `RemoveCybersecurityClaim`, `RemoveParty`).
+    /// `RemoveCybersecurityGoal`, `RemoveCybersecurityClaim`, `RemoveParty`,
+    /// `RemoveCondition`).
     /// Time O(1), space O(1).
     ///
     /// ```
@@ -1120,6 +1161,9 @@ impl Op {
             | Self::AddParty { provenance, .. }
             | Self::RenameParty { provenance, .. }
             | Self::SetPartyKind { provenance, .. }
+            | Self::AddCondition { provenance, .. }
+            | Self::RenameCondition { provenance, .. }
+            | Self::SetConditionPresent { provenance, .. }
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }
@@ -1154,6 +1198,7 @@ impl Op {
             | Self::RemoveCybersecurityGoal { .. }
             | Self::RemoveCybersecurityClaim { .. }
             | Self::RemoveParty { .. }
+            | Self::RemoveCondition { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }
@@ -1235,6 +1280,9 @@ impl Op {
             | Self::AddParty { provenance, .. }
             | Self::RenameParty { provenance, .. }
             | Self::SetPartyKind { provenance, .. }
+            | Self::AddCondition { provenance, .. }
+            | Self::RenameCondition { provenance, .. }
+            | Self::SetConditionPresent { provenance, .. }
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }
@@ -1271,6 +1319,7 @@ impl Op {
             | Self::RemoveCybersecurityGoal { .. }
             | Self::RemoveCybersecurityClaim { .. }
             | Self::RemoveParty { .. }
+            | Self::RemoveCondition { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }

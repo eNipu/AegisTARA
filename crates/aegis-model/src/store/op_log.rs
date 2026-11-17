@@ -18,8 +18,8 @@ use super::{
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
+    InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
@@ -419,6 +419,29 @@ enum OpView<'a> {
     RemoveParty {
         id: Text<PartyId>,
     },
+    AddCondition {
+        id: Text<ConditionId>,
+        name: &'a str,
+        description: &'a str,
+        present: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameCondition {
+        id: Text<ConditionId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetConditionPresent {
+        id: Text<ConditionId>,
+        present: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveCondition {
+        id: Text<ConditionId>,
+    },
     SetThreatGoal {
         threat: Text<ThreatId>,
         goal: Option<Text<GoalId>>,
@@ -673,6 +696,9 @@ fn within_caps(op: &Op) -> bool {
         }
         Op::AddTreeNode { node, .. } => name_ok(node.label()),
         Op::RenameTreeNode { label, .. } => name_ok(label),
+        Op::AddCondition {
+            name, description, ..
+        } => name_ok(name) && description.len() <= MAX_DESCRIPTION_BYTES,
         Op::AddAsset { name, .. }
         | Op::RenameAsset { name, .. }
         | Op::AddDamageScenario { name, .. }
@@ -685,6 +711,7 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameCybersecurityClaim { name, .. }
         | Op::AddParty { name, .. }
         | Op::RenameParty { name, .. }
+        | Op::RenameCondition { name, .. }
         | Op::AddElement { name, .. }
         | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
@@ -1258,6 +1285,38 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveParty { id } => OpView::RemoveParty { id: Text(*id) },
+        Op::AddCondition {
+            id,
+            name,
+            description,
+            present,
+            provenance,
+        } => OpView::AddCondition {
+            id: Text(*id),
+            name,
+            description,
+            present: *present,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameCondition {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameCondition {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetConditionPresent {
+            id,
+            present,
+            provenance,
+        } => OpView::SetConditionPresent {
+            id: Text(*id),
+            present: *present,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveCondition { id } => OpView::RemoveCondition { id: Text(*id) },
         Op::SetThreatGoal {
             threat,
             goal,
@@ -2089,6 +2148,38 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveParty { id } => Op::RemoveParty { id: id.0 },
+        OpWire::AddCondition {
+            id,
+            name,
+            description,
+            present,
+            provenance,
+        } => Op::AddCondition {
+            id: id.0,
+            name: name.0,
+            description: description.0,
+            present,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameCondition {
+            id,
+            name,
+            provenance,
+        } => Op::RenameCondition {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetConditionPresent {
+            id,
+            present,
+            provenance,
+        } => Op::SetConditionPresent {
+            id: id.0,
+            present,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveCondition { id } => Op::RemoveCondition { id: id.0 },
         OpWire::SetThreatGoal {
             threat,
             goal,

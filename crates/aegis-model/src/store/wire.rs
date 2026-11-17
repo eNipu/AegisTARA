@@ -56,8 +56,9 @@ use crate::control::{
 };
 use crate::error::{PackError, StoreError};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
+    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
+    InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
+    VisualPrefix,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -2452,6 +2453,29 @@ pub(super) enum OpWire {
     },
     RemoveParty {
         id: WireId<PartyId>,
+    },
+    AddCondition {
+        id: WireId<ConditionId>,
+        name: Name,
+        description: DescriptionText,
+        present: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameCondition {
+        id: WireId<ConditionId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetConditionPresent {
+        id: WireId<ConditionId>,
+        present: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveCondition {
+        id: WireId<ConditionId>,
     },
     SetThreatGoal {
         threat: WireId<ThreatId>,
