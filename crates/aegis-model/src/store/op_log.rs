@@ -355,6 +355,18 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    LinkGoalParty {
+        goal: Text<GoalId>,
+        party: Text<PartyId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkGoalParty {
+        goal: Text<GoalId>,
+        party: Text<PartyId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     RemoveCybersecurityGoal {
         id: Text<GoalId>,
     },
@@ -367,6 +379,18 @@ enum OpView<'a> {
     RenameCybersecurityClaim {
         id: Text<ClaimId>,
         name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    LinkClaimParty {
+        claim: Text<ClaimId>,
+        party: Text<PartyId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkClaimParty {
+        claim: Text<ClaimId>,
+        party: Text<PartyId>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
@@ -1140,6 +1164,24 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             control: Text(*control),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::LinkGoalParty {
+            goal,
+            party,
+            provenance,
+        } => OpView::LinkGoalParty {
+            goal: Text(*goal),
+            party: Text(*party),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkGoalParty {
+            goal,
+            party,
+            provenance,
+        } => OpView::UnlinkGoalParty {
+            goal: Text(*goal),
+            party: Text(*party),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::RemoveCybersecurityGoal { id } => OpView::RemoveCybersecurityGoal { id: Text(*id) },
         Op::AddCybersecurityClaim {
             id,
@@ -1157,6 +1199,24 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         } => OpView::RenameCybersecurityClaim {
             id: Text(*id),
             name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::LinkClaimParty {
+            claim,
+            party,
+            provenance,
+        } => OpView::LinkClaimParty {
+            claim: Text(*claim),
+            party: Text(*party),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkClaimParty {
+            claim,
+            party,
+            provenance,
+        } => OpView::UnlinkClaimParty {
+            claim: Text(*claim),
+            party: Text(*party),
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveCybersecurityClaim { id } => OpView::RemoveCybersecurityClaim { id: Text(*id) },
@@ -1924,6 +1984,24 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             control: control.0,
             provenance: wire::unwrap_provenance(provenance),
         },
+        OpWire::LinkGoalParty {
+            goal,
+            party,
+            provenance,
+        } => Op::LinkGoalParty {
+            goal: goal.0,
+            party: party.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkGoalParty {
+            goal,
+            party,
+            provenance,
+        } => Op::UnlinkGoalParty {
+            goal: goal.0,
+            party: party.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::RemoveCybersecurityGoal { id } => Op::RemoveCybersecurityGoal { id: id.0 },
         OpWire::AddCybersecurityClaim {
             id,
@@ -1941,6 +2019,24 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::RenameCybersecurityClaim {
             id: id.0,
             name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::LinkClaimParty {
+            claim,
+            party,
+            provenance,
+        } => Op::LinkClaimParty {
+            claim: claim.0,
+            party: party.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkClaimParty {
+            claim,
+            party,
+            provenance,
+        } => Op::UnlinkClaimParty {
+            claim: claim.0,
+            party: party.0,
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveCybersecurityClaim { id } => Op::RemoveCybersecurityClaim { id: id.0 },

@@ -4,7 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::{ControlId, ControlIdx, NodeId, NodeIdx, TreeIdx};
+use crate::id::{ControlId, ControlIdx, NodeId, NodeIdx, PartyIdx, TreeIdx};
 use crate::item::{ItemIdx, ItemRef};
 use crate::methodology::{AttackType, ControlKind, FeasibilityLevel};
 use crate::provenance::Provenance;
@@ -810,6 +810,8 @@ pub struct CybersecurityGoal {
     pub(crate) name: Arc<str>,
     /// Sorted by the target's `ControlId`, unique, at most [`MAX_GOAL_CONTROLS`].
     pub(crate) controls: Vec<ControlIdx>,
+    /// Sorted by `PartyId`, unique, at most 16 parties.
+    pub(crate) responsible: Vec<PartyIdx>,
     pub(crate) provenance: Provenance,
 }
 
@@ -873,6 +875,13 @@ impl CybersecurityGoal {
         &self.controls
     }
 
+    /// Returns the parties responsible for this goal, sorted by
+    /// [`PartyId`](crate::PartyId) and unique. Time O(1).
+    #[must_use]
+    pub fn responsible(&self) -> &[PartyIdx] {
+        &self.responsible
+    }
+
     /// Returns the provenance of the last [`Op`](crate::Op) that created or
     /// modified this cybersecurity goal. Time O(1).
     ///
@@ -932,6 +941,8 @@ impl CybersecurityGoal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CybersecurityClaim {
     pub(crate) name: Arc<str>,
+    /// Sorted by `PartyId`, unique, at most 16 parties.
+    pub(crate) responsible: Vec<PartyIdx>,
     pub(crate) provenance: Provenance,
 }
 
@@ -959,6 +970,13 @@ impl CybersecurityClaim {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the parties responsible for this claim, sorted by
+    /// [`PartyId`](crate::PartyId) and unique. Time O(1).
+    #[must_use]
+    pub fn responsible(&self) -> &[PartyIdx] {
+        &self.responsible
     }
 
     /// Returns the provenance of the last [`Op`](crate::Op) that created or

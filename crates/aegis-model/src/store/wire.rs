@@ -2347,6 +2347,18 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    LinkGoalParty {
+        goal: WireId<GoalId>,
+        party: WireId<PartyId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkGoalParty {
+        goal: WireId<GoalId>,
+        party: WireId<PartyId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     RemoveCybersecurityGoal {
         id: WireId<GoalId>,
     },
@@ -2359,6 +2371,18 @@ pub(super) enum OpWire {
     RenameCybersecurityClaim {
         id: WireId<ClaimId>,
         name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    LinkClaimParty {
+        claim: WireId<ClaimId>,
+        party: WireId<PartyId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkClaimParty {
+        claim: WireId<ClaimId>,
+        party: WireId<PartyId>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

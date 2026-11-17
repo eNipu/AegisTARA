@@ -306,7 +306,7 @@ pub use methodology::{
     RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
 pub use op::Op;
-pub use party::{MAX_PARTIES, Party, PartyKind};
+pub use party::{MAX_PARTIES, MAX_RESPONSIBLE, Party, PartyKind};
 pub use paths::{AttackPath, AttackPaths, ChokePoint};
 pub use project::{MAX_NAME_CHARS, Project, ProjectEvalCache};
 pub use provenance::{Provenance, ProvenanceSource};

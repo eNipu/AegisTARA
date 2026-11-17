@@ -1153,6 +1153,96 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// A party cannot be removed while a goal or claim still lists it.
+    /// ```
+    /// use aegis_model::{ModelError, PartyId};
+    /// let party = PartyId::new_v7();
+    /// let err = ModelError::PartyInUse { party, goals: 1, claims: 2 };
+    /// assert_eq!(err.to_string(), format!("party {party} is listed by 1 goal(s) and 2 claim(s)"));
+    /// ```
+    #[error("party {party} is listed by {goals} goal(s) and {claims} claim(s)")]
+    PartyInUse {
+        /// The party still listed as responsible.
+        party: PartyId,
+        /// How many goals list it.
+        goals: usize,
+        /// How many claims list it.
+        claims: usize,
+    },
+    /// The cybersecurity goal already lists this party as responsible.
+    /// ```
+    /// use aegis_model::{GoalId, ModelError, PartyId};
+    /// let goal = GoalId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::DuplicateGoalParty { goal, party }; assert_eq!(err.to_string(), format!("cybersecurity goal {goal} already lists party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity goal {goal} already lists party {party} as responsible")]
+    DuplicateGoalParty {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// The party already listed.
+        party: PartyId,
+    },
+    /// The cybersecurity goal does not list this party as responsible.
+    /// ```
+    /// use aegis_model::{GoalId, ModelError, PartyId};
+    /// let goal = GoalId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::GoalPartyNotLinked { goal, party }; assert_eq!(err.to_string(), format!("cybersecurity goal {goal} does not list party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity goal {goal} does not list party {party} as responsible")]
+    GoalPartyNotLinked {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// The party not listed.
+        party: PartyId,
+    },
+    /// A cybersecurity goal may list at most `max` responsible parties.
+    /// ```
+    /// use aegis_model::{ModelError, MAX_RESPONSIBLE};
+    /// let err = ModelError::TooManyGoalResponsible { max: MAX_RESPONSIBLE };
+    /// assert_eq!(err.to_string(), "cybersecurity goal would list more than 16 responsible parties");
+    /// ```
+    #[error("cybersecurity goal would list more than {max} responsible parties")]
+    TooManyGoalResponsible {
+        /// The limit.
+        max: usize,
+    },
+    /// The cybersecurity claim already lists this party as responsible.
+    /// ```
+    /// use aegis_model::{ClaimId, ModelError, PartyId};
+    /// let claim = ClaimId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::DuplicateClaimParty { claim, party }; assert_eq!(err.to_string(), format!("cybersecurity claim {claim} already lists party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity claim {claim} already lists party {party} as responsible")]
+    DuplicateClaimParty {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The party already listed.
+        party: PartyId,
+    },
+    /// The cybersecurity claim does not list this party as responsible.
+    /// ```
+    /// use aegis_model::{ClaimId, ModelError, PartyId};
+    /// let claim = ClaimId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::ClaimPartyNotLinked { claim, party }; assert_eq!(err.to_string(), format!("cybersecurity claim {claim} does not list party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity claim {claim} does not list party {party} as responsible")]
+    ClaimPartyNotLinked {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The party not listed.
+        party: PartyId,
+    },
+    /// A cybersecurity claim may list at most `max` responsible parties.
+    /// ```
+    /// use aegis_model::{ModelError, MAX_RESPONSIBLE};
+    /// let err = ModelError::TooManyClaimResponsible { max: MAX_RESPONSIBLE };
+    /// assert_eq!(err.to_string(), "cybersecurity claim would list more than 16 responsible parties");
+    /// ```
+    #[error("cybersecurity claim would list more than {max} responsible parties")]
+    TooManyClaimResponsible {
+        /// The limit.
+        max: usize,
+    },
     /// The threat does not have this catalog ref.
     #[error("threat scenario {threat} does not have catalog ref {catalog_ref}")]
     CatalogRefNotFound {

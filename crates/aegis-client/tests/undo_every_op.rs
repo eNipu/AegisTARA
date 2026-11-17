@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, AttrValue, ComponentId, ControlId, DamageId, DataFlowId, ElementId,
-    ElementKind, ElementRef, GateKind, InterfaceId, LinkTarget, Methodology, Node, NodeId, Op,
-    PartyId, PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AttackTree, AttrValue, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
+    ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, LinkTarget, Methodology,
+    Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -488,7 +488,63 @@ fn walk_parties(seen: &mut BTreeSet<String>) {
     ] {
         apply_undo_redo(&mut ws, seen, op);
     }
-    // The add above is still applied after its undo/redo, so the party exists.
+    // A goal and a claim give the responsible-link ops a target. Each call
+    // leaves its op applied, so the party, goal and claim exist below.
+    let (goal, claim) = (GoalId::new_v7(), ClaimId::new_v7());
+    for op in [
+        Op::AddCybersecurityGoal {
+            id: goal,
+            name: "Protect the asset".into(),
+            controls: vec![],
+            provenance: who(),
+        },
+        Op::AddCybersecurityClaim {
+            id: claim,
+            name: "Retain with rationale".into(),
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::LinkGoalParty {
+            goal,
+            party: id,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::UnlinkGoalParty {
+            goal,
+            party: id,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::LinkClaimParty {
+            claim,
+            party: id,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::UnlinkClaimParty {
+            claim,
+            party: id,
+            provenance: who(),
+        },
+    );
+    // Tear down: no responsible links remain, so the party can be removed.
+    apply_undo_redo(&mut ws, seen, Op::RemoveCybersecurityGoal { id: goal });
+    apply_undo_redo(&mut ws, seen, Op::RemoveCybersecurityClaim { id: claim });
     apply_undo_redo(&mut ws, seen, Op::RemoveParty { id });
 }
 
