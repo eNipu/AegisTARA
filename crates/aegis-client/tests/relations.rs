@@ -14,9 +14,9 @@ use aegis_client::relations::{
 };
 use aegis_client::view::Selection;
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GateKind, GoalId,
-    InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId, PartyIdx, PartyKind, Project,
-    Provenance, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId, PartyIdx,
+    PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// `Selection` has no `Ord`, and the orphan rule forbids adding one here. This
@@ -41,6 +41,7 @@ impl Sel {
             Selection::Goal(_) => 10,
             Selection::Claim(_) => 11,
             Selection::Party(_) => 12,
+            Selection::Condition(_) => 13,
         };
         let s = self.0;
         (rank, format!("{s:?}"))
@@ -272,9 +273,48 @@ fn project() -> Project {
         Op::SetThreatClaim {
             threat,
             claim: Some(claim),
-            provenance,
+            provenance: provenance.clone(),
         },
     ];
+    // Two conditions, needed by one element of every supported kind and by
+    // the step, so every condition row is `many` with one owning source.
+    let conditions = [ConditionId::new_v7(), ConditionId::new_v7()];
+    let mut ops = ops;
+    for (i, id) in conditions.iter().enumerate() {
+        ops.push(Op::AddCondition {
+            id: *id,
+            name: format!("Condition {i}").into(),
+            description: "".into(),
+            present: true,
+            provenance: provenance.clone(),
+        });
+    }
+    use aegis_model::ElementRef as E;
+    for element in [
+        E::Asset(asset),
+        E::Component(c1),
+        E::Interface(iface),
+        E::Threat(threat),
+        E::Tree(tree_id),
+        E::Goal(goal),
+        E::Claim(claim),
+    ] {
+        for condition in conditions {
+            ops.push(Op::NeedCondition {
+                element,
+                condition,
+                provenance: provenance.clone(),
+            });
+        }
+    }
+    for condition in conditions {
+        ops.push(Op::NeedStepCondition {
+            tree: tree_id,
+            node: step,
+            condition,
+            provenance: provenance.clone(),
+        });
+    }
 
     let mut project = Project::new(m);
     for op in ops {
@@ -294,6 +334,8 @@ fn sources_of(project: &Project, kind: ElementKind) -> Vec<Selection> {
         ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
         ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
         ElementKind::Interface => project.interfaces().map(|(_, id, _)| Selection::Interface(id)).collect(),
+        ElementKind::Component => project.components().map(|(_, id, _)| Selection::Component(id)).collect(),
+        ElementKind::Tree => project.attack_trees().map(|(_, id, _)| Selection::Tree(id)).collect(),
         ElementKind::TrustBoundary => project.trust_boundaries().map(|(_, id, _)| Selection::TrustBoundary(id)).collect(),
         ElementKind::Step => project
             .attack_trees()
@@ -388,6 +430,65 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
         }
         if let Some(i) = flow.interface().and_then(|i| project.interface_id(i)) {
             out.insert((source, Sel(Selection::Interface(i))));
+        }
+    }
+
+    // Condition links, read straight from the model's accessors.
+    let condition = |i| {
+        project
+            .condition_id(i)
+            .map(|c| Sel(Selection::Condition(c)))
+    };
+    let holders: Vec<(Selection, aegis_model::ElementRef)> = project
+        .assets()
+        .map(|(_, id, _)| (Selection::Asset(id), aegis_model::ElementRef::Asset(id)))
+        .chain(project.components().map(|(_, id, _)| {
+            (
+                Selection::Component(id),
+                aegis_model::ElementRef::Component(id),
+            )
+        }))
+        .chain(project.interfaces().map(|(_, id, _)| {
+            (
+                Selection::Interface(id),
+                aegis_model::ElementRef::Interface(id),
+            )
+        }))
+        .chain(
+            project
+                .threat_scenarios()
+                .map(|(_, id, _)| (Selection::Threat(id), aegis_model::ElementRef::Threat(id))),
+        )
+        .chain(
+            project
+                .attack_trees()
+                .map(|(_, id, _)| (Selection::Tree(id), aegis_model::ElementRef::Tree(id))),
+        )
+        .chain(
+            project
+                .cybersecurity_goals()
+                .map(|(_, id, _)| (Selection::Goal(id), aegis_model::ElementRef::Goal(id))),
+        )
+        .chain(
+            project
+                .cybersecurity_claims()
+                .map(|(_, id, _)| (Selection::Claim(id), aegis_model::ElementRef::Claim(id))),
+        )
+        .collect();
+    for (sel, element) in holders {
+        for &i in project.condition_link_ids(element) {
+            if let Some(c) = condition(i) {
+                out.insert((Sel(sel), c));
+            }
+        }
+    }
+    for (_, tree, t) in project.attack_trees() {
+        for (_, node, _) in t.iter() {
+            for &i in project.step_condition_link_ids(tree, node) {
+                if let Some(c) = condition(i) {
+                    out.insert((Sel(Selection::TreeNode(tree, node)), c));
+                }
+            }
         }
     }
 
@@ -517,6 +618,14 @@ fn keys_and_labels_are_valid() {
         (RelationKey::DATAFLOW_INTERFACE, "dataflow-interface"),
         (RelationKey::INTERFACE_COMPONENT, "interface-component"),
         (RelationKey::BOUNDARY_MEMBERS, "boundary-members"),
+        (RelationKey::ASSET_CONDITIONS, "asset-conditions"),
+        (RelationKey::COMPONENT_CONDITIONS, "component-conditions"),
+        (RelationKey::INTERFACE_CONDITIONS, "interface-conditions"),
+        (RelationKey::THREAT_CONDITIONS, "threat-conditions"),
+        (RelationKey::TREE_CONDITIONS, "tree-conditions"),
+        (RelationKey::GOAL_CONDITIONS, "goal-conditions"),
+        (RelationKey::CLAIM_CONDITIONS, "claim-conditions"),
+        (RelationKey::STEP_CONDITIONS, "step-conditions"),
     ];
     let keys: HashSet<RelationKey> = RELATIONS.iter().map(|row| row.key).collect();
     assert_eq!(keys.len(), RELATIONS.len(), "a relation key repeats");
@@ -583,6 +692,8 @@ fn new_keys_resolve_in_every_language() {
         "party-customer",
         "party-supplier",
         "party-other",
+        "condition",
+        "condition-present",
     ];
     for language in [Language::En, Language::Ja, Language::Pseudo] {
         let catalog = Catalog::load(language);

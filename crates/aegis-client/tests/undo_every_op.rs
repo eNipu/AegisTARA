@@ -716,3 +716,80 @@ fn removing_a_goal_or_claim_with_parties_undoes_the_links() {
     ws.undo().expect("undo goal removal");
     assert!(*ws.project() == before, "party links restored");
 }
+
+/// Removing a condition, an asset, a step or a tree that needs one is one
+/// edit and one undo step, and undo restores every condition link.
+#[test]
+fn removals_clear_condition_links_in_one_undo_step() {
+    use aegis_client::commands::Edit;
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    type MakeEdit = fn(AssetId, TreeId, NodeId, ConditionId) -> Edit;
+    let edits: [MakeEdit; 4] = [
+        |_, _, _, condition| Edit::RemoveCondition { condition },
+        |asset, _, _, _| Edit::RemoveAsset { asset },
+        |_, tree, node, _| Edit::RemoveTreeNode { tree, node },
+        |_, tree, _, _| Edit::RemoveTree { tree },
+    ];
+    for (n, make) in edits.into_iter().enumerate() {
+        let mut ws = Workspace::empty(Arc::clone(&m));
+        let (asset, tree, root, step) = (
+            AssetId::new_v7(),
+            TreeId::new_v7(),
+            NodeId::new_v7(),
+            NodeId::new_v7(),
+        );
+        let condition = ConditionId::new_v7();
+        let mut at = AttackTree::new(root, Node::gate(GateKind::Or, "root")).expect("tree");
+        at.add_child(at.root(), step, Node::step("step"))
+            .expect("step");
+        let setup = vec![
+            Op::AddCondition {
+                id: condition,
+                name: "Bluetooth fitted".into(),
+                description: "".into(),
+                present: true,
+                provenance: who(),
+            },
+            Op::AddAsset {
+                id: asset,
+                name: "Key".into(),
+                properties: m.all_properties(),
+                provenance: who(),
+            },
+            Op::AddAttackTree {
+                id: tree,
+                tree: at,
+                step_feasibility: vec![],
+                provenance: who(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Asset(asset),
+                condition,
+                provenance: who(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Tree(tree),
+                condition,
+                provenance: who(),
+            },
+            Op::NeedStepCondition {
+                tree,
+                node: step,
+                condition,
+                provenance: who(),
+            },
+        ];
+        ws.apply(setup, Origin::Edit).expect("setup");
+        let before = ws.project().clone();
+        let ops = make(asset, tree, step, condition)
+            .to_ops(ws.project(), "alice", 1)
+            .unwrap_or_else(|e| panic!("edit {n}: {e:?}"));
+        ws.apply(ops, Origin::Edit)
+            .unwrap_or_else(|e| panic!("edit {n}: {e:?}"));
+        ws.undo().expect("one undo step");
+        assert!(
+            *ws.project() == before,
+            "edit {n}: undo restores every link"
+        );
+    }
+}
