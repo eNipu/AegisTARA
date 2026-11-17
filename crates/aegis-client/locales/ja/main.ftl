@@ -138,6 +138,16 @@ relation-dataflow-to = フロー先
 relation-dataflow-interface = フローのインターフェース
 relation-interface-component = 所属コンポーネント
 relation-boundary-members = メンバーコンポーネント
+condition = 条件
+condition-present = 成立
+relation-asset-conditions = 資産の条件
+relation-component-conditions = コンポーネントの条件
+relation-interface-conditions = インターフェースの条件
+relation-threat-conditions = 脅威の条件
+relation-tree-conditions = 攻撃ツリーの条件
+relation-goal-conditions = 目標の条件
+relation-claim-conditions = 主張の条件
+relation-step-conditions = ステップの条件
 
 # Party roles (job 145).
 party-us = 自社

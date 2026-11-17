@@ -755,6 +755,31 @@ pub enum Edit {
         /// Link or unlink.
         linked: bool,
     },
+    /// Makes an element need a condition, or stop needing it (APL-01).
+    SetConditionLink {
+        /// The asset, component, interface, threat, tree, goal or claim.
+        element: aegis_model::ElementRef,
+        /// The condition.
+        condition: aegis_model::ConditionId,
+        /// Need or not.
+        linked: bool,
+    },
+    /// Makes an attack step need a condition, or stop needing it.
+    SetStepConditionLink {
+        /// The tree.
+        tree: TreeId,
+        /// The step.
+        node: NodeId,
+        /// The condition.
+        condition: aegis_model::ConditionId,
+        /// Need or not.
+        linked: bool,
+    },
+    /// Removes a condition, unneeding it everywhere first, as one undo step.
+    RemoveCondition {
+        /// The condition.
+        condition: aegis_model::ConditionId,
+    },
     /// Removes a goal, unlinking it from threats first.
     RemoveGoal {
         /// The goal.
@@ -1025,6 +1050,83 @@ fn unapply_target_ops(project: &Project, target: ItemRef, p: &Provenance) -> Vec
 /// An element with a description cannot be removed, so every removal in an
 /// edit is preceded by an op that clears its description. The edit is one
 /// undo step, and undo brings back the element and then its text.
+/// Every element that may need a condition, with the conditions it needs.
+fn condition_needers(
+    project: &Project,
+) -> Vec<(aegis_model::ElementRef, &[aegis_model::ConditionIdx])> {
+    use aegis_model::ElementRef as E;
+    let elements = project
+        .assets()
+        .map(|(_, id, _)| E::Asset(id))
+        .chain(project.components().map(|(_, id, _)| E::Component(id)))
+        .chain(project.interfaces().map(|(_, id, _)| E::Interface(id)))
+        .chain(project.threat_scenarios().map(|(_, id, _)| E::Threat(id)))
+        .chain(project.attack_trees().map(|(_, id, _)| E::Tree(id)))
+        .chain(project.cybersecurity_goals().map(|(_, id, _)| E::Goal(id)))
+        .chain(
+            project
+                .cybersecurity_claims()
+                .map(|(_, id, _)| E::Claim(id)),
+        );
+    elements
+        .map(|e| (e, project.condition_link_ids(e)))
+        .filter(|(_, l)| !l.is_empty())
+        .collect()
+}
+
+/// `UnneedCondition` ops for every condition `element` needs.
+fn unneed_conditions_ops(
+    project: &Project,
+    element: aegis_model::ElementRef,
+    provenance: &Provenance,
+) -> Vec<Op> {
+    project
+        .condition_link_ids(element)
+        .iter()
+        .filter_map(|&i| project.condition_id(i))
+        .map(|condition| Op::UnneedCondition {
+            element,
+            condition,
+            provenance: provenance.clone(),
+        })
+        .collect()
+}
+
+/// `UnneedStepCondition` ops for one step of `tree`, or for every step when
+/// `node` is `None`.
+fn unneed_step_conditions_ops(
+    project: &Project,
+    tree: TreeId,
+    node: Option<NodeId>,
+    provenance: &Provenance,
+) -> Vec<Op> {
+    let nodes: Vec<NodeId> = match node {
+        Some(n) => vec![n],
+        None => project
+            .attack_tree_idx(&tree)
+            .and_then(|i| project.attack_tree(i))
+            .map(|t| t.iter().map(|(_, id, _)| id).collect())
+            .unwrap_or_default(),
+    };
+    nodes
+        .into_iter()
+        .flat_map(|node| {
+            project
+                .step_condition_link_ids(tree, node)
+                .iter()
+                .filter_map(|&i| project.condition_id(i))
+                .map(move |condition| (node, condition))
+                .collect::<Vec<_>>()
+        })
+        .map(|(node, condition)| Op::UnneedStepCondition {
+            tree,
+            node,
+            condition,
+            provenance: provenance.clone(),
+        })
+        .collect()
+}
+
 fn clear_descriptions_before_removal(
     project: &Project,
     ops: Vec<Op>,
@@ -1032,6 +1134,7 @@ fn clear_descriptions_before_removal(
 ) -> Vec<Op> {
     use aegis_model::ElementRef as E;
     let mut out = Vec::with_capacity(ops.len());
+    let mut removed_nodes = std::collections::HashSet::new();
     for op in ops {
         let target = match &op {
             Op::RemoveComponent { id } => Some(E::Component(*id)),
@@ -1047,6 +1150,34 @@ fn clear_descriptions_before_removal(
             Op::RemoveCybersecurityClaim { id } => Some(E::Claim(*id)),
             _ => None,
         };
+        // Condition links block removal (the inverse cannot restore them), so
+        // unneed them first in the same undo step (job 133).
+        if let Some(target) = target {
+            out.extend(unneed_conditions_ops(project, target, provenance));
+        }
+        match &op {
+            Op::RemoveTreeNode { tree, id, .. } => {
+                removed_nodes.insert((*tree, *id));
+                out.extend(unneed_step_conditions_ops(
+                    project,
+                    *tree,
+                    Some(*id),
+                    provenance,
+                ));
+            }
+            Op::RemoveAttackTree { id } => {
+                // Nodes taken out one by one earlier in this edit are done.
+                out.extend(
+                    unneed_step_conditions_ops(project, *id, None, provenance)
+                        .into_iter()
+                        .filter(|o| {
+                            !matches!(o, Op::UnneedStepCondition { tree, node, .. }
+                                if removed_nodes.contains(&(*tree, *node)))
+                        }),
+                );
+            }
+            _ => {}
+        }
         if let Some(target) = target.filter(|t| project.description(*t).is_some()) {
             for (lang, _) in project.description_translations(target) {
                 out.push(Op::SetDescriptionTranslation {
@@ -2456,6 +2587,70 @@ impl Edit {
                     provenance: p,
                 }
             }],
+            Edit::SetConditionLink {
+                element,
+                condition,
+                linked,
+            } => vec![if *linked {
+                Op::NeedCondition {
+                    element: *element,
+                    condition: *condition,
+                    provenance: p,
+                }
+            } else {
+                Op::UnneedCondition {
+                    element: *element,
+                    condition: *condition,
+                    provenance: p,
+                }
+            }],
+            Edit::SetStepConditionLink {
+                tree,
+                node,
+                condition,
+                linked,
+            } => vec![if *linked {
+                Op::NeedStepCondition {
+                    tree: *tree,
+                    node: *node,
+                    condition: *condition,
+                    provenance: p,
+                }
+            } else {
+                Op::UnneedStepCondition {
+                    tree: *tree,
+                    node: *node,
+                    condition: *condition,
+                    provenance: p,
+                }
+            }],
+            Edit::RemoveCondition { condition } => {
+                let idx = project.condition_idx(condition).ok_or(EditError::Missing)?;
+                let mut ops = Vec::new();
+                for (element, list) in condition_needers(project) {
+                    if list.contains(&idx) {
+                        ops.push(Op::UnneedCondition {
+                            element,
+                            condition: *condition,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
+                for (_, tree, t) in project.attack_trees() {
+                    for (_, node, _) in t.iter() {
+                        if project.step_condition_link_ids(tree, node).contains(&idx) {
+                            ops.push(Op::UnneedStepCondition {
+                                tree,
+                                node,
+                                condition: *condition,
+                                provenance: p.clone(),
+                            });
+                        }
+                    }
+                }
+                ops.push(Op::RemoveCondition { id: *condition });
+                ops
+            }
             Edit::LinkGoalParty {
                 goal,
                 party,
@@ -2888,6 +3083,9 @@ impl Edit {
             Edit::AddGoal { id, .. } | Edit::AddGoalFor { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),
             Edit::LinkGoalParty { goal, .. } => Some(Selection::Goal(*goal)),
+            Edit::SetStepConditionLink { tree, node, .. } => {
+                Some(Selection::TreeNode(*tree, *node))
+            }
             Edit::LinkClaimParty { claim, .. } => Some(Selection::Claim(*claim)),
             Edit::DuplicateComponent { id, .. } => Some(Selection::Component(*id)),
             Edit::DuplicateInterface { id, .. } => Some(Selection::Interface(*id)),
