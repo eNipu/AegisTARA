@@ -136,6 +136,9 @@ relation-step-via = ⟦Gôés thrôûgh␣⟧
 relation-step-mitigations = ⟦Mîtîgâtîôns␣⟧
 relation-dataflow-from = ⟦Flôw sôûrcé␣⟧
 relation-dataflow-to = ⟦Flôw dés tînâtîôn␣⟧
+relation-dataflow-interface = ⟦Flôw îñtérfâcé␣⟧
+relation-interface-component = ⟦Ôwñîñg cômpôñéñt␣⟧
+relation-boundary-members = ⟦Mémbér cômpôñéñts␣⟧
 
 # Party roles (job 145).
 party-us = ⟦Ûs␣⟧

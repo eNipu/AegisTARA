@@ -3187,7 +3187,7 @@ pub fn process_map(ws: &Workspace, baselines: usize) -> Vec<ProcessMapBox> {
     let project = ws.project();
     let methodology = project.methodology();
     let rows = problems(ws);
-    let lint = project.lint().len();
+    let lint = rows.len();
     PageGroup::ALL
         .iter()
         .map(|group| {
@@ -3241,7 +3241,7 @@ pub fn process_map(ws: &Workspace, baselines: usize) -> Vec<ProcessMapBox> {
 
 /// The sidebar count of one page, by the rules of `nav_counts` in the
 /// session. Every page has an arm, so a new page cannot fall into a silent 0.
-fn page_count(p: &Project, page: Page, baselines: usize, lint: usize) -> usize {
+pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize) -> usize {
     match page {
         Page::Overview => 0,
         Page::Item => {

@@ -982,6 +982,34 @@ pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) ->
         .collect()
 }
 
+/// Ops that clear the rationale on `threat`'s link to `damage` (or on all its
+/// links, for `None`), so a following unlink or removal undoes exactly.
+fn clear_link_rationale(
+    project: &Project,
+    threat: ThreatId,
+    damage: Option<DamageId>,
+    p: &Provenance,
+) -> Vec<Op> {
+    let Some(t) = project
+        .threat_scenario_idx(&threat)
+        .and_then(|i| project.threat_scenario(i))
+    else {
+        return Vec::new();
+    };
+    t.damage_links()
+        .into_iter()
+        .filter(|l| !l.rationale.is_empty())
+        .filter_map(|l| project.damage_scenario_id(l.damage))
+        .filter(|d| damage.is_none_or(|want| want == *d))
+        .map(|d| Op::SetDamageLinkRationale {
+            threat,
+            damage: d,
+            text: "".into(),
+            provenance: p.clone(),
+        })
+        .collect()
+}
+
 /// Ops that unapply every security control applied directly to `target`.
 fn unapply_target_ops(project: &Project, target: ItemRef, p: &Provenance) -> Vec<Op> {
     project
@@ -1708,10 +1736,14 @@ impl Edit {
                 let mut ops: Vec<Op> = project
                     .threat_scenarios()
                     .filter(|(_, _, t)| t.damages().contains(&d_idx))
-                    .map(|(_, threat, _)| Op::UnlinkDamage {
-                        threat,
-                        damage: *damage,
-                        provenance: p.clone(),
+                    .flat_map(|(_, threat, _)| {
+                        let mut ops = clear_link_rationale(project, threat, Some(*damage), &p);
+                        ops.push(Op::UnlinkDamage {
+                            threat,
+                            damage: *damage,
+                            provenance: p.clone(),
+                        });
+                        ops
                     })
                     .collect();
                 if project
@@ -1780,19 +1812,23 @@ impl Edit {
                 threat,
                 damage,
                 linked,
-            } => vec![if *linked {
-                Op::LinkDamage {
-                    threat: *threat,
-                    damage: *damage,
-                    provenance: p,
+            } => {
+                if *linked {
+                    vec![Op::LinkDamage {
+                        threat: *threat,
+                        damage: *damage,
+                        provenance: p,
+                    }]
+                } else {
+                    let mut ops = clear_link_rationale(project, *threat, Some(*damage), &p);
+                    ops.push(Op::UnlinkDamage {
+                        threat: *threat,
+                        damage: *damage,
+                        provenance: p,
+                    });
+                    ops
                 }
-            } else {
-                Op::UnlinkDamage {
-                    threat: *threat,
-                    damage: *damage,
-                    provenance: p,
-                }
-            }],
+            }
             Edit::AddCatalogRef {
                 threat,
                 scheme,
@@ -1936,6 +1972,7 @@ impl Edit {
                         provenance: p.clone(),
                     });
                 }
+                ops.extend(clear_link_rationale(project, *threat, None, &p));
                 ops.push(Op::RemoveThreatScenario { id: *threat });
                 ops
             }
@@ -2466,6 +2503,20 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
+                // Unlink responsible parties first, so undo restores them.
+                let g = project
+                    .cybersecurity_goal(g_idx)
+                    .ok_or(EditError::Missing)?;
+                ops.extend(
+                    g.responsible()
+                        .iter()
+                        .filter_map(|&i| project.party_id(i))
+                        .map(|party| Op::UnlinkGoalParty {
+                            goal: *goal,
+                            party,
+                            provenance: p.clone(),
+                        }),
+                );
                 ops.push(Op::RemoveCybersecurityGoal { id: *goal });
                 ops
             }
@@ -2492,6 +2543,20 @@ impl Edit {
                         provenance: p.clone(),
                     })
                     .collect();
+                // Unlink responsible parties first, so undo restores them.
+                let c = project
+                    .cybersecurity_claim(c_idx)
+                    .ok_or(EditError::Missing)?;
+                ops.extend(
+                    c.responsible()
+                        .iter()
+                        .filter_map(|&i| project.party_id(i))
+                        .map(|party| Op::UnlinkClaimParty {
+                            claim: *claim,
+                            party,
+                            provenance: p.clone(),
+                        }),
+                );
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
             }

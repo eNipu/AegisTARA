@@ -326,3 +326,49 @@ fn empty_rationale_reverts_to_v1_string_array_form() {
     );
     assert!(!String::from_utf8_lossy(&bytes).contains("rationale"));
 }
+
+/// A link with a rationale cannot be unlinked, nor its threat removed: the
+/// inverses (`LinkDamage`, `AddThreatScenario`) cannot carry the text.
+#[test]
+fn unlink_and_threat_removal_are_refused_while_a_rationale_exists() {
+    let m = methodology();
+    let (mut p, threat, [d0, d1]) = fixture(&m);
+    for d in [d0, d1] {
+        p.apply(Op::LinkDamage {
+            threat,
+            damage: d,
+            provenance: who(),
+        })
+        .expect("link");
+    }
+    p.apply(pair(threat, d0, "reaches the ECU", who()))
+        .expect("set");
+    let refused = Err(ModelError::DamageLinkHasRationale { threat, damage: d0 });
+    assert_eq!(
+        p.apply(Op::UnlinkDamage {
+            threat,
+            damage: d0,
+            provenance: who()
+        })
+        .map(|_| ()),
+        refused
+    );
+    assert_eq!(
+        p.apply(Op::RemoveThreatScenario { id: threat }).map(|_| ()),
+        refused
+    );
+    // The other link has no rationale and still unlinks.
+    p.apply(Op::UnlinkDamage {
+        threat,
+        damage: d1,
+        provenance: who(),
+    })
+    .expect("unlink d1");
+    p.apply(pair(threat, d0, "", who())).expect("clear");
+    p.apply(Op::UnlinkDamage {
+        threat,
+        damage: d0,
+        provenance: who(),
+    })
+    .expect("unlink d0");
+}

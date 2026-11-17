@@ -2067,7 +2067,7 @@ impl Project {
 
     /// Resolves a live party's arena index to its public ID. Time O(1).
     #[must_use]
-    pub(crate) fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
+    pub fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
         self.parties.id(idx)
     }
 
@@ -6789,7 +6789,10 @@ impl Project {
                 ..
             } => self.check_catalog_ref_change(*threat, catalog_ref, false)?,
             Op::LinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, true)?,
-            Op::UnlinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, false)?,
+            Op::UnlinkDamage { threat, damage, .. } => {
+                self.check_link(*threat, *damage, false)?;
+                self.require_no_link_rationale(*threat, Some(*damage))?;
+            }
             Op::RemoveThreatScenario { id } => return self.check_remove_threat(*id),
             Op::AddAttackTree {
                 id,
@@ -8900,6 +8903,25 @@ impl Project {
         }
     }
 
+    /// Refuses when the threat's link to `damage` (or any of its links, for
+    /// `None`) has a rationale: unlink and remove inverses cannot carry it.
+    fn require_no_link_rationale(
+        &self,
+        threat: ThreatId,
+        damage: Option<DamageId>,
+    ) -> Result<(), ModelError> {
+        let t = self.threat_ref(threat)?;
+        for (d, _) in &t.damage_rationales {
+            let Some(id) = self.damage_key(*d) else {
+                continue;
+            };
+            if damage.is_none_or(|want| want == id) {
+                return Err(ModelError::DamageLinkHasRationale { threat, damage: id });
+            }
+        }
+        Ok(())
+    }
+
     fn check_remove_threat(&self, id: ThreatId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Threat(id), EntityKind::ThreatScenario)?;
         let t = self.threat_ref(id)?;
@@ -8942,6 +8964,7 @@ impl Project {
         if !t.feasibility_rationale.is_empty() {
             return Err(ModelError::ThreatHasRationale { threat: id });
         }
+        self.require_no_link_rationale(id, None)?;
         let elements = self
             .elements
             .inbound(crate::element::LinkTarget::Threat(id));
@@ -9407,10 +9430,16 @@ impl Project {
 
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
-        let (idx, _) = self.live_goal(id)?;
+        let (idx, g) = self.live_goal(id)?;
         let threats = self.refs.goals.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::CybersecurityGoalInUse { goal: id, threats });
+        }
+        if !g.responsible.is_empty() {
+            return Err(ModelError::CybersecurityGoalHasParties {
+                goal: id,
+                parties: g.responsible.len(),
+            });
         }
         Ok(())
     }
@@ -9440,6 +9469,10 @@ impl Project {
         let threats = self.refs.claims.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::CybersecurityClaimInUse { claim: id, threats });
+        }
+        let parties = self.live_claim_ref(id)?.responsible.len();
+        if parties > 0 {
+            return Err(ModelError::CybersecurityClaimHasParties { claim: id, parties });
         }
         Ok(())
     }
