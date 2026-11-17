@@ -966,3 +966,68 @@ fn op_log_round_trips_every_responsible_op() {
         .collect();
     assert_eq!(read, ops);
 }
+
+#[test]
+fn project_eq_sees_goal_responsible_difference() {
+    let (party, goal) = (PartyId::new_v7(), GoalId::new_v7());
+    let mut without = project();
+    add(&mut without, party, "Bosch", PartyKind::Supplier);
+    add_goal(&mut without, goal);
+
+    let mut with = without.clone();
+    // Linking with the same provenance `add_goal` used leaves provenance
+    // unchanged, so the responsible list is the only difference.
+    with.apply(Op::LinkGoalParty {
+        goal,
+        party,
+        provenance: who(),
+    })
+    .expect("link goal party");
+
+    assert!(without != with);
+}
+
+#[test]
+fn project_eq_ignores_party_insertion_order_for_claims() {
+    let (p1, p2, claim) = (PartyId::new_v7(), PartyId::new_v7(), ClaimId::new_v7());
+
+    // A: parties enter the arena as p1 then p2; claim links p1 then p2.
+    let mut a = project();
+    add(&mut a, p1, "First", PartyKind::Supplier);
+    add(&mut a, p2, "Second", PartyKind::Customer);
+    add_claim(&mut a, claim);
+    a.apply(Op::LinkClaimParty {
+        claim,
+        party: p1,
+        provenance: who(),
+    })
+    .expect("link p1");
+    a.apply(Op::LinkClaimParty {
+        claim,
+        party: p2,
+        provenance: who(),
+    })
+    .expect("link p2");
+
+    // B: same public parties and claim, but parties enter the arena in the
+    // opposite order (so the stored PartyIdx slots differ) and the links are
+    // applied in the opposite order too.
+    let mut b = project();
+    add(&mut b, p2, "Second", PartyKind::Customer);
+    add(&mut b, p1, "First", PartyKind::Supplier);
+    add_claim(&mut b, claim);
+    b.apply(Op::LinkClaimParty {
+        claim,
+        party: p2,
+        provenance: who(),
+    })
+    .expect("link p2");
+    b.apply(Op::LinkClaimParty {
+        claim,
+        party: p1,
+        provenance: who(),
+    })
+    .expect("link p1");
+
+    assert!(a == b);
+}

@@ -11273,7 +11273,7 @@ impl PartialEq for Project {
             && self
                 .cybersecurity_claims()
                 .zip(other.cybersecurity_claims())
-                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_claim(x, other, y))
             && self
                 .cybersecurity_goals()
                 .zip(other.cybersecurity_goals())
@@ -11400,8 +11400,8 @@ impl Project {
                 .all(|(&a, &b)| self.item_ref(Some(a)) == other.item_ref(Some(b)))
     }
 
-    /// Compares two goals from two projects by content, with control
-    /// references resolved to public IDs. O(c).
+    /// Compares two goals from two projects by content, with control and
+    /// responsible-party references resolved to public IDs. O(c + p).
     fn same_goal(&self, x: &CybersecurityGoal, other: &Project, y: &CybersecurityGoal) -> bool {
         x.name == y.name
             && x.provenance == y.provenance
@@ -11410,6 +11410,23 @@ impl Project {
                 .iter()
                 .zip(&y.controls)
                 .all(|(&a, &b)| self.control_key(a) == other.control_key(b))
+            && x.responsible.len() == y.responsible.len()
+            && x.responsible
+                .iter()
+                .zip(&y.responsible)
+                .all(|(&a, &b)| self.party_key(a) == other.party_key(b))
+    }
+
+    /// Compares two claims from two projects by content, with responsible-party
+    /// references resolved to public IDs. O(p).
+    fn same_claim(&self, x: &CybersecurityClaim, other: &Project, y: &CybersecurityClaim) -> bool {
+        x.name == y.name
+            && x.provenance == y.provenance
+            && x.responsible.len() == y.responsible.len()
+            && x.responsible
+                .iter()
+                .zip(&y.responsible)
+                .all(|(&a, &b)| self.party_key(a) == other.party_key(b))
     }
 
     /// Compares two threats from two projects by content, with references
