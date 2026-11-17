@@ -126,6 +126,7 @@ id = ID
 properties = Properties
 worst-risk = Worst risk
 controls = Controls
+responsible = Responsible
 
 # Relation labels (job 149).
 relation-asset-component = Component
@@ -135,8 +136,16 @@ relation-threat-tree = Attack tree
 relation-threat-goal = Goal
 relation-threat-claim = Claim
 relation-goal-controls = Controls
+relation-goal-responsible = Responsible
+relation-claim-responsible = Responsible
 relation-control-targets = Applied to
 relation-step-via = Goes through
 relation-step-mitigations = Mitigations
 relation-dataflow-from = Flow source
 relation-dataflow-to = Flow destination
+
+# Party roles (job 145).
+party-us = Us
+party-customer = Customer
+party-supplier = Supplier
+party-other = Other

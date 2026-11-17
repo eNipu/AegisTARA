@@ -70,6 +70,7 @@ impl Label {
             Selection::Control(id) => project.security_control_idx(&id).is_some(),
             Selection::Goal(id) => project.cybersecurity_goal_idx(&id).is_some(),
             Selection::Claim(id) => project.cybersecurity_claim_idx(&id).is_some(),
+            Selection::Party(id) => project.party_idx(&id).is_some(),
             Selection::Component(id) => project.component_idx(&id).is_some(),
             Selection::Interface(id) => project.interface_idx(&id).is_some(),
             Selection::DataFlow(id) => project.data_flow_idx(&id).is_some(),
@@ -285,9 +286,13 @@ fn target_of(op: &Op) -> Option<Selection> {
         Op::LinkGoalControl { goal, .. } | Op::UnlinkGoalControl { goal, .. } => {
             Selection::Goal(*goal)
         }
+        Op::LinkGoalParty { goal, .. } | Op::UnlinkGoalParty { goal, .. } => Selection::Goal(*goal),
         Op::AddCybersecurityClaim { id, .. }
         | Op::RenameCybersecurityClaim { id, .. }
         | Op::RemoveCybersecurityClaim { id } => Selection::Claim(*id),
+        Op::LinkClaimParty { claim, .. } | Op::UnlinkClaimParty { claim, .. } => {
+            Selection::Claim(*claim)
+        }
         Op::AddComponent { id, .. }
         | Op::RenameComponent { id, .. }
         | Op::SetComponentParent { id, .. }
@@ -435,9 +440,29 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::UnlinkGoalControl { goal: g, .. } => {
             ("unlink", "control from cybersecurity goal", goal(g))
         }
+        Op::LinkGoalParty { goal: g, .. } => (
+            "change",
+            "responsible parties of cybersecurity goal",
+            goal(g),
+        ),
+        Op::UnlinkGoalParty { goal: g, .. } => (
+            "unlink",
+            "responsible party from cybersecurity goal",
+            goal(g),
+        ),
         Op::RemoveCybersecurityGoal { id } => ("remove", "cybersecurity goal", goal(id)),
         Op::AddCybersecurityClaim { name, .. } => ("add", "cybersecurity claim", some(name)),
         Op::RenameCybersecurityClaim { id, .. } => ("rename", "cybersecurity claim", claim(id)),
+        Op::LinkClaimParty { claim: c, .. } => (
+            "change",
+            "responsible parties of cybersecurity claim",
+            claim(c),
+        ),
+        Op::UnlinkClaimParty { claim: c, .. } => (
+            "unlink",
+            "responsible party from cybersecurity claim",
+            claim(c),
+        ),
         Op::RemoveCybersecurityClaim { id } => ("remove", "cybersecurity claim", claim(id)),
 
         Op::AddComponent { name, .. } => ("add", "component", some(name)),
