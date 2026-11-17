@@ -268,12 +268,21 @@ fn nested_or_over_and_drops_the_excluded_branch() -> Res {
         })
     );
     let (_, _, tree) = fx.p.attack_trees().next().ok_or("no tree")?;
-    let paths: Vec<_> = eval.attack_paths(tree).ok_or("no paths")?.collect();
-    assert_eq!(paths.len(), 1);
-    assert_eq!(paths[0].steps(), &[c]);
-    let top = eval.top_k_paths(tree, 10).ok_or("no top paths")?;
-    assert_eq!(top.len(), 1);
-    assert!(top.iter().all(|p| !p.steps().contains(&a)));
+    let paths: Vec<Vec<_>> = eval
+        .attack_paths(tree)
+        .ok_or("no paths")?
+        .map(|p| p.steps().to_vec())
+        .collect();
+    assert!(!paths.is_empty());
+    assert_eq!(paths, vec![vec![c]]);
+    let top: Vec<Vec<_>> = eval
+        .top_k_paths(tree, 10)
+        .ok_or("no top paths")?
+        .iter()
+        .map(|p| p.steps().to_vec())
+        .collect();
+    assert!(!top.is_empty());
+    assert_eq!(top, vec![vec![c]]);
     assert_toggle_agrees(&mut fx)
 }
 
