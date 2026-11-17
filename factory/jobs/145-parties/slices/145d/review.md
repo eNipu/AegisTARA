@@ -1,0 +1,11 @@
+VERDICT: PASS
+## For the owner
+What changed: Added `Selection::Party` and two relation-registry rows (`goal-responsible`, `claim-responsible`) whose reads resolve stored party indices to `Selection::Party`, with typed link/unlink edits. Added a Responsible `Links` column to Goals/Claims filled from stored responsible lists, inspector picker data, and undo labels for all four new ops. Added `responsible`/relation/party-role keys in en/ja/pseudo and tests for reverse reachability, column conventions, locale keys, undo labels, and pick→undo byte restoration.
+Look at: `crates/aegis-client/src/relations.rs:117-118` and `:278-288` — the two rows and their reads; both-way lookup depends on these returning `Selection::Party` for `reverse_related`/`linked`, and the resolution scan is O(elements). `crates/aegis-client/src/lib.rs:54` — picker toggle emits `LinkGoalParty` and one undo restores `save()` bytes; pick/unpick symmetry holds by construction (one `Op` per `Edit`) but unpick is not separately exercised. `crates/aegis-client/src/pages.rs:2599` — an untested `ShareTreatmentWithoutOtherParty` problem arm added only to unbreak the build after 145c; sanity-check its message text.
+Risk: Both-way reachability is real: `reverse_related`/`linked` scan `elements_of_kind(row.from)` against the new reads, and `every_link_is_reachable_both_ways` (`tests/relations.rs:419`) walks the fixture's goal/claim→party links forward and in reverse and would fail if either row were removed. Pick/unpick is one undo step: `to_ops` emits exactly one `Op` and the lib test proves apply→undo restores bytes. All new keys resolve in all three locales (`tests/relations.rs:532`); undo labels resolve to goal/claim and never the `change project` catch-all (`tests/undo_labels.rs:191`). No `.slint`, shell, dependency, model-op, snapshot or risk change. Residual: unpick undo is not individually tested and the 145c problem arm is untested — both low risk, detailed above.
+View: git -C factory/worktrees/145-parties diff 726042f2d4e7889932c67bf54e489259514063b1..HEAD
+## Findings
+none
+## Lesson
+[builder] When adding a `LintCode` variant, add its `pages.rs::problem` arm in the same slice or the client crate will not compile (145c omitted it and broke 145d's build).
+NEXT: human

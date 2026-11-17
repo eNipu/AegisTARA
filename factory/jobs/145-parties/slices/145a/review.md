@@ -1,0 +1,11 @@
+VERDICT: PASS
+## For the owner
+What changed: Added a typed `Party` element (`PartyId`/`PartyIdx`, arena, `P` visual prefix) to `aegis-model` with accessors on `Project`. Added four ops (add/rename/set-kind/remove) with exact inverses, five error variants, a `ProjectDiff::parties()` accessor and op-log/wire arms. Added `tests/parties.rs` and extended `undo_every_op.rs` to cover all four ops.
+Look at: `crates/aegis-model/src/project.rs:8921` — `check_add_party` couples the duplicate-id, blank/over-long-name, provenance and 256-cap guards; confirm the `len() >= MAX_PARTIES || next_idx(slot_limit).is_none()` boundary is what the cap test exercises. `crates/aegis-model/src/project.rs:10443` — `commit_remove_party` inverse restores name/kind/provenance; the inverse test confirms the freed arena slot is reused so the visual ID returns to `P00`, not `P01`. `crates/aegis-client/tests/undo_every_op.rs:467` — `walk_parties` is the only thing registering the four new variants in `seen`; removing it fails the declared-variants assertion.
+Risk: Low. Recipe parts in scope are covered: typed ops with exact inverses (verified by `save()`-byte round-trips plus direct state/visual-ID checks), name/cap guards with error variants asserted and inputs only each guard refuses (L09), a `P` prefix that is not reused by any existing prefix, and provenance checked on every op that carries it (the fall-through at `validate` line 6768 covers Rename/SetPartyKind; AddParty checks it in `check_add_party`; blank-actor test included, L15). Error text carries only bounded UUIDs/limits — tests assert no name leaks (R3/Q4). No new dependency, no snapshot/envelope change, no risk-number change, files confined to the allow list. Two recipe items are intentionally deferred by the prompt, not defects: the `RemoveParty` in-use guard (145b) and persistence/snapshot fields (145c) — a reloaded snapshot will not restore parties until that slice lands. One cosmetic stale doc comment (`op.rs:997` still says "seven entity-removal variants" after `RemoveParty` made it eight) does not affect behavior.
+View: git -C factory/worktrees/145-parties diff 7f83a51..HEAD
+## Findings
+- none
+## Lesson
+- [builder] When adding a new removal `Op` variant, update the doc comment that counts removal variants (seven -> eight here); it drifts silently because no test reads it.
+NEXT: human
