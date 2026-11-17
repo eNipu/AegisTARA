@@ -58,6 +58,7 @@ through = 経由
 attack-type = 攻撃タイプ
 rationale = 根拠
 feasibility-rationale = 実現可能性の根拠
+pair-rationale = 組み合わせの根拠
 scales = スケール
 scaling-reason = スケーラビリティの根拠
 no = なし

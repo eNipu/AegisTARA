@@ -6734,6 +6734,15 @@ impl Project {
                 self.live_threat(*threat)?;
                 check_text(text, MAX_DESCRIPTION_CHARS)?;
             }
+            Op::SetDamageLinkRationale {
+                threat,
+                damage,
+                text,
+                ..
+            } => {
+                self.check_link(*threat, *damage, false)?;
+                check_text(text, MAX_DESCRIPTION_CHARS)?;
+            }
             Op::AddComponent {
                 id,
                 name,
@@ -7293,6 +7302,47 @@ impl Project {
                     threat,
                     text: std::mem::replace(&mut t.feasibility_rationale, text),
                     provenance: std::mem::replace(&mut t.provenance, provenance),
+                })
+            }
+            Op::SetDamageLinkRationale {
+                threat,
+                damage,
+                text,
+                provenance,
+            } => {
+                let idx = self.threat_index(threat)?;
+                let t = self
+                    .threats
+                    .get(idx)
+                    .ok_or(ModelError::UnknownThreatScenario(threat))?;
+                let pos = self
+                    .find_link(t, damage)
+                    .map_err(|_| ModelError::DamageNotLinked { threat, damage })?;
+                let dmg = t.damages[pos];
+                let key = self.damage_key(dmg);
+                let overlay = t
+                    .damage_rationales
+                    .binary_search_by_key(&key, |(d, _)| self.damage_key(*d));
+                let t = self
+                    .threats
+                    .get_mut(idx)
+                    .ok_or(ModelError::UnknownThreatScenario(threat))?;
+                let previous = match overlay {
+                    Ok(i) if text.is_empty() => t.damage_rationales.remove(i).1,
+                    Ok(i) => std::mem::replace(&mut t.damage_rationales[i].1, text),
+                    Err(i) => {
+                        if !text.is_empty() {
+                            t.damage_rationales.insert(i, (dmg, text));
+                        }
+                        Arc::from("")
+                    }
+                };
+                let provenance = std::mem::replace(&mut t.provenance, provenance);
+                Ok(Op::SetDamageLinkRationale {
+                    threat,
+                    damage,
+                    text: previous,
+                    provenance,
                 })
             }
             Op::AddComponent {
@@ -9782,6 +9832,7 @@ impl Project {
             category,
             catalog_refs,
             damages,
+            damage_rationales: Vec::new(),
             direct_feasibility: None,
             attack_tree: None,
             treatment: None,
@@ -9845,6 +9896,10 @@ impl Project {
             .get(idx)
             .ok_or(ModelError::UnknownThreatScenario(threat))?;
         let found = self.find_link(t, damage);
+        let key = self.damage_key(d);
+        let overlay = t
+            .damage_rationales
+            .binary_search_by_key(&key, |(d, _)| self.damage_key(*d));
         let t = self
             .threats
             .get_mut(idx)
@@ -9862,6 +9917,9 @@ impl Project {
             }
             (false, Ok(pos)) => {
                 t.damages.remove(pos);
+                if let Ok(i) = overlay {
+                    t.damage_rationales.remove(i);
+                }
                 let provenance = std::mem::replace(&mut t.provenance, provenance);
                 bump(&mut self.refs.damages, Some(d.index()), false);
                 Ok(Op::LinkDamage {
@@ -11489,6 +11547,11 @@ impl Project {
                 .iter()
                 .zip(&y.damages)
                 .all(|(&a, &b)| self.damage_key(a) == other.damage_key(b))
+            && x.damage_rationales.len() == y.damage_rationales.len()
+            && x.damage_rationales
+                .iter()
+                .zip(&y.damage_rationales)
+                .all(|((a, ta), (b, tb))| self.damage_key(*a) == other.damage_key(*b) && ta == tb)
     }
 
     /// Checks every structural invariant and returns a description of the
@@ -11586,6 +11649,22 @@ impl Project {
             let keys: Vec<_> = t.damages.iter().map(|&d| self.damage_key(d)).collect();
             if keys.iter().any(Option::is_none) || !keys.windows(2).all(|w| w[0] < w[1]) {
                 return Err(format!("threat {id} damages invalid or not sorted"));
+            }
+            if t.damage_rationales
+                .iter()
+                .any(|(d, text)| text.is_empty() || !t.damages.contains(d))
+            {
+                return Err(format!("threat {id} damage rationale unlinked or empty"));
+            }
+            let rkeys: Vec<_> = t
+                .damage_rationales
+                .iter()
+                .map(|(d, _)| self.damage_key(*d))
+                .collect();
+            if rkeys.iter().any(Option::is_none) || !rkeys.windows(2).all(|w| w[0] < w[1]) {
+                return Err(format!(
+                    "threat {id} damage rationales invalid or not sorted"
+                ));
             }
             if let Some(level) = t.direct_feasibility {
                 m.check_feasibility_level(level)
@@ -12407,6 +12486,7 @@ impl ProjectEvalCache {
             | Op::SetThreatScaling { .. }
             | Op::SetImpactRationale { .. }
             | Op::SetFeasibilityRationale { .. }
+            | Op::SetDamageLinkRationale { .. }
             | Op::AddSecurityControl { .. }
             | Op::RenameSecurityControl { .. }
             | Op::SetControlKind { .. }

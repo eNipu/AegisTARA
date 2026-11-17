@@ -685,6 +685,7 @@ pub fn report_workbook_xlsx_in(
         names.damage_scenario.plural.to_string(),
         names.feasibility.to_string(),
         "Feasibility rationale".to_owned(),
+        "Pair rationale".to_owned(),
         "Scales".to_owned(),
         "Scaling reason".to_owned(),
         "Risk before controls".to_owned(),
@@ -720,6 +721,7 @@ pub fn report_workbook_xlsx_in(
             r.feasibility,
             t.as_ref()
                 .map_or_else(String::new, |t| t.feasibility_rationale.clone()),
+            r.rationale,
             match t.as_ref().and_then(|t| t.scales) {
                 Some(true) => "yes",
                 Some(false) => "no",

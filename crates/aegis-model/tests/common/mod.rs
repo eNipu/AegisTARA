@@ -1594,6 +1594,37 @@ impl Gen {
                 text: self.rationale(s.c),
                 provenance,
             },
+            65 => {
+                // Pick a threat/damage pair that is actually linked so the op
+                // applies. Empty text clears: the snapshot wire format does not
+                // persist damage-link rationales until 146b, so a non-empty
+                // value here would break snapshot_round_trip/replay (Project ==
+                // after load). With no linked pair, fall back to the op this
+                // selector produced before this arm existed (the `_` arm).
+                let linked = p
+                    .threat_scenarios()
+                    .filter(|(_, _, t)| !t.damages().is_empty())
+                    .find_map(|(_, threat, t)| {
+                        t.damages()
+                            .iter()
+                            .filter_map(|&d| p.damage_scenario_id(d))
+                            .next()
+                            .map(|damage| (threat, damage))
+                    });
+                match linked {
+                    Some((threat, damage)) => Op::SetDamageLinkRationale {
+                        threat,
+                        damage,
+                        text: "".into(),
+                        provenance,
+                    },
+                    None => Op::SetComponentSystem {
+                        id: self.component(p, s.a),
+                        system: (!s.b.is_multiple_of(4)).then(|| self.system(p, s.b)),
+                        provenance,
+                    },
+                }
+            }
             56 => Op::SetThreatScaling {
                 threat: self.threat(p, s.a),
                 scales: match s.b % 3 {
