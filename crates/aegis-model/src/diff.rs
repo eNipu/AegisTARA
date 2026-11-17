@@ -23,7 +23,7 @@ use std::fmt;
 
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    ThreatId, TreeId, TrustBoundaryId,
+    PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::methodology::{FeasibilityLevel, RiskLevel};
 
@@ -566,6 +566,7 @@ pub struct ProjectDiff {
     pub(crate) security_controls: EntityDiff<ControlId>,
     pub(crate) cybersecurity_goals: EntityDiff<GoalId>,
     pub(crate) cybersecurity_claims: EntityDiff<ClaimId>,
+    pub(crate) parties: EntityDiff<PartyId>,
     pub(crate) elements: EntityDiff<ElementId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
     pub(crate) notes_changed: bool,
@@ -745,6 +746,21 @@ impl ProjectDiff {
         &self.cybersecurity_claims
     }
 
+    /// Returns the added, removed, and modified [`PartyId`]s in canonical
+    /// order. Party changes add no risk delta.
+    ///
+    /// Time O(1), space O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(ProjectDiff::default().parties().is_empty());
+    /// ```
+    #[must_use]
+    pub fn parties(&self) -> &EntityDiff<PartyId> {
+        &self.parties
+    }
+
     /// Returns the added, removed, and modified [`ElementId`]s of generic
     /// elements in canonical order. Element changes add no risk delta.
     ///
@@ -815,6 +831,7 @@ impl ProjectDiff {
             && self.security_controls.is_empty()
             && self.cybersecurity_goals.is_empty()
             && self.cybersecurity_claims.is_empty()
+            && self.parties.is_empty()
             && self.elements.is_empty()
     }
 }

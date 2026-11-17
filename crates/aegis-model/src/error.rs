@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::control::RiskTreatment;
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, NodeIdx, ThreatId, TreeId, TrustBoundaryId,
+    NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -284,6 +284,15 @@ pub enum ModelError {
     /// A cybersecurity claim with this ID already exists in the project.
     #[error("cybersecurity claim {0} already exists in the project")]
     DuplicateCybersecurityClaim(ClaimId),
+    /// A party with this ID already exists in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, PartyId};
+    /// let id = PartyId::new_v7();
+    /// assert_eq!(ModelError::DuplicatePartyId(id).to_string(), format!("party {id} already exists in the project"));
+    /// ```
+    #[error("party {0} already exists in the project")]
+    DuplicatePartyId(PartyId),
     /// An element with this ID already exists in the project.
     #[error("element {0} already exists in the project")]
     DuplicateElement(ElementId),
@@ -418,6 +427,15 @@ pub enum ModelError {
     /// No cybersecurity claim with this ID is in the project.
     #[error("cybersecurity claim {0} is not in the project")]
     UnknownCybersecurityClaim(ClaimId),
+    /// No party with this ID is in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, PartyId};
+    /// let id = PartyId::new_v7();
+    /// assert_eq!(ModelError::UnknownParty(id).to_string(), format!("party {id} is not in the project"));
+    /// ```
+    #[error("party {0} is not in the project")]
+    UnknownParty(PartyId),
     /// No element with this ID is in the project.
     #[error("element {0} is not in the project")]
     UnknownElement(ElementId),
@@ -539,6 +557,35 @@ pub enum ModelError {
         /// Which entity kind had a name that was too long.
         kind: EntityKind,
         /// The limit, in chars.
+        max: usize,
+    },
+    /// A party name is empty or only whitespace. Carries no name text.
+    ///
+    /// ```
+    /// assert_eq!(aegis_model::ModelError::PartyNameEmpty.to_string(), "party name is empty");
+    /// ```
+    #[error("party name is empty")]
+    PartyNameEmpty,
+    /// A party name is longer than `max` chars. Carries no name text.
+    ///
+    /// ```
+    /// let err = aegis_model::ModelError::PartyNameTooLong { max: 256 };
+    /// assert_eq!(err.to_string(), "party name is longer than 256 chars");
+    /// ```
+    #[error("party name is longer than {max} chars")]
+    PartyNameTooLong {
+        /// The limit, in chars.
+        max: usize,
+    },
+    /// A project holds at most `max` parties.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, MAX_PARTIES};
+    /// assert_eq!(ModelError::TooManyParties { max: MAX_PARTIES }.to_string(), "project holds more than 256 parties");
+    /// ```
+    #[error("project holds more than {max} parties")]
+    TooManyParties {
+        /// The limit.
         max: usize,
     },
     /// A non-empty provenance actor string contains only whitespace.
@@ -1103,6 +1150,96 @@ pub enum ModelError {
     TooManyGoalControls {
         /// The cybersecurity goal.
         goal: GoalId,
+        /// The limit.
+        max: usize,
+    },
+    /// A party cannot be removed while a goal or claim still lists it.
+    /// ```
+    /// use aegis_model::{ModelError, PartyId};
+    /// let party = PartyId::new_v7();
+    /// let err = ModelError::PartyInUse { party, goals: 1, claims: 2 };
+    /// assert_eq!(err.to_string(), format!("party {party} is listed by 1 goal(s) and 2 claim(s)"));
+    /// ```
+    #[error("party {party} is listed by {goals} goal(s) and {claims} claim(s)")]
+    PartyInUse {
+        /// The party still listed as responsible.
+        party: PartyId,
+        /// How many goals list it.
+        goals: usize,
+        /// How many claims list it.
+        claims: usize,
+    },
+    /// The cybersecurity goal already lists this party as responsible.
+    /// ```
+    /// use aegis_model::{GoalId, ModelError, PartyId};
+    /// let goal = GoalId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::DuplicateGoalParty { goal, party }; assert_eq!(err.to_string(), format!("cybersecurity goal {goal} already lists party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity goal {goal} already lists party {party} as responsible")]
+    DuplicateGoalParty {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// The party already listed.
+        party: PartyId,
+    },
+    /// The cybersecurity goal does not list this party as responsible.
+    /// ```
+    /// use aegis_model::{GoalId, ModelError, PartyId};
+    /// let goal = GoalId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::GoalPartyNotLinked { goal, party }; assert_eq!(err.to_string(), format!("cybersecurity goal {goal} does not list party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity goal {goal} does not list party {party} as responsible")]
+    GoalPartyNotLinked {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// The party not listed.
+        party: PartyId,
+    },
+    /// A cybersecurity goal may list at most `max` responsible parties.
+    /// ```
+    /// use aegis_model::{ModelError, MAX_RESPONSIBLE};
+    /// let err = ModelError::TooManyGoalResponsible { max: MAX_RESPONSIBLE };
+    /// assert_eq!(err.to_string(), "cybersecurity goal would list more than 16 responsible parties");
+    /// ```
+    #[error("cybersecurity goal would list more than {max} responsible parties")]
+    TooManyGoalResponsible {
+        /// The limit.
+        max: usize,
+    },
+    /// The cybersecurity claim already lists this party as responsible.
+    /// ```
+    /// use aegis_model::{ClaimId, ModelError, PartyId};
+    /// let claim = ClaimId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::DuplicateClaimParty { claim, party }; assert_eq!(err.to_string(), format!("cybersecurity claim {claim} already lists party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity claim {claim} already lists party {party} as responsible")]
+    DuplicateClaimParty {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The party already listed.
+        party: PartyId,
+    },
+    /// The cybersecurity claim does not list this party as responsible.
+    /// ```
+    /// use aegis_model::{ClaimId, ModelError, PartyId};
+    /// let claim = ClaimId::new_v7(); let party = PartyId::new_v7();
+    /// let err = ModelError::ClaimPartyNotLinked { claim, party }; assert_eq!(err.to_string(), format!("cybersecurity claim {claim} does not list party {party} as responsible"));
+    /// ```
+    #[error("cybersecurity claim {claim} does not list party {party} as responsible")]
+    ClaimPartyNotLinked {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The party not listed.
+        party: PartyId,
+    },
+    /// A cybersecurity claim may list at most `max` responsible parties.
+    /// ```
+    /// use aegis_model::{ModelError, MAX_RESPONSIBLE};
+    /// let err = ModelError::TooManyClaimResponsible { max: MAX_RESPONSIBLE };
+    /// assert_eq!(err.to_string(), "cybersecurity claim would list more than 16 responsible parties");
+    /// ```
+    #[error("cybersecurity claim would list more than {max} responsible parties")]
+    TooManyClaimResponsible {
         /// The limit.
         max: usize,
     },

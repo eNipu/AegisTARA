@@ -7,13 +7,13 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackTree, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter, Project,
-    Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
+    AttackTree, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter, PartyKind,
+    Project, Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, control_id, cref, damage_id, describe, factor, factor_lvl,
-    feas, lvl, node_id, prop, props, read_log, reordered, save, scheme, second, second_def,
-    threat_cat, threat_id, tree_id, wide, write_log,
+    SENTINEL, asset_id, builtin, cat, claim_id, control_id, cref, damage_id, describe, factor,
+    factor_lvl, feas, goal_id, lvl, node_id, party_id, prop, props, read_log, reordered, save,
+    scheme, second, second_def, threat_cat, threat_id, tree_id, wide, write_log,
 };
 use serde_json::Value;
 
@@ -235,6 +235,83 @@ fn golden_v1_files_are_lf_only_and_end_in_newline() {
         assert!(!bytes.contains(&b'\r'), "{path}");
         assert_eq!(bytes.last(), Some(&b'\n'), "{path}");
     }
+}
+
+#[test]
+fn v1_fixture_without_parties_loads_and_saves_identical_bytes() {
+    let m = builtin();
+    let bytes = std::fs::read(PROJECT_V1).expect("fixture");
+    let p = load(&bytes, &m).expect("loads");
+    let saved = save(&p);
+    assert_eq!(saved, bytes);
+    let text = String::from_utf8(saved).expect("utf8");
+    assert!(!text.contains("\"parties\""), "no parties key written");
+    assert!(
+        !text.contains("\"responsible\""),
+        "no responsible key written"
+    );
+}
+
+#[test]
+fn parties_and_responsible_round_trip_byte_for_byte() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    // More than 100 parties, with a zero-padded visual ID gap (party 0 is
+    // removed) so position-based visual IDs on read-back cannot match.
+    let mut ids = Vec::new();
+    for i in 0..101u64 {
+        let id = party_id(1000 + i);
+        p.apply(Op::AddParty {
+            id,
+            name: format!("party {i}").into(),
+            kind: match i % 4 {
+                0 => PartyKind::Us,
+                1 => PartyKind::Customer,
+                2 => PartyKind::Supplier,
+                _ => PartyKind::Other,
+            },
+            provenance: Provenance::default(),
+        })
+        .expect("add party");
+        ids.push(id);
+    }
+    p.apply(Op::RemoveParty { id: ids[0] })
+        .expect("remove party");
+    let goal = goal_id(1);
+    p.apply(Op::AddCybersecurityGoal {
+        id: goal,
+        name: "goal".into(),
+        controls: Vec::new(),
+        provenance: Provenance::default(),
+    })
+    .expect("add goal");
+    let claim = claim_id(2);
+    p.apply(Op::AddCybersecurityClaim {
+        id: claim,
+        name: "claim".into(),
+        provenance: Provenance::default(),
+    })
+    .expect("add claim");
+    for &party in &ids[1..6] {
+        p.apply(Op::LinkGoalParty {
+            goal,
+            party,
+            provenance: Provenance::default(),
+        })
+        .expect("link goal party");
+    }
+    for &party in &ids[6..11] {
+        p.apply(Op::LinkClaimParty {
+            claim,
+            party,
+            provenance: Provenance::default(),
+        })
+        .expect("link claim party");
+    }
+    let saved = save(&p);
+    let back = load(&saved, &m).expect("loads");
+    assert_eq!(save(&back), saved);
+    assert_eq!(back.parties().count(), 100);
 }
 
 // ---------------------------------------------------------------------------

@@ -15,7 +15,8 @@ use aegis_client::relations::{
 use aegis_client::view::Selection;
 use aegis_model::{
     AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GateKind, GoalId,
-    ItemRef, Methodology, Node, NodeId, Op, Project, Provenance, ThreatId, TreeId,
+    ItemRef, Methodology, Node, NodeId, Op, PartyId, PartyIdx, PartyKind, Project, Provenance,
+    ThreatId, TreeId,
 };
 
 /// `Selection` has no `Ord`, and the orphan rule forbids adding one here. This
@@ -39,6 +40,7 @@ impl Sel {
             Selection::Control(_) => 9,
             Selection::Goal(_) => 10,
             Selection::Claim(_) => 11,
+            Selection::Party(_) => 12,
         };
         let s = self.0;
         (rank, format!("{s:?}"))
@@ -89,6 +91,7 @@ fn project() -> Project {
         GoalId::new_v7(),
         ClaimId::new_v7(),
     );
+    let (party1, party2) = (PartyId::new_v7(), PartyId::new_v7());
 
     let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "root")).expect("tree");
     tree.add_child(tree.root(), step, Node::step("step"))
@@ -214,6 +217,38 @@ fn project() -> Project {
             name: "claim".into(),
             provenance: provenance.clone(),
         },
+        Op::AddParty {
+            id: party1,
+            name: "Bosch".into(),
+            kind: PartyKind::Supplier,
+            provenance: provenance.clone(),
+        },
+        Op::AddParty {
+            id: party2,
+            name: "OEM".into(),
+            kind: PartyKind::Customer,
+            provenance: provenance.clone(),
+        },
+        Op::LinkGoalParty {
+            goal,
+            party: party1,
+            provenance: provenance.clone(),
+        },
+        Op::LinkGoalParty {
+            goal,
+            party: party2,
+            provenance: provenance.clone(),
+        },
+        Op::LinkClaimParty {
+            claim,
+            party: party1,
+            provenance: provenance.clone(),
+        },
+        Op::LinkClaimParty {
+            claim,
+            party: party2,
+            provenance: provenance.clone(),
+        },
         Op::SetThreatClaim {
             threat,
             claim: Some(claim),
@@ -235,6 +270,7 @@ fn sources_of(project: &Project, kind: ElementKind) -> Vec<Selection> {
         ElementKind::Asset => project.assets().map(|(_, id, _)| Selection::Asset(id)).collect(),
         ElementKind::Threat => project.threat_scenarios().map(|(_, id, _)| Selection::Threat(id)).collect(),
         ElementKind::Goal => project.cybersecurity_goals().map(|(_, id, _)| Selection::Goal(id)).collect(),
+        ElementKind::Claim => project.cybersecurity_claims().map(|(_, id, _)| Selection::Claim(id)).collect(),
         ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
         ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
         ElementKind::Step => project
@@ -250,6 +286,9 @@ fn sources_of(project: &Project, kind: ElementKind) -> Vec<Selection> {
 /// `registry_links`.
 fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
     let mut out = BTreeSet::new();
+    let party_ids: Vec<(PartyIdx, PartyId)> =
+        project.parties().map(|(idx, id, _)| (idx, id)).collect();
+    let party_id = |idx: PartyIdx| party_ids.iter().find(|(i, _)| *i == idx).map(|(_, id)| *id);
 
     for (_, id, asset) in project.assets() {
         if let Some(component) = asset.component().and_then(|c| project.component_id(c)) {
@@ -298,6 +337,21 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
                 if let Some(target) = item_selection(item) {
                     out.insert((Sel(Selection::Control(id)), Sel(target)));
                 }
+            }
+        }
+    }
+
+    for (_, id, goal) in project.cybersecurity_goals() {
+        for &idx in goal.responsible() {
+            if let Some(party) = party_id(idx) {
+                out.insert((Sel(Selection::Goal(id)), Sel(Selection::Party(party))));
+            }
+        }
+    }
+    for (_, id, claim) in project.cybersecurity_claims() {
+        for &idx in claim.responsible() {
+            if let Some(party) = party_id(idx) {
+                out.insert((Sel(Selection::Claim(id)), Sel(Selection::Party(party))));
             }
         }
     }
@@ -411,6 +465,8 @@ fn keys_and_labels_are_valid() {
         (RelationKey::THREAT_GOAL, "threat-goal"),
         (RelationKey::THREAT_CLAIM, "threat-claim"),
         (RelationKey::GOAL_CONTROLS, "goal-controls"),
+        (RelationKey::GOAL_RESPONSIBLE, "goal-responsible"),
+        (RelationKey::CLAIM_RESPONSIBLE, "claim-responsible"),
         (RelationKey::CONTROL_TARGETS, "control-targets"),
         (RelationKey::STEP_VIA, "step-via"),
         (RelationKey::STEP_MITIGATIONS, "step-mitigations"),
@@ -468,4 +524,30 @@ fn many_matches_the_fixture() {
             "row {key}: many={many} but found {count} targets"
         );
     }
+}
+
+/// The new heading, relation and party-role keys resolve in every bundled
+/// locale. Hyphenated ids only (L27).
+#[test]
+fn new_keys_resolve_in_every_language() {
+    let ids = [
+        "responsible",
+        "relation-goal-responsible",
+        "relation-claim-responsible",
+        "party-us",
+        "party-customer",
+        "party-supplier",
+        "party-other",
+    ];
+    for language in [Language::En, Language::Ja, Language::Pseudo] {
+        let catalog = Catalog::load(language);
+        for id in ids {
+            let text = catalog.tr(id);
+            assert!(
+                !text.starts_with('[') && !text.is_empty(),
+                "missing {id} in {language}: {text}"
+            );
+        }
+    }
+    assert_eq!(Catalog::load(Language::Ja).tr("responsible"), "責任者");
 }

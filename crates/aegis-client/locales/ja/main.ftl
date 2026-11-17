@@ -117,6 +117,7 @@ id = ID
 properties = 特性
 worst-risk = 最大リスク
 controls = 対策
+responsible = 責任者
 
 # Relation labels (job 149).
 relation-asset-component = コンポーネント
@@ -126,8 +127,16 @@ relation-threat-tree = 攻撃ツリー
 relation-threat-goal = 目標
 relation-threat-claim = 主張
 relation-goal-controls = 対策
+relation-goal-responsible = 責任者
+relation-claim-responsible = 責任者
 relation-control-targets = 適用先
 relation-step-via = 経由
 relation-step-mitigations = 緩和策
 relation-dataflow-from = フロー元
 relation-dataflow-to = フロー先
+
+# Party roles (job 145).
+party-us = 自社
+party-customer = 顧客
+party-supplier = サプライヤー
+party-other = その他

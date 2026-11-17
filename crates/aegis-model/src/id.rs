@@ -642,6 +642,43 @@ entity_ids! {
 }
 
 entity_ids! {
+    /// Internal index of a party in a [`Project`](crate::Project) arena.
+    ///
+    /// 4 bytes, `Copy`, and only meaningful for the project that handed it
+    /// out. There is no public constructor.
+    ///
+    /// ```
+    /// assert_eq!(std::mem::size_of::<aegis_model::PartyIdx>(), 4);
+    /// ```
+    pub struct PartyIdx;
+    index_example {
+        /// ```
+        /// # use std::sync::Arc;
+        /// # use aegis_model::{Methodology, Op, PartyId, PartyKind, Project, Provenance};
+        /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+        /// # let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+        /// # let id = PartyId::new_v7();
+        /// # p.apply(Op::AddParty { id, name: "Bosch".into(), kind: PartyKind::Supplier, provenance: Provenance::default() })?;
+        /// assert_eq!(p.party_idx(&id).map(|i| i.index()), Some(0));
+        /// # Ok(())
+        /// # }
+        /// ```
+    }
+    /// Stable public ID of a party: an RFC 9562 version 7 UUID.
+    ///
+    /// ```
+    /// use aegis_model::PartyId;
+    ///
+    /// # fn main() -> Result<(), aegis_model::ModelError> {
+    /// let id = PartyId::new_v7();
+    /// assert_eq!(id.to_string().parse::<PartyId>()?, id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub struct PartyId;
+}
+
+entity_ids! {
     /// Internal index of a system component in a [`Project`](crate::Project)
     /// arena (ARC-02).
     ///
@@ -1009,7 +1046,7 @@ impl fmt::Display for ElementId {
 /// Fixed human-readable prefix for an element kind's visual ID (FND-06).
 ///
 /// Every numbered element kind has a short uppercase prefix (`A`, `D`, `T`,
-/// `AT`, `SC`, `G`, `CL`, `C`, `IF`, `DF`, `TB`). Combined with a 0-based
+/// `AT`, `SC`, `G`, `CL`, `P`, `C`, `IF`, `DF`, `TB`). Combined with a 0-based
 /// sequence number zero-padded to at least two digits (`00`..`99`, growing
 /// to `100`+), it forms a stable human-readable visual ID such as `A00`,
 /// `T01`, or `DF12`.
@@ -1023,6 +1060,8 @@ impl fmt::Display for ElementId {
 /// assert_eq!(format_visual_id(VisualPrefix::Threat, 100), "T100");
 /// assert_eq!(VisualPrefix::Threat.parse_num("T07"), Some(7));
 /// assert_eq!(VisualPrefix::Threat.parse_num("T007"), None);
+/// assert_eq!(VisualPrefix::Party.format(0), "P00");
+/// assert_eq!(VisualPrefix::Party.format(100), "P100");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VisualPrefix {
@@ -1040,6 +1079,8 @@ pub enum VisualPrefix {
     Goal,
     /// Cybersecurity claim (`CL00`, `CL01`, ...).
     Claim,
+    /// Party (`P00`, `P01`, ...).
+    Party,
     /// Item-definition component (`C00`, `C01`, ...).
     Component,
     /// Item-definition interface (`IF00`, `IF01`, ...).
@@ -1052,12 +1093,13 @@ pub enum VisualPrefix {
 
 impl VisualPrefix {
     /// The uppercase ASCII prefix string (`"A"`, `"D"`, `"T"`, `"AT"`,
-    /// `"SC"`, `"G"`, `"CL"`, `"C"`, `"IF"`, `"DF"`, `"TB"`). Time O(1).
+    /// `"SC"`, `"G"`, `"CL"`, `"P"`, `"C"`, `"IF"`, `"DF"`, `"TB"`). Time O(1).
     ///
     /// ```
     /// use aegis_model::VisualPrefix;
     ///
     /// assert_eq!(VisualPrefix::Asset.as_str(), "A");
+    /// assert_eq!(VisualPrefix::Party.as_str(), "P");
     /// assert_eq!(VisualPrefix::TrustBoundary.as_str(), "TB");
     /// ```
     #[must_use]
@@ -1070,6 +1112,7 @@ impl VisualPrefix {
             Self::Control => "SC",
             Self::Goal => "G",
             Self::Claim => "CL",
+            Self::Party => "P",
             Self::Component => "C",
             Self::Interface => "IF",
             Self::DataFlow => "DF",

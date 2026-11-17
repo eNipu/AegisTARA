@@ -18,7 +18,7 @@ use aegis_canvas::{LayoutConfig, NodeKind, NodeStyle, Scene, Tone};
 use aegis_model::{
     AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementRef,
     FeasibilityLevel, GateKind, GoalId, InterfaceId, ItemRef, Methodology, NodeId, NodeIdx,
-    Project, SuggestionId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
+    PartyId, Project, SuggestionId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
 };
 
 use aegis_proto as pb;
@@ -312,6 +312,18 @@ const fn element(e: ElementType) -> ColumnLabel {
 
 const ID: ColumnSpec = col("id", ColumnKind::Id, msg("id"), 76);
 const THREATS: ColumnSpec = col("threats", ColumnKind::Computed, msg("threats"), 90);
+const RESPONSIBLE_G: ColumnSpec = col(
+    "responsible",
+    ColumnKind::Links(RelationKey::GOAL_RESPONSIBLE),
+    msg("responsible"),
+    160,
+);
+const RESPONSIBLE_C: ColumnSpec = col(
+    "responsible",
+    ColumnKind::Links(RelationKey::CLAIM_RESPONSIBLE),
+    msg("responsible"),
+    160,
+);
 const BEFORE: ColumnSpec = col("before", ColumnKind::Computed, msg("risk-before"), 100);
 const AFTER: ColumnSpec = col("after", ColumnKind::Computed, msg("risk-after"), 100);
 
@@ -438,13 +450,14 @@ impl TableId {
                 const C: &[ColumnSpec] = &[
                     ID,
                     name(E::CybersecurityGoal),
+                    RESPONSIBLE_G,
                     col("controls", Computed, msg("controls"), 90),
                     THREATS,
                 ];
                 C
             }
             TableId::Claims => {
-                const C: &[ColumnSpec] = &[ID, name(E::CybersecurityClaim), THREATS];
+                const C: &[ColumnSpec] = &[ID, name(E::CybersecurityClaim), RESPONSIBLE_C, THREATS];
                 C
             }
             TableId::Problems => {
@@ -634,6 +647,8 @@ pub enum Selection {
     Goal(GoalId),
     /// A cybersecurity claim.
     Claim(ClaimId),
+    /// A responsible party in the project's party list.
+    Party(PartyId),
 }
 
 /// A user administration request (admins, password login).

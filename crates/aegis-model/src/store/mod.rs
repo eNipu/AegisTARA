@@ -63,6 +63,7 @@ use crate::methodology::{
     MAX_PACK_CLAUSE_REFS, MAX_PACK_TRANSLATIONS, MAX_PREFIX_LEN, MAX_PROPERTIES, MAX_SEGMENTS,
     MAX_THREAT_CATEGORIES,
 };
+use crate::party::{MAX_PARTIES, MAX_RESPONSIBLE};
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_ATTACK_TREE_NODES;
 
@@ -295,6 +296,17 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A snapshot lists more than [`MAX_PARTIES`](crate::MAX_PARTIES) parties.
+    Parties {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A goal or claim lists more than
+    /// [`MAX_RESPONSIBLE`](crate::MAX_RESPONSIBLE) responsible parties.
+    Responsible {
+        /// The cap, in items.
+        max: usize,
+    },
     /// A security control lists more than
     /// [`MAX_CONTROL_TARGETS`](crate::MAX_CONTROL_TARGETS) applied targets.
     ControlTargets {
@@ -478,6 +490,10 @@ impl Limit {
     pub(crate) const GOAL_CONTROLS: Limit = Limit::GoalControls {
         max: MAX_GOAL_CONTROLS,
     };
+    pub(crate) const PARTIES: Limit = Limit::Parties { max: MAX_PARTIES };
+    pub(crate) const RESPONSIBLE: Limit = Limit::Responsible {
+        max: MAX_RESPONSIBLE,
+    };
     pub(crate) const CONTROL_TARGETS: Limit = Limit::ControlTargets {
         max: MAX_CONTROL_TARGETS,
     };
@@ -578,6 +594,8 @@ impl fmt::Display for Limit {
             Limit::GoalControls { max } => {
                 write!(f, "more than {max} goal controls")
             }
+            Limit::Parties { max } => write!(f, "more than {max} parties"),
+            Limit::Responsible { max } => write!(f, "more than {max} responsible parties"),
             Limit::ControlTargets { max } => {
                 write!(f, "more than {max} control targets")
             }
@@ -719,6 +737,8 @@ mod tests {
             Limit::STEP_FEASIBILITY,
             Limit::STEP_MITIGATIONS,
             Limit::GOAL_CONTROLS,
+            Limit::PARTIES,
+            Limit::RESPONSIBLE,
             Limit::CONTROL_TARGETS,
             Limit::CONTROL_RULES,
             Limit::CONTROL_KINDS,

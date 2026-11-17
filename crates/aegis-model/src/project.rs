@@ -22,8 +22,8 @@ use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
 use crate::id::{
     ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId,
     ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx,
-    InterfaceId, InterfaceIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
-    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
+    InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, ThreatId, ThreatIdx, TreeId,
+    TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
@@ -36,6 +36,7 @@ use crate::methodology::{
     ThreatCategory,
 };
 use crate::op::Op;
+use crate::party::{MAX_PARTIES, MAX_RESPONSIBLE, Party, PartyKind};
 use crate::paths::{AttackPath, ChokePoint};
 use crate::provenance::Provenance;
 use crate::sensitivity::{
@@ -597,6 +598,7 @@ pub struct Project {
     controls: Arena<ControlId, ControlIdx, SecurityControl>,
     goals: Arena<GoalId, GoalIdx, CybersecurityGoal>,
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
+    parties: Arena<PartyId, PartyIdx, Party>,
     components: Arena<ComponentId, ComponentIdx, Component>,
     interfaces: Arena<InterfaceId, InterfaceIdx, Interface>,
     data_flows: Arena<DataFlowId, DataFlowIdx, DataFlow>,
@@ -636,6 +638,20 @@ pub(crate) fn check_name(kind: EntityKind, name: &str) -> Result<(), ModelError>
     if name.chars().count() > MAX_NAME_CHARS {
         return Err(ModelError::NameTooLong {
             kind,
+            max: MAX_NAME_CHARS,
+        });
+    }
+    Ok(())
+}
+
+/// Checks a party name without putting the name in the error text.
+/// Time O(name length).
+fn check_party_name(name: &str) -> Result<(), ModelError> {
+    if name.trim().is_empty() {
+        return Err(ModelError::PartyNameEmpty);
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(ModelError::PartyNameTooLong {
             max: MAX_NAME_CHARS,
         });
     }
@@ -720,6 +736,7 @@ impl Project {
             controls: Arena::new(),
             goals: Arena::new(),
             claims: Arena::new(),
+            parties: Arena::new(),
             components: Arena::new(),
             interfaces: Arena::new(),
             data_flows: Arena::new(),
@@ -1964,6 +1981,63 @@ impl Project {
         self.claims.iter()
     }
 
+    // -- Parties -----------------------------------------------------------------
+
+    /// Resolves a party's public ID to its arena index in O(log n).
+    /// Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Op, PartyId, PartyKind, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// # let id = PartyId::new_v7();
+    /// # p.apply(Op::AddParty { id, name: "Bosch".into(), kind: PartyKind::Supplier, provenance: Provenance::default() })?;
+    /// let idx = p.party_idx(&id).ok_or("missing")?;
+    /// assert_eq!(p.party(idx).map(|x| x.name()), Some("Bosch"));
+    /// assert_eq!(p.parties().count(), 1);
+    /// assert_eq!(p.party_visual_id(idx).as_deref(), Some("P00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn party_idx(&self, id: &PartyId) -> Option<PartyIdx> {
+        self.parties.idx(id)
+    }
+
+    /// Returns a live party in O(1), or `None` if `idx` is out of range or tombstoned.
+    #[must_use]
+    pub fn party(&self, idx: PartyIdx) -> Option<&Party> {
+        self.parties.get(idx)
+    }
+
+    /// Resolves a live party's arena index to its public ID. Time O(1).
+    #[must_use]
+    pub(crate) fn party_id(&self, idx: PartyIdx) -> Option<PartyId> {
+        self.parties.id(idx)
+    }
+
+    /// Returns a live party's 0-based visual number for snapshot IDs.
+    #[must_use]
+    pub(crate) fn party_visual_num(&self, idx: PartyIdx) -> Option<u32> {
+        self.parties.visual_num(idx)
+    }
+
+    /// Iterates live parties in deterministic `PartyId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    pub fn parties(&self) -> impl Iterator<Item = (PartyIdx, PartyId, &Party)> {
+        self.parties.iter()
+    }
+
+    /// Returns a live party's human-readable visual ID (`P00`, `P01`, ...)
+    /// in O(1), or `None` if `idx` is out of range or tombstoned.
+    #[must_use]
+    pub fn party_visual_id(&self, idx: PartyIdx) -> Option<String> {
+        self.parties
+            .visual_num(idx)
+            .map(|n| VisualPrefix::Party.format(n))
+    }
+
     // -- Components (ARC-02) -----------------------------------------------------
 
     /// Returns a live component in O(1), or `None` if `idx` is out of range or
@@ -3012,6 +3086,10 @@ impl Project {
 
     pub(crate) fn set_claim_loaded_visual(&mut self, id: &ClaimId, vis: u32, next: u32) {
         self.claims.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_party_loaded_visual(&mut self, id: &PartyId, vis: u32, next: u32) {
+        self.parties.set_loaded_visual(id, vis, next);
     }
 
     pub(crate) fn set_component_loaded_visual(&mut self, id: &ComponentId, vis: u32, next: u32) {
@@ -5550,7 +5628,11 @@ impl Project {
                     }
                 }
                 Some(RiskTreatment::Share | RiskTreatment::Retain) => {
-                    if threat.claim().is_none() {
+                    if let Some(claim_idx) = threat.claim() {
+                        if threat.treatment() == Some(RiskTreatment::Share) {
+                            self.lint_share_party(id, claim_idx, findings);
+                        }
+                    } else {
                         findings.push(LintFinding::new(
                             LintCode::RetainOrShareTreatmentWithoutClaim { threat: id },
                         ));
@@ -5583,6 +5665,26 @@ impl Project {
                     claim,
                 }));
             }
+        }
+    }
+
+    /// A `Share` threat whose claim names no party other than `Us` warns.
+    fn lint_share_party(
+        &self,
+        threat: ThreatId,
+        claim_idx: ClaimIdx,
+        findings: &mut Vec<LintFinding>,
+    ) {
+        let has_other = self.claims.get(claim_idx).is_some_and(|claim| {
+            claim.responsible().iter().any(|&party_idx| {
+                self.party(party_idx)
+                    .is_some_and(|party| party.kind() != PartyKind::Us)
+            })
+        });
+        if !has_other {
+            findings.push(LintFinding::new(
+                LintCode::ShareTreatmentWithoutOtherParty { threat },
+            ));
         }
     }
 
@@ -5908,7 +6010,10 @@ impl Project {
         let cybersecurity_goals = diff_arena(&self.goals, &other.goals, |x, y| {
             self.same_goal(x, other, y)
         });
-        let cybersecurity_claims = diff_arena(&self.claims, &other.claims, |x, y| x == y);
+        let cybersecurity_claims = diff_arena(&self.claims, &other.claims, |x, y| {
+            self.same_claim(x, other, y)
+        });
+        let parties = diff_arena(&self.parties, &other.parties, |x, y| x == y);
         let components = diff_arena(&self.components, &other.components, |x, y| {
             self.same_component(x, other, y)
         });
@@ -5948,6 +6053,7 @@ impl Project {
             security_controls,
             cybersecurity_goals,
             cybersecurity_claims,
+            parties,
             elements: self.elements.diff(&other.elements),
             components,
             interfaces,
@@ -6567,6 +6673,10 @@ impl Project {
             Op::UnlinkGoalControl { goal, control, .. } => {
                 self.check_goal_control(*goal, *control, false)?;
             }
+            Op::LinkGoalParty { goal, party, .. } => self.check_goal_party(*goal, *party, true)?,
+            Op::UnlinkGoalParty { goal, party, .. } => {
+                self.check_goal_party(*goal, *party, false)?;
+            }
             Op::RemoveCybersecurityGoal { id } => return self.check_remove_goal(*id),
             Op::AddCybersecurityClaim {
                 id,
@@ -6577,7 +6687,27 @@ impl Project {
                 self.live_claim(*id)?;
                 check_name(EntityKind::CybersecurityClaim, name)?;
             }
+            Op::LinkClaimParty { claim, party, .. } => {
+                self.check_claim_party(*claim, *party, true)?;
+            }
+            Op::UnlinkClaimParty { claim, party, .. } => {
+                self.check_claim_party(*claim, *party, false)?;
+            }
             Op::RemoveCybersecurityClaim { id } => return self.check_remove_claim(*id),
+            Op::AddParty {
+                id,
+                name,
+                provenance,
+                ..
+            } => return self.check_add_party(*id, name, provenance),
+            Op::RenameParty { id, name, .. } => {
+                self.party_index(*id)?;
+                check_party_name(name)?;
+            }
+            Op::SetPartyKind { id, .. } => {
+                self.party_index(*id)?;
+            }
+            Op::RemoveParty { id } => return self.check_remove_party(*id),
             Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
@@ -7040,6 +7170,16 @@ impl Project {
                 control,
                 provenance,
             } => self.commit_goal_control(goal, control, provenance, false),
+            Op::LinkGoalParty {
+                goal,
+                party,
+                provenance,
+            } => self.commit_goal_party(goal, party, provenance, true),
+            Op::UnlinkGoalParty {
+                goal,
+                party,
+                provenance,
+            } => self.commit_goal_party(goal, party, provenance, false),
             Op::RemoveCybersecurityGoal { id } => self.commit_remove_goal(id),
             Op::AddCybersecurityClaim {
                 id,
@@ -7051,7 +7191,34 @@ impl Project {
                 name,
                 provenance,
             } => self.commit_rename_claim(id, name, provenance),
+            Op::LinkClaimParty {
+                claim,
+                party,
+                provenance,
+            } => self.commit_claim_party(claim, party, provenance, true),
+            Op::UnlinkClaimParty {
+                claim,
+                party,
+                provenance,
+            } => self.commit_claim_party(claim, party, provenance, false),
             Op::RemoveCybersecurityClaim { id } => self.commit_remove_claim(id),
+            Op::AddParty {
+                id,
+                name,
+                kind,
+                provenance,
+            } => self.commit_add_party(id, name, kind, provenance),
+            Op::RenameParty {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_party(id, name, provenance),
+            Op::SetPartyKind {
+                id,
+                kind,
+                provenance,
+            } => self.commit_set_party_kind(id, kind, provenance),
+            Op::RemoveParty { id } => self.commit_remove_party(id),
             Op::AddElement {
                 id,
                 kind,
@@ -7264,6 +7431,13 @@ impl Project {
             .ok_or(ModelError::UnknownCybersecurityClaim(id))
     }
 
+    fn party_mut(&mut self, id: PartyId) -> Result<&mut Party, ModelError> {
+        let idx = self.party_index(id)?;
+        self.parties
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownParty(id))
+    }
+
     fn component_mut(&mut self, id: ComponentId) -> Result<&mut Component, ModelError> {
         let idx = self.component_index(id)?;
         self.components
@@ -7333,6 +7507,10 @@ impl Project {
         self.claims
             .idx(&id)
             .ok_or(ModelError::UnknownCybersecurityClaim(id))
+    }
+
+    fn party_index(&self, id: PartyId) -> Result<PartyIdx, ModelError> {
+        self.parties.idx(&id).ok_or(ModelError::UnknownParty(id))
     }
 
     fn component_index(&self, id: ComponentId) -> Result<ComponentIdx, ModelError> {
@@ -7405,6 +7583,12 @@ impl Project {
             .get(idx)
             .ok_or(ModelError::UnknownCybersecurityGoal(id))?;
         Ok((idx, g))
+    }
+
+    fn live_claim_ref(&self, id: ClaimId) -> Result<&CybersecurityClaim, ModelError> {
+        self.claims
+            .get(self.live_claim(id)?)
+            .ok_or(ModelError::UnknownCybersecurityClaim(id))
     }
 
     fn live_claim(&self, id: ClaimId) -> Result<ClaimIdx, ModelError> {
@@ -7492,6 +7676,10 @@ impl Project {
         self.controls.id(idx)
     }
 
+    fn party_key(&self, idx: PartyIdx) -> Option<PartyId> {
+        self.parties.id(idx)
+    }
+
     /// The public form of a stored "through" item, if it is live.
     pub(crate) fn item_ref(&self, idx: Option<ItemIdx>) -> Option<ItemRef> {
         match idx? {
@@ -7567,6 +7755,16 @@ impl Project {
     fn find_goal_control(&self, g: &CybersecurityGoal, control: ControlId) -> Result<usize, usize> {
         g.controls
             .binary_search_by(|&c| self.control_key(c).cmp(&Some(control)))
+    }
+
+    fn find_goal_party(&self, g: &CybersecurityGoal, party: PartyId) -> Result<usize, usize> {
+        g.responsible
+            .binary_search_by(|&p| self.party_key(p).cmp(&Some(party)))
+    }
+
+    fn find_claim_party(&self, c: &CybersecurityClaim, party: PartyId) -> Result<usize, usize> {
+        c.responsible
+            .binary_search_by(|&p| self.party_key(p).cmp(&Some(party)))
     }
 
     /// How many live threats on `a` violate `p`. O(log p).
@@ -8774,6 +8972,41 @@ impl Project {
         }
     }
 
+    fn check_goal_party(&self, goal: GoalId, party: PartyId, link: bool) -> Result<(), ModelError> {
+        let (_, g) = self.live_goal(goal)?;
+        self.party_index(party)?;
+        match (link, self.find_goal_party(g, party).is_ok()) {
+            (true, true) => Err(ModelError::DuplicateGoalParty { goal, party }),
+            (true, false) if g.responsible.len() >= MAX_RESPONSIBLE => {
+                Err(ModelError::TooManyGoalResponsible {
+                    max: MAX_RESPONSIBLE,
+                })
+            }
+            (false, false) => Err(ModelError::GoalPartyNotLinked { goal, party }),
+            _ => Ok(()),
+        }
+    }
+
+    fn check_claim_party(
+        &self,
+        claim: ClaimId,
+        party: PartyId,
+        link: bool,
+    ) -> Result<(), ModelError> {
+        let c = self.live_claim_ref(claim)?;
+        self.party_index(party)?;
+        match (link, self.find_claim_party(c, party).is_ok()) {
+            (true, true) => Err(ModelError::DuplicateClaimParty { claim, party }),
+            (true, false) if c.responsible.len() >= MAX_RESPONSIBLE => {
+                Err(ModelError::TooManyClaimResponsible {
+                    max: MAX_RESPONSIBLE,
+                })
+            }
+            (false, false) => Err(ModelError::ClaimPartyNotLinked { claim, party }),
+            _ => Ok(()),
+        }
+    }
+
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
         let (idx, _) = self.live_goal(id)?;
@@ -8809,6 +9042,45 @@ impl Project {
         let threats = self.refs.claims.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::CybersecurityClaimInUse { claim: id, threats });
+        }
+        Ok(())
+    }
+
+    fn check_add_party(
+        &self,
+        id: PartyId,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.parties.idx(&id).is_some() {
+            return Err(ModelError::DuplicatePartyId(id));
+        }
+        check_party_name(name)?;
+        check_provenance(provenance)?;
+        if self.parties.len() >= MAX_PARTIES || self.parties.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::TooManyParties { max: MAX_PARTIES });
+        }
+        Ok(())
+    }
+
+    fn check_remove_party(&self, id: PartyId) -> Result<(), ModelError> {
+        let idx = self.party_index(id)?;
+        let goals = self
+            .goals
+            .iter()
+            .filter(|(_, _, g)| g.responsible.contains(&idx))
+            .count();
+        let claims = self
+            .claims
+            .iter()
+            .filter(|(_, _, c)| c.responsible.contains(&idx))
+            .count();
+        if goals > 0 || claims > 0 {
+            return Err(ModelError::PartyInUse {
+                party: id,
+                goals,
+                claims,
+            });
         }
         Ok(())
     }
@@ -10120,6 +10392,7 @@ impl Project {
         let g = CybersecurityGoal {
             name,
             controls,
+            responsible: Vec::new(),
             provenance,
         };
         let idx =
@@ -10197,6 +10470,40 @@ impl Project {
         }
     }
 
+    fn commit_goal_party(
+        &mut self,
+        goal: GoalId,
+        party: PartyId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let p = self.party_index(party)?;
+        let found = self.find_goal_party(self.live_goal(goal)?.1, party);
+        let g = self.goal_mut(goal)?;
+        match (link, found) {
+            (true, Err(pos)) => {
+                g.responsible.insert(pos, p);
+                let provenance = std::mem::replace(&mut g.provenance, provenance);
+                Ok(Op::UnlinkGoalParty {
+                    goal,
+                    party,
+                    provenance,
+                })
+            }
+            (false, Ok(pos)) => {
+                g.responsible.remove(pos);
+                let provenance = std::mem::replace(&mut g.provenance, provenance);
+                Ok(Op::LinkGoalParty {
+                    goal,
+                    party,
+                    provenance,
+                })
+            }
+            (true, Ok(_)) => Err(ModelError::DuplicateGoalParty { goal, party }),
+            (false, Err(_)) => Err(ModelError::GoalPartyNotLinked { goal, party }),
+        }
+    }
+
     fn commit_remove_goal(&mut self, id: GoalId) -> Result<Op, ModelError> {
         let idx = self.goal_index(id)?;
         let (_, g) = self.live_goal(id)?;
@@ -10229,7 +10536,11 @@ impl Project {
         name: Arc<str>,
         provenance: Provenance,
     ) -> Result<Op, ModelError> {
-        let claim = CybersecurityClaim { name, provenance };
+        let claim = CybersecurityClaim {
+            name,
+            responsible: Vec::new(),
+            provenance,
+        };
         self.claims.push(id, claim, self.slot_limit).ok_or(
             ModelError::ProjectCapacityExceeded {
                 kind: EntityKind::CybersecurityClaim,
@@ -10255,6 +10566,40 @@ impl Project {
         })
     }
 
+    fn commit_claim_party(
+        &mut self,
+        claim: ClaimId,
+        party: PartyId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let p = self.party_index(party)?;
+        let found = self.find_claim_party(self.live_claim_ref(claim)?, party);
+        let c = self.claim_mut(claim)?;
+        match (link, found) {
+            (true, Err(pos)) => {
+                c.responsible.insert(pos, p);
+                let provenance = std::mem::replace(&mut c.provenance, provenance);
+                Ok(Op::UnlinkClaimParty {
+                    claim,
+                    party,
+                    provenance,
+                })
+            }
+            (false, Ok(pos)) => {
+                c.responsible.remove(pos);
+                let provenance = std::mem::replace(&mut c.provenance, provenance);
+                Ok(Op::LinkClaimParty {
+                    claim,
+                    party,
+                    provenance,
+                })
+            }
+            (true, Ok(_)) => Err(ModelError::DuplicateClaimParty { claim, party }),
+            (false, Err(_)) => Err(ModelError::ClaimPartyNotLinked { claim, party }),
+        }
+    }
+
     fn commit_remove_claim(&mut self, id: ClaimId) -> Result<Op, ModelError> {
         let idx = self.claim_index(id)?;
         let c = self
@@ -10265,6 +10610,70 @@ impl Project {
             id,
             name: c.name,
             provenance: c.provenance,
+        })
+    }
+
+    fn commit_add_party(
+        &mut self,
+        id: PartyId,
+        name: Arc<str>,
+        kind: PartyKind,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let party = Party {
+            name,
+            kind,
+            provenance,
+        };
+        self.parties
+            .push(id, party, self.slot_limit)
+            .ok_or(ModelError::TooManyParties { max: MAX_PARTIES })?;
+        Ok(Op::RemoveParty { id })
+    }
+
+    fn commit_rename_party(
+        &mut self,
+        id: PartyId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let p = self.party_mut(id)?;
+        let name = std::mem::replace(&mut p.name, name);
+        let provenance = std::mem::replace(&mut p.provenance, provenance);
+        Ok(Op::RenameParty {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_party_kind(
+        &mut self,
+        id: PartyId,
+        kind: PartyKind,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let p = self.party_mut(id)?;
+        let kind = std::mem::replace(&mut p.kind, kind);
+        let provenance = std::mem::replace(&mut p.provenance, provenance);
+        Ok(Op::SetPartyKind {
+            id,
+            kind,
+            provenance,
+        })
+    }
+
+    fn commit_remove_party(&mut self, id: PartyId) -> Result<Op, ModelError> {
+        let idx = self.party_index(id)?;
+        let p = self
+            .parties
+            .remove(idx)
+            .ok_or(ModelError::UnknownParty(id))?;
+        Ok(Op::AddParty {
+            id,
+            name: p.name,
+            kind: p.kind,
+            provenance: p.provenance,
         })
     }
 
@@ -10886,6 +11295,7 @@ impl PartialEq for Project {
             && self.controls.len() == other.controls.len()
             && self.goals.len() == other.goals.len()
             && self.claims.len() == other.claims.len()
+            && self.parties.len() == other.parties.len()
             && self.components.len() == other.components.len()
             && self.interfaces.len() == other.interfaces.len()
             && self.data_flows.len() == other.data_flows.len()
@@ -10905,11 +11315,15 @@ impl PartialEq for Project {
             && self
                 .cybersecurity_claims()
                 .zip(other.cybersecurity_claims())
-                .all(|((_, a, x), (_, b, y))| a == b && x == y)
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_claim(x, other, y))
             && self
                 .cybersecurity_goals()
                 .zip(other.cybersecurity_goals())
                 .all(|((_, a, x), (_, b, y))| a == b && self.same_goal(x, other, y))
+            && self
+                .parties()
+                .zip(other.parties())
+                .all(|((_, a, x), (_, b, y))| a == b && x == y)
             && self
                 .components()
                 .zip(other.components())
@@ -11028,8 +11442,8 @@ impl Project {
                 .all(|(&a, &b)| self.item_ref(Some(a)) == other.item_ref(Some(b)))
     }
 
-    /// Compares two goals from two projects by content, with control
-    /// references resolved to public IDs. O(c).
+    /// Compares two goals from two projects by content, with control and
+    /// responsible-party references resolved to public IDs. O(c + p).
     fn same_goal(&self, x: &CybersecurityGoal, other: &Project, y: &CybersecurityGoal) -> bool {
         x.name == y.name
             && x.provenance == y.provenance
@@ -11038,6 +11452,23 @@ impl Project {
                 .iter()
                 .zip(&y.controls)
                 .all(|(&a, &b)| self.control_key(a) == other.control_key(b))
+            && x.responsible.len() == y.responsible.len()
+            && x.responsible
+                .iter()
+                .zip(&y.responsible)
+                .all(|(&a, &b)| self.party_key(a) == other.party_key(b))
+    }
+
+    /// Compares two claims from two projects by content, with responsible-party
+    /// references resolved to public IDs. O(p).
+    fn same_claim(&self, x: &CybersecurityClaim, other: &Project, y: &CybersecurityClaim) -> bool {
+        x.name == y.name
+            && x.provenance == y.provenance
+            && x.responsible.len() == y.responsible.len()
+            && x.responsible
+                .iter()
+                .zip(&y.responsible)
+                .all(|(&a, &b)| self.party_key(a) == other.party_key(b))
     }
 
     /// Compares two threats from two projects by content, with references
@@ -11984,10 +12415,18 @@ impl ProjectEvalCache {
             | Op::RenameCybersecurityGoal { .. }
             | Op::LinkGoalControl { .. }
             | Op::UnlinkGoalControl { .. }
+            | Op::LinkGoalParty { .. }
+            | Op::UnlinkGoalParty { .. }
             | Op::RemoveCybersecurityGoal { .. }
             | Op::AddCybersecurityClaim { .. }
             | Op::RenameCybersecurityClaim { .. }
+            | Op::LinkClaimParty { .. }
+            | Op::UnlinkClaimParty { .. }
             | Op::RemoveCybersecurityClaim { .. }
+            | Op::AddParty { .. }
+            | Op::RenameParty { .. }
+            | Op::SetPartyKind { .. }
+            | Op::RemoveParty { .. }
             | Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }

@@ -187,6 +187,7 @@ pub fn table_rows(
             |r, key| match key {
                 "id" => text(&r.visual_id),
                 "name" => text(&r.name),
+                "responsible" => text(r.responsible.join(", ")),
                 "controls" => count(r.controls),
                 "threats" => count(r.threats),
                 _ => None,
@@ -199,6 +200,7 @@ pub fn table_rows(
             |r, key| match key {
                 "id" => text(&r.visual_id),
                 "name" => text(&r.name),
+                "responsible" => text(r.responsible.join(", ")),
                 "threats" => count(r.threats),
                 _ => None,
             },

@@ -8,13 +8,14 @@ use crate::description::ElementRef;
 use crate::element::{AttrValue, ElementKind, LinkTarget};
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, ThreatId, TreeId, TrustBoundaryId,
+    NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
     AttackType, CatalogRef, ControlKind, FactorLevel, FeasibilityFactor, FeasibilityLevel,
     ImpactCategory, InterfaceKind, Level, ThreatCategory,
 };
+use crate::party::PartyKind;
 use crate::provenance::Provenance;
 use crate::tree::{AttackTree, GateKind, Node};
 
@@ -79,10 +80,18 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `RenameCybersecurityGoal` | the same with the old name and provenance | O(log n) |
 /// | `LinkGoalControl` | `UnlinkGoalControl` with the old provenance | O(log n + m) |
 /// | `UnlinkGoalControl` | `LinkGoalControl` with the old provenance | O(log n + m) |
+/// | `LinkGoalParty` | `UnlinkGoalParty` with the old provenance | O(log n + m) |
+/// | `UnlinkGoalParty` | `LinkGoalParty` with the old provenance | O(log n + m) |
 /// | `RemoveCybersecurityGoal` | `AddCybersecurityGoal`, controls in stored order | O(log n + m) |
 /// | `AddCybersecurityClaim` | `RemoveCybersecurityClaim` | O(log n) |
 /// | `RenameCybersecurityClaim` | the same with the old name and provenance | O(log n) |
+/// | `LinkClaimParty` | `UnlinkClaimParty` with the old provenance | O(log n + m) |
+/// | `UnlinkClaimParty` | `LinkClaimParty` with the old provenance | O(log n + m) |
 /// | `RemoveCybersecurityClaim` | `AddCybersecurityClaim` with the old fields and provenance | O(log n) |
+/// | `AddParty` | `RemoveParty` | O(log n) |
+/// | `RenameParty` | the same with the old name and provenance | O(log n) |
+/// | `SetPartyKind` | the same with the old kind and provenance | O(log n) |
+/// | `RemoveParty` | `AddParty` with the old fields and provenance | O(log n + goals + claims) |
 /// | `SetThreatGoal` | the same with the old goal and provenance | O(log n) |
 /// | `SetThreatClaim` | the same with the old claim and provenance | O(log n) |
 /// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
@@ -641,6 +650,24 @@ pub enum Op {
         /// Provenance of unlinking the security control.
         provenance: Provenance,
     },
+    /// Lists a party as responsible for a goal (at most 16 parties).
+    LinkGoalParty {
+        /// Existing cybersecurity goal.
+        goal: GoalId,
+        /// Existing party, not yet listed on `goal`.
+        party: PartyId,
+        /// Provenance of listing the party as responsible.
+        provenance: Provenance,
+    },
+    /// Removes a party from the responsible list of a cybersecurity goal.
+    UnlinkGoalParty {
+        /// Existing cybersecurity goal.
+        goal: GoalId,
+        /// A party listed on `goal`.
+        party: PartyId,
+        /// Provenance of removing the party from the responsible list.
+        provenance: Provenance,
+    },
     /// Removes a cybersecurity goal that no threat scenario references.
     RemoveCybersecurityGoal {
         /// Existing cybersecurity goal.
@@ -664,10 +691,62 @@ pub enum Op {
         /// Provenance of the rename.
         provenance: Provenance,
     },
+    /// Lists a party as responsible for a claim (at most 16 parties).
+    LinkClaimParty {
+        /// Existing cybersecurity claim.
+        claim: ClaimId,
+        /// Existing party, not yet listed on `claim`.
+        party: PartyId,
+        /// Provenance of listing the party as responsible.
+        provenance: Provenance,
+    },
+    /// Removes a party from the responsible list of a cybersecurity claim.
+    UnlinkClaimParty {
+        /// Existing cybersecurity claim.
+        claim: ClaimId,
+        /// A party listed on `claim`.
+        party: PartyId,
+        /// Provenance of removing the party from the responsible list.
+        provenance: Provenance,
+    },
     /// Removes a cybersecurity claim that no threat scenario references.
     RemoveCybersecurityClaim {
         /// Existing cybersecurity claim.
         id: ClaimId,
+    },
+    /// Adds a party to the project's party list.
+    AddParty {
+        /// Unused party ID.
+        id: PartyId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// The party's role.
+        kind: PartyKind,
+        /// Provenance of the party creation.
+        provenance: Provenance,
+    },
+    /// Renames a party.
+    RenameParty {
+        /// Existing party.
+        id: PartyId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Changes a party's role.
+    SetPartyKind {
+        /// Existing party.
+        id: PartyId,
+        /// New role.
+        kind: PartyKind,
+        /// Provenance of the kind change.
+        provenance: Provenance,
+    },
+    /// Removes a party. The inverse restores its fields and provenance.
+    RemoveParty {
+        /// Existing party.
+        id: PartyId,
     },
     /// Links a threat scenario to a cybersecurity goal, replaces its linked
     /// goal, or unlinks it (`None`).
@@ -955,9 +1034,9 @@ pub enum Op {
 
 impl Op {
     /// Returns the provenance carried by this operation, or `None` for the
-    /// seven entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
+    /// eight entity-removal variants (`RemoveAsset`, `RemoveDamageScenario`,
     /// `RemoveThreatScenario`, `RemoveAttackTree`, `RemoveSecurityControl`,
-    /// `RemoveCybersecurityGoal`, `RemoveCybersecurityClaim`).
+    /// `RemoveCybersecurityGoal`, `RemoveCybersecurityClaim`, `RemoveParty`).
     /// Time O(1), space O(1).
     ///
     /// ```
@@ -1018,8 +1097,15 @@ impl Op {
             | Self::RenameCybersecurityGoal { provenance, .. }
             | Self::LinkGoalControl { provenance, .. }
             | Self::UnlinkGoalControl { provenance, .. }
+            | Self::LinkGoalParty { provenance, .. }
+            | Self::UnlinkGoalParty { provenance, .. }
             | Self::AddCybersecurityClaim { provenance, .. }
             | Self::RenameCybersecurityClaim { provenance, .. }
+            | Self::LinkClaimParty { provenance, .. }
+            | Self::UnlinkClaimParty { provenance, .. }
+            | Self::AddParty { provenance, .. }
+            | Self::RenameParty { provenance, .. }
+            | Self::SetPartyKind { provenance, .. }
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }
@@ -1052,6 +1138,7 @@ impl Op {
             | Self::RemoveSecurityControl { .. }
             | Self::RemoveCybersecurityGoal { .. }
             | Self::RemoveCybersecurityClaim { .. }
+            | Self::RemoveParty { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }
@@ -1124,8 +1211,15 @@ impl Op {
             | Self::RenameCybersecurityGoal { provenance, .. }
             | Self::LinkGoalControl { provenance, .. }
             | Self::UnlinkGoalControl { provenance, .. }
+            | Self::LinkGoalParty { provenance, .. }
+            | Self::UnlinkGoalParty { provenance, .. }
             | Self::AddCybersecurityClaim { provenance, .. }
             | Self::RenameCybersecurityClaim { provenance, .. }
+            | Self::LinkClaimParty { provenance, .. }
+            | Self::UnlinkClaimParty { provenance, .. }
+            | Self::AddParty { provenance, .. }
+            | Self::RenameParty { provenance, .. }
+            | Self::SetPartyKind { provenance, .. }
             | Self::AddElement { provenance, .. }
             | Self::RenameElement { provenance, .. }
             | Self::SetElementAttribute { provenance, .. }
@@ -1160,6 +1254,7 @@ impl Op {
             | Self::RemoveSecurityControl { .. }
             | Self::RemoveCybersecurityGoal { .. }
             | Self::RemoveCybersecurityClaim { .. }
+            | Self::RemoveParty { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }

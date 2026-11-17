@@ -17,7 +17,7 @@ use crate::element::{AttrValue, ElementKind};
 use crate::error::StoreError;
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
+    PartyId, PartyIdx, ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
 };
 use crate::methodology::Methodology;
 use crate::op::Op;
@@ -57,6 +57,8 @@ struct SnapshotView<'a> {
     languages: Vec<&'a str>,
     #[serde(skip_serializing_if = "Elements::is_empty")]
     elements: Elements<'a>,
+    #[serde(skip_serializing_if = "Parties::is_empty")]
+    parties: Parties<'a>,
 }
 
 /// What every entity view needs.
@@ -74,6 +76,7 @@ struct Trees<'a>(Ctx<'a>);
 struct Controls<'a>(Ctx<'a>);
 struct Goals<'a>(&'a Project);
 struct Claims<'a>(&'a Project);
+struct Parties<'a>(&'a Project);
 struct Components<'a>(&'a Project);
 struct Interfaces<'a>(Ctx<'a>);
 struct DataFlows<'a>(&'a Project);
@@ -87,6 +90,12 @@ impl Elements<'_> {
         ElementKind::ALL
             .iter()
             .all(|k| self.0.element_count(*k) == 0)
+    }
+}
+
+impl Parties<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.parties().next().is_none()
     }
 }
 
@@ -359,6 +368,8 @@ struct GoalView<'a> {
     visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
     controls: LinkedControls<'a>,
+    #[serde(skip_serializing_if = "LinkedParties::is_empty")]
+    responsible: LinkedParties<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -369,6 +380,19 @@ struct ClaimView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     visual_id: Option<Text<VisualDisplay>>,
     name: &'a str,
+    #[serde(skip_serializing_if = "LinkedParties::is_empty")]
+    responsible: LinkedParties<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+#[derive(Serialize)]
+struct PartyView<'a> {
+    id: Text<PartyId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
+    name: &'a str,
+    kind: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -434,6 +458,18 @@ struct LinkedDamages<'a> {
 struct LinkedControls<'a> {
     p: &'a Project,
     links: &'a [crate::id::ControlIdx],
+}
+
+/// A goal's or claim's responsible parties as public IDs, in stored (ID) order.
+struct LinkedParties<'a> {
+    p: &'a Project,
+    links: &'a [PartyIdx],
+}
+
+impl LinkedParties<'_> {
+    fn is_empty(&self) -> bool {
+        self.links.is_empty()
+    }
 }
 
 /// A trust boundary's member components as public IDs, in stored (ID) order.
@@ -631,6 +667,10 @@ impl Serialize for Goals<'_> {
                         p,
                         links: g.controls(),
                     },
+                    responsible: LinkedParties {
+                        p,
+                        links: g.responsible(),
+                    },
                     provenance: ProvenanceView::of(g.provenance()),
                 }),
         )
@@ -651,7 +691,32 @@ impl Serialize for Claims<'_> {
                         pos,
                     ),
                     name: cl.name(),
+                    responsible: LinkedParties {
+                        p,
+                        links: cl.responsible(),
+                    },
                     provenance: ProvenanceView::of(cl.provenance()),
+                }),
+        )
+    }
+}
+
+impl Serialize for Parties<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(
+            p.parties()
+                .enumerate()
+                .map(|(pos, (idx, id, party))| PartyView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::Party,
+                        p.party_visual_num(idx),
+                        pos,
+                    ),
+                    name: party.name(),
+                    kind: party.kind().as_str(),
+                    provenance: ProvenanceView::of(party.provenance()),
                 }),
         )
     }
@@ -768,6 +833,16 @@ impl Serialize for LinkedControls<'_> {
     }
 }
 
+impl Serialize for LinkedParties<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.links
+                .iter()
+                .map(|&idx| Required(self.p.party_id(idx).map(Text))),
+        )
+    }
+}
+
 impl Serialize for LinkedBoundaryComponents<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_seq(
@@ -879,6 +954,7 @@ impl Project {
             review_marks: ReviewMarks(self),
             languages: self.languages().iter().map(|l| &**l).collect(),
             elements: Elements(self),
+            parties: Parties(self),
         };
         f(&view)
     }
@@ -1115,27 +1191,55 @@ impl Project {
             }
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, party) in snapshot.parties.0.into_iter().enumerate() {
+            let vis = claim_visual(party.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = party.id.0;
+            project.apply(Op::AddParty {
+                id,
+                name: party.name.0,
+                kind: party.kind,
+                provenance: wire::unwrap_provenance(party.provenance),
+            })?;
+            project.set_party_loaded_visual(&id, vis, next_vis);
+        }
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, g) in snapshot.cybersecurity_goals.into_iter().enumerate() {
             let vis = claim_visual(g.visual_id, pos, &mut used, &mut next_vis)?;
             let id = g.id.0;
+            let provenance = wire::unwrap_provenance(g.provenance);
             project.apply(Op::AddCybersecurityGoal {
                 id,
                 name: g.name.0,
                 controls: g.controls.0.into_iter().map(|c| c.0).collect(),
-                provenance: wire::unwrap_provenance(g.provenance),
+                provenance: provenance.clone(),
             })?;
             project.set_goal_loaded_visual(&id, vis, next_vis);
+            for party in g.responsible.0 {
+                project.apply(Op::LinkGoalParty {
+                    goal: id,
+                    party: party.0,
+                    provenance: provenance.clone(),
+                })?;
+            }
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, cl) in snapshot.cybersecurity_claims.into_iter().enumerate() {
             let vis = claim_visual(cl.visual_id, pos, &mut used, &mut next_vis)?;
             let id = cl.id.0;
+            let provenance = wire::unwrap_provenance(cl.provenance);
             project.apply(Op::AddCybersecurityClaim {
                 id,
                 name: cl.name.0,
-                provenance: wire::unwrap_provenance(cl.provenance),
+                provenance: provenance.clone(),
             })?;
             project.set_claim_loaded_visual(&id, vis, next_vis);
+            for party in cl.responsible.0 {
+                project.apply(Op::LinkClaimParty {
+                    claim: id,
+                    party: party.0,
+                    provenance: provenance.clone(),
+                })?;
+            }
         }
         // Marks go on with their tree, under the tree's own provenance.
         let mut marks: std::collections::BTreeSet<(crate::id::TreeId, crate::id::NodeId)> =
