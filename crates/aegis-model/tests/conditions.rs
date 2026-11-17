@@ -958,3 +958,76 @@ fn link_ops_round_trip_through_the_op_log() {
         .collect();
     assert_eq!(read, ops);
 }
+
+/// An element or step that needs a condition cannot be removed, nor its tree:
+/// the removal inverses (`AddAsset`, `AddTreeNode`, `AddAttackTree`) cannot
+/// carry the links, so undo would silently lose them. Once unneeded, each
+/// removal goes through.
+#[test]
+fn removing_an_element_or_step_that_needs_a_condition_is_refused() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let (mut p, conditions, asset, tree, step) = linked_project(&m, 1);
+    let condition = conditions[0];
+    let element = ElementRef::Asset(asset);
+    p.apply(Op::NeedCondition {
+        element,
+        condition,
+        provenance: who(),
+    })
+    .expect("need");
+    p.apply(Op::NeedStepCondition {
+        tree,
+        node: step,
+        condition,
+        provenance: who(),
+    })
+    .expect("need step");
+
+    assert_eq!(
+        p.apply(Op::RemoveAsset { id: asset }).map(|_| ()),
+        Err(ModelError::ElementNeedsConditions {
+            element,
+            conditions: 1
+        })
+    );
+    assert_eq!(
+        p.apply(Op::RemoveTreeNode {
+            tree,
+            id: step,
+            provenance: who()
+        })
+        .map(|_| ()),
+        Err(ModelError::NodeIsRated(step))
+    );
+    assert!(
+        matches!(
+            p.apply(Op::RemoveAttackTree { id: tree }),
+            Err(ModelError::AttackTreeHasStepLinks { steps: 1, .. })
+        ),
+        "a step condition counts as a step link"
+    );
+
+    p.apply(Op::UnneedCondition {
+        element,
+        condition,
+        provenance: who(),
+    })
+    .expect("unneed");
+    p.apply(Op::UnneedStepCondition {
+        tree,
+        node: step,
+        condition,
+        provenance: who(),
+    })
+    .expect("unneed step");
+    p.apply(Op::RemoveTreeNode {
+        tree,
+        id: step,
+        provenance: who(),
+    })
+    .expect("node removes");
+    p.apply(Op::RemoveAttackTree { id: tree })
+        .expect("tree removes");
+    p.apply(Op::RemoveAsset { id: asset })
+        .expect("asset removes");
+}
