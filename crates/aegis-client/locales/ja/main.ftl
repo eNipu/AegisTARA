@@ -117,3 +117,17 @@ id = ID
 properties = 特性
 worst-risk = 最大リスク
 controls = 対策
+
+# Relation labels (job 149).
+relation-asset-component = コンポーネント
+relation-threat-asset = 資産
+relation-threat-damages = 損害シナリオ
+relation-threat-tree = 攻撃ツリー
+relation-threat-goal = 目標
+relation-threat-claim = 主張
+relation-goal-controls = 対策
+relation-control-targets = 適用先
+relation-step-via = 経由
+relation-step-mitigations = 緩和策
+relation-dataflow-from = フロー元
+relation-dataflow-to = フロー先
