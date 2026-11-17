@@ -190,6 +190,7 @@ fn short_keys() -> Arc<Methodology> {
             .collect(),
         catalog_schemes: vec![],
         require_rationale: false,
+        clause_refs: std::collections::BTreeMap::default(),
         attack_potential: None,
     };
     match Methodology::new(def) {

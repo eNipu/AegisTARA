@@ -474,6 +474,7 @@ fn expected() -> MethodologyDef {
             },
         }],
         require_rationale: false,
+        clause_refs: std::collections::BTreeMap::default(),
         attack_potential: Some(AttackPotentialDef {
             factors: vec![
                 FactorDef {
