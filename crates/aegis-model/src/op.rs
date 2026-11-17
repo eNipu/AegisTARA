@@ -97,6 +97,7 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
 /// | `SetImpactRationale` | the same with the old text and provenance | O(log n + r) |
 /// | `SetFeasibilityRationale` | the same with the old text and provenance | O(log n + r) |
+/// | `SetDamageLinkRationale` | the same with the old text and provenance | O(log n + r) |
 /// | `AddElement` | `RemoveElement` | O(log n) |
 /// | `RenameElement` | the same with the old name and provenance | O(log n) |
 /// | `RemoveElement` | `AddElement` with the old kind, name and provenance | O(log n) |
@@ -790,6 +791,19 @@ pub enum Op {
         /// Provenance of the change.
         provenance: Provenance,
     },
+    /// Sets why a threat is linked to a damage scenario (FND-09): plain text,
+    /// at most [`MAX_DESCRIPTION_CHARS`](crate::MAX_DESCRIPTION_CHARS)
+    /// chars; empty clears it.
+    SetDamageLinkRationale {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// An existing damage scenario already linked to the threat.
+        damage: DamageId,
+        /// The rationale.
+        text: Arc<str>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
     /// Rates whether a threat scenario scales to many vehicles (FND-10):
     /// `Some(true)`, `Some(false)`, or `None` for not rated, with a reasoning
     /// text (plain text, at most [`MAX_DESCRIPTION_CHARS`](crate::MAX_DESCRIPTION_CHARS)
@@ -1116,6 +1130,7 @@ impl Op {
             | Self::SetThreatScaling { provenance, .. }
             | Self::SetImpactRationale { provenance, .. }
             | Self::SetFeasibilityRationale { provenance, .. }
+            | Self::SetDamageLinkRationale { provenance, .. }
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }
@@ -1230,6 +1245,7 @@ impl Op {
             | Self::SetThreatScaling { provenance, .. }
             | Self::SetImpactRationale { provenance, .. }
             | Self::SetFeasibilityRationale { provenance, .. }
+            | Self::SetDamageLinkRationale { provenance, .. }
             | Self::AddComponent { provenance, .. }
             | Self::RenameComponent { provenance, .. }
             | Self::SetComponentParent { provenance, .. }

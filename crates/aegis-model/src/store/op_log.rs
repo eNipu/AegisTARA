@@ -450,6 +450,13 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetDamageLinkRationale {
+        threat: Text<ThreatId>,
+        damage: Text<DamageId>,
+        text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     AddComponent {
         id: Text<ComponentId>,
         name: &'a str,
@@ -646,7 +653,8 @@ fn within_caps(op: &Op) -> bool {
         Op::SetDescription { text, .. }
         | Op::SetThreatScaling { reason: text, .. }
         | Op::SetImpactRationale { text, .. }
-        | Op::SetFeasibilityRationale { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
+        | Op::SetFeasibilityRationale { text, .. }
+        | Op::SetDamageLinkRationale { text, .. } => text.len() <= MAX_DESCRIPTION_BYTES,
         Op::SetDescriptionTranslation { lang, text, .. } => {
             lang.len() <= crate::description::MAX_LANG_TAG_BYTES
                 && text.len() <= MAX_DESCRIPTION_BYTES
@@ -1294,6 +1302,17 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance,
         } => OpView::SetFeasibilityRationale {
             threat: Text(*threat),
+            text,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetDamageLinkRationale {
+            threat,
+            damage,
+            text,
+            provenance,
+        } => OpView::SetDamageLinkRationale {
+            threat: Text(*threat),
+            damage: Text(*damage),
             text,
             provenance: ProvenanceView::of(provenance),
         },
