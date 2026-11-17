@@ -2231,6 +2231,54 @@
       ],
       "decision": null,
       "updated": "2026-11-17T17:37:12Z"
+    },
+    {
+      "id": "146-pair-rationale",
+      "title": "Threat x damage pair rationale (FND-09)",
+      "branch": "factory/146-pair-rationale",
+      "stage": "merged",
+      "slice": "146c",
+      "base": "1e024e754c9bc31a599da70de08335f5a0276dec",
+      "reviews": {
+        "slice": "146c",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "146a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 175
+        },
+        {
+          "slice": "146b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 87
+        },
+        {
+          "slice": "146c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 66
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-17T18:41:04Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
