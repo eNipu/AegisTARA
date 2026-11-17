@@ -224,7 +224,7 @@ fn columns_have_unique_keys_and_start_with_the_id() {
         for c in columns {
             assert!(c.width > 0, "{table:?} {}", c.key);
             if let ColumnKind::Links(relation) = c.kind {
-                assert!(!relation.is_empty(), "{table:?} {}", c.key);
+                assert!(!relation.as_str().is_empty(), "{table:?} {}", c.key);
             }
         }
     }
