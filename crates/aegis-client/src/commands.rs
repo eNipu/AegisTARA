@@ -2104,6 +2104,19 @@ impl Edit {
                     });
                 }
                 ops.extend(clear_link_rationale(project, *threat, None, &p));
+                // Elements such as misuse cases that link to the threat.
+                let target = aegis_model::LinkTarget::Threat(*threat);
+                for kind in ElementKind::ALL {
+                    for (id, e) in project.elements(*kind) {
+                        if e.links().contains(&target) {
+                            ops.push(Op::UnlinkElement {
+                                id,
+                                target,
+                                provenance: p.clone(),
+                            });
+                        }
+                    }
+                }
                 ops.push(Op::RemoveThreatScenario { id: *threat });
                 ops
             }

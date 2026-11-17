@@ -2123,6 +2123,13 @@ pub fn replay(
                     "inverse of {:?} did not restore the project",
                     op
                 );
+                // `==` ignores visual IDs and list order (L06); the saved
+                // bytes do not, so undo must restore those too.
+                prop_assert!(
+                    save(&back) == save(&before),
+                    "inverse of {:?} changed the saved bytes",
+                    op
+                );
                 check(&back)?;
                 undo.push(inverse);
             }
