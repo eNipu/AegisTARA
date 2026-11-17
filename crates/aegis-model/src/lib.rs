@@ -262,7 +262,7 @@ mod tree;
 /// ```
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use applicability::{Condition, MAX_CONDITIONS};
+pub use applicability::{Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
 pub use asset::{Asset, PropertySet};
 pub use control::{
     CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,

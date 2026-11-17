@@ -3225,6 +3225,43 @@ impl Project {
         self.parties.set_loaded_visual(id, vis, next);
     }
 
+    /// The public ID of the condition at `idx`. Time O(1).
+    #[must_use]
+    pub fn condition_id(&self, idx: ConditionIdx) -> Option<ConditionId> {
+        self.conditions.id(idx)
+    }
+
+    pub(crate) fn set_condition_loaded_visual(&mut self, id: &ConditionId, vis: u32, next: u32) {
+        self.conditions.set_loaded_visual(id, vis, next);
+    }
+
+    /// Every element's needed conditions, in `ElementRef` order; for the
+    /// snapshot. Time O(1) per entry.
+    pub(crate) fn condition_link_entries(
+        &self,
+    ) -> impl Iterator<Item = (ElementRef, &[ConditionIdx])> {
+        self.condition_links.iter().map(|(t, l)| (*t, l.as_slice()))
+    }
+
+    /// Every step's needed conditions, in tree then node order; for the
+    /// snapshot. Time O(steps).
+    pub(crate) fn step_condition_entries(&self) -> Vec<(TreeId, NodeId, &[ConditionIdx])> {
+        let mut out = Vec::new();
+        for (_, tree_id, entry) in self.trees.iter() {
+            let Some(links) = entry.step_links.as_ref() else {
+                continue;
+            };
+            for (idx, node, _) in entry.tree.iter() {
+                if let Some(list) = links.condition.get(idx.index())
+                    && !list.is_empty()
+                {
+                    out.push((tree_id, node, list.as_slice()));
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn set_component_loaded_visual(&mut self, id: &ComponentId, vis: u32, next: u32) {
         self.components.set_loaded_visual(id, vis, next);
     }

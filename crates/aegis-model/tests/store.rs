@@ -7,13 +7,14 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackTree, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter, PartyKind,
-    Project, Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
+    AttackTree, ElementRef, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter,
+    PartyKind, Project, Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
 };
 use common::{
-    SENTINEL, asset_id, builtin, cat, claim_id, control_id, cref, damage_id, describe, factor,
-    factor_lvl, feas, goal_id, lvl, node_id, party_id, prop, props, read_log, reordered, save,
-    scheme, second, second_def, threat_cat, threat_id, tree_id, wide, write_log,
+    SENTINEL, asset_id, builtin, cat, claim_id, component_id, condition_id, control_id, cref,
+    damage_id, describe, factor, factor_lvl, feas, goal_id, interface_id, lvl, node_id, party_id,
+    prop, props, read_log, reordered, save, scheme, second, second_def, threat_cat, threat_id,
+    tree_id, wide, write_log,
 };
 use serde_json::Value;
 
@@ -1848,4 +1849,175 @@ fn visual_ids_round_trip_after_deletion_and_reject_invalid_or_duplicate() {
             "{bad}"
         );
     }
+}
+
+/// Conditions with a visual-ID gap past 100 (L06), links on every supported
+/// element kind and on a step: save, load and save again give the same bytes.
+#[test]
+fn conditions_and_links_round_trip_byte_for_byte() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let who = Provenance::default;
+    let mut conditions = Vec::new();
+    for i in 0..102u64 {
+        let id = condition_id(5000 + i);
+        p.apply(Op::AddCondition {
+            id,
+            name: format!("condition {i}").into(),
+            description: if i % 2 == 0 {
+                "".into()
+            } else {
+                format!("why {i}").into()
+            },
+            present: i % 3 != 0,
+            provenance: who(),
+        })
+        .expect("add condition");
+        conditions.push(id);
+    }
+    p.apply(Op::RemoveCondition { id: conditions[0] })
+        .expect("gap");
+
+    let (asset, threat, goal, claim) = (asset_id(1), threat_id(2), goal_id(3), claim_id(4));
+    let (component, interface, tree) = (component_id(5), interface_id(6), tree_id(7));
+    let (root, step) = (node_id(8), node_id(9));
+    let mut at = AttackTree::new(root, Node::gate(GateKind::Or, "root")).expect("tree");
+    at.add_child(at.root(), step, Node::step("step"))
+        .expect("step");
+    let kind = m.interface_kinds().next().expect("interface kind");
+    for op in [
+        Op::AddComponent {
+            id: component,
+            name: "ECU".into(),
+            parent: None,
+            provenance: who(),
+        },
+        Op::AddInterface {
+            id: interface,
+            name: "CAN".into(),
+            component,
+            kind,
+            provenance: who(),
+        },
+        Op::AddAsset {
+            id: asset,
+            name: "key".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        },
+        Op::AddThreatScenario {
+            id: threat,
+            name: "spoof".into(),
+            asset,
+            category: m.threat_categories().next().expect("category"),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: who(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: at,
+            step_feasibility: vec![],
+            provenance: who(),
+        },
+        Op::AddCybersecurityGoal {
+            id: goal,
+            name: "goal".into(),
+            controls: vec![],
+            provenance: who(),
+        },
+        Op::AddCybersecurityClaim {
+            id: claim,
+            name: "claim".into(),
+            provenance: who(),
+        },
+    ] {
+        p.apply(op).expect("element");
+    }
+    let targets = [
+        ElementRef::Asset(asset),
+        ElementRef::Component(component),
+        ElementRef::Interface(interface),
+        ElementRef::Threat(threat),
+        ElementRef::Tree(tree),
+        ElementRef::Goal(goal),
+        ElementRef::Claim(claim),
+    ];
+    for (i, element) in targets.into_iter().enumerate() {
+        // Two links each, added in descending ID order so storage must sort.
+        for condition in [conditions[101 - i], conditions[1 + i]] {
+            p.apply(Op::NeedCondition {
+                element,
+                condition,
+                provenance: who(),
+            })
+            .expect("need");
+        }
+    }
+    p.apply(Op::NeedStepCondition {
+        tree,
+        node: step,
+        condition: conditions[50],
+        provenance: who(),
+    })
+    .expect("need step");
+
+    let bytes = save(&p);
+    let back = load(&bytes, &m).expect("loads");
+    assert_eq!(save(&back), bytes, "byte for byte");
+    assert_eq!(back, p);
+    assert_eq!(
+        back.condition_visual_id(back.condition_idx(&conditions[101]).expect("idx"))
+            .as_deref(),
+        Some("CF101")
+    );
+    let text = String::from_utf8(bytes).expect("utf8");
+    for key in [
+        "\"conditions\"",
+        "\"condition_links\"",
+        "\"step_conditions\"",
+    ] {
+        assert!(text.contains(key), "{key} written");
+    }
+}
+
+#[test]
+fn v1_fixture_writes_no_condition_keys() {
+    let m = builtin();
+    let bytes = std::fs::read(PROJECT_V1).expect("fixture");
+    let saved = save(&load(&bytes, &m).expect("loads"));
+    assert_eq!(saved, bytes);
+    let text = String::from_utf8(saved).expect("utf8");
+    for key in [
+        "\"conditions\"",
+        "\"condition_links\"",
+        "\"step_conditions\"",
+    ] {
+        assert!(!text.contains(key), "{key} not written");
+    }
+}
+
+/// A link to a condition the snapshot does not declare is refused.
+#[test]
+fn a_link_to_an_unknown_condition_is_refused() {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let goal = goal_id(1);
+    p.apply(Op::AddCybersecurityGoal {
+        id: goal,
+        name: "g".into(),
+        controls: vec![],
+        provenance: Provenance::default(),
+    })
+    .expect("goal");
+    let mut v: Value = serde_json::from_slice(&save(&p)).expect("json");
+    v["condition_links"] = serde_json::json!([{
+        "target": {"kind": "goal", "id": goal.to_string()},
+        "conditions": [condition_id(9).to_string()],
+    }]);
+    let bytes = serde_json::to_vec(&v).expect("bytes");
+    assert!(matches!(
+        load(&bytes, &m),
+        Err(StoreError::Model(ModelError::UnknownCondition(_)))
+    ));
 }
