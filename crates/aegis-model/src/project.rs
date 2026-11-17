@@ -5970,7 +5970,9 @@ impl Project {
         let cybersecurity_goals = diff_arena(&self.goals, &other.goals, |x, y| {
             self.same_goal(x, other, y)
         });
-        let cybersecurity_claims = diff_arena(&self.claims, &other.claims, |x, y| x == y);
+        let cybersecurity_claims = diff_arena(&self.claims, &other.claims, |x, y| {
+            self.same_claim(x, other, y)
+        });
         let parties = diff_arena(&self.parties, &other.parties, |x, y| x == y);
         let components = diff_arena(&self.components, &other.components, |x, y| {
             self.same_component(x, other, y)

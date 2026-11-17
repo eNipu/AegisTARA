@@ -1030,4 +1030,5 @@ fn project_eq_ignores_party_insertion_order_for_claims() {
     .expect("link p1");
 
     assert!(a == b);
+    assert!(a.diff(&b).expect("diff").cybersecurity_claims().is_empty());
 }
