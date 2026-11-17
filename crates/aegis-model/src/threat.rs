@@ -24,6 +24,15 @@ pub const MAX_CATALOG_REFS: usize = 16;
 /// ```
 pub const MAX_DAMAGE_LINKS: usize = 256;
 
+/// One damage link of a threat scenario and its rationale (FND-09).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DamageLink {
+    /// The linked damage scenario.
+    pub damage: DamageIdx,
+    /// Why that damage is linked; empty when not given.
+    pub rationale: Arc<str>,
+}
+
 /// A threat scenario of a [`Project`](crate::Project).
 ///
 /// A read-only view. It targets one asset, has one threat category (the
@@ -32,7 +41,9 @@ pub const MAX_DAMAGE_LINKS: usize = 256;
 /// disagree), cites 0 to 16 catalog refs, and links to damage scenarios.
 /// `catalog_refs` is sorted and unique; `damages` is sorted by the damage
 /// scenario's public ID, unique, and at most [`MAX_DAMAGE_LINKS`] long.
-/// Neither order depends on edit history.
+/// Neither order depends on edit history. Rationales on those links live in
+/// a sparse overlay also sorted by public ID, so [`damage_links`](Self::damage_links)
+/// pairs each link with its text without changing `damages`.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -74,6 +85,9 @@ pub struct ThreatScenario {
     /// Sorted by the target's `DamageId`, unique, at most
     /// [`MAX_DAMAGE_LINKS`].
     pub(crate) damages: Vec<DamageIdx>,
+    /// Sparse rationales on damage links: only non-empty texts, sorted by the
+    /// target's public ID, at most [`MAX_DAMAGE_LINKS`].
+    pub(crate) damage_rationales: Vec<(DamageIdx, Arc<str>)>,
     pub(crate) direct_feasibility: Option<FeasibilityLevel>,
     pub(crate) attack_tree: Option<TreeIdx>,
     pub(crate) treatment: Option<RiskTreatment>,
@@ -219,6 +233,30 @@ impl ThreatScenario {
     #[must_use]
     pub fn damages(&self) -> &[DamageIdx] {
         &self.damages
+    }
+
+    /// Returns one [`DamageLink`] per damage link, sorted by the target
+    /// damage scenario's public ID, with its rationale (empty when unset).
+    /// Time O(k · r).
+    #[must_use]
+    pub fn damage_links(&self) -> Vec<DamageLink> {
+        self.damages
+            .iter()
+            .map(|&damage| DamageLink {
+                damage,
+                rationale: Arc::from(self.damage_rationale(damage)),
+            })
+            .collect()
+    }
+
+    /// Returns the rationale on the link to `damage`, empty when unset.
+    /// Time O(r).
+    #[must_use]
+    pub fn damage_rationale(&self, damage: DamageIdx) -> &str {
+        self.damage_rationales
+            .iter()
+            .find(|(d, _)| *d == damage)
+            .map_or("", |(_, text)| text)
     }
 
     /// Returns the direct feasibility rating assigned to this threat
