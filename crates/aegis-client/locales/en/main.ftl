@@ -63,6 +63,7 @@ through = Through
 attack-type = Attack type
 rationale = Rationale
 feasibility-rationale = Feasibility rationale
+pair-rationale = Pair rationale
 scales = Scales
 scaling-reason = Scaling reason
 no = no

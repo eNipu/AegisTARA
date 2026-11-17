@@ -411,6 +411,16 @@ fn walk_elements(seen: &mut BTreeSet<String>) {
     ] {
         apply_undo_redo(&mut ws, seen, op);
     }
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::SetDamageLinkRationale {
+            threat,
+            damage,
+            text: "Trusted boot".into(),
+            provenance: who(),
+        },
+    );
     let target = LinkTarget::Threat(threat);
     apply_undo_redo(
         &mut ws,

@@ -251,7 +251,8 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::SetThreatGoal { threat, .. }
         | Op::SetThreatClaim { threat, .. }
         | Op::SetThreatScaling { threat, .. }
-        | Op::SetFeasibilityRationale { threat, .. } => Selection::Threat(*threat),
+        | Op::SetFeasibilityRationale { threat, .. }
+        | Op::SetDamageLinkRationale { threat, .. } => Selection::Threat(*threat),
         Op::SetImpactRationale { damage, .. } => Selection::Damage(*damage),
         Op::AddAttackTree { id, .. } | Op::RemoveAttackTree { id } => Selection::Tree(*id),
         Op::RemoveTreeNode { tree, .. } => Selection::Tree(*tree),
@@ -403,6 +404,9 @@ fn parts(op: &Op, p: &Project) -> Parts {
             "feasibility rationale of threat scenario",
             threat(t),
         ),
+        Op::SetDamageLinkRationale { threat: t, .. } => {
+            ("change", "pair rationale of threat scenario", threat(t))
+        }
         Op::SetImpactRationale { damage: d, .. } => {
             ("change", "impact rationale of damage scenario", damage(d))
         }

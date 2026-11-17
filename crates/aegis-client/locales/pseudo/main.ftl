@@ -59,6 +59,7 @@ through = ⟦Thrôûgh␣⟧
 attack-type = ⟦Âttâck týpé␣⟧
 rationale = ⟦Râtîônâlé␣⟧
 feasibility-rationale = ⟦Féâsîbîlîtý râtîônâlé␣⟧
+pair-rationale = ⟦Pâîr râtîônâlé␣⟧
 scales = ⟦Scâlés␣⟧
 scaling-reason = ⟦Scâlîng réâsôn␣⟧
 no = ⟦nô␣⟧
