@@ -412,7 +412,7 @@
     },
     {
       "id": "024-cybersecurity-goals-and-claims",
-      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 \u00a715.4)",
+      "title": "Cybersecurity goals and claims with treatment traceability (ISO 21434 §15.4)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -1121,7 +1121,7 @@
     },
     {
       "id": "115-row-actions",
-      "title": "Row actions in tables: DataTable, + and \u22ef actions, keyboard, read-only, 5,000-row check (UI-09)",
+      "title": "Row actions in tables: DataTable, + and ⋯ actions, keyboard, read-only, 5,000-row check (UI-09)",
       "stage": "merged",
       "worktree": null,
       "branch": "master",
@@ -2279,6 +2279,62 @@
       ],
       "decision": null,
       "updated": "2026-11-17T18:41:04Z"
+    },
+    {
+      "id": "133-conditions-model",
+      "title": "Conditions in the model: Condition (CF), condition_links, step conditions (APL-01)",
+      "branch": "factory/133-conditions-model",
+      "stage": "merged",
+      "slice": "133d",
+      "base": "007c5649a39109ef04f24d15c75c6d816cf8bce8",
+      "reviews": {
+        "slice": "133d",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "133a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 602
+        },
+        {
+          "slice": "133b",
+          "gate": "FAIL",
+          "review": "CHANGES",
+          "owner": "auto",
+          "model": "hy4",
+          "gate_tries": 1,
+          "review_tries": 0,
+          "lines": 667
+        },
+        {
+          "slice": "133c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "claude-opus-5-5",
+          "gate_tries": 1,
+          "review_tries": 1
+        },
+        {
+          "slice": "133d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "claude-opus-5-5",
+          "gate_tries": 1,
+          "review_tries": 1
+        }
+      ],
+      "decision": "133b fixed and 133c/133d built by Claude after opencode was stopped; ci.sh green; see second-review.md",
+      "updated": "2026-11-17T21:00:00Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
