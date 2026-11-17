@@ -19,7 +19,7 @@ use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, ThreatId, TreeId, TrustBoundaryId,
+    NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
@@ -373,6 +373,28 @@ enum OpView<'a> {
     RemoveCybersecurityClaim {
         id: Text<ClaimId>,
     },
+    AddParty {
+        id: Text<PartyId>,
+        name: &'a str,
+        kind: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameParty {
+        id: Text<PartyId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetPartyKind {
+        id: Text<PartyId>,
+        kind: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveParty {
+        id: Text<PartyId>,
+    },
     SetThreatGoal {
         threat: Text<ThreatId>,
         goal: Option<Text<GoalId>>,
@@ -629,6 +651,8 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameCybersecurityGoal { name, .. }
         | Op::AddCybersecurityClaim { name, .. }
         | Op::RenameCybersecurityClaim { name, .. }
+        | Op::AddParty { name, .. }
+        | Op::RenameParty { name, .. }
         | Op::AddElement { name, .. }
         | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
@@ -1136,6 +1160,36 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveCybersecurityClaim { id } => OpView::RemoveCybersecurityClaim { id: Text(*id) },
+        Op::AddParty {
+            id,
+            name,
+            kind,
+            provenance,
+        } => OpView::AddParty {
+            id: Text(*id),
+            name,
+            kind: kind.as_str(),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameParty {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameParty {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetPartyKind {
+            id,
+            kind,
+            provenance,
+        } => OpView::SetPartyKind {
+            id: Text(*id),
+            kind: kind.as_str(),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveParty { id } => OpView::RemoveParty { id: Text(*id) },
         Op::SetThreatGoal {
             threat,
             goal,
@@ -1890,6 +1944,36 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveCybersecurityClaim { id } => Op::RemoveCybersecurityClaim { id: id.0 },
+        OpWire::AddParty {
+            id,
+            name,
+            kind,
+            provenance,
+        } => Op::AddParty {
+            id: id.0,
+            name: name.0,
+            kind,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameParty {
+            id,
+            name,
+            provenance,
+        } => Op::RenameParty {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetPartyKind {
+            id,
+            kind,
+            provenance,
+        } => Op::SetPartyKind {
+            id: id.0,
+            kind,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveParty { id } => Op::RemoveParty { id: id.0 },
         OpWire::SetThreatGoal {
             threat,
             goal,

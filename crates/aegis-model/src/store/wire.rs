@@ -57,7 +57,7 @@ use crate::control::{
 use crate::error::{PackError, StoreError};
 use crate::id::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, NodeIdx, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
+    NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx, TrustBoundaryId, VisualPrefix,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -2364,6 +2364,28 @@ pub(super) enum OpWire {
     },
     RemoveCybersecurityClaim {
         id: WireId<ClaimId>,
+    },
+    AddParty {
+        id: WireId<PartyId>,
+        name: Name,
+        kind: crate::party::PartyKind,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameParty {
+        id: WireId<PartyId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetPartyKind {
+        id: WireId<PartyId>,
+        kind: crate::party::PartyKind,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveParty {
+        id: WireId<PartyId>,
     },
     SetThreatGoal {
         threat: WireId<ThreatId>,

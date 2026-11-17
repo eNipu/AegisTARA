@@ -22,8 +22,8 @@ use crate::eval::{Evaluation, MaxMin, TreeEvalCache, evaluate};
 use crate::id::{
     ArenaIndex, AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ControlId,
     ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx,
-    InterfaceId, InterfaceIdx, NodeId, NodeIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
-    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
+    InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, ThreatId, ThreatIdx, TreeId,
+    TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
@@ -36,6 +36,7 @@ use crate::methodology::{
     ThreatCategory,
 };
 use crate::op::Op;
+use crate::party::{MAX_PARTIES, Party, PartyKind};
 use crate::paths::{AttackPath, ChokePoint};
 use crate::provenance::Provenance;
 use crate::sensitivity::{
@@ -597,6 +598,7 @@ pub struct Project {
     controls: Arena<ControlId, ControlIdx, SecurityControl>,
     goals: Arena<GoalId, GoalIdx, CybersecurityGoal>,
     claims: Arena<ClaimId, ClaimIdx, CybersecurityClaim>,
+    parties: Arena<PartyId, PartyIdx, Party>,
     components: Arena<ComponentId, ComponentIdx, Component>,
     interfaces: Arena<InterfaceId, InterfaceIdx, Interface>,
     data_flows: Arena<DataFlowId, DataFlowIdx, DataFlow>,
@@ -636,6 +638,20 @@ pub(crate) fn check_name(kind: EntityKind, name: &str) -> Result<(), ModelError>
     if name.chars().count() > MAX_NAME_CHARS {
         return Err(ModelError::NameTooLong {
             kind,
+            max: MAX_NAME_CHARS,
+        });
+    }
+    Ok(())
+}
+
+/// Checks a party name without putting the name in the error text.
+/// Time O(name length).
+fn check_party_name(name: &str) -> Result<(), ModelError> {
+    if name.trim().is_empty() {
+        return Err(ModelError::PartyNameEmpty);
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(ModelError::PartyNameTooLong {
             max: MAX_NAME_CHARS,
         });
     }
@@ -720,6 +736,7 @@ impl Project {
             controls: Arena::new(),
             goals: Arena::new(),
             claims: Arena::new(),
+            parties: Arena::new(),
             components: Arena::new(),
             interfaces: Arena::new(),
             data_flows: Arena::new(),
@@ -1962,6 +1979,51 @@ impl Project {
         &self,
     ) -> impl Iterator<Item = (ClaimIdx, ClaimId, &CybersecurityClaim)> {
         self.claims.iter()
+    }
+
+    // -- Parties -----------------------------------------------------------------
+
+    /// Resolves a party's public ID to its arena index in O(log n).
+    /// Space O(1).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use aegis_model::{Methodology, Op, PartyId, PartyKind, Project, Provenance};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut p = Project::new(Arc::new(Methodology::iso21434_r155()?));
+    /// # let id = PartyId::new_v7();
+    /// # p.apply(Op::AddParty { id, name: "Bosch".into(), kind: PartyKind::Supplier, provenance: Provenance::default() })?;
+    /// let idx = p.party_idx(&id).ok_or("missing")?;
+    /// assert_eq!(p.party(idx).map(|x| x.name()), Some("Bosch"));
+    /// assert_eq!(p.parties().count(), 1);
+    /// assert_eq!(p.party_visual_id(idx).as_deref(), Some("P00"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn party_idx(&self, id: &PartyId) -> Option<PartyIdx> {
+        self.parties.idx(id)
+    }
+
+    /// Returns a live party in O(1), or `None` if `idx` is out of range or tombstoned.
+    #[must_use]
+    pub fn party(&self, idx: PartyIdx) -> Option<&Party> {
+        self.parties.get(idx)
+    }
+
+    /// Iterates live parties in deterministic `PartyId` order.
+    /// Time O(1) per item, O(n) for the whole walk; space O(1).
+    pub fn parties(&self) -> impl Iterator<Item = (PartyIdx, PartyId, &Party)> {
+        self.parties.iter()
+    }
+
+    /// Returns a live party's human-readable visual ID (`P00`, `P01`, ...)
+    /// in O(1), or `None` if `idx` is out of range or tombstoned.
+    #[must_use]
+    pub fn party_visual_id(&self, idx: PartyIdx) -> Option<String> {
+        self.parties
+            .visual_num(idx)
+            .map(|n| VisualPrefix::Party.format(n))
     }
 
     // -- Components (ARC-02) -----------------------------------------------------
@@ -5909,6 +5971,7 @@ impl Project {
             self.same_goal(x, other, y)
         });
         let cybersecurity_claims = diff_arena(&self.claims, &other.claims, |x, y| x == y);
+        let parties = diff_arena(&self.parties, &other.parties, |x, y| x == y);
         let components = diff_arena(&self.components, &other.components, |x, y| {
             self.same_component(x, other, y)
         });
@@ -5948,6 +6011,7 @@ impl Project {
             security_controls,
             cybersecurity_goals,
             cybersecurity_claims,
+            parties,
             elements: self.elements.diff(&other.elements),
             components,
             interfaces,
@@ -6578,6 +6642,19 @@ impl Project {
                 check_name(EntityKind::CybersecurityClaim, name)?;
             }
             Op::RemoveCybersecurityClaim { id } => return self.check_remove_claim(*id),
+            Op::AddParty {
+                id,
+                name,
+                provenance,
+                ..
+            } => return self.check_add_party(*id, name, provenance),
+            Op::RenameParty { id, name, .. } => {
+                self.party_index(*id)?;
+                check_party_name(name)?;
+            }
+            Op::SetPartyKind { id, .. } | Op::RemoveParty { id } => {
+                self.party_index(*id)?;
+            }
             Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
@@ -7052,6 +7129,23 @@ impl Project {
                 provenance,
             } => self.commit_rename_claim(id, name, provenance),
             Op::RemoveCybersecurityClaim { id } => self.commit_remove_claim(id),
+            Op::AddParty {
+                id,
+                name,
+                kind,
+                provenance,
+            } => self.commit_add_party(id, name, kind, provenance),
+            Op::RenameParty {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_party(id, name, provenance),
+            Op::SetPartyKind {
+                id,
+                kind,
+                provenance,
+            } => self.commit_set_party_kind(id, kind, provenance),
+            Op::RemoveParty { id } => self.commit_remove_party(id),
             Op::AddElement {
                 id,
                 kind,
@@ -7264,6 +7358,13 @@ impl Project {
             .ok_or(ModelError::UnknownCybersecurityClaim(id))
     }
 
+    fn party_mut(&mut self, id: PartyId) -> Result<&mut Party, ModelError> {
+        let idx = self.party_index(id)?;
+        self.parties
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownParty(id))
+    }
+
     fn component_mut(&mut self, id: ComponentId) -> Result<&mut Component, ModelError> {
         let idx = self.component_index(id)?;
         self.components
@@ -7333,6 +7434,10 @@ impl Project {
         self.claims
             .idx(&id)
             .ok_or(ModelError::UnknownCybersecurityClaim(id))
+    }
+
+    fn party_index(&self, id: PartyId) -> Result<PartyIdx, ModelError> {
+        self.parties.idx(&id).ok_or(ModelError::UnknownParty(id))
     }
 
     fn component_index(&self, id: ComponentId) -> Result<ComponentIdx, ModelError> {
@@ -8813,6 +8918,23 @@ impl Project {
         Ok(())
     }
 
+    fn check_add_party(
+        &self,
+        id: PartyId,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        if self.parties.idx(&id).is_some() {
+            return Err(ModelError::DuplicatePartyId(id));
+        }
+        check_party_name(name)?;
+        check_provenance(provenance)?;
+        if self.parties.len() >= MAX_PARTIES || self.parties.next_idx(self.slot_limit).is_none() {
+            return Err(ModelError::TooManyParties { max: MAX_PARTIES });
+        }
+        Ok(())
+    }
+
     fn check_set_threat_goal(
         &self,
         threat: ThreatId,
@@ -10268,6 +10390,70 @@ impl Project {
         })
     }
 
+    fn commit_add_party(
+        &mut self,
+        id: PartyId,
+        name: Arc<str>,
+        kind: PartyKind,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let party = Party {
+            name,
+            kind,
+            provenance,
+        };
+        self.parties
+            .push(id, party, self.slot_limit)
+            .ok_or(ModelError::TooManyParties { max: MAX_PARTIES })?;
+        Ok(Op::RemoveParty { id })
+    }
+
+    fn commit_rename_party(
+        &mut self,
+        id: PartyId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let p = self.party_mut(id)?;
+        let name = std::mem::replace(&mut p.name, name);
+        let provenance = std::mem::replace(&mut p.provenance, provenance);
+        Ok(Op::RenameParty {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_set_party_kind(
+        &mut self,
+        id: PartyId,
+        kind: PartyKind,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let p = self.party_mut(id)?;
+        let kind = std::mem::replace(&mut p.kind, kind);
+        let provenance = std::mem::replace(&mut p.provenance, provenance);
+        Ok(Op::SetPartyKind {
+            id,
+            kind,
+            provenance,
+        })
+    }
+
+    fn commit_remove_party(&mut self, id: PartyId) -> Result<Op, ModelError> {
+        let idx = self.party_index(id)?;
+        let p = self
+            .parties
+            .remove(idx)
+            .ok_or(ModelError::UnknownParty(id))?;
+        Ok(Op::AddParty {
+            id,
+            name: p.name,
+            kind: p.kind,
+            provenance: p.provenance,
+        })
+    }
+
     fn commit_set_threat_goal(
         &mut self,
         threat: ThreatId,
@@ -10886,6 +11072,7 @@ impl PartialEq for Project {
             && self.controls.len() == other.controls.len()
             && self.goals.len() == other.goals.len()
             && self.claims.len() == other.claims.len()
+            && self.parties.len() == other.parties.len()
             && self.components.len() == other.components.len()
             && self.interfaces.len() == other.interfaces.len()
             && self.data_flows.len() == other.data_flows.len()
@@ -10910,6 +11097,10 @@ impl PartialEq for Project {
                 .cybersecurity_goals()
                 .zip(other.cybersecurity_goals())
                 .all(|((_, a, x), (_, b, y))| a == b && self.same_goal(x, other, y))
+            && self
+                .parties()
+                .zip(other.parties())
+                .all(|((_, a, x), (_, b, y))| a == b && x == y)
             && self
                 .components()
                 .zip(other.components())
@@ -11988,6 +12179,10 @@ impl ProjectEvalCache {
             | Op::AddCybersecurityClaim { .. }
             | Op::RenameCybersecurityClaim { .. }
             | Op::RemoveCybersecurityClaim { .. }
+            | Op::AddParty { .. }
+            | Op::RenameParty { .. }
+            | Op::SetPartyKind { .. }
+            | Op::RemoveParty { .. }
             | Op::AddElement { .. }
             | Op::RenameElement { .. }
             | Op::RemoveElement { .. }
