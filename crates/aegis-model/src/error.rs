@@ -1234,6 +1234,16 @@ pub enum ModelError {
     /// The threat scenario has no linked attack tree to evaluate.
     #[error("threat scenario {0} has no linked attack tree")]
     NoAttackTree(ThreatId),
+    /// The threat scenario is excluded by applicability (APL-02); see
+    /// [`Project::applicability`](crate::Project::applicability) for the
+    /// reasons.
+    #[error("threat scenario {0} is not applicable")]
+    ThreatNotApplicable(ThreatId),
+    /// The attack tree is excluded by applicability (APL-02); see
+    /// [`Project::applicability`](crate::Project::applicability) for the
+    /// reasons.
+    #[error("attack tree {0} is not applicable")]
+    TreeNotApplicable(TreeId),
     /// An impacts list names the same category twice.
     #[error("impact category index {} is listed twice", .0.index())]
     DuplicateImpactCategory(ImpactCategory),

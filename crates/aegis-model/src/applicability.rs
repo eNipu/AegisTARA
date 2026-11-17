@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::description::ElementRef;
 use crate::eval::{Applicable, AttributeDomain, Lifted, evaluate};
-use crate::id::{ConditionId, ConditionIdx, NodeId, NodeIdx, TreeId, TreeIdx};
+use crate::id::{ConditionId, ConditionIdx, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx};
 use crate::item::{Component, ItemRef, MAX_COMPONENT_DEPTH};
 use crate::project::Project;
 use crate::provenance::Provenance;
@@ -268,8 +268,23 @@ impl Applicability {
             .flat_map(|(t, x)| x.nodes.iter().map(move |(n, r)| (*t, *n, r.as_slice())))
     }
 
+    /// Whether `self` and `other` agree on threat `threat` and, when given,
+    /// on tree `tree` and every node of it. Time O(log n + nodes of `tree`).
+    pub(crate) fn same_for_threat(
+        &self,
+        other: &Self,
+        threat: ThreatId,
+        tree: Option<TreeId>,
+    ) -> bool {
+        let same = |e: ElementRef| self.elements.get(&e) == other.elements.get(&e);
+        same(ElementRef::Threat(threat))
+            && tree.is_none_or(|t| {
+                same(ElementRef::Tree(t))
+                    && self.trees.get(&t).map(|x| &x.nodes) == other.trees.get(&t).map(|x| &x.nodes)
+            })
+    }
+
     /// Whether the node at `idx` of `tree` is excluded. Time O(log n).
-    #[allow(dead_code)] // used by evaluation in slice 134b
     pub(crate) fn node_excluded_at(&self, tree: TreeId, idx: NodeIdx) -> bool {
         self.trees
             .get(&tree)
