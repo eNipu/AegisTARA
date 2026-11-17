@@ -71,6 +71,7 @@ impl Label {
             Selection::Goal(id) => project.cybersecurity_goal_idx(&id).is_some(),
             Selection::Claim(id) => project.cybersecurity_claim_idx(&id).is_some(),
             Selection::Party(id) => project.party_idx(&id).is_some(),
+            Selection::Condition(id) => project.condition_idx(&id).is_some(),
             Selection::Component(id) => project.component_idx(&id).is_some(),
             Selection::Interface(id) => project.interface_idx(&id).is_some(),
             Selection::DataFlow(id) => project.data_flow_idx(&id).is_some(),
@@ -311,6 +312,13 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::RemoveTrustBoundary { id } => Selection::TrustBoundary(*id),
         Op::AddBoundaryComponent { boundary, .. }
         | Op::RemoveBoundaryComponent { boundary, .. } => Selection::TrustBoundary(*boundary),
+        Op::AddCondition { id, .. }
+        | Op::RenameCondition { id, .. }
+        | Op::SetConditionPresent { id, .. }
+        | Op::RemoveCondition { id } => Selection::Condition(*id),
+        Op::NeedStepCondition { tree, node, .. } | Op::UnneedStepCondition { tree, node, .. } => {
+            Selection::TreeNode(*tree, *node)
+        }
         Op::SetDescription { target, .. } | Op::SetDescriptionTranslation { target, .. } => {
             match target {
                 ElementRef::Asset(id) => Selection::Asset(*id),
@@ -346,6 +354,11 @@ fn parts(op: &Op, p: &Project) -> Parts {
     let flow = |id: &_| name_of(p, &ElementRef::DataFlow(*id));
     let boundary = |id: &_| name_of(p, &ElementRef::TrustBoundary(*id));
     let some = |n: &str| Some(n.to_owned());
+    let condition = |id: &aegis_model::ConditionId| {
+        p.condition_idx(id)
+            .and_then(|i| p.condition(i))
+            .map(|c| c.name().to_owned())
+    };
     match op {
         Op::AddElement {
             kind: aegis_model::ElementKind::System,
@@ -489,6 +502,20 @@ fn parts(op: &Op, p: &Project) -> Parts {
         }
         Op::RemoveTrustBoundary { id } => ("remove", "trust boundary", boundary(id)),
 
+        Op::AddCondition { name, .. } => ("add", "condition", some(name)),
+        Op::RenameCondition { id, .. } => ("rename", "condition", condition(id)),
+        Op::SetConditionPresent { id, present, .. } => (
+            if *present { "switch on" } else { "switch off" },
+            "condition",
+            condition(id),
+        ),
+        Op::RemoveCondition { id } => ("remove", "condition", condition(id)),
+        Op::NeedCondition { element, .. } => ("change", "conditions of", name_of(p, element)),
+        Op::UnneedCondition { element, .. } => ("clear", "condition of", name_of(p, element)),
+        Op::NeedStepCondition { condition: c, .. } => ("need", "condition on step", condition(c)),
+        Op::UnneedStepCondition { condition: c, .. } => {
+            ("clear", "condition on step", condition(c))
+        }
         Op::SetDescription { target, .. } => ("change", "description of", name_of(p, target)),
         Op::SetDescriptionTranslation { target, .. } => {
             ("change", "description translation of", name_of(p, target))

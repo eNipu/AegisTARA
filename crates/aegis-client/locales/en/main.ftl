@@ -144,6 +144,19 @@ relation-step-via = Goes through
 relation-step-mitigations = Mitigations
 relation-dataflow-from = Flow source
 relation-dataflow-to = Flow destination
+relation-dataflow-interface = Flow interface
+relation-interface-component = Owning component
+relation-boundary-members = Member components
+condition = Condition
+condition-present = Present
+relation-asset-conditions = Asset conditions
+relation-component-conditions = Component conditions
+relation-interface-conditions = Interface conditions
+relation-threat-conditions = Threat conditions
+relation-tree-conditions = Tree conditions
+relation-goal-conditions = Goal conditions
+relation-claim-conditions = Claim conditions
+relation-step-conditions = Step conditions
 
 # Party roles (job 145).
 party-us = Us

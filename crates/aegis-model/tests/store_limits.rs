@@ -11,14 +11,15 @@ use std::sync::Arc;
 use aegis_model::{
     AttackPotentialDef, AttackTree, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
     GateKind, ImpactCategoryDef, LevelDef, Limit, MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS,
-    MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES, MAX_PARTIES,
-    MAX_PROJECT_FILE_BYTES, MAX_RESPONSIBLE, MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology,
-    MethodologyDef, Node, Op, OpLogReader, PotentialBandDef, Project, PropertyDef, Provenance,
-    RiskTreatment, SegmentDef, StoreError, ThreatCategoryDef,
+    MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS,
+    MAX_NAME_CHARS, MAX_OP_RECORD_BYTES, MAX_PARTIES, MAX_PROJECT_FILE_BYTES, MAX_RESPONSIBLE,
+    MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology, MethodologyDef, Node, Op, OpLogReader,
+    PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef, StoreError,
+    ThreatCategoryDef,
 };
 use common::{
-    asset_id, builtin, claim_id, control_id, damage_id, goal_id, node_id, party_id, read_log, save,
-    threat_id, tree_id, write_log,
+    asset_id, builtin, claim_id, condition_id, control_id, damage_id, goal_id, node_id, party_id,
+    read_log, save, threat_id, tree_id, write_log,
 };
 use serde_json::{Value, json};
 
@@ -391,6 +392,56 @@ fn caps_responsible() {
     over.push(json!(party_id(2000).to_string()));
     s["cybersecurity_goals"] = json!([{"id": goal_id(1).to_string(), "name": "g",
                                         "controls": [], "responsible": over}]);
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+fn conditions_json(n: usize) -> Vec<Value> {
+    (0..n)
+        .map(|i| json!({"id": condition_id(3000 + i as u64).to_string(), "name": "c"}))
+        .collect()
+}
+
+#[test]
+fn caps_conditions() {
+    let want = Limit::Conditions {
+        max: MAX_CONDITIONS,
+    };
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    // Just under the cap: exactly MAX_CONDITIONS decode and load.
+    s["conditions"] = json!(conditions_json(MAX_CONDITIONS));
+    Project::load(s.to_string().as_bytes(), builtin()).expect("at the cap loads");
+    // One over: the decode cap fires before model validation.
+    s["conditions"] = json!(conditions_json(MAX_CONDITIONS + 1));
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+#[test]
+fn caps_condition_links() {
+    let want = Limit::ConditionLinks {
+        max: MAX_CONDITIONS_PER_ELEMENT,
+    };
+    let ids = |n: usize| -> Vec<Value> {
+        (0..n)
+            .map(|i| json!(condition_id(3000 + i as u64).to_string()))
+            .collect()
+    };
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    s["conditions"] = json!(conditions_json(MAX_CONDITIONS_PER_ELEMENT + 1));
+    s["cybersecurity_goals"] = json!([{"id": goal_id(1).to_string(), "name": "g", "controls": []}]);
+    let target = json!({"kind": "goal", "id": goal_id(1).to_string()});
+    // Just under the cap: exactly MAX_CONDITIONS_PER_ELEMENT links load.
+    s["condition_links"] =
+        json!([{"target": target, "conditions": ids(MAX_CONDITIONS_PER_ELEMENT)}]);
+    Project::load(s.to_string().as_bytes(), builtin()).expect("at the cap loads");
+    // One over, on an element and on a step: the decode cap fires.
+    s["condition_links"] =
+        json!([{"target": target, "conditions": ids(MAX_CONDITIONS_PER_ELEMENT + 1)}]);
+    assert_limit(&snapshot_error(&s.to_string()), want);
+    s["condition_links"] = json!([]);
+    s["step_conditions"] = json!([{"tree": tree_id(1).to_string(), "node": node_id(2).to_string(),
+                                   "conditions": ids(MAX_CONDITIONS_PER_ELEMENT + 1)}]);
     assert_limit(&snapshot_error(&s.to_string()), want);
 }
 

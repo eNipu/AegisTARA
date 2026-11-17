@@ -4,9 +4,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::control::RiskTreatment;
+use crate::description::ElementRef;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
+    InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -293,6 +294,15 @@ pub enum ModelError {
     /// ```
     #[error("party {0} already exists in the project")]
     DuplicatePartyId(PartyId),
+    /// A condition with this ID already exists in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, ConditionId};
+    /// let id = ConditionId::new_v7();
+    /// assert_eq!(ModelError::DuplicateConditionId(id).to_string(), format!("condition {id} already exists in the project"));
+    /// ```
+    #[error("condition {0} already exists in the project")]
+    DuplicateConditionId(ConditionId),
     /// An element with this ID already exists in the project.
     #[error("element {0} already exists in the project")]
     DuplicateElement(ElementId),
@@ -436,6 +446,15 @@ pub enum ModelError {
     /// ```
     #[error("party {0} is not in the project")]
     UnknownParty(PartyId),
+    /// No condition with this ID is in the project.
+    ///
+    /// ```
+    /// # use aegis_model::{ModelError, ConditionId};
+    /// let id = ConditionId::new_v7();
+    /// assert_eq!(ModelError::UnknownCondition(id).to_string(), format!("condition {id} is not in the project"));
+    /// ```
+    #[error("condition {0} is not in the project")]
+    UnknownCondition(ConditionId),
     /// No element with this ID is in the project.
     #[error("element {0} is not in the project")]
     UnknownElement(ElementId),
@@ -566,6 +585,13 @@ pub enum ModelError {
     /// ```
     #[error("party name is empty")]
     PartyNameEmpty,
+    /// A condition name is empty or only whitespace. Carries no name text.
+    ///
+    /// ```
+    /// assert_eq!(aegis_model::ModelError::ConditionNameEmpty.to_string(), "condition name is empty");
+    /// ```
+    #[error("condition name is empty")]
+    ConditionNameEmpty,
     /// A party name is longer than `max` chars. Carries no name text.
     ///
     /// ```
@@ -574,6 +600,17 @@ pub enum ModelError {
     /// ```
     #[error("party name is longer than {max} chars")]
     PartyNameTooLong {
+        /// The limit, in chars.
+        max: usize,
+    },
+    /// A condition name is longer than `max` chars. Carries no name text.
+    ///
+    /// ```
+    /// let err = aegis_model::ModelError::ConditionNameTooLong { max: 256 };
+    /// assert_eq!(err.to_string(), "condition name is longer than 256 chars");
+    /// ```
+    #[error("condition name is longer than {max} chars")]
+    ConditionNameTooLong {
         /// The limit, in chars.
         max: usize,
     },
@@ -587,6 +624,84 @@ pub enum ModelError {
     TooManyParties {
         /// The limit.
         max: usize,
+    },
+    /// A project holds at most `max` conditions.
+    ///
+    /// ```
+    /// use aegis_model::{ModelError, MAX_CONDITIONS};
+    /// assert_eq!(ModelError::TooManyConditions { max: MAX_CONDITIONS }.to_string(), "project holds more than 256 conditions");
+    /// ```
+    #[error("project holds more than {max} conditions")]
+    TooManyConditions {
+        /// The limit.
+        max: usize,
+    },
+    /// The element does not need this condition.
+    #[error("element {element:?} does not need condition {condition}")]
+    ConditionNotLinked {
+        /// The element.
+        element: ElementRef,
+        /// The condition.
+        condition: ConditionId,
+    },
+    /// The step does not need this condition.
+    #[error("step {node} of tree {tree} does not need condition {condition}")]
+    StepConditionNotLinked {
+        /// The tree.
+        tree: TreeId,
+        /// The step node.
+        node: NodeId,
+        /// The condition.
+        condition: ConditionId,
+    },
+    /// The element already needs this condition.
+    #[error("element {element:?} already needs condition {condition}")]
+    ConditionAlreadyNeeded {
+        /// The element.
+        element: ElementRef,
+        /// The repeated condition.
+        condition: ConditionId,
+    },
+    /// The step already needs this condition.
+    #[error("step {node} of tree {tree} already needs condition {condition}")]
+    StepConditionAlreadyNeeded {
+        /// The tree.
+        tree: TreeId,
+        /// The step node.
+        node: NodeId,
+        /// The repeated condition.
+        condition: ConditionId,
+    },
+    /// Condition links reject this target kind; carries IDs, never a name.
+    #[error("condition links do not support target {element:?}")]
+    UnsupportedConditionTarget {
+        /// The unsupported target.
+        element: ElementRef,
+    },
+    /// An element or step would need more than `max` conditions.
+    #[error("element or step would need more than {max} conditions")]
+    TooManyConditionLinks {
+        /// The limit.
+        max: usize,
+    },
+    /// The element cannot be removed while it still needs conditions; the
+    /// removal's inverse could not restore them. Unneed them first.
+    #[error("element {element:?} still needs {conditions} condition(s)")]
+    ElementNeedsConditions {
+        /// The element.
+        element: ElementRef,
+        /// How many conditions it needs.
+        conditions: usize,
+    },
+    /// A condition cannot be removed while an element or step needs it.
+    #[error("condition {condition} is needed by {elements} element(s) and {steps} step(s)")]
+    ConditionInUse {
+        /// The condition still needed.
+        condition: ConditionId,
+        /// How many elements need it.
+        elements: usize,
+        /// How many steps need it.
+        steps: usize,
     },
     /// A non-empty provenance actor string contains only whitespace.
     ///
@@ -1016,6 +1131,24 @@ pub enum ModelError {
         /// How many threat scenarios reference it.
         threats: u32,
     },
+    /// The cybersecurity goal cannot be removed while it lists responsible
+    /// parties, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity goal {goal} still lists {parties} responsible part(ies)")]
+    CybersecurityGoalHasParties {
+        /// The cybersecurity goal.
+        goal: GoalId,
+        /// How many parties it lists.
+        parties: usize,
+    },
+    /// The cybersecurity claim cannot be removed while it lists responsible
+    /// parties, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity claim {claim} still lists {parties} responsible part(ies)")]
+    CybersecurityClaimHasParties {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// How many parties it lists.
+        parties: usize,
+    },
     /// The threat scenario cannot be removed while it still references an
     /// attack tree; unlink the tree first.
     #[error("threat scenario {threat} still references attack tree {tree}")]
@@ -1078,6 +1211,18 @@ pub enum ModelError {
     ThreatHasRationale {
         /// The threat scenario.
         threat: ThreatId,
+    },
+    /// The threat-damage link cannot be removed, nor its threat scenario,
+    /// while the link still has a rationale (FND-09), because the inverse
+    /// could not restore it; clear it first.
+    #[error(
+        "the link from threat scenario {threat} to damage scenario {damage} still has a rationale"
+    )]
+    DamageLinkHasRationale {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The damage scenario.
+        damage: DamageId,
     },
     /// The damage scenario cannot be removed while it still has an impact
     /// rationale (FND-09); clear it first.
@@ -1777,6 +1922,13 @@ pub enum MethodologyError {
     /// More than `max` language translations are declared in a pack.
     #[error("more than {max} pack translations")]
     TooManyTranslations {
+        /// The limit.
+        max: usize,
+    },
+    /// A pack lists clause refs for more than `max` pages, or more than
+    /// `max` refs for one page.
+    #[error("more than {max} clause refs")]
+    TooManyClauseRefs {
         /// The limit.
         max: usize,
     },

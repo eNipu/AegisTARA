@@ -127,7 +127,25 @@ impl MultiLinkPicker {
     /// and never panics. Time O(elements + options), space O(options).
     #[must_use]
     pub fn open(project: &Project, key: RelationKey, from: Selection) -> Self {
-        let options = match relations::relation(key) {
+        let mut picker = Self {
+            key,
+            from,
+            options: Vec::new(),
+            filter: PickerFilter::default(),
+            visible: Vec::new(),
+            cursor: 0,
+            open: true,
+        };
+        picker.refresh(project);
+        picker
+    }
+
+    /// Re-reads the options and their `linked` flags after an edit, keeping
+    /// the filter and the cursor (clamped), so the picker stays open across
+    /// several picks. Time O(candidates).
+    pub fn refresh(&mut self, project: &Project) {
+        let (key, from) = (self.key, self.from);
+        self.options = match relations::relation(key) {
             Some(row) if ElementKind::kind_of(from) == Some(row.from) => {
                 let linked: HashSet<Selection> =
                     relations::related(project, key, from).into_iter().collect();
@@ -146,16 +164,9 @@ impl MultiLinkPicker {
             }
             _ => Vec::new(),
         };
-        let visible = (0..options.len()).collect();
-        Self {
-            key,
-            from,
-            options,
-            filter: PickerFilter::default(),
-            visible,
-            cursor: 0,
-            open: true,
-        }
+        let cursor = self.cursor;
+        self.refilter();
+        self.set_cursor(cursor);
     }
 
     /// Whether the picker is open.
@@ -356,6 +367,12 @@ impl MultiLinkPicker {
                 project.party_idx(&id),
                 |i| project.party_visual_id(i),
                 |i| project.party(i),
+                |e| e.name().to_owned()
+            ),
+            Selection::Condition(id) => named!(
+                project.condition_idx(&id),
+                |i| project.condition_visual_id(i),
+                |i| project.condition(i),
                 |e| e.name().to_owned()
             ),
             Selection::Component(id) => named!(

@@ -14,9 +14,9 @@ use aegis_client::relations::{
 };
 use aegis_client::view::Selection;
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GateKind, GoalId,
-    ItemRef, Methodology, Node, NodeId, Op, PartyId, PartyIdx, PartyKind, Project, Provenance,
-    ThreatId, TreeId,
+    AssetId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId, PartyIdx,
+    PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// `Selection` has no `Ord`, and the orphan rule forbids adding one here. This
@@ -41,6 +41,7 @@ impl Sel {
             Selection::Goal(_) => 10,
             Selection::Claim(_) => 11,
             Selection::Party(_) => 12,
+            Selection::Condition(_) => 13,
         };
         let s = self.0;
         (rank, format!("{s:?}"))
@@ -77,6 +78,8 @@ fn project() -> Project {
     let authenticity = m.property("authenticity").expect("authenticity");
 
     let (c1, c2) = (ComponentId::new_v7(), ComponentId::new_v7());
+    let (iface, boundary) = (InterfaceId::new_v7(), TrustBoundaryId::new_v7());
+    let can = m.interface_kinds().next().expect("an interface kind");
     let (flow, asset, d1, d2, threat) = (
         DataFlowId::new_v7(),
         AssetId::new_v7(),
@@ -110,12 +113,25 @@ fn project() -> Project {
             parent: None,
             provenance: provenance.clone(),
         },
+        Op::AddInterface {
+            id: iface,
+            name: "CAN".into(),
+            component: c2,
+            kind: can,
+            provenance: provenance.clone(),
+        },
+        Op::AddTrustBoundary {
+            id: boundary,
+            name: "vehicle".into(),
+            components: vec![c1, c2],
+            provenance: provenance.clone(),
+        },
         Op::AddDataFlow {
             id: flow,
             name: "flow".into(),
             from: c1,
             to: c2,
-            interface: None,
+            interface: Some(iface),
             provenance: provenance.clone(),
         },
         Op::AddAsset {
@@ -164,7 +180,7 @@ fn project() -> Project {
         Op::SetStepVia {
             tree: tree_id,
             node: step,
-            via: Some(ItemRef::Component(c1)),
+            via: Some(ItemRef::Interface(iface)),
             provenance: provenance.clone(),
         },
         Op::AddSecurityControl {
@@ -185,6 +201,11 @@ fn project() -> Project {
         Op::ApplyControl {
             control: control1,
             target: ItemRef::Component(c2),
+            provenance: provenance.clone(),
+        },
+        Op::ApplyControl {
+            control: control1,
+            target: ItemRef::Interface(iface),
             provenance: provenance.clone(),
         },
         Op::SetStepMitigation {
@@ -252,9 +273,48 @@ fn project() -> Project {
         Op::SetThreatClaim {
             threat,
             claim: Some(claim),
-            provenance,
+            provenance: provenance.clone(),
         },
     ];
+    // Two conditions, needed by one element of every supported kind and by
+    // the step, so every condition row is `many` with one owning source.
+    let conditions = [ConditionId::new_v7(), ConditionId::new_v7()];
+    let mut ops = ops;
+    for (i, id) in conditions.iter().enumerate() {
+        ops.push(Op::AddCondition {
+            id: *id,
+            name: format!("Condition {i}").into(),
+            description: "".into(),
+            present: true,
+            provenance: provenance.clone(),
+        });
+    }
+    use aegis_model::ElementRef as E;
+    for element in [
+        E::Asset(asset),
+        E::Component(c1),
+        E::Interface(iface),
+        E::Threat(threat),
+        E::Tree(tree_id),
+        E::Goal(goal),
+        E::Claim(claim),
+    ] {
+        for condition in conditions {
+            ops.push(Op::NeedCondition {
+                element,
+                condition,
+                provenance: provenance.clone(),
+            });
+        }
+    }
+    for condition in conditions {
+        ops.push(Op::NeedStepCondition {
+            tree: tree_id,
+            node: step,
+            condition,
+            provenance: provenance.clone(),
+        });
+    }
 
     let mut project = Project::new(m);
     for op in ops {
@@ -273,6 +333,10 @@ fn sources_of(project: &Project, kind: ElementKind) -> Vec<Selection> {
         ElementKind::Claim => project.cybersecurity_claims().map(|(_, id, _)| Selection::Claim(id)).collect(),
         ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
         ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
+        ElementKind::Interface => project.interfaces().map(|(_, id, _)| Selection::Interface(id)).collect(),
+        ElementKind::Component => project.components().map(|(_, id, _)| Selection::Component(id)).collect(),
+        ElementKind::Tree => project.attack_trees().map(|(_, id, _)| Selection::Tree(id)).collect(),
+        ElementKind::TrustBoundary => project.trust_boundaries().map(|(_, id, _)| Selection::TrustBoundary(id)).collect(),
         ElementKind::Step => project
             .attack_trees()
             .flat_map(|(_, id, tree)| tree.iter().map(move |(_, node, _)| Selection::TreeNode(id, node)))
@@ -364,6 +428,85 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
         if let Some(to) = project.component_id(flow.to()) {
             out.insert((source, Sel(Selection::Component(to))));
         }
+        if let Some(i) = flow.interface().and_then(|i| project.interface_id(i)) {
+            out.insert((source, Sel(Selection::Interface(i))));
+        }
+    }
+
+    // Condition links, read straight from the model's accessors.
+    let condition = |i| {
+        project
+            .condition_id(i)
+            .map(|c| Sel(Selection::Condition(c)))
+    };
+    let holders: Vec<(Selection, aegis_model::ElementRef)> = project
+        .assets()
+        .map(|(_, id, _)| (Selection::Asset(id), aegis_model::ElementRef::Asset(id)))
+        .chain(project.components().map(|(_, id, _)| {
+            (
+                Selection::Component(id),
+                aegis_model::ElementRef::Component(id),
+            )
+        }))
+        .chain(project.interfaces().map(|(_, id, _)| {
+            (
+                Selection::Interface(id),
+                aegis_model::ElementRef::Interface(id),
+            )
+        }))
+        .chain(
+            project
+                .threat_scenarios()
+                .map(|(_, id, _)| (Selection::Threat(id), aegis_model::ElementRef::Threat(id))),
+        )
+        .chain(
+            project
+                .attack_trees()
+                .map(|(_, id, _)| (Selection::Tree(id), aegis_model::ElementRef::Tree(id))),
+        )
+        .chain(
+            project
+                .cybersecurity_goals()
+                .map(|(_, id, _)| (Selection::Goal(id), aegis_model::ElementRef::Goal(id))),
+        )
+        .chain(
+            project
+                .cybersecurity_claims()
+                .map(|(_, id, _)| (Selection::Claim(id), aegis_model::ElementRef::Claim(id))),
+        )
+        .collect();
+    for (sel, element) in holders {
+        for &i in project.condition_link_ids(element) {
+            if let Some(c) = condition(i) {
+                out.insert((Sel(sel), c));
+            }
+        }
+    }
+    for (_, tree, t) in project.attack_trees() {
+        for (_, node, _) in t.iter() {
+            for &i in project.step_condition_link_ids(tree, node) {
+                if let Some(c) = condition(i) {
+                    out.insert((Sel(Selection::TreeNode(tree, node)), c));
+                }
+            }
+        }
+    }
+
+    for (_, id, iface) in project.interfaces() {
+        if let Some(c) = project.component_id(iface.component()) {
+            out.insert((Sel(Selection::Interface(id)), Sel(Selection::Component(c))));
+        }
+    }
+
+    for (_, id, boundary) in project.trust_boundaries() {
+        for &c in boundary.components() {
+            if let Some(c) = project.component_id(c) {
+                out.insert((
+                    Sel(Selection::TrustBoundary(id)),
+                    Sel(Selection::Component(c)),
+                ));
+            }
+        }
     }
 
     for (tree_idx, tree_id, tree) in project.attack_trees() {
@@ -426,7 +569,7 @@ fn every_link_is_reachable_both_ways() {
         // row's read actually contains this target before requiring one match.
         let matches: Vec<_> = RELATIONS
             .iter()
-            .filter(|row| row.from == from && row.to == to)
+            .filter(|row| row.from == from && row.to.contains(&to))
             .filter(|row| related(&project, row.key, source).contains(&target))
             .collect();
         let n = matches.len();
@@ -472,6 +615,17 @@ fn keys_and_labels_are_valid() {
         (RelationKey::STEP_MITIGATIONS, "step-mitigations"),
         (RelationKey::DATAFLOW_FROM, "dataflow-from"),
         (RelationKey::DATAFLOW_TO, "dataflow-to"),
+        (RelationKey::DATAFLOW_INTERFACE, "dataflow-interface"),
+        (RelationKey::INTERFACE_COMPONENT, "interface-component"),
+        (RelationKey::BOUNDARY_MEMBERS, "boundary-members"),
+        (RelationKey::ASSET_CONDITIONS, "asset-conditions"),
+        (RelationKey::COMPONENT_CONDITIONS, "component-conditions"),
+        (RelationKey::INTERFACE_CONDITIONS, "interface-conditions"),
+        (RelationKey::THREAT_CONDITIONS, "threat-conditions"),
+        (RelationKey::TREE_CONDITIONS, "tree-conditions"),
+        (RelationKey::GOAL_CONDITIONS, "goal-conditions"),
+        (RelationKey::CLAIM_CONDITIONS, "claim-conditions"),
+        (RelationKey::STEP_CONDITIONS, "step-conditions"),
     ];
     let keys: HashSet<RelationKey> = RELATIONS.iter().map(|row| row.key).collect();
     assert_eq!(keys.len(), RELATIONS.len(), "a relation key repeats");
@@ -538,6 +692,8 @@ fn new_keys_resolve_in_every_language() {
         "party-customer",
         "party-supplier",
         "party-other",
+        "condition",
+        "condition-present",
     ];
     for language in [Language::En, Language::Ja, Language::Pseudo] {
         let catalog = Catalog::load(language);
@@ -550,4 +706,25 @@ fn new_keys_resolve_in_every_language() {
         }
     }
     assert_eq!(Catalog::load(Language::Ja).tr("responsible"), "責任者");
+}
+
+/// A control can target an interface and a step can go via one, so the picker
+/// must offer interfaces for both rows, not only components.
+#[test]
+fn item_targets_offer_interfaces() {
+    let project = project();
+    let iface = project
+        .interfaces()
+        .map(|(_, id, _)| Selection::Interface(id))
+        .next()
+        .expect("fixture interface");
+    for key in [RelationKey::CONTROL_TARGETS, RelationKey::STEP_VIA] {
+        let offered = aegis_client::relations::candidates(&project, key);
+        assert!(
+            offered.contains(&iface),
+            "{} misses interfaces",
+            key.as_str()
+        );
+        assert!(offered.iter().any(|s| matches!(s, Selection::Component(_))));
+    }
 }

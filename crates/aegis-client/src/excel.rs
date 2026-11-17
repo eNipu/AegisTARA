@@ -1415,14 +1415,29 @@ pub fn preview_import(
                 responsible_added.push((key, id));
                 id
             };
-            if let Some(gid) = goal_id {
+            // An earlier row or import may already have made this link; the
+            // model refuses a duplicate, which would drop the whole row.
+            let party_idx = sim.party_idx(&party_id);
+            let goal_has = goal_id.is_some_and(|g| {
+                sim.cybersecurity_goal_idx(&g)
+                    .and_then(|i| sim.cybersecurity_goal(i))
+                    .zip(party_idx)
+                    .is_some_and(|(goal, p)| goal.responsible().contains(&p))
+            });
+            let claim_has = claim_id.is_some_and(|c| {
+                sim.cybersecurity_claim_idx(&c)
+                    .and_then(|i| sim.cybersecurity_claim(i))
+                    .zip(party_idx)
+                    .is_some_and(|(claim, p)| claim.responsible().contains(&p))
+            });
+            if let Some(gid) = goal_id.filter(|_| !goal_has) {
                 row_ops.push(Op::LinkGoalParty {
                     goal: gid,
                     party: party_id,
                     provenance: prov.clone(),
                 });
             }
-            if let Some(cid) = claim_id {
+            if let Some(cid) = claim_id.filter(|_| !claim_has) {
                 row_ops.push(Op::LinkClaimParty {
                     claim: cid,
                     party: party_id,
@@ -1722,6 +1737,38 @@ mod tests {
         assert_eq!(preview.unmapped_rows.len(), 1);
         assert_eq!(preview.unmapped_rows[0].row_number, 5);
         assert!(preview.unmapped_rows[0].reason.contains("scaling"));
+    }
+
+    /// Two rows naming the same goal, claim and party, then the same
+    /// workbook imported again: every row is accepted and each link exists once.
+    #[test]
+    fn repeated_responsible_links_are_not_refused() {
+        let m = std::sync::Arc::new(Methodology::iso21434_r155().expect("builtin"));
+        let mut project = Project::new(m);
+        let row = |n| (n, vec!["My Goal".into(), "My Claim".into(), "Bosch".into()]);
+        let wb = WorkbookData {
+            sheets: vec![SheetData {
+                name: "Goals".into(),
+                headers: ["Goal".into(), "Claim".into(), "Responsible".into()].to_vec(),
+                rows: vec![row(2), row(3)],
+            }],
+        };
+        for round in 0..2 {
+            let preview = preview_import(&project, &wb, &ExcelMapping::default(), "mira", 1)
+                .expect("preview");
+            assert!(
+                preview.unmapped_rows.is_empty(),
+                "round {round}: {:?}",
+                preview.unmapped_rows
+            );
+            for op in preview.ops {
+                project.apply(op).expect("applies");
+            }
+        }
+        let (_, _, goal) = project.cybersecurity_goals().next().expect("goal");
+        assert_eq!(goal.responsible().len(), 1);
+        let (_, _, claim) = project.cybersecurity_claims().next().expect("claim");
+        assert_eq!(claim.responsible().len(), 1);
     }
 
     #[test]

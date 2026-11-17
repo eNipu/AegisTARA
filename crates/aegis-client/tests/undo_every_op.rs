@@ -18,9 +18,10 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, AttrValue, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
-    ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, LinkTarget, Methodology,
-    Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
+    DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, LinkTarget,
+    Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -558,6 +559,88 @@ fn walk_parties(seen: &mut BTreeSet<String>) {
     apply_undo_redo(&mut ws, seen, Op::RemoveParty { id });
 }
 
+fn walk_conditions(seen: &mut BTreeSet<String>) {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let id = ConditionId::new_v7();
+    let asset = AssetId::new_v7();
+    let (tree, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    for op in [
+        Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
+            step_feasibility: vec![],
+            provenance: who(),
+        },
+        Op::AddTreeNode {
+            tree,
+            parent: root,
+            id: step,
+            node: Node::step("Step"),
+            index: 1,
+            position: 0,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    for op in [
+        Op::AddCondition {
+            id,
+            name: "Airbag deploys".into(),
+            description: "Frontal crash".into(),
+            present: true,
+            provenance: who(),
+        },
+        Op::RenameCondition {
+            id,
+            name: "Airbag deploys in a crash".into(),
+            provenance: who(),
+        },
+        Op::SetConditionPresent {
+            id,
+            present: false,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    let element = ElementRef::Asset(asset);
+    for op in [
+        Op::NeedCondition {
+            element,
+            condition: id,
+            provenance: who(),
+        },
+        Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: id,
+            provenance: who(),
+        },
+        Op::UnneedCondition {
+            element,
+            condition: id,
+            provenance: who(),
+        },
+        Op::UnneedStepCondition {
+            tree,
+            node: step,
+            condition: id,
+            provenance: who(),
+        },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+    apply_undo_redo(&mut ws, seen, Op::RemoveCondition { id });
+}
+
 #[test]
 fn every_op_kind_is_undone_and_redone_exactly() {
     let m = common::second();
@@ -569,6 +652,7 @@ fn every_op_kind_is_undone_and_redone_exactly() {
     walk_item_definition_trees_and_descriptions(&mut seen);
     walk_elements(&mut seen);
     walk_parties(&mut seen);
+    walk_conditions(&mut seen);
     assert_eq!(seen, declared_variants(), "an Op variant is not exercised");
 }
 
@@ -582,4 +666,130 @@ fn a_whole_session_of_edits_undoes_back_to_empty() {
     ws.undo().expect("one undo step for the whole batch");
     assert!(!ws.can_undo());
     assert!(ws.project() == &Project::new(m));
+}
+
+/// Removing a goal or claim that lists a party is one undo step that brings
+/// the party links back.
+#[test]
+fn removing_a_goal_or_claim_with_parties_undoes_the_links() {
+    use aegis_client::commands::Edit;
+    use aegis_model::{ClaimId, GoalId};
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let (party, goal, claim) = (PartyId::new_v7(), GoalId::new_v7(), ClaimId::new_v7());
+    let setup = vec![
+        Op::AddParty {
+            id: party,
+            name: "Bosch".into(),
+            kind: PartyKind::Supplier,
+            provenance: who(),
+        },
+        Op::AddCybersecurityGoal {
+            id: goal,
+            name: "G".into(),
+            controls: vec![],
+            provenance: who(),
+        },
+        Op::AddCybersecurityClaim {
+            id: claim,
+            name: "C".into(),
+            provenance: who(),
+        },
+        Op::LinkGoalParty {
+            goal,
+            party,
+            provenance: who(),
+        },
+        Op::LinkClaimParty {
+            claim,
+            party,
+            provenance: who(),
+        },
+    ];
+    ws.apply(setup, Origin::Edit).expect("setup");
+    let before = ws.project().clone();
+    for edit in [Edit::RemoveGoal { goal }, Edit::RemoveClaim { claim }] {
+        let ops = edit.to_ops(ws.project(), "alice", 1).expect("ops");
+        ws.apply(ops, Origin::Edit).expect("removes");
+    }
+    ws.undo().expect("undo claim removal");
+    ws.undo().expect("undo goal removal");
+    assert!(*ws.project() == before, "party links restored");
+}
+
+/// Removing a condition, an asset, a step or a tree that needs one is one
+/// edit and one undo step, and undo restores every condition link.
+#[test]
+fn removals_clear_condition_links_in_one_undo_step() {
+    use aegis_client::commands::Edit;
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    type MakeEdit = fn(AssetId, TreeId, NodeId, ConditionId) -> Edit;
+    let edits: [MakeEdit; 4] = [
+        |_, _, _, condition| Edit::RemoveCondition { condition },
+        |asset, _, _, _| Edit::RemoveAsset { asset },
+        |_, tree, node, _| Edit::RemoveTreeNode { tree, node },
+        |_, tree, _, _| Edit::RemoveTree { tree },
+    ];
+    for (n, make) in edits.into_iter().enumerate() {
+        let mut ws = Workspace::empty(Arc::clone(&m));
+        let (asset, tree, root, step) = (
+            AssetId::new_v7(),
+            TreeId::new_v7(),
+            NodeId::new_v7(),
+            NodeId::new_v7(),
+        );
+        let condition = ConditionId::new_v7();
+        let mut at = AttackTree::new(root, Node::gate(GateKind::Or, "root")).expect("tree");
+        at.add_child(at.root(), step, Node::step("step"))
+            .expect("step");
+        let setup = vec![
+            Op::AddCondition {
+                id: condition,
+                name: "Bluetooth fitted".into(),
+                description: "".into(),
+                present: true,
+                provenance: who(),
+            },
+            Op::AddAsset {
+                id: asset,
+                name: "Key".into(),
+                properties: m.all_properties(),
+                provenance: who(),
+            },
+            Op::AddAttackTree {
+                id: tree,
+                tree: at,
+                step_feasibility: vec![],
+                provenance: who(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Asset(asset),
+                condition,
+                provenance: who(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Tree(tree),
+                condition,
+                provenance: who(),
+            },
+            Op::NeedStepCondition {
+                tree,
+                node: step,
+                condition,
+                provenance: who(),
+            },
+        ];
+        ws.apply(setup, Origin::Edit).expect("setup");
+        let before = ws.project().clone();
+        let ops = make(asset, tree, step, condition)
+            .to_ops(ws.project(), "alice", 1)
+            .unwrap_or_else(|e| panic!("edit {n}: {e:?}"));
+        ws.apply(ops, Origin::Edit)
+            .unwrap_or_else(|e| panic!("edit {n}: {e:?}"));
+        ws.undo().expect("one undo step");
+        assert!(
+            *ws.project() == before,
+            "edit {n}: undo restores every link"
+        );
+    }
 }
