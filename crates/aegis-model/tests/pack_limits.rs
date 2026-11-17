@@ -290,6 +290,13 @@ fn clause_refs_caps() {
         Limit::ClauseRefs { max: 32 },
         "clause refs for 33 pages",
     );
+    // The model refuses the same over-cap def built in code, so it can never
+    // write a pack that `read_pack` refuses.
+    let want = Err(aegis_model::MethodologyError::TooManyClauseRefs { max: 32 });
+    assert_eq!(Methodology::new(d).map(|_| ()), want, "33 pages in code");
+    let mut d = second_def();
+    d.clause_refs = [("page".into(), page_refs(33))].into_iter().collect();
+    assert_eq!(Methodology::new(d).map(|_| ()), want, "33 refs in code");
 }
 
 #[test]
