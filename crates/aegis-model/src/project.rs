@@ -6588,7 +6588,10 @@ impl Project {
                 ..
             } => self.check_catalog_ref_change(*threat, catalog_ref, false)?,
             Op::LinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, true)?,
-            Op::UnlinkDamage { threat, damage, .. } => self.check_link(*threat, *damage, false)?,
+            Op::UnlinkDamage { threat, damage, .. } => {
+                self.check_link(*threat, *damage, false)?;
+                self.require_no_link_rationale(*threat, Some(*damage))?;
+            }
             Op::RemoveThreatScenario { id } => return self.check_remove_threat(*id),
             Op::AddAttackTree {
                 id,
@@ -8552,6 +8555,25 @@ impl Project {
         }
     }
 
+    /// Refuses when the threat's link to `damage` (or any of its links, for
+    /// `None`) has a rationale: unlink and remove inverses cannot carry it.
+    fn require_no_link_rationale(
+        &self,
+        threat: ThreatId,
+        damage: Option<DamageId>,
+    ) -> Result<(), ModelError> {
+        let t = self.threat_ref(threat)?;
+        for (d, _) in &t.damage_rationales {
+            let Some(id) = self.damage_key(*d) else {
+                continue;
+            };
+            if damage.is_none_or(|want| want == id) {
+                return Err(ModelError::DamageLinkHasRationale { threat, damage: id });
+            }
+        }
+        Ok(())
+    }
+
     fn check_remove_threat(&self, id: ThreatId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Threat(id), EntityKind::ThreatScenario)?;
         let t = self.threat_ref(id)?;
@@ -8594,6 +8616,7 @@ impl Project {
         if !t.feasibility_rationale.is_empty() {
             return Err(ModelError::ThreatHasRationale { threat: id });
         }
+        self.require_no_link_rationale(id, None)?;
         let elements = self
             .elements
             .inbound(crate::element::LinkTarget::Threat(id));
