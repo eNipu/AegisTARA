@@ -16,8 +16,8 @@ use aegis_model::{
     CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ControlId, DamageId, ElementId,
     FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel, GateKind, GoalId,
     ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef, Methodology,
-    MethodologyDef, Node, NodeId, Op, PotentialBandDef, Project, Property, PropertyDef,
-    PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment, SegmentDef,
+    MethodologyDef, Node, NodeId, Op, PartyId, PartyKind, PotentialBandDef, Project, Property,
+    PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment, SegmentDef,
     ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
@@ -480,6 +480,10 @@ pub fn claim_id(n: u64) -> ClaimId {
     ClaimId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn party_id(n: u64) -> PartyId {
+    PartyId::from_uuid(v7(n)).expect("v7")
+}
+
 pub fn component_id(n: u64) -> ComponentId {
     ComponentId::from_uuid(v7(n)).expect("v7")
 }
@@ -555,7 +559,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..66,
+        0u8..74,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -761,6 +765,14 @@ impl Gen {
         }
     }
 
+    fn party(&mut self, p: &Project, sel: u16) -> PartyId {
+        let existing: Vec<_> = p.parties().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => party_id(self.fresh()),
+        }
+    }
+
     fn element(&mut self, p: &Project, sel: u16) -> ElementId {
         let existing: Vec<_> = p
             .elements(aegis_model::ElementKind::MisuseCase)
@@ -812,6 +824,15 @@ impl Gen {
             1 => RiskTreatment::Reduce,
             2 => RiskTreatment::Share,
             _ => RiskTreatment::Retain,
+        }
+    }
+
+    fn party_kind(&self, sel: u16) -> PartyKind {
+        match sel % 4 {
+            0 => PartyKind::Us,
+            1 => PartyKind::Customer,
+            2 => PartyKind::Supplier,
+            _ => PartyKind::Other,
         }
     }
 
@@ -1400,9 +1421,25 @@ impl Gen {
                     provenance,
                 }
             }
-            42 => Op::RemoveCybersecurityGoal {
-                id: self.goal(p, s.a),
-            },
+            42 => {
+                // The single-op inverse of RemoveCybersecurityGoal is
+                // AddCybersecurityGoal, which cannot carry responsible links;
+                // only remove a goal whose inverse is exact.
+                let removable: Vec<_> = p
+                    .cybersecurity_goals()
+                    .filter(|(_, _, g)| g.responsible().is_empty())
+                    .map(|(_, id, _)| id)
+                    .collect();
+                match nth(removable, s.a) {
+                    Some(id) => Op::RemoveCybersecurityGoal { id },
+                    None => Op::AddParty {
+                        id: party_id(self.fresh()),
+                        name: self.name(s.c),
+                        kind: self.party_kind(s.b),
+                        provenance,
+                    },
+                }
+            }
             43 => Op::AddCybersecurityClaim {
                 id: if s.a.is_multiple_of(12) {
                     self.claim(p, s.b)
@@ -1417,9 +1454,23 @@ impl Gen {
                 name: self.name(s.c),
                 provenance,
             },
-            45 => Op::RemoveCybersecurityClaim {
-                id: self.claim(p, s.a),
-            },
+            45 => {
+                // As for goals, the single-op inverse cannot restore links.
+                let removable: Vec<_> = p
+                    .cybersecurity_claims()
+                    .filter(|(_, _, cl)| cl.responsible().is_empty())
+                    .map(|(_, id, _)| id)
+                    .collect();
+                match nth(removable, s.a) {
+                    Some(id) => Op::RemoveCybersecurityClaim { id },
+                    None => Op::AddParty {
+                        id: party_id(self.fresh()),
+                        name: self.name(s.c),
+                        kind: self.party_kind(s.b),
+                        provenance,
+                    },
+                }
+            }
             46 => Op::SetThreatGoal {
                 threat: self.threat(p, s.a),
                 goal: (!s.b.is_multiple_of(4)).then(|| self.goal(p, s.b)),
@@ -1592,23 +1643,42 @@ impl Gen {
                 provenance,
             },
             63 => {
+                // Unlink an element that already has a link; otherwise seed a
+                // link so a later unlink can succeed under every methodology.
                 let linked: Vec<_> = p
                     .elements(aegis_model::ElementKind::MisuseCase)
                     .filter(|(_, e)| !e.links().is_empty())
                     .map(|(id, e)| (id, e.links().to_vec()))
                     .collect();
-                let (id, links) = match nth(linked, s.a) {
-                    Some(pick) if !s.c.is_multiple_of(4) => pick,
-                    _ => (self.element(p, s.a), Vec::new()),
-                };
-                let target = match nth(links, s.b) {
-                    Some(t) => t,
-                    None => aegis_model::LinkTarget::Threat(self.threat(p, s.b)),
-                };
-                Op::UnlinkElement {
-                    id,
-                    target,
-                    provenance,
+                match nth(linked, s.a) {
+                    Some((id, links)) => {
+                        let target = match nth(links, s.b) {
+                            Some(t) => t,
+                            None => aegis_model::LinkTarget::Threat(self.threat(p, s.b)),
+                        };
+                        Op::UnlinkElement {
+                            id,
+                            target,
+                            provenance,
+                        }
+                    }
+                    None if p
+                        .elements(aegis_model::ElementKind::MisuseCase)
+                        .next()
+                        .is_none() =>
+                    {
+                        Op::AddElement {
+                            id: element_id(self.fresh()),
+                            kind: aegis_model::ElementKind::MisuseCase,
+                            name: self.name(s.c),
+                            provenance,
+                        }
+                    }
+                    None => Op::LinkElement {
+                        id: self.element(p, 1),
+                        target: aegis_model::LinkTarget::Threat(self.threat(p, 1)),
+                        provenance,
+                    },
                 }
             }
             64 => {
@@ -1625,6 +1695,136 @@ impl Gen {
                         ceiling: (!s.c.is_multiple_of(4)).then(|| self.feasibility_level(s.c)),
                         provenance,
                     }
+                }
+            }
+            66 => Op::AddParty {
+                id: if s.a.is_multiple_of(16) {
+                    self.party(p, s.b)
+                } else {
+                    party_id(self.fresh())
+                },
+                name: self.name(s.c),
+                kind: self.party_kind(s.b),
+                provenance,
+            },
+            67 => Op::RenameParty {
+                id: self.party(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            68 => Op::SetPartyKind {
+                id: self.party(p, s.a),
+                kind: self.party_kind(s.b),
+                provenance,
+            },
+            69 => Op::RemoveParty {
+                id: self.party(p, s.a),
+            },
+            70 => Op::LinkGoalParty {
+                goal: self.goal(p, s.a),
+                party: self.party(p, s.b),
+                provenance,
+            },
+            71 => {
+                // Unlink a goal that already lists a party; when none does,
+                // seed the state with a link so a later unlink can succeed.
+                let with_parties: Vec<_> = p
+                    .cybersecurity_goals()
+                    .filter(|(_, _, g)| !g.responsible().is_empty())
+                    .map(|(_, id, _)| id)
+                    .collect();
+                match nth(with_parties, s.a) {
+                    Some(goal) => {
+                        let linked: Vec<_> = p
+                            .cybersecurity_goal_idx(&goal)
+                            .and_then(|g| p.cybersecurity_goal(g))
+                            .map(|g| {
+                                p.parties()
+                                    .filter(|(idx, _, _)| g.responsible().contains(idx))
+                                    .map(|(_, id, _)| id)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let party = match nth(linked, s.b) {
+                            Some(id) => id,
+                            None => self.party(p, s.b),
+                        };
+                        Op::UnlinkGoalParty {
+                            goal,
+                            party,
+                            provenance,
+                        }
+                    }
+                    None if p.parties().next().is_none() => Op::AddParty {
+                        id: party_id(self.fresh()),
+                        name: self.name(s.c),
+                        kind: self.party_kind(s.b),
+                        provenance,
+                    },
+                    None if p.cybersecurity_goals().next().is_none() => Op::AddCybersecurityGoal {
+                        id: goal_id(self.fresh()),
+                        name: self.name(s.c),
+                        controls: Vec::new(),
+                        provenance,
+                    },
+                    None => Op::LinkGoalParty {
+                        goal: self.goal(p, 1),
+                        party: self.party(p, 1),
+                        provenance,
+                    },
+                }
+            }
+            72 => Op::LinkClaimParty {
+                claim: self.claim(p, s.a),
+                party: self.party(p, s.b),
+                provenance,
+            },
+            73 => {
+                let with_parties: Vec<_> = p
+                    .cybersecurity_claims()
+                    .filter(|(_, _, cl)| !cl.responsible().is_empty())
+                    .map(|(_, id, _)| id)
+                    .collect();
+                match nth(with_parties, s.a) {
+                    Some(claim) => {
+                        let linked: Vec<_> = p
+                            .cybersecurity_claim_idx(&claim)
+                            .and_then(|cl| p.cybersecurity_claim(cl))
+                            .map(|cl| {
+                                p.parties()
+                                    .filter(|(idx, _, _)| cl.responsible().contains(idx))
+                                    .map(|(_, id, _)| id)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let party = match nth(linked, s.b) {
+                            Some(id) => id,
+                            None => self.party(p, s.b),
+                        };
+                        Op::UnlinkClaimParty {
+                            claim,
+                            party,
+                            provenance,
+                        }
+                    }
+                    None if p.parties().next().is_none() => Op::AddParty {
+                        id: party_id(self.fresh()),
+                        name: self.name(s.c),
+                        kind: self.party_kind(s.b),
+                        provenance,
+                    },
+                    None if p.cybersecurity_claims().next().is_none() => {
+                        Op::AddCybersecurityClaim {
+                            id: claim_id(self.fresh()),
+                            name: self.name(s.c),
+                            provenance,
+                        }
+                    }
+                    None => Op::LinkClaimParty {
+                        claim: self.claim(p, 1),
+                        party: self.party(p, 1),
+                        provenance,
+                    },
                 }
             }
             _ => Op::SetComponentSystem {
@@ -1692,7 +1892,12 @@ pub fn replay(
                     op,
                     again
                 );
-                prop_assert_eq!(&back, &before);
+                prop_assert_eq!(
+                    &back,
+                    &before,
+                    "inverse of {:?} did not restore the project",
+                    op
+                );
                 check(&back)?;
                 undo.push(inverse);
             }
@@ -1822,6 +2027,24 @@ pub fn reordered(mut def: MethodologyDef) -> MethodologyDef {
     def
 }
 
+/// True for the eight party ops added in job 145. The workspace exchange
+/// format has no party file yet (a later slice), so property tests that save
+/// a project as workspace files must not apply these ops. The generator still
+/// covers them through `replay`, which drives the coverage test directly.
+fn is_party_op(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::AddParty { .. }
+            | Op::RenameParty { .. }
+            | Op::SetPartyKind { .. }
+            | Op::RemoveParty { .. }
+            | Op::LinkGoalParty { .. }
+            | Op::UnlinkGoalParty { .. }
+            | Op::LinkClaimParty { .. }
+            | Op::UnlinkClaimParty { .. }
+    )
+}
+
 /// Replays `seeds` on a fresh project over `m` and calls `f(project, op,
 /// inverse)` after every accepted op, with the project after the op.
 /// Returns the final project.
@@ -1834,6 +2057,9 @@ pub fn accepted(
     let mut project = Project::new(Arc::clone(m));
     for s in seeds {
         let op = generator.op(&project, s);
+        if is_party_op(&op) {
+            continue;
+        }
         if let Ok(inverse) = project.apply(op.clone()) {
             f(&project, &op, &inverse)?;
         }

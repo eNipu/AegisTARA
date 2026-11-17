@@ -161,6 +161,13 @@ pub enum LintCode {
         /// The threat scenario lacking a linked cybersecurity claim.
         threat: ThreatId,
     },
+    /// A threat scenario has a [`RiskTreatment::Share`](crate::RiskTreatment::Share)
+    /// decision and a linked [`CybersecurityClaim`](crate::CybersecurityClaim),
+    /// but that claim names no responsible party other than `Us`.
+    ShareTreatmentWithoutOtherParty {
+        /// The threat scenario whose shared claim has no other party.
+        threat: ThreatId,
+    },
     /// A threat scenario links to a [`CybersecurityGoal`](crate::CybersecurityGoal),
     /// but its risk treatment is not [`RiskTreatment::Reduce`](crate::RiskTreatment::Reduce).
     GoalOnNonReduceThreat {
@@ -344,6 +351,7 @@ impl LintCode {
             | Self::StepSettingsIncomplete { .. }
             | Self::ReduceTreatmentWithoutGoal { .. }
             | Self::RetainOrShareTreatmentWithoutClaim { .. }
+            | Self::ShareTreatmentWithoutOtherParty { .. }
             | Self::GoalOnNonReduceThreat { .. }
             | Self::ClaimOnNonRetainOrShareThreat { .. }
             | Self::CybersecurityGoalWithoutControls { .. }
@@ -465,6 +473,10 @@ impl fmt::Display for LintCode {
             Self::RetainOrShareTreatmentWithoutClaim { threat } => write!(
                 f,
                 "threat scenario {threat} has retain or share treatment without a linked cybersecurity claim"
+            ),
+            Self::ShareTreatmentWithoutOtherParty { threat } => write!(
+                f,
+                "threat scenario {threat} shares risk without a responsible party other than us"
             ),
             Self::GoalOnNonReduceThreat { threat, goal } => write!(
                 f,

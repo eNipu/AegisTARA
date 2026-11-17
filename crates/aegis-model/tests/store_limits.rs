@@ -11,13 +11,13 @@ use std::sync::Arc;
 use aegis_model::{
     AttackPotentialDef, AttackTree, CatalogSchemeDef, CatalogSyntax, FactorDef, FactorLevelDef,
     GateKind, ImpactCategoryDef, LevelDef, Limit, MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS,
-    MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES,
-    MAX_PROJECT_FILE_BYTES, MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology, MethodologyDef,
-    Node, Op, OpLogReader, PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment,
-    SegmentDef, StoreError, ThreatCategoryDef,
+    MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS, MAX_NAME_CHARS, MAX_OP_RECORD_BYTES, MAX_PARTIES,
+    MAX_PROJECT_FILE_BYTES, MAX_RESPONSIBLE, MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology,
+    MethodologyDef, Node, Op, OpLogReader, PotentialBandDef, Project, PropertyDef, Provenance,
+    RiskTreatment, SegmentDef, StoreError, ThreatCategoryDef,
 };
 use common::{
-    asset_id, builtin, claim_id, control_id, damage_id, goal_id, node_id, read_log, save,
+    asset_id, builtin, claim_id, control_id, damage_id, goal_id, node_id, party_id, read_log, save,
     threat_id, tree_id, write_log,
 };
 use serde_json::{Value, json};
@@ -347,6 +347,50 @@ fn caps_goal_controls() {
     let mut s: Value =
         serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
     s["cybersecurity_goals"] = json!([{"id": id(10), "name": "g", "controls": ctrls17}]);
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+#[test]
+fn caps_parties() {
+    let want = Limit::Parties { max: MAX_PARTIES };
+    let parties: Vec<Value> = (0..MAX_PARTIES)
+        .map(|i| json!({"id": party_id(1000 + i as u64).to_string(), "name": "p", "kind": "us"}))
+        .collect();
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    // Just under the cap: exactly MAX_PARTIES decodes and loads.
+    s["parties"] = json!(parties);
+    Project::load(s.to_string().as_bytes(), builtin()).expect("at the cap loads");
+    // One over: the decode cap fires before model validation.
+    let mut over = parties;
+    over.push(json!({"id": party_id(2000).to_string(), "name": "p", "kind": "us"}));
+    s["parties"] = json!(over);
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+#[test]
+fn caps_responsible() {
+    let want = Limit::Responsible {
+        max: MAX_RESPONSIBLE,
+    };
+    let ids: Vec<Value> = (0..MAX_RESPONSIBLE)
+        .map(|i| json!(party_id(1000 + i as u64).to_string()))
+        .collect();
+    let parties: Vec<Value> = (0..MAX_RESPONSIBLE)
+        .map(|i| json!({"id": party_id(1000 + i as u64).to_string(), "name": "p", "kind": "us"}))
+        .collect();
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    s["parties"] = json!(parties);
+    // Just under the cap: exactly MAX_RESPONSIBLE links load.
+    s["cybersecurity_goals"] =
+        json!([{"id": goal_id(1).to_string(), "name": "g", "controls": [], "responsible": ids}]);
+    Project::load(s.to_string().as_bytes(), builtin()).expect("at the cap loads");
+    // One over: the decode cap fires before model validation.
+    let mut over = ids;
+    over.push(json!(party_id(2000).to_string()));
+    s["cybersecurity_goals"] = json!([{"id": goal_id(1).to_string(), "name": "g",
+                                        "controls": [], "responsible": over}]);
     assert_limit(&snapshot_error(&s.to_string()), want);
 }
 
