@@ -5,7 +5,6 @@ orchestrator writes this file; agents only read the lines with their tag. One li
 lesson: the cause, not the symptom. At most 25. `seen: 3` gets `PROMOTE`, and `/factory retro`
 then proposes to turn it into a check or a rule.
 
-- L01 [builder] Run `cargo fmt --all` before every commit; the gate fails on formatting first. Evidence: jobs 128, 138 (workspace fmt failed after the code was right). seen: 2
 - L02 [builder] A new `Op` must be added to `common::record_every_op`, or the `undo_every_op` test in `aegis-client` fails. Evidence: job 138 (`SetThreatScaling`). seen: 1
 - L03 [builder] A new symbol used across modules needs its import where it is used; build the whole workspace, not only the crate you edited. Evidence: job 128 (`ElementRef` in `aegis-client`). seen: 1
 - L04 [planner] A removal op needs its guard decided in the spec: what blocks removal and how the inverse stays exact. Evidence: job 138 needed a follow-up fix commit. seen: 1
@@ -30,3 +29,4 @@ then proposes to turn it into a check or a rule.
 - L23 [builder] Thread a new parameter through the existing row builders with the smallest diff instead of rewriting them; a rewrite pushes the slice over the gate size limit. Evidence: job 121 slice 121b (gate FAIL at 350 lines, 216 after shrinking). seen: 1
 - L24 [planner] Adding a required field to a public struct forces an edit at every construction site, doc examples and test fixtures included; put those files in the allow list when cutting the slice, not after the gate fails. Evidence: job 131 slice 131a (error.rs doc tests and catalog.rs fixture out of scope, gate FAIL, re-cut and round 2). seen: 1
 - L25 [planner] A count rule copied from nav_counts ("Versions = baselines if >0") must name the state each rule reads; a fixed &Workspace signature made one rule impossible, and the builder documented the gap instead of the prompt being cut to fit the data available. Evidence: job 131 slice 131b (review CHANGES, NEXT: planner). seen: 1
+- L26 [orchestrator] The owner's session can move master while a job is in flight; before Merge, check `git merge-base master factory/<job>` and integrate master into the branch (builder, both sides kept) and re-gate against the new master, instead of merging into a moved master. Evidence: job 131 (129c landed mid-job, merge conflict in view.rs, integration round). seen: 1

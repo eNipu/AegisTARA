@@ -1,0 +1,46 @@
+{
+  "job": "131-process-map",
+  "slices": [
+    {
+      "id": "131a",
+      "title": "Optional clause_refs per page in the methodology pack format",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/methodology/mod.rs",
+        "crates/aegis-model/src/methodology/pack.rs",
+        "crates/aegis-model/src/methodology/catalog.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-model/benches/*"
+      ],
+      "max_lines": 450,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": ["cargo test --locked -p aegis-model"]
+    },
+    {
+      "id": "131b",
+      "title": "ProcessMapBox and process_map() in aegis-client",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/tests/process_map.rs",
+        "crates/aegis-model/src/methodology/mod.rs",
+        "crates/aegis-model/src/methodology/pack.rs",
+        "crates/aegis-model/src/methodology/catalog.rs",
+        "crates/aegis-model/src/store/mod.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-model/benches/*"
+      ],
+      "max_lines": 320,
+      "new_deps": false,
+      "ci": [],
+      "checks": ["cargo test --locked -p aegis-client --test process_map"]
+    }
+  ]
+}

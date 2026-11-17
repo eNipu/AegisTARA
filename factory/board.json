@@ -2022,7 +2022,7 @@
       "id": "131-process-map",
       "title": "Process map on the Overview: page-group boxes, clause_refs in packs (UI-18)",
       "branch": "factory/131-process-map",
-      "stage": "review",
+      "stage": "merged",
       "slice": "131b",
       "base": "a9b2cbce41f92f2efc1f5dce4de6d262a2ed03b6",
       "reviews": {
@@ -2051,10 +2051,20 @@
           "gate_tries": 1,
           "review_tries": 2,
           "lines": 170
+        },
+        {
+          "slice": "131b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "qwen4-max",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 240
         }
       ],
       "decision": null,
-      "updated": "2026-11-17T09:00:03Z"
+      "updated": "2026-11-17T13:37:02Z"
     },
     {
       "id": "129c-table-convention-rework",
