@@ -14,6 +14,7 @@ use aegis_server::{FolderStore, ProjectStore};
 
 const NO_PROJECT: &str = "the folder holds no project";
 const CANNOT_READ: &str = "cannot read the old project folder: ";
+const SHOWN_CHARS: usize = 64;
 
 /// Whether `root` is an old standalone project folder: its `manifest.json`
 /// is a file and it holds no workspace yet. O(1).
@@ -71,8 +72,8 @@ async fn read_old(root: &Path, methodology: &Methodology) -> Result<LoadedProjec
     {
         return Err(format!(
             "the folder uses {} {}, but this app opens {} {}",
-            meta.methodology_key,
-            meta.methodology_version,
+            shown(&meta.methodology_key),
+            shown(&meta.methodology_version),
             methodology.key(),
             methodology.version()
         ));
@@ -84,4 +85,15 @@ async fn read_old(root: &Path, methodology: &Methodology) -> Result<LoadedProjec
         .ok_or_else(|| NO_PROJECT.to_owned())?;
     drop(store);
     Ok(loaded)
+}
+
+/// At most `SHOWN_CHARS` characters of a value read from the old folder,
+/// with `…` when cut, so a message never carries unbounded input. O(1).
+fn shown(value: &str) -> String {
+    let mut chars = value.chars();
+    let mut out: String = chars.by_ref().take(SHOWN_CHARS).collect();
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    out
 }
