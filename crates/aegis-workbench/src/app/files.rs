@@ -1,17 +1,28 @@
 //! Open Folder, Save and Save As: the workbench over a project folder on
 //! disk. Reading and writing go through `WorkspaceFolder` and `convert`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aegis_client::explorer::ExplorerState;
 use aegis_client::folder::WorkspaceFolder;
 use aegis_client::settings::default_export_dir;
 use aegis_client::workspace::Workspace;
-use gpui::{Context, PathPromptOptions, SharedString, Window};
+use gpui::{Context, PathPromptOptions, PromptButton, PromptLevel, SharedString, Window};
 
 use super::workbench::{Body, OVERVIEW, Workbench, overview_lines, remove};
 use crate::convert::{convert_legacy, is_legacy};
+
+/// What happens once the project may be left.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Leave {
+    /// Close the window.
+    Close,
+    /// Quit the app.
+    Quit,
+    /// Open the project folder at the path.
+    Open(PathBuf),
+}
 
 impl Workbench {
     /// The open project folder; `None` for the in-memory sample.
@@ -50,10 +61,22 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        self.open_inner(path, true, window, cx)
+    }
+
+    /// `open_folder`, saving the unsaved changes of the open folder first
+    /// only when `save_first`.
+    fn open_inner(
+        &mut self,
+        path: &Path,
+        save_first: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         if self.folder.as_ref().is_some_and(|f| f.holds(path)) {
             return Ok(());
         }
-        if self.folder.is_some() && self.has_unsaved_changes() {
+        if save_first && self.folder.is_some() && self.has_unsaved_changes() {
             self.save(cx)?;
         }
         let converted = is_legacy(path);
@@ -132,19 +155,109 @@ impl Workbench {
         Ok(())
     }
 
-    /// Saves the layout and any unsaved changes before the window closes;
-    /// `false` (and the error in the status bar) when the save failed.
-    pub fn before_close(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Saves the layout and asks the window to close: `true` once leaving
+    /// is decided, otherwise the project is left as `leave` says and the
+    /// window closes later, or stays.
+    pub fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.save_layout(cx);
-        if self.folder.is_none() || !self.has_unsaved_changes() {
+        if self.leaving {
             return true;
         }
-        match self.save(cx) {
-            Ok(()) => true,
-            Err(e) => {
-                self.note = Some(e);
-                cx.notify();
-                false
+        self.leave(Leave::Close, window, cx);
+        false
+    }
+
+    /// Leaves the project, then does `then`. A folder that saves is saved
+    /// silently; the sample with changes, or a failed save, asks Save (or
+    /// Try again), Don't save or Cancel first. Does nothing while asking.
+    pub fn leave(&mut self, then: Leave, window: &mut Window, cx: &mut Context<Self>) {
+        if self.asking {
+            return;
+        }
+        if let Leave::Open(p) = &then
+            && self.folder.as_ref().is_some_and(|f| f.holds(p))
+        {
+            return;
+        }
+        if !self.has_unsaved_changes() {
+            self.finish(then, false, window, cx);
+        } else if self.folder.is_some() {
+            match self.save(cx) {
+                Ok(()) => self.finish(then, false, window, cx),
+                Err(e) => {
+                    self.note = Some(e.clone());
+                    cx.notify();
+                    self.ask(then, Some(e), window, cx);
+                }
+            }
+        } else {
+            self.ask(then, None, window, cx);
+        }
+    }
+
+    /// Shows the one dialog: Save As (sample) or Try again (failed save),
+    /// Don't save, Cancel.
+    fn ask(
+        &mut self,
+        then: Leave,
+        error: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.asking = true;
+        let name = [("name", self.name.as_str())];
+        let (title, detail, first) = match &error {
+            Some(e) => (
+                self.catalog.tr_with("workbench-leave-failed-title", &name),
+                self.catalog
+                    .tr_with("workbench-leave-failed", &[("error", e.as_str())]),
+                self.catalog.tr("workbench-leave-retry"),
+            ),
+            None => (
+                self.catalog.tr_with("workbench-leave-title", &name),
+                self.catalog.tr("workbench-leave-sample"),
+                self.catalog.tr("workbench-leave-save-as"),
+            ),
+        };
+        let answers = [
+            PromptButton::ok(first),
+            PromptButton::new(self.catalog.tr("workbench-leave-discard")),
+            PromptButton::cancel(self.catalog.tr("workbench-leave-cancel")),
+        ];
+        let rx = window.prompt(PromptLevel::Warning, &title, Some(&detail), &answers, cx);
+        let failed = error.is_some();
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = rx.await.ok();
+            let _ = this.update_in(cx, |w, window, cx| {
+                w.asking = false;
+                match answer {
+                    Some(0) if failed => w.leave(then, window, cx),
+                    Some(0) => w.prompt_save_as(Some(then), window, cx),
+                    Some(1) => w.finish(then, true, window, cx),
+                    _ => {}
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Does `then` now; `discard` opens another folder without saving the
+    /// open one first. A refused folder goes to the status bar.
+    fn finish(&mut self, then: Leave, discard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match then {
+            Leave::Close => {
+                self.leaving = true;
+                window.remove_window();
+            }
+            Leave::Quit => {
+                self.leaving = true;
+                cx.quit();
+            }
+            Leave::Open(p) => {
+                if let Err(e) = self.open_inner(&p, !discard, window, cx) {
+                    self.note = Some(e);
+                    cx.notify();
+                }
             }
         }
     }
@@ -175,23 +288,31 @@ impl Workbench {
                 && let Some(p) = paths.first()
             {
                 let _ = this.update_in(cx, |w, window, cx| {
-                    if let Err(e) = w.open_folder(p, window, cx) {
-                        w.note = Some(e);
-                        cx.notify();
-                    }
+                    w.leave(Leave::Open(p.clone()), window, cx);
                 });
             }
         })
         .detach();
     }
 
-    /// Asks the OS for a new folder and saves the project into it.
-    pub(super) fn prompt_save_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Asks the OS for a new folder and saves the project into it, then
+    /// does `then` when given and the save worked.
+    pub(super) fn prompt_save_as(
+        &mut self,
+        then: Option<Leave>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let rx = cx.prompt_for_new_path(&default_export_dir(), Some(&self.name));
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = rx.await {
-                let _ = this.update_in(cx, |w, window, cx| {
-                    if let Err(e) = w.save_as(&path, window, cx) {
+                let _ = this.update_in(cx, |w, window, cx| match w.save_as(&path, window, cx) {
+                    Ok(()) => {
+                        if let Some(then) = then {
+                            w.finish(then, false, window, cx);
+                        }
+                    }
+                    Err(e) => {
                         w.note = Some(e);
                         cx.notify();
                     }

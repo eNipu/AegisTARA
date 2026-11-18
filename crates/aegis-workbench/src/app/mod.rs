@@ -21,6 +21,7 @@ use gpui_component::{Root, Theme, ThemeMode};
 use crate::theme::{Tokens, dark, light, parse_hex};
 
 pub use commands::{bind_all, bindings, dispatch_id};
+pub use files::Leave;
 pub use icons::icon;
 pub use workbench::Workbench;
 
