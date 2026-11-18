@@ -2,7 +2,13 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn main() {
-    eprintln!("aegis-workbench: the window is not built yet");
+    aegis_workbench::app::run();
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn main() {
+    eprintln!("aegis-workbench runs on macOS and Windows");
     std::process::exit(1);
 }

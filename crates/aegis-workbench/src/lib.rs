@@ -7,3 +7,6 @@
 
 pub mod sample;
 pub mod theme;
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub mod app;

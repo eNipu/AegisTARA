@@ -213,3 +213,12 @@ explorer-item-definition = ⟦Itém défînîtîôn␣⟧
 explorer-risk-treatment = ⟦Rîsk tréâtmént␣⟧
 explorer-goals-and-claims = ⟦Gôâls ând clâîms␣⟧
 explorer-problems = ⟦Prôbléms␣⟧
+
+# Workbench window (job 182)
+workbench-overview = ⟦Ovérvîéw␣⟧
+workbench-inspector-empty = ⟦Séléct ân élémént tô séé îts détâîls.␣⟧
+workbench-bottom-empty = ⟦Prôbléms, chângés ând tâsk ôûtpût âppéâr héré în â lâtér vérsîôn.␣⟧
+workbench-status-unsaved = ⟦Sâmplé prôjéct în mémôrý: chângés âré nôt sâvéd.␣⟧
+workbench-explorer = ⟦Explôrér␣⟧
+workbench-inspector = ⟦Inspéctôr␣⟧
+workbench-bottom = ⟦Oûtpût␣⟧
