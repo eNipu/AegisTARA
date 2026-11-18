@@ -1667,6 +1667,11 @@ project ID the server already holds is refused untouched. Imported actors keep
 their names, so if their edits are inside the license's seat window they hold
 a seat after the next start (II.4.6).
 
+**Conversion.** The GPUI workbench converts such a folder on open with
+`aegis_workbench::convert::convert_legacy` (`FolderStore` plus
+`Loaded::rebuild`), writing workspace files beside the old files and deleting
+nothing (job 164).
+
 ## II.5 Client core (`crates/aegis-client`)
 
 ### II.5.1 Modules and types
