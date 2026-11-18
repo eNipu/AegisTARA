@@ -37,6 +37,10 @@ unic-langid.workspace = true
 base64.workspace = true
 flate2.workspace = true
 
+[features]
+# The OS keychain for remembered logins; the desktop apps turn it on.
+os-keychain = ["aegis-auth/os-keychain"]
+
 [dev-dependencies]
 http-body-util.workspace = true
 aegis-auth = { workspace = true, features = ["test-support"] }

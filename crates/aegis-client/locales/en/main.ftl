@@ -251,3 +251,20 @@ workbench-bottom = Output
 # Workbench explorer (job 182)
 workbench-picked = Moving { $name }: select a system and press { $keys }.
 workbench-list-empty = Nothing here yet.
+
+# Sign-in screen (job 208)
+signin-choose-server = Enter the address of your AegisTARA server.
+signin-connecting = Connecting to { $url }…
+signin-online = Signed in as { $user }.
+signin-offline = The server cannot be reached. { $reason }
+signin-login-company = Please log in with your company account.
+signin-login-password = Log in with your user name and password.
+signin-login-dev = Enter a user name.
+signin-error-credentials = The user name or password is wrong.
+signin-error-throttled = Too many failed logins. Try again in { $seconds } seconds.
+signin-error-password-off = Password login is off on this server. Use the company login.
+signin-error-password-turned-off = Password login was turned off. Log in with your company account.
+signin-error-unreachable = The server cannot be reached: { $error }
+signin-error-not-reached = Could not reach { $url }. { $error }
+signin-error-too-old = This server is too old for this app (it cannot tell how to log in). Update the server.
+signin-error-login-unfinished = The login did not finish: { $error }

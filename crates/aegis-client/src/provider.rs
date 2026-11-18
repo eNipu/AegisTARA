@@ -1,4 +1,4 @@
-//! How the shell logs in.
+//! How the desktop apps log in.
 //!
 //! Three ways, one trait (`CredentialProvider`). The server says which one
 //! it wants (`GetLoginOptions`), so the user only types the server address:
@@ -16,16 +16,19 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::connection::{DevLogin, PasswordLogin};
 use aegis_auth::http::HyperClient;
 use aegis_auth::layer::CredentialProvider;
 use aegis_auth::oidc::{OidcClient, OidcConfig};
 use aegis_auth::session::{Session as AuthSession, SystemBrowser};
-use aegis_auth::store::{MemorySecretStore, OsKeychain, SecretStore, Vault};
+#[cfg(feature = "os-keychain")]
+use aegis_auth::store::OsKeychain;
+use aegis_auth::store::{MemorySecretStore, SecretStore, Vault};
 use aegis_auth::{AuthError, Credentials, system_clock};
-use aegis_client::connection::{DevLogin, PasswordLogin};
 use tokio::sync::OnceCell;
 
-type Secrets = Arc<dyn SecretStore>;
+/// Where remembered logins are kept.
+pub type Secrets = Arc<dyn SecretStore>;
 
 /// Longest the user may take to finish logging in.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -64,6 +67,7 @@ impl OidcProvider {
     async fn session(&self) -> Result<&Arc<AuthSession<HyperClient, Secrets>>, AuthError> {
         self.session
             .get_or_try_init(|| async {
+                #[cfg(feature = "os-keychain")]
                 let secrets: Secrets = match OsKeychain::open("AegisTARA") {
                     Ok(keychain) => Arc::new(keychain),
                     Err(e) => {
@@ -72,6 +76,11 @@ impl OidcProvider {
                         tracing::warn!(error = %e, "no OS keychain; the login will not be remembered");
                         Arc::new(MemorySecretStore::new())
                     }
+                };
+                #[cfg(not(feature = "os-keychain"))]
+                let secrets: Secrets = {
+                    tracing::warn!("no OS keychain; the login will not be remembered");
+                    Arc::new(MemorySecretStore::new())
                 };
                 let mut config = OidcConfig::new(&self.settings.issuer, &self.settings.client_id);
                 config.resource.clone_from(&self.settings.resource);
@@ -107,13 +116,27 @@ impl OidcProvider {
 /// Opens the OS keychain, or a memory store on a machine without one.
 #[must_use]
 pub fn secrets() -> Secrets {
-    match OsKeychain::open("AegisTARA") {
-        Ok(keychain) => Arc::new(keychain),
-        Err(e) => {
-            tracing::warn!(error = %e, "no OS keychain; logins will not be remembered");
-            Arc::new(MemorySecretStore::new())
+    #[cfg(feature = "os-keychain")]
+    {
+        match OsKeychain::open("AegisTARA") {
+            Ok(keychain) => Arc::new(keychain),
+            Err(e) => {
+                tracing::warn!(error = %e, "no OS keychain; logins will not be remembered");
+                Arc::new(MemorySecretStore::new())
+            }
         }
     }
+    #[cfg(not(feature = "os-keychain"))]
+    {
+        tracing::warn!("no OS keychain; logins will not be remembered");
+        Arc::new(MemorySecretStore::new())
+    }
+}
+
+/// A store in memory only: for tests and for machines without a keychain.
+#[must_use]
+pub fn memory_secrets() -> Secrets {
+    Arc::new(MemorySecretStore::new())
 }
 
 /// Password login, with the session token optionally kept in the keychain.
