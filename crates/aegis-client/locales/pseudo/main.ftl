@@ -265,3 +265,18 @@ license-invalid = ⟦Thé lîcénsé fîlé cânnôt bé ûséd: { $error }␣�
 license-not-yet-valid = ⟦Thîs lîcénsé îs nôt vâlîd ýét. Chéck thé cômpûtér's dâté.␣⟧
 workbench-needs-license = ⟦Opén â prôjéct fôldér frôm thé stârt scréén, wîth ýôûr lîcénsé fîlé.␣⟧
 workbench-read-only-expired = ⟦Réâd-ônlý: thé lîcénsé ôf { $customer } hâs éxpîréd.␣⟧
+
+# Start screen (job 208)
+start-local = ⟦Ôn thîs cômpûtér␣⟧
+start-folder = ⟦Prôjéct fôldér␣⟧
+start-license = ⟦Lîcénsé fîlé␣⟧
+start-browse = ⟦Brôwsé…␣⟧
+start-open = ⟦Ôpén␣⟧
+start-new = ⟦Néw wôrkspâcé…␣⟧
+start-sample = ⟦Trý thé sâmplé␣⟧
+start-license-ok = ⟦Lîcénséd tô { $customer }, { $days } dâýs léft.␣⟧
+start-license-grace = ⟦Lîcénséd tô { $customer }: thé lîcénsé hâs éndéd, { $days } dâýs ôf grâcé léft.␣⟧
+start-license-expired = ⟦Thé lîcénsé ôf { $customer } hâs éxpîréd: prôjécts ôpén réâd-ônlý.␣⟧
+start-needs-folder = ⟦Chôôsé â prôjéct fôldér.␣⟧
+start-needs-license = ⟦Chôôsé ýôûr lîcénsé fîlé.␣⟧
+start-folder-not-empty = ⟦{ $path } îs nôt émptý. Chôôsé ân émptý ôr néw fôldér fôr â néw wôrkspâcé.␣⟧

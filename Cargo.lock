@@ -317,6 +317,7 @@ name = "aegis-workbench"
 version = "0.1.0"
 dependencies = [
  "aegis-client",
+ "aegis-license",
  "aegis-model",
  "aegis-server",
  "gpui-component",

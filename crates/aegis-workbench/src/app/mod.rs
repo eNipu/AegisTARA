@@ -5,6 +5,7 @@ mod files;
 mod icons;
 mod layout;
 mod panels;
+mod start;
 mod workbench;
 
 use std::path::PathBuf;
@@ -23,6 +24,7 @@ use crate::theme::{Tokens, dark, light, parse_hex};
 pub use commands::{bind_all, bindings, dispatch_id};
 pub use files::Leave;
 pub use icons::icon;
+pub use start::{StartConfig, StartEvent, StartScreen};
 pub use workbench::Workbench;
 
 /// Opens the workbench window, with the project folder `folder` when

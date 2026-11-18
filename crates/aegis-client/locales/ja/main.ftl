@@ -264,3 +264,18 @@ license-invalid = ライセンスファイルを使用できません: { $error 
 license-not-yet-valid = このライセンスはまだ有効ではありません。コンピューターの日付を確認してください。
 workbench-needs-license = スタート画面から、ライセンスファイルを指定してプロジェクトフォルダーを開いてください。
 workbench-read-only-expired = 読み取り専用: { $customer } のライセンスの有効期限が切れています。
+
+# Start screen (job 208)
+start-local = このコンピューター
+start-folder = プロジェクトフォルダー
+start-license = ライセンスファイル
+start-browse = 参照…
+start-open = 開く
+start-new = 新しいワークスペース…
+start-sample = サンプルを試す
+start-license-ok = { $customer } にライセンスされています。残り { $days } 日です。
+start-license-grace = { $customer } にライセンスされています: ライセンス期間は終了しました。猶予期間は残り { $days } 日です。
+start-license-expired = { $customer } のライセンスは期限切れです: プロジェクトは読み取り専用で開きます。
+start-needs-folder = プロジェクトフォルダーを選んでください。
+start-needs-license = ライセンスファイルを選んでください。
+start-folder-not-empty = { $path } は空ではありません。新しいワークスペースには、空のフォルダーか新しいフォルダーを選んでください。
