@@ -68,6 +68,7 @@ aegis-client = { path = "crates/aegis-client" }
 aegis-server = { path = "crates/aegis-server" }
 aegis-shell = { path = "crates/aegis-shell" }
 aegis-license = { path = "crates/aegis-license" }
+aegis-workbench = { path = "crates/aegis-workbench" }
 png = "0.18"
 rstar = "0.12"
 # Skia is the default GPU renderer (ADR 0063, D25); the software renderer
@@ -77,6 +78,10 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 slint-build = "=1.18.1"
 insta = "1"
 fluent-bundle = "0.15"
+# GPUI workbench toolkit (job 182, ADR 0066); only aegis-workbench may use it.
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui-component = "=0.9.1"
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders"] }
 unic-langid = "0.9"
 
 # Shipped binaries (standards R10). Tests and benches use the dev profile.

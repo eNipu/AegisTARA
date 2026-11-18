@@ -163,3 +163,74 @@ party-us = Us
 party-customer = Customer
 party-supplier = Supplier
 party-other = Other
+
+# Workbench commands (job 182)
+cmd-palette = Go to anything
+cmd-palette-tip = Find a command or any element by ID or name.
+cmd-undo = Undo
+cmd-undo-tip = Take back the last change.
+cmd-redo = Redo
+cmd-redo-tip = Make the change you took back again.
+cmd-toggle-explorer = Show or hide the explorer
+cmd-toggle-explorer-tip = Open or close the project tree on the left.
+cmd-toggle-inspector = Show or hide the inspector
+cmd-toggle-inspector-tip = Open or close the details panel on the right.
+cmd-toggle-bottom-dock = Show or hide the bottom panel
+cmd-toggle-bottom-dock-tip = Open or close the panel at the bottom.
+cmd-focus-explorer = Focus the explorer
+cmd-focus-explorer-tip = Move the keyboard to the project tree.
+cmd-filter-explorer = Filter the explorer
+cmd-filter-explorer-tip = Show only tree items whose name matches.
+cmd-explorer-down = Next item
+cmd-explorer-down-tip = Select the item below.
+cmd-explorer-up = Previous item
+cmd-explorer-up-tip = Select the item above.
+cmd-explorer-expand = Expand
+cmd-explorer-expand-tip = Show the items inside this one.
+cmd-explorer-collapse = Collapse
+cmd-explorer-collapse-tip = Hide the items inside this one.
+cmd-open-selected = Open
+cmd-open-selected-tip = Open the selected item in a tab.
+cmd-pick-up = Pick up to move
+cmd-pick-up-tip = Mark the selected item to move it elsewhere.
+cmd-drop-here = Move here
+cmd-drop-here-tip = Move the picked-up item under the selected one.
+cmd-close-tab = Close tab
+cmd-close-tab-tip = Close the tab you are looking at.
+cmd-next-tab = Next tab
+cmd-next-tab-tip = Go to the tab on the right.
+cmd-previous-tab = Previous tab
+cmd-previous-tab-tip = Go to the tab on the left.
+cmd-toggle-theme = Switch light or dark
+cmd-toggle-theme-tip = Change between the light and the dark look.
+cmd-reset-layout = Reset the layout
+cmd-reset-layout-tip = Put every panel back where it started.
+cmd-show-shortcuts = Keyboard shortcuts
+cmd-show-shortcuts-tip = List every command and its keys.
+cmd-quit = Quit
+cmd-quit-tip = Close AegisTARA.
+
+# Workbench explorer (job 182)
+explorer-overview = Overview
+explorer-project-definition = Project definition
+explorer-parties = Responsible parties
+explorer-shared-analysis = Shared analysis
+explorer-systems = Systems
+explorer-not-in-system = Not in a system
+explorer-item-definition = Item definition
+explorer-risk-treatment = Risk treatment
+explorer-goals-and-claims = Goals and claims
+explorer-problems = Problems
+
+# Workbench window (job 182)
+workbench-overview = Overview
+workbench-inspector-empty = Select an element to see its details.
+workbench-bottom-empty = Problems, changes and task output appear here in a later version.
+workbench-status-unsaved = Sample project in memory: changes are not saved.
+workbench-explorer = Explorer
+workbench-inspector = Inspector
+workbench-bottom = Output
+
+# Workbench explorer (job 182)
+workbench-picked = Moving { $name }: select a system and press { $keys }.
+workbench-list-empty = Nothing here yet.

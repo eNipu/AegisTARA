@@ -155,3 +155,74 @@ party-us = ⟦Ûs␣⟧
 party-customer = ⟦Cûstômér␣⟧
 party-supplier = ⟦Sûpplîér␣⟧
 party-other = ⟦Ôthér␣⟧
+
+# Workbench commands (job 182)
+cmd-palette = ⟦Gô tô ânýthîng␣⟧
+cmd-palette-tip = ⟦Fînd â cômmând ôr âný élémént bý ÎD ôr nâmé.␣⟧
+cmd-undo = ⟦Ûndô␣⟧
+cmd-undo-tip = ⟦Tâké bâck thé lâst chângé.␣⟧
+cmd-redo = ⟦Rédô␣⟧
+cmd-redo-tip = ⟦Mâké thé chângé ýôû tôôk bâck âgâîn.␣⟧
+cmd-toggle-explorer = ⟦Shôw ôr hîdé thé éxplôrér␣⟧
+cmd-toggle-explorer-tip = ⟦Ôpén ôr clôsé thé prôjéct tréé ôn thé léft.␣⟧
+cmd-toggle-inspector = ⟦Shôw ôr hîdé thé înspéctôr␣⟧
+cmd-toggle-inspector-tip = ⟦Ôpén ôr clôsé thé détâîls pânél ôn thé rîght.␣⟧
+cmd-toggle-bottom-dock = ⟦Shôw ôr hîdé thé bôttôm pânél␣⟧
+cmd-toggle-bottom-dock-tip = ⟦Ôpén ôr clôsé thé pânél ât thé bôttôm.␣⟧
+cmd-focus-explorer = ⟦Fôcûs thé éxplôrér␣⟧
+cmd-focus-explorer-tip = ⟦Môvé thé kéýbôârd tô thé prôjéct tréé.␣⟧
+cmd-filter-explorer = ⟦Fîltér thé éxplôrér␣⟧
+cmd-filter-explorer-tip = ⟦Shôw ônlý tréé îtéms whôsé nâmé mâtchés.␣⟧
+cmd-explorer-down = ⟦Néxt îtém␣⟧
+cmd-explorer-down-tip = ⟦Séléct thé îtém bélôw.␣⟧
+cmd-explorer-up = ⟦Prévîôûs îtém␣⟧
+cmd-explorer-up-tip = ⟦Séléct thé îtém âbôvé.␣⟧
+cmd-explorer-expand = ⟦Éxpând␣⟧
+cmd-explorer-expand-tip = ⟦Shôw thé îtéms însîdé thîs ôné.␣⟧
+cmd-explorer-collapse = ⟦Côllâpsé␣⟧
+cmd-explorer-collapse-tip = ⟦Hîdé thé îtéms însîdé thîs ôné.␣⟧
+cmd-open-selected = ⟦Ôpén␣⟧
+cmd-open-selected-tip = ⟦Ôpén thé séléctéd îtém în â tâb.␣⟧
+cmd-pick-up = ⟦Pîck ûp tô môvé␣⟧
+cmd-pick-up-tip = ⟦Mârk thé séléctéd îtém tô môvé ît élséwhéré.␣⟧
+cmd-drop-here = ⟦Môvé héré␣⟧
+cmd-drop-here-tip = ⟦Môvé thé pîckéd-ûp îtém ûndér thé séléctéd ôné.␣⟧
+cmd-close-tab = ⟦Clôsé tâb␣⟧
+cmd-close-tab-tip = ⟦Clôsé thé tâb ýôû âré lôôkîng ât.␣⟧
+cmd-next-tab = ⟦Néxt tâb␣⟧
+cmd-next-tab-tip = ⟦Gô tô thé tâb ôn thé rîght.␣⟧
+cmd-previous-tab = ⟦Prévîôûs tâb␣⟧
+cmd-previous-tab-tip = ⟦Gô tô thé tâb ôn thé léft.␣⟧
+cmd-toggle-theme = ⟦Swîtch lîght ôr dârk␣⟧
+cmd-toggle-theme-tip = ⟦Chângé bétwéén thé lîght ând thé dârk lôôk.␣⟧
+cmd-reset-layout = ⟦Rését thé lâýôût␣⟧
+cmd-reset-layout-tip = ⟦Pût évérý pânél bâck whéré ît stârtéd.␣⟧
+cmd-show-shortcuts = ⟦Kéýbôârd shôrtcûts␣⟧
+cmd-show-shortcuts-tip = ⟦Lîst évérý cômmând ând îts kéýs.␣⟧
+cmd-quit = ⟦Qûît␣⟧
+cmd-quit-tip = ⟦Clôsé AegisTARA.␣⟧
+
+# Workbench explorer (job 182)
+explorer-overview = ⟦Ovérvîéw␣⟧
+explorer-project-definition = ⟦Prôjéct défînîtîôn␣⟧
+explorer-parties = ⟦Réspônsîblé pârtîés␣⟧
+explorer-shared-analysis = ⟦Shâréd ânâlýsîs␣⟧
+explorer-systems = ⟦Sýstéms␣⟧
+explorer-not-in-system = ⟦Nôt în â sýstém␣⟧
+explorer-item-definition = ⟦Itém défînîtîôn␣⟧
+explorer-risk-treatment = ⟦Rîsk tréâtmént␣⟧
+explorer-goals-and-claims = ⟦Gôâls ând clâîms␣⟧
+explorer-problems = ⟦Prôbléms␣⟧
+
+# Workbench window (job 182)
+workbench-overview = ⟦Ovérvîéw␣⟧
+workbench-inspector-empty = ⟦Séléct ân élémént tô séé îts détâîls.␣⟧
+workbench-bottom-empty = ⟦Prôbléms, chângés ând tâsk ôûtpût âppéâr héré în â lâtér vérsîôn.␣⟧
+workbench-status-unsaved = ⟦Sâmplé prôjéct în mémôrý: chângés âré nôt sâvéd.␣⟧
+workbench-explorer = ⟦Explôrér␣⟧
+workbench-inspector = ⟦Inspéctôr␣⟧
+workbench-bottom = ⟦Oûtpût␣⟧
+
+# Workbench explorer (job 182)
+workbench-picked = ⟦Môvîng { $name }: séléct â sýstém ând préss { $keys }.␣⟧
+workbench-list-empty = ⟦Nôthîng héré ýét.␣⟧
