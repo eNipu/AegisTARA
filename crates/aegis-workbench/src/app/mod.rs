@@ -1,7 +1,7 @@
 //! The GPUI window: theme set-up, the `Workbench` view and its panels.
 
+mod commands;
 mod icons;
-mod keys;
 mod layout;
 mod panels;
 mod workbench;
@@ -18,19 +18,20 @@ use gpui_component::{Root, Theme, ThemeMode};
 
 use crate::theme::{Tokens, dark, light, parse_hex};
 
+pub use commands::{bind_all, bindings, dispatch_id};
 pub use icons::icon;
-pub use keys::bind_keys;
 pub use workbench::Workbench;
 
 /// Opens the workbench window and runs until it closes.
 pub fn run() {
     gpui_platform::application().run(|cx| {
         gpui_component::init(cx);
-        bind_keys(cx);
+        bind_all(cx);
         let path = config_dir().map(|dir| Settings::path_in(&dir));
         let settings = path.as_deref().map(Settings::load).unwrap_or_default();
         let appearance = settings.appearance();
         let catalog = Rc::new(Catalog::load(settings.language()));
+        commands::set_menus(&catalog, cx);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

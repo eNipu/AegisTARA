@@ -10,7 +10,7 @@ use aegis_client::i18n::{Catalog, Language};
 use aegis_client::settings::Appearance;
 use aegis_client::systems::system_rows;
 use aegis_client::view::Selection;
-use aegis_workbench::app::{Workbench, apply_appearance, bind_keys};
+use aegis_workbench::app::{Workbench, apply_appearance, bind_all};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
 fn keys(id: &str) -> String {
@@ -27,7 +27,7 @@ fn press(cx: &mut VisualTestContext, id: &str) {
 fn open(cx: &mut TestAppContext) -> (Entity<Workbench>, &mut VisualTestContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        bind_keys(cx);
+        bind_all(cx);
     });
     let catalog = Rc::new(Catalog::load(Language::En));
     let (view, cx) = cx.add_window_view(|window, cx| {
