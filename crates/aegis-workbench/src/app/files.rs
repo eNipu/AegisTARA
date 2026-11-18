@@ -12,7 +12,7 @@ use aegis_client::workspace::Workspace;
 use aegis_model::Project;
 use gpui::{Context, PathPromptOptions, PromptButton, PromptLevel, SharedString, Window};
 
-use super::workbench::{Body, OVERVIEW, Workbench, overview_lines, remove};
+use super::workbench::{Body, OVERVIEW, Workbench, WorkbenchEvent, overview_lines, remove};
 use crate::convert::{convert_legacy, is_legacy};
 
 /// What happens once the project may be left.
@@ -24,6 +24,8 @@ pub enum Leave {
     Quit,
     /// Open the project folder at the path.
     Open(PathBuf),
+    /// Go back to the start screen.
+    Start,
 }
 
 impl Workbench {
@@ -339,6 +341,7 @@ impl Workbench {
                     cx.notify();
                 }
             }
+            Leave::Start => cx.emit(WorkbenchEvent::BackToStart),
         }
     }
 
