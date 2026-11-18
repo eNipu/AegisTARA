@@ -1,6 +1,7 @@
 //! The GPUI window: theme set-up, the `Workbench` view and its panels.
 
 mod icons;
+mod keys;
 mod layout;
 mod panels;
 mod workbench;
@@ -18,12 +19,14 @@ use gpui_component::{Root, Theme, ThemeMode};
 use crate::theme::{Tokens, dark, light, parse_hex};
 
 pub use icons::icon;
+pub use keys::bind_keys;
 pub use workbench::Workbench;
 
 /// Opens the workbench window and runs until it closes.
 pub fn run() {
     gpui_platform::application().run(|cx| {
         gpui_component::init(cx);
+        bind_keys(cx);
         let path = config_dir().map(|dir| Settings::path_in(&dir));
         let settings = path.as_deref().map(Settings::load).unwrap_or_default();
         let appearance = settings.appearance();
