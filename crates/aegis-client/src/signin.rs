@@ -7,6 +7,9 @@ use crate::i18n::Catalog;
 use crate::state::{ConnectionView, ProjectEntry};
 use crate::transport::TransportKind;
 
+mod flow;
+pub use flow::SignIn;
+
 /// Where the sign-in stands: the five states of the Slint shell (codes 4, 0,
 /// 1, 2 and 3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
