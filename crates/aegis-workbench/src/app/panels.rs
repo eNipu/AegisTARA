@@ -1,12 +1,13 @@
 //! The dock panels of the skeleton. They only show what `aegis-client` and
 //! the project already computed.
 
-use aegis_client::explorer::{ExplorerKey, ExplorerRow, Mark};
+use aegis_client::explorer::{ExplorerKey, ExplorerRow, Folder, Mark};
+use aegis_client::view::Selection;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, WeakEntity, Window, div, px,
+    App, AppContext as _, Context, Div, FocusHandle, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
 };
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
@@ -38,7 +39,7 @@ macro_rules! dock_panel {
     };
 }
 
-/// The explorer dock: one line per [`ExplorerRow`]. Clicks and double clicks
+/// The explorer dock: one line per [`ExplorerRow`]. Clicks, drags and drops
 /// go to the [`Workbench`], which owns the explorer state.
 pub struct ExplorerPanel {
     focus_handle: FocusHandle,
@@ -86,6 +87,23 @@ impl ExplorerPanel {
 }
 
 dock_panel!(ExplorerPanel, "ExplorerPanel");
+
+/// What a dragged component looks like under the pointer.
+struct DragLabel(SharedString);
+
+impl Render for DragLabel {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .px_2()
+            .py_0p5()
+            .text_sm()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .child(self.0.clone())
+    }
+}
 
 /// Runs `f` on the workbench, if it is still open.
 fn on_workbench(
@@ -145,7 +163,15 @@ fn row(
         let c = if n > 0 { ink } else { grey };
         div().text_color(c).child(n.to_string())
     });
-    let click = wb.clone();
+    let (click, drop) = (wb.clone(), wb.clone());
+    let draggable = matches!(
+        key,
+        ExplorerKey::Element(_, Folder::Components, Selection::Component(_))
+    );
+    let target = matches!(
+        key,
+        ExplorerKey::System(_) | ExplorerKey::Unassigned | ExplorerKey::Folder(..)
+    );
     let label = SharedString::from(r.label.clone());
     let wash = color(&t.accent_wash);
     div()
@@ -174,6 +200,16 @@ fn row(
                 }
             });
         })
+        .when(draggable, |d| {
+            d.on_drag(key, move |_, _, _, cx| cx.new(|_| DragLabel(label.clone())))
+        })
+        .when(target, |d| {
+            d.drag_over::<ExplorerKey>(move |s, _, _, _| s.bg(wash))
+                .on_drop(move |dragged: &ExplorerKey, window, cx| {
+                    let dragged = *dragged;
+                    on_workbench(&drop, window, cx, |w, _, cx| w.drop_on(dragged, key, cx));
+                })
+        })
 }
 
 impl Render for ExplorerPanel {
@@ -188,6 +224,7 @@ impl Render for ExplorerPanel {
             .iter()
             .enumerate()
             .map(|(ix, r)| row(ix, r, self.selected == Some(r.key), t, &self.workbench));
+        let wb = self.workbench.clone();
         div()
             .id("explorer")
             .key_context("Explorer")
@@ -202,6 +239,12 @@ impl Render for ExplorerPanel {
                 MouseButton::Left,
                 cx.listener(|p, _, window, cx| window.focus(&p.focus_handle, cx)),
             )
+            .on_key_down(move |ev, window, cx| {
+                // Escape has no command-table row: it only lets go.
+                if ev.keystroke.key == "escape" {
+                    on_workbench(&wb, window, cx, |w, _, cx| w.let_go(cx));
+                }
+            })
             .children(rows)
     }
 }
@@ -227,6 +270,19 @@ macro_rules! text_panel {
             ) -> Self {
                 let focus_handle = cx.focus_handle();
                 Self { focus_handle, title, heading, lines }
+            }
+
+            /// Replaces the title, heading and lines.
+            #[allow(dead_code)] // only the list and element tabs change
+            pub fn set(
+                &mut self,
+                title: SharedString,
+                heading: Option<SharedString>,
+                lines: Vec<SharedString>,
+                cx: &mut Context<Self>,
+            ) {
+                (self.title, self.heading, self.lines) = (title, heading, lines);
+                cx.notify();
             }
         }
 

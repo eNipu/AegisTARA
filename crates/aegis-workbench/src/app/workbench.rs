@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use aegis_client::command_table::{command, shortcut_label};
 use aegis_client::explorer::{
-    ExplorerIndex, ExplorerKey, ExplorerRow, ExplorerState, Folder, Owner,
+    ExplorerIndex, ExplorerKey, ExplorerRow, ExplorerState, Folder, Owner, drop_edit,
 };
 use aegis_client::i18n::Catalog;
 use aegis_client::pages::{problems, selection_visual_id};
@@ -16,8 +17,8 @@ use aegis_client::view::Selection;
 use aegis_client::workspace::Workspace;
 use aegis_model::ElementNamesDef;
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Subscription, Window, div, px,
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::dock::{
@@ -25,8 +26,13 @@ use gpui_component::dock::{
 };
 
 use super::apply_appearance;
+use super::keys::{
+    DropHere, ExplorerCollapse, ExplorerDown, ExplorerExpand, ExplorerUp, OpenSelected, PickUp,
+    Redo, Undo,
+};
 use super::layout::{apply_layout, default_layout, read_layout};
 use super::panels::{BottomPanel, ElementTab, ExplorerPanel, InspectorPanel, ListTab, OverviewTab};
+use crate::local;
 use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
 
 /// The tab Root, Overview and Systems open.
@@ -34,8 +40,16 @@ const OVERVIEW: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Overvi
 /// The one problems tab every Problems folder opens.
 const PROBLEMS: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Problems);
 
+/// What a center tab shows, to refresh it after a change.
+enum Body {
+    Overview,
+    List(Entity<ListTab>),
+    Element(Entity<ElementTab>),
+}
+
 struct Tab {
     handle: Arc<dyn BasePanelView>,
+    body: Body,
 }
 
 /// The window's root view.
@@ -45,9 +59,12 @@ pub struct Workbench {
     state: ExplorerState,
     catalog: Rc<Catalog>,
     names: ElementNamesDef,
+    actor: String,
     explorer: Entity<ExplorerPanel>,
     area: Entity<DockArea>,
     tabs: HashMap<ExplorerKey, Tab>,
+    picked: Option<(ExplorerKey, String)>,
+    note: Option<String>,
     status: SharedString,
     settings_path: Option<PathBuf>,
     saved: Option<WorkbenchLayout>,
@@ -92,6 +109,12 @@ fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
         Selection::Party(_) | Selection::Condition(_) => return None,
     };
     Some(n.singular.to_string())
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 impl Workbench {
@@ -170,6 +193,7 @@ impl Workbench {
         });
         let overview = Tab {
             handle: panel_handle(overview),
+            body: Body::Overview,
         };
         window.focus(&gpui::Focusable::focus_handle(&explorer, cx), cx);
         let mut wb = Self {
@@ -178,9 +202,12 @@ impl Workbench {
             state: ExplorerState::default(),
             catalog,
             names,
+            actor: local::actor(),
             explorer,
             area,
             tabs: HashMap::from([(OVERVIEW, overview)]),
+            picked: None,
+            note: None,
             status,
             settings_path,
             saved: Some(saved),
@@ -229,6 +256,11 @@ impl Workbench {
         &self.area
     }
 
+    /// The component being moved with the keyboard, if any.
+    pub fn picked(&self) -> Option<ExplorerKey> {
+        self.picked.as_ref().map(|(k, _)| *k)
+    }
+
     fn show_rows(&mut self, cx: &mut Context<Self>) {
         let rows = self.index.rows(&self.state);
         let selected = self.state.selected;
@@ -269,13 +301,17 @@ impl Workbench {
             };
             let tab = if let ExplorerKey::Element(..) = key {
                 let e = cx.new(|cx| ElementTab::new(title, None, lines, cx));
+                let handle = panel_handle(e.clone());
                 Tab {
-                    handle: panel_handle(e),
+                    handle,
+                    body: Body::Element(e),
                 }
             } else {
                 let l = cx.new(|cx| ListTab::new(title, None, lines, cx));
+                let handle = panel_handle(l.clone());
                 Tab {
-                    handle: panel_handle(l),
+                    handle,
+                    body: Body::List(l),
                 }
             };
             self.tabs.insert(key, tab);
@@ -332,6 +368,43 @@ impl Workbench {
         Some((title, if lines.is_empty() { empty() } else { lines }))
     }
 
+    /// Rebuilds the tree and every open tab after the project changed.
+    fn changed(&mut self, res: Result<(), String>, cx: &mut Context<Self>) {
+        self.note = res.err();
+        self.index = ExplorerIndex::build(&self.workspace, &self.names, &self.catalog, SAMPLE_NAME);
+        let updates: Vec<_> = self
+            .tabs
+            .iter()
+            .filter_map(|(k, t)| Some((self.content(*k)?, &t.body)))
+            .collect();
+        for ((title, lines), body) in updates {
+            match body {
+                Body::Overview => {}
+                Body::List(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
+                Body::Element(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
+            }
+        }
+        self.show_rows(cx);
+    }
+
+    /// Drops `dragged` on `target`: moves a component to another system.
+    pub fn drop_on(&mut self, dragged: ExplorerKey, target: ExplorerKey, cx: &mut Context<Self>) {
+        let Some(edit) = drop_edit(self.workspace.project(), &dragged, &target) else {
+            return;
+        };
+        let res = local::apply_edit(&mut self.workspace, &edit, &self.actor, now_ms());
+        if res.is_ok() {
+            self.picked = None;
+        }
+        self.changed(res, cx);
+    }
+
+    /// Lets go of the component picked up with the keyboard.
+    pub fn let_go(&mut self, cx: &mut Context<Self>) {
+        self.picked = None;
+        cx.notify();
+    }
+
     fn save_layout(&mut self, cx: &App) {
         let Some(path) = &self.settings_path else {
             return;
@@ -347,6 +420,61 @@ impl Workbench {
             eprintln!("could not save the layout: {err}");
         }
         self.saved = Some(layout);
+    }
+
+    fn rows_then(&mut self, cx: &mut Context<Self>, f: fn(&mut ExplorerState, &[ExplorerRow])) {
+        let rows = self.index.rows(&self.state);
+        f(&mut self.state, &rows);
+        self.show_rows(cx);
+    }
+
+    fn on_open(&mut self, _: &OpenSelected, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(key) = self.state.selected {
+            self.open(key, window, cx);
+        }
+    }
+
+    fn on_pick_up(&mut self, _: &PickUp, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.state.selected else {
+            return;
+        };
+        if let ExplorerKey::Element(_, Folder::Components, Selection::Component(_)) = key {
+            let label = self.row(key).map(|r| r.label).unwrap_or_default();
+            self.picked = Some((key, label));
+            cx.notify();
+        }
+    }
+
+    fn on_drop_here(&mut self, _: &DropHere, _: &mut Window, cx: &mut Context<Self>) {
+        if let (Some((dragged, _)), Some(target)) = (self.picked.clone(), self.state.selected) {
+            self.drop_on(dragged, target, cx);
+        }
+    }
+
+    fn on_undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        let res = local::undo(&mut self.workspace);
+        self.changed(res, cx);
+    }
+
+    fn on_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        let res = local::redo(&mut self.workspace);
+        self.changed(res, cx);
+    }
+
+    fn status_text(&self) -> SharedString {
+        if let Some(note) = &self.note {
+            return note.clone().into();
+        }
+        let Some((_, name)) = &self.picked else {
+            return self.status.clone();
+        };
+        let mac = cfg!(target_os = "macos");
+        let keys = command("drop-here")
+            .and_then(|c| c.keys_for(mac))
+            .map(|k| shortcut_label(&k, mac))
+            .unwrap_or_default();
+        let args = [("name", name.as_str()), ("keys", keys.as_str())];
+        self.catalog.tr_with("workbench-picked", &args).into()
     }
 }
 
@@ -364,6 +492,7 @@ fn shared(key: ExplorerKey) -> ExplorerKey {
 
 impl Render for Workbench {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status = self.status_text();
         let theme = cx.theme();
         let bar = || {
             div()
@@ -374,6 +503,22 @@ impl Render for Workbench {
                 .border_color(theme.border)
         };
         div()
+            .key_context("Workbench")
+            .on_action(
+                cx.listener(|w, _: &ExplorerDown, _, cx| w.rows_then(cx, ExplorerState::down)),
+            )
+            .on_action(cx.listener(|w, _: &ExplorerUp, _, cx| w.rows_then(cx, ExplorerState::up)))
+            .on_action(
+                cx.listener(|w, _: &ExplorerExpand, _, cx| w.rows_then(cx, ExplorerState::right)),
+            )
+            .on_action(
+                cx.listener(|w, _: &ExplorerCollapse, _, cx| w.rows_then(cx, ExplorerState::left)),
+            )
+            .on_action(cx.listener(Self::on_open))
+            .on_action(cx.listener(Self::on_pick_up))
+            .on_action(cx.listener(Self::on_drop_here))
+            .on_action(cx.listener(Self::on_undo))
+            .on_action(cx.listener(Self::on_redo))
             .size_full()
             .flex()
             .flex_col()
@@ -387,7 +532,7 @@ impl Render for Workbench {
                     .border_t_1()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(self.status.clone()),
+                    .child(status),
             )
     }
 }
