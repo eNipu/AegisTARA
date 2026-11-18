@@ -153,6 +153,45 @@ fn extra_ops() -> (Arc<Methodology>, Vec<Op>) {
 }
 
 #[test]
+fn layout_paths_are_exactly_the_written_ones() {
+    let mut paths = BTreeSet::new();
+    let m = second();
+    let mut p = Project::new(Arc::clone(&m));
+    for op in record_every_op(Arc::clone(&m)) {
+        p.apply(op).expect("apply");
+        paths.extend(files(&p).into_iter().map(|f| f.path));
+    }
+    let (m, ops) = extra_ops();
+    paths.extend(files(&project_with(&m, &ops)).into_iter().map(|f| f.path));
+    for path in &paths {
+        assert!(WorkspaceFile::is_layout_path(path), "{path}");
+    }
+    assert!(paths.contains("aegis.json") && paths.contains("shared/damage.json"));
+    assert!(paths.iter().any(|p| p.starts_with("systems/main/trees/")));
+    let fixed = ["item", "assets", "threats"].map(|s| format!("systems/main/{s}.json"));
+    assert!(paths.iter().any(|p| {
+        let rest = p.strip_prefix("systems/main/").unwrap_or("/");
+        !rest.contains('/') && rest.ends_with(".json") && !fixed.contains(p)
+    }));
+    let long = format!("systems/main/trees/{}.json", "a".repeat(300));
+    for bad in [
+        ".git/config.json",
+        "manifest.json",
+        "notes.json",
+        "shared/other.json",
+        "systems/other/assets.json",
+        "systems/main/trees/a/b.json",
+        "systems/main/trees/.json",
+        "../aegis.json",
+        "Aegis.json",
+        "",
+        &long,
+    ] {
+        assert!(!WorkspaceFile::is_layout_path(bad), "{bad}");
+    }
+}
+
+#[test]
 fn layout_covers_every_snapshot_key() {
     let mut seen = BTreeSet::new();
     // The recorded ops end by tearing the project down, so check after
