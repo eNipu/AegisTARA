@@ -1,0 +1,14 @@
+{
+  "surface": "#FFFFFF",
+  "sidebar": "#F4F6F8",
+  "raised": "#EDF0F3",
+  "line": "#DCE2E8",
+  "line_strong": "#9AA5B1",
+  "ink": "#1E2A36",
+  "ink_muted": "#4F5D6B",
+  "accent": "#2F6DB5",
+  "accent_wash": "#E7EFF9",
+  "error": "#B42318",
+  "warning": "#B54708",
+  "systems": ["#5560C8", "#94508F", "#2A7C8C", "#B8577A", "#5A6F86", "#8A6748"]
+}
