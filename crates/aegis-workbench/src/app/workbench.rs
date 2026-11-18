@@ -12,6 +12,7 @@ use aegis_client::explorer::{
 };
 use aegis_client::folder::WorkspaceFolder;
 use aegis_client::i18n::Catalog;
+use aegis_client::license_file::LocalLicense;
 use aegis_client::pages::{problems, selection_visual_id};
 use aegis_client::palette::{PaletteEntry, PaletteTarget, entries, search};
 use aegis_client::settings::{Appearance, Settings, WorkbenchLayout};
@@ -105,6 +106,11 @@ pub struct Workbench {
     /// The project name: the folder's name, or the sample's.
     pub(super) name: String,
     pub(super) methodology: Arc<Methodology>,
+    /// Why the project cannot be changed (expired license, server
+    /// project); `None` when it can.
+    pub(super) read_only: Option<String>,
+    /// The license checked on the start screen; `None` until one is.
+    pub(super) license: Option<LocalLicense>,
     /// A leave dialog is open.
     pub(super) asking: bool,
     /// The window may close now.
@@ -269,6 +275,8 @@ impl Workbench {
             saved_seq,
             name: SAMPLE_NAME.to_owned(),
             methodology,
+            read_only: None,
+            license: None,
             asking: false,
             leaving: false,
             settings_path,
@@ -455,6 +463,9 @@ impl Workbench {
 
     /// Drops `dragged` on `target`: moves a component to another system.
     pub fn drop_on(&mut self, dragged: ExplorerKey, target: ExplorerKey, cx: &mut Context<Self>) {
+        if self.refuse_read_only(cx) {
+            return;
+        }
         let Some(edit) = drop_edit(self.workspace.project(), &dragged, &target) else {
             return;
         };
@@ -510,6 +521,7 @@ impl Workbench {
     pub fn run(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         match id {
             "palette" => self.toggle_palette(window, cx),
+            "undo" | "redo" if self.refuse_read_only(cx) => {}
             "undo" | "redo" => {
                 let step = if id == "undo" {
                     local::undo
@@ -836,6 +848,9 @@ impl Workbench {
     fn status_text(&self) -> SharedString {
         if let Some(note) = &self.note {
             return note.clone().into();
+        }
+        if let Some(reason) = &self.read_only {
+            return reason.clone().into();
         }
         let Some((_, name)) = &self.picked else {
             let label = self.workspace.project().methodology().label();
