@@ -243,3 +243,20 @@ workbench-bottom = ⟦Oûtpût␣⟧
 # Workbench explorer (job 182)
 workbench-picked = ⟦Môvîng { $name }: séléct â sýstém ând préss { $keys }.␣⟧
 workbench-list-empty = ⟦Nôthîng héré ýét.␣⟧
+
+# Sign-in screen (job 208)
+signin-choose-server = ⟦Entér thé âddréss ôf ýôûr AégîsTARA sérvér.␣⟧
+signin-connecting = ⟦Cônnéctîng tô { $url }…␣⟧
+signin-online = ⟦Sîgnéd în âs { $user }.␣⟧
+signin-offline = ⟦Thé sérvér cânnôt bé réâchéd. { $reason }␣⟧
+signin-login-company = ⟦Pléâsé lôg în wîth ýôûr cômpâný âccôûnt.␣⟧
+signin-login-password = ⟦Lôg în wîth ýôûr ûsér nâmé ând pâsswôrd.␣⟧
+signin-login-dev = ⟦Entér â ûsér nâmé.␣⟧
+signin-error-credentials = ⟦Thé ûsér nâmé ôr pâsswôrd îs wrông.␣⟧
+signin-error-throttled = ⟦Tôô mâný fâîléd lôgîns. Trý âgâîn în { $seconds } sécônds.␣⟧
+signin-error-password-off = ⟦Pâsswôrd lôgîn îs ôff ôn thîs sérvér. Usé thé cômpâný lôgîn.␣⟧
+signin-error-password-turned-off = ⟦Pâsswôrd lôgîn wâs tûrnéd ôff. Lôg în wîth ýôûr cômpâný âccôûnt.␣⟧
+signin-error-unreachable = ⟦Thé sérvér cânnôt bé réâchéd: { $error }␣⟧
+signin-error-not-reached = ⟦Côûld nôt réâch { $url }. { $error }␣⟧
+signin-error-too-old = ⟦Thîs sérvér îs tôô ôld fôr thîs âpp (ît cânnôt téll hôw tô lôg în). Updâté thé sérvér.␣⟧
+signin-error-login-unfinished = ⟦Thé lôgîn dîd nôt fînîsh: { $error }␣⟧

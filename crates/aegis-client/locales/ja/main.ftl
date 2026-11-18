@@ -242,3 +242,20 @@ workbench-bottom = 出力
 # Workbench explorer (job 182)
 workbench-picked = { $name } を移動中: システムを選択して { $keys } を押してください。
 workbench-list-empty = まだ何もありません。
+
+# Sign-in screen (job 208)
+signin-choose-server = AegisTARA サーバーのアドレスを入力してください。
+signin-connecting = { $url } に接続中…
+signin-online = { $user } としてサインインしています。
+signin-offline = サーバーに接続できません。{ $reason }
+signin-login-company = 会社のアカウントでログインしてください。
+signin-login-password = ユーザー名とパスワードでログインしてください。
+signin-login-dev = ユーザー名を入力してください。
+signin-error-credentials = ユーザー名またはパスワードが正しくありません。
+signin-error-throttled = ログインの失敗が多すぎます。{ $seconds } 秒後にもう一度お試しください。
+signin-error-password-off = このサーバーではパスワードログインがオフです。会社のログインを使用してください。
+signin-error-password-turned-off = パスワードログインがオフになりました。会社のアカウントでログインしてください。
+signin-error-unreachable = サーバーに接続できません: { $error }
+signin-error-not-reached = { $url } に接続できませんでした。{ $error }
+signin-error-too-old = このサーバーはこのアプリには古すぎます（ログイン方法を返せません）。サーバーを更新してください。
+signin-error-login-unfinished = ログインが完了しませんでした: { $error }
