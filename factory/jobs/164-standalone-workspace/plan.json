@@ -1,0 +1,85 @@
+{
+  "job": "164-standalone-workspace",
+  "slices": [
+    {
+      "id": "164a",
+      "title": "Open, create and save a workspace folder on disk",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/folder.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/tests/folder.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": ["cargo test --locked -p aegis-client --test folder"]
+    },
+    {
+      "id": "164b",
+      "title": "Save journal so a killed save leaves whole files, with recovery on open",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/folder.rs",
+        "crates/aegis-client/tests/folder_recovery.rs",
+        "crates/aegis-client/tests/folder.rs",
+        "docs/adr/*",
+        "docs/architecture.md"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test folder",
+        "cargo test --locked -p aegis-client --test folder_recovery"
+      ]
+    },
+    {
+      "id": "164c",
+      "title": "Convert an old standalone project folder into workspace files",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-workbench/Cargo.toml",
+        "Cargo.lock",
+        "crates/aegis-workbench/src/lib.rs",
+        "crates/aegis-workbench/src/convert.rs",
+        "crates/aegis-workbench/tests/convert.rs",
+        "docs/architecture.md"
+      ],
+      "max_lines": 220,
+      "new_deps": true,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test convert",
+        "scripts/deny.sh licenses bans sources"
+      ]
+    },
+    {
+      "id": "164d",
+      "title": "Open folder, Save and Save As in the workbench",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/command_table.rs",
+        "crates/aegis-client/tests/command_table.rs",
+        "crates/aegis-client/tests/palette.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-workbench/src/app/*",
+        "crates/aegis-workbench/src/main.rs",
+        "crates/aegis-workbench/tests/folder_view.rs",
+        "crates/aegis-workbench/tests/command_wiring.rs"
+      ],
+      "max_lines": 560,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test command_table",
+        "cargo test --locked -p aegis-workbench --test command_wiring",
+        "cargo test --locked -p aegis-workbench --test folder_view"
+      ]
+    }
+  ]
+}
