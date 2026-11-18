@@ -4,7 +4,7 @@
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn main() {
-    aegis_workbench::app::run();
+    aegis_workbench::app::run(std::env::args_os().nth(1).map(std::path::PathBuf::from));
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

@@ -15,6 +15,7 @@ pub fn icon(key: &str) -> Option<IconName> {
         "folder" => IconName::Folder,
         "folder-open" => IconName::FolderOpen,
         "file" => IconName::File,
+        "hard-drive" => IconName::HardDrive,
         "search" => IconName::Search,
         "undo" => IconName::Undo,
         "redo" => IconName::Redo,
