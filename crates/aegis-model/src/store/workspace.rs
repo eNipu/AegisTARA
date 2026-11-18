@@ -186,6 +186,21 @@ impl Project {
 /// Longest path put into an error.
 const MAX_PATH_IN_ERROR: usize = 256;
 
+impl WorkspaceFile {
+    /// Whether `path` is a path of the workspace file set: true exactly for
+    /// the names `Project::from_workspace_files` accepts. O(length of `path`).
+    ///
+    /// ```
+    /// use aegis_model::WorkspaceFile;
+    /// assert!(WorkspaceFile::is_layout_path("aegis.json"));
+    /// assert!(!WorkspaceFile::is_layout_path(".git/config.json"));
+    /// ```
+    #[must_use]
+    pub fn is_layout_path(path: &str) -> bool {
+        path.len() <= MAX_PATH_IN_ERROR && path_ok(path) && lookup(path).is_some()
+    }
+}
+
 /// `text` cut to `max` bytes at a character boundary, and short enough that
 /// its `Debug` form stays within `max` bytes too (escapes such as
 /// `\u{1}` are longer than the character).
@@ -349,8 +364,7 @@ where
         if total > MAX_PROJECT_FILE_BYTES {
             return Err(StoreError::LimitExceeded(Limit::PROJECT_FILE));
         }
-        let short_enough = path.len() <= MAX_PATH_IN_ERROR;
-        let looked = (short_enough && path_ok(path))
+        let looked = WorkspaceFile::is_layout_path(path)
             .then(|| lookup(path))
             .flatten();
         let Some((kind, keys)) = looked else {

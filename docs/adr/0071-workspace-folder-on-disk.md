@@ -67,6 +67,11 @@ Open, create and convert take the lock and then recover:
   Any failure is `Journal` or `Symlink` and nothing is changed. Then each
   `replace` path whose staged file still exists is renamed into place, each
   `remove` path is removed, and the journal is removed.
+  Every journal path must also be a layout path
+  (`WorkspaceFile::is_layout_path`), so recovery never touches `.git/` or
+  any other file; the gap between checking a folder on the way and using
+  it (a symbolic link planted in between) stays, since an attacker able to
+  plant links can already write the folder.
 - Then `.aegis-save.json.tmp` and every regular `*.aegis-new` at the root
   and under `shared/` and `systems/` are removed. Links are skipped.
 

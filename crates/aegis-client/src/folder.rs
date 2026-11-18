@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use aegis_model::{
     MAX_PROJECT_FILE_BYTES, MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES, Methodology, Project,
-    StoreError,
+    StoreError, WorkspaceFile,
 };
 use serde::{Deserialize, Serialize};
 
@@ -377,6 +377,16 @@ impl WorkspaceFolder {
         &self.root
     }
 
+    /// Whether `path` names this folder, links and `..` resolved; false if
+    /// either path cannot be resolved. O(path length) plus two system calls.
+    #[must_use]
+    pub fn holds(&self, path: &Path) -> bool {
+        match (fs::canonicalize(path), fs::canonicalize(&self.root)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
     /// The folder's own name (its last path component), or the whole path
     /// if it has none. O(path length).
     #[must_use]
@@ -454,7 +464,8 @@ fn journal_error(problem: String) -> FolderError {
 
 /// Whether a journal path is a workspace path: lower-case ASCII letters,
 /// digits, `-`, `.` and `/`, relative, no empty, `.` or `..` part, at most
-/// 256 bytes, ending in `.json`. O(length).
+/// 256 bytes, ending in `.json`. [`read_journal`] also requires a layout
+/// path ([`WorkspaceFile::is_layout_path`]). O(length).
 fn valid_journal_path(p: &str) -> bool {
     !p.is_empty()
         && p.len() <= MAX_SHOWN
@@ -465,7 +476,10 @@ fn valid_journal_path(p: &str) -> bool {
         && p.ends_with(".json")
 }
 
-/// Reads and checks the journal in `root`, touching nothing.
+/// Reads and checks the journal in `root`, touching nothing. Every path it
+/// names must be a layout path of the workspace file set
+/// ([`WorkspaceFile::is_layout_path`]), so `.git/` and other files are never
+/// replaced or removed.
 fn read_journal(root: &Path) -> Result<Journal, FolderError> {
     let path = root.join(JOURNAL);
     let meta = fs::symlink_metadata(&path).map_err(io_at(JOURNAL))?;
@@ -509,7 +523,7 @@ fn read_journal(root: &Path) -> Result<Journal, FolderError> {
         }
     }
     for p in journal.replace.iter().chain(&journal.remove) {
-        if !valid_journal_path(p) {
+        if !(valid_journal_path(p) && WorkspaceFile::is_layout_path(p)) {
             let shown: String = p
                 .chars()
                 .take(MAX_SHOWN)
