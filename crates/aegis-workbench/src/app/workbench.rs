@@ -22,14 +22,13 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::dock::{
-    BasePanelView, DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, panel_handle,
+    BasePanel, BasePanelView, DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, PaneRef,
+    PanelId, panel_handle,
 };
+use gpui_component::input::{InputEvent, InputState};
 
 use super::apply_appearance;
-use super::keys::{
-    DropHere, ExplorerCollapse, ExplorerDown, ExplorerExpand, ExplorerUp, OpenSelected, PickUp,
-    Redo, Undo,
-};
+use super::commands::on_every_command;
 use super::layout::{apply_layout, default_layout, read_layout};
 use super::panels::{BottomPanel, ElementTab, ExplorerPanel, InspectorPanel, ListTab, OverviewTab};
 use crate::local;
@@ -42,7 +41,7 @@ const PROBLEMS: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Proble
 
 /// What a center tab shows, to refresh it after a change.
 enum Body {
-    Overview,
+    Overview(Entity<OverviewTab>),
     List(Entity<ListTab>),
     Element(Entity<ElementTab>),
 }
@@ -61,15 +60,17 @@ pub struct Workbench {
     names: ElementNamesDef,
     actor: String,
     explorer: Entity<ExplorerPanel>,
+    filter: Entity<InputState>,
     area: Entity<DockArea>,
     tabs: HashMap<ExplorerKey, Tab>,
+    appearance: Appearance,
     picked: Option<(ExplorerKey, String)>,
     note: Option<String>,
     status: SharedString,
     settings_path: Option<PathBuf>,
     saved: Option<WorkbenchLayout>,
     _skin: Rc<DockSkin>,
-    _subscriptions: [Subscription; 2],
+    _subscriptions: [Subscription; 3],
 }
 
 /// Every row of the tree, all nodes expanded. Time O(tree x depth).
@@ -145,7 +146,16 @@ impl Workbench {
         let overview =
             cx.new(|cx| OverviewTab::new(tr("workbench-overview"), heading, counts.into(), cx));
         let me = cx.weak_entity();
-        let explorer = cx.new(|cx| ExplorerPanel::new(tr("workbench-explorer"), me, cx));
+        let placeholder = tr("cmd-filter-explorer");
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let filtered = cx.subscribe(&filter, |this, input, ev: &InputEvent, cx| {
+            if let InputEvent::Change = ev {
+                this.state.filter = input.read(cx).value().to_string();
+                this.show_rows(cx);
+            }
+        });
+        let explorer =
+            cx.new(|cx| ExplorerPanel::new(tr("workbench-explorer"), filter.clone(), me, cx));
         let inspector_text = vec![tr("workbench-inspector-empty")];
         let inspector =
             cx.new(|cx| InspectorPanel::new(tr("workbench-inspector"), None, inspector_text, cx));
@@ -186,14 +196,14 @@ impl Workbench {
             catalog.tr("workbench-status-unsaved")
         )
         .into();
-        let follow = cx.observe_window_appearance(window, move |_, window, cx| {
-            if appearance == Appearance::System {
-                apply_appearance(appearance, window, cx);
+        let follow = cx.observe_window_appearance(window, |this, window, cx| {
+            if this.appearance == Appearance::System {
+                apply_appearance(this.appearance, window, cx);
             }
         });
         let overview = Tab {
-            handle: panel_handle(overview),
-            body: Body::Overview,
+            handle: panel_handle(overview.clone()),
+            body: Body::Overview(overview),
         };
         window.focus(&gpui::Focusable::focus_handle(&explorer, cx), cx);
         let mut wb = Self {
@@ -204,15 +214,17 @@ impl Workbench {
             names,
             actor: local::actor(),
             explorer,
+            filter,
             area,
             tabs: HashMap::from([(OVERVIEW, overview)]),
+            appearance,
             picked: None,
             note: None,
             status,
             settings_path,
             saved: Some(saved),
             _skin: skin,
-            _subscriptions: [changed, follow],
+            _subscriptions: [changed, follow, filtered],
         };
         wb.show_rows(cx);
         wb
@@ -316,9 +328,13 @@ impl Workbench {
             };
             self.tabs.insert(key, tab);
         }
-        let Some(handle) = self.tabs.get(&key).map(|t| t.handle.clone()) else {
-            return;
-        };
+        if let Some(handle) = self.tabs.get(&key).map(|t| t.handle.clone()) {
+            self.show_tab(handle, window, cx);
+        }
+    }
+
+    /// Adds `handle` to the center if it is not there, and shows it.
+    fn show_tab(&mut self, handle: Arc<dyn BasePanelView>, window: &mut Window, cx: &mut App) {
         self.area.update(cx, |area, cx| {
             let id = handle.panel_id(cx);
             if area.panel(id).is_none() {
@@ -379,7 +395,7 @@ impl Workbench {
             .collect();
         for ((title, lines), body) in updates {
             match body {
-                Body::Overview => {}
+                Body::Overview(_) => {}
                 Body::List(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
                 Body::Element(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
             }
@@ -428,13 +444,7 @@ impl Workbench {
         self.show_rows(cx);
     }
 
-    fn on_open(&mut self, _: &OpenSelected, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(key) = self.state.selected {
-            self.open(key, window, cx);
-        }
-    }
-
-    fn on_pick_up(&mut self, _: &PickUp, _: &mut Window, cx: &mut Context<Self>) {
+    fn pick_up(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.state.selected else {
             return;
         };
@@ -445,20 +455,137 @@ impl Workbench {
         }
     }
 
-    fn on_drop_here(&mut self, _: &DropHere, _: &mut Window, cx: &mut Context<Self>) {
-        if let (Some((dragged, _)), Some(target)) = (self.picked.clone(), self.state.selected) {
-            self.drop_on(dragged, target, cx);
+    /// Runs the command `id` of the command table; every key, menu item,
+    /// toolbar button and palette pick ends here.
+    pub fn run(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match id {
+            "undo" | "redo" => {
+                let step = if id == "undo" {
+                    local::undo
+                } else {
+                    local::redo
+                };
+                let res = step(&mut self.workspace);
+                self.changed(res, cx);
+            }
+            "toggle-explorer" => self.toggle_dock(DockPlacement::Left, window, cx),
+            "toggle-inspector" => self.toggle_dock(DockPlacement::Right, window, cx),
+            "toggle-bottom-dock" => self.toggle_dock(DockPlacement::Bottom, window, cx),
+            "focus-explorer" => {
+                self.open_dock(DockPlacement::Left, window, cx);
+                window.focus(&gpui::Focusable::focus_handle(&self.explorer, cx), cx);
+            }
+            "filter-explorer" => {
+                self.open_dock(DockPlacement::Left, window, cx);
+                self.filter.update(cx, |f, cx| f.focus(window, cx));
+            }
+            "explorer-down" => self.rows_then(cx, ExplorerState::down),
+            "explorer-up" => self.rows_then(cx, ExplorerState::up),
+            "explorer-expand" => self.rows_then(cx, ExplorerState::right),
+            "explorer-collapse" => self.rows_then(cx, ExplorerState::left),
+            "open-selected" => {
+                if let Some(key) = self.state.selected {
+                    self.open(key, window, cx);
+                }
+            }
+            "pick-up" => self.pick_up(cx),
+            "drop-here" => {
+                if let (Some((dragged, _)), Some(target)) =
+                    (self.picked.clone(), self.state.selected)
+                {
+                    self.drop_on(dragged, target, cx);
+                }
+            }
+            "close-tab" => self.close_tab(window, cx),
+            "next-tab" => self.step_tab(1, window, cx),
+            "previous-tab" => self.step_tab(-1, window, cx),
+            "toggle-theme" => self.toggle_theme(window, cx),
+            "reset-layout" => {
+                let layout = default_layout(SAMPLE_KEY);
+                self.area
+                    .update(cx, |a, cx| apply_layout(a, &layout, window, cx));
+                self.save_layout(cx);
+            }
+            "quit" => {
+                self.save_layout(cx);
+                cx.quit();
+            }
+            _ => {}
         }
     }
 
-    fn on_undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        let res = local::undo(&mut self.workspace);
-        self.changed(res, cx);
+    fn toggle_dock(&mut self, placement: DockPlacement, window: &mut Window, cx: &mut App) {
+        self.area
+            .update(cx, |a, cx| a.toggle_dock(placement, window, cx));
     }
 
-    fn on_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        let res = local::redo(&mut self.workspace);
-        self.changed(res, cx);
+    fn open_dock(&mut self, placement: DockPlacement, window: &mut Window, cx: &mut App) {
+        if !self.area.read(cx).is_dock_open(placement) {
+            self.toggle_dock(placement, window, cx);
+        }
+    }
+
+    /// The panels of the first center tab group and the shown one's index.
+    fn center_tabs(&self, cx: &App) -> Option<(Vec<PanelId>, usize)> {
+        let mut found = None;
+        let tree = self.area.read(cx).layout(DockPlacement::Center)?;
+        tree.root().walk(&mut |node| {
+            if let PaneRef::Tabs { panels, active_ix } = node.kind()
+                && found.is_none()
+                && !panels.is_empty()
+            {
+                found = Some((panels.to_vec(), active_ix));
+            }
+        });
+        found
+    }
+
+    /// Shows the tab `step` places right (negative: left), wrapping round.
+    fn step_tab(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((panels, at)) = self.center_tabs(cx) else {
+            return;
+        };
+        let n = panels.len().cast_signed();
+        let next = (at.cast_signed() + step).rem_euclid(n).cast_unsigned();
+        if let Some(id) = panels.get(next).copied() {
+            self.area.update(cx, |a, cx| a.select_panel(id, window, cx));
+        }
+    }
+
+    /// Closes the tab shown in the center.
+    fn close_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self
+            .center_tabs(cx)
+            .and_then(|(panels, at)| panels.get(at).copied())
+        else {
+            return;
+        };
+        let area = &self.area;
+        let tab = self.tabs.values().find(|t| t.handle.panel_id(cx) == id);
+        match tab.map(|t| &t.body) {
+            Some(Body::Overview(e)) => remove(area, e, window, cx),
+            Some(Body::List(e)) => remove(area, e, window, cx),
+            Some(Body::Element(e)) => remove(area, e, window, cx),
+            None => {}
+        }
+    }
+
+    /// Switches light and dark and remembers the choice.
+    fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.appearance = if cx.theme().is_dark() {
+            Appearance::Light
+        } else {
+            Appearance::Dark
+        };
+        apply_appearance(self.appearance, window, cx);
+        if let Some(path) = &self.settings_path {
+            let mut settings = Settings::load(path);
+            settings.appearance = self.appearance.code().to_owned();
+            if let Err(err) = settings.save(path) {
+                eprintln!("could not save the appearance: {err}");
+            }
+        }
+        cx.notify();
     }
 
     fn status_text(&self) -> SharedString {
@@ -478,6 +605,11 @@ impl Workbench {
     }
 }
 
+/// Takes the panel `e` out of the dock area.
+fn remove<P: BasePanel>(area: &Entity<DockArea>, e: &Entity<P>, window: &mut Window, cx: &mut App) {
+    area.update(cx, |a, cx| a.remove_panel(e.clone(), window, cx));
+}
+
 /// The tab key of an explorer key: Root, Overview and Systems share the
 /// Overview tab, every Problems folder the problems tab.
 fn shared(key: ExplorerKey) -> ExplorerKey {
@@ -493,6 +625,7 @@ fn shared(key: ExplorerKey) -> ExplorerKey {
 impl Render for Workbench {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = self.status_text();
+        let root = on_every_command(div().key_context("Workbench"), cx);
         let theme = cx.theme();
         let bar = || {
             div()
@@ -502,29 +635,19 @@ impl Render for Workbench {
                 .bg(theme.title_bar)
                 .border_color(theme.border)
         };
-        div()
-            .key_context("Workbench")
-            .on_action(
-                cx.listener(|w, _: &ExplorerDown, _, cx| w.rows_then(cx, ExplorerState::down)),
-            )
-            .on_action(cx.listener(|w, _: &ExplorerUp, _, cx| w.rows_then(cx, ExplorerState::up)))
-            .on_action(
-                cx.listener(|w, _: &ExplorerExpand, _, cx| w.rows_then(cx, ExplorerState::right)),
-            )
-            .on_action(
-                cx.listener(|w, _: &ExplorerCollapse, _, cx| w.rows_then(cx, ExplorerState::left)),
-            )
-            .on_action(cx.listener(Self::on_open))
-            .on_action(cx.listener(Self::on_pick_up))
-            .on_action(cx.listener(Self::on_drop_here))
-            .on_action(cx.listener(Self::on_undo))
-            .on_action(cx.listener(Self::on_redo))
+        root.relative()
             .size_full()
             .flex()
             .flex_col()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(bar().h(px(36.)).border_b_1().child(SAMPLE_NAME))
+            .child(
+                bar()
+                    .h(px(36.))
+                    .gap_1()
+                    .border_b_1()
+                    .child(div().flex_1().child(SAMPLE_NAME)),
+            )
             .child(div().flex_1().min_h_0().child(self.area.clone()))
             .child(
                 bar()

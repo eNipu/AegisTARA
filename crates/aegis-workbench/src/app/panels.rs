@@ -5,10 +5,11 @@ use aegis_client::explorer::{ExplorerKey, ExplorerRow, Folder, Mark};
 use aegis_client::view::Selection;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Context, Div, FocusHandle, InteractiveElement as _, IntoElement,
+    App, AppContext as _, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     MouseButton, ParentElement as _, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
 };
+use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use super::color;
@@ -44,6 +45,7 @@ macro_rules! dock_panel {
 pub struct ExplorerPanel {
     focus_handle: FocusHandle,
     title: SharedString,
+    filter: Entity<InputState>,
     rows: Vec<ExplorerRow>,
     selected: Option<ExplorerKey>,
     workbench: WeakEntity<Workbench>,
@@ -54,12 +56,14 @@ pub struct ExplorerPanel {
 impl ExplorerPanel {
     pub fn new(
         title: SharedString,
+        filter: Entity<InputState>,
         workbench: WeakEntity<Workbench>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
             title,
+            filter,
             rows: Vec::new(),
             selected: None,
             workbench,
@@ -183,7 +187,7 @@ fn row(
         .pr_2()
         .when(selected, |d| d.bg(wash))
         .child(chevron)
-        .child(Icon::new(icon(r.icon)).small())
+        .child(Icon::new(icon(r.icon).unwrap_or(IconName::File)).small())
         .child(div().truncate().child(label.clone()))
         .when(r.linked, |d| d.child("\u{21e2}"))
         .children(square)
@@ -225,16 +229,14 @@ impl Render for ExplorerPanel {
             .enumerate()
             .map(|(ix, r)| row(ix, r, self.selected == Some(r.key), t, &self.workbench));
         let wb = self.workbench.clone();
-        div()
+        let tree = div()
             .id("explorer")
             .key_context("Explorer")
             .track_focus(&self.focus_handle)
-            .size_full()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .py_1()
-            .text_sm()
-            .bg(cx.theme().sidebar)
-            .text_color(cx.theme().sidebar_foreground)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|p, _, window, cx| window.focus(&p.focus_handle, cx)),
@@ -245,7 +247,16 @@ impl Render for ExplorerPanel {
                     on_workbench(&wb, window, cx, |w, _, cx| w.let_go(cx));
                 }
             })
-            .children(rows)
+            .children(rows);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .text_sm()
+            .bg(cx.theme().sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .child(div().p_1().child(Input::new(&self.filter).small()))
+            .child(tree)
     }
 }
 
