@@ -33,6 +33,7 @@ use gpui_component::{ActiveTheme as _, Disableable as _, IconName, Sizable as _}
 
 use super::apply_appearance;
 use super::commands::{dispatch_id, on_every_command};
+use super::files::Leave;
 use super::icons::icon;
 use super::layout::{apply_layout, default_layout, read_layout};
 use super::panels::{
@@ -104,6 +105,10 @@ pub struct Workbench {
     /// The project name: the folder's name, or the sample's.
     pub(super) name: String,
     pub(super) methodology: Arc<Methodology>,
+    /// A leave dialog is open.
+    pub(super) asking: bool,
+    /// The window may close now.
+    pub(super) leaving: bool,
     settings_path: Option<PathBuf>,
     saved: Option<WorkbenchLayout>,
     _skin: Rc<DockSkin>,
@@ -227,8 +232,9 @@ impl Workbench {
             }
         });
         let me = cx.weak_entity();
-        window.on_window_should_close(cx, move |_, cx| {
-            me.update(cx, |w, cx| w.before_close(cx)).unwrap_or(true)
+        window.on_window_should_close(cx, move |window, cx| {
+            me.update(cx, |w, cx| w.request_close(window, cx))
+                .unwrap_or(true)
         });
 
         let methodology = Arc::clone(project.methodology());
@@ -263,6 +269,8 @@ impl Workbench {
             saved_seq,
             name: SAMPLE_NAME.to_owned(),
             methodology,
+            asking: false,
+            leaving: false,
             settings_path,
             saved: Some(saved),
             _skin: skin,
@@ -555,14 +563,8 @@ impl Workbench {
                 let res = self.save(cx);
                 self.changed(res, cx);
             }
-            "save" | "save-as" => self.prompt_save_as(window, cx),
-            "quit" => {
-                if self.before_close(cx) {
-                    cx.quit();
-                } else {
-                    cx.notify();
-                }
-            }
+            "save" | "save-as" => self.prompt_save_as(None, window, cx),
+            "quit" => self.leave(Leave::Quit, window, cx),
             _ => {}
         }
     }

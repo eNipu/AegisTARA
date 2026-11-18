@@ -78,6 +78,16 @@ Open, create and convert take the lock and then recover:
 A save cut off before its journal was renamed into place opens as the old
 project; one cut off after opens as the new project.
 
+### Leaving with unsaved changes
+
+Closing the window, quitting and opening another folder leave the project
+(slice 164eb). A folder that saves is saved silently, with no dialog. The
+in-memory sample with changes asks Save As…, Don't save or Cancel; a
+folder whose save fails asks Try again, Don't save or Cancel, with the
+error in the dialog. Don't save always lets the window close. Only one
+dialog is open at a time. Opening the folder that is already open does
+nothing.
+
 ## Not chosen
 
 - One atomic write per file only (164a). Each file is whole, but a crash

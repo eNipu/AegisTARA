@@ -1,5 +1,5 @@
-//! Open Folder, Save, Save As and saving on close in the workbench window
-//! (job 164, slice 164d).
+//! Open Folder, Save, Save As and leaving with unsaved changes in the
+//! workbench window (job 164, slice 164d; job 164e, slice 164eb).
 #![cfg(any(target_os = "macos", target_os = "windows"))]
 
 use std::fs;
@@ -19,9 +19,9 @@ use aegis_client::workspace::Workspace;
 use aegis_model::{Methodology, OpCodec, Project};
 use aegis_server::store::{ProjectMeta, StoredOp};
 use aegis_server::{FolderStore, ProjectId, ProjectStore};
-use aegis_workbench::app::{Workbench, apply_appearance, bind_all};
+use aegis_workbench::app::{Leave, Workbench, apply_appearance, bind_all};
 use aegis_workbench::sample::workbench_sample;
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{Entity, TestAppContext, VisualContext as _, VisualTestContext};
 
 const OVERVIEW: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Overview);
 
@@ -276,51 +276,191 @@ fn a_refused_folder_keeps_the_project(cx: &mut TestAppContext) {
     }
 }
 
+fn request_close(view: &Entity<Workbench>, cx: &mut VisualTestContext) -> bool {
+    let closed = view.update_in(cx, |w, window, cx| w.request_close(window, cx));
+    cx.run_until_parked();
+    closed
+}
+
+fn leave(view: &Entity<Workbench>, cx: &mut VisualTestContext, then: Leave) {
+    view.update_in(cx, |w, window, cx| w.leave(then, window, cx));
+    cx.run_until_parked();
+}
+
+fn answer(cx: &mut VisualTestContext, button: &str) {
+    cx.simulate_prompt_answer(button);
+    cx.run_until_parked();
+}
+
+fn window_open(cx: &mut VisualTestContext) -> bool {
+    let window = cx.window_handle();
+    cx.windows().contains(&window)
+}
+
+/// The edit state, read without the window (it may be closed).
+fn unsaved_after(view: &Entity<Workbench>, cx: &mut VisualTestContext) -> bool {
+    cx.cx.update(|cx| view.read(cx).has_unsaved_changes())
+}
+
 #[gpui::test]
-fn close_saves_unsaved_changes(cx: &mut TestAppContext) {
+fn close_saves_a_folder_without_asking(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let dir = scratch("close");
     save_as(&view, cx, &dir);
-    let (tcu, was) = move_tcu(&view, cx);
+    let (tcu, _) = move_tcu(&view, cx);
     assert!(unsaved(&view, cx));
-    assert!(view.update(cx, |w, cx| w.before_close(cx)));
-    assert!(!unsaved(&view, cx));
+    let closed = request_close(&view, cx);
+    assert!(!cx.has_pending_prompt());
+    assert!(closed || !window_open(cx));
+    assert!(!unsaved_after(&view, cx));
 
-    let release = other_folder("close-release");
-    open_folder(&view, cx, &release).expect("open other");
-    let (folder, project) = WorkspaceFolder::open(&dir, methodology()).expect("reopen");
+    // The closed window's workbench still holds the lock: read a copy.
+    let copy = scratch("close-copy");
+    copy_folder(&dir, &copy);
+    let (folder, project) = WorkspaceFolder::open(&copy, methodology()).expect("reopen");
     drop(folder);
     assert_eq!(system_name_of(&project, tcu).as_deref(), Some("Gateway"));
-    #[cfg(not(unix))]
-    let _ = was;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        open_folder(&view, cx, &dir).expect("open again");
-        let held = dir.join("systems").join("main");
-        assert!(held.join("item.json").is_file());
-        let mode = fs::metadata(&held).expect("meta").permissions();
-        fs::set_permissions(&held, fs::Permissions::from_mode(0o555)).expect("read-only");
-        fs::set_permissions(held.join("item.json"), fs::Permissions::from_mode(0o444))
-            .expect("read-only");
-        // The reopened workspace has no undo history: move it back instead.
-        move_to(&view, cx, tcu, was);
-        assert!(unsaved(&view, cx));
-        let closed = view.update(cx, |w, cx| w.before_close(cx));
-        let note = cx.update(|_, cx| view.read(cx).note().map(str::to_owned));
-        fs::set_permissions(held.join("item.json"), fs::Permissions::from_mode(0o644))
-            .expect("restore");
-        fs::set_permissions(&held, mode).expect("restore");
-        assert!(!closed);
-        assert!(note.is_some());
-        let again = other_folder("close-again");
-        open_folder(&view, cx, &again).expect("open other");
-        let _ = fs::remove_dir_all(&again);
-    }
-
     let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&copy);
+}
+
+/// Copies the folder `from` into `to`, without its lock file.
+fn copy_folder(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("dir");
+    for entry in fs::read_dir(from).expect("read") {
+        let entry = entry.expect("entry");
+        let (path, name) = (entry.path(), entry.file_name());
+        if path.is_dir() {
+            copy_folder(&path, &to.join(&name));
+        } else if name != ".aegis.lock" {
+            fs::copy(&path, to.join(&name)).expect("copy");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn a_failing_save_asks_and_dont_save_closes(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (view, cx) = open(cx);
+    let dir = scratch("close-fails");
+    save_as(&view, cx, &dir);
+    let (tcu, was) = move_tcu(&view, cx);
+    view.update(cx, |w, cx| w.save(cx)).expect("save");
+    let held = dir.join("systems").join("main");
+    assert!(held.join("item.json").is_file());
+    let mode = fs::metadata(&held).expect("meta").permissions();
+    fs::set_permissions(&held, fs::Permissions::from_mode(0o555)).expect("read-only");
+    fs::set_permissions(held.join("item.json"), fs::Permissions::from_mode(0o444))
+        .expect("read-only");
+    move_to(&view, cx, tcu, was);
+    assert!(unsaved(&view, cx));
+
+    let closed = request_close(&view, cx);
+    let asked = cx.has_pending_prompt();
+    let note = cx.update(|_, cx| view.read(cx).note().is_some());
+    answer(cx, "Cancel");
+    let kept = window_open(cx) && unsaved(&view, cx);
+    request_close(&view, cx);
+    answer(cx, "Try again");
+    let asked_again = cx.has_pending_prompt();
+    answer(cx, "Don't save");
+    let gone = !window_open(cx);
+    fs::set_permissions(held.join("item.json"), fs::Permissions::from_mode(0o644))
+        .expect("restore");
+    fs::set_permissions(&held, mode).expect("restore");
+
+    assert!(!closed);
+    assert!(asked);
+    assert!(note);
+    assert!(kept);
+    assert!(asked_again);
+    assert!(gone);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
+fn sample_edits_ask_before_close(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    move_tcu(&view, cx);
+    assert!(!request_close(&view, cx));
+    assert!(cx.has_pending_prompt());
+    answer(cx, "Cancel");
+    assert!(window_open(cx));
+    assert!(unsaved(&view, cx));
+
+    request_close(&view, cx);
+    answer(cx, "Save As…");
+    assert!(cx.did_prompt_for_new_path());
+    let dir = scratch("close-sample");
+    cx.simulate_new_path_selection(|_| Some(dir.clone()));
+    cx.run_until_parked();
+    assert!(is_workspace(&dir));
+    assert!(!window_open(cx));
+    assert!(!unsaved_after(&view, cx));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
+fn sample_without_edits_closes_without_asking(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let closed = request_close(&view, cx);
+    assert!(!cx.has_pending_prompt());
+    assert!(closed || !window_open(cx));
+}
+
+#[gpui::test]
+fn opening_a_folder_over_sample_edits_asks(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    move_tcu(&view, cx);
+    let before = project_bytes(&view, cx);
+    let other = other_folder("over-sample");
+    leave(&view, cx, Leave::Open(other.clone()));
+    assert!(cx.has_pending_prompt());
+    answer(cx, "Cancel");
+    assert_eq!(project_bytes(&view, cx), before);
+    assert!(cx.update(|_, cx| view.read(cx).folder().is_none()));
+
+    leave(&view, cx, Leave::Open(other.clone()));
+    answer(cx, "Don't save");
+    let name = other
+        .file_name()
+        .expect("name")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(root_label(&view, cx), Some(name));
+    let release = other_folder("over-sample-release");
+    open_folder(&view, cx, &release).expect("open other");
+    let _ = fs::remove_dir_all(&other);
     let _ = fs::remove_dir_all(&release);
+}
+
+#[gpui::test]
+fn a_refused_folder_after_dont_save_keeps_the_edits(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    move_tcu(&view, cx);
+    let before = project_bytes(&view, cx);
+    let bad = scratch("over-sample-bad");
+    fs::create_dir_all(&bad).expect("dir");
+    fs::write(bad.join("aegis.json"), "{").expect("write");
+    leave(&view, cx, Leave::Open(bad.clone()));
+    answer(cx, "Don't save");
+    assert!(unsaved(&view, cx));
+    assert_eq!(project_bytes(&view, cx), before);
+    assert!(cx.update(|_, cx| view.read(cx).note().is_some()));
+    let _ = fs::remove_dir_all(&bad);
+}
+
+#[gpui::test]
+fn quit_with_sample_edits_asks(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    move_tcu(&view, cx);
+    view.update_in(cx, |w, window, cx| w.run("quit", window, cx));
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    answer(cx, "Cancel");
+    assert!(window_open(cx));
+    assert!(unsaved(&view, cx));
 }
 
 /// Writes an old folder in `dir` holding the workbench sample plus one
