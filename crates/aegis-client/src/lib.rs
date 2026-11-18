@@ -9,6 +9,7 @@ pub mod error;
 pub mod excel;
 pub mod explorer;
 pub mod find;
+pub mod folder;
 pub mod i18n;
 pub mod library;
 pub mod outline;
