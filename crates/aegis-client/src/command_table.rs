@@ -10,6 +10,8 @@
 pub enum CommandGroup {
     /// App-wide commands (palette, shortcuts, quit).
     General,
+    /// Opening and saving the project folder.
+    File,
     /// Panels, tabs, theme and layout.
     View,
     /// Moving around the explorer.
@@ -25,6 +27,7 @@ impl CommandGroup {
     pub const fn name(self) -> &'static str {
         match self {
             CommandGroup::General => "General",
+            CommandGroup::File => "File",
             CommandGroup::View => "View",
             CommandGroup::Navigate => "Navigate",
             CommandGroup::Edit => "Edit",
@@ -109,8 +112,11 @@ macro_rules! command_table {
     };
 }
 
-static COMMANDS: [CommandSpec; 22] = command_table! {
+static COMMANDS: [CommandSpec; 25] = command_table! {
     "palette"            General  "search"           -          "cmd-k"          -        false;
+    "open-folder"        File     "folder-open"      -          "cmd-o"          -        true;
+    "save"               File     "hard-drive"       -          "cmd-s"          -        true;
+    "save-as"            File     "folder"           -          "cmd-shift-s"    -        true;
     "undo"               Edit     "undo"             -          "cmd-z"          -        true;
     "redo"               Edit     "redo"             -          "cmd-shift-z"    "ctrl-y" true;
     "toggle-explorer"    View     "panel-left"       -          "cmd-b"          -        true;

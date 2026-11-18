@@ -10,13 +10,14 @@ use aegis_client::command_table::{command, commands, shortcut_label};
 use aegis_client::explorer::{
     ExplorerIndex, ExplorerKey, ExplorerRow, ExplorerState, Folder, Owner, drop_edit,
 };
+use aegis_client::folder::WorkspaceFolder;
 use aegis_client::i18n::Catalog;
 use aegis_client::pages::{problems, selection_visual_id};
 use aegis_client::palette::{PaletteEntry, PaletteTarget, entries, search};
 use aegis_client::settings::{Appearance, Settings, WorkbenchLayout};
 use aegis_client::view::Selection;
 use aegis_client::workspace::Workspace;
-use aegis_model::ElementNamesDef;
+use aegis_model::{ElementNamesDef, Methodology, Project};
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, px,
@@ -42,7 +43,7 @@ use crate::local;
 use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
 
 /// The tab Root, Overview and Systems open.
-const OVERVIEW: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Overview);
+pub(super) const OVERVIEW: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Overview);
 /// The one problems tab every Problems folder opens.
 const PROBLEMS: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Problems);
 
@@ -59,15 +60,15 @@ const TOOLBAR: [&str; 6] = [
 ];
 
 /// What a center tab shows, to refresh it after a change.
-enum Body {
+pub(super) enum Body {
     Overview(Entity<OverviewTab>),
     List(Entity<ListTab>),
     Element(Entity<ElementTab>),
 }
 
-struct Tab {
+pub(super) struct Tab {
     handle: Arc<dyn BasePanelView>,
-    body: Body,
+    pub(super) body: Body,
 }
 
 /// The open palette: its entries (built when it opened), the query and
@@ -81,22 +82,28 @@ struct Palette {
 
 /// The window's root view.
 pub struct Workbench {
-    workspace: Workspace,
+    pub(super) workspace: Workspace,
     index: ExplorerIndex,
-    state: ExplorerState,
-    catalog: Rc<Catalog>,
-    names: ElementNamesDef,
+    pub(super) state: ExplorerState,
+    pub(super) catalog: Rc<Catalog>,
+    pub(super) names: ElementNamesDef,
     actor: String,
     explorer: Entity<ExplorerPanel>,
     filter: Entity<InputState>,
-    area: Entity<DockArea>,
-    tabs: HashMap<ExplorerKey, Tab>,
+    pub(super) area: Entity<DockArea>,
+    pub(super) tabs: HashMap<ExplorerKey, Tab>,
     shortcuts: Option<Entity<ShortcutsTab>>,
     palette: Option<Palette>,
     appearance: Appearance,
-    picked: Option<(ExplorerKey, String)>,
-    note: Option<String>,
-    status: SharedString,
+    pub(super) picked: Option<(ExplorerKey, String)>,
+    pub(super) note: Option<String>,
+    /// The open project folder; `None` for the in-memory sample.
+    pub(super) folder: Option<WorkspaceFolder>,
+    /// The confirmed sequence of the workspace when it was last saved.
+    pub(super) saved_seq: u64,
+    /// The project name: the folder's name, or the sample's.
+    pub(super) name: String,
+    pub(super) methodology: Arc<Methodology>,
     settings_path: Option<PathBuf>,
     saved: Option<WorkbenchLayout>,
     _skin: Rc<DockSkin>,
@@ -142,6 +149,18 @@ fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
     Some(n.singular.to_string())
 }
 
+/// The Overview lines: how many assets, threats, trees and controls.
+pub(super) fn overview_lines(project: &Project, names: &ElementNamesDef) -> Vec<SharedString> {
+    [
+        (&names.asset, project.asset_count()),
+        (&names.threat_scenario, project.threat_scenario_count()),
+        (&names.attack_tree, project.attack_tree_count()),
+        (&names.security_control, project.security_control_count()),
+    ]
+    .map(|(n, count)| SharedString::from(format!("{}: {count}", n.plural)))
+    .into()
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -165,16 +184,9 @@ impl Workbench {
         let index = ExplorerIndex::build(&workspace, &names, &catalog, SAMPLE_NAME);
         let tr = |id: &str| SharedString::from(catalog.tr(id));
 
-        let counts = [
-            (&names.asset, project.asset_count()),
-            (&names.threat_scenario, project.threat_scenario_count()),
-            (&names.attack_tree, project.attack_tree_count()),
-            (&names.security_control, project.security_control_count()),
-        ]
-        .map(|(n, count)| SharedString::from(format!("{}: {count}", n.plural)));
+        let counts = overview_lines(project, &names);
         let heading = Some(SharedString::from(SAMPLE_NAME));
-        let overview =
-            cx.new(|cx| OverviewTab::new(tr("workbench-overview"), heading, counts.into(), cx));
+        let overview = cx.new(|cx| OverviewTab::new(tr("workbench-overview"), heading, counts, cx));
         let me = cx.weak_entity();
         let placeholder = tr("cmd-filter-explorer");
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
@@ -216,16 +228,11 @@ impl Workbench {
         });
         let me = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
-            let _ = me.update(cx, |w, cx| w.save_layout(cx));
-            true
+            me.update(cx, |w, cx| w.before_close(cx)).unwrap_or(true)
         });
 
-        let status = format!(
-            "{}  ·  {}",
-            project.methodology().label(),
-            catalog.tr("workbench-status-unsaved")
-        )
-        .into();
+        let methodology = Arc::clone(project.methodology());
+        let saved_seq = workspace.confirmed_seq();
         let follow = cx.observe_window_appearance(window, |this, window, cx| {
             if this.appearance == Appearance::System {
                 apply_appearance(this.appearance, window, cx);
@@ -252,7 +259,10 @@ impl Workbench {
             appearance,
             picked: None,
             note: None,
-            status,
+            folder: None,
+            saved_seq,
+            name: SAMPLE_NAME.to_owned(),
+            methodology,
             settings_path,
             saved: Some(saved),
             _skin: skin,
@@ -417,9 +427,9 @@ impl Workbench {
     }
 
     /// Rebuilds the tree and every open tab after the project changed.
-    fn changed(&mut self, res: Result<(), String>, cx: &mut Context<Self>) {
+    pub(super) fn changed(&mut self, res: Result<(), String>, cx: &mut Context<Self>) {
         self.note = res.err();
-        self.index = ExplorerIndex::build(&self.workspace, &self.names, &self.catalog, SAMPLE_NAME);
+        self.index = ExplorerIndex::build(&self.workspace, &self.names, &self.catalog, &self.name);
         let updates: Vec<_> = self
             .tabs
             .iter()
@@ -453,7 +463,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn save_layout(&mut self, cx: &App) {
+    pub(super) fn save_layout(&mut self, cx: &App) {
         let Some(path) = &self.settings_path else {
             return;
         };
@@ -540,9 +550,18 @@ impl Workbench {
                 self.save_layout(cx);
             }
             "show-shortcuts" => self.show_shortcuts(window, cx),
+            "open-folder" => self.prompt_open(window, cx),
+            "save" if self.folder.is_some() => {
+                let res = self.save(cx);
+                self.changed(res, cx);
+            }
+            "save" | "save-as" => self.prompt_save_as(window, cx),
             "quit" => {
-                self.save_layout(cx);
-                cx.quit();
+                if self.before_close(cx) {
+                    cx.quit();
+                } else {
+                    cx.notify();
+                }
             }
             _ => {}
         }
@@ -817,7 +836,18 @@ impl Workbench {
             return note.clone().into();
         }
         let Some((_, name)) = &self.picked else {
-            return self.status.clone();
+            let label = self.workspace.project().methodology().label();
+            let Some(folder) = &self.folder else {
+                let unsaved = self.catalog.tr("workbench-status-unsaved");
+                return format!("{label}  ·  {unsaved}").into();
+            };
+            let state = if self.has_unsaved_changes() {
+                "workbench-status-changed"
+            } else {
+                "workbench-status-saved"
+            };
+            let path = folder.root().display();
+            return format!("{label}  ·  {path}  ·  {}", self.catalog.tr(state)).into();
         };
         let mac = cfg!(target_os = "macos");
         let keys = command("drop-here")
@@ -830,7 +860,12 @@ impl Workbench {
 }
 
 /// Takes the panel `e` out of the dock area.
-fn remove<P: BasePanel>(area: &Entity<DockArea>, e: &Entity<P>, window: &mut Window, cx: &mut App) {
+pub(super) fn remove<P: BasePanel>(
+    area: &Entity<DockArea>,
+    e: &Entity<P>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     area.update(cx, |a, cx| a.remove_panel(e.clone(), window, cx));
 }
 
@@ -872,7 +907,7 @@ impl Render for Workbench {
                     .h(px(36.))
                     .gap_1()
                     .border_b_1()
-                    .child(div().flex_1().child(SAMPLE_NAME))
+                    .child(div().flex_1().child(self.name.clone()))
                     .children(tools),
             )
             .child(div().flex_1().min_h_0().child(self.area.clone()))
