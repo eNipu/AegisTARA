@@ -36,6 +36,9 @@ macro_rules! command_actions {
 
 command_actions! {
     "palette" => Palette,
+    "open-folder" => OpenFolder,
+    "save" => Save,
+    "save-as" => SaveAs,
     "undo" => Undo,
     "redo" => Redo,
     "toggle-explorer" => ToggleExplorer,
@@ -86,7 +89,7 @@ pub fn bind_all(cx: &mut App) {
     cx.bind_keys(all);
 }
 
-/// The app menu: AegisTARA, Edit, View and Navigate, labels from `catalog`.
+/// The app menu: AegisTARA, File, Edit, View and Navigate, labels from `catalog`.
 /// The native menu cannot draw icons; the toolbar and palette do.
 pub fn set_menus(catalog: &Catalog, cx: &App) {
     let item = |id: &str| {
@@ -103,6 +106,10 @@ pub fn set_menus(catalog: &Catalog, cx: &App) {
     };
     cx.set_menus([
         menu("AegisTARA", &["show-shortcuts", "toggle-theme", "quit"]),
+        menu(
+            CommandGroup::File.name(),
+            &["open-folder", "save", "save-as"],
+        ),
         menu(CommandGroup::Edit.name(), &["undo", "redo"]),
         menu(
             CommandGroup::View.name(),

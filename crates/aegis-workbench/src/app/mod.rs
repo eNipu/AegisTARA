@@ -1,11 +1,13 @@
 //! The GPUI window: theme set-up, the `Workbench` view and its panels.
 
 mod commands;
+mod files;
 mod icons;
 mod layout;
 mod panels;
 mod workbench;
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use aegis_client::i18n::Catalog;
@@ -22,9 +24,10 @@ pub use commands::{bind_all, bindings, dispatch_id};
 pub use icons::icon;
 pub use workbench::Workbench;
 
-/// Opens the workbench window and runs until it closes.
-pub fn run() {
-    gpui_platform::application().run(|cx| {
+/// Opens the workbench window, with the project folder `folder` when
+/// given, and runs until it closes.
+pub fn run(folder: Option<PathBuf>) {
+    gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
         bind_all(cx);
         let path = config_dir().map(|dir| Settings::path_in(&dir));
@@ -44,6 +47,13 @@ pub fn run() {
         let opened = cx.open_window(options, |window, cx| {
             apply_appearance(appearance, window, cx);
             let workbench = cx.new(|cx| Workbench::new(catalog, appearance, path, window, cx));
+            if let Some(dir) = &folder {
+                workbench.update(cx, |w, cx| {
+                    if let Err(err) = w.open_folder(dir, window, cx) {
+                        w.note = Some(err);
+                    }
+                });
+            }
             cx.new(|cx| Root::new(workbench, window, cx))
         });
         if let Err(err) = opened {
