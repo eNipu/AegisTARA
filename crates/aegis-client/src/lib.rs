@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 pub mod audit;
 pub mod combined;
+pub mod command_table;
 pub mod commands;
 pub mod connection;
 pub mod error;
@@ -11,6 +12,7 @@ pub mod i18n;
 pub mod library;
 pub mod outline;
 pub mod pages;
+pub mod palette;
 pub mod picker;
 pub mod relations;
 pub mod report;
