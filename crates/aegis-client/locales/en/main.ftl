@@ -209,3 +209,15 @@ cmd-show-shortcuts = Keyboard shortcuts
 cmd-show-shortcuts-tip = List every command and its keys.
 cmd-quit = Quit
 cmd-quit-tip = Close AegisTARA.
+
+# Workbench explorer (job 182)
+explorer-overview = Overview
+explorer-project-definition = Project definition
+explorer-parties = Responsible parties
+explorer-shared-analysis = Shared analysis
+explorer-systems = Systems
+explorer-not-in-system = Not in a system
+explorer-item-definition = Item definition
+explorer-risk-treatment = Risk treatment
+explorer-goals-and-claims = Goals and claims
+explorer-problems = Problems

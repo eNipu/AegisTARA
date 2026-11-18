@@ -201,3 +201,15 @@ cmd-show-shortcuts = ⟦Kéýbôârd shôrtcûts␣⟧
 cmd-show-shortcuts-tip = ⟦Lîst évérý cômmând ând îts kéýs.␣⟧
 cmd-quit = ⟦Qûît␣⟧
 cmd-quit-tip = ⟦Clôsé AegisTARA.␣⟧
+
+# Workbench explorer (job 182)
+explorer-overview = ⟦Ovérvîéw␣⟧
+explorer-project-definition = ⟦Prôjéct défînîtîôn␣⟧
+explorer-parties = ⟦Réspônsîblé pârtîés␣⟧
+explorer-shared-analysis = ⟦Shâréd ânâlýsîs␣⟧
+explorer-systems = ⟦Sýstéms␣⟧
+explorer-not-in-system = ⟦Nôt în â sýstém␣⟧
+explorer-item-definition = ⟦Itém défînîtîôn␣⟧
+explorer-risk-treatment = ⟦Rîsk tréâtmént␣⟧
+explorer-goals-and-claims = ⟦Gôâls ând clâîms␣⟧
+explorer-problems = ⟦Prôbléms␣⟧
