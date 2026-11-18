@@ -2012,3 +2012,58 @@ async fn a_stale_system_name_stops_the_report_export() {
     drop(alice);
     server.stop().await;
 }
+
+/// The snapshot is the version downloaded on open; local edits reach it only
+/// through a new download (job 208).
+#[tokio::test]
+async fn snapshot_is_the_downloaded_version() {
+    use aegis_model::AssetId;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    let server = TestServer::start(Duration::ZERO).await;
+    let alice = server.session("alice", false);
+    let id = create_and_open(&alice, "Snapshot").await;
+    start_editing(&alice).await;
+    alice
+        .send(Command::ShowPage(aegis_client::view::Page::Assets))
+        .expect("sent");
+    alice
+        .send(Command::Edit(Edit::AddAsset {
+            id: AssetId::new_v7(),
+            name: "ECU".into(),
+            properties: (0..6).collect(),
+        }))
+        .expect("sent");
+    let view = until(&alice, "asset", |vm| p(vm).data.assets.len() == 1).await;
+    assert_eq!(
+        p(&view).snapshot.assets().count(),
+        0,
+        "a local edit reached the snapshot"
+    );
+    let alice_seq = p(&view).snapshot_seq;
+
+    until(&alice, "synced", project_ready).await;
+    alice.send(Command::EndEdit).expect("sent");
+    until(&alice, "released", |vm| {
+        vm.project
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::ReadOnly && p.lock_holder.is_none())
+    })
+    .await;
+
+    let bob = server.session("bob", false);
+    until(&bob, "online", online).await;
+    bob.send(Command::OpenProject { id }).expect("sent");
+    let view = until(&bob, "bob sees the project", |vm| vm.project.is_some()).await;
+    let names: Vec<&str> = p(&view)
+        .snapshot
+        .assets()
+        .map(|(_, _, a)| a.name())
+        .collect();
+    assert_eq!(names, ["ECU"]);
+    assert!(p(&view).snapshot_seq > alice_seq);
+    drop(alice);
+    drop(bob);
+    server.stop().await;
+}

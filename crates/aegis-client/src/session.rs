@@ -282,6 +282,11 @@ struct Open {
     entry: ProjectEntry,
     codec: OpCodec,
     ws: Workspace,
+    /// The project as last downloaded, on open or reload. Copied once per
+    /// download and shared with every view.
+    snapshot: Arc<Project>,
+    /// The server's sequence number of `snapshot`.
+    snapshot_seq: u64,
     ui: UiState,
     mode: Mode,
     lease: Option<Lease>,
@@ -1521,12 +1526,16 @@ impl<P: CredentialProvider> Actor<P> {
             }
         };
         let holder = Some(loaded.lock_holder).filter(|h| !h.is_empty());
+        let snapshot = Arc::new(loaded.project.clone());
+        let snapshot_seq = loaded.last_seq;
         let ws = Workspace::new(loaded.project, loaded.last_seq);
         let entry = entry_of(loaded.summary);
         match self.open.as_mut().filter(|o| o.epoch == epoch) {
             // A resync: keep the selection, replace the data.
             Some(open) => {
                 open.ws = ws;
+                open.snapshot = snapshot;
+                open.snapshot_seq = snapshot_seq;
                 open.lock_holder = holder;
                 open.newer_seq = None;
                 open.resyncing = false;
@@ -1554,6 +1563,8 @@ impl<P: CredentialProvider> Actor<P> {
                     codec: OpCodec::new(loaded.methodology),
                     entry,
                     ws,
+                    snapshot,
+                    snapshot_seq,
                     ui,
                     mode: Mode::ReadOnly,
                     lease: None,
@@ -3291,6 +3302,8 @@ impl<P: CredentialProvider> Actor<P> {
                     &open.ui.system_view,
                 ),
                 confirmed_seq: open.ws.confirmed_seq(),
+                snapshot: Arc::clone(&open.snapshot),
+                snapshot_seq: open.snapshot_seq,
                 numbers,
                 risks_verified_seq: self
                     .verified
