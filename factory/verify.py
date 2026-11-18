@@ -14,6 +14,7 @@ import fnmatch
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -41,6 +42,15 @@ def run(cmd, cwd, shell=False):
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
+def rename_paths(entry):
+    """numstat shows a move as `a/{x => y}/b` or `x => y`; return the old and the new path."""
+    m = re.fullmatch(r"(.*)\{(.*) => (.*)\}(.*)", entry)
+    if m:
+        pre, old, new, post = m.groups()
+        return [(pre + old + post).replace("//", "/"), (pre + new + post).replace("//", "/")]
+    return entry.split(" => ") if " => " in entry else [entry]
+
+
 def check_diff(numstat, slice_):
     """Pure part: numstat text + the slice's plan -> (failures, counted lines)."""
     allow = slice_.get("allow", [])
@@ -48,13 +58,16 @@ def check_diff(numstat, slice_):
     rows = [line.split("\t") for line in numstat.splitlines() if line.strip()]
     if not rows:
         return ["no changes since base: the builder committed nothing"], 0
-    for added, removed, path in rows:
-        if not matches(path, allow):
-            failures.append(f"out of scope: {path} (allowed: {', '.join(allow)})")
-        elif matches(path, PROTECTED) and not any(g == path for g in allow):
-            failures.append(f"protected file: {path} (the plan must list it by exact path)")
-        if path.endswith("Cargo.lock") and not slice_.get("new_deps", False):
-            failures.append("Cargo.lock changed but the plan says new_deps is false")
+    for added, removed, entry in rows:
+        paths = rename_paths(entry)
+        for path in paths:
+            if not matches(path, allow):
+                failures.append(f"out of scope: {path} (allowed: {', '.join(allow)})")
+            elif matches(path, PROTECTED) and not any(g == path for g in allow):
+                failures.append(f"protected file: {path} (the plan must list it by exact path)")
+            if path.endswith("Cargo.lock") and not slice_.get("new_deps", False):
+                failures.append("Cargo.lock changed but the plan says new_deps is false")
+        path = paths[-1]
         if not matches(path, NOT_COUNTED) and added.isdigit():
             counted += int(added) + int(removed)
     cap = slice_.get("max_lines", 400)
@@ -79,7 +92,7 @@ def main(argv):
         print(f"slice {slice_id} is not in {job_dir / 'plan.json'}")
         return 2
 
-    code, numstat = run(["git", "diff", "--numstat", "--no-renames", f"{base}..HEAD"], tree)
+    code, numstat = run(["git", "diff", "--numstat", f"{base}..HEAD"], tree)
     failures, counted = ([f"git diff failed: {numstat}"], 0) if code else check_diff(numstat, slice_)
     report = [f"Diff: {counted} counted lines, {len(numstat.splitlines())} files"]
 
@@ -109,6 +122,11 @@ def self_check():
     assert check_diff("", s)[0], "empty diff must fail"
     assert check_diff("3\t1\tcrates/aegis-model/src/a.rs", s) == ([], 4)
     assert "out of scope" in check_diff("1\t0\tcrates/aegis-server/src/a.rs", s)[0][0]
+    moved = {"allow": ["crates/a/src/p.rs", "crates/b/src/p.rs"], "max_lines": 10}
+    assert check_diff("2\t1\tcrates/{a => b}/src/p.rs", moved) == ([], 3), "a move inside the allow list passes"
+    assert "out of scope" in check_diff("2\t1\tcrates/{a => c}/src/p.rs", moved)[0][0], "a move out of it fails"
+    assert rename_paths("x.rs => y.rs") == ["x.rs", "y.rs"]
+    assert rename_paths("src/{ => sub}/a.rs") == ["src/a.rs", "src/sub/a.rs"]
     assert "too big" in check_diff("9\t9\tcrates/aegis-model/src/a.rs", s)[0][0]
     assert check_diff("900\t0\tcrates/aegis-model/tests/t.rs", s) == ([], 0), "tests are not counted"
     wide = {"allow": ["*"], "max_lines": 10}
