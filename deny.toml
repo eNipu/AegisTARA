@@ -60,6 +60,14 @@ exceptions = [
     { crate = "slint@1.18.1", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
     { crate = "slint-build@1.18.1", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
     { crate = "slint-macros@1.18.1", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    # GPUI workbench (job 182): approved by the owner, see factory/jobs/182-workbench-skeleton/spec.md open question 1.
+    # MPL-2.0 is file-level copyleft; the files ship unmodified and the
+    # third-party notices name crates.io as their source. 0BSD is public-domain-like.
+    { crate = "option-ext@0.2.0", allow = ["MPL-2.0"] },
+    { crate = "dwrote@0.11.5", allow = ["MPL-2.0"] },
+    { crate = "cbindgen@0.28.0", allow = ["MPL-2.0"] },
+    { crate = "enum-iterator@2.3.0", allow = ["0BSD"] },
+    { crate = "enum-iterator-derive@1.5.0", allow = ["0BSD"] },
 ]
 
 [licenses.private]
@@ -85,6 +93,13 @@ ignore = [
     # Reviewed 2026-11-07: a notice, not a vulnerability; pin-utils is the
     # `pin_mut!` macro only. Slint 1.18.1 and spin_on 0.1.1 are the latest.
     { id = "RUSTSEC-2026-0441", reason = "pin-utils unmaintained; via slint > spin_on (slint-macros, skia renderer), no safe upgrade" },
+    # Reviewed 2026-11-18 (job 182): "unmaintained" notices, not
+    # vulnerabilities, reached only through the GPUI workbench set, which
+    # `[bans]` keeps in aegis-workbench. Re-check at each GPUI bump.
+    { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; via gpui-component and gpui-base, no safe upgrade" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained (proc macro); via gpui-component, no safe upgrade" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained; via gpui-component > gpui-kit-assets > gpui-pre-reqwest, no safe upgrade" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained; via gpui-pre and gpui-component > resvg > usvg (SVG text), no safe upgrade" },
 ]
 
 [bans]
@@ -104,6 +119,25 @@ deny = [
     # Slint is confined to the desktop shell (D7, D9): the client core, the
     # server, and every other crate stay free of the UI toolkit.
     { crate = "slint", wrappers = ["aegis-shell"], reason = "UI toolkit, desktop shell only (D7)" },
+    # GPUI is confined to the workbench (job 182, ADR 0066). gpui-pre's other
+    # direct dependents are its own platform crates and gpui-component's
+    # parts (`cargo tree -i gpui-pre -e normal --depth 1`).
+    { crate = "gpui-component", wrappers = ["aegis-workbench"], reason = "UI toolkit, workbench only (D37)" },
+    { crate = "gpui-pre-platform", wrappers = ["aegis-workbench"], reason = "UI toolkit platform layer, workbench only (D37)" },
+    { crate = "gpui-pre", wrappers = [
+        "aegis-workbench",
+        "gpui-base",
+        "gpui-component",
+        "gpui-kit-assets",
+        "gpui-pre-apple",
+        "gpui-pre-ios",
+        "gpui-pre-linux",
+        "gpui-pre-macos",
+        "gpui-pre-platform",
+        "gpui-pre-web",
+        "gpui-pre-wgpu",
+        "gpui-pre-windows",
+    ], reason = "UI toolkit, workbench only (D37)" },
 ]
 # Path dependencies (fixtures, future workspace members) may omit a version.
 allow-wildcard-paths = true
