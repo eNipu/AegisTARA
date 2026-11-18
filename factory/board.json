@@ -2383,6 +2383,124 @@
       ],
       "decision": null,
       "updated": "2026-11-17T23:54:46Z"
+    },
+    {
+      "id": "182-workbench-skeleton",
+      "title": "Workbench skeleton",
+      "branch": "factory/182-workbench-skeleton",
+      "stage": "merged",
+      "slice": "182e2",
+      "base": "2f5401ad96202f318c51b280a16b3dc2101a9648",
+      "reviews": {
+        "slice": "182e2",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "182a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 494
+        },
+        {
+          "slice": "182b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 516
+        },
+        {
+          "slice": "182b2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 236
+        },
+        {
+          "slice": "182c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 265
+        },
+        {
+          "slice": "182c2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 436
+        },
+        {
+          "slice": "182d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 267
+        },
+        {
+          "slice": "182d2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 423
+        },
+        {
+          "slice": "182d3",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 286
+        },
+        {
+          "slice": "182e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 478
+        },
+        {
+          "slice": "182e2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 287
+        }
+      ],
+      "decision": "",
+      "updated": "2026-11-18T11:07:22Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

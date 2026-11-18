@@ -1,0 +1,225 @@
+{
+  "job": "182-workbench-skeleton",
+  "slices": [
+    {
+      "id": "182a",
+      "title": "One command table and palette search in the client core",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/command_table.rs",
+        "crates/aegis-client/src/palette.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/command_table.rs",
+        "crates/aegis-client/tests/palette.rs"
+      ],
+      "max_lines": 600,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test command_table --test palette"
+      ]
+    },
+    {
+      "id": "182b",
+      "title": "Project explorer tree with folders, counts and rows",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/explorer.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/explorer.rs"
+      ],
+      "max_lines": 600,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test explorer"
+      ]
+    },
+    {
+      "id": "182b2",
+      "title": "Explorer marks, filter, keyboard moves, reveal and drop rule",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/explorer.rs",
+        "crates/aegis-client/tests/explorer.rs"
+      ],
+      "max_lines": 320,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test explorer"
+      ]
+    },
+    {
+      "id": "182c",
+      "title": "aegis-workbench crate: GPUI dependencies, licence rules, themes and sample",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-workbench/Cargo.toml",
+        "crates/aegis-workbench/src/lib.rs",
+        "crates/aegis-workbench/src/main.rs",
+        "crates/aegis-workbench/src/theme.rs",
+        "crates/aegis-workbench/src/sample.rs",
+        "crates/aegis-workbench/themes/*",
+        "crates/aegis-workbench/tests/theme.rs",
+        "crates/aegis-workbench/tests/sample.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "deny.toml"
+      ],
+      "max_lines": 360,
+      "new_deps": true,
+      "ci": [
+        "crates/aegis-workbench"
+      ],
+      "checks": [
+        "cargo build --locked -p aegis-workbench",
+        "cargo test --locked -p aegis-workbench",
+        "scripts/deny.sh licenses bans sources",
+        "test -f crates/aegis-workbench/themes/light.json",
+        "test -f crates/aegis-workbench/themes/dark.json",
+        "git diff --quiet factory/182c-full HEAD -- Cargo.toml Cargo.lock deny.toml crates/aegis-workbench/Cargo.toml crates/aegis-workbench/src/theme.rs crates/aegis-workbench/src/sample.rs crates/aegis-workbench/themes crates/aegis-workbench/tests/theme.rs crates/aegis-workbench/tests/sample.rs"
+      ]
+    },
+    {
+      "id": "182c2",
+      "title": "Workbench window with docks, panels, theme switching and the window test",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/lib.rs",
+        "crates/aegis-workbench/src/main.rs",
+        "crates/aegis-workbench/src/app/*",
+        "crates/aegis-workbench/tests/window.rs",
+        "crates/aegis-client/locales/*"
+      ],
+      "max_lines": 580,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-workbench",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo build --locked -p aegis-workbench",
+        "cargo test --locked -p aegis-workbench",
+        "git diff --quiet factory/182c-full HEAD"
+      ]
+    },
+    {
+      "id": "182d",
+      "title": "Local edits with undo, and dock layout remembered between runs",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/settings.rs",
+        "crates/aegis-client/tests/settings_layout.rs",
+        "crates/aegis-workbench/src/lib.rs",
+        "crates/aegis-workbench/src/local.rs",
+        "crates/aegis-workbench/src/app/*",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 340,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-workbench",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-workbench",
+        "cargo test --locked -p aegis-client --test settings_layout",
+        "git diff --quiet factory/182d-full HEAD -- crates/aegis-client/src/settings.rs crates/aegis-client/tests/settings_layout.rs crates/aegis-workbench/src/lib.rs crates/aegis-workbench/src/local.rs crates/aegis-workbench/tests/local.rs crates/aegis-workbench/src/app/layout.rs crates/aegis-workbench/tests/window.rs"
+      ]
+    },
+    {
+      "id": "182d2",
+      "title": "Explorer tree rows with icons and marks, list and element tabs",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/*",
+        "crates/aegis-workbench/tests/explorer_view.rs",
+        "crates/aegis-client/locales/*"
+      ],
+      "max_lines": 580,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-workbench",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-workbench",
+        "git diff --quiet factory/182d-full HEAD -- crates/aegis-workbench/src/app/icons.rs crates/aegis-workbench/src/app/layout.rs crates/aegis-client/locales crates/aegis-client/src/settings.rs crates/aegis-workbench/src/local.rs"
+      ]
+    },
+    {
+      "id": "182d3",
+      "title": "Keyboard actions from the command table, move components by drag or keys, undo and redo",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/*",
+        "crates/aegis-workbench/tests/explorer_view.rs"
+      ],
+      "max_lines": 340,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-workbench"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-workbench",
+        "git diff --quiet factory/182d-full HEAD"
+      ]
+    },
+    {
+      "id": "182e",
+      "title": "Command actions, key bindings and menus from the command table, explorer filter, dock, tab and theme commands",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/*",
+        "crates/aegis-workbench/tests/command_wiring.rs",
+        "crates/aegis-workbench/tests/explorer_view.rs"
+      ],
+      "max_lines": 600,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-workbench"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-workbench",
+        "git diff --quiet factory/182e-full HEAD -- crates/aegis-workbench/src/app/commands.rs crates/aegis-workbench/src/app/keys.rs crates/aegis-workbench/src/app/icons.rs crates/aegis-workbench/src/app/mod.rs crates/aegis-workbench/tests/command_wiring.rs crates/aegis-workbench/tests/explorer_view.rs"
+      ]
+    },
+    {
+      "id": "182e2",
+      "title": "Palette overlay, toolbar and shortcut list",
+      "tier": "small",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/panels.rs",
+        "crates/aegis-workbench/tests/palette_view.rs"
+      ],
+      "max_lines": 375,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-workbench",
+        "scripts/deny.sh licenses bans sources",
+        "git diff --quiet factory/182e-full HEAD"
+      ]
+    }
+  ]
+}
