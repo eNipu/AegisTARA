@@ -1,0 +1,51 @@
+{ "job": "164e-workspace-gaps",
+  "slices": [
+    {
+      "id": "164ea",
+      "title": "Limit journal paths to the file set and treat the open folder as itself",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/store/workspace.rs",
+        "crates/aegis-model/tests/workspace.rs",
+        "crates/aegis-client/src/folder.rs",
+        "crates/aegis-client/tests/folder.rs",
+        "crates/aegis-client/tests/folder_recovery.rs",
+        "crates/aegis-workbench/src/app/files.rs",
+        "crates/aegis-workbench/tests/folder_view.rs",
+        "docs/adr/0071-workspace-folder-on-disk.md"
+      ],
+      "max_lines": 130,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client", "crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test workspace",
+        "cargo test --locked -p aegis-client --test folder",
+        "cargo test --locked -p aegis-client --test folder_recovery",
+        "cargo test --locked -p aegis-workbench --test folder_view"
+      ]
+    },
+    {
+      "id": "164eb",
+      "title": "Ask Save, Don't save or Cancel before changes would be lost",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/files.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/tests/folder_view.rs",
+        "crates/aegis-client/locales/en/main.ftl",
+        "crates/aegis-client/locales/ja/main.ftl",
+        "crates/aegis-client/locales/pseudo/main.ftl",
+        "docs/adr/0071-workspace-folder-on-disk.md"
+      ],
+      "max_lines": 360,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test folder_view",
+        "cargo test --locked -p aegis-workbench --test command_wiring"
+      ]
+    }
+  ] }

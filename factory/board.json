@@ -2559,6 +2559,44 @@
       ],
       "decision": null,
       "updated": "2026-11-18T13:11:22Z"
+    },
+    {
+      "id": "164e-workspace-gaps",
+      "title": "Workspace gaps from the 164 reviews",
+      "branch": "factory/164e-workspace-gaps",
+      "stage": "merged",
+      "slice": "164eb",
+      "base": "ca481e3e244a06d00f673de3aa23d868207e8531",
+      "reviews": {
+        "slice": "164eb",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "164ea",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 52
+        },
+        {
+          "slice": "164eb",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 210
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-18T13:58:18Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
