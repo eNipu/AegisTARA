@@ -1,21 +1,25 @@
 //! The `Workbench` view: top bar, dock area and status bar over the sample.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use aegis_client::explorer::{ExplorerIndex, ExplorerState};
 use aegis_client::i18n::Catalog;
-use aegis_client::settings::Appearance;
+use aegis_client::settings::{Appearance, Settings, WorkbenchLayout};
 use aegis_client::workspace::Workspace;
 use gpui::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
-use gpui_component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
+use gpui_component::dock::{
+    DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, panel_handle,
+};
 
 use super::apply_appearance;
+use super::layout::{apply_layout, default_layout, read_layout};
 use super::panels::{BottomPanel, ExplorerPanel, InspectorPanel, OverviewTab};
-use crate::sample::{SAMPLE_NAME, workbench_sample};
+use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
 
 /// The window's root view.
 pub struct Workbench {
@@ -25,22 +29,27 @@ pub struct Workbench {
     explorer: Entity<ExplorerPanel>,
     area: Entity<DockArea>,
     status: SharedString,
+    settings_path: Option<PathBuf>,
+    saved: Option<WorkbenchLayout>,
     _skin: Rc<DockSkin>,
-    _appearance: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 impl Workbench {
     /// The workbench over the sample project, with texts from `catalog`.
+    /// The dock layout is read from and saved to `settings_path` (none:
+    /// the defaults, never saved).
     pub fn new(
-        catalog: &Catalog,
+        catalog: Rc<Catalog>,
         appearance: Appearance,
+        settings_path: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let workspace = workbench_sample();
         let project = workspace.project();
         let names = project.methodology().element_names().clone();
-        let index = ExplorerIndex::build(&workspace, &names, catalog, SAMPLE_NAME);
+        let index = ExplorerIndex::build(&workspace, &names, &catalog, SAMPLE_NAME);
         let state = ExplorerState::default();
         let tr = |id: &str| SharedString::from(catalog.tr(id));
 
@@ -62,19 +71,32 @@ impl Workbench {
         let bottom_text = vec![tr("workbench-bottom-empty")];
         let bottom = cx.new(|cx| BottomPanel::new(tr("workbench-bottom"), None, bottom_text, cx));
 
+        let layout = settings_path
+            .as_ref()
+            .and_then(|p| Settings::load(p).workbench_layout(SAMPLE_KEY))
+            .unwrap_or_else(|| default_layout(SAMPLE_KEY));
         let (area, skin) = DockSkin::dock_area("workbench", None, window, cx);
         let center = DockLayout::tabs().panel_view(panel_handle(overview), cx);
         let left = DockLayout::tabs().panel_view(panel_handle(explorer.clone()), cx);
         let right = DockLayout::tabs().panel_view(panel_handle(inspector), cx);
         let below = DockLayout::tabs().panel_view(panel_handle(bottom), cx);
-        area.update(cx, |area, cx| {
+        let saved = area.update(cx, |area, cx| {
             area.set_center(center, window, cx);
             area.set_dock(DockPlacement::Left, left, window, cx);
             area.set_dock(DockPlacement::Right, right, window, cx);
             area.set_dock(DockPlacement::Bottom, below, window, cx);
-            area.set_dock_size(DockPlacement::Left, px(280.), window, cx);
-            area.set_dock_size(DockPlacement::Right, px(320.), window, cx);
-            area.set_dock_size(DockPlacement::Bottom, px(200.), window, cx);
+            apply_layout(area, &layout, window, cx);
+            read_layout(area, SAMPLE_KEY)
+        });
+        let changed = cx.subscribe(&area, |this, _, ev: &DockEvent, cx| {
+            if let DockEvent::LayoutChanged = ev {
+                this.save_layout(cx);
+            }
+        });
+        let me = cx.weak_entity();
+        window.on_window_should_close(cx, move |_, cx| {
+            let _ = me.update(cx, |w, cx| w.save_layout(cx));
+            true
         });
 
         let status = format!(
@@ -95,8 +117,10 @@ impl Workbench {
             explorer,
             area,
             status,
+            settings_path,
+            saved: Some(saved),
             _skin: skin,
-            _appearance: follow,
+            _subscriptions: [changed, follow],
         }
     }
 
@@ -118,6 +142,28 @@ impl Workbench {
     /// What is open and selected in the explorer.
     pub fn state(&self) -> &ExplorerState {
         &self.state
+    }
+
+    /// The dock area.
+    pub fn area(&self) -> &Entity<DockArea> {
+        &self.area
+    }
+
+    fn save_layout(&mut self, cx: &App) {
+        let Some(path) = &self.settings_path else {
+            return;
+        };
+        let layout = read_layout(self.area.read(cx), SAMPLE_KEY);
+        if self.saved.as_ref() == Some(&layout) {
+            return;
+        }
+        // Reload first: other code may have written other fields.
+        let mut settings = Settings::load(path);
+        settings.set_workbench_layout(layout.clone());
+        if let Err(err) = settings.save(path) {
+            eprintln!("could not save the layout: {err}");
+        }
+        self.saved = Some(layout);
     }
 }
 

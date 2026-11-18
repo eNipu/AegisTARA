@@ -1,6 +1,8 @@
 //! The workbench window opens in GPUI's test context with its docks.
 #![cfg(any(target_os = "macos", target_os = "windows"))]
 
+use std::rc::Rc;
+
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::settings::Appearance;
 use aegis_workbench::app::{Workbench, apply_appearance};
@@ -9,10 +11,10 @@ use gpui::TestAppContext;
 #[gpui::test]
 fn the_window_opens_with_explorer_rows(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
-    let catalog = Catalog::load(Language::En);
+    let catalog = Rc::new(Catalog::load(Language::En));
     let (view, cx) = cx.add_window_view(|window, cx| {
         apply_appearance(Appearance::Light, window, cx);
-        Workbench::new(&catalog, Appearance::Light, window, cx)
+        Workbench::new(catalog, Appearance::Light, None, window, cx)
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let (shown, expected) = cx.update(|_, cx| {
