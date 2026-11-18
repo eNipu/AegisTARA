@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod local;
 pub mod sample;
 pub mod theme;
 

@@ -95,6 +95,30 @@ pub struct SystemViewSetting {
     pub systems: Vec<String>,
 }
 
+/// The workbench docks of one workspace: which are open and how big they
+/// are, in logical pixels (job 182).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct WorkbenchLayout {
+    /// The workspace key; at most [`MAX_LAYOUT_KEY_BYTES`].
+    pub key: String,
+    /// The explorer dock is open.
+    pub left_open: bool,
+    /// The inspector dock is open.
+    pub right_open: bool,
+    /// The bottom dock is open.
+    pub bottom_open: bool,
+    /// Width of the left dock.
+    pub left_width: u32,
+    /// Width of the right dock.
+    pub right_width: u32,
+    /// Height of the bottom dock.
+    pub bottom_height: u32,
+}
+
+/// Longest workspace key whose layout is remembered.
+pub const MAX_LAYOUT_KEY_BYTES: usize = 128;
+
 /// Largest settings file read.
 pub const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 
@@ -141,6 +165,8 @@ pub struct Settings {
     /// The systems each user looks at in each project (SYS-03); never part
     /// of a project.
     pub system_views: Vec<SystemViewSetting>,
+    /// The workbench dock layout of each workspace, oldest first.
+    pub workbench_layouts: Vec<WorkbenchLayout>,
 }
 
 /// How the window picks light or dark (UI-07.5).
@@ -330,6 +356,37 @@ impl Settings {
         self.system_views.drain(..extra);
     }
 
+    /// The remembered workbench layout of `key`, with the dock widths
+    /// clamped to 160..=800 and the height to 80..=600; `None` when none is
+    /// stored or the key is longer than [`MAX_LAYOUT_KEY_BYTES`].
+    #[must_use]
+    pub fn workbench_layout(&self, key: &str) -> Option<WorkbenchLayout> {
+        if key.len() > MAX_LAYOUT_KEY_BYTES {
+            return None;
+        }
+        let mut layout = self
+            .workbench_layouts
+            .iter()
+            .find(|l| l.key == key)?
+            .clone();
+        layout.left_width = layout.left_width.clamp(160, 800);
+        layout.right_width = layout.right_width.clamp(160, 800);
+        layout.bottom_height = layout.bottom_height.clamp(80, 600);
+        Some(layout)
+    }
+
+    /// Remembers `layout` under its key as the newest entry; the oldest
+    /// entries are dropped beyond `MAX_REMEMBERED_VIEWS`.
+    pub fn set_workbench_layout(&mut self, layout: WorkbenchLayout) {
+        self.workbench_layouts.retain(|l| l.key != layout.key);
+        self.workbench_layouts.push(layout);
+        let extra = self
+            .workbench_layouts
+            .len()
+            .saturating_sub(MAX_REMEMBERED_VIEWS);
+        self.workbench_layouts.drain(..extra);
+    }
+
     /// The export folder to use.
     #[must_use]
     pub fn export_dir(&self) -> PathBuf {
@@ -394,6 +451,7 @@ mod tests {
             bottom_panel: 0,
             collapsed_groups: vec!["assets-threats".into()],
             system_views: Vec::new(),
+            workbench_layouts: Vec::new(),
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);

@@ -1,7 +1,10 @@
 //! The GPUI window: theme set-up, the `Workbench` view and its panels.
 
+mod layout;
 mod panels;
 mod workbench;
+
+use std::rc::Rc;
 
 use aegis_client::i18n::Catalog;
 use aegis_client::settings::{Appearance, Settings, config_dir};
@@ -19,10 +22,10 @@ pub use workbench::Workbench;
 pub fn run() {
     gpui_platform::application().run(|cx| {
         gpui_component::init(cx);
-        let settings = config_dir()
-            .map(|dir| Settings::load(&Settings::path_in(&dir)))
-            .unwrap_or_default();
-        let (appearance, catalog) = (settings.appearance(), Catalog::load(settings.language()));
+        let path = config_dir().map(|dir| Settings::path_in(&dir));
+        let settings = path.as_deref().map(Settings::load).unwrap_or_default();
+        let appearance = settings.appearance();
+        let catalog = Rc::new(Catalog::load(settings.language()));
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -34,7 +37,7 @@ pub fn run() {
         };
         let opened = cx.open_window(options, |window, cx| {
             apply_appearance(appearance, window, cx);
-            let workbench = cx.new(|cx| Workbench::new(&catalog, appearance, window, cx));
+            let workbench = cx.new(|cx| Workbench::new(catalog, appearance, path, window, cx));
             cx.new(|cx| Root::new(workbench, window, cx))
         });
         if let Err(err) = opened {
