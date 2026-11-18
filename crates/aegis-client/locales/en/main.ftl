@@ -273,3 +273,18 @@ license-invalid = The license file cannot be used: { $error }
 license-not-yet-valid = This license is not valid yet. Check the computer's date.
 workbench-needs-license = Open a project folder from the start screen, with your license file.
 workbench-read-only-expired = Read-only: the license of { $customer } has expired.
+
+# Start screen (job 208)
+start-local = On this computer
+start-folder = Project folder
+start-license = License file
+start-browse = Browse…
+start-open = Open
+start-new = New workspace…
+start-sample = Try the sample
+start-license-ok = Licensed to { $customer }, { $days } days left.
+start-license-grace = Licensed to { $customer }: the license has ended, { $days } days of grace left.
+start-license-expired = The license of { $customer } has expired: projects open read-only.
+start-needs-folder = Choose a project folder.
+start-needs-license = Choose your license file.
+start-folder-not-empty = { $path } is not empty. Choose an empty or new folder for a new workspace.
