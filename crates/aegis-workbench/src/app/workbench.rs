@@ -20,8 +20,9 @@ use aegis_client::view::Selection;
 use aegis_client::workspace::Workspace;
 use aegis_model::{ElementNamesDef, Methodology, Project};
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, px,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
+    px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::command::{Command, CommandItem, CommandState};
@@ -120,6 +121,15 @@ pub struct Workbench {
     _skin: Rc<DockSkin>,
     _subscriptions: [Subscription; 3],
 }
+
+/// What the workbench asks the window around it to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkbenchEvent {
+    /// The project was left; show the start screen.
+    BackToStart,
+}
+
+impl EventEmitter<WorkbenchEvent> for Workbench {}
 
 /// Every row of the tree, all nodes expanded. Time O(tree x depth).
 fn all_rows(index: &ExplorerIndex) -> Vec<ExplorerRow> {
@@ -576,6 +586,7 @@ impl Workbench {
                 self.changed(res, cx);
             }
             "save" | "save-as" => self.prompt_save_as(None, window, cx),
+            "back-to-start" => self.leave(Leave::Start, window, cx),
             "quit" => self.leave(Leave::Quit, window, cx),
             _ => {}
         }
