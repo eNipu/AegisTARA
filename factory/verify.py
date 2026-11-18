@@ -79,7 +79,7 @@ def main(argv):
         print(f"slice {slice_id} is not in {job_dir / 'plan.json'}")
         return 2
 
-    code, numstat = run(["git", "diff", "--numstat", f"{base}..HEAD"], tree)
+    code, numstat = run(["git", "diff", "--numstat", "--no-renames", f"{base}..HEAD"], tree)
     failures, counted = ([f"git diff failed: {numstat}"], 0) if code else check_diff(numstat, slice_)
     report = [f"Diff: {counted} counted lines, {len(numstat.splitlines())} files"]
 
