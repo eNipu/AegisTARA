@@ -145,6 +145,34 @@ fn journal(replace: &[&str], remove: &[&str]) -> String {
 }
 
 #[test]
+fn a_journal_outside_the_file_set_touches_nothing() {
+    let dir = scratch("outside-set");
+    let (m, ws) = sample();
+    drop(WorkspaceFolder::create(&dir, ws.project()).expect("create"));
+    fs::create_dir_all(dir.join(".git")).expect("git dir");
+    let (git, notes) = (dir.join(".git/config.json"), dir.join("notes.json"));
+    fs::write(&git, b"git config").expect("git");
+    fs::write(&notes, b"my notes").expect("notes");
+    let damage = dir.join("shared/damage.json");
+    let before = fs::read(&damage).expect("damage");
+    let record = journal(
+        &[],
+        &["shared/damage.json", ".git/config.json", "notes.json"],
+    );
+    fs::write(dir.join(".aegis-save.json"), record).expect("journal");
+
+    let result = WorkspaceFolder::open(&dir, m);
+    assert!(
+        matches!(result, Err(FolderError::Journal { .. })),
+        "{result:?}"
+    );
+    assert_eq!(fs::read(&git).expect("git"), b"git config");
+    assert_eq!(fs::read(&notes).expect("notes"), b"my notes");
+    assert_eq!(fs::read(&damage).expect("damage"), before);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_hostile_journal_is_refused_and_touches_nothing() {
     let hostile = [
         "../victim.json",
@@ -152,6 +180,10 @@ fn a_hostile_journal_is_refused_and_touches_nothing() {
         "shared\\damage.json",
         "Shared/damage.json",
         "shared/../../victim.json",
+        ".git/config.json",
+        "manifest.json",
+        "notes.json",
+        "systems/main/trees/a/b.json",
     ];
     for (i, bad) in hostile.iter().enumerate() {
         for in_replace in [false, true] {
@@ -194,16 +226,19 @@ fn a_journal_through_a_link_is_refused() {
     fs::create_dir_all(&outside).expect("outside");
     let victim = outside.join("victim.json");
     fs::write(&victim, b"victim").expect("victim");
-    std::os::unix::fs::symlink(&outside, dir.join("systems/link")).expect("link");
+    // A layout path, so only the link check can refuse it.
+    let trees = dir.join("systems/main/trees");
+    fs::remove_dir_all(&trees).expect("trees");
+    std::os::unix::fs::symlink(&outside, &trees).expect("link");
     fs::write(
         dir.join(".aegis-save.json"),
-        journal(&[], &["systems/link/victim.json"]),
+        journal(&[], &["systems/main/trees/victim.json"]),
     )
     .expect("journal");
 
     let result = WorkspaceFolder::open(&dir, m);
     assert!(
-        matches!(&result, Err(FolderError::Symlink { path }) if path == "systems/link"),
+        matches!(&result, Err(FolderError::Symlink { path }) if path == "systems/main/trees"),
         "{result:?}"
     );
     assert!(victim.exists());
