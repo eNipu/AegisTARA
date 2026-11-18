@@ -221,3 +221,12 @@ explorer-item-definition = Item definition
 explorer-risk-treatment = Risk treatment
 explorer-goals-and-claims = Goals and claims
 explorer-problems = Problems
+
+# Workbench window (job 182)
+workbench-overview = Overview
+workbench-inspector-empty = Select an element to see its details.
+workbench-bottom-empty = Problems, changes and task output appear here in a later version.
+workbench-status-unsaved = Sample project in memory: changes are not saved.
+workbench-explorer = Explorer
+workbench-inspector = Inspector
+workbench-bottom = Output

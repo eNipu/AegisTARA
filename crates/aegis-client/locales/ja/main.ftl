@@ -212,3 +212,12 @@ explorer-item-definition = アイテム定義
 explorer-risk-treatment = リスク対応
 explorer-goals-and-claims = 目標と主張
 explorer-problems = 問題
+
+# Workbench window (job 182)
+workbench-overview = 概要
+workbench-inspector-empty = 要素を選択すると詳細が表示されます。
+workbench-bottom-empty = 問題、変更、タスクの出力は今後のバージョンでここに表示されます。
+workbench-status-unsaved = サンプルプロジェクトはメモリ上にあります。変更は保存されません。
+workbench-explorer = エクスプローラー
+workbench-inspector = インスペクター
+workbench-bottom = 出力
