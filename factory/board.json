@@ -2501,6 +2501,64 @@
       ],
       "decision": "",
       "updated": "2026-11-18T11:07:22Z"
+    },
+    {
+      "id": "164-standalone-workspace",
+      "title": "Standalone workspace",
+      "branch": "factory/164-standalone-workspace",
+      "stage": "merged",
+      "slice": "164d",
+      "base": "7fbdd03ed7c4bdb42d920f3e3ef7df6ab4d3f952",
+      "reviews": {
+        "slice": "164d",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "164a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 468
+        },
+        {
+          "slice": "164b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 294
+        },
+        {
+          "slice": "164c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 2,
+          "lines": 102
+        },
+        {
+          "slice": "164d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 373
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-18T13:11:22Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

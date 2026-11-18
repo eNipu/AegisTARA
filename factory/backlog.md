@@ -8,7 +8,7 @@ Owner rule (2026-11-18): this group comes before every other open line; only the
 
 - [ ] [design] GPUI screen mockups: login and every screen on one canvas, agreed with the owner before any build (206-gpui-mockups; canvas https://claude.ai/artifact/XrQjbEY2w4tXkgiumEN89m)
 - [ ] [design] GPUI spec: which core and server features each screen needs, what exists, what is missing, the job order and the test scale (207-gpui-spec)
-- [design] Standalone workspace: open and save a workspace folder through the file set (164-standalone-workspace; `docs/design/workbench-breakdown.md` group 1)
+- [x] Standalone workspace (owner 2026-11-18: next GUI job): open and save a workspace folder through the file set (164-standalone-workspace; `docs/design/workbench-breakdown.md` group 1)
 - [design] System folders: each system lists its own elements plus the project-level damage scenarios, controls, goals and claims it links to (`⇢`); New in a system folder creates at project level and links in one undo step; system kind Internal or External (`docs/design/project-explorer.md` section 4, owner Q1 2026-11-18) (210-system-folders)
 - [design] System templates and integration properties: templates in the base library, a system derived from one, integration properties as conditions that switch base-tree branches (section 5; builds on 133 and 134) (211-system-templates)
 - [design] Base inheritance: derivation link and override layer for trees, assets and the item skeleton, inherited and overridden marks, Reset to base, the Base changed review on a new template version (section 5.3; owner Q2: live link with overrides) (212-base-inheritance)
