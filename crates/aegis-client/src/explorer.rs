@@ -1,13 +1,15 @@
 //! The project explorer: the whole project as one tree (project, shared
-//! analysis, every system with the same folders), with counts. Problem
-//! marks, keyboard moves, the filter and the drop rule arrive in slice
-//! 182b2. No UI toolkit; the GPUI crate only renders [`ExplorerRow`]s.
+//! analysis, every system with the same folders), with counts, problem
+//! marks, keyboard moves, a filter and the drop rule. No UI toolkit; the
+//! GPUI crate only renders [`ExplorerRow`]s.
 
 use std::collections::{HashMap, HashSet};
 
 use aegis_model::{ElementId, ElementNameDef, ElementNamesDef, Project, SystemSet, SystemUse};
 
+use crate::commands::Edit;
 use crate::i18n::Catalog;
+use crate::pages::problems;
 use crate::systems::system_rows;
 use crate::view::Selection;
 use crate::workspace::Workspace;
@@ -113,6 +115,8 @@ struct Node {
     parent: Option<ExplorerKey>,
     depth: u8,
     label: String,
+    /// Byte length of the visual ID at the start of an element label.
+    split: usize,
     count: Option<usize>,
     mark: Mark,
     linked: bool,
@@ -262,9 +266,8 @@ pub struct ExplorerIndex {
 
 impl ExplorerIndex {
     /// Builds the tree: the systems of every element, the members of every
-    /// folder and the counts; every mark is [`Mark::None`] until slice
-    /// 182b2. Time O(project x systems), space the same (an element is
-    /// listed once per system).
+    /// folder, the counts and the marks from the linter. Time O(project x
+    /// systems), space the same (an element is listed once per system).
     #[must_use]
     pub fn build(
         ws: &Workspace,
@@ -318,6 +321,7 @@ impl ExplorerIndex {
                 &SystemSet::is_empty,
             );
         }
+        ix.marks(ws, &usage, &items);
         ix
     }
 
@@ -369,7 +373,8 @@ impl ExplorerIndex {
             let mut n = 0;
             for i in kinds.iter().flat_map(|k| pick(items, *k, member)) {
                 let label = format!("{} {}", i.visual_id, i.name);
-                self.add(ExplorerKey::Element(o, f, i.sel), key, label);
+                self.add(ExplorerKey::Element(o, f, i.sel), key, label)
+                    .split = i.visual_id.len();
                 n += 1;
             }
             let has_kind = kinds.iter().any(|k| items.contains_key(k));
@@ -391,17 +396,92 @@ impl ExplorerIndex {
         }
     }
 
+    /// Marks the folders each finding lands in and their ancestors, and
+    /// counts the findings per owner.
+    fn marks(&mut self, ws: &Workspace, usage: &SystemUse, items: &Items) {
+        use ExplorerKey as K;
+        let kinds: HashMap<Selection, (Folder, SystemSet)> = items
+            .iter()
+            .flat_map(|(f, list)| list.iter().map(|i| (i.sel, (*f, i.set))))
+            .collect();
+        let mut counts: HashMap<Owner, usize> = HashMap::new();
+        for row in problems(ws) {
+            let m = if row.error {
+                Mark::Error
+            } else {
+                Mark::Warning
+            };
+            let found = row.target.and_then(|s| match s {
+                Selection::TreeNode(t, _) => kinds.get(&Selection::Tree(t)).copied(),
+                s => kinds.get(&s).copied(),
+            });
+            let (mut keys, mut touched) = (Vec::new(), Vec::new());
+            match found {
+                None => keys.push(K::Root),
+                Some((F::Parties, _)) => keys.push(K::Folder(Owner::Project, F::Parties)),
+                Some((f, set)) => {
+                    touched = usage.ids(set).map(Owner::System).collect();
+                    let linked = match f {
+                        F::Goals | F::Claims => Some(F::GoalsAndClaims),
+                        F::Damage | F::Controls => Some(f),
+                        _ => None,
+                    };
+                    if let Some(sf) = linked {
+                        keys.push(K::Folder(Owner::Project, f));
+                        keys.extend(touched.iter().map(|o| K::Folder(*o, sf)));
+                    } else {
+                        if set.is_empty() {
+                            touched.push(Owner::Unassigned);
+                        }
+                        keys.extend(touched.iter().map(|o| K::Folder(*o, f)));
+                    }
+                }
+            }
+            for o in touched {
+                keys.push(K::Folder(o, Folder::Problems));
+                *counts.entry(o).or_default() += 1;
+            }
+            for k in keys {
+                self.mark(k, m);
+            }
+        }
+        for (o, n) in counts {
+            if let Some(node) = self.nodes.get_mut(&K::Folder(o, Folder::Problems)) {
+                node.count = Some(n);
+            }
+        }
+    }
+
+    /// Raises the mark of `key` and of every ancestor to at least `m`.
+    fn mark(&mut self, key: ExplorerKey, m: Mark) {
+        let mut at = Some(key);
+        while let Some(k) = at {
+            let Some(node) = self.nodes.get_mut(&k) else {
+                return;
+            };
+            node.mark = node.mark.max(m);
+            at = node.parent;
+        }
+    }
+
     /// The visible rows, depth first, children only under expanded nodes;
-    /// time O(visible rows). The filter arrives in slice 182b2.
+    /// time O(visible rows). With a filter: the element rows whose visual
+    /// ID or name holds it (any case), their ancestors shown expanded, and
+    /// the root always; time O(project).
     #[must_use]
     pub fn rows(&self, state: &ExplorerState) -> Vec<ExplorerRow> {
+        let keep = (!state.filter.is_empty()).then(|| self.matching(&state.filter.to_lowercase()));
         let mut out = Vec::new();
         let mut stack = vec![ExplorerKey::Root];
         while let Some(key) = stack.pop() {
             let Some(node) = self.nodes.get(&key) else {
                 continue;
             };
-            let expanded = !node.children.is_empty() && state.expanded.contains(&key);
+            let shown = |c: &ExplorerKey| keep.as_ref().is_none_or(|k| k.contains(c));
+            let expanded = match &keep {
+                Some(k) => node.children.iter().any(|c| k.contains(c)),
+                None => !node.children.is_empty() && state.expanded.contains(&key),
+            };
             out.push(ExplorerRow {
                 key,
                 parent: node.parent,
@@ -416,10 +496,50 @@ impl ExplorerIndex {
                 system_slot: node.system_slot,
             });
             if expanded {
-                stack.extend(node.children.iter().rev());
+                stack.extend(node.children.iter().rev().filter(|c| shown(c)));
             }
         }
         out
+    }
+
+    /// The element nodes matching `needle` (lower case) and their ancestors.
+    fn matching(&self, needle: &str) -> HashSet<ExplorerKey> {
+        let mut keep = HashSet::new();
+        for (key, node) in &self.nodes {
+            if !matches!(key, ExplorerKey::Element(..)) {
+                continue;
+            }
+            let (vid, name) = node.label.split_at(node.split.min(node.label.len()));
+            if !(vid.to_lowercase().contains(needle)
+                || name.trim_start().to_lowercase().contains(needle))
+            {
+                continue;
+            }
+            let mut at = Some(*key);
+            while let Some(k) = at {
+                if !keep.insert(k) {
+                    break;
+                }
+                at = self.nodes.get(&k).and_then(|n| n.parent);
+            }
+        }
+        keep
+    }
+
+    /// The first element node holding `sel`, depth first.
+    fn find(&self, sel: Selection) -> Option<ExplorerKey> {
+        let mut stack = vec![ExplorerKey::Root];
+        while let Some(key) = stack.pop() {
+            if let ExplorerKey::Element(_, _, s) = key
+                && s == sel
+            {
+                return Some(key);
+            }
+            if let Some(node) = self.nodes.get(&key) {
+                stack.extend(node.children.iter().rev());
+            }
+        }
+        None
     }
 }
 
@@ -443,7 +563,7 @@ pub struct ExplorerState {
     pub expanded: HashSet<ExplorerKey>,
     /// The selected node.
     pub selected: Option<ExplorerKey>,
-    /// The filter text; applied from slice 182b2.
+    /// The filter text; empty shows everything.
     pub filter: String,
 }
 
@@ -465,6 +585,61 @@ impl Default for ExplorerState {
 }
 
 impl ExplorerState {
+    fn position(&self, rows: &[ExplorerRow]) -> Option<usize> {
+        let sel = self.selected?;
+        rows.iter().position(|r| r.key == sel)
+    }
+
+    fn select_at(&mut self, rows: &[ExplorerRow], i: usize) {
+        if let Some(r) = rows.get(i) {
+            self.selected = Some(r.key);
+        }
+    }
+
+    /// Selects the next row; stops at the last.
+    pub fn down(&mut self, rows: &[ExplorerRow]) {
+        let last = rows.len().saturating_sub(1);
+        let i = self.position(rows).map_or(0, |i| (i + 1).min(last));
+        self.select_at(rows, i);
+    }
+
+    /// Selects the previous row; stops at the first.
+    pub fn up(&mut self, rows: &[ExplorerRow]) {
+        let i = self.position(rows).map_or(0, |i| i.saturating_sub(1));
+        self.select_at(rows, i);
+    }
+
+    /// Expands a collapsed node, or moves into an expanded one.
+    pub fn right(&mut self, rows: &[ExplorerRow]) {
+        let Some(i) = self.position(rows) else {
+            return;
+        };
+        let Some(row) = rows.get(i) else {
+            return;
+        };
+        if row.has_children && !row.expanded {
+            self.expanded.insert(row.key);
+        } else if row.expanded
+            && let Some(next) = rows.get(i + 1)
+            && next.parent == Some(row.key)
+        {
+            self.selected = Some(next.key);
+        }
+    }
+
+    /// Collapses an expanded node, or moves to the parent.
+    pub fn left(&mut self, rows: &[ExplorerRow]) {
+        let Some(row) = self.position(rows).and_then(|i| rows.get(i)) else {
+            return;
+        };
+        if row.expanded && self.expanded.remove(&row.key) {
+            return;
+        }
+        if let Some(parent) = row.parent {
+            self.selected = Some(parent);
+        }
+    }
+
     /// Expands or collapses `key`.
     pub fn toggle(&mut self, key: ExplorerKey) {
         if !self.expanded.remove(&key) {
@@ -476,4 +651,43 @@ impl ExplorerState {
     pub fn select(&mut self, key: ExplorerKey) {
         self.selected = Some(key);
     }
+
+    /// Selects the first element row holding `sel` and expands its
+    /// ancestors; does nothing when no row holds it. Time O(tree).
+    pub fn reveal(&mut self, index: &ExplorerIndex, sel: Selection) {
+        let Some(key) = index.find(sel) else {
+            return;
+        };
+        let mut at = index.nodes.get(&key).and_then(|n| n.parent);
+        while let Some(k) = at {
+            self.expanded.insert(k);
+            at = index.nodes.get(&k).and_then(|n| n.parent);
+        }
+        self.selected = Some(key);
+    }
+}
+
+/// The edit for dropping `dragged` on `target`: a top-level component onto
+/// another system (or onto "Not in a system") moves it there. Every other
+/// pair returns `None`.
+#[must_use]
+pub fn drop_edit(project: &Project, dragged: &ExplorerKey, target: &ExplorerKey) -> Option<Edit> {
+    let ExplorerKey::Element(_, Folder::Components, Selection::Component(c)) = *dragged else {
+        return None;
+    };
+    let component = project
+        .component_idx(&c)
+        .and_then(|i| project.component(i))?;
+    if component.parent().is_some() {
+        return None;
+    }
+    let system = match *target {
+        ExplorerKey::System(s) | ExplorerKey::Folder(Owner::System(s), _) => Some(s),
+        ExplorerKey::Unassigned | ExplorerKey::Folder(Owner::Unassigned, _) => None,
+        _ => return None,
+    };
+    (component.system() != system).then(|| Edit::MoveToSystem {
+        components: vec![c],
+        system,
+    })
 }
