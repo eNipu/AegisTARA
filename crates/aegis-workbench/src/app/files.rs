@@ -37,7 +37,8 @@ impl Workbench {
     }
 
     /// Opens the project folder `path`, converting an old project folder
-    /// first. Unsaved changes of the open folder are saved before.
+    /// first. Unsaved changes of the open folder are saved before. Opening
+    /// the folder that is already open does nothing.
     ///
     /// # Errors
     ///
@@ -49,6 +50,9 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.folder.as_ref().is_some_and(|f| f.holds(path)) {
+            return Ok(());
+        }
         if self.folder.is_some() && self.has_unsaved_changes() {
             self.save(cx)?;
         }
@@ -104,7 +108,8 @@ impl Workbench {
     }
 
     /// Writes the project into the new folder `path` and goes on in it.
-    /// The changes and their undo history stay.
+    /// The changes and their undo history stay. Save As into the open
+    /// folder is a plain Save.
     ///
     /// # Errors
     ///
@@ -115,6 +120,9 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.folder.as_ref().is_some_and(|f| f.holds(path)) {
+            return self.save(cx);
+        }
         let folder =
             WorkspaceFolder::create(path, self.workspace.project()).map_err(|e| e.to_string())?;
         self.name = folder.name();

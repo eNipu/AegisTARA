@@ -141,6 +141,28 @@ fn a_second_open_is_locked() {
 }
 
 #[test]
+fn holds_names_only_this_folder() {
+    let (dir, other) = (scratch("holds"), scratch("holds-other"));
+    let (_, ws) = sample();
+    let folder = WorkspaceFolder::create(&dir, ws.project()).expect("create");
+    fs::create_dir_all(&other).expect("other");
+    assert!(folder.holds(&dir));
+    assert!(folder.holds(&dir.join("shared").join("..")));
+    assert!(!folder.holds(&other));
+    assert!(!folder.holds(&dir.join("missing")));
+    #[cfg(unix)]
+    {
+        let link = scratch("holds-link");
+        std::os::unix::fs::symlink(&dir, &link).expect("symlink");
+        assert!(folder.holds(&link));
+        let _ = fs::remove_file(&link);
+    }
+    drop(folder);
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&other);
+}
+
+#[test]
 fn create_refuses_a_non_empty_folder() {
     let (_, ws) = sample();
     let dir = scratch("not-empty");

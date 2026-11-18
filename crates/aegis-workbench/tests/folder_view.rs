@@ -186,6 +186,42 @@ fn an_edit_is_unsaved_until_save_and_reopens_equal(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn opening_the_open_folder_does_nothing(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let dir = scratch("open-same");
+    save_as(&view, cx, &dir);
+    move_tcu(&view, cx);
+    let bytes = project_bytes(&view, cx);
+    let item = dir.join("systems/main/item.json");
+    let on_disk = fs::read(&item).expect("item");
+    for again in [dir.clone(), dir.join("shared").join("..")] {
+        open_folder(&view, cx, &again).expect("open again");
+        assert!(unsaved(&view, cx));
+        assert_eq!(project_bytes(&view, cx), bytes);
+        assert_eq!(fs::read(&item).expect("item"), on_disk);
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
+fn save_as_into_the_open_folder_saves(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let dir = scratch("save-as-same");
+    save_as(&view, cx, &dir);
+    move_tcu(&view, cx);
+    let edited = project_bytes(&view, cx);
+    save_as(&view, cx, &dir);
+    assert!(!unsaved(&view, cx));
+    let release = other_folder("save-as-same-release");
+    open_folder(&view, cx, &release).expect("open other");
+    let (folder, project) = WorkspaceFolder::open(&dir, methodology()).expect("reopen");
+    drop(folder);
+    assert_eq!(saved(&project), edited);
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&release);
+}
+
+#[gpui::test]
 fn opening_a_folder_closes_element_tabs(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let tcu = cx.update(|_, cx| {
