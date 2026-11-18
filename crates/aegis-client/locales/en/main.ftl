@@ -230,3 +230,7 @@ workbench-status-unsaved = Sample project in memory: changes are not saved.
 workbench-explorer = Explorer
 workbench-inspector = Inspector
 workbench-bottom = Output
+
+# Workbench explorer (job 182)
+workbench-picked = Moving { $name }: select a system and press { $keys }.
+workbench-list-empty = Nothing here yet.

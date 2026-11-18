@@ -221,3 +221,7 @@ workbench-status-unsaved = サンプルプロジェクトはメモリ上にあ�
 workbench-explorer = エクスプローラー
 workbench-inspector = インスペクター
 workbench-bottom = 出力
+
+# Workbench explorer (job 182)
+workbench-picked = { $name } を移動中: システムを選択して { $keys } を押してください。
+workbench-list-empty = まだ何もありません。
