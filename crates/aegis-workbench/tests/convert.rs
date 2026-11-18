@@ -33,6 +33,11 @@ fn saved(project: &Project) -> Vec<u8> {
 /// Writes an old folder in `dir` holding the workbench sample plus one
 /// rename after the snapshot, and returns the project it should hold.
 fn old_folder(dir: &Path, m: &Arc<Methodology>, version: &str) -> Project {
+    old_folder_keyed(dir, m, m.key(), version)
+}
+
+/// As `old_folder`, with the methodology key written into the manifest.
+fn old_folder_keyed(dir: &Path, m: &Arc<Methodology>, key: &str, version: &str) -> Project {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -42,7 +47,7 @@ fn old_folder(dir: &Path, m: &Arc<Methodology>, version: &str) -> Project {
         let meta = ProjectMeta {
             id: ProjectId::new_v7(),
             name: "Old".into(),
-            methodology_key: m.key().into(),
+            methodology_key: key.into(),
             methodology_version: version.into(),
             created_ms: 1,
         };
@@ -126,6 +131,21 @@ fn another_methodology_version_is_refused() {
         panic!("another version must be refused");
     };
     assert!(message.contains("0.0-test"), "{message}");
+    assert!(!dir.join("aegis.json").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_long_methodology_key_is_cut_in_the_message() {
+    let dir = scratch("longkey");
+    let m = methodology();
+    let key = "k".repeat(10_000);
+    old_folder_keyed(&dir, &m, &key, m.version());
+    let Err(message) = convert_legacy(&dir, m) else {
+        panic!("another key must be refused");
+    };
+    assert!(message.len() < 300, "{} bytes", message.len());
+    assert!(message.contains('…'), "{message}");
     assert!(!dir.join("aegis.json").exists());
     let _ = fs::remove_dir_all(&dir);
 }
