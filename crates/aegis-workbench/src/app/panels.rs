@@ -1,12 +1,19 @@
 //! The dock panels of the skeleton. They only show what `aegis-client` and
 //! the project already computed.
 
-use aegis_client::explorer::ExplorerRow;
+use aegis_client::explorer::{ExplorerKey, ExplorerRow, Mark};
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, FocusHandle, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Window, div, px,
+    App, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, WeakEntity, Window, div, px,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _};
+
+use super::color;
+use super::icons::icon;
+use super::workbench::Workbench;
+use crate::theme::{Tokens, dark, light};
 
 /// Implements the dock panel traits for a view with a `focus_handle` and a
 /// `title` field.
@@ -31,22 +38,45 @@ macro_rules! dock_panel {
     };
 }
 
-/// The explorer dock: the visible rows, indented by depth, with counts.
-/// Slice 182d replaces it with the interactive tree.
+/// The explorer dock: one line per [`ExplorerRow`]. Clicks and double clicks
+/// go to the [`Workbench`], which owns the explorer state.
 pub struct ExplorerPanel {
     focus_handle: FocusHandle,
     title: SharedString,
     rows: Vec<ExplorerRow>,
+    selected: Option<ExplorerKey>,
+    workbench: WeakEntity<Workbench>,
+    light: Tokens,
+    dark: Tokens,
 }
 
 impl ExplorerPanel {
-    pub fn new(title: SharedString, rows: Vec<ExplorerRow>, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
+    pub fn new(
+        title: SharedString,
+        workbench: WeakEntity<Workbench>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
-            focus_handle,
+            focus_handle: cx.focus_handle(),
             title,
-            rows,
+            rows: Vec::new(),
+            selected: None,
+            workbench,
+            light: light(),
+            dark: dark(),
         }
+    }
+
+    /// Shows `rows` with `selected` highlighted.
+    pub fn set_rows(
+        &mut self,
+        rows: Vec<ExplorerRow>,
+        selected: Option<ExplorerKey>,
+        cx: &mut Context<Self>,
+    ) {
+        self.rows = rows;
+        self.selected = selected;
+        cx.notify();
     }
 
     /// The rows shown.
@@ -57,24 +87,121 @@ impl ExplorerPanel {
 
 dock_panel!(ExplorerPanel, "ExplorerPanel");
 
+/// Runs `f` on the workbench, if it is still open.
+fn on_workbench(
+    wb: &WeakEntity<Workbench>,
+    window: &mut Window,
+    cx: &mut App,
+    f: impl FnOnce(&mut Workbench, &mut Window, &mut Context<Workbench>),
+) {
+    let _ = wb.update(cx, |w, cx| f(w, window, cx));
+}
+
+/// One explorer line: chevron, icon, label, link mark, system square,
+/// lint dot and count.
+fn row(
+    ix: usize,
+    r: &ExplorerRow,
+    selected: bool,
+    t: &Tokens,
+    wb: &WeakEntity<Workbench>,
+) -> Stateful<Div> {
+    let key = r.key;
+    let ink = color(&t.ink);
+    let grey = color(&t.line_strong);
+    let chevron = div().w(px(14.)).flex_none().when(r.has_children, |d| {
+        let wb = wb.clone();
+        let name = if r.expanded {
+            IconName::ChevronDown
+        } else {
+            IconName::ChevronRight
+        };
+        d.child(Icon::new(name).xsmall())
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                on_workbench(&wb, window, cx, |w, _, cx| w.toggle(key, cx));
+            })
+    });
+    let square = match (key, r.system_slot) {
+        (_, Some(slot)) => {
+            let c = t
+                .systems
+                .get(usize::from(slot).saturating_sub(1))
+                .map_or(grey, |h| color(h));
+            Some(div().size(px(8.)).flex_none().bg(c))
+        }
+        (ExplorerKey::Unassigned, None) => {
+            Some(div().size(px(8.)).flex_none().border_1().border_color(grey))
+        }
+        _ => None,
+    };
+    let dot = match r.mark {
+        Mark::None => None,
+        Mark::Warning => Some(color(&t.warning)),
+        Mark::Error => Some(color(&t.error)),
+    }
+    .map(|c| div().size(px(6.)).flex_none().rounded_full().bg(c));
+    let count = r.count.map(|n| {
+        let c = if n > 0 { ink } else { grey };
+        div().text_color(c).child(n.to_string())
+    });
+    let click = wb.clone();
+    let label = SharedString::from(r.label.clone());
+    let wash = color(&t.accent_wash);
+    div()
+        .id(ix)
+        .flex()
+        .items_center()
+        .gap_1()
+        .pl(px(4. + 14. * f32::from(r.depth)))
+        .pr_2()
+        .when(selected, |d| d.bg(wash))
+        .child(chevron)
+        .child(Icon::new(icon(r.icon)).small())
+        .child(div().truncate().child(label.clone()))
+        .when(r.linked, |d| d.child("\u{21e2}"))
+        .children(square)
+        .child(div().flex_1())
+        .children(dot)
+        .children(count)
+        .on_click(move |ev, window, cx| {
+            let open = ev.click_count() >= 2;
+            on_workbench(&click, window, cx, |w, window, cx| {
+                if open {
+                    w.open(key, window, cx)
+                } else {
+                    w.select(key, cx)
+                }
+            });
+        })
+}
+
 impl Render for ExplorerPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
-        let rows = self.rows.iter().map(|r| {
-            let count = r.count.map(|n| n.to_string()).unwrap_or_default();
-            div()
-                .flex()
-                .gap_2()
-                .pl(px(8. + 14. * f32::from(r.depth)))
-                .child(r.label.clone())
-                .child(div().text_color(muted).child(count))
-        });
+        let t = if cx.theme().is_dark() {
+            &self.dark
+        } else {
+            &self.light
+        };
+        let rows = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(ix, r)| row(ix, r, self.selected == Some(r.key), t, &self.workbench));
         div()
+            .id("explorer")
+            .key_context("Explorer")
+            .track_focus(&self.focus_handle)
             .size_full()
+            .overflow_y_scroll()
             .py_1()
             .text_sm()
             .bg(cx.theme().sidebar)
             .text_color(cx.theme().sidebar_foreground)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|p, _, window, cx| window.focus(&p.focus_handle, cx)),
+            )
             .children(rows)
     }
 }
@@ -116,6 +243,14 @@ macro_rules! text_panel {
 text_panel!(
     /// The Overview tab: the project name and its element counts.
     OverviewTab
+);
+text_panel!(
+    /// A folder's elements, or every problem, one line each (read-only).
+    ListTab
+);
+text_panel!(
+    /// One element: visual ID, name and kind (read-only).
+    ElementTab
 );
 text_panel!(
     /// The inspector dock; empty until something is selected.

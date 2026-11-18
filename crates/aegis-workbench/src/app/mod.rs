@@ -1,5 +1,6 @@
 //! The GPUI window: theme set-up, the `Workbench` view and its panels.
 
+mod icons;
 mod layout;
 mod panels;
 mod workbench;
@@ -16,6 +17,7 @@ use gpui_component::{Root, Theme, ThemeMode};
 
 use crate::theme::{Tokens, dark, light, parse_hex};
 
+pub use icons::icon;
 pub use workbench::Workbench;
 
 /// Opens the workbench window and runs until it closes.

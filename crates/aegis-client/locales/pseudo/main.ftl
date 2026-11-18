@@ -222,3 +222,7 @@ workbench-status-unsaved = ⟦Sâmplé prôjéct în mémôrý: chângés âré 
 workbench-explorer = ⟦Explôrér␣⟧
 workbench-inspector = ⟦Inspéctôr␣⟧
 workbench-bottom = ⟦Oûtpût␣⟧
+
+# Workbench explorer (job 182)
+workbench-picked = ⟦Môvîng { $name }: séléct â sýstém ând préss { $keys }.␣⟧
+workbench-list-empty = ⟦Nôthîng héré ýét.␣⟧
