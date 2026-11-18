@@ -6,31 +6,38 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use aegis_client::command_table::{command, shortcut_label};
+use aegis_client::command_table::{command, commands, shortcut_label};
 use aegis_client::explorer::{
     ExplorerIndex, ExplorerKey, ExplorerRow, ExplorerState, Folder, Owner, drop_edit,
 };
 use aegis_client::i18n::Catalog;
 use aegis_client::pages::{problems, selection_visual_id};
+use aegis_client::palette::{PaletteEntry, PaletteTarget, entries, search};
 use aegis_client::settings::{Appearance, Settings, WorkbenchLayout};
 use aegis_client::view::Selection;
 use aegis_client::workspace::Workspace;
 use aegis_model::ElementNamesDef;
 use gpui::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, px,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::command::{Command, CommandItem, CommandState};
 use gpui_component::dock::{
     BasePanel, BasePanelView, DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, PaneRef,
     PanelId, panel_handle,
 };
 use gpui_component::input::{InputEvent, InputState};
+use gpui_component::{ActiveTheme as _, Disableable as _, IconName, Sizable as _};
 
 use super::apply_appearance;
-use super::commands::on_every_command;
+use super::commands::{dispatch_id, on_every_command};
+use super::icons::icon;
 use super::layout::{apply_layout, default_layout, read_layout};
-use super::panels::{BottomPanel, ElementTab, ExplorerPanel, InspectorPanel, ListTab, OverviewTab};
+use super::panels::{
+    BottomPanel, ElementTab, ExplorerPanel, InspectorPanel, ListTab, OverviewTab, ShortcutGroup,
+    ShortcutsTab,
+};
 use crate::local;
 use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
 
@@ -38,6 +45,18 @@ use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
 const OVERVIEW: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Overview);
 /// The one problems tab every Problems folder opens.
 const PROBLEMS: ExplorerKey = ExplorerKey::Folder(Owner::Project, Folder::Problems);
+
+/// The most results the palette shows.
+const PALETTE_LIMIT: usize = 12;
+/// The commands of the toolbar, left to right.
+const TOOLBAR: [&str; 6] = [
+    "palette",
+    "undo",
+    "redo",
+    "toggle-explorer",
+    "toggle-inspector",
+    "toggle-bottom-dock",
+];
 
 /// What a center tab shows, to refresh it after a change.
 enum Body {
@@ -49,6 +68,15 @@ enum Body {
 struct Tab {
     handle: Arc<dyn BasePanelView>,
     body: Body,
+}
+
+/// The open palette: its entries (built when it opened), the query and
+/// where the focus goes back to.
+struct Palette {
+    state: Entity<CommandState>,
+    entries: Vec<PaletteEntry>,
+    query: String,
+    back: Option<FocusHandle>,
 }
 
 /// The window's root view.
@@ -63,6 +91,8 @@ pub struct Workbench {
     filter: Entity<InputState>,
     area: Entity<DockArea>,
     tabs: HashMap<ExplorerKey, Tab>,
+    shortcuts: Option<Entity<ShortcutsTab>>,
+    palette: Option<Palette>,
     appearance: Appearance,
     picked: Option<(ExplorerKey, String)>,
     note: Option<String>,
@@ -217,6 +247,8 @@ impl Workbench {
             filter,
             area,
             tabs: HashMap::from([(OVERVIEW, overview)]),
+            shortcuts: None,
+            palette: None,
             appearance,
             picked: None,
             note: None,
@@ -459,6 +491,7 @@ impl Workbench {
     /// toolbar button and palette pick ends here.
     pub fn run(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         match id {
+            "palette" => self.toggle_palette(window, cx),
             "undo" | "redo" => {
                 let step = if id == "undo" {
                     local::undo
@@ -506,6 +539,7 @@ impl Workbench {
                     .update(cx, |a, cx| apply_layout(a, &layout, window, cx));
                 self.save_layout(cx);
             }
+            "show-shortcuts" => self.show_shortcuts(window, cx),
             "quit" => {
                 self.save_layout(cx);
                 cx.quit();
@@ -561,6 +595,11 @@ impl Workbench {
             return;
         };
         let area = &self.area;
+        if let Some(e) = &self.shortcuts
+            && panel_handle(e.clone()).panel_id(cx) == id
+        {
+            return remove(area, e, window, cx);
+        }
         let tab = self.tabs.values().find(|t| t.handle.panel_id(cx) == id);
         match tab.map(|t| &t.body) {
             Some(Body::Overview(e)) => remove(area, e, window, cx),
@@ -586,6 +625,191 @@ impl Workbench {
             }
         }
         cx.notify();
+    }
+
+    /// Opens (or shows) the shortcut list tab.
+    fn show_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entity = match &self.shortcuts {
+            Some(e) => e.clone(),
+            None => {
+                let mac = cfg!(target_os = "macos");
+                let mut groups: Vec<ShortcutGroup> = Vec::new();
+                for c in commands() {
+                    let keys = c.keys_for(mac).map(|k| shortcut_label(&k, mac));
+                    let label = self.catalog.tr(&c.label_id()).into();
+                    let row = (
+                        icon(c.icon).unwrap_or(IconName::File),
+                        label,
+                        keys.unwrap_or_default().into(),
+                    );
+                    let name = SharedString::from(c.group.name());
+                    match groups.iter_mut().find(|(n, _)| *n == name) {
+                        Some((_, rows)) => rows.push(row),
+                        None => groups.push((name, vec![row])),
+                    }
+                }
+                let title = self.catalog.tr("cmd-show-shortcuts").into();
+                let e = cx.new(|cx| ShortcutsTab {
+                    focus_handle: cx.focus_handle(),
+                    title,
+                    groups,
+                });
+                self.shortcuts = Some(e.clone());
+                e
+            }
+        };
+        self.show_tab(panel_handle(entity), window, cx);
+    }
+
+    /// Whether the palette is open.
+    pub fn palette_open(&self) -> bool {
+        self.palette.is_some()
+    }
+
+    /// Opens the palette over the window, or closes it when it is open.
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            self.close_palette(window, cx);
+            return;
+        }
+        let mac = cfg!(target_os = "macos");
+        let entries = entries(Some(&self.workspace), &self.catalog, mac);
+        let back = window.focused(cx);
+        let state = cx.new(|cx| CommandState::new(window, cx));
+        state.update(cx, |s, cx| s.focus(window, cx));
+        self.palette = Some(Palette {
+            state,
+            entries,
+            query: String::new(),
+            back,
+        });
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(p) = self.palette.take() else {
+            return;
+        };
+        let back = p
+            .back
+            .unwrap_or_else(|| gpui::Focusable::focus_handle(&self.explorer, cx));
+        window.focus(&back, cx);
+        cx.notify();
+    }
+
+    /// Picks result `row` of the palette.
+    fn pick(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.palette.as_ref().and_then(|p| {
+            let hits = search(&p.entries, &p.query, PALETTE_LIMIT);
+            hits.get(row).map(|e| e.target.clone())
+        }) else {
+            return;
+        };
+        self.close_palette(window, cx);
+        match target {
+            PaletteTarget::Element(sel) => {
+                self.reveal(sel, cx);
+                if let Some(key @ ExplorerKey::Element(_, _, s)) = self.state.selected
+                    && s == sel
+                {
+                    self.open(key, window, cx);
+                }
+            }
+            PaletteTarget::Command(id) => {
+                if let Some(action) = dispatch_id(id) {
+                    window.dispatch_action(action, cx);
+                }
+            }
+        }
+    }
+
+    /// The palette over the window: the input and the best results.
+    fn palette_layer(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let p = self.palette.as_ref()?;
+        let items = search(&p.entries, &p.query, PALETTE_LIMIT)
+            .into_iter()
+            .map(|e| {
+                let cells = [&e.visual_id, &e.title, &e.detail, &e.keys]
+                    .map(|t| SharedString::from(t.clone()));
+                CommandItem::new()
+                    .label(cells[1].clone())
+                    .child(move |_, cx| {
+                        let muted = cx.theme().muted_foreground;
+                        div()
+                            .flex()
+                            .w_full()
+                            .gap_2()
+                            .child(div().w(px(48.)).child(cells[0].clone()))
+                            .child(div().flex_1().truncate().child(cells[1].clone()))
+                            .child(div().text_color(muted).child(cells[2].clone()))
+                            .child(div().text_color(muted).child(cells[3].clone()))
+                    })
+            });
+        let (on_query, on_pick, on_cancel) = (cx.weak_entity(), cx.weak_entity(), cx.weak_entity());
+        let tip = self.catalog.tr("cmd-palette-tip");
+        let command = Command::new(&p.state)
+            .filterable(false)
+            .placeholder(tip)
+            .items(items)
+            .on_query(move |q, _, cx| {
+                let _ = on_query.update(cx, |w, cx| {
+                    if let Some(p) = &mut w.palette {
+                        p.query = q.to_owned();
+                    }
+                    cx.notify();
+                });
+            })
+            .on_confirm(move |ix, window, cx| {
+                let _ = on_pick.update(cx, |w, cx| w.pick(ix.row, window, cx));
+            })
+            .on_cancel(move |window, cx| {
+                let _ = on_cancel.update(cx, |w, cx| w.close_palette(window, cx));
+            });
+        let theme = cx.theme();
+        let panel = div()
+            .w(px(600.))
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .child(command.bordered(false));
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .justify_center()
+                .pt(px(80.))
+                .child(panel)
+                .into_any_element(),
+        )
+    }
+
+    /// The toolbar buttons of [`TOOLBAR`], each with the tooltip
+    /// `"<tooltip> (<shortcut>)"` (no brackets without keys).
+    fn toolbar(&self, cx: &mut Context<Self>) -> Vec<Button> {
+        let mac = cfg!(target_os = "macos");
+        TOOLBAR
+            .iter()
+            .filter_map(|&id| {
+                let spec = command(id)?;
+                let mut tip = self.catalog.tr(&spec.tooltip_id());
+                if let Some(keys) = spec.keys_for(mac) {
+                    tip = format!("{tip} ({})", shortcut_label(&keys, mac));
+                }
+                let ws = &self.workspace;
+                let off = (id == "undo" && !ws.can_undo()) || (id == "redo" && !ws.can_redo());
+                let button = Button::new(id)
+                    .ghost()
+                    .small()
+                    .icon(icon(spec.icon)?)
+                    .tooltip(tip)
+                    .disabled(off)
+                    .on_click(cx.listener(move |w, _, window, cx| w.run(id, window, cx)));
+                Some(button)
+            })
+            .collect()
     }
 
     fn status_text(&self) -> SharedString {
@@ -625,6 +849,8 @@ fn shared(key: ExplorerKey) -> ExplorerKey {
 impl Render for Workbench {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = self.status_text();
+        let tools = self.toolbar(cx);
+        let layer = self.palette_layer(cx);
         let root = on_every_command(div().key_context("Workbench"), cx);
         let theme = cx.theme();
         let bar = || {
@@ -646,7 +872,8 @@ impl Render for Workbench {
                     .h(px(36.))
                     .gap_1()
                     .border_b_1()
-                    .child(div().flex_1().child(SAMPLE_NAME)),
+                    .child(div().flex_1().child(SAMPLE_NAME))
+                    .children(tools),
             )
             .child(div().flex_1().min_h_0().child(self.area.clone()))
             .child(
@@ -657,5 +884,6 @@ impl Render for Workbench {
                     .text_color(theme.muted_foreground)
                     .child(status),
             )
+            .children(layer)
     }
 }

@@ -260,6 +260,53 @@ impl Render for ExplorerPanel {
     }
 }
 
+/// One group of the shortcut list: its name and, per command, icon, label
+/// and shortcut label.
+pub type ShortcutGroup = (SharedString, Vec<(IconName, SharedString, SharedString)>);
+
+/// The shortcut list tab: every command with its keys, by group.
+pub struct ShortcutsTab {
+    pub focus_handle: FocusHandle,
+    pub title: SharedString,
+    pub groups: Vec<ShortcutGroup>,
+}
+
+dock_panel!(ShortcutsTab, "ShortcutsTab");
+
+impl Render for ShortcutsTab {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let groups = self.groups.iter().map(|(name, rows)| {
+            let rows = rows.iter().map(|(icon, label, keys)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(icon.clone()).small())
+                    .child(div().flex_1().child(label.clone()))
+                    .child(div().text_color(theme.muted_foreground).child(keys.clone()))
+            });
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_color(theme.muted_foreground).child(name.clone()))
+                .children(rows)
+        });
+        div()
+            .id("shortcuts")
+            .size_full()
+            .overflow_y_scroll()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_sm()
+            .text_color(theme.foreground)
+            .children(groups)
+    }
+}
+
 /// Defines a panel of a few lines of text: the Overview tab, the inspector
 /// and the bottom dock of the skeleton.
 macro_rules! text_panel {
