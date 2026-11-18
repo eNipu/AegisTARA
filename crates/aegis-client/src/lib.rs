@@ -7,6 +7,7 @@ pub mod commands;
 pub mod connection;
 pub mod error;
 pub mod excel;
+pub mod explorer;
 pub mod find;
 pub mod i18n;
 pub mod library;

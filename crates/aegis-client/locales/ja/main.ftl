@@ -200,3 +200,15 @@ cmd-show-shortcuts = キーボードショートカット
 cmd-show-shortcuts-tip = すべてのコマンドとそのキーを一覧表示します。
 cmd-quit = 終了
 cmd-quit-tip = AegisTARAを閉じます。
+
+# Workbench explorer (job 182)
+explorer-overview = 概要
+explorer-project-definition = プロジェクト定義
+explorer-parties = 責任当事者
+explorer-shared-analysis = 共有分析
+explorer-systems = システム
+explorer-not-in-system = システム未割り当て
+explorer-item-definition = アイテム定義
+explorer-risk-treatment = リスク対応
+explorer-goals-and-claims = 目標と主張
+explorer-problems = 問題
