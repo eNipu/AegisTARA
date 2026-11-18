@@ -229,12 +229,12 @@ fn empty_query_no_match_and_limit() -> Result<(), ModelError> {
     assert_eq!(
         targets,
         [
-            &PaletteTarget::Command("undo"),
-            &PaletteTarget::Command("redo"),
-            &PaletteTarget::Command("toggle-explorer"),
+            &PaletteTarget::Command("open-folder"),
+            &PaletteTarget::Command("save"),
+            &PaletteTarget::Command("save-as"),
         ]
     );
-    assert_eq!(first[0].keys, "⌘Z");
+    assert_eq!(first[0].keys, "⌘O");
     assert!(search(&all, "zzqx", 10).is_empty());
     assert_eq!(search(&all, "e", 4).len(), 4);
     assert!(search(&all, "e", 100).len() > 4);
