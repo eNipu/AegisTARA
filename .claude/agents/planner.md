@@ -110,6 +110,12 @@ Never write "see the spec": copy the needed facts into the prompt.
 A property or "is the same" test must compute its value a second, independent way; a check
 that compares a result with the list it was cut from cannot fail and proves nothing.
 
+Note: jobs with any `high`-risk slice or ≥4 slices undergo an automated fresh-context EGM
+Spec Audit (`egm-codebase-details` + `egm-implementation-readiness`, see `docs/egm-workflow.md`)
+before Slice 1 builds. Verify every referenced method name, signature, struct field, `allow`
+path, and `max_lines` estimate (remembering `verify.py` counts locales and `Cargo.toml`) against
+the live files so the audit passes cleanly on the first try.
+
 ## Finish
 Your final reply is one line and nothing else: `<n> slices NEXT: human` if the spec has open
 questions, else `<n> slices NEXT: builder <first-slice-id>`. Everything else belongs in
