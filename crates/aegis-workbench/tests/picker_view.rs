@@ -10,11 +10,15 @@ use aegis_client::commands::Edit;
 use aegis_client::explorer::{ExplorerKey, Folder, Owner};
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::picker::MultiLinkPicker;
-use aegis_client::relations::RelationKey;
+use aegis_client::relations::{ElementKind, RELATIONS, RelationKey, related};
 use aegis_client::settings::Appearance;
 use aegis_client::view::Selection;
-use aegis_model::{DamageId, GoalId, Op, PartyId, PartyKind, Project, Provenance};
-use aegis_workbench::app::{MultiLinkPickerView, Workbench, apply_appearance, bind_all};
+use aegis_model::{
+    ConditionId, DamageId, ElementRef, GoalId, Op, PartyId, PartyKind, Project, Provenance,
+};
+use aegis_workbench::app::{
+    InspectorPanel, MultiLinkPickerView, Workbench, apply_appearance, bind_all,
+};
 use aegis_workbench::sample::workbench_sample;
 use gpui::{
     AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render,
@@ -514,4 +518,366 @@ fn external_refresh_preserves_filter_and_space_toggles_when_unfocused(cx: &mut T
         assert!(p.picker().is_open());
         assert!(p.picker().active().expect("active").linked);
     });
+}
+
+fn inspector_of(wb: &Entity<Workbench>, vcx: &mut VisualTestContext) -> Entity<InspectorPanel> {
+    vcx.read_entity(wb, |w, _| w.inspector().clone())
+}
+
+#[gpui::test]
+fn inspector_relation_rows_match_registry_for_threat_and_goal(cx: &mut TestAppContext) {
+    let (_catalog, _host, wb, vcx) = open_host(cx);
+    let inspector = inspector_of(&wb, vcx);
+
+    // Seed a Goal and an off Condition excluding the Threat so we also cover excluded rendering.
+    let mut project = workbench_sample().project().clone();
+    let prov = Provenance::human("tester", 1);
+    let threat = project
+        .threat_scenarios()
+        .next()
+        .map(|(_, id, _)| id)
+        .expect("sample has threat");
+    let goal = GoalId::new_v7();
+    let cond = ConditionId::new_v7();
+    for op in [
+        Op::AddCybersecurityGoal {
+            id: goal,
+            name: "Authenticate brake commands".into(),
+            controls: Vec::new(),
+            provenance: prov.clone(),
+        },
+        Op::AddCondition {
+            id: cond,
+            name: "Hardware security module fitted".into(),
+            description: "".into(),
+            present: false,
+            provenance: prov.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Threat(threat),
+            condition: cond,
+            provenance: prov,
+        },
+    ] {
+        project.apply(op).expect("seed op applies");
+    }
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(project, "Inspector test", None, window, cx);
+    });
+
+    // Selecting a Threat via ExplorerKey (Workbench::select) populates InspectorPanel.
+    let threat_key = vcx.read_entity(&wb, |w, _| {
+        w.index()
+            .rows(&aegis_client::explorer::ExplorerState::default())
+            .into_iter()
+            .find_map(|r| match r.key {
+                k @ ExplorerKey::Element(_, _, Selection::Threat(id)) if id == threat => Some(k),
+                _ => None,
+            })
+            .unwrap_or(ExplorerKey::Element(
+                Owner::Project,
+                Folder::Threats,
+                Selection::Threat(threat),
+            ))
+    });
+    wb.update(vcx, |w, cx| w.select(threat_key, cx));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let expected_threat_rels: Vec<(RelationKey, bool)> = RELATIONS
+        .iter()
+        .filter(|r| r.from == ElementKind::Threat)
+        .map(|r| (r.key, r.link.is_some()))
+        .collect();
+    let expected_damages = vcx.read_entity(&wb, |w, _| {
+        related(
+            w.workspace().project(),
+            RelationKey::THREAT_DAMAGES,
+            Selection::Threat(threat),
+        )
+    });
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), Some(Selection::Threat(threat)));
+        let actual: Vec<(RelationKey, bool)> = i
+            .relation_rows()
+            .iter()
+            .map(|r| (r.key, r.editable))
+            .collect();
+        assert_eq!(actual, expected_threat_rels);
+        let dmg_row = i
+            .relation_rows()
+            .iter()
+            .find(|r| r.key == RelationKey::THREAT_DAMAGES)
+            .expect("THREAT_DAMAGES row present");
+        let chip_targets: Vec<Selection> = dmg_row.chips.iter().map(|c| c.target).collect();
+        assert_eq!(chip_targets, expected_damages);
+    });
+
+    // Non-editable relation refuses open_picker without changing active_picker.
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::THREAT_ASSET, window, cx);
+    });
+    assert!(vcx.read_entity(&inspector, |i, _| i.active_picker().is_none()));
+
+    // Selecting a Goal via Workbench::select_element updates rows to match ElementKind::Goal.
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Goal(goal)), cx)
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let expected_goal_rels: Vec<(RelationKey, bool)> = RELATIONS
+        .iter()
+        .filter(|r| r.from == ElementKind::Goal)
+        .map(|r| (r.key, r.link.is_some()))
+        .collect();
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), Some(Selection::Goal(goal)));
+        let actual: Vec<(RelationKey, bool)> = i
+            .relation_rows()
+            .iter()
+            .map(|r| (r.key, r.editable))
+            .collect();
+        assert_eq!(actual, expected_goal_rels);
+    });
+}
+
+#[gpui::test]
+fn inspector_inline_picker_toggles_without_double_lease_undoes_and_closes_on_reselect(
+    cx: &mut TestAppContext,
+) {
+    let (_catalog, _host, wb, vcx) = open_host(cx);
+    let inspector = inspector_of(&wb, vcx);
+
+    let extra_damage = DamageId::new_v7();
+    wb.update(vcx, |w, cx| {
+        assert!(w.apply_edit(
+            &Edit::AddDamage {
+                id: extra_damage,
+                name: "Thermal runaway".into(),
+            },
+            cx,
+        ));
+    });
+    let threat = vcx.read_entity(&wb, |w, _| {
+        w.workspace()
+            .project()
+            .threat_scenarios()
+            .next()
+            .map(|(_, id, _)| id)
+            .expect("sample has threat")
+    });
+    let asset = vcx.read_entity(&wb, |w, _| {
+        w.workspace()
+            .project()
+            .assets()
+            .next()
+            .map(|(_, id, _)| id)
+            .expect("sample has asset")
+    });
+
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Threat(threat)), cx);
+    });
+    let before_bytes = project_bytes(&wb, vcx);
+    let before_chips: Vec<Selection> = vcx.read_entity(&inspector, |i, _| {
+        i.relation_rows()
+            .iter()
+            .find(|r| r.key == RelationKey::THREAT_DAMAGES)
+            .expect("damages row")
+            .chips
+            .iter()
+            .map(|c| c.target)
+            .collect()
+    });
+    assert!(!before_chips.contains(&Selection::Damage(extra_damage)));
+
+    // Open the inline picker on THREAT_DAMAGES and draw so it is mounted in the right dock.
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::THREAT_DAMAGES, window, cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.run_until_parked();
+
+    let picker = vcx.read_entity(&inspector, |i, _| {
+        i.active_picker().cloned().expect("inline picker is open")
+    });
+    let picker_id = picker.entity_id();
+
+    // Filter to the new damage and press Enter -> live link toggle with no double-lease panic.
+    picker.update_in(vcx, |p, window, cx| p.set_filter("Thermal", window, cx));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.run_until_parked();
+
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+
+    // Inspector chips updated AND the exact same picker entity stayed open and refreshed (L31).
+    vcx.read_entity(&inspector, |i, _| {
+        let active = i
+            .active_picker()
+            .expect("picker must stay open after toggle");
+        assert_eq!(active.entity_id(), picker_id, "picker must not be reopened");
+        let chips: Vec<Selection> = i
+            .relation_rows()
+            .iter()
+            .find(|r| r.key == RelationKey::THREAT_DAMAGES)
+            .expect("damages row")
+            .chips
+            .iter()
+            .map(|c| c.target)
+            .collect();
+        assert_eq!(chips.len(), before_chips.len() + 1);
+        assert!(chips.contains(&Selection::Damage(extra_damage)));
+    });
+    vcx.read_entity(&picker, |p, _| {
+        assert!(p.picker().is_open());
+        assert!(p.picker().active().expect("active").linked);
+    });
+    assert_ne!(project_bytes(&wb, vcx), before_bytes);
+
+    // Run "undo" via Workbench::run -> bytes match prior snapshot and chips & picker revert.
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    vcx.run_until_parked();
+
+    assert_eq!(project_bytes(&wb, vcx), before_bytes);
+    vcx.read_entity(&inspector, |i, _| {
+        let active = i.active_picker().expect("picker stays open across undo");
+        assert_eq!(active.entity_id(), picker_id);
+        let chips: Vec<Selection> = i
+            .relation_rows()
+            .iter()
+            .find(|r| r.key == RelationKey::THREAT_DAMAGES)
+            .expect("damages row")
+            .chips
+            .iter()
+            .map(|c| c.target)
+            .collect();
+        assert_eq!(chips, before_chips);
+    });
+    vcx.read_entity(&picker, |p, _| {
+        assert!(!p.picker().active().expect("active").linked);
+    });
+
+    // Clicking a chip in the inline picker navigates without double-lease and switches selection.
+    let linked_damage = *before_chips.first().expect("sample threat has a damage");
+    picker.update_in(vcx, |p, window, cx| p.open_chip(linked_damage, window, cx));
+    vcx.run_until_parked();
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), Some(linked_damage));
+        assert!(i.active_picker().is_none());
+    });
+
+    // Re-select threat, open picker, then select a different element -> active_picker closes.
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Threat(threat)), cx);
+    });
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::THREAT_DAMAGES, window, cx);
+    });
+    assert!(vcx.read_entity(&inspector, |i, _| i.active_picker().is_some()));
+
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Asset(asset)), cx);
+    });
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), Some(Selection::Asset(asset)));
+        assert!(i.active_picker().is_none());
+    });
+}
+
+#[gpui::test]
+fn inspector_clears_on_deleted_selection_and_project_replace(cx: &mut TestAppContext) {
+    let (_catalog, _host, wb, vcx) = open_host(cx);
+    let inspector = inspector_of(&wb, vcx);
+
+    let threat = vcx.read_entity(&wb, |w, _| {
+        w.workspace()
+            .project()
+            .threat_scenarios()
+            .next()
+            .map(|(_, id, _)| id)
+            .expect("sample has threat")
+    });
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Threat(threat)), cx);
+    });
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::THREAT_DAMAGES, window, cx);
+    });
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), Some(Selection::Threat(threat)));
+        assert!(!i.relation_rows().is_empty());
+        assert!(i.active_picker().is_some());
+    });
+
+    // Deleting the inspected element via Workbench::apply_edit clears selection, rows, and picker.
+    wb.update(vcx, |w, cx| {
+        assert!(w.apply_edit(&Edit::RemoveThreat { threat }, cx));
+    });
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), None);
+        assert!(i.relation_rows().is_empty());
+        assert!(i.active_picker().is_none());
+    });
+
+    // Select an asset with an open picker, then replace the project via show_project -> clears.
+    let asset = vcx.read_entity(&wb, |w, _| {
+        w.workspace()
+            .project()
+            .assets()
+            .next()
+            .map(|(_, id, _)| id)
+            .expect("sample has asset")
+    });
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Asset(asset)), cx);
+    });
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::ASSET_COMPONENT, window, cx);
+    });
+    assert!(vcx.read_entity(&inspector, |i, _| i.active_picker().is_some()));
+
+    let fresh = workbench_sample().project().clone();
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(fresh, "Replaced project", None, window, cx);
+    });
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), None);
+        assert!(i.relation_rows().is_empty());
+        assert!(i.active_picker().is_none());
+    });
+}
+
+#[gpui::test]
+fn inspector_read_only_guard_refuses_opening_picker(cx: &mut TestAppContext) {
+    let (_catalog, _host, wb, vcx) = open_host(cx);
+    let inspector = inspector_of(&wb, vcx);
+
+    let threat = vcx.read_entity(&wb, |w, _| {
+        w.workspace()
+            .project()
+            .threat_scenarios()
+            .next()
+            .map(|(_, id, _)| id)
+            .expect("sample has threat")
+    });
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Threat(threat)), cx);
+        w.set_read_only(Some("Read-only".into()), cx);
+    });
+
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::THREAT_DAMAGES, window, cx);
+    });
+    assert!(vcx.read_entity(&inspector, |i, _| i.active_picker().is_none()));
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.note().map(str::to_owned)),
+        Some("Read-only".into())
+    );
+
+    // Clearing read-only allows the exact same open_picker call to succeed (L09).
+    wb.update(vcx, |w, cx| w.set_read_only(None, cx));
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::THREAT_DAMAGES, window, cx);
+    });
+    assert!(vcx.read_entity(&inspector, |i, _| i.active_picker().is_some()));
 }

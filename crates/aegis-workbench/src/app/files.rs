@@ -182,6 +182,7 @@ impl Workbench {
                 Body::Element(e) => remove(&self.area, e, window, cx),
             }
         }
+        self.select_element(None, cx);
         self.renamed(window, cx);
     }
 

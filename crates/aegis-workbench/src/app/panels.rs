@@ -27,18 +27,23 @@ macro_rules! dock_panel {
             }
         }
         impl gpui_component::dock::Panel for $ty {
-            fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            fn title(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
                 self.title.clone()
             }
         }
         impl gpui::EventEmitter<gpui_component::dock::PanelEvent> for $ty {}
         impl gpui::Focusable for $ty {
-            fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+            fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
                 self.focus_handle.clone()
             }
         }
     };
 }
+pub(super) use dock_panel;
 
 /// The explorer dock: one line per [`ExplorerRow`]. Clicks, drags and drops
 /// go to the [`Workbench`], which owns the explorer state.
@@ -365,10 +370,6 @@ text_panel!(
 text_panel!(
     /// One element: visual ID, name and kind (read-only).
     ElementTab
-);
-text_panel!(
-    /// The inspector dock; empty until something is selected.
-    InspectorPanel
 );
 text_panel!(
     /// The bottom dock; problems and changes arrive in later jobs.
