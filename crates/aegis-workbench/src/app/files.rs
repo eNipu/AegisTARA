@@ -6,11 +6,13 @@ use std::sync::Arc;
 
 use aegis_client::explorer::ExplorerState;
 use aegis_client::folder::WorkspaceFolder;
+use aegis_client::license_file::LocalLicense;
 use aegis_client::settings::default_export_dir;
 use aegis_client::workspace::Workspace;
+use aegis_model::Project;
 use gpui::{Context, PathPromptOptions, PromptButton, PromptLevel, SharedString, Window};
 
-use super::workbench::{Body, OVERVIEW, Workbench, overview_lines, remove};
+use super::workbench::{Body, OVERVIEW, Workbench, WorkbenchEvent, overview_lines, remove};
 use crate::convert::{convert_legacy, is_legacy};
 
 /// What happens once the project may be left.
@@ -22,9 +24,58 @@ pub enum Leave {
     Quit,
     /// Open the project folder at the path.
     Open(PathBuf),
+    /// Go back to the start screen.
+    Start,
 }
 
 impl Workbench {
+    /// Makes the project unchangeable for `reason`, shown in the status
+    /// bar, or changeable again with `None`.
+    pub fn set_read_only(&mut self, reason: Option<String>, cx: &mut Context<Self>) {
+        self.read_only = reason;
+        cx.notify();
+    }
+
+    /// Why the project cannot be changed, if it cannot.
+    pub fn read_only(&self) -> Option<&str> {
+        self.read_only.as_deref()
+    }
+
+    /// The license checked on the start screen; Open Folder needs one.
+    pub fn set_license(&mut self, license: Option<LocalLicense>) {
+        self.license = license;
+    }
+
+    /// The license checked on the start screen, if any.
+    pub fn license(&self) -> Option<&LocalLicense> {
+        self.license.as_ref()
+    }
+
+    /// When read-only, puts the reason in the status bar and returns `true`.
+    pub(super) fn refuse_read_only(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(reason) = self.read_only.clone() else {
+            return false;
+        };
+        self.note = Some(reason);
+        cx.notify();
+        true
+    }
+
+    /// Shows a project that is not a folder (a server project's downloaded
+    /// version).
+    pub fn show_project(
+        &mut self,
+        project: Project,
+        name: &str,
+        read_only: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replace(project, name.to_owned(), None, window, cx);
+        self.read_only = read_only;
+        cx.notify();
+    }
+
     /// The open project folder; `None` for the in-memory sample.
     pub fn folder(&self) -> Option<&Path> {
         self.folder.as_ref().map(WorkspaceFolder::root)
@@ -86,10 +137,36 @@ impl Workbench {
         } else {
             WorkspaceFolder::open(path, methodology).map_err(|e| e.to_string())?
         };
+        let name = folder.name();
+        self.replace(project, name, Some(folder), window, cx);
+        self.read_only = self.license.as_ref().filter(|l| !l.editing).map(|l| {
+            self.catalog.tr_with(
+                "workbench-read-only-expired",
+                &[("customer", l.customer.as_str())],
+            )
+        });
+        if converted {
+            self.note = Some(self.catalog.tr("workbench-converted"));
+        }
+        Ok(())
+    }
+
+    /// Shows `project` named `name` from `folder` (`None`: not a folder),
+    /// with no undo history, no open tabs but the overview.
+    fn replace(
+        &mut self,
+        project: Project,
+        name: String,
+        folder: Option<WorkspaceFolder>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.methodology = Arc::clone(project.methodology());
+        self.names = project.methodology().element_names().clone();
         self.workspace = Workspace::new(project, 0);
         self.saved_seq = 0;
-        self.name = folder.name();
-        self.folder = Some(folder);
+        self.name = name;
+        self.folder = folder;
         self.picked = None;
         self.state = ExplorerState {
             filter: std::mem::take(&mut self.state.filter),
@@ -106,19 +183,18 @@ impl Workbench {
             }
         }
         self.renamed(window, cx);
-        if converted {
-            self.note = Some(self.catalog.tr("workbench-converted"));
-        }
-        Ok(())
     }
 
     /// Saves the changes to the open folder.
     ///
     /// # Errors
     ///
-    /// When no folder is open (use Save As), or the text of the failed
-    /// save.
+    /// The read-only reason, when no folder is open (use Save As), or the
+    /// text of the failed save.
     pub fn save(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if let Some(reason) = &self.read_only {
+            return Err(reason.clone());
+        }
         let Some(folder) = &mut self.folder else {
             return Err("no project folder is open".to_owned());
         };
@@ -136,13 +212,19 @@ impl Workbench {
     ///
     /// # Errors
     ///
-    /// Why the folder cannot be created or written.
+    /// The read-only reason, or why the folder cannot be created or
+    /// written.
     pub fn save_as(
         &mut self,
         path: &Path,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if let Some(reason) = self.read_only.clone() {
+            self.note = Some(reason.clone());
+            cx.notify();
+            return Err(reason);
+        }
         if self.folder.as_ref().is_some_and(|f| f.holds(path)) {
             return self.save(cx);
         }
@@ -259,6 +341,7 @@ impl Workbench {
                     cx.notify();
                 }
             }
+            Leave::Start => cx.emit(WorkbenchEvent::BackToStart),
         }
     }
 
@@ -275,8 +358,14 @@ impl Workbench {
         self.changed(Ok(()), cx);
     }
 
-    /// Asks the OS for a folder and opens it.
+    /// Asks the OS for a folder and opens it; without a checked license,
+    /// only says to use the start screen.
     pub(super) fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.license.is_none() {
+            self.note = Some(self.catalog.tr("workbench-needs-license"));
+            cx.notify();
+            return;
+        }
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -303,6 +392,9 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.refuse_read_only(cx) {
+            return;
+        }
         let rx = cx.prompt_for_new_path(&default_export_dir(), Some(&self.name));
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = rx.await {

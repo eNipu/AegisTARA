@@ -447,6 +447,12 @@ pub struct ProjectView {
     pub is_empty: bool,
     /// The last sequence number the server confirmed.
     pub confirmed_seq: u64,
+    /// The project as last downloaded from the server, on open or reload;
+    /// local edits are not in it until the next reload. Shared, never copied
+    /// per view.
+    pub snapshot: Arc<aegis_model::Project>,
+    /// The server's sequence number of `snapshot`.
+    pub snapshot_seq: u64,
     /// The newest sequence number at which this computer's risk numbers
     /// were found equal to the server's own. `None` until the first check.
     /// May lag behind `confirmed_seq`; `numbers` is what the window shows.

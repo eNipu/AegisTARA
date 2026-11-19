@@ -14,7 +14,7 @@ build = "build.rs"
 [dependencies]
 aegis-auth = { workspace = true, features = ["os-keychain"] }
 aegis-canvas.workspace = true
-aegis-client.workspace = true
+aegis-client = { workspace = true, features = ["os-keychain"] }
 aegis-model.workspace = true
 aegis-license.workspace = true
 aegis-server.workspace = true

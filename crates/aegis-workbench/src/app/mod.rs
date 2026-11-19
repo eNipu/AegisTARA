@@ -5,13 +5,19 @@ mod files;
 mod icons;
 mod layout;
 mod panels;
+mod server;
+mod shell;
+mod start;
 mod workbench;
 
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use aegis_client::i18n::Catalog;
+use aegis_client::provider::secrets;
 use aegis_client::settings::{Appearance, Settings, config_dir};
+use aegis_license::TrustedKeys;
 use gpui::{
     App, AppContext as _, Bounds, Hsla, TitlebarOptions, Window, WindowBounds, WindowOptions, px,
     size,
@@ -23,10 +29,14 @@ use crate::theme::{Tokens, dark, light, parse_hex};
 pub use commands::{bind_all, bindings, dispatch_id};
 pub use files::Leave;
 pub use icons::icon;
-pub use workbench::Workbench;
+pub use server::{METHODOLOGIES, ServerEvent, ServerPane};
+pub use shell::{Screen, Shell};
+pub use start::{ServerSetup, StartConfig, StartEvent, StartScreen};
+pub use workbench::{Workbench, WorkbenchEvent};
 
-/// Opens the workbench window, with the project folder `folder` when
-/// given, and runs until it closes.
+/// Opens the window on the start screen, opening the project folder
+/// `folder` under the remembered license when given, and runs until it
+/// closes.
 pub fn run(folder: Option<PathBuf>) {
     gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
@@ -36,6 +46,20 @@ pub fn run(folder: Option<PathBuf>) {
         let appearance = settings.appearance();
         let catalog = Rc::new(Catalog::load(settings.language()));
         commands::set_menus(&catalog, cx);
+        let server = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => Some(ServerSetup {
+                runtime: rt.handle().clone(),
+                secrets: secrets(),
+                keep: Some(Arc::new(rt)),
+            }),
+            Err(err) => {
+                eprintln!("could not start the server runtime: {err}");
+                None
+            }
+        };
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -47,15 +71,19 @@ pub fn run(folder: Option<PathBuf>) {
         };
         let opened = cx.open_window(options, |window, cx| {
             apply_appearance(appearance, window, cx);
-            let workbench = cx.new(|cx| Workbench::new(catalog, appearance, path, window, cx));
+            let config = StartConfig {
+                catalog,
+                appearance,
+                settings_path: path,
+                keys: TrustedKeys::vendor(),
+                server,
+            };
+            let shell = cx.new(|cx| Shell::new(config, window, cx));
+            shell.update(cx, |s, cx| s.start_polling(window, cx));
             if let Some(dir) = &folder {
-                workbench.update(cx, |w, cx| {
-                    if let Err(err) = w.open_folder(dir, window, cx) {
-                        w.note = Some(err);
-                    }
-                });
+                shell.update(cx, |s, cx| s.open_path(dir, window, cx));
             }
-            cx.new(|cx| Root::new(workbench, window, cx))
+            cx.new(|cx| Root::new(shell, window, cx))
         });
         if let Err(err) = opened {
             eprintln!("could not open the window: {err:#}");

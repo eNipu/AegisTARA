@@ -39,6 +39,7 @@ command_actions! {
     "open-folder" => OpenFolder,
     "save" => Save,
     "save-as" => SaveAs,
+    "back-to-start" => BackToStart,
     "undo" => Undo,
     "redo" => Redo,
     "toggle-explorer" => ToggleExplorer,
