@@ -15,6 +15,7 @@
 //! starts. Writing goes to a temporary file first and is renamed into place,
 //! so a crash never leaves half a file.
 
+use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,6 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::i18n::Language;
 use crate::report::ReportProfile;
 use crate::systems::SystemView;
+use crate::table::table_key;
+use crate::view::{ColumnKind, ColumnSpec, TableId};
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -167,6 +170,11 @@ pub struct Settings {
     pub system_views: Vec<SystemViewSetting>,
     /// The workbench dock layout of each workspace, oldest first.
     pub workbench_layouts: Vec<WorkbenchLayout>,
+    /// Visible column keys per table (`table_key` -> ordered keys); absent
+    /// means the default [`ColumnSpec::visible`] set (UI-14).
+    pub table_columns: BTreeMap<String, Vec<String>>,
+    /// Whether the read-only developer JSON source toggle is enabled (WBX-07).
+    pub developer_source_view: bool,
 }
 
 /// How the window picks light or dark (UI-07.5).
@@ -396,6 +404,44 @@ impl Settings {
             PathBuf::from(self.export_dir.trim())
         }
     }
+
+    /// Visible columns of `table` in [`TableId::columns`] order.
+    #[must_use]
+    pub fn visible_columns(&self, table: TableId) -> Vec<&'static ColumnSpec> {
+        let cols = table.columns();
+        match self.table_columns.get(table_key(table)) {
+            Some(stored) => cols
+                .iter()
+                .filter(|c| c.kind == ColumnKind::Id || stored.iter().any(|k| k == c.key))
+                .collect(),
+            None => cols.iter().filter(|c| c.visible).collect(),
+        }
+    }
+
+    /// Shows or hides column `key` of `table` in [`TableId::columns`] order.
+    /// Unknown keys and hiding [`ColumnKind::Id`] are ignored.
+    pub fn set_column_visible(&mut self, table: TableId, key: &str, visible: bool) {
+        let cols = table.columns();
+        if !cols
+            .iter()
+            .any(|c| c.key == key && (visible || c.kind != ColumnKind::Id))
+        {
+            return;
+        }
+        let shown: Vec<_> = self
+            .visible_columns(table)
+            .into_iter()
+            .map(|c| c.key)
+            .collect();
+        let keep = |k: &str| (k == key && visible) || (k != key && shown.contains(&k));
+        let ordered = cols
+            .iter()
+            .filter(|c| keep(c.key))
+            .map(|c| c.key.to_owned())
+            .collect();
+        self.table_columns
+            .insert(table_key(table).to_owned(), ordered);
+    }
 }
 
 /// A file name for an export: the project name with anything but letters,
@@ -452,6 +498,8 @@ mod tests {
             collapsed_groups: vec!["assets-threats".into()],
             system_views: Vec::new(),
             workbench_layouts: Vec::new(),
+            table_columns: BTreeMap::new(),
+            developer_source_view: false,
         };
         s.save(&path).expect("save");
         assert_eq!(Settings::load(&path), s);
