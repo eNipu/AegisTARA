@@ -13,8 +13,12 @@ use crate::explorer::Owner;
 use crate::view::{Selection, TableId};
 
 mod edit;
+mod fill;
+mod tsv;
 
 pub use edit::{CellEditorKind, CellInput, cell_editor, edit_cell, edit_cells};
+pub use fill::fill_down;
+pub use tsv::{MAX_PASTE_BYTES, MAX_PASTE_COLS, MAX_PASTE_ROWS, format_tsv, parse_tsv};
 
 /// Why a grid editing, fill, or clipboard paste operation was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

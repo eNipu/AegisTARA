@@ -193,7 +193,7 @@ pub fn cell_editor(
     }
 }
 
-fn element_name(p: &Project, target: Selection) -> Option<String> {
+pub(crate) fn element_name(p: &Project, target: Selection) -> Option<String> {
     let name = match target {
         Selection::Asset(id) => p.asset(p.asset_idx(&id)?)?.name(),
         Selection::Damage(id) => p.damage_scenario(p.damage_scenario_idx(&id)?)?.name(),

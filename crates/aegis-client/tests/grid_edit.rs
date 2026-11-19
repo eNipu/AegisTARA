@@ -6,18 +6,20 @@ use std::sync::Arc;
 use aegis_client::commands::{Edit, EditError, TREATMENTS};
 use aegis_client::explorer::Owner;
 use aegis_client::grid::{
-    CellEditorKind, CellInput, GridError, GridSelection, add_row_edit, cell_editor,
-    delete_rows_edit, edit_cell, edit_cells,
+    CellEditorKind, CellInput, GridError, GridSelection, MAX_PASTE_BYTES, MAX_PASTE_COLS,
+    MAX_PASTE_ROWS, add_row_edit, cell_editor, delete_rows_edit, edit_cell, edit_cells, fill_down,
+    format_tsv, parse_tsv,
 };
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::pages::vocabulary;
-use aegis_client::relations::RelationKey;
+use aegis_client::relations::{self, RelationKey};
+use aegis_client::table::{Cell, TableRow, table_rows};
 use aegis_client::undo_label::Label;
 use aegis_client::view::{ColumnSpec, Selection, TableId};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ComponentId, DamageId, ElementId, Methodology, PartyId, Project, PropertySet,
-    RiskTreatment, ThreatId,
+    AssetId, ComponentId, DamageId, ElementId, Methodology, Op, PartyId, PartyKind, Project,
+    PropertySet, Provenance, RiskTreatment, ThreatId,
 };
 
 const ACTOR: &str = "mira";
@@ -1764,4 +1766,743 @@ fn multi_cell_edits_across_three_rows_apply_and_undo_in_one_step() {
     }
     ws.undo().expect("single undo restores all 3 risks");
     assert_eq!(save_bytes(&ws), before);
+}
+
+// ---- 189b3: fill_down (including editable links) and RFC-4180 TSV codec ----
+
+fn add_party(ws: &mut Workspace, name: &str) -> PartyId {
+    let id = PartyId::new_v7();
+    let provenance = Provenance::human(ACTOR, NOW_MS);
+    ws.apply(
+        vec![Op::AddParty {
+            id,
+            name: name.into(),
+            kind: PartyKind::Supplier,
+            provenance,
+        }],
+        Origin::Edit,
+    )
+    .expect("add party");
+    id
+}
+
+fn all_cols(table: TableId) -> Vec<&'static ColumnSpec> {
+    table.columns().iter().collect()
+}
+
+fn synthetic_row(target: Option<Selection>, texts: &[&str]) -> TableRow {
+    TableRow {
+        target,
+        cells: texts
+            .iter()
+            .map(|t| Cell {
+                text: (*t).to_owned(),
+                tone: None,
+                chips: Vec::new(),
+            })
+            .collect(),
+        excluded: false,
+        excluded_reason: None,
+    }
+}
+
+#[test]
+fn fill_down_assets_copies_name_properties_and_component_without_redundant_unlink() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    let comp_a = add_component(&mut ws, "Gateway ECU", None);
+    let comp_b = add_component(&mut ws, "Brake ECU", None);
+
+    let a1 = add_asset(&mut ws, "CAN Bus", vec![0, 2]);
+    let a2 = add_asset(&mut ws, "Key Store", vec![1]);
+    let a3 = add_asset(&mut ws, "Flash", vec![0, 1]);
+    apply_edit(
+        &mut ws,
+        &Edit::SetAssetComponent {
+            asset: a1,
+            component: Some(comp_a),
+        },
+    );
+    apply_edit(
+        &mut ws,
+        &Edit::SetAssetComponent {
+            asset: a2,
+            component: Some(comp_b),
+        },
+    );
+
+    let rows = table_rows(&ws, TableId::Assets, &vocab, &catalog);
+    assert_eq!(rows.len(), 3);
+    let cols = all_cols(TableId::Assets);
+    let mut sel = GridSelection::single(0, 0);
+    sel.extend_to(2, cols.len() - 1);
+
+    let before = save_bytes(&ws);
+    let batch =
+        fill_down(ws.project(), TableId::Assets, &rows, &cols, sel).expect("fill down assets");
+
+    // Verify 1:1 component replacement emits SetAssetComponent(Some(comp_a)) directly
+    // with NO redundant SetAssetComponent(None) unlink before it.
+    let Edit::Batch(ref items) = batch else {
+        panic!("expected Edit::Batch, got {batch:?}");
+    };
+    assert!(
+        !items.iter().any(|e| matches!(
+            e,
+            Edit::SetAssetComponent {
+                component: None,
+                ..
+            }
+        )),
+        "1:1 link replacement must not emit redundant unlink: {items:?}"
+    );
+    assert!(items.iter().any(|e| matches!(
+        e,
+        Edit::SetAssetComponent {
+            asset,
+            component: Some(c),
+        } if *asset == a2 && *c == comp_a
+    )));
+    assert!(items.iter().any(|e| matches!(
+        e,
+        Edit::SetAssetComponent {
+            asset,
+            component: Some(c),
+        } if *asset == a3 && *c == comp_a
+    )));
+
+    apply_edit(&mut ws, &batch);
+    for id in [a2, a3] {
+        let idx = ws.project().asset_idx(&id).expect("asset idx");
+        let asset = ws.project().asset(idx).expect("asset slot");
+        assert_eq!(asset.name(), "CAN Bus");
+        assert_eq!(asset.properties(), prop_set(ws.project(), &[0, 2]));
+        assert_eq!(
+            relations::related(
+                ws.project(),
+                RelationKey::ASSET_COMPONENT,
+                Selection::Asset(id)
+            ),
+            vec![Selection::Component(comp_a)]
+        );
+    }
+
+    // Single undo restores exact project bytes.
+    ws.undo().expect("undo asset fill_down");
+    assert_eq!(save_bytes(&ws), before);
+
+    // Clearing component when source asset has no component: place unbound a3 on top.
+    let clear_rows = vec![
+        synthetic_row(Some(Selection::Asset(a3)), &[]),
+        synthetic_row(Some(Selection::Asset(a1)), &[]),
+        synthetic_row(Some(Selection::Asset(a2)), &[]),
+    ];
+    let comp_cols = [col_by_key(TableId::Assets, "component")];
+    let mut clear_sel = GridSelection::single(0, 0);
+    clear_sel.extend_to(2, 0);
+
+    let before_clear = save_bytes(&ws);
+    let clear_batch = fill_down(
+        ws.project(),
+        TableId::Assets,
+        &clear_rows,
+        &comp_cols,
+        clear_sel,
+    )
+    .expect("fill down clear component");
+    let Edit::Batch(ref clear_items) = clear_batch else {
+        panic!("expected Edit::Batch for clearing 2 components");
+    };
+    assert_eq!(clear_items.len(), 2);
+    assert!(clear_items.iter().all(|e| matches!(
+        e,
+        Edit::SetAssetComponent {
+            component: None,
+            ..
+        }
+    )));
+    apply_edit(&mut ws, &clear_batch);
+    for id in [a1, a2, a3] {
+        assert!(
+            relations::related(
+                ws.project(),
+                RelationKey::ASSET_COMPONENT,
+                Selection::Asset(id)
+            )
+            .is_empty()
+        );
+    }
+    // Filling down again when all are already unbound -> NothingToFill (no empty batch).
+    assert_eq!(
+        fill_down(
+            ws.project(),
+            TableId::Assets,
+            &clear_rows,
+            &comp_cols,
+            clear_sel
+        ),
+        Err(GridError::NothingToFill)
+    );
+    ws.undo().expect("undo clear component fill_down");
+    assert_eq!(save_bytes(&ws), before_clear);
+}
+
+#[test]
+fn fill_down_goals_syncs_nm_responsible_links_and_undoes_in_one_step() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    let p1 = add_party(&mut ws, "Bosch");
+    let p2 = add_party(&mut ws, "Continental");
+    let p3 = add_party(&mut ws, "Denso");
+
+    let g1 = add_goal(&mut ws, "Goal 1");
+    let g2 = add_goal(&mut ws, "Goal 2");
+    let g3 = add_goal(&mut ws, "Goal 3");
+    let Selection::Goal(g1_id) = g1 else {
+        unreachable!()
+    };
+    let Selection::Goal(g2_id) = g2 else {
+        unreachable!()
+    };
+
+    // g1: [p1, p2], g2: [p2, p3] (extra p3, missing p1), g3: [] (missing p1, p2).
+    for (goal, party) in [(g1_id, p1), (g1_id, p2), (g2_id, p2), (g2_id, p3)] {
+        apply_edit(
+            &mut ws,
+            &Edit::LinkGoalParty {
+                goal,
+                party,
+                linked: true,
+            },
+        );
+    }
+
+    let rows = table_rows(&ws, TableId::Goals, &vocab, &catalog);
+    let cols = [
+        col_by_key(TableId::Goals, "id"),
+        col_by_key(TableId::Goals, "responsible"),
+    ];
+    let mut sel = GridSelection::single(0, 0);
+    sel.extend_to(2, 1);
+
+    let before = save_bytes(&ws);
+    let batch = fill_down(ws.project(), TableId::Goals, &rows, &cols, sel)
+        .expect("fill down goal responsible");
+    let Edit::Batch(ref items) = batch else {
+        panic!("expected Edit::Batch for goal responsible sync");
+    };
+    // g2: unlink p3 + link p1 (2 edits, p2 untouched); g3: link p1 + link p2 (2 edits).
+    assert_eq!(items.len(), 4);
+    assert!(items.iter().any(|e| matches!(
+        e,
+        Edit::LinkGoalParty {
+            goal,
+            party,
+            linked: false,
+        } if *goal == g2_id && *party == p3
+    )));
+    assert!(items.iter().any(|e| matches!(
+        e,
+        Edit::LinkGoalParty {
+            goal,
+            party,
+            linked: true,
+        } if *goal == g2_id && *party == p1
+    )));
+
+    apply_edit(&mut ws, &batch);
+    let expected = [Selection::Party(p1), Selection::Party(p2)];
+    for goal in [g1, g2, g3] {
+        let mut linked = relations::related(ws.project(), RelationKey::GOAL_RESPONSIBLE, goal);
+        linked.sort_by_key(|s| format!("{s:?}"));
+        let mut want = expected.to_vec();
+        want.sort_by_key(|s| format!("{s:?}"));
+        assert_eq!(linked, want);
+    }
+
+    // Re-running fill_down when all goals already match returns NothingToFill.
+    assert_eq!(
+        fill_down(ws.project(), TableId::Goals, &rows, &cols, sel),
+        Err(GridError::NothingToFill)
+    );
+
+    ws.undo().expect("undo goal responsible fill_down");
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn fill_down_threats_risks_and_damage_ratings_with_exact_undo() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+    let _asset = add_asset(&mut ws, "Bus", vec![0]);
+
+    // 1. Threats: scales (preserving destination scaling_reason, skipping read-only asset link).
+    let t1 = add_threat(&mut ws, "T1");
+    let t2 = add_threat(&mut ws, "T2");
+    let t3 = add_threat(&mut ws, "T3");
+    let [
+        Selection::Threat(t1_id),
+        Selection::Threat(t2_id),
+        Selection::Threat(t3_id),
+    ] = [t1, t2, t3]
+    else {
+        unreachable!()
+    };
+    apply_edit(
+        &mut ws,
+        &Edit::SetThreatScaling {
+            threat: t1_id,
+            scales: Some(true),
+            reason: "OTA fleet".into(),
+        },
+    );
+    apply_edit(
+        &mut ws,
+        &Edit::SetThreatScaling {
+            threat: t2_id,
+            scales: Some(false),
+            reason: "Physical port".into(),
+        },
+    );
+    apply_edit(
+        &mut ws,
+        &Edit::SetThreatScaling {
+            threat: t3_id,
+            scales: None,
+            reason: "Needs review".into(),
+        },
+    );
+
+    let threat_rows = table_rows(&ws, TableId::Threats, &vocab, &catalog);
+    let threat_cols = [
+        col_by_key(TableId::Threats, "id"),
+        col_by_key(TableId::Threats, "asset"),
+        col_by_key(TableId::Threats, "scales"),
+    ];
+    let mut sel = GridSelection::single(0, 0);
+    sel.extend_to(2, 2);
+
+    let before = save_bytes(&ws);
+    let batch = fill_down(
+        ws.project(),
+        TableId::Threats,
+        &threat_rows,
+        &threat_cols,
+        sel,
+    )
+    .expect("fill down threat scales");
+    apply_edit(&mut ws, &batch);
+    for (id, expected_reason) in [(t2_id, "Physical port"), (t3_id, "Needs review")] {
+        let t = ws
+            .project()
+            .threat_scenario(ws.project().threat_scenario_idx(&id).expect("idx"))
+            .expect("slot");
+        assert_eq!(t.scales(), Some(true));
+        assert_eq!(t.scaling_reason(), expected_reason);
+    }
+    ws.undo().expect("undo threat scales fill_down");
+    assert_eq!(save_bytes(&ws), before);
+
+    // 2. Risks: treatment.
+    apply_edit(
+        &mut ws,
+        &Edit::SetTreatment {
+            threat: t1_id,
+            treatment: Some(1), // Reduce
+        },
+    );
+    apply_edit(
+        &mut ws,
+        &Edit::SetTreatment {
+            threat: t2_id,
+            treatment: Some(2), // Share
+        },
+    );
+    let risk_rows = table_rows(&ws, TableId::Risks, &vocab, &catalog);
+    let risk_cols = [col_by_key(TableId::Risks, "treatment")];
+    let mut risk_sel = GridSelection::single(0, 0);
+    risk_sel.extend_to(2, 0);
+
+    let before = save_bytes(&ws);
+    let batch = fill_down(
+        ws.project(),
+        TableId::Risks,
+        &risk_rows,
+        &risk_cols,
+        risk_sel,
+    )
+    .expect("fill down risk treatment");
+    apply_edit(&mut ws, &batch);
+    for id in [t2_id, t3_id] {
+        let t = ws
+            .project()
+            .threat_scenario(ws.project().threat_scenario_idx(&id).expect("idx"))
+            .expect("slot");
+        assert_eq!(t.treatment(), Some(RiskTreatment::Reduce));
+    }
+    ws.undo().expect("undo risk treatment fill_down");
+    assert_eq!(save_bytes(&ws), before);
+
+    // 3. Damage: impact (multi-category atomic copy + pruning of already-matching category).
+    let d1 = add_damage(&mut ws, "D1");
+    let d2 = add_damage(&mut ws, "D2");
+    let d3 = add_damage(&mut ws, "D3");
+    let [
+        Selection::Damage(d1_id),
+        Selection::Damage(d2_id),
+        Selection::Damage(d3_id),
+    ] = [d1, d2, d3]
+    else {
+        unreachable!()
+    };
+    apply_edit(
+        &mut ws,
+        &Edit::SetImpact {
+            damage: d1_id,
+            category: 0,
+            level: Some(2),
+        },
+    );
+    apply_edit(
+        &mut ws,
+        &Edit::SetImpact {
+            damage: d1_id,
+            category: 1,
+            level: Some(1),
+        },
+    );
+    apply_edit(
+        &mut ws,
+        &Edit::SetImpact {
+            damage: d2_id,
+            category: 0,
+            level: Some(0),
+        },
+    );
+    apply_edit(
+        &mut ws,
+        &Edit::SetImpact {
+            damage: d2_id,
+            category: 1,
+            level: Some(1), // already matches d1
+        },
+    );
+
+    let dmg_rows = table_rows(&ws, TableId::Damage, &vocab, &catalog);
+    let dmg_cols = [col_by_key(TableId::Damage, "impact")];
+    let mut dmg_sel = GridSelection::single(0, 0);
+    dmg_sel.extend_to(2, 0);
+
+    let before = save_bytes(&ws);
+    let batch = fill_down(ws.project(), TableId::Damage, &dmg_rows, &dmg_cols, dmg_sel)
+        .expect("fill down damage impact");
+    // d2 needs only cat 0 (1 edit); d3 needs cat 0 and cat 1 (2 edits) => 3 edits total.
+    assert!(matches!(batch, Edit::Batch(ref items) if items.len() == 3));
+    apply_edit(&mut ws, &batch);
+    let m = ws.project().methodology();
+    let cat0 = m.impact_categories().next().expect("cat0");
+    let cat1 = m.impact_categories().nth(1).expect("cat1");
+    let lvl0 = m.levels(cat0).nth(2).expect("lvl2");
+    let lvl1 = m.levels(cat1).nth(1).expect("lvl1");
+    for id in [d2_id, d3_id] {
+        let d = ws
+            .project()
+            .damage_scenario(ws.project().damage_scenario_idx(&id).expect("idx"))
+            .expect("slot");
+        assert_eq!(d.impact(cat0), Some(lvl0));
+        assert_eq!(d.impact(cat1), Some(lvl1));
+    }
+    ws.undo().expect("undo damage impact fill_down");
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn fill_down_guards_and_edge_cases() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    let a1 = add_asset(&mut ws, "Same", vec![0]);
+    let a2 = add_asset(&mut ws, "Same", vec![0]);
+    let a3 = add_asset(&mut ws, "Different", vec![1]);
+
+    let rows = table_rows(&ws, TableId::Assets, &vocab, &catalog);
+    let cols = all_cols(TableId::Assets);
+
+    // 1. Problems table (valid 2-row selection, non-empty cols) -> only NotEditable triggers.
+    let problem_cols = all_cols(TableId::Problems);
+    let problem_rows = vec![
+        synthetic_row(Some(Selection::Asset(a1)), &[]),
+        synthetic_row(Some(Selection::Asset(a2)), &[]),
+    ];
+    let mut two_row = GridSelection::single(0, 0);
+    two_row.extend_to(1, 0);
+    assert_eq!(
+        fill_down(
+            ws.project(),
+            TableId::Problems,
+            &problem_rows,
+            &problem_cols,
+            two_row
+        ),
+        Err(GridError::NotEditable)
+    );
+
+    // 2. Single-row selection -> NothingToFill.
+    assert_eq!(
+        fill_down(
+            ws.project(),
+            TableId::Assets,
+            &rows,
+            &cols,
+            GridSelection::single(0, 1)
+        ),
+        Err(GridError::NothingToFill)
+    );
+
+    // 3. Computed-only / Id-only selection across 2 rows -> NothingToFill.
+    let computed_cols = [
+        col_by_key(TableId::Assets, "id"),
+        col_by_key(TableId::Assets, "threats"),
+        col_by_key(TableId::Assets, "worst-risk"),
+    ];
+    let mut comp_sel = GridSelection::single(0, 0);
+    comp_sel.extend_to(2, 2);
+    assert_eq!(
+        fill_down(
+            ws.project(),
+            TableId::Assets,
+            &rows,
+            &computed_cols,
+            comp_sel
+        ),
+        Err(GridError::NothingToFill)
+    );
+
+    // 4. Identical rows (a1 and a2 have same name, properties, and component) -> NothingToFill.
+    let mut identical_sel = GridSelection::single(0, 0);
+    identical_sel.extend_to(1, cols.len() - 1);
+    assert_eq!(
+        fill_down(ws.project(), TableId::Assets, &rows, &cols, identical_sel),
+        Err(GridError::NothingToFill)
+    );
+
+    // 5. Out-of-bounds src_row or col_start -> NothingToFill.
+    let mut oob_row = GridSelection::single(10, 0);
+    oob_row.extend_to(12, 1);
+    assert_eq!(
+        fill_down(ws.project(), TableId::Assets, &rows, &cols, oob_row),
+        Err(GridError::NothingToFill)
+    );
+    let mut oob_col = GridSelection::single(0, 99);
+    oob_col.extend_to(2, 100);
+    assert_eq!(
+        fill_down(ws.project(), TableId::Assets, &rows, &cols, oob_col),
+        Err(GridError::NothingToFill)
+    );
+
+    // 6. Out-of-bounds end_row / col_end clamps cleanly + destination row with target: None skipped.
+    let gapped_rows = vec![
+        synthetic_row(Some(Selection::Asset(a1)), &[]),
+        synthetic_row(None, &[]),
+        synthetic_row(Some(Selection::Asset(a3)), &[]),
+    ];
+    let name_and_props = [
+        col_by_key(TableId::Assets, "name"),
+        col_by_key(TableId::Assets, "properties"),
+    ];
+    let mut wide_sel = GridSelection::single(0, 0);
+    wide_sel.extend_to(50, 50);
+    let before = save_bytes(&ws);
+    let edit = fill_down(
+        ws.project(),
+        TableId::Assets,
+        &gapped_rows,
+        &name_and_props,
+        wide_sel,
+    )
+    .expect("clamped fill_down skipping None target");
+    apply_edit(&mut ws, &edit);
+    let a3_slot = ws
+        .project()
+        .asset(ws.project().asset_idx(&a3).expect("a3 idx"))
+        .expect("a3 slot");
+    assert_eq!(a3_slot.name(), "Same");
+    assert_eq!(a3_slot.properties(), prop_set(ws.project(), &[0]));
+    ws.undo().expect("undo clamped fill_down");
+    assert_eq!(save_bytes(&ws), before);
+
+    // 7. Source row with target: None -> NothingToFill.
+    let none_src = vec![
+        synthetic_row(None, &[]),
+        synthetic_row(Some(Selection::Asset(a3)), &[]),
+    ];
+    assert_eq!(
+        fill_down(
+            ws.project(),
+            TableId::Assets,
+            &none_src,
+            &name_and_props,
+            two_row
+        ),
+        Err(GridError::NothingToFill)
+    );
+}
+
+#[test]
+fn tsv_format_and_parse_roundtrip_and_rfc4180_rules() {
+    let rows = vec![
+        synthetic_row(None, &["A00", "Plain", "has\ttab", "quote\"here"]),
+        synthetic_row(
+            None,
+            &[
+                "A01",
+                "line1\nline2",
+                "crlf\r\ninside",
+                "both\"and\nnewline",
+            ],
+        ),
+        synthetic_row(None, &["A02", "bare\rcr", "", "café 日本語"]),
+    ];
+
+    // Full grid round-trip.
+    let all_indices = [0, 1, 2, 3];
+    let mut full = GridSelection::single(0, 0);
+    full.extend_to(2, 3);
+    let formatted = format_tsv(&rows, &all_indices, full);
+    assert_eq!(
+        formatted,
+        "A00\tPlain\t\"has\ttab\"\t\"quote\"\"here\"\n\
+         A01\t\"line1\nline2\"\t\"crlf\r\ninside\"\t\"both\"\"and\nnewline\"\n\
+         A02\t\"bare\rcr\"\t\tcafé 日本語"
+    );
+    let parsed = parse_tsv(&formatted).expect("round-trip parse");
+    assert_eq!(
+        parsed,
+        vec![
+            vec!["A00", "Plain", "has\ttab", "quote\"here"],
+            vec![
+                "A01",
+                "line1\nline2",
+                "crlf\r\ninside",
+                "both\"and\nnewline"
+            ],
+            vec!["A02", "bare\rcr", "", "café 日本語"],
+        ]
+    );
+
+    // Subset visible_col_indices + reversed selection + clamped out-of-bounds end.
+    let subset_cols = [1, 3];
+    let mut sub_sel = GridSelection::single(99, 99);
+    sub_sel.extend_to(1, 0);
+    let sub_tsv = format_tsv(&rows, &subset_cols, sub_sel);
+    assert_eq!(
+        parse_tsv(&sub_tsv).expect("parse subset"),
+        vec![
+            vec!["line1\nline2", "both\"and\nnewline"],
+            vec!["bare\rcr", "café 日本語"],
+        ]
+    );
+
+    // format_tsv on empty rows, empty columns, or out-of-bounds start returns "".
+    assert_eq!(format_tsv(&[], &all_indices, full), "");
+    assert_eq!(format_tsv(&rows, &[], full), "");
+    assert_eq!(
+        format_tsv(&rows, &all_indices, GridSelection::single(3, 0)),
+        ""
+    );
+    assert_eq!(
+        format_tsv(&rows, &all_indices, GridSelection::single(0, 4)),
+        ""
+    );
+
+    // Single trailing \r\n or \n stripped; \r\n and \n row separators both work.
+    assert_eq!(
+        parse_tsv("a\tb\r\nc\td\r\n").expect("crlf with trailing crlf"),
+        vec![vec!["a", "b"], vec!["c", "d"]]
+    );
+    assert_eq!(
+        parse_tsv("a\tb\nc\td\n").expect("lf with trailing lf"),
+        vec![vec!["a", "b"], vec!["c", "d"]]
+    );
+    // Double trailing newline strips only one, leaving a final empty row.
+    assert_eq!(
+        parse_tsv("a\n\n").expect("double trailing lf"),
+        vec![vec!["a"], vec![""]]
+    );
+    // Quoted empty field and escaped double-quote only.
+    assert_eq!(
+        parse_tsv("\"\"\t\"\"\"\"").expect("quoted empty and quote"),
+        vec![vec!["", "\""]]
+    );
+    // Single "\n" alone is empty after stripping one trailing newline.
+    assert_eq!(parse_tsv("\n"), Err(GridError::EmptyPaste));
+}
+
+#[test]
+fn tsv_parse_guards_return_exact_errors() {
+    // 1. PasteTooLarge: > 1 MiB, 1 row, 1 col (violates ONLY byte limit).
+    let at_byte_cap = "a".repeat(MAX_PASTE_BYTES);
+    assert_eq!(parse_tsv(&at_byte_cap).expect("exactly 1 MiB").len(), 1);
+    let over_byte_cap = "a".repeat(MAX_PASTE_BYTES + 1);
+    assert_eq!(parse_tsv(&over_byte_cap), Err(GridError::PasteTooLarge));
+
+    // 2. TooManyRows: 1,001 short rows, 1 col, ~2 KiB (violates ONLY row limit).
+    let at_row_cap = vec!["x"; MAX_PASTE_ROWS].join("\n");
+    assert_eq!(
+        parse_tsv(&at_row_cap).expect("exactly 1000 rows").len(),
+        MAX_PASTE_ROWS
+    );
+    let over_row_cap = vec!["x"; MAX_PASTE_ROWS + 1].join("\n");
+    assert_eq!(parse_tsv(&over_row_cap), Err(GridError::TooManyRows));
+
+    // 3. TooManyCols: 1 row, 65 cols, ~129 bytes (violates ONLY col limit).
+    let at_col_cap = vec!["x"; MAX_PASTE_COLS].join("\t");
+    assert_eq!(
+        parse_tsv(&at_col_cap).expect("exactly 64 cols")[0].len(),
+        MAX_PASTE_COLS
+    );
+    let over_col_cap = vec!["x"; MAX_PASTE_COLS + 1].join("\t");
+    assert_eq!(parse_tsv(&over_col_cap), Err(GridError::TooManyCols));
+
+    // 4. MalformedQuote { line: 2 } for unclosed quote on line 2.
+    assert_eq!(
+        parse_tsv("a\tb\n\"unclosed"),
+        Err(GridError::MalformedQuote { line: 2 })
+    );
+    assert_eq!(
+        parse_tsv("a\tb\n\"unclosed\nstill open"),
+        Err(GridError::MalformedQuote { line: 2 })
+    );
+
+    // 5. MalformedQuote { line: 1 } for unquoted embedded quote `foo"bar`.
+    assert_eq!(
+        parse_tsv("foo\"bar"),
+        Err(GridError::MalformedQuote { line: 1 })
+    );
+
+    // 6. MalformedQuote { line: 1 } for trailing chars after closing quote `"foo"bar`.
+    assert_eq!(
+        parse_tsv("\"foo\"bar"),
+        Err(GridError::MalformedQuote { line: 1 })
+    );
+
+    // 7. MalformedQuote { line: 3 } after a 2-line quoted multiline field on lines 1-2.
+    assert_eq!(
+        parse_tsv("\"line1\nline2\"\tok\nfoo\"bar"),
+        Err(GridError::MalformedQuote { line: 3 })
+    );
+    assert_eq!(
+        parse_tsv("\"line1\r\nline2\"\r\n\"bad\"extra"),
+        Err(GridError::MalformedQuote { line: 3 })
+    );
+
+    // 8. EmptyPaste for "" and "\r\n".
+    assert_eq!(parse_tsv(""), Err(GridError::EmptyPaste));
+    assert_eq!(parse_tsv("\r\n"), Err(GridError::EmptyPaste));
 }
