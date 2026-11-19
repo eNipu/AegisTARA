@@ -266,3 +266,28 @@ fn no_project_lists_commands_only() {
             .any(|e| e.target == PaletteTarget::Command("palette"))
     );
 }
+
+/// The developer source toggle appears in the palette, while grid-scoped
+/// editing commands stay out of the palette (`in_palette: false`).
+#[test]
+fn developer_source_toggle_in_palette_and_grid_commands_hidden() {
+    let catalog = Catalog::load(Language::En);
+    let list = entries(None, &catalog, true);
+    assert!(
+        list.iter()
+            .any(|e| e.target == PaletteTarget::Command("toggle-developer-source")),
+        "toggle-developer-source should appear in the palette"
+    );
+    for id in [
+        "grid-add-row",
+        "grid-delete-rows",
+        "grid-fill-down",
+        "grid-copy",
+        "grid-paste",
+    ] {
+        assert!(
+            !list.iter().any(|e| e.target == PaletteTarget::Command(id)),
+            "{id} should not appear in the palette"
+        );
+    }
+}

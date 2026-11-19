@@ -23,7 +23,7 @@ fn ids_are_unique_and_icons_are_kebab() {
         assert!(!c.icon.starts_with('-') && !c.icon.ends_with('-'));
         assert_eq!(command(c.id), Some(c));
     }
-    assert_eq!(commands().len(), 26);
+    assert_eq!(commands().len(), 32);
     assert_eq!(command("no-such-command"), None);
 }
 
@@ -31,6 +31,7 @@ fn ids_are_unique_and_icons_are_kebab() {
 fn every_label_and_tooltip_is_translated() {
     for language in [Language::En, Language::Ja, Language::Pseudo] {
         let catalog = Catalog::load(language);
+        assert_eq!(catalog.language(), language);
         for c in commands() {
             let label = catalog.tr(&c.label_id());
             let tip = catalog.tr(&c.tooltip_id());
@@ -89,6 +90,8 @@ fn shortcut_labels_per_platform() {
         "Ctrl+Alt+B"
     );
     assert_eq!(shortcut_label(&keys_off_mac("quit"), false), "Ctrl+Q");
+    assert_eq!(shortcut_label("cmd-backspace", true), "⌘⌫");
+    assert_eq!(shortcut_label("ctrl-delete", false), "Ctrl+Del");
 }
 
 #[test]

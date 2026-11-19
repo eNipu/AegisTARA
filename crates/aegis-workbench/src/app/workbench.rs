@@ -116,6 +116,8 @@ pub struct Workbench {
     pub(super) asking: bool,
     /// The window may close now.
     pub(super) leaving: bool,
+    /// Whether the opt-in read-only developer JSON source toggle is enabled.
+    pub(super) developer_source_view: bool,
     settings_path: Option<PathBuf>,
     saved: Option<WorkbenchLayout>,
     _skin: Rc<DockSkin>,
@@ -225,10 +227,14 @@ impl Workbench {
         let bottom_text = vec![tr("workbench-bottom-empty")];
         let bottom = cx.new(|cx| BottomPanel::new(tr("workbench-bottom"), None, bottom_text, cx));
 
-        let layout = settings_path
+        let loaded_settings = settings_path.as_ref().map(|p| Settings::load(p));
+        let layout = loaded_settings
             .as_ref()
-            .and_then(|p| Settings::load(p).workbench_layout(SAMPLE_KEY))
+            .and_then(|s| s.workbench_layout(SAMPLE_KEY))
             .unwrap_or_else(|| default_layout(SAMPLE_KEY));
+        let developer_source_view = loaded_settings
+            .as_ref()
+            .is_some_and(|s| s.developer_source_view);
         let (area, skin) = DockSkin::dock_area("workbench", None, window, cx);
         let center = DockLayout::tabs().panel_view(panel_handle(overview.clone()), cx);
         let left = DockLayout::tabs().panel_view(panel_handle(explorer.clone()), cx);
@@ -289,6 +295,7 @@ impl Workbench {
             license: None,
             asking: false,
             leaving: false,
+            developer_source_view,
             settings_path,
             saved: Some(saved),
             _skin: skin,
@@ -306,6 +313,12 @@ impl Workbench {
     /// The workspace shown.
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    /// Whether the opt-in read-only developer JSON source toggle is enabled.
+    #[must_use]
+    pub fn developer_source_view(&self) -> bool {
+        self.developer_source_view
     }
 
     /// The explorer tree of the workspace.
@@ -452,9 +465,21 @@ impl Workbench {
         Some((title, if lines.is_empty() { empty() } else { lines }))
     }
 
-    /// Rebuilds the tree and every open tab after the project changed.
-    pub(super) fn changed(&mut self, res: Result<(), String>, cx: &mut Context<Self>) {
-        self.note = res.err();
+    /// Sets or clears the transient status-bar note.
+    pub(super) fn set_note(&mut self, note: Option<String>, cx: &mut Context<Self>) {
+        self.note = note;
+        cx.notify();
+    }
+
+    /// Rebuilds the tree and every open tab after the project changed,
+    /// skipping any child entity whose id matches `skip`.
+    pub(super) fn changed_skipping(
+        &mut self,
+        res: Result<(), String>,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_note(res.err(), cx);
         self.index = ExplorerIndex::build(&self.workspace, &self.names, &self.catalog, &self.name);
         let updates: Vec<_> = self
             .tabs
@@ -464,11 +489,73 @@ impl Workbench {
         for ((title, lines), body) in updates {
             match body {
                 Body::Overview(_) => {}
-                Body::List(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
-                Body::Element(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
+                Body::List(e) if skip != Some(e.entity_id()) => {
+                    e.update(cx, |t, cx| t.set(title, None, lines, cx));
+                }
+                Body::Element(e) if skip != Some(e.entity_id()) => {
+                    e.update(cx, |t, cx| t.set(title, None, lines, cx));
+                }
+                Body::List(_) | Body::Element(_) => {}
             }
         }
-        self.show_rows(cx);
+        if skip != Some(self.explorer.entity_id()) {
+            self.show_rows(cx);
+        }
+    }
+
+    /// Rebuilds the tree and every open tab after the project changed.
+    pub(super) fn changed(&mut self, res: Result<(), String>, cx: &mut Context<Self>) {
+        self.changed_skipping(res, None, cx);
+    }
+
+    /// Applies `edit` to the workspace and refreshes open views, skipping
+    /// any child entity whose id matches `skip`.
+    pub fn apply_edit_skipping(
+        &mut self,
+        edit: &aegis_client::commands::Edit,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.refuse_read_only(cx) {
+            return false;
+        }
+        let res = local::apply_edit(&mut self.workspace, edit, &self.actor, now_ms());
+        let ok = res.is_ok();
+        self.changed_skipping(res, skip, cx);
+        ok
+    }
+
+    /// Applies `edit` to the workspace and refreshes every open view.
+    pub fn apply_edit(
+        &mut self,
+        edit: &aegis_client::commands::Edit,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.apply_edit_skipping(edit, None, cx)
+    }
+
+    /// Reveals `sel` in the explorer, selects its first element row, and
+    /// opens its element tab.
+    pub fn open_target_skipping(
+        &mut self,
+        sel: Selection,
+        _skip: Option<gpui::EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.reveal(sel, cx);
+        if let Some(key) = all_rows(&self.index).into_iter().find_map(|r| match r.key {
+            key @ ExplorerKey::Element(_, _, s) if s == sel => Some(key),
+            _ => None,
+        }) {
+            self.select(key, cx);
+            self.open(key, window, cx);
+        }
+    }
+
+    /// Reveals `sel` in the explorer and opens its element tab.
+    pub fn open_target(&mut self, sel: Selection, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_target_skipping(sel, None, window, cx);
     }
 
     /// Drops `dragged` on `target`: moves a component to another system.
@@ -573,6 +660,7 @@ impl Workbench {
             "next-tab" => self.step_tab(1, window, cx),
             "previous-tab" => self.step_tab(-1, window, cx),
             "toggle-theme" => self.toggle_theme(window, cx),
+            "toggle-developer-source" => self.toggle_developer_source(cx),
             "reset-layout" => {
                 let layout = default_layout(SAMPLE_KEY);
                 self.area
@@ -666,6 +754,20 @@ impl Workbench {
             settings.appearance = self.appearance.code().to_owned();
             if let Err(err) = settings.save(path) {
                 eprintln!("could not save the appearance: {err}");
+            }
+        }
+        cx.notify();
+    }
+
+    /// Toggles the opt-in read-only developer JSON source view and persists
+    /// the preference when a settings file is configured.
+    fn toggle_developer_source(&mut self, cx: &mut Context<Self>) {
+        self.developer_source_view = !self.developer_source_view;
+        if let Some(path) = &self.settings_path {
+            let mut settings = Settings::load(path);
+            settings.developer_source_view = self.developer_source_view;
+            if let Err(err) = settings.save(path) {
+                eprintln!("could not save the developer source view setting: {err}");
             }
         }
         cx.notify();
