@@ -10,6 +10,7 @@ pub mod excel;
 pub mod explorer;
 pub mod find;
 pub mod folder;
+pub mod grid;
 pub mod i18n;
 pub mod library;
 pub mod license_file;
