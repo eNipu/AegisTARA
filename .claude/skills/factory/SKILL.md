@@ -31,6 +31,8 @@ backlog line
    │
  planner ──► spec.md + plan.json + prompts/<slice>.md
    │
+ egm audit ► egm-review.md   (high-risk or >=4 slices: codebase-details + implementation-readiness)
+   │
    ▼  for each slice, in order, without stopping
  builder ──► one commit + build.md
    │
@@ -67,6 +69,7 @@ factory/lessons.md                          what the factory learned; you write 
 factory/verify.py                           the script gate
 factory/jobs/<job-id>/spec.md               planner
 factory/jobs/<job-id>/plan.json             planner: the slices
+factory/jobs/<job-id>/egm-review.md         EGM Spec Audit (Tier 2, high-risk or >=4 slices)
 factory/jobs/<job-id>/prompts/<slice>.md    planner: one self-contained build prompt per slice
 factory/jobs/<job-id>/slices/<slice>/build.md    builder
 factory/jobs/<job-id>/slices/<slice>/gate.md     verify.py
@@ -116,7 +119,10 @@ highest in board.json plus a short slug. Then run **Plan**, then **Slice** for e
 order, then **Merge**. One command is one job.
 
 ### `/factory plan <job-id>`
-Run **Plan** only. Use it to get the prompts without building, for example to build outside.
+Run **Plan** (and **Spec Audit (EGM)** when applicable) only. Use it to get audited prompts without building, for example to build outside.
+
+### `/factory design-review <path>`
+Tier 1 project-level EGM review (see `docs/egm-workflow.md`) for `[design]` specs, `docs/design/*.md`, or `docs/adr/*.md`. Runs fresh-context Goldfish personas sequentially (`egm-zoom-out`, `egm-design`, `egm-comprehension`, `egm-codebase-details`, `egm-implementation-readiness`), synthesizes findings into `egm-review.md`, and stops for the human to decide architectural tradeoffs before unlocking `[design]` → `[ ]`.
 
 ### `/factory rework <slice-id> <note>`
 For a job at `needs-human`. Append `## Rework <slice-id>` and the note to `rework.md`, write
@@ -141,6 +147,18 @@ exist, skip the planner. Otherwise spawn `planner`: "Job `<job-id>`. Feature: `<
 Write `spec.md` (if missing), `plan.json` and `prompts/` in `factory/jobs/<job-id>/`."
 Check that `plan.json` parses and every slice has its prompt file. The planner decides what
 it can and records it under `## Decisions`; only `NEXT: human` stops you.
+
+**Spec Audit (EGM).** For jobs with any `high`-risk slice or ≥4 slices, skip if
+`factory/jobs/<job-id>/egm-review.md` already exists. Otherwise run two fresh-context
+Goldfish reviewers sequentially (one agent at a time, see `docs/egm-workflow.md`):
+1. `egm-codebase-details`: verify every symbol, method signature, file path, `allow` glob,
+   and reuse opportunity in `spec.md`, `plan.json`, and `prompts/*.md` against the real code.
+2. `egm-implementation-readiness`: verify every prompt is unambiguous, self-contained, has
+   falsifiable tests, and fits comfortably under its `max_lines` cap (including locales).
+Record the synthesized findings in `factory/jobs/<job-id>/egm-review.md`. If there are
+blocking defects (wrong symbol names, missing `allow` paths, missing edge cases, or
+unrealistic `max_lines`), have `planner` fix them once before Slice 1 builds. Architectural
+contradictions with `docs/decisions.md` stop for the owner.
 
 **Slice.**
 1. First slice only: `git worktree add factory/worktrees/<job-id> -b factory/<job-id> HEAD`
