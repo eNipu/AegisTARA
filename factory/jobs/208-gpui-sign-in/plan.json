@@ -1,0 +1,165 @@
+{
+  "job": "208-gpui-sign-in",
+  "slices": [
+    {
+      "id": "208a",
+      "title": "Move the login providers into the client core and add the sign-in view model",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-shell/src/provider.rs",
+        "crates/aegis-shell/src/lib.rs",
+        "crates/aegis-shell/src/launcher.rs",
+        "crates/aegis-shell/Cargo.toml",
+        "crates/aegis-client/src/provider.rs",
+        "crates/aegis-client/src/signin.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/Cargo.toml",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/signin_view.rs"
+      ],
+      "max_lines": 320,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client",
+        "crates/aegis-shell"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test signin_view",
+        "cargo build --locked -p aegis-shell"
+      ]
+    },
+    {
+      "id": "208b",
+      "title": "Sign in to a server without a window: the SignIn controller",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/signin.rs",
+        "crates/aegis-client/src/signin/*",
+        "crates/aegis-client/src/provider.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/signin.rs"
+      ],
+      "max_lines": 540,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test signin",
+        "cargo test --locked -p aegis-client --test signin_view"
+      ]
+    },
+    {
+      "id": "208c",
+      "title": "License file check, the downloaded server version, and a read-only workbench",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/license_file.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/src/state.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/license_file.rs",
+        "crates/aegis-client/tests/session.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/files.rs",
+        "crates/aegis-workbench/tests/read_only.rs"
+      ],
+      "max_lines": 420,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client",
+        "crates/aegis-workbench"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test license_file",
+        "cargo test --locked -p aegis-client --test session snapshot",
+        "cargo test --locked -p aegis-workbench --test read_only",
+        "cargo test --locked -p aegis-workbench --test folder_view"
+      ]
+    },
+    {
+      "id": "208d",
+      "title": "Start screen view for this computer: license, open, new workspace, sample",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-workbench/src/app/start.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/Cargo.toml",
+        "Cargo.lock",
+        "crates/aegis-workbench/tests/start_local.rs",
+        "crates/aegis-client/locales/*"
+      ],
+      "max_lines": 530,
+      "new_deps": true,
+      "ci": [
+        "crates/aegis-client",
+        "crates/aegis-workbench"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test start_local",
+        "cargo test --locked -p aegis-workbench --test folder_view"
+      ]
+    },
+    {
+      "id": "208d2",
+      "title": "Open the window on the start screen and add Back to Start",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-workbench/src/app/shell.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/src/app/files.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/commands.rs",
+        "crates/aegis-workbench/tests/start_local.rs",
+        "crates/aegis-workbench/tests/command_wiring.rs",
+        "crates/aegis-workbench/tests/palette_view.rs",
+        "crates/aegis-client/src/command_table.rs",
+        "crates/aegis-client/tests/command_table.rs",
+        "crates/aegis-client/tests/palette.rs",
+        "crates/aegis-client/locales/*"
+      ],
+      "max_lines": 310,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client",
+        "crates/aegis-workbench"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test start_local",
+        "cargo test --locked -p aegis-workbench --test folder_view",
+        "cargo test --locked -p aegis-workbench --test command_wiring",
+        "cargo test --locked -p aegis-client --test command_table"
+      ]
+    },
+    {
+      "id": "208e",
+      "title": "Start screen for a company server: sign in, connection states, project list",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-workbench/src/app/start.rs",
+        "crates/aegis-workbench/src/app/server.rs",
+        "crates/aegis-workbench/src/app/shell.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/Cargo.toml",
+        "Cargo.lock",
+        "crates/aegis-workbench/tests/start_server.rs",
+        "crates/aegis-workbench/tests/start_local.rs",
+        "crates/aegis-client/locales/*"
+      ],
+      "max_lines": 600,
+      "new_deps": true,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test start_server",
+        "cargo test --locked -p aegis-workbench --test start_local"
+      ]
+    }
+  ]
+}
