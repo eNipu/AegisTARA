@@ -83,6 +83,7 @@ fn open<'a>(cx: &'a mut TestAppContext, name: &str, keys: TrustedKeys) -> Window
         appearance: Appearance::Light,
         settings_path: Some(settings.clone()),
         keys,
+        server: None,
     };
     let (shell, cx) = cx.add_window_view(|window, cx| {
         apply_appearance(Appearance::Light, window, cx);

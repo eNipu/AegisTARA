@@ -4,9 +4,11 @@
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use aegis_client::i18n::Catalog;
 use aegis_client::license_file::{LocalLicense, now_secs, read_license};
+use aegis_client::provider::Secrets;
 use aegis_client::settings::{Appearance, Settings, default_export_dir};
 use aegis_license::TrustedKeys;
 use gpui::{
@@ -16,6 +18,19 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
+
+use super::server::ServerPane;
+
+/// Runtime and secret store for the company-server column.
+#[derive(Clone)]
+pub struct ServerSetup {
+    /// Tokio runtime handle for server connections.
+    pub runtime: tokio::runtime::Handle,
+    /// Where remembered logins are kept.
+    pub secrets: Secrets,
+    /// Holds the app's runtime alive; tests pass `None` and own theirs.
+    pub keep: Option<Arc<tokio::runtime::Runtime>>,
+}
 
 /// What the start screen and the shell around it share.
 #[derive(Clone)]
@@ -28,6 +43,8 @@ pub struct StartConfig {
     pub settings_path: Option<PathBuf>,
     /// The keys a license file must be signed with.
     pub keys: TrustedKeys,
+    /// Company server setup; `None` hides the server column.
+    pub server: Option<ServerSetup>,
 }
 
 /// What the start screen asks the shell to do.
@@ -54,6 +71,7 @@ pub enum StartEvent {
 /// The start screen view.
 pub struct StartScreen {
     config: StartConfig,
+    server: Option<Entity<ServerPane>>,
     folder: Entity<InputState>,
     license_path: Entity<InputState>,
     error: Option<String>,
@@ -72,7 +90,12 @@ enum Pick {
 
 impl StartScreen {
     /// The start screen, its fields filled from the remembered settings.
-    pub fn new(config: &StartConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        config: &StartConfig,
+        server: Option<Entity<ServerPane>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let settings = config
             .settings_path
             .as_deref()
@@ -103,6 +126,7 @@ impl StartScreen {
         ];
         Self {
             config: config.clone(),
+            server,
             folder,
             license_path,
             error: None,
@@ -319,6 +343,31 @@ impl Render for StartScreen {
                     .on_click(cx.listener(|s, _, _, cx| s.open_sample(cx))),
             );
         let theme = cx.theme();
+        let local = div()
+            .w(px(500.))
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(div().text_lg().child(tr("start-local")))
+            .child(folder_row)
+            .child(license_row)
+            .children(
+                license_line.map(|t| div().text_sm().text_color(theme.muted_foreground).child(t)),
+            )
+            .child(buttons)
+            .children(error.map(|e| div().text_color(theme.danger).child(e)));
+        let columns = div()
+            .flex()
+            .gap_8()
+            .child(local)
+            .children(self.server.clone().map(|server| {
+                div()
+                    .w(px(500.))
+                    .pl_8()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .child(server)
+            }));
         div()
             .size_full()
             .flex()
@@ -328,20 +377,11 @@ impl Render for StartScreen {
             .text_color(theme.foreground)
             .child(
                 div()
-                    .w(px(560.))
                     .flex()
                     .flex_col()
-                    .gap_4()
+                    .gap_6()
                     .child(div().text_2xl().child("AegisTARA"))
-                    .child(div().text_lg().child(tr("start-local")))
-                    .child(folder_row)
-                    .child(license_row)
-                    .children(
-                        license_line
-                            .map(|t| div().text_sm().text_color(theme.muted_foreground).child(t)),
-                    )
-                    .child(buttons)
-                    .children(error.map(|e| div().text_color(theme.danger).child(e))),
+                    .child(columns),
             )
     }
 }
