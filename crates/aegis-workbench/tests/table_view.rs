@@ -13,8 +13,8 @@ use aegis_client::i18n::{Catalog, Language};
 use aegis_client::pages::vocabulary_for_lang;
 use aegis_client::settings::{Appearance, Settings};
 use aegis_client::systems::system_rows;
-use aegis_client::table::table_rows_for_owner;
-use aegis_client::view::TableId;
+use aegis_client::table::{Tone, table_rows_for_owner};
+use aegis_client::view::{ColumnKind, Selection, TableId};
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ConditionId, ElementId, ElementRef, GoalId, Methodology, Op,
     PartyId, PartyKind, Project, Provenance,
@@ -329,4 +329,176 @@ fn column_visibility_persists_across_workbench_reopen_and_protects_id(cx: &mut T
     });
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
+fn link_chip_navigation_opens_target_tab_and_updates_inspector(cx: &mut TestAppContext) {
+    let (_catalog, wb, vcx) = open_workbench(cx, None);
+    let project = fixture_all_eight_tables();
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(project, "Link chip fixture", None, window, cx);
+    });
+
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Threats);
+    wb.update_in(vcx, |w, window, cx| {
+        w.open(key, window, cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(key))
+        .expect("Threats TableTab opens");
+    let asset_col = TableId::Threats
+        .columns()
+        .iter()
+        .position(|c| c.key == "asset")
+        .expect("Threats table has asset link column");
+
+    let chip = vcx.read_entity(&tab, |t, _| {
+        (0..t.visible_row_count())
+            .filter_map(|r| t.displayed_row(r))
+            .find_map(|row| row.cells.get(asset_col)?.chips.first().cloned())
+            .expect("Threats asset cell must expose at least one LinkChip")
+    });
+    assert!(!chip.visual_id.is_empty(), "chip visual_id must be set");
+    assert!(!chip.label.is_empty(), "chip label tooltip must be set");
+    assert!(
+        matches!(chip.target, Selection::Asset(_)),
+        "Threats asset chip must target an Asset"
+    );
+
+    assert_eq!(
+        vcx.read_entity(&wb, |w, cx| w.inspector().read(cx).selection()),
+        None
+    );
+
+    wb.update_in(vcx, |w, window, cx| {
+        w.open_target(chip.target, window, cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    vcx.read_entity(&wb, |w, cx| {
+        assert_eq!(w.inspector().read(cx).selection(), Some(chip.target));
+        let elem_key = w
+            .state()
+            .selected
+            .expect("open_target selects the linked element in the explorer");
+        assert!(
+            matches!(elem_key, ExplorerKey::Element(_, _, sel) if sel == chip.target),
+            "explorer selection must match chip target"
+        );
+        assert!(
+            w.has_tab(elem_key, cx),
+            "target element tab must open when navigating from a link chip"
+        );
+    });
+}
+
+#[gpui::test]
+fn excluded_asset_row_shows_reason_and_renders_in_light_and_dark_themes(cx: &mut TestAppContext) {
+    let (_catalog, wb, vcx) = open_workbench(cx, None);
+    let project = fixture_all_eight_tables();
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(project, "Excluded row fixture", None, window, cx);
+    });
+
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Assets);
+    wb.update_in(vcx, |w, window, cx| {
+        w.open(key, window, cx);
+    });
+    let tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(key))
+        .expect("Assets TableTab opens");
+
+    let (excluded_row_ix, reason) = vcx.read_entity(&tab, |t, _| {
+        (0..t.visible_row_count())
+            .filter_map(|i| {
+                let row = t.displayed_row(i)?;
+                row.excluded.then(|| (i, row.excluded_reason.clone()))
+            })
+            .next()
+            .expect("asset linked to an off condition must be marked excluded")
+    });
+    let reason = reason.expect("excluded row must carry an excluded_reason tooltip");
+    assert!(
+        reason.contains("Optional V2X module installed"),
+        "expected condition name in excluded_reason, got: {reason}"
+    );
+
+    tab.update(vcx, |t, cx| {
+        t.set_selection(Some(GridSelection::single(excluded_row_ix, 1)), cx);
+    });
+
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        vcx.update(|window, cx| {
+            apply_appearance(appearance, window, cx);
+            window.draw(cx).clear(cx);
+        });
+    }
+}
+
+#[gpui::test]
+fn wide_risks_table_renders_tone_pills_and_computed_columns_in_both_themes(
+    cx: &mut TestAppContext,
+) {
+    let (_catalog, wb, vcx) = open_workbench(cx, None);
+
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Risks);
+    wb.update_in(vcx, |w, window, cx| {
+        w.open(key, window, cx);
+    });
+    let tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(key))
+        .expect("Risks TableTab opens");
+
+    vcx.read_entity(&tab, |t, _| {
+        let total_width: u16 = t.visible_columns().iter().map(|c| c.width).sum();
+        assert_eq!(
+            total_width, 1206,
+            "default Risks columns must total 1206 px"
+        );
+        assert!(
+            t.visible_columns()
+                .iter()
+                .any(|c| c.kind == ColumnKind::Computed),
+            "Risks table must include computed columns"
+        );
+        let has_rated_tone = (0..t.visible_row_count())
+            .filter_map(|r| t.displayed_row(r))
+            .flat_map(|row| &row.cells)
+            .any(|c| {
+                matches!(
+                    c.tone,
+                    Some(Tone::VeryLow | Tone::Low | Tone::Medium | Tone::High)
+                ) && !c.text.is_empty()
+            });
+        assert!(
+            has_rated_tone,
+            "Risks fixture must render at least one rated tone pill"
+        );
+    });
+
+    tab.update(vcx, |t, cx| {
+        let mut sel = GridSelection::single(0, 1);
+        sel.extend_to(0, 5);
+        t.set_selection(Some(sel), cx);
+    });
+
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        vcx.update(|window, cx| {
+            apply_appearance(appearance, window, cx);
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    // Also show the hidden Links column ("asset") so Links + Computed + Tone pills render together.
+    wb.update(vcx, |w, cx| {
+        w.set_table_column_visible(TableId::Risks, "asset", true, cx);
+    });
+    for appearance in [Appearance::Dark, Appearance::Light] {
+        vcx.update(|window, cx| {
+            apply_appearance(appearance, window, cx);
+            window.draw(cx).clear(cx);
+        });
+    }
 }
