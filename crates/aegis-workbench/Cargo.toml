@@ -15,7 +15,7 @@ name = "aegis-workbench"
 path = "src/main.rs"
 
 [dependencies]
-aegis-client.workspace = true
+aegis-client = { workspace = true, features = ["os-keychain"] }
 aegis-license.workspace = true
 aegis-model.workspace = true
 aegis-server.workspace = true
@@ -25,6 +25,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 aegis-license = { workspace = true, features = ["issuer"] }
+tokio-stream.workspace = true
 
 # GPUI runs on macOS and Windows only (job 182, ADR 0066).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
