@@ -2597,6 +2597,84 @@
       ],
       "decision": null,
       "updated": "2026-11-18T13:58:18Z"
+    },
+    {
+      "id": "208-gpui-sign-in",
+      "title": "Sign-in and project list in GPUI",
+      "branch": "factory/208-gpui-sign-in",
+      "stage": "merged",
+      "slice": "208e",
+      "base": "998e06b65aa53002ef0811661df41f88c9dd5c04",
+      "reviews": {
+        "slice": "208e",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "208a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 280
+        },
+        {
+          "slice": "208b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 507
+        },
+        {
+          "slice": "208c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 268
+        },
+        {
+          "slice": "208d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 398
+        },
+        {
+          "slice": "208d2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opus",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 235
+        },
+        {
+          "slice": "208e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 824
+        }
+      ],
+      "decision": "",
+      "updated": "2026-11-19T03:35:59Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
