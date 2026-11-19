@@ -3,36 +3,111 @@
 //! A renderer asks [`TableId::columns`] what a table shows and
 //! [`table_rows`] for the cells, so no table has its own column code.
 
-use aegis_canvas::Tone;
+pub use aegis_canvas::Tone;
 
+use aegis_model::{Applicability, ElementRef, Project, Reason, SystemSet, SystemUse};
+
+use crate::explorer::{Folder, Owner};
 use crate::i18n::Catalog;
 use crate::pages::{self, Vocabulary};
-use crate::view::{RiskView, Selection, TableId, threat_rows};
+use crate::relations;
+use crate::view::{ColumnKind, RiskView, Selection, TableId, threat_rows};
 use crate::workspace::Workspace;
 
-/// One cell: its text and, for a risk level, its color bucket.
+/// One clickable link chip in a `ColumnKind::Links` cell (UI-14.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkChip {
+    /// Linked element opened when the chip is activated.
+    pub target: Selection,
+    /// Short visual ID (`C00`, `A01`, ...).
+    pub visual_id: String,
+    /// Linked element's display name.
+    pub label: String,
+}
+
+/// One cell: its text, optional risk color bucket, and link chips.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Cell {
     /// What the cell shows.
     pub text: String,
     /// The color bucket of a risk level.
     pub tone: Option<Tone>,
+    /// Clickable link chips for `ColumnKind::Links` cells; empty otherwise.
+    pub chips: Vec<LinkChip>,
 }
 
-/// One row: the element it opens and one cell per column of the table,
-/// in the order of [`TableId::columns`], hidden columns included.
+/// One row: the element it opens, one cell per column of the table
+/// (in [`TableId::columns`] order, hidden columns included), and exclusion state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TableRow {
     /// The element the row stands for; `None` for a problem with no target.
     pub target: Option<Selection>,
     /// One cell per column.
     pub cells: Vec<Cell>,
+    /// Whether this row's element is excluded by an off condition (UI-14.3).
+    pub excluded: bool,
+    /// Human-readable reason when [`Self::excluded`] is true.
+    pub excluded_reason: Option<String>,
+}
+
+/// Stable lowercase key naming one table in settings and filters.
+#[must_use]
+pub fn table_key(table: TableId) -> &'static str {
+    match table {
+        TableId::Assets => "assets",
+        TableId::Damage => "damage",
+        TableId::Threats => "threats",
+        TableId::Risks => "risks",
+        TableId::Controls => "controls",
+        TableId::Goals => "goals",
+        TableId::Claims => "claims",
+        TableId::Problems => "problems",
+    }
+}
+
+/// The table opened by an explorer [`Folder`], or `None` for non-table folders.
+#[must_use]
+pub fn table_for_folder(folder: Folder) -> Option<TableId> {
+    match folder {
+        Folder::Assets => Some(TableId::Assets),
+        Folder::Damage => Some(TableId::Damage),
+        Folder::Threats => Some(TableId::Threats),
+        Folder::Risks => Some(TableId::Risks),
+        Folder::Controls => Some(TableId::Controls),
+        Folder::Goals => Some(TableId::Goals),
+        Folder::Claims => Some(TableId::Claims),
+        Folder::Problems => Some(TableId::Problems),
+        _ => None,
+    }
+}
+
+/// Read-only workspace JSON source for `table` (WBX-07).
+#[must_use]
+pub fn table_source_json(project: &Project, table: TableId) -> String {
+    let (path, kind) = match table {
+        TableId::Assets => ("systems/main/assets.json", "assets"),
+        TableId::Damage => ("shared/damage.json", "damage"),
+        TableId::Threats | TableId::Risks => ("systems/main/threats.json", "threats"),
+        TableId::Controls => ("shared/controls.json", "controls"),
+        TableId::Goals => ("shared/goals.json", "goals"),
+        TableId::Claims => ("shared/claims.json", "claims"),
+        TableId::Problems => return "{}\n".to_owned(),
+    };
+    if let Ok(files) = project.to_workspace_files()
+        && let Some(file) = files.into_iter().find(|f| f.path == path)
+    {
+        return String::from_utf8_lossy(&file.bytes).into_owned();
+    }
+    format!(
+        "{{\n  \"format\": \"aegis-workspace\",\n  \"version\": 1,\n  \"kind\": \"{kind}\",\n  \"items\": []\n}}\n"
+    )
 }
 
 fn text(text: impl Into<String>) -> Option<Cell> {
     Some(Cell {
         text: text.into(),
         tone: None,
+        chips: Vec::new(),
     })
 }
 
@@ -46,12 +121,145 @@ fn risk(r: Option<&RiskView>, unrated: String) -> Option<Cell> {
         Cell {
             text: unrated,
             tone: None,
+            chips: Vec::new(),
         },
         |r| Cell {
             text: r.label.clone(),
             tone: Some(r.tone),
+            chips: Vec::new(),
         },
     ))
+}
+
+macro_rules! elem_name {
+    ($p:expr, $id:expr, $idx:ident, $get:ident) => {
+        $p.$idx(&$id).and_then(|i| $p.$get(i)).map(|e| e.name())
+    };
+}
+
+fn selection_label(p: &Project, sel: Selection) -> String {
+    use Selection as S;
+    match sel {
+        S::Component(id) => elem_name!(p, id, component_idx, component),
+        S::Interface(id) => elem_name!(p, id, interface_idx, interface),
+        S::DataFlow(id) => elem_name!(p, id, data_flow_idx, data_flow),
+        S::TrustBoundary(id) => elem_name!(p, id, trust_boundary_idx, trust_boundary),
+        S::Asset(id) => elem_name!(p, id, asset_idx, asset),
+        S::Damage(id) => elem_name!(p, id, damage_scenario_idx, damage_scenario),
+        S::Threat(id) => elem_name!(p, id, threat_scenario_idx, threat_scenario),
+        S::Control(id) => elem_name!(p, id, security_control_idx, security_control),
+        S::Goal(id) => elem_name!(p, id, cybersecurity_goal_idx, cybersecurity_goal),
+        S::Claim(id) => elem_name!(p, id, cybersecurity_claim_idx, cybersecurity_claim),
+        S::Party(id) => elem_name!(p, id, party_idx, party),
+        S::Condition(id) => elem_name!(p, id, condition_idx, condition),
+        S::Tree(id) => p
+            .attack_tree_idx(&id)
+            .and_then(|i| p.attack_tree(i))
+            .and_then(|t| t.get(t.root()))
+            .map(aegis_model::Node::label),
+        S::TreeNode(t, n) => p
+            .attack_tree_idx(&t)
+            .and_then(|i| p.attack_tree(i))
+            .and_then(|tr| tr.idx_of(&n).and_then(|ni| tr.get(ni)))
+            .map(aegis_model::Node::label),
+    }
+    .unwrap_or_default()
+    .to_owned()
+}
+
+fn selection_element_ref(sel: Selection) -> Option<ElementRef> {
+    use ElementRef as E;
+    use Selection as S;
+    Some(match sel {
+        S::Asset(id) => E::Asset(id),
+        S::Damage(id) => E::Damage(id),
+        S::Threat(id) => E::Threat(id),
+        S::Tree(id) => E::Tree(id),
+        S::Control(id) => E::Control(id),
+        S::Goal(id) => E::Goal(id),
+        S::Claim(id) => E::Claim(id),
+        S::Component(id) => E::Component(id),
+        S::Interface(id) => E::Interface(id),
+        S::DataFlow(id) => E::DataFlow(id),
+        S::TrustBoundary(id) => E::TrustBoundary(id),
+        S::TreeNode(_, _) | S::Party(_) | S::Condition(_) => return None,
+    })
+}
+
+fn exclusion_state(
+    p: &Project,
+    app: &Applicability,
+    target: Option<Selection>,
+) -> (bool, Option<String>) {
+    let Some(elem) = target
+        .and_then(selection_element_ref)
+        .filter(|&e| app.is_excluded(e))
+    else {
+        return (false, None);
+    };
+    let text = app
+        .reasons(elem)
+        .iter()
+        .map(|&r| match r {
+            Reason::ConditionOff(cid) => {
+                let s = Selection::Condition(cid);
+                let vis = pages::selection_visual_id(p, s);
+                let name = selection_label(p, s);
+                let joined = format!("{vis} {name}");
+                let trimmed = joined.trim();
+                if trimmed.is_empty() {
+                    "condition off"
+                } else {
+                    trimmed
+                }
+                .to_owned()
+            }
+            Reason::OwnerExcluded(_) => "owner excluded".to_owned(),
+            Reason::ViaExcluded(_) => "via excluded".to_owned(),
+            Reason::AllPathsExcluded => "all paths excluded".to_owned(),
+            _ => "excluded".to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    (true, Some(text))
+}
+
+fn selection_system_set(p: &Project, u: &SystemUse, sel: Selection) -> Option<SystemSet> {
+    use Selection as S;
+    match sel {
+        S::Component(id) => p.component_idx(&id).map(|i| u.component(i)),
+        S::Interface(id) => p.interface_idx(&id).map(|i| u.interface(i)),
+        S::DataFlow(id) => p.data_flow_idx(&id).map(|i| u.data_flow(i)),
+        S::TrustBoundary(id) => p.trust_boundary_idx(&id).map(|i| u.trust_boundary(i)),
+        S::Asset(id) => p.asset_idx(&id).map(|i| u.asset(i)),
+        S::Damage(id) => p.damage_scenario_idx(&id).map(|i| u.damage(i)),
+        S::Threat(id) => p.threat_scenario_idx(&id).map(|i| u.threat(i)),
+        S::Tree(id) | S::TreeNode(id, _) => p.attack_tree_idx(&id).map(|i| u.tree(i)),
+        S::Control(id) => p.security_control_idx(&id).map(|i| u.control(i)),
+        S::Goal(id) => p.cybersecurity_goal_idx(&id).map(|i| u.goal(i)),
+        S::Claim(id) => p.cybersecurity_claim_idx(&id).map(|i| u.claim(i)),
+        S::Party(_) | S::Condition(_) => None,
+    }
+}
+
+fn matches_owner(
+    p: &Project,
+    u: &SystemUse,
+    sys_set: Option<SystemSet>,
+    target: Option<Selection>,
+) -> bool {
+    use Selection as S;
+    let Some((sel, set)) = target.and_then(|s| selection_system_set(p, u, s).map(|m| (s, m)))
+    else {
+        return false;
+    };
+    match sys_set {
+        Some(s) => set.intersects(s),
+        None => {
+            set.is_empty()
+                && !matches!(sel, S::Damage(_) | S::Control(_) | S::Goal(_) | S::Claim(_))
+        }
+    }
 }
 
 /// Builds the rows of `table` from `items`. A column `cell` does not know
@@ -71,6 +279,8 @@ fn build<R>(
                 .iter()
                 .map(|c| cell(r, c.key).unwrap_or_else(|| Cell::from_key(c.key)))
                 .collect(),
+            excluded: false,
+            excluded_reason: None,
         })
         .collect()
 }
@@ -80,6 +290,7 @@ impl Cell {
         Cell {
             text: format!("[{key}]"),
             tone: None,
+            chips: Vec::new(),
         }
     }
 }
@@ -94,8 +305,21 @@ pub fn table_rows(
     vocab: &Vocabulary,
     catalog: &Catalog,
 ) -> Vec<TableRow> {
+    table_rows_for_owner(ws, table, Owner::Project, vocab, catalog)
+}
+
+/// The rows of `table` scoped to an explorer [`Owner`], with link chips and
+/// applicability exclusion state populated.
+#[must_use]
+pub fn table_rows_for_owner(
+    ws: &Workspace,
+    table: TableId,
+    owner: Owner,
+    vocab: &Vocabulary,
+    catalog: &Catalog,
+) -> Vec<TableRow> {
     let unrated = || catalog.tr("not-rated");
-    match table {
+    let mut rows = match table {
         TableId::Assets => build(
             table,
             &pages::asset_rows(ws),
@@ -217,5 +441,34 @@ pub fn table_rows(
                 _ => None,
             },
         ),
+    };
+    let project = ws.project();
+    if owner != Owner::Project {
+        let usage = project.system_use();
+        let sys_set = match owner {
+            Owner::System(id) => Some(usage.set_of([id])),
+            Owner::Project | Owner::Unassigned => None,
+        };
+        rows.retain(|row| matches_owner(project, &usage, sys_set, row.target));
     }
+    let app = project.applicability();
+    let columns = table.columns();
+    for row in &mut rows {
+        if let Some(from) = row.target {
+            for (col, cell) in columns.iter().zip(&mut row.cells) {
+                if let ColumnKind::Links(rel) = col.kind {
+                    cell.chips = relations::related(project, rel, from)
+                        .into_iter()
+                        .map(|target| LinkChip {
+                            target,
+                            visual_id: pages::selection_visual_id(project, target),
+                            label: selection_label(project, target),
+                        })
+                        .collect();
+                }
+            }
+        }
+        (row.excluded, row.excluded_reason) = exclusion_state(project, &app, row.target);
+    }
+    rows
 }
