@@ -137,7 +137,9 @@ macro_rules! elem_name {
     };
 }
 
-fn selection_label(p: &Project, sel: Selection) -> String {
+/// Human-readable display name of `sel` in `p`, or empty if stale. Time O(1).
+#[must_use]
+pub fn selection_label(p: &Project, sel: Selection) -> String {
     use Selection as S;
     match sel {
         S::Component(id) => elem_name!(p, id, component_idx, component),
@@ -222,6 +224,13 @@ fn exclusion_state(
         .collect::<Vec<_>>()
         .join(", ");
     (true, Some(text))
+}
+
+/// Whether `sel` is excluded by an off condition in `p`, with its human-readable
+/// reason when excluded. Time O(project applicability).
+#[must_use]
+pub fn selection_exclusion(p: &Project, sel: Selection) -> (bool, Option<String>) {
+    exclusion_state(p, &p.applicability(), Some(sel))
 }
 
 fn selection_system_set(p: &Project, u: &SystemUse, sel: Selection) -> Option<SystemSet> {

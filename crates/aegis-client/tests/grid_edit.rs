@@ -8,18 +8,20 @@ use aegis_client::explorer::Owner;
 use aegis_client::grid::{
     CellEditorKind, CellInput, GridError, GridSelection, MAX_PASTE_BYTES, MAX_PASTE_COLS,
     MAX_PASTE_ROWS, add_row_edit, cell_editor, delete_rows_edit, edit_cell, edit_cells, fill_down,
-    format_tsv, parse_tsv,
+    format_tsv, parse_tsv, paste_tsv,
 };
 use aegis_client::i18n::{Catalog, Language};
-use aegis_client::pages::vocabulary;
+use aegis_client::pages::{selection_visual_id, vocabulary, vocabulary_for_lang};
 use aegis_client::relations::{self, RelationKey};
-use aegis_client::table::{Cell, TableRow, table_rows};
+use aegis_client::table::{
+    Cell, TableRow, selection_exclusion, selection_label, table_rows, table_rows_for_owner,
+};
 use aegis_client::undo_label::Label;
 use aegis_client::view::{ColumnSpec, Selection, TableId};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ComponentId, DamageId, ElementId, Methodology, Op, PartyId, PartyKind, Project,
-    PropertySet, Provenance, RiskTreatment, ThreatId,
+    AssetId, ComponentId, ConditionId, DamageId, ElementId, ElementRef, Methodology, Op, PartyId,
+    PartyKind, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
 };
 
 const ACTOR: &str = "mira";
@@ -2505,4 +2507,1371 @@ fn tsv_parse_guards_return_exact_errors() {
     // 8. EmptyPaste for "" and "\r\n".
     assert_eq!(parse_tsv(""), Err(GridError::EmptyPaste));
     assert_eq!(parse_tsv("\r\n"), Err(GridError::EmptyPaste));
+}
+
+// ---- 189b4: selection_label, selection_exclusion, and grid TSV paste engine ----
+
+#[test]
+fn selection_label_and_selection_exclusion_report_live_and_excluded_state() {
+    let mut ws = empty_workspace();
+    let asset_id = add_asset(&mut ws, "Brake CAN", vec![0]);
+    let sel = Selection::Asset(asset_id);
+
+    assert_eq!(selection_label(ws.project(), sel), "Brake CAN");
+    assert_eq!(
+        selection_label(ws.project(), Selection::Asset(AssetId::new_v7())),
+        ""
+    );
+    assert_eq!(selection_exclusion(ws.project(), sel), (false, None));
+
+    // Gate the asset behind an off condition and verify selection_exclusion reports it.
+    let cond_id = ConditionId::new_v7();
+    let prov = Provenance::human(ACTOR, NOW_MS);
+    ws.apply(
+        vec![
+            Op::AddCondition {
+                id: cond_id,
+                name: "ADAS Option".into(),
+                description: "".into(),
+                present: false,
+                provenance: prov.clone(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Asset(asset_id),
+                condition: cond_id,
+                provenance: prov,
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("apply condition exclusion");
+
+    let (excluded, reason) = selection_exclusion(ws.project(), sel);
+    assert!(excluded);
+    let reason = reason.expect("exclusion reason");
+    assert!(
+        reason.contains("ADAS Option"),
+        "expected condition name in reason, got '{reason}'"
+    );
+}
+
+#[test]
+fn paste_tsv_updates_and_appends_across_all_seven_editable_tables_with_exact_undo() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    let comp1 = add_component(&mut ws, "Gateway ECU", None);
+    let comp2 = add_component(&mut ws, "Brake ECU", None);
+    let party1 = add_party(&mut ws, "OEM Security");
+    let party2 = add_party(&mut ws, "Tier-1 Brakes");
+
+    let asset1 = add_asset(&mut ws, "CAN Bus", vec![0]);
+    let asset2 = add_asset(&mut ws, "Key Store", vec![0, 1]);
+    let Selection::Damage(dmg1) = add_damage(&mut ws, "Loss of Braking") else {
+        unreachable!()
+    };
+    let Selection::Threat(thr1) = add_threat(&mut ws, "Spoof Speed") else {
+        unreachable!()
+    };
+    // Give thr1 a scaling reason to verify existing-row paste preserves it.
+    apply_edit(
+        &mut ws,
+        &Edit::SetThreatScaling {
+            threat: thr1,
+            scales: Some(false),
+            reason: "Single-vehicle physical tap".into(),
+        },
+    );
+    let Selection::Control(ctrl1) = add_control(&mut ws, "SecOC") else {
+        unreachable!()
+    };
+    let Selection::Goal(goal1) = add_goal(&mut ws, "Protect Braking") else {
+        unreachable!()
+    };
+    let Selection::Claim(claim1) = add_claim(&mut ws, "Gateway Isolated") else {
+        unreachable!()
+    };
+
+    // 1. Assets: update existing row 0 (name, component, properties) + append new row + skip blank row.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::Assets, &vocab, &catalog);
+        let cols = all_cols(TableId::Assets);
+        let p0 = &vocab.properties[0];
+        let p1 = &vocab.properties[1];
+        let p2 = &vocab.properties[2];
+        let comp2_vis = selection_visual_id(ws.project(), Selection::Component(comp2));
+        let tsv = format!(
+            "A00\tCAN-FD Bus\tGateway ECU\t{p0}, {p1}, {p2}\t99\tHigh\n\
+             A01\tKey Store\t{comp2_vis}\t{p1}; {p2}\t0\t\n\
+             \t\t\t\t\t\n\
+             NEW\tTelemetry Key\tBrake ECU\t{p0}, {p1}\t0\t"
+        );
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::Assets,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            &tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste assets");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let a1 = p.asset(p.asset_idx(&asset1).expect("a1")).expect("slot");
+        assert_eq!(a1.name(), "CAN-FD Bus");
+        assert_eq!(a1.component(), p.component_idx(&comp1));
+        assert_eq!(a1.properties(), prop_set(p, &[0, 1, 2]));
+
+        let a2 = p.asset(p.asset_idx(&asset2).expect("a2")).expect("slot");
+        assert_eq!(a2.component(), p.component_idx(&comp2));
+        assert_eq!(a2.properties(), prop_set(p, &[1, 2]));
+
+        assert_eq!(p.assets().count(), 3);
+        let (_, _, appended) = p
+            .assets()
+            .find(|(_, _, a)| a.name() == "Telemetry Key")
+            .expect("appended asset");
+        assert_eq!(appended.component(), p.component_idx(&comp2));
+        assert_eq!(appended.properties(), prop_set(p, &[0, 1]));
+
+        ws.undo().expect("undo assets paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+
+    // 2. Damage: update existing row + append new row with multiple impact ratings.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::Damage, &vocab, &catalog);
+        let cols = all_cols(TableId::Damage);
+        let cat0 = &vocab.impact_categories[0];
+        let cat1 = &vocab.impact_categories[1];
+        let tsv = format!(
+            "D00\tDelayed Braking\t{}: {}\t0\n\
+             NEW\tData Breach\t{}: {}; {}: {}\t0",
+            cat0.label, cat0.levels[2], cat0.label, cat0.levels[1], cat1.label, cat1.levels[3]
+        );
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::Damage,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            &tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste damage");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let m = p.methodology();
+        let c0 = m.impact_categories().next().expect("cat0");
+        let c1 = m.impact_categories().nth(1).expect("cat1");
+        let d1 = p
+            .damage_scenario(p.damage_scenario_idx(&dmg1).expect("d1"))
+            .expect("slot");
+        assert_eq!(d1.name(), "Delayed Braking");
+        assert_eq!(d1.impact(c0), m.levels(c0).nth(2));
+        assert_eq!(d1.impact(c1), None);
+
+        let (_, _, appended) = p
+            .damage_scenarios()
+            .find(|(_, _, d)| d.name() == "Data Breach")
+            .expect("appended damage");
+        assert_eq!(appended.impact(c0), m.levels(c0).nth(1));
+        assert_eq!(appended.impact(c1), m.levels(c1).nth(3));
+
+        ws.undo().expect("undo damage paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+
+    // 3. Threats: update existing (preserving scaling_reason & ignoring read-only asset) + append new.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::Threats, &vocab, &catalog);
+        let cols = all_cols(TableId::Threats);
+        let tsv = "T00\tSpoof Wheel Speed\tKey Store\tYes\tHigh\tLow\n\
+                   NEW\tExtract Keys\tKey Store\ttrue\t\t";
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::Threats,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste threats");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let t1 = p
+            .threat_scenario(p.threat_scenario_idx(&thr1).expect("t1"))
+            .expect("slot");
+        assert_eq!(t1.name(), "Spoof Wheel Speed");
+        // Existing row's read-only THREAT_ASSET link was not mutated.
+        assert_eq!(t1.asset(), p.asset_idx(&asset1).expect("a1 idx"));
+        assert_eq!(t1.scales(), Some(true));
+        assert_eq!(t1.scaling_reason(), "Single-vehicle physical tap");
+
+        let (_, _, appended) = p
+            .threat_scenarios()
+            .find(|(_, _, t)| t.name() == "Extract Keys")
+            .expect("appended threat");
+        assert_eq!(appended.asset(), p.asset_idx(&asset2).expect("a2 idx"));
+        assert_eq!(appended.scales(), Some(true));
+
+        ws.undo().expect("undo threats paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+
+    // 4. Risks: update existing treatment + append new risk with asset & treatment.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::Risks, &vocab, &catalog);
+        let cols = vec![
+            col_by_key(TableId::Risks, "name"),
+            col_by_key(TableId::Risks, "asset"),
+            col_by_key(TableId::Risks, "treatment"),
+        ];
+        let tsv = "Spoof Speed\tKey Store\tReduce\n\
+                   Tamper Calibration\tKey Store\tShare";
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::Risks,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste risks");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let t1 = p
+            .threat_scenario(p.threat_scenario_idx(&thr1).expect("t1"))
+            .expect("slot");
+        assert_eq!(t1.treatment(), Some(RiskTreatment::Reduce));
+        assert_eq!(t1.asset(), p.asset_idx(&asset1).expect("a1 idx"));
+
+        let (_, _, appended) = p
+            .threat_scenarios()
+            .find(|(_, _, t)| t.name() == "Tamper Calibration")
+            .expect("appended risk");
+        assert_eq!(appended.asset(), p.asset_idx(&asset2).expect("a2 idx"));
+        assert_eq!(appended.treatment(), Some(RiskTreatment::Share));
+
+        ws.undo().expect("undo risks paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+
+    // 5. Controls: update existing + append new.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::Controls, &vocab, &catalog);
+        let cols = all_cols(TableId::Controls);
+        let tsv = "C00\tSecOC MAC\t0\t0\t0\n\
+                   NEW\tHardware Firewall\t0\t0\t0";
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::Controls,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste controls");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let c1 = p
+            .security_control(p.security_control_idx(&ctrl1).expect("c1"))
+            .expect("slot");
+        assert_eq!(c1.name(), "SecOC MAC");
+        assert!(
+            p.security_controls()
+                .any(|(_, _, c)| c.name() == "Hardware Firewall")
+        );
+
+        ws.undo().expect("undo controls paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+
+    // 6. Goals: update existing (name + responsible links) + append new with 2 parties.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::Goals, &vocab, &catalog);
+        let cols = all_cols(TableId::Goals);
+        let tsv = "G00\tProtect Braking Bus\tOEM Security\t0\t0\n\
+                   NEW\tAuthenticate Updates\tOEM Security, Tier-1 Brakes\t0\t0";
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::Goals,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste goals");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let g1 = p
+            .cybersecurity_goal(p.cybersecurity_goal_idx(&goal1).expect("g1"))
+            .expect("slot");
+        assert_eq!(g1.name(), "Protect Braking Bus");
+        assert_eq!(
+            relations::related(p, RelationKey::GOAL_RESPONSIBLE, Selection::Goal(goal1)),
+            vec![Selection::Party(party1)]
+        );
+        let (_, new_goal_id, _) = p
+            .cybersecurity_goals()
+            .find(|(_, _, g)| g.name() == "Authenticate Updates")
+            .expect("appended goal");
+        assert_eq!(
+            relations::related(
+                p,
+                RelationKey::GOAL_RESPONSIBLE,
+                Selection::Goal(new_goal_id)
+            ),
+            vec![Selection::Party(party1), Selection::Party(party2)]
+        );
+
+        ws.undo().expect("undo goals paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+
+    // 7. Claims: update existing (name + responsible links) + append new with 2 parties.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::Claims, &vocab, &catalog);
+        let cols = all_cols(TableId::Claims);
+        let tsv = "CL00\tGateway Hardened\tTier-1 Brakes\t0\n\
+                   NEW\tKeys Stored in HSM\tOEM Security; Tier-1 Brakes\t0";
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::Claims,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste claims");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let cl1 = p
+            .cybersecurity_claim(p.cybersecurity_claim_idx(&claim1).expect("cl1"))
+            .expect("slot");
+        assert_eq!(cl1.name(), "Gateway Hardened");
+        assert_eq!(
+            relations::related(p, RelationKey::CLAIM_RESPONSIBLE, Selection::Claim(claim1)),
+            vec![Selection::Party(party2)]
+        );
+        let (_, new_claim_id, _) = p
+            .cybersecurity_claims()
+            .find(|(_, _, c)| c.name() == "Keys Stored in HSM")
+            .expect("appended claim");
+        assert_eq!(
+            relations::related(
+                p,
+                RelationKey::CLAIM_RESPONSIBLE,
+                Selection::Claim(new_claim_id)
+            ),
+            vec![Selection::Party(party1), Selection::Party(party2)]
+        );
+
+        ws.undo().expect("undo claims paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+}
+
+#[test]
+fn paste_tsv_append_threat_on_non_category0_asset_picks_compatible_category() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    // Find a property that excludes threat category 0 (e.g., Integrity-only).
+    let (excluded_prop_idx, expected_cat) = {
+        let m = ws.project().methodology();
+        let cat0 = m.threat_categories().next().expect("cat0");
+        let cat0_props = m.violates(cat0);
+        let prop_idx = m
+            .properties()
+            .enumerate()
+            .find(|(_, p)| !cat0_props.contains(*p))
+            .map(|(i, _)| i)
+            .expect("property not violated by category 0");
+        let single = PropertySet::default().with(m.properties().nth(prop_idx).expect("prop"));
+        let cat = m
+            .threat_categories()
+            .find(|&c| m.violates(c).iter().all(|p| single.contains(p)))
+            .expect("compatible category for single property");
+        assert_ne!(cat, cat0, "chosen property must exclude category 0");
+        (prop_idx, cat)
+    };
+
+    let integrity_asset = add_asset(&mut ws, "Integrity Only Asset", vec![excluded_prop_idx]);
+    let rows = table_rows(&ws, TableId::Threats, &vocab, &catalog);
+    let cols = all_cols(TableId::Threats);
+    let before = save_bytes(&ws);
+
+    let tsv = "NEW\tTamper Firmware\tIntegrity Only Asset\tNo\t\t";
+    let edit = paste_tsv(
+        ws.project(),
+        TableId::Threats,
+        Owner::Project,
+        &rows,
+        &cols,
+        0,
+        0,
+        tsv,
+        &vocab,
+        &catalog,
+    )
+    .expect("append threat on integrity-only asset");
+    apply_edit(&mut ws, &edit);
+
+    let p = ws.project();
+    let (_, _, t) = p
+        .threat_scenarios()
+        .find(|(_, _, t)| t.name() == "Tamper Firmware")
+        .expect("appended threat");
+    assert_eq!(t.asset(), p.asset_idx(&integrity_asset).expect("asset idx"));
+    assert_eq!(t.category(), expected_cat);
+    assert_eq!(t.scales(), Some(false));
+
+    ws.undo().expect("undo");
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn paste_tsv_treatments_exact_order_and_clear() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+    let _asset = add_asset(&mut ws, "CAN Bus", vec![0]);
+
+    let t_ids: Vec<ThreatId> = ["T1", "T2", "T3", "T4"]
+        .into_iter()
+        .map(|name| match add_threat(&mut ws, name) {
+            Selection::Threat(id) => id,
+            _ => unreachable!(),
+        })
+        .collect();
+
+    let rows = table_rows(&ws, TableId::Risks, &vocab, &catalog);
+    let cols = vec![
+        col_by_key(TableId::Risks, "name"),
+        col_by_key(TableId::Risks, "treatment"),
+    ];
+    let before = save_bytes(&ws);
+
+    // Update 4 existing rows with mixed case + append 4 new rows in TREATMENTS order.
+    let tsv = "T1\tavoid\n\
+               T2\tREDUCE\n\
+               T3\tShare\n\
+               T4\tRetain\n\
+               N1\tAvoid\n\
+               N2\tReduce\n\
+               N3\tShare\n\
+               N4\tRetain";
+    let edit = paste_tsv(
+        ws.project(),
+        TableId::Risks,
+        Owner::Project,
+        &rows,
+        &cols,
+        0,
+        0,
+        tsv,
+        &vocab,
+        &catalog,
+    )
+    .expect("paste all four treatments");
+    apply_edit(&mut ws, &edit);
+
+    let expected = [
+        RiskTreatment::Avoid,
+        RiskTreatment::Reduce,
+        RiskTreatment::Share,
+        RiskTreatment::Retain,
+    ];
+    assert_eq!(TREATMENTS, expected);
+
+    let p = ws.project();
+    for (id, want) in t_ids.iter().zip(expected) {
+        let idx = p.threat_scenario_idx(id).expect("threat idx");
+        assert_eq!(
+            p.threat_scenario(idx).expect("slot").treatment(),
+            Some(want)
+        );
+    }
+    for (name, want) in ["N1", "N2", "N3", "N4"].into_iter().zip(expected) {
+        let (_, _, t) = p
+            .threat_scenarios()
+            .find(|(_, _, t)| t.name() == name)
+            .expect("appended risk");
+        assert_eq!(t.treatment(), Some(want));
+    }
+
+    // Clearing treatment with empty string on existing row sets it back to None.
+    let rows_after = table_rows(&ws, TableId::Risks, &vocab, &catalog);
+    let clear_edit = paste_tsv(
+        ws.project(),
+        TableId::Risks,
+        Owner::Project,
+        &rows_after,
+        &[col_by_key(TableId::Risks, "treatment")],
+        0,
+        0,
+        "",
+        &vocab,
+        &catalog,
+    );
+    // Note: pure "" is EmptyPaste; clearing requires a cell like "\t" or pasting name + empty treatment.
+    assert_eq!(clear_edit, Err(GridError::EmptyPaste));
+    let clear_with_name = paste_tsv(
+        ws.project(),
+        TableId::Risks,
+        Owner::Project,
+        &rows_after,
+        &cols,
+        0,
+        0,
+        "T1\t",
+        &vocab,
+        &catalog,
+    )
+    .expect("clear treatment with empty cell");
+    apply_edit(&mut ws, &clear_with_name);
+    let t0_idx = ws.project().threat_scenario_idx(&t_ids[0]).expect("t0");
+    assert_eq!(
+        ws.project()
+            .threat_scenario(t0_idx)
+            .expect("slot")
+            .treatment(),
+        None
+    );
+
+    ws.undo().expect("undo clear");
+    ws.undo().expect("undo paste treatments");
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn paste_tsv_damage_impact_replacement_and_ja_locale_roundtrip() {
+    let mut ws = empty_workspace();
+    let catalog_en = Catalog::load(Language::En);
+    let vocab_en = vocabulary(ws.project().methodology());
+    let catalog_ja = Catalog::load(Language::Ja);
+    let vocab_ja = vocabulary_for_lang(ws.project().methodology(), "ja");
+
+    let Selection::Damage(dmg_id) = add_damage(&mut ws, "Braking Fault") else {
+        unreachable!()
+    };
+    // Seed both Safety (cat 0) and Financial (cat 1).
+    apply_edit(
+        &mut ws,
+        &Edit::Batch(vec![
+            Edit::SetImpact {
+                damage: dmg_id,
+                category: 0,
+                level: Some(3),
+            },
+            Edit::SetImpact {
+                damage: dmg_id,
+                category: 1,
+                level: Some(2),
+            },
+        ]),
+    );
+
+    // 1. Replacement semantics: pasting only "Safety: Moderate" clears Financial.
+    let before_replace = save_bytes(&ws);
+    let rows = table_rows(&ws, TableId::Damage, &vocab_en, &catalog_en);
+    let cols = all_cols(TableId::Damage);
+    let edit = paste_tsv(
+        ws.project(),
+        TableId::Damage,
+        Owner::Project,
+        &rows,
+        &cols,
+        0,
+        2,
+        "Safety: Moderate",
+        &vocab_en,
+        &catalog_en,
+    )
+    .expect("replace impact");
+    apply_edit(&mut ws, &edit);
+
+    let p = ws.project();
+    let m = p.methodology();
+    let c0 = m.impact_categories().next().expect("Safety");
+    let c1 = m.impact_categories().nth(1).expect("Financial");
+    let d = p
+        .damage_scenario(p.damage_scenario_idx(&dmg_id).expect("idx"))
+        .expect("slot");
+    let moderate_lvl = m
+        .levels(c0)
+        .find(|&l| m.level_label(c0, l) == Some("Moderate"))
+        .expect("Moderate level");
+    assert_eq!(d.impact(c0), Some(moderate_lvl));
+    assert_eq!(
+        d.impact(c1),
+        None,
+        "previous Financial impact must be cleared"
+    );
+
+    ws.undo().expect("undo impact replacement");
+    assert_eq!(save_bytes(&ws), before_replace);
+
+    // 2. Empty impact cell clears all categories on existing row.
+    let clear_edit = paste_tsv(
+        ws.project(),
+        TableId::Damage,
+        Owner::Project,
+        &rows,
+        &cols,
+        0,
+        1,
+        "Braking Fault\t",
+        &vocab_en,
+        &catalog_en,
+    )
+    .expect("clear all impacts");
+    apply_edit(&mut ws, &clear_edit);
+    let p = ws.project();
+    let d = p
+        .damage_scenario(p.damage_scenario_idx(&dmg_id).expect("idx"))
+        .expect("slot");
+    assert!(
+        p.methodology()
+            .impact_categories()
+            .all(|c| d.impact(c).is_none())
+    );
+    ws.undo().expect("undo clear all impacts");
+    assert_eq!(save_bytes(&ws), before_replace);
+
+    // 3. Localized Language::Ja round-trip: format_tsv -> paste_tsv succeeds on existing & appended rows!
+    let rows_ja = table_rows(&ws, TableId::Damage, &vocab_ja, &catalog_ja);
+    let vis_indices: Vec<usize> = (0..cols.len()).collect();
+    let mut sel = GridSelection::single(0, 0);
+    sel.extend_to(0, cols.len() - 1);
+    let formatted_ja = format_tsv(&rows_ja, &vis_indices, sel);
+
+    // Round-trip onto existing row -> identical no-op Edit::Batch(vec![]).
+    let noop = paste_tsv(
+        ws.project(),
+        TableId::Damage,
+        Owner::Project,
+        &rows_ja,
+        &cols,
+        0,
+        0,
+        &formatted_ja,
+        &vocab_ja,
+        &catalog_ja,
+    )
+    .expect("ja round-trip existing row");
+    assert_eq!(noop, Edit::Batch(vec![]));
+
+    // Round-trip past end -> appends an identical copy of the damage scenario!
+    let append_ja = paste_tsv(
+        ws.project(),
+        TableId::Damage,
+        Owner::Project,
+        &rows_ja,
+        &cols,
+        rows_ja.len(),
+        0,
+        &formatted_ja,
+        &vocab_ja,
+        &catalog_ja,
+    )
+    .expect("ja round-trip append row");
+    apply_edit(&mut ws, &append_ja);
+    assert_eq!(ws.project().damage_scenarios().count(), 2);
+    let (_, _, copy) = ws
+        .project()
+        .damage_scenarios()
+        .find(|(_, id, _)| *id != dmg_id)
+        .expect("appended ja copy");
+    let m = ws.project().methodology();
+    let c0 = m.impact_categories().next().expect("cat0");
+    let c1 = m.impact_categories().nth(1).expect("cat1");
+    assert_eq!(copy.impact(c0), m.levels(c0).nth(3));
+    assert_eq!(copy.impact(c1), m.levels(c1).nth(2));
+    ws.undo().expect("undo ja append");
+    assert_eq!(save_bytes(&ws), before_replace);
+
+    // 4. Directly pasting Japanese vocabulary labels (for impact, properties, and scales) also works.
+    let ja_cat0 = &vocab_ja.impact_categories[0];
+    let ja_tsv = format!("新規ダメージ\t{}: {}", ja_cat0.label, ja_cat0.levels[2]);
+    let ja_direct = paste_tsv(
+        ws.project(),
+        TableId::Damage,
+        Owner::Project,
+        &rows_ja,
+        &cols,
+        rows_ja.len(),
+        1,
+        &ja_tsv,
+        &vocab_ja,
+        &catalog_ja,
+    )
+    .expect("direct ja impact labels");
+    apply_edit(&mut ws, &ja_direct);
+    let (_, _, ja_dmg) = ws
+        .project()
+        .damage_scenarios()
+        .find(|(_, _, d)| d.name() == "新規ダメージ")
+        .expect("ja damage");
+    assert_eq!(
+        ja_dmg.impact(c0),
+        ws.project().methodology().levels(c0).nth(2)
+    );
+    ws.undo().expect("undo direct ja damage");
+    assert_eq!(save_bytes(&ws), before_replace);
+}
+
+#[test]
+fn paste_tsv_rejects_multiple_tokens_on_1_to_1_links() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    let c0 = add_component(&mut ws, "ECU Alpha", None);
+    let c1 = add_component(&mut ws, "ECU Beta", None);
+    let a0 = add_asset(&mut ws, "Asset Zero", vec![0]);
+    let a1 = add_asset(&mut ws, "Asset One", vec![0]);
+    let before = save_bytes(&ws);
+
+    let c0_vis = selection_visual_id(ws.project(), Selection::Component(c0));
+    let c1_vis = selection_visual_id(ws.project(), Selection::Component(c1));
+    let a0_vis = selection_visual_id(ws.project(), Selection::Asset(a0));
+    let a1_vis = selection_visual_id(ws.project(), Selection::Asset(a1));
+
+    // Existing Asset row: >1 token in 1:1 ASSET_COMPONENT -> UnknownLink.
+    let asset_rows = table_rows(&ws, TableId::Assets, &vocab, &catalog);
+    let asset_cols = all_cols(TableId::Assets);
+    let err = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::Project,
+        &asset_rows,
+        &asset_cols,
+        0,
+        2,
+        &format!("{c0_vis}, {c1_vis}"),
+        &vocab,
+        &catalog,
+    );
+    assert_eq!(
+        err,
+        Err(GridError::UnknownLink {
+            row: 1,
+            col: "component".into(),
+            value: format!("{c0_vis}, {c1_vis}"),
+        })
+    );
+
+    // Appended Asset row: >1 token in 1:1 ASSET_COMPONENT -> UnknownLink.
+    let err = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::Project,
+        &asset_rows,
+        &asset_cols,
+        asset_rows.len(),
+        1,
+        &format!("New Asset\t{c0_vis}; {c1_vis}"),
+        &vocab,
+        &catalog,
+    );
+    assert_eq!(
+        err,
+        Err(GridError::UnknownLink {
+            row: 1,
+            col: "component".into(),
+            value: format!("{c0_vis}; {c1_vis}"),
+        })
+    );
+
+    // Appended Threat row: >1 token in 1:1 THREAT_ASSET -> UnknownLink.
+    let threat_rows = table_rows(&ws, TableId::Threats, &vocab, &catalog);
+    let threat_cols = all_cols(TableId::Threats);
+    let err = paste_tsv(
+        ws.project(),
+        TableId::Threats,
+        Owner::Project,
+        &threat_rows,
+        &threat_cols,
+        0,
+        1,
+        &format!("New Threat\t{a0_vis}, {a1_vis}"),
+        &vocab,
+        &catalog,
+    );
+    assert_eq!(
+        err,
+        Err(GridError::UnknownLink {
+            row: 1,
+            col: "asset".into(),
+            value: format!("{a0_vis}, {a1_vis}"),
+        })
+    );
+
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn paste_tsv_link_candidate_matching_precedence() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    // Create two components where c0's name collides with c1's visual_id!
+    let c0 = add_component(&mut ws, "Placeholder", None);
+    let c1 = add_component(&mut ws, "Gateway", None);
+    let c0_vis = selection_visual_id(ws.project(), Selection::Component(c0));
+    let c1_vis = selection_visual_id(ws.project(), Selection::Component(c1));
+    apply_edit(
+        &mut ws,
+        &Edit::RenameComponent {
+            component: c0,
+            name: c1_vis.clone(),
+        },
+    );
+
+    let a1 = add_asset(&mut ws, "A1", vec![0]);
+    let a2 = add_asset(&mut ws, "A2", vec![0]);
+    let a3 = add_asset(&mut ws, "A3", vec![0]);
+
+    let rows = table_rows(&ws, TableId::Assets, &vocab, &catalog);
+    let cols = vec![col_by_key(TableId::Assets, "component")];
+    let before = save_bytes(&ws);
+
+    // Row 1: exact visual_id (lowercase) -> beats c0's name match -> resolves to c1.
+    // Row 2: exact "{visual_id} — {name}" (case-insensitive) -> resolves to c0.
+    // Row 3: exact name (case-insensitive) -> resolves to c1.
+    let tsv = format!(
+        "{}\n{} — {}\ngateway",
+        c1_vis.to_lowercase(),
+        c0_vis.to_lowercase(),
+        c1_vis.to_lowercase()
+    );
+    let edit = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::Project,
+        &rows,
+        &cols,
+        0,
+        0,
+        &tsv,
+        &vocab,
+        &catalog,
+    )
+    .expect("precedence paste");
+    apply_edit(&mut ws, &edit);
+
+    let p = ws.project();
+    let c0_idx = p.component_idx(&c0).expect("c0 idx");
+    let c1_idx = p.component_idx(&c1).expect("c1 idx");
+    assert_eq!(
+        p.asset(p.asset_idx(&a1).expect("a1"))
+            .expect("slot")
+            .component(),
+        Some(c1_idx),
+        "exact visual_id must beat earlier exact name"
+    );
+    assert_eq!(
+        p.asset(p.asset_idx(&a2).expect("a2"))
+            .expect("slot")
+            .component(),
+        Some(c0_idx),
+        "visual_id — name must resolve to c0"
+    );
+    assert_eq!(
+        p.asset(p.asset_idx(&a3).expect("a3"))
+            .expect("slot")
+            .component(),
+        Some(c1_idx),
+        "case-insensitive exact name must resolve to c1"
+    );
+
+    ws.undo().expect("undo precedence");
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn paste_tsv_appended_empty_link_fallbacks_and_excess_trailing_columns() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    let sys = add_system(&mut ws, "Powertrain");
+    let sys_comp = add_component(&mut ws, "Engine ECU", Some(sys));
+
+    // Append Asset under Owner::System(sys) with empty component cell + excess trailing columns.
+    let before = save_bytes(&ws);
+    let asset_rows =
+        table_rows_for_owner(&ws, TableId::Assets, Owner::System(sys), &vocab, &catalog);
+    let asset_cols = vec![
+        col_by_key(TableId::Assets, "name"),
+        col_by_key(TableId::Assets, "component"),
+    ];
+    let edit = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::System(sys),
+        &asset_rows,
+        &asset_cols,
+        0,
+        0,
+        "Fuel Map\t\textra1\textra2",
+        &vocab,
+        &catalog,
+    )
+    .expect("append asset with empty component fallback + excess cols");
+    apply_edit(&mut ws, &edit);
+
+    let p = ws.project();
+    let (_, sys_asset_id, fuel_map) = p
+        .assets()
+        .find(|(_, _, a)| a.name() == "Fuel Map")
+        .expect("appended Fuel Map");
+    assert_eq!(
+        fuel_map.component(),
+        p.component_idx(&sys_comp),
+        "empty component cell must fall back to system_component"
+    );
+    assert_eq!(
+        fuel_map.properties(),
+        prop_set(p, &[0]),
+        "absent properties column must default to vec![0]"
+    );
+
+    // Update existing Asset row with excess trailing columns ignored silently.
+    let asset_rows_now =
+        table_rows_for_owner(&ws, TableId::Assets, Owner::System(sys), &vocab, &catalog);
+    let update_edit = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::System(sys),
+        &asset_rows_now,
+        &[col_by_key(TableId::Assets, "name")],
+        0,
+        0,
+        "Fuel Map v2\tignored_col_1\tignored_col_2",
+        &vocab,
+        &catalog,
+    )
+    .expect("update existing row ignoring excess trailing columns");
+    apply_edit(&mut ws, &update_edit);
+    assert_eq!(
+        ws.project()
+            .asset(ws.project().asset_idx(&sys_asset_id).expect("idx"))
+            .expect("slot")
+            .name(),
+        "Fuel Map v2"
+    );
+
+    // Append Threat under Owner::System(sys) with empty asset cell -> falls back to default_asset_for_owner.
+    let threat_rows =
+        table_rows_for_owner(&ws, TableId::Threats, Owner::System(sys), &vocab, &catalog);
+    let threat_cols = vec![
+        col_by_key(TableId::Threats, "name"),
+        col_by_key(TableId::Threats, "asset"),
+        col_by_key(TableId::Threats, "scales"),
+    ];
+    let thr_edit = paste_tsv(
+        ws.project(),
+        TableId::Threats,
+        Owner::System(sys),
+        &threat_rows,
+        &threat_cols,
+        0,
+        0,
+        "Tamper Fuel Map\t   \tYes\texcess_col",
+        &vocab,
+        &catalog,
+    )
+    .expect("append threat with empty asset fallback + excess cols");
+    apply_edit(&mut ws, &thr_edit);
+
+    let p = ws.project();
+    let (_, _, thr) = p
+        .threat_scenarios()
+        .find(|(_, _, t)| t.name() == "Tamper Fuel Map")
+        .expect("appended threat");
+    assert_eq!(thr.asset(), p.asset_idx(&sys_asset_id).expect("asset idx"));
+    assert_eq!(thr.scales(), Some(true));
+
+    ws.undo().expect("undo threat");
+    ws.undo().expect("undo rename");
+    ws.undo().expect("undo asset");
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn paste_tsv_guards_return_exact_errors_and_truncate_untrusted_values() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+    let _asset = add_asset(&mut ws, "CAN Bus", vec![0]);
+    let _dmg = add_damage(&mut ws, "Braking Loss");
+    let _thr = add_threat(&mut ws, "Spoof Frame");
+    let before = save_bytes(&ws);
+
+    let bogus_100 = "z".repeat(100);
+    let bogus_64 = "z".repeat(64);
+
+    // 1. TableId::Problems -> NotEditable (valid TSV, only Problems guard triggers).
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Problems,
+            Owner::Project,
+            &[],
+            &all_cols(TableId::Problems),
+            0,
+            0,
+            "P00\tBlocking\tText",
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::NotEditable)
+    );
+
+    // 2. Invalid rating on row 2 with 100-char bogus token -> UnknownRating { row: 2, col, value <= 64 }.
+    let asset_rows = table_rows(&ws, TableId::Assets, &vocab, &catalog);
+    let asset_cols = all_cols(TableId::Assets);
+    let p0 = &vocab.properties[0];
+    let err = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::Project,
+        &asset_rows,
+        &asset_cols,
+        0,
+        1,
+        &format!("CAN Bus\t\t{p0}\nAppended\t\t{bogus_100}"),
+        &vocab,
+        &catalog,
+    );
+    assert_eq!(
+        err,
+        Err(GridError::UnknownRating {
+            row: 2,
+            col: "properties".into(),
+            value: bogus_64.clone(),
+        })
+    );
+
+    // 3. Invalid Damage impact (missing ':', unknown category, unknown level) with 100-char value.
+    let dmg_rows = table_rows(&ws, TableId::Damage, &vocab, &catalog);
+    let dmg_cols = all_cols(TableId::Damage);
+    let err = paste_tsv(
+        ws.project(),
+        TableId::Damage,
+        Owner::Project,
+        &dmg_rows,
+        &dmg_cols,
+        0,
+        2,
+        &bogus_100,
+        &vocab,
+        &catalog,
+    );
+    assert_eq!(
+        err,
+        Err(GridError::UnknownRating {
+            row: 1,
+            col: "impact".into(),
+            value: bogus_64.clone(),
+        })
+    );
+    let err = paste_tsv(
+        ws.project(),
+        TableId::Damage,
+        Owner::Project,
+        &dmg_rows,
+        &dmg_cols,
+        0,
+        2,
+        "Safety: NotALevel",
+        &vocab,
+        &catalog,
+    );
+    assert_eq!(
+        err,
+        Err(GridError::UnknownRating {
+            row: 1,
+            col: "impact".into(),
+            value: "NotALevel".into(),
+        })
+    );
+
+    // 4. Invalid scales & invalid treatment.
+    let thr_rows = table_rows(&ws, TableId::Threats, &vocab, &catalog);
+    let thr_cols = all_cols(TableId::Threats);
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Threats,
+            Owner::Project,
+            &thr_rows,
+            &thr_cols,
+            0,
+            3,
+            "maybe",
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::UnknownRating {
+            row: 1,
+            col: "scales".into(),
+            value: "maybe".into(),
+        })
+    );
+    let risk_rows = table_rows(&ws, TableId::Risks, &vocab, &catalog);
+    let risk_cols = vec![col_by_key(TableId::Risks, "treatment")];
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Risks,
+            Owner::Project,
+            &risk_rows,
+            &risk_cols,
+            0,
+            0,
+            "Ignore",
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::UnknownRating {
+            row: 1,
+            col: "treatment".into(),
+            value: "Ignore".into(),
+        })
+    );
+
+    // 5. Invalid link with 100-char token -> UnknownLink truncated to 64 chars.
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Assets,
+            Owner::Project,
+            &asset_rows,
+            &asset_cols,
+            0,
+            2,
+            &bogus_100,
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::UnknownLink {
+            row: 1,
+            col: "component".into(),
+            value: bogus_64,
+        })
+    );
+
+    // 6. Blank name on existing row 1 and appended row 2 -> EmptyName with exact 1-based row.
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Assets,
+            Owner::Project,
+            &asset_rows,
+            &asset_cols,
+            0,
+            1,
+            "   ",
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::EmptyName { row: 1 })
+    );
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Assets,
+            Owner::Project,
+            &asset_rows,
+            &asset_cols,
+            0,
+            1,
+            &format!("Valid Name\t\t{p0}\n   \t\t{p0}"),
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::EmptyName { row: 2 })
+    );
+
+    // 7. Only computed columns or only blank appended rows -> EmptyPaste.
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Assets,
+            Owner::Project,
+            &asset_rows,
+            &asset_cols,
+            0,
+            4,
+            "42\tHigh",
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::EmptyPaste)
+    );
+    assert_eq!(
+        paste_tsv(
+            ws.project(),
+            TableId::Assets,
+            Owner::Project,
+            &asset_rows,
+            &asset_cols,
+            asset_rows.len(),
+            0,
+            "   \t  \n\t ",
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::EmptyPaste)
+    );
+
+    // 8. Appending a threat with no asset in scope -> NoAssetForThreat.
+    let empty_ws = empty_workspace();
+    assert_eq!(
+        paste_tsv(
+            empty_ws.project(),
+            TableId::Threats,
+            Owner::Project,
+            &[],
+            &thr_cols,
+            0,
+            1,
+            "Orphan Threat",
+            &vocab,
+            &catalog,
+        ),
+        Err(GridError::NoAssetForThreat)
+    );
+
+    // Project remained completely untouched through all guard failures.
+    assert_eq!(save_bytes(&ws), before);
+}
+
+#[test]
+fn paste_tsv_format_tsv_multi_column_roundtrip() {
+    let mut ws = empty_workspace();
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+
+    let comp = add_component(&mut ws, "Telematics ECU", None);
+    let a1 = AssetId::new_v7();
+    apply_edit(
+        &mut ws,
+        &Edit::AddAssetBound {
+            id: a1,
+            name: "Cellular Modem".into(),
+            properties: vec![0, 1, 2],
+            component: comp,
+        },
+    );
+    let a2 = add_asset(&mut ws, "OTA Key", vec![0, 3]);
+
+    let rows = table_rows(&ws, TableId::Assets, &vocab, &catalog);
+    let cols = all_cols(TableId::Assets);
+    let vis_indices: Vec<usize> = (0..cols.len()).collect();
+    let mut sel = GridSelection::single(0, 0);
+    sel.extend_to(rows.len() - 1, cols.len() - 1);
+    let tsv = format_tsv(&rows, &vis_indices, sel);
+
+    // Round-trip onto existing rows -> zero changes.
+    let noop = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::Project,
+        &rows,
+        &cols,
+        0,
+        0,
+        &tsv,
+        &vocab,
+        &catalog,
+    )
+    .expect("multi-column round-trip existing");
+    assert_eq!(noop, Edit::Batch(vec![]));
+
+    // Round-trip appended past the end -> duplicates both rows faithfully, undone in 1 step.
+    let before = save_bytes(&ws);
+    let append = paste_tsv(
+        ws.project(),
+        TableId::Assets,
+        Owner::Project,
+        &rows,
+        &cols,
+        rows.len(),
+        0,
+        &tsv,
+        &vocab,
+        &catalog,
+    )
+    .expect("multi-column round-trip append");
+    apply_edit(&mut ws, &append);
+
+    let p = ws.project();
+    assert_eq!(p.assets().count(), 4);
+    let modem_copies: Vec<_> = p
+        .assets()
+        .filter(|(_, id, a)| *id != a1 && a.name() == "Cellular Modem")
+        .collect();
+    assert_eq!(modem_copies.len(), 1);
+    assert_eq!(modem_copies[0].2.component(), p.component_idx(&comp));
+    assert_eq!(modem_copies[0].2.properties(), prop_set(p, &[0, 1, 2]));
+
+    let key_copies: Vec<_> = p
+        .assets()
+        .filter(|(_, id, a)| *id != a2 && a.name() == "OTA Key")
+        .collect();
+    assert_eq!(key_copies.len(), 1);
+    assert_eq!(key_copies[0].2.component(), None);
+    assert_eq!(key_copies[0].2.properties(), prop_set(p, &[0, 3]));
+
+    ws.undo().expect("single undo restores multi-column append");
+    assert_eq!(save_bytes(&ws), before);
 }

@@ -498,7 +498,7 @@ fn unknown_rating(col: &str, value: &str) -> GridError {
     }
 }
 
-fn with_row(err: GridError, row: usize) -> GridError {
+pub(crate) fn with_row(err: GridError, row: usize) -> GridError {
     match err {
         GridError::EmptyName { .. } => GridError::EmptyName { row },
         GridError::UnknownRating { col, value, .. } => GridError::UnknownRating { row, col, value },
