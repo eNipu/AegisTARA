@@ -37,10 +37,10 @@ use super::apply_appearance;
 use super::commands::{dispatch_id, on_every_command};
 use super::files::Leave;
 use super::icons::icon;
+use super::inspector::InspectorPanel;
 use super::layout::{apply_layout, default_layout, read_layout};
 use super::panels::{
-    BottomPanel, ElementTab, ExplorerPanel, InspectorPanel, ListTab, OverviewTab, ShortcutGroup,
-    ShortcutsTab,
+    BottomPanel, ElementTab, ExplorerPanel, ListTab, OverviewTab, ShortcutGroup, ShortcutsTab,
 };
 use crate::local;
 use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
@@ -92,6 +92,7 @@ pub struct Workbench {
     pub(super) names: ElementNamesDef,
     actor: String,
     explorer: Entity<ExplorerPanel>,
+    inspector: Entity<InspectorPanel>,
     filter: Entity<InputState>,
     pub(super) area: Entity<DockArea>,
     pub(super) tabs: HashMap<ExplorerKey, Tab>,
@@ -154,7 +155,7 @@ fn all_rows(index: &ExplorerIndex) -> Vec<ExplorerRow> {
 }
 
 /// The singular name of the kind of `sel`, if the pack names it.
-fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
+pub(super) fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
     let n = match sel {
         Selection::Component(_) => &names.component,
         Selection::Interface(_) => &names.interface,
@@ -219,11 +220,10 @@ impl Workbench {
                 this.show_rows(cx);
             }
         });
-        let explorer =
-            cx.new(|cx| ExplorerPanel::new(tr("workbench-explorer"), filter.clone(), me, cx));
-        let inspector_text = vec![tr("workbench-inspector-empty")];
-        let inspector =
-            cx.new(|cx| InspectorPanel::new(tr("workbench-inspector"), None, inspector_text, cx));
+        let explorer = cx
+            .new(|cx| ExplorerPanel::new(tr("workbench-explorer"), filter.clone(), me.clone(), cx));
+        let inspector = cx
+            .new(|cx| InspectorPanel::new(tr("workbench-inspector"), Rc::clone(&catalog), me, cx));
         let bottom_text = vec![tr("workbench-bottom-empty")];
         let bottom = cx.new(|cx| BottomPanel::new(tr("workbench-bottom"), None, bottom_text, cx));
 
@@ -238,7 +238,7 @@ impl Workbench {
         let (area, skin) = DockSkin::dock_area("workbench", None, window, cx);
         let center = DockLayout::tabs().panel_view(panel_handle(overview.clone()), cx);
         let left = DockLayout::tabs().panel_view(panel_handle(explorer.clone()), cx);
-        let right = DockLayout::tabs().panel_view(panel_handle(inspector), cx);
+        let right = DockLayout::tabs().panel_view(panel_handle(inspector.clone()), cx);
         let below = DockLayout::tabs().panel_view(panel_handle(bottom), cx);
         let saved = area.update(cx, |area, cx| {
             area.set_center(center, window, cx);
@@ -279,6 +279,7 @@ impl Workbench {
             names,
             actor: local::actor(),
             explorer,
+            inspector,
             filter,
             area,
             tabs: HashMap::from([(OVERVIEW, overview)]),
@@ -349,6 +350,31 @@ impl Workbench {
         &self.area
     }
 
+    /// The right-hand relation-backed inspector dock panel.
+    pub fn inspector(&self) -> &Entity<InspectorPanel> {
+        &self.inspector
+    }
+
+    /// Updates the inspector selection, skipping the inspector entity when its
+    /// [`gpui::EntityId`] matches `skip`.
+    pub fn select_element_skipping(
+        &mut self,
+        sel: Option<Selection>,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        if Some(self.inspector.entity_id()) != skip {
+            self.inspector.update(cx, |i, cx| {
+                i.set_selection(sel, self.workspace.project(), &self.names, skip, cx);
+            });
+        }
+    }
+
+    /// Updates the inspector selection.
+    pub fn select_element(&mut self, sel: Option<Selection>, cx: &mut Context<Self>) {
+        self.select_element_skipping(sel, None, cx);
+    }
+
     /// The component being moved with the keyboard, if any.
     pub fn picked(&self) -> Option<ExplorerKey> {
         self.picked.as_ref().map(|(k, _)| *k)
@@ -366,6 +392,9 @@ impl Workbench {
     pub fn select(&mut self, key: ExplorerKey, cx: &mut Context<Self>) {
         self.state.select(key);
         self.show_rows(cx);
+        if let ExplorerKey::Element(_, _, sel) = key {
+            self.select_element(Some(sel), cx);
+        }
     }
 
     /// Selects the first row of `sel` and opens its ancestors.
@@ -501,6 +530,12 @@ impl Workbench {
         if skip != Some(self.explorer.entity_id()) {
             self.show_rows(cx);
         }
+        if Some(self.inspector.entity_id()) != skip {
+            let cur = self.inspector.read(cx).selection();
+            self.inspector.update(cx, |i, cx| {
+                i.set_selection(cur, self.workspace.project(), &self.names, skip, cx);
+            });
+        }
     }
 
     /// Rebuilds the tree and every open tab after the project changed.
@@ -534,12 +569,12 @@ impl Workbench {
         self.apply_edit_skipping(edit, None, cx)
     }
 
-    /// Reveals `sel` in the explorer, selects its first element row, and
-    /// opens its element tab.
+    /// Reveals `sel` in the explorer, selects its first element row, opens its
+    /// element tab, and updates the inspector (respecting `skip`).
     pub fn open_target_skipping(
         &mut self,
         sel: Selection,
-        _skip: Option<gpui::EntityId>,
+        skip: Option<gpui::EntityId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -548,9 +583,11 @@ impl Workbench {
             key @ ExplorerKey::Element(_, _, s) if s == sel => Some(key),
             _ => None,
         }) {
-            self.select(key, cx);
+            self.state.select(key);
+            self.show_rows(cx);
             self.open(key, window, cx);
         }
+        self.select_element_skipping(Some(sel), skip, cx);
     }
 
     /// Reveals `sel` in the explorer and opens its element tab.

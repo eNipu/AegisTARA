@@ -3,6 +3,7 @@
 mod commands;
 mod files;
 mod icons;
+mod inspector;
 mod layout;
 mod panels;
 mod picker_view;
@@ -30,6 +31,7 @@ use crate::theme::{Tokens, dark, light, parse_hex};
 pub use commands::{bind_all, bindings, dispatch_id};
 pub use files::Leave;
 pub use icons::icon;
+pub use inspector::{InspectorPanel, InspectorRelationRow};
 pub use picker_view::MultiLinkPickerView;
 pub use server::{METHODOLOGIES, ServerEvent, ServerPane};
 pub use shell::{Screen, Shell};
