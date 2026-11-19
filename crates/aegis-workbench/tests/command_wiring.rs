@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use aegis_client::command_table::commands;
 use aegis_client::commands::Edit;
+use aegis_client::explorer::ExplorerKey;
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::settings::{Appearance, Settings};
 use aegis_client::view::Selection;
@@ -135,12 +136,54 @@ fn workbench_hooks_toggle_developer_source_apply_edit_and_open_target(cx: &mut T
         })
         .expect("sample asset");
     let sel = Selection::Asset(asset);
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.state().selected),
+        Some(ExplorerKey::Root)
+    );
     wb.update_in(vcx, |w, window, cx| {
         w.open_target(sel, window, cx);
     });
     let selected = vcx.read_entity(&wb, |w, _| w.state().selected);
     let key = selected.expect("selected element row");
+    assert_ne!(key, ExplorerKey::Root);
+    assert!(
+        matches!(key, ExplorerKey::Element(_, _, s) if s == sel),
+        "expected element row for {sel:?}, got {key:?}"
+    );
     assert!(vcx.read_entity(&wb, |w, cx| w.has_tab(key, cx)));
+
+    // apply_edit refuses mutations on a read-only workbench, sets note(), and leaves project intact.
+    let seq_before = vcx.read_entity(&wb, |w, _| w.workspace().confirmed_seq());
+    wb.update(vcx, |w, cx| {
+        w.set_read_only(Some("locked for review".into()), cx);
+    });
+    let refused = wb.update(vcx, |w, cx| {
+        w.apply_edit(
+            &Edit::SetDescription {
+                target: ElementRef::Project,
+                text: "blocked edit".into(),
+            },
+            cx,
+        )
+    });
+    assert!(!refused);
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.note().map(str::to_owned)),
+        Some("locked for review".to_owned())
+    );
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| {
+            w.workspace()
+                .project()
+                .description(ElementRef::Project)
+                .map(str::to_owned)
+        }),
+        Some("via hook".to_owned())
+    );
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.workspace().confirmed_seq()),
+        seq_before
+    );
 
     // Reloading Workbench from the same settings file restores developer_source_view = true.
     let (wb2, vcx2) = cx.add_window_view(|window, cx| {

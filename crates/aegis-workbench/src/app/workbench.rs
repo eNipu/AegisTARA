@@ -1052,3 +1052,113 @@ impl Render for Workbench {
             .children(layer)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use aegis_client::commands::Edit;
+    use aegis_client::i18n::Language;
+
+    use super::*;
+
+    #[gpui::test]
+    fn apply_edit_skipping_avoids_double_lease_and_refreshes_siblings(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let catalog = Rc::new(Catalog::load(Language::En));
+        let (wb, vcx) = cx.add_window_view(|window, cx| {
+            Workbench::new(Rc::clone(&catalog), Appearance::Light, None, window, cx)
+        });
+        let Some(asset) = vcx.read_entity(&wb, |w, _| {
+            w.workspace().project().assets().next().map(|(_, id, _)| id)
+        }) else {
+            panic!("sample project must contain an asset");
+        };
+
+        // Open both an element tab and its parent folder list tab so all three skip arms are live.
+        wb.update_in(vcx, |w, window, cx| {
+            w.open_target(Selection::Asset(asset), window, cx);
+            if let Some(ExplorerKey::Element(owner, folder, _)) = w.state.selected {
+                w.open(ExplorerKey::Folder(owner, folder), window, cx);
+            }
+        });
+
+        let (elem_tab, list_tab, explorer) = vcx.read_entity(&wb, |w, _| {
+            let elem = w.tabs.values().find_map(|t| match &t.body {
+                Body::Element(e) => Some(e.clone()),
+                _ => None,
+            });
+            let list = w.tabs.values().find_map(|t| match &t.body {
+                Body::List(e) => Some(e.clone()),
+                _ => None,
+            });
+            (elem, list, w.explorer.clone())
+        });
+        let (Some(elem_tab), Some(list_tab)) = (elem_tab, list_tab) else {
+            panic!("both element and list tabs must be open");
+        };
+
+        let hits = [
+            Rc::new(Cell::new(0usize)),
+            Rc::new(Cell::new(0usize)),
+            Rc::new(Cell::new(0usize)),
+        ];
+        let _subs = vcx.update(|_, cx| {
+            let [eh, lh, xh] = hits.clone();
+            [
+                cx.observe(&elem_tab, move |_, _| eh.set(eh.get() + 1)),
+                cx.observe(&list_tab, move |_, _| lh.set(lh.get() + 1)),
+                cx.observe(&explorer, move |_, _| xh.set(xh.get() + 1)),
+            ]
+        });
+        let rename = |name: &str| Edit::RenameAsset {
+            asset,
+            name: name.into(),
+        };
+        let reset = || hits.iter().for_each(|h| h.set(0));
+        let has_row = |vcx: &gpui::VisualTestContext, needle: &str| {
+            vcx.read_entity(&explorer, |p, _| {
+                p.rows().iter().any(|r| r.label.contains(needle))
+            })
+        };
+
+        // 1. Inside ElementTab::update skipping elem_tab.
+        let id = elem_tab.entity_id();
+        assert!(elem_tab.update(vcx, |_, cx| {
+            wb.update(cx, |w, cx| {
+                w.apply_edit_skipping(&rename("Skip Elem"), Some(id), cx)
+            })
+        }));
+        vcx.run_until_parked();
+        assert_eq!(hits[0].get(), 0);
+        assert!(hits[1].get() > 0 && hits[2].get() > 0 && has_row(vcx, "Skip Elem"));
+
+        // 2. Inside ListTab::update skipping list_tab.
+        reset();
+        let id = list_tab.entity_id();
+        assert!(list_tab.update(vcx, |_, cx| {
+            wb.update(cx, |w, cx| {
+                w.apply_edit_skipping(&rename("Skip List"), Some(id), cx)
+            })
+        }));
+        vcx.run_until_parked();
+        assert_eq!(hits[1].get(), 0);
+        assert!(hits[0].get() > 0 && hits[2].get() > 0 && has_row(vcx, "Skip List"));
+
+        // 3. Inside ExplorerPanel::update skipping explorer.
+        reset();
+        let id = explorer.entity_id();
+        assert!(explorer.update(vcx, |_, cx| {
+            wb.update(cx, |w, cx| {
+                w.apply_edit_skipping(&rename("Skip Explorer"), Some(id), cx)
+            })
+        }));
+        vcx.run_until_parked();
+        assert_eq!(hits[2].get(), 0);
+        assert!(hits[0].get() > 0 && hits[1].get() > 0);
+        assert!(has_row(vcx, "Skip List") && !has_row(vcx, "Skip Explorer"));
+    }
+}
