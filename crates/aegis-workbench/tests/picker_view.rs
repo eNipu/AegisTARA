@@ -766,10 +766,27 @@ fn inspector_inline_picker_toggles_without_double_lease_undoes_and_closes_on_res
         assert!(i.active_picker().is_none());
     });
 
-    // Re-select threat, open picker, then select a different element -> active_picker closes.
+    // Re-select threat, open inline picker, draw, and press Escape -> set_on_close clears
+    // active_picker via me.update without double-lease while keeping selection intact (L31).
     wb.update(vcx, |w, cx| {
         w.select_element(Some(Selection::Threat(threat)), cx);
     });
+    inspector.update_in(vcx, |i, window, cx| {
+        i.open_picker(RelationKey::THREAT_DAMAGES, window, cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.run_until_parked();
+    assert!(vcx.read_entity(&inspector, |i, _| i.active_picker().is_some()));
+
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), Some(Selection::Threat(threat)));
+        assert!(i.active_picker().is_none());
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // Re-open picker, then select a different element -> active_picker closes.
     inspector.update_in(vcx, |i, window, cx| {
         i.open_picker(RelationKey::THREAT_DAMAGES, window, cx);
     });
@@ -836,9 +853,12 @@ fn inspector_clears_on_deleted_selection_and_project_replace(cx: &mut TestAppCon
     });
     assert!(vcx.read_entity(&inspector, |i, _| i.active_picker().is_some()));
 
-    let fresh = workbench_sample().project().clone();
+    // Clone the current project so `asset` still exists with the same UUID in the replacement;
+    // only Workbench::replace's explicit clear (not stale-ID detection) clears the inspector.
+    let same_ids = vcx.read_entity(&wb, |w, _| w.workspace().project().clone());
+    assert!(same_ids.asset_idx(&asset).is_some());
     wb.update_in(vcx, |w, window, cx| {
-        w.show_project(fresh, "Replaced project", None, window, cx);
+        w.show_project(same_ids, "Replaced project", None, window, cx);
     });
     vcx.read_entity(&inspector, |i, _| {
         assert_eq!(i.selection(), None);
