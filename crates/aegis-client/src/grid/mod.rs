@@ -12,6 +12,10 @@ use crate::commands::Edit;
 use crate::explorer::Owner;
 use crate::view::{Selection, TableId};
 
+mod edit;
+
+pub use edit::{CellEditorKind, CellInput, cell_editor, edit_cell, edit_cells};
+
 /// Why a grid editing, fill, or clipboard paste operation was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum GridError {
