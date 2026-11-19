@@ -10,6 +10,7 @@ mod picker_view;
 mod server;
 mod shell;
 mod start;
+mod table_tab;
 mod workbench;
 
 use std::path::PathBuf;
@@ -36,6 +37,7 @@ pub use picker_view::MultiLinkPickerView;
 pub use server::{METHODOLOGIES, ServerEvent, ServerPane};
 pub use shell::{Screen, Shell};
 pub use start::{ServerSetup, StartConfig, StartEvent, StartScreen};
+pub use table_tab::TableTab;
 pub use workbench::{Workbench, WorkbenchEvent};
 
 /// Opens the window on the start screen, opening the project folder

@@ -16,7 +16,8 @@ use aegis_client::license_file::LocalLicense;
 use aegis_client::pages::{problems, selection_visual_id};
 use aegis_client::palette::{PaletteEntry, PaletteTarget, entries, search};
 use aegis_client::settings::{Appearance, Settings, WorkbenchLayout};
-use aegis_client::view::Selection;
+use aegis_client::table::table_for_folder;
+use aegis_client::view::{ColumnSpec, Selection, TableId};
 use aegis_client::workspace::Workspace;
 use aegis_model::{ElementNamesDef, Methodology, Project};
 use gpui::{
@@ -42,6 +43,7 @@ use super::layout::{apply_layout, default_layout, read_layout};
 use super::panels::{
     BottomPanel, ElementTab, ExplorerPanel, ListTab, OverviewTab, ShortcutGroup, ShortcutsTab,
 };
+use super::table_tab::TableTab;
 use crate::local;
 use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
 
@@ -66,6 +68,7 @@ const TOOLBAR: [&str; 6] = [
 pub(super) enum Body {
     Overview(Entity<OverviewTab>),
     List(Entity<ListTab>),
+    Table(Entity<TableTab>),
     Element(Entity<ElementTab>),
 }
 
@@ -117,8 +120,8 @@ pub struct Workbench {
     pub(super) asking: bool,
     /// The window may close now.
     pub(super) leaving: bool,
-    /// Whether the opt-in read-only developer JSON source toggle is enabled.
-    pub(super) developer_source_view: bool,
+    /// Loaded user settings (column visibility, developer source view, layout).
+    pub(super) settings: Settings,
     settings_path: Option<PathBuf>,
     saved: Option<WorkbenchLayout>,
     _skin: Rc<DockSkin>,
@@ -227,14 +230,13 @@ impl Workbench {
         let bottom_text = vec![tr("workbench-bottom-empty")];
         let bottom = cx.new(|cx| BottomPanel::new(tr("workbench-bottom"), None, bottom_text, cx));
 
-        let loaded_settings = settings_path.as_ref().map(|p| Settings::load(p));
-        let layout = loaded_settings
-            .as_ref()
-            .and_then(|s| s.workbench_layout(SAMPLE_KEY))
+        let settings = settings_path
+            .as_deref()
+            .map(Settings::load)
+            .unwrap_or_default();
+        let layout = settings
+            .workbench_layout(SAMPLE_KEY)
             .unwrap_or_else(|| default_layout(SAMPLE_KEY));
-        let developer_source_view = loaded_settings
-            .as_ref()
-            .is_some_and(|s| s.developer_source_view);
         let (area, skin) = DockSkin::dock_area("workbench", None, window, cx);
         let center = DockLayout::tabs().panel_view(panel_handle(overview.clone()), cx);
         let left = DockLayout::tabs().panel_view(panel_handle(explorer.clone()), cx);
@@ -296,7 +298,7 @@ impl Workbench {
             license: None,
             asking: false,
             leaving: false,
-            developer_source_view,
+            settings,
             settings_path,
             saved: Some(saved),
             _skin: skin,
@@ -319,7 +321,99 @@ impl Workbench {
     /// Whether the opt-in read-only developer JSON source toggle is enabled.
     #[must_use]
     pub fn developer_source_view(&self) -> bool {
-        self.developer_source_view
+        self.settings.developer_source_view
+    }
+
+    /// Visible columns for `table` according to the loaded user settings.
+    pub(super) fn visible_columns_for(&self, table: TableId) -> Vec<&'static ColumnSpec> {
+        self.settings.visible_columns(table)
+    }
+
+    fn refresh_tables(
+        &self,
+        only: Option<TableId>,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        let updates: Vec<_> = self
+            .tabs
+            .iter()
+            .filter_map(|(&k, t)| match &t.body {
+                Body::Table(e) if skip != Some(e.entity_id()) => {
+                    let tbl = e.read(cx).table();
+                    if only.is_some_and(|want| want != tbl) {
+                        return None;
+                    }
+                    let title = self.table_title(k, tbl);
+                    Some((e.clone(), title, self.visible_columns_for(tbl)))
+                }
+                _ => None,
+            })
+            .collect();
+        for (e, title, cols) in updates {
+            e.update(cx, |t, cx| {
+                t.refresh(title, &self.workspace, cols, skip, cx)
+            });
+        }
+    }
+
+    /// Shows or hides column `key` of `table`, persists the choice, and
+    /// refreshes every open [`TableTab`] for `table` except `skip`.
+    pub(super) fn set_table_column_visible_skipping(
+        &mut self,
+        table: TableId,
+        key: &str,
+        visible: bool,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.set_column_visible(table, key, visible);
+        if let Some(path) = &self.settings_path {
+            let mut disk = Settings::load(path);
+            disk.set_column_visible(table, key, visible);
+            let _ = disk.save(path);
+        }
+        self.refresh_tables(Some(table), skip, cx);
+        cx.notify();
+    }
+
+    /// Shows or hides column `key` of `table`, persists the setting, and
+    /// refreshes every open [`TableTab`] of that table.
+    pub fn set_table_column_visible(
+        &mut self,
+        table: TableId,
+        key: &str,
+        visible: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_table_column_visible_skipping(table, key, visible, None, cx);
+    }
+
+    /// Localized title for a table folder tab, falling back to the pack or
+    /// catalog title when `key` is absent from `ExplorerIndex`.
+    pub(super) fn table_title(&self, key: ExplorerKey, table: TableId) -> SharedString {
+        if let Some(row) = self.row(key) {
+            return SharedString::from(row.label);
+        }
+        match table {
+            TableId::Assets => self.names.asset.plural.to_string().into(),
+            TableId::Damage => self.names.damage_scenario.plural.to_string().into(),
+            TableId::Threats => self.names.threat_scenario.plural.to_string().into(),
+            TableId::Risks => self.catalog.tr("explorer-risk-treatment").into(),
+            TableId::Controls => self.names.security_control.plural.to_string().into(),
+            TableId::Goals => self.names.cybersecurity_goal.plural.to_string().into(),
+            TableId::Claims => self.names.cybersecurity_claim.plural.to_string().into(),
+            TableId::Problems => self.catalog.tr("explorer-problems").into(),
+        }
+    }
+
+    /// The open [`TableTab`] for `key`, if any (normalizing shared keys such as `Problems`).
+    #[must_use]
+    pub fn table_tab(&self, key: ExplorerKey) -> Option<Entity<TableTab>> {
+        match self.tabs.get(&shared(key)).map(|t| &t.body) {
+            Some(Body::Table(e)) => Some(e.clone()),
+            _ => None,
+        }
     }
 
     /// The explorer tree of the workspace.
@@ -416,6 +510,23 @@ impl Workbench {
         if matches!(key, ExplorerKey::System(_) | ExplorerKey::Unassigned) {
             self.toggle(key, cx);
             return;
+        }
+        if !self.tabs.contains_key(&key)
+            && let ExplorerKey::Folder(owner, folder) = key
+            && let Some(table_id) = table_for_folder(folder)
+        {
+            let title = self.table_title(key, table_id);
+            let cols = self.visible_columns_for(table_id);
+            let (cat, wb, ws) = (Rc::clone(&self.catalog), cx.weak_entity(), &self.workspace);
+            let t = cx.new(|cx| TableTab::new(title, table_id, owner, ws, cols, cat, wb, cx));
+            let handle = panel_handle(t.clone());
+            self.tabs.insert(
+                key,
+                Tab {
+                    handle,
+                    body: Body::Table(t),
+                },
+            );
         }
         if !self.tabs.contains_key(&key) {
             let Some((title, lines)) = self.content(key) else {
@@ -517,7 +628,7 @@ impl Workbench {
             .collect();
         for ((title, lines), body) in updates {
             match body {
-                Body::Overview(_) => {}
+                Body::Overview(_) | Body::Table(_) => {}
                 Body::List(e) if skip != Some(e.entity_id()) => {
                     e.update(cx, |t, cx| t.set(title, None, lines, cx));
                 }
@@ -527,6 +638,7 @@ impl Workbench {
                 Body::List(_) | Body::Element(_) => {}
             }
         }
+        self.refresh_tables(None, skip, cx);
         if skip != Some(self.explorer.entity_id()) {
             self.show_rows(cx);
         }
@@ -773,6 +885,7 @@ impl Workbench {
         match tab.map(|t| &t.body) {
             Some(Body::Overview(e)) => remove(area, e, window, cx),
             Some(Body::List(e)) => remove(area, e, window, cx),
+            Some(Body::Table(e)) => remove(area, e, window, cx),
             Some(Body::Element(e)) => remove(area, e, window, cx),
             None => {}
         }
@@ -799,10 +912,10 @@ impl Workbench {
     /// Toggles the opt-in read-only developer JSON source view and persists
     /// the preference when a settings file is configured.
     fn toggle_developer_source(&mut self, cx: &mut Context<Self>) {
-        self.developer_source_view = !self.developer_source_view;
+        self.settings.developer_source_view = !self.settings.developer_source_view;
         if let Some(path) = &self.settings_path {
             let mut settings = Settings::load(path);
-            settings.developer_source_view = self.developer_source_view;
+            settings.developer_source_view = self.settings.developer_source_view;
             if let Err(err) = settings.save(path) {
                 eprintln!("could not save the developer source view setting: {err}");
             }
@@ -1129,7 +1242,7 @@ mod tests {
                 _ => None,
             });
             let list = w.tabs.values().find_map(|t| match &t.body {
-                Body::List(e) => Some(e.clone()),
+                Body::Table(e) => Some(e.clone()),
                 _ => None,
             });
             (elem, list, w.explorer.clone())

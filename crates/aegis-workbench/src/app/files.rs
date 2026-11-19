@@ -179,6 +179,7 @@ impl Workbench {
                 }
                 Body::Overview(e) => remove(&self.area, e, window, cx),
                 Body::List(e) => remove(&self.area, e, window, cx),
+                Body::Table(e) => remove(&self.area, e, window, cx),
                 Body::Element(e) => remove(&self.area, e, window, cx),
             }
         }
