@@ -31,7 +31,7 @@ use slint::ComponentHandle;
 
 use crate::AppWindow;
 use crate::controller::{Controller, Hooks};
-use crate::provider::{AppProvider, OidcProvider, OidcSettings, PasswordProvider, secrets};
+use aegis_client::provider::{AppProvider, OidcProvider, OidcSettings, PasswordProvider, secrets};
 
 /// What the network tasks report back.
 enum Event {

@@ -112,11 +112,12 @@ macro_rules! command_table {
     };
 }
 
-static COMMANDS: [CommandSpec; 25] = command_table! {
+static COMMANDS: [CommandSpec; 26] = command_table! {
     "palette"            General  "search"           -          "cmd-k"          -        false;
     "open-folder"        File     "folder-open"      -          "cmd-o"          -        true;
     "save"               File     "hard-drive"       -          "cmd-s"          -        true;
     "save-as"            File     "folder"           -          "cmd-shift-s"    -        true;
+    "back-to-start"      File     "arrow-left"       -          -                -        true;
     "undo"               Edit     "undo"             -          "cmd-z"          -        true;
     "redo"               Edit     "redo"             -          "cmd-shift-z"    "ctrl-y" true;
     "toggle-explorer"    View     "panel-left"       -          "cmd-b"          -        true;
