@@ -217,6 +217,18 @@ cmd-show-shortcuts = Keyboard shortcuts
 cmd-show-shortcuts-tip = List every command and its keys.
 cmd-quit = Quit
 cmd-quit-tip = Close AegisTARA.
+cmd-grid-add-row = Add row
+cmd-grid-add-row-tip = Append a new row to the current table.
+cmd-grid-delete-rows = Delete rows
+cmd-grid-delete-rows-tip = Remove the selected rows from the table.
+cmd-grid-fill-down = Fill down
+cmd-grid-fill-down-tip = Copy the top cell value down into the selected rows.
+cmd-grid-copy = Copy cells
+cmd-grid-copy-tip = Copy the selected table cells as tab-separated text.
+cmd-grid-paste = Paste cells
+cmd-grid-paste-tip = Paste tab-separated text into the table starting at the active cell.
+cmd-toggle-developer-source = Show or hide developer source view
+cmd-toggle-developer-source-tip = Show or hide the read-only JSON source toggle on table tabs.
 
 # Workbench explorer (job 182)
 explorer-overview = Overview
@@ -312,3 +324,19 @@ server-open = Open
 server-sign-out = Sign out
 workbench-read-only-server = Read-only: the saved version on { $server }. Editing server projects comes in a later version of this app.
 workbench-read-only-server-held = Read-only: the saved version on { $server }; { $holder } is editing it.
+
+# Table tabs, picker, and inspector (job 189)
+grid-columns = Columns
+grid-filters = Filters
+grid-clear-filters = Clear filters
+grid-source = Source
+grid-grid = Grid
+grid-no-matches = No matching rows.
+grid-computed-tip = Computed from the model; not editable.
+grid-excluded-badge = Not applicable
+grid-apply = Apply
+grid-clear = Clear
+picker-placeholder = Filter by ID or name…
+picker-empty = No matching items.
+picker-edit-links = Edit links
+inspector-relations = Relations

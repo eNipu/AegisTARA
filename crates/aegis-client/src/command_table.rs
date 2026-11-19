@@ -112,7 +112,7 @@ macro_rules! command_table {
     };
 }
 
-static COMMANDS: [CommandSpec; 26] = command_table! {
+static COMMANDS: [CommandSpec; 32] = command_table! {
     "palette"            General  "search"           -          "cmd-k"          -        false;
     "open-folder"        File     "folder-open"      -          "cmd-o"          -        true;
     "save"               File     "hard-drive"       -          "cmd-s"          -        true;
@@ -139,6 +139,12 @@ static COMMANDS: [CommandSpec; 26] = command_table! {
     "reset-layout"       View     "layout-dashboard" -          -                -        true;
     "show-shortcuts"     General  "info"             -          "cmd-/"          -        true;
     "quit"               General  "window-close"     -          "cmd-q"          "ctrl-q" true;
+    "grid-add-row"            Edit "plus"            "Grid"     "cmd-n"          -             false;
+    "grid-delete-rows"        Edit "delete"          "Grid"     "cmd-backspace"  "ctrl-delete" false;
+    "grid-fill-down"          Edit "arrow-down"      "Grid"     "cmd-d"          -             false;
+    "grid-copy"               Edit "copy"            "Grid"     "cmd-c"          -             false;
+    "grid-paste"              Edit "replace"         "Grid"     "cmd-v"          -             false;
+    "toggle-developer-source" View "square-terminal" -          -                -             true;
 };
 
 /// Every workbench command, in menu order.
@@ -171,6 +177,8 @@ fn key_label(key: &str, mac: bool) -> String {
         "right" => "→".to_owned(),
         "tab" => "Tab".to_owned(),
         "escape" => "Esc".to_owned(),
+        "backspace" => "⌫".to_owned(),
+        "delete" => "Del".to_owned(),
         k if k.chars().count() == 1 => k.to_uppercase(),
         k => k.to_owned(),
     }

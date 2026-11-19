@@ -209,6 +209,18 @@ cmd-show-shortcuts = ⟦Kéýbôârd shôrtcûts␣⟧
 cmd-show-shortcuts-tip = ⟦Lîst évérý cômmând ând îts kéýs.␣⟧
 cmd-quit = ⟦Qûît␣⟧
 cmd-quit-tip = ⟦Clôsé AegisTARA.␣⟧
+cmd-grid-add-row = ⟦Âdd rôw␣⟧
+cmd-grid-add-row-tip = ⟦Âppénd â néw rôw tô thé cûrrént tâblé.␣⟧
+cmd-grid-delete-rows = ⟦Délété rôws␣⟧
+cmd-grid-delete-rows-tip = ⟦Rémôvé thé séléctéd rôws frôm thé tâblé.␣⟧
+cmd-grid-fill-down = ⟦Fîll dôwn␣⟧
+cmd-grid-fill-down-tip = ⟦Côpý thé tôp céll vâlûé dôwn întô thé séléctéd rôws.␣⟧
+cmd-grid-copy = ⟦Côpý célls␣⟧
+cmd-grid-copy-tip = ⟦Côpý thé séléctéd tâblé célls âs tâb-sépârâtéd téxt.␣⟧
+cmd-grid-paste = ⟦Pâsté célls␣⟧
+cmd-grid-paste-tip = ⟦Pâsté tâb-sépârâtéd téxt întô thé tâblé stârtîng ât thé âctîvé céll.␣⟧
+cmd-toggle-developer-source = ⟦Shôw ôr hîdé dévélôpér sôûrcé vîéw␣⟧
+cmd-toggle-developer-source-tip = ⟦Shôw ôr hîdé thé réâd-ônlý JSÔN sôûrcé tôgglé ôn tâblé tâbs.␣⟧
 
 # Workbench explorer (job 182)
 explorer-overview = ⟦Ovérvîéw␣⟧
@@ -304,3 +316,19 @@ server-open = ⟦Opén␣⟧
 server-sign-out = ⟦Sîgn ôût␣⟧
 workbench-read-only-server = ⟦Réâd-ônlý: thé sâvéd vérsîôn ôn { $server }. Edîtîng sérvér prôjécts cômés în â lâtér vérsîôn ôf thîs âpp.␣⟧
 workbench-read-only-server-held = ⟦Réâd-ônlý: thé sâvéd vérsîôn ôn { $server }; { $holder } îs édîtîng ît.␣⟧
+
+# Table tabs, picker, and inspector (job 189)
+grid-columns = ⟦Côlûmns␣⟧
+grid-filters = ⟦Fîltérs␣⟧
+grid-clear-filters = ⟦Cléâr fîltérs␣⟧
+grid-source = ⟦Sôûrcé␣⟧
+grid-grid = ⟦Grîd␣⟧
+grid-no-matches = ⟦Nô mâtchîng rôws.␣⟧
+grid-computed-tip = ⟦Cômpûtéd frôm thé môdél; nôt édîtâblé.␣⟧
+grid-excluded-badge = ⟦Nôt âpplîcâblé␣⟧
+grid-apply = ⟦Âpplý␣⟧
+grid-clear = ⟦Cléâr␣⟧
+picker-placeholder = ⟦Fîltér bý ÎD ôr nâmé…␣⟧
+picker-empty = ⟦Nô mâtchîng îtéms.␣⟧
+picker-edit-links = ⟦Édît lînks␣⟧
+inspector-relations = ⟦Rélâtîôns␣⟧
