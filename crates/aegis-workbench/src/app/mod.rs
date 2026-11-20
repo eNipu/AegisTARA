@@ -3,11 +3,17 @@
 mod commands;
 mod files;
 mod icons;
+mod inspector;
 mod layout;
 mod panels;
+mod picker_view;
 mod server;
 mod shell;
 mod start;
+mod table_chrome;
+mod table_edit;
+mod table_popovers;
+mod table_tab;
 mod workbench;
 
 use std::path::PathBuf;
@@ -29,9 +35,12 @@ use crate::theme::{Tokens, dark, light, parse_hex};
 pub use commands::{bind_all, bindings, dispatch_id};
 pub use files::Leave;
 pub use icons::icon;
+pub use inspector::{InspectorPanel, InspectorRelationRow};
+pub use picker_view::MultiLinkPickerView;
 pub use server::{METHODOLOGIES, ServerEvent, ServerPane};
 pub use shell::{Screen, Shell};
 pub use start::{ServerSetup, StartConfig, StartEvent, StartScreen};
+pub use table_tab::TableTab;
 pub use workbench::{Workbench, WorkbenchEvent};
 
 /// Opens the window on the start screen, opening the project folder

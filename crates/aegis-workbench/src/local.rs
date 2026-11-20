@@ -38,6 +38,9 @@ pub fn apply_edit(ws: &mut Workspace, edit: &Edit, actor: &str, now_ms: u64) -> 
     let ops = edit
         .to_ops(ws.project(), actor, now_ms)
         .map_err(|e| e.to_string())?;
+    if ops.is_empty() {
+        return Ok(());
+    }
     let res = ws.apply(ops, Origin::Edit);
     done(ws, res)
 }

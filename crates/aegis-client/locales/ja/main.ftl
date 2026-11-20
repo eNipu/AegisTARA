@@ -208,6 +208,18 @@ cmd-show-shortcuts = キーボードショートカット
 cmd-show-shortcuts-tip = すべてのコマンドとそのキーを一覧表示します。
 cmd-quit = 終了
 cmd-quit-tip = AegisTARAを閉じます。
+cmd-grid-add-row = 行を追加
+cmd-grid-add-row-tip = 現在のテーブルに新しい行を追加します。
+cmd-grid-delete-rows = 行を削除
+cmd-grid-delete-rows-tip = 選択した行をテーブルから削除します。
+cmd-grid-fill-down = 下方向へコピー
+cmd-grid-fill-down-tip = 先頭セルの値を選択した行に下方向へコピーします。
+cmd-grid-copy = セルをコピー
+cmd-grid-copy-tip = 選択したセルをタブ区切りテキストとしてコピーします。
+cmd-grid-paste = セルを貼り付け
+cmd-grid-paste-tip = アクティブなセルを起点にタブ区切りテキストをテーブルへ貼り付けます。
+cmd-toggle-developer-source = 開発者向けソース表示の切替
+cmd-toggle-developer-source-tip = テーブルタブの読み取り専用 JSON ソース切替を表示または非表示にします。
 
 # Workbench explorer (job 182)
 explorer-overview = 概要
@@ -303,3 +315,19 @@ server-open = 開く
 server-sign-out = サインアウト
 workbench-read-only-server = 読み取り専用: { $server } に保存されているバージョンです。サーバープロジェクトの編集は今後のバージョンで対応します。
 workbench-read-only-server-held = 読み取り専用: { $server } に保存されているバージョンです。{ $holder } が編集中です。
+
+# Table tabs, picker, and inspector (job 189)
+grid-columns = 列
+grid-filters = フィルター
+grid-clear-filters = フィルターをクリア
+grid-source = ソース
+grid-grid = グリッド
+grid-no-matches = 一致する行はありません。
+grid-computed-tip = モデルから算出されるため編集できません。
+grid-excluded-badge = 対象外
+grid-apply = 適用
+grid-clear = クリア
+picker-placeholder = ID または名前で絞り込み…
+picker-empty = 一致する項目はありません。
+picker-edit-links = リンクを編集
+inspector-relations = 関連
