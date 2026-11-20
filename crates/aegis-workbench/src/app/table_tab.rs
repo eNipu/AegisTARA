@@ -6,16 +6,19 @@ use aegis_client::explorer::Owner;
 use aegis_client::grid::GridSelection;
 use aegis_client::i18n::Catalog;
 use aegis_client::pages::vocabulary_for_lang;
-use aegis_client::table::{Cell, LinkChip, TableRow, Tone, table_rows_for_owner};
-use aegis_client::table_filter::TableFilters;
+use aegis_client::table::{
+    Cell, LinkChip, TableRow, Tone, table_rows_for_owner, table_source_json,
+};
+use aegis_client::table_filter::{ColumnFilter, TableFilters};
 use aegis_client::view::{ColumnKind, ColumnSpec, Selection, TableId};
 use aegis_client::workspace::Workspace;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, EntityId, FocusHandle, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
+    AnyElement, AppContext as _, ClickEvent, Context, Div, Entity, EntityId, FocusHandle, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div, px,
 };
+use gpui_component::input::{InputEvent, InputState};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
@@ -115,12 +118,19 @@ pub struct TableTab {
     pub(super) workbench: WeakEntity<Workbench>,
     pub(super) rows: Vec<TableRow>,
     pub(super) visible_cols: Vec<&'static ColumnSpec>,
-    #[allow(dead_code)] // Read by 189d2 filter chips for hidden columns.
     pub(super) all_headings: Vec<String>,
     pub(super) headings: Vec<String>,
     pub(super) filters: TableFilters,
     pub(super) filtered_indices: Vec<usize>,
     pub(super) selection: Option<GridSelection>,
+    pub(super) chooser_open: bool,
+    pub(super) filter_col: Option<&'static str>,
+    pub(super) filter_input: Entity<InputState>,
+    pub(super) syncing_filter: bool,
+    _filter_sub: Subscription,
+    pub(super) developer_source_enabled: bool,
+    pub(super) source_mode: bool,
+    pub(super) source_text: SharedString,
     pub(super) light: Tokens,
     pub(super) dark: Tokens,
 }
@@ -136,14 +146,30 @@ impl TableTab {
         owner: Owner,
         ws: &Workspace,
         visible_cols: Vec<&'static ColumnSpec>,
+        developer_source_enabled: bool,
         catalog: Rc<Catalog>,
         workbench: WeakEntity<Workbench>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let (rows, all_headings, headings) =
             build_rows_and_headings(ws, table, owner, &visible_cols, &catalog);
         let filters = TableFilters::default();
         let filtered_indices = filters.matching_rows(&rows, table.columns());
+        let placeholder = SharedString::from(catalog.tr("grid-filters"));
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let _filter_sub = cx.subscribe(&filter_input, |this, input, ev: &InputEvent, cx| {
+            if let InputEvent::Change = ev
+                && !this.syncing_filter
+                && let Some(col_key) = this.filter_col
+            {
+                let val = input.read(cx).value().to_string();
+                let cur = this.filters.column(col_key).map_or("", ColumnFilter::query);
+                if val != cur {
+                    this.set_column_filter_query(col_key, val, cx);
+                }
+            }
+        });
         Self {
             focus_handle: cx.focus_handle(),
             title,
@@ -158,22 +184,37 @@ impl TableTab {
             filters,
             filtered_indices,
             selection: None,
+            chooser_open: false,
+            filter_col: None,
+            filter_input,
+            syncing_filter: false,
+            _filter_sub,
+            developer_source_enabled,
+            source_mode: false,
+            source_text: SharedString::default(),
             light: light(),
             dark: dark(),
         }
     }
 
-    /// Rebuilds rows, headings, and filter matches from `ws`, clamping any active selection.
-    pub fn refresh(
+    pub(super) fn apply_refresh(
         &mut self,
         title: SharedString,
         ws: &Workspace,
         visible_cols: Vec<&'static ColumnSpec>,
-        _skip: Option<EntityId>,
-        cx: &mut Context<Self>,
+        developer_source_enabled: bool,
     ) {
         self.title = title;
         self.visible_cols = visible_cols;
+        self.developer_source_enabled = developer_source_enabled;
+        if !developer_source_enabled {
+            self.source_mode = false;
+        }
+        if let Some(fcol) = self.filter_col
+            && !self.visible_cols.iter().any(|c| c.key == fcol)
+        {
+            self.filter_col = None;
+        }
         let built = build_rows_and_headings(
             ws,
             self.table,
@@ -184,6 +225,22 @@ impl TableTab {
         (self.rows, self.all_headings, self.headings) = built;
         self.filtered_indices = self.filters.matching_rows(&self.rows, self.table.columns());
         self.clamp_selection();
+        if developer_source_enabled && self.source_mode {
+            self.source_text = SharedString::from(table_source_json(ws.project(), self.table));
+        }
+    }
+
+    /// Rebuilds rows, headings, and filter matches from `ws`, clamping any active selection.
+    pub fn refresh(
+        &mut self,
+        title: SharedString,
+        ws: &Workspace,
+        visible_cols: Vec<&'static ColumnSpec>,
+        developer_source_enabled: bool,
+        _skip: Option<EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_refresh(title, ws, visible_cols, developer_source_enabled);
         cx.notify();
     }
 
@@ -247,8 +304,16 @@ impl TableTab {
         cx.notify();
     }
 
-    pub(super) fn grid_keys_active(&self) -> bool {
-        true
+    /// The shared column-filter text input entity.
+    #[must_use]
+    pub fn filter_input(&self) -> &Entity<InputState> {
+        &self.filter_input
+    }
+
+    /// Whether the `"Grid"` key context is active for this tab.
+    #[must_use]
+    pub fn grid_keys_active(&self) -> bool {
+        !self.source_mode && self.filter_col.is_none()
     }
 
     fn select_cell(
@@ -462,8 +527,12 @@ impl TableTab {
             .children(cells)
     }
 
-    fn render_header(&self, tokens: &Tokens) -> Div {
-        let (line, muted) = (color(&tokens.line), color(&tokens.ink_muted));
+    fn render_header(&self, tokens: &Tokens, cx: &mut Context<Self>) -> Div {
+        let (line, muted, accent) = (
+            color(&tokens.line),
+            color(&tokens.ink_muted),
+            color(&tokens.accent),
+        );
         let computed_tip = self.catalog.tr("grid-computed-tip");
         let cells = self
             .visible_cols
@@ -471,12 +540,14 @@ impl TableTab {
             .zip(&self.headings)
             .enumerate()
             .map(|(vis_col, (col, heading))| {
+                let key = col.key;
+                let active = self.filters.column(key).is_some() || self.filter_col == Some(key);
                 cell_box(col.width, line)
                     .py_1p5()
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(div().min_w_0().truncate().child(heading.clone()))
+                    .child(div().flex_1().min_w_0().truncate().child(heading.clone()))
                     .when(col.kind == ColumnKind::Computed, |d| {
                         let mark = div()
                             .id(("table-hdr-computed", vis_col))
@@ -484,6 +555,19 @@ impl TableTab {
                             .child(Icon::new(IconName::Asterisk).xsmall());
                         d.child(with_tip(mark, &computed_tip))
                     })
+                    .child(
+                        div()
+                            .id(("table-hdr-filter", vis_col))
+                            .flex_shrink_0()
+                            .p_0p5()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .when(active, |d| d.text_color(accent))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_filter_for(key, window, cx);
+                            }))
+                            .child(Icon::new(IconName::Search).xsmall()),
+                    )
             });
         h_flex()
             .min_w_full()
@@ -508,7 +592,21 @@ impl Render for TableTab {
             &self.light
         };
         let muted = color(&t.ink_muted);
-        let header = self.render_header(t);
+        if self.is_source_mode() {
+            return v_flex()
+                .id("table-tab")
+                .track_focus(&self.focus_handle)
+                .size_full()
+                .bg(color(&t.surface))
+                .text_color(color(&t.ink))
+                .text_sm()
+                .child(self.render_toolbar(cx))
+                .children(self.render_chooser(cx))
+                .children(self.render_filter_panel(cx))
+                .child(self.render_source(cx));
+        }
+
+        let header = self.render_header(t, cx);
 
         let body: AnyElement = if self.filtered_indices.is_empty() {
             div()
@@ -547,6 +645,9 @@ impl Render for TableTab {
             .bg(color(&t.surface))
             .text_color(color(&t.ink))
             .text_sm()
+            .child(self.render_toolbar(cx))
+            .children(self.render_chooser(cx))
+            .children(self.render_filter_panel(cx))
             .child(
                 v_flex()
                     .id("table-scroll")

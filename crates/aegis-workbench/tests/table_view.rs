@@ -13,7 +13,8 @@ use aegis_client::i18n::{Catalog, Language};
 use aegis_client::pages::vocabulary_for_lang;
 use aegis_client::settings::{Appearance, Settings};
 use aegis_client::systems::system_rows;
-use aegis_client::table::{Tone, table_rows_for_owner};
+use aegis_client::table::{Tone, table_rows_for_owner, table_source_json};
+use aegis_client::table_filter::ColumnFilter;
 use aegis_client::view::{ColumnKind, Selection, TableId};
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ConditionId, ElementId, ElementRef, GoalId, Methodology, Op,
@@ -501,4 +502,344 @@ fn wide_risks_table_renders_tone_pills_and_computed_columns_in_both_themes(
             window.draw(cx).clear(cx);
         });
     }
+}
+
+#[gpui::test]
+fn column_chooser_toggle_column_persists_without_double_lease(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("aegis-table-chooser-{}", ElementId::new_v7()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let settings_path = Settings::path_in(&dir);
+
+    let (_catalog, wb, vcx) = open_workbench(cx, Some(settings_path.clone()));
+    let sys = vcx.read_entity(&wb, |w, _| {
+        system_rows(w.workspace())
+            .into_iter()
+            .next()
+            .expect("sample has a system")
+            .id
+    });
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Assets);
+    let sys_key = ExplorerKey::Folder(Owner::System(sys), Folder::Assets);
+    wb.update_in(vcx, |w, window, cx| {
+        w.open(key, window, cx);
+        w.open(sys_key, window, cx);
+    });
+    let tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(key))
+        .expect("Assets TableTab opens");
+    let sys_tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(sys_key))
+        .expect("System Assets TableTab opens");
+
+    vcx.read_entity(&tab, |t, _| {
+        let keys: Vec<&str> = t.visible_columns().iter().map(|c| c.key).collect();
+        assert!(
+            !keys.contains(&"component"),
+            "component is hidden by default"
+        );
+        assert!(
+            keys.contains(&"worst-risk"),
+            "worst-risk is visible by default"
+        );
+        assert!(keys.contains(&"id"), "id is visible by default");
+    });
+
+    // Toggle via TableTab::toggle_column (must not double-lease `tab` and must refresh `sys_tab`).
+    tab.update(vcx, |t, cx| {
+        t.toggle_column("component", cx);
+        t.toggle_column("worst-risk", cx);
+        t.toggle_column("id", cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let expected_keys = vcx.read_entity(&tab, |t, _| {
+        let keys: Vec<&str> = t.visible_columns().iter().map(|c| c.key).collect();
+        assert!(keys.contains(&"component"), "component must become visible");
+        assert!(
+            !keys.contains(&"worst-risk"),
+            "worst-risk must become hidden"
+        );
+        assert!(keys.contains(&"id"), "toggling id off must be refused");
+        keys
+    });
+    vcx.read_entity(&sys_tab, |t, _| {
+        let keys: Vec<&str> = t.visible_columns().iter().map(|c| c.key).collect();
+        assert_eq!(
+            keys, expected_keys,
+            "sibling TableTab must stay in sync with toggle_column"
+        );
+    });
+
+    // Reopen a fresh Workbench with the same settings_path and verify persistence.
+    let (_catalog2, wb2, vcx2) = open_workbench(cx, Some(settings_path));
+    wb2.update_in(vcx2, |w, window, cx| {
+        w.open(key, window, cx);
+    });
+    vcx2.update(|window, cx| window.draw(cx).clear(cx));
+    let tab2 = vcx2
+        .read_entity(&wb2, |w, _| w.table_tab(key))
+        .expect("reopened Assets TableTab opens");
+    vcx2.read_entity(&tab2, |t, _| {
+        let keys: Vec<&str> = t.visible_columns().iter().map(|c| c.key).collect();
+        assert_eq!(keys, expected_keys);
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
+fn column_filters_switch_without_clobber_handle_blanks_and_hidden_columns(cx: &mut TestAppContext) {
+    let (_catalog, wb, vcx) = open_workbench(cx, None);
+    let mut project = workbench_sample().project().clone();
+    let blank_asset = AssetId::new_v7();
+    let edit = Edit::AddAsset {
+        id: blank_asset,
+        name: "Bare Sensor".into(),
+        properties: vec![0],
+    };
+    for op in edit.to_ops(&project, "tester", 2).expect("edit converts") {
+        project.apply(op).expect("blank-properties asset applies");
+    }
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(project, "Filter fixture", None, window, cx);
+    });
+
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Assets);
+    wb.update_in(vcx, |w, window, cx| {
+        w.open(key, window, cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(key))
+        .expect("Assets TableTab opens");
+    let full_count = vcx.read_entity(&tab, |t, _| {
+        assert!(t.grid_keys_active());
+        assert_eq!(t.open_filter_column(), None);
+        t.visible_row_count()
+    });
+    assert!(full_count >= 2);
+
+    // 1. Set query "foo" on "name", open "name" (populates input with "foo"),
+    //    then switch to "properties" and verify "properties" is NOT clobbered with "foo".
+    tab.update_in(vcx, |t, window, cx| {
+        t.set_column_filter_query("name", "foo", cx);
+        t.open_filter_for("name", window, cx);
+    });
+    vcx.read_entity(&tab, |t, cx| {
+        assert_eq!(t.open_filter_column(), Some("name"));
+        assert!(!t.grid_keys_active());
+        assert_eq!(t.filter_input().read(cx).value().as_str(), "foo");
+    });
+
+    tab.update_in(vcx, |t, window, cx| {
+        t.open_filter_for("properties", window, cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.read_entity(&tab, |t, cx| {
+        assert_eq!(t.open_filter_column(), Some("properties"));
+        assert_eq!(
+            t.filters().column("properties"),
+            None,
+            "switching filter column must not clobber the new column with the previous query"
+        );
+        assert_eq!(t.filter_input().read(cx).value().as_str(), "");
+        assert_eq!(
+            t.filters().column("name").map(ColumnFilter::query),
+            Some("foo")
+        );
+    });
+
+    // Typing into the shared filter input updates "properties" (proves syncing_filter reset).
+    let filter_input = vcx.read_entity(&tab, |t, _| t.filter_input().clone());
+    filter_input.update_in(vcx, |input, window, cx| {
+        input.insert("Integrity", window, cx);
+    });
+    vcx.read_entity(&tab, |t, _| {
+        assert_eq!(
+            t.filters().column("properties").map(ColumnFilter::query),
+            Some("Integrity")
+        );
+    });
+
+    // Switch back to "name": both stored queries remain intact and input restores "foo".
+    tab.update_in(vcx, |t, window, cx| {
+        t.open_filter_for("name", window, cx);
+    });
+    vcx.read_entity(&tab, |t, cx| {
+        assert_eq!(t.open_filter_column(), Some("name"));
+        assert_eq!(t.filter_input().read(cx).value().as_str(), "foo");
+        assert_eq!(
+            t.filters().column("name").map(ColumnFilter::query),
+            Some("foo")
+        );
+        assert_eq!(
+            t.filters().column("properties").map(ColumnFilter::query),
+            Some("Integrity")
+        );
+    });
+
+    // Switching and setting a query in the same update must not be clobbered by deferred Change.
+    tab.update_in(vcx, |t, window, cx| {
+        t.open_filter_for("properties", window, cx);
+        t.set_column_filter_query("properties", "Availability", cx);
+    });
+    vcx.read_entity(&tab, |t, _| {
+        assert_eq!(
+            t.filters().column("properties").map(ColumnFilter::query),
+            Some("Availability")
+        );
+    });
+
+    // Clicking the already-open column closes the filter panel and re-enables Grid keys.
+    tab.update_in(vcx, |t, window, cx| {
+        t.open_filter_for("properties", window, cx);
+    });
+    vcx.read_entity(&tab, |t, _| {
+        assert_eq!(t.open_filter_column(), None);
+        assert!(t.grid_keys_active());
+    });
+
+    // 2. Value-set filter including blank "" value and clear_filters() restoring full count.
+    let risk_col = TableId::Assets
+        .columns()
+        .iter()
+        .position(|c| c.key == "worst-risk")
+        .expect("Assets has worst-risk column");
+    tab.update_in(vcx, |t, window, cx| {
+        t.clear_filters(cx);
+        t.open_filter_for("worst-risk", window, cx);
+        t.toggle_column_filter_value("worst-risk", String::new(), cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.read_entity(&tab, |t, _| {
+        let count = t.visible_row_count();
+        assert!(
+            count > 0 && count < full_count,
+            "blank value filter must match only unrated assets (got {count} of {full_count})"
+        );
+        for r in 0..count {
+            let cell = &t.displayed_row(r).expect("row in bounds").cells[risk_col];
+            assert_eq!(cell.text, "");
+        }
+    });
+    tab.update(vcx, |t, cx| t.clear_filters(cx));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.filters().is_active());
+        assert_eq!(t.visible_row_count(), full_count);
+    });
+
+    // 3. Hiding a column with an active filter closes filter_col, keeps filter active,
+    //    draws its hidden-column filter chip cleanly, and remains clearable via clear_filters().
+    tab.update_in(vcx, |t, window, cx| {
+        t.open_filter_for("properties", window, cx);
+        t.set_column_filter_query("properties", "Integrity", cx);
+    });
+    let filtered_count = vcx.read_entity(&tab, |t, _| {
+        assert_eq!(t.open_filter_column(), Some("properties"));
+        t.visible_row_count()
+    });
+    assert!(filtered_count < full_count);
+
+    tab.update(vcx, |t, cx| t.toggle_column("properties", cx));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(
+            !t.visible_columns().iter().any(|c| c.key == "properties"),
+            "properties column must be hidden"
+        );
+        assert_eq!(
+            t.open_filter_column(),
+            None,
+            "hiding the filtered column must close its filter popover"
+        );
+        assert!(t.grid_keys_active());
+        assert!(t.filters().is_active());
+        assert!(t.filters().column("properties").is_some());
+        assert_eq!(t.visible_row_count(), filtered_count);
+    });
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        vcx.update(|window, cx| {
+            apply_appearance(appearance, window, cx);
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    tab.update(vcx, |t, cx| t.clear_filters(cx));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.filters().is_active());
+        assert_eq!(t.visible_row_count(), full_count);
+    });
+}
+
+#[gpui::test]
+fn developer_source_view_is_opt_in_closes_filter_and_matches_source_json(cx: &mut TestAppContext) {
+    let (_catalog, wb, vcx) = open_workbench(cx, None);
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Assets);
+    wb.update_in(vcx, |w, window, cx| {
+        w.open(key, window, cx);
+    });
+    let tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(key))
+        .expect("Assets TableTab opens");
+
+    // Disabled by default (D40): set_source_mode(true, ...) is ignored and stays lazy.
+    tab.update_in(vcx, |t, window, cx| {
+        t.open_filter_for("name", window, cx);
+        t.set_source_mode(
+            true,
+            || panic!("ws_source must not run when developer_source_view is off"),
+            cx,
+        );
+    });
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.is_source_mode());
+        assert_eq!(t.open_filter_column(), Some("name"));
+        assert!(t.source_text().is_empty());
+    });
+
+    // Enable developer_source_view via the workbench command.
+    wb.update_in(vcx, |w, window, cx| {
+        w.run("toggle-developer-source", window, cx);
+    });
+    vcx.read_entity(&wb, |w, _| assert!(w.developer_source_view()));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let expected_json = vcx.read_entity(&wb, |w, _| {
+        table_source_json(w.workspace().project(), TableId::Assets)
+    });
+    assert!(
+        expected_json.contains("\"assets\""),
+        "source JSON should contain assets payload"
+    );
+
+    tab.update(vcx, |t, cx| {
+        t.set_source_mode(true, || expected_json.clone(), cx);
+    });
+    vcx.read_entity(&tab, |t, _| {
+        assert!(t.is_source_mode());
+        assert!(!t.grid_keys_active());
+        assert_eq!(
+            t.open_filter_column(),
+            None,
+            "entering source mode must close any open filter popover"
+        );
+        assert_eq!(t.source_text(), expected_json);
+    });
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        vcx.update(|window, cx| {
+            apply_appearance(appearance, window, cx);
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    // Toggling developer_source_view back off forces every open TableTab out of source mode.
+    wb.update_in(vcx, |w, window, cx| {
+        w.run("toggle-developer-source", window, cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.read_entity(&wb, |w, _| assert!(!w.developer_source_view()));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.is_source_mode());
+        assert!(t.grid_keys_active());
+    });
 }
