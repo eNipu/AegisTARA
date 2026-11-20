@@ -2675,6 +2675,164 @@
       ],
       "decision": "",
       "updated": "2026-11-19T03:35:59Z"
+    },
+    {
+      "id": "189-table-tabs",
+      "title": "Grids in GPUI",
+      "branch": "factory/189-table-tabs",
+      "stage": "merged",
+      "slice": "189e2",
+      "base": "186039cab7f682d88ae79be982f389b0c2b49047",
+      "reviews": {
+        "slice": "189e2",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "189a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 466
+        },
+        {
+          "slice": "189b1",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 379
+        },
+        {
+          "slice": "189b2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 544
+        },
+        {
+          "slice": "189b3",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 450
+        },
+        {
+          "slice": "189b4",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 588
+        },
+        {
+          "slice": "189c1a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 347
+        },
+        {
+          "slice": "189c1b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 375
+        },
+        {
+          "slice": "189c2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 2,
+          "lines": 473
+        },
+        {
+          "slice": "189d1a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 478
+        },
+        {
+          "slice": "189d1b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 354
+        },
+        {
+          "slice": "189d2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 536
+        },
+        {
+          "slice": "189e1a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 473
+        },
+        {
+          "slice": "189e1b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 348
+        },
+        {
+          "slice": "189e2",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 338
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-20T11:02:50Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
