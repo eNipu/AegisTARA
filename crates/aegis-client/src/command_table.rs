@@ -112,7 +112,7 @@ macro_rules! command_table {
     };
 }
 
-static COMMANDS: [CommandSpec; 32] = command_table! {
+static COMMANDS: [CommandSpec; 33] = command_table! {
     "palette"            General  "search"           -          "cmd-k"          -        false;
     "open-folder"        File     "folder-open"      -          "cmd-o"          -        true;
     "save"               File     "hard-drive"       -          "cmd-s"          -        true;
@@ -145,6 +145,7 @@ static COMMANDS: [CommandSpec; 32] = command_table! {
     "grid-copy"               Edit "copy"            "Grid"     "cmd-c"          -             false;
     "grid-paste"              Edit "replace"         "Grid"     "cmd-v"          -             false;
     "toggle-developer-source" View "square-terminal" -          -                -             true;
+    "go-to-cause"             Navigate "external-link" -        "cmd-alt-g"      -             true;
 };
 
 /// Every workbench command, in menu order.

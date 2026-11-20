@@ -12,6 +12,7 @@ pub mod find;
 pub mod folder;
 pub mod grid;
 pub mod i18n;
+pub mod inspector;
 pub mod library;
 pub mod license_file;
 pub mod outline;
