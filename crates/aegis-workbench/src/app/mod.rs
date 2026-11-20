@@ -12,6 +12,7 @@ mod shell;
 mod start;
 mod table_chrome;
 mod table_edit;
+mod table_popovers;
 mod table_tab;
 mod workbench;
 

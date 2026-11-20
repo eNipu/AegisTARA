@@ -8,7 +8,8 @@ use aegis_client::view::TableId;
 use aegis_model::Project;
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EntityId, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, ParentElement as _, Styled as _, Subscription, Window, div, px,
+    KeyDownEvent, MouseButton, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{InputEvent, InputState};
@@ -32,7 +33,6 @@ fn folder_for(table: TableId) -> Folder {
 }
 
 /// Active inline editor or popover inside a [`TableTab`].
-#[allow(dead_code)] // SingleChoice/MultiChoice/ImpactRatings rendered in 189e1b.
 pub(super) enum ActiveEditor {
     Text {
         row: usize,
@@ -221,6 +221,12 @@ impl TableTab {
             }
         };
         self.editor = Some(editor);
+        if !matches!(
+            self.editor,
+            Some(ActiveEditor::Text { .. } | ActiveEditor::LinkPicker { .. })
+        ) {
+            window.focus(&self.focus_handle, cx);
+        }
         cx.notify();
         true
     }
@@ -387,11 +393,28 @@ impl TableTab {
     }
 
     pub(super) fn render_editor_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let Some(ActiveEditor::LinkPicker { col, view, .. }) = &self.editor else {
-            return None;
+        let (col, body) = match self.editor.as_ref()? {
+            ActiveEditor::Text { .. } => return None,
+            ActiveEditor::SingleChoice {
+                col,
+                options,
+                selected,
+                allow_clear,
+                ..
+            } => (
+                *col,
+                self.render_single_choice(options, *selected, *allow_clear, cx),
+            ),
+            ActiveEditor::MultiChoice { col, options, .. } => {
+                (*col, self.render_multi_choice(options, cx))
+            }
+            ActiveEditor::ImpactRatings {
+                col, categories, ..
+            } => (*col, self.render_impact_ratings(categories, cx)),
+            ActiveEditor::LinkPicker { col, view, .. } => (*col, view.clone().into_any_element()),
         };
         let th = cx.theme();
-        let heading = self.headings.get(*col).cloned().unwrap_or_default();
+        let heading = self.headings.get(col).cloned().unwrap_or_default();
         let close = Button::new("table-editor-close")
             .ghost()
             .xsmall()
@@ -421,7 +444,14 @@ impl TableTab {
                         .child(div().text_xs().font_semibold().child(heading))
                         .child(close),
                 )
-                .child(div().p_2().child(view.clone()))
+                .child(
+                    div()
+                        .id("table-editor-body")
+                        .p_2()
+                        .max_h(px(420.))
+                        .overflow_y_scroll()
+                        .child(body),
+                )
                 .into_any_element(),
         )
     }
