@@ -1,0 +1,265 @@
+{
+  "job": "189-table-tabs",
+  "slices": [
+    {
+      "id": "189a",
+      "title": "Table link chips, excluded rows, owner scope, column filters, chooser settings, and source JSON",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/table.rs",
+        "crates/aegis-client/src/table_filter.rs",
+        "crates/aegis-client/src/settings.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test table_conventions",
+        "cargo test --locked -p aegis-client --test table_features"
+      ]
+    },
+    {
+      "id": "189b1",
+      "title": "SetAssetProperties edit and grid core: GridError, GridSelection, add_row_edit, delete_rows_edit",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/grid/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 540,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test grid_edit"
+      ]
+    },
+    {
+      "id": "189b2",
+      "title": "Grid cell editor descriptors, inline cell edit, and multi-cell edit",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/grid/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 550,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test grid_edit"
+      ]
+    },
+    {
+      "id": "189b3",
+      "title": "Grid fill down (including editable links) and RFC-4180 TSV format/parse codec",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/grid/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 520,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test grid_edit"
+      ]
+    },
+    {
+      "id": "189b4",
+      "title": "Grid TSV paste engine: update existing rows and append new rows across all editable tables",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/table.rs",
+        "crates/aegis-client/src/grid/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 600,
+      "new_deps": false,
+      "ci": ["crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test grid_edit"
+      ]
+    },
+    {
+      "id": "189c1a",
+      "title": "Grid commands, i18n, Catalog::language, icons, empty-op short-circuit, and Workbench edit/navigation hooks",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/command_table.rs",
+        "crates/aegis-client/src/i18n.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/command_table.rs",
+        "crates/aegis-client/tests/palette.rs",
+        "crates/aegis-workbench/src/local.rs",
+        "crates/aegis-workbench/src/app/icons.rs",
+        "crates/aegis-workbench/src/app/commands.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/tests/command_wiring.rs"
+      ],
+      "max_lines": 360,
+      "new_deps": false,
+      "ci": ["crates/aegis-client", "crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test command_table",
+        "cargo test --locked -p aegis-client --test palette",
+        "cargo test --locked -p aegis-workbench --test command_wiring"
+      ]
+    },
+    {
+      "id": "189c1b",
+      "title": "Reusable keyboard-operable GPUI MultiLinkPickerView (UI-15)",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/picker_view.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/tests/picker_view.rs"
+      ],
+      "max_lines": 380,
+      "new_deps": false,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test picker_view"
+      ]
+    },
+    {
+      "id": "189c2",
+      "title": "Relation-backed GPUI InspectorPanel wired into Workbench",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/panels.rs",
+        "crates/aegis-workbench/src/app/inspector.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/files.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/tests/picker_view.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test picker_view"
+      ]
+    },
+    {
+      "id": "189d1a",
+      "title": "GPUI TableTab core grid state, Settings-backed column visibility, and Workbench folder wiring",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/table_tab.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/files.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/tests/table_view.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test table_view"
+      ]
+    },
+    {
+      "id": "189d1b",
+      "title": "GPUI TableTab UI-14 presentation: computed marks, link chips, tone pills, excluded rows, and scroll layout",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/table_tab.rs",
+        "crates/aegis-workbench/tests/table_view.rs"
+      ],
+      "max_lines": 360,
+      "new_deps": false,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test table_view"
+      ]
+    },
+    {
+      "id": "189d2",
+      "title": "GPUI TableTab column chooser, per-column filters, and opt-in developer source view",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/table_chrome.rs",
+        "crates/aegis-workbench/src/app/table_tab.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/tests/table_view.rs"
+      ],
+      "max_lines": 560,
+      "new_deps": false,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test table_view"
+      ]
+    },
+    {
+      "id": "189e1a",
+      "title": "GPUI TableTab keyboard navigation, inline Text and LinkPicker editors, and multi-cell commit core",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/table_edit.rs",
+        "crates/aegis-workbench/src/app/table_tab.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/tests/table_edit_view.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test table_edit_view"
+      ]
+    },
+    {
+      "id": "189e1b",
+      "title": "GPUI TableTab typed rating editor popovers: SingleChoice, MultiChoice, and atomic ImpactRatings",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/table_edit.rs",
+        "crates/aegis-workbench/src/app/table_popovers.rs",
+        "crates/aegis-workbench/src/app/mod.rs",
+        "crates/aegis-workbench/tests/table_edit_view.rs"
+      ],
+      "max_lines": 380,
+      "new_deps": false,
+      "ci": ["crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test table_edit_view"
+      ]
+    },
+    {
+      "id": "189e2",
+      "title": "GPUI TableTab add/delete rows, fill down, TSV clipboard copy/paste, and command wiring",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/table_edit.rs",
+        "crates/aegis-workbench/src/app/table_chrome.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/tests/table_edit_view.rs"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test table_edit_view",
+        "cargo test --locked -p aegis-workbench --test table_view",
+        "cargo test --locked -p aegis-workbench --test picker_view"
+      ]
+    }
+  ]
+}
