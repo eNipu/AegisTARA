@@ -11,7 +11,7 @@ use aegis_client::grid::{CellInput, GridSelection};
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::settings::Appearance;
 use aegis_client::view::Selection;
-use aegis_model::{AssetId, GoalId, Op, PartyId, PartyKind, Project, Provenance};
+use aegis_model::{AssetId, GoalId, Op, PartyId, PartyKind, Project, Provenance, RiskTreatment};
 use aegis_workbench::app::{TableTab, Workbench, apply_appearance, bind_all};
 use aegis_workbench::sample::workbench_sample;
 use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
@@ -358,5 +358,270 @@ fn read_only_refuses_start_edit_and_commit_input(cx: &mut TestAppContext) {
         t.commit_input(CellInput::Text("Blocked".into()), window, cx)
     }));
     vcx.read_entity(&tab, |t, _| assert!(!t.is_editing()));
+    assert_eq!(project_bytes(&wb, vcx), before);
+}
+
+#[gpui::test]
+fn single_choice_rating_edits_risk_treatment_and_renders_popovers(cx: &mut TestAppContext) {
+    let (wb, tab, vcx) = open_table(Folder::Risks, None, cx);
+    let before = project_bytes(&wb, vcx);
+    let treatment_col = col_index(&tab, "treatment", vcx);
+
+    let (row_ix, threat_id) = vcx.read_entity(&wb, |w, cx| {
+        let p = w.workspace().project();
+        let t = tab.read(cx);
+        (0..t.visible_row_count())
+            .find_map(|r| match t.displayed_row(r).and_then(|row| row.target) {
+                Some(Selection::Threat(id)) => {
+                    let th = p.threat_scenario(p.threat_scenario_idx(&id)?)?;
+                    (th.treatment() != Some(RiskTreatment::Reduce)).then_some((r, id))
+                }
+                _ => None,
+            })
+            .expect("sample risks must have a row without Reduce treatment")
+    });
+    select_cell(&tab, row_ix, treatment_col, vcx);
+
+    assert!(tab.update_in(vcx, |t, window, cx| t.start_edit(window, cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(t.is_editing());
+        assert!(!t.grid_keys_active());
+    });
+
+    assert!(tab.update_in(vcx, |t, window, cx| {
+        t.commit_input(CellInput::SingleChoice(Some(1)), window, cx)
+    }));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.is_editing());
+        assert!(t.grid_keys_active());
+    });
+    vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let th = p
+            .threat_scenario(p.threat_scenario_idx(&threat_id).unwrap())
+            .unwrap();
+        assert_eq!(th.treatment(), Some(RiskTreatment::Reduce));
+    });
+    assert_ne!(project_bytes(&wb, vcx), before);
+
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    // Clearing treatment via SingleChoice(None) also commits and undoes cleanly.
+    assert!(tab.update_in(vcx, |t, window, cx| t.start_edit(window, cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(tab.update_in(vcx, |t, window, cx| {
+        t.commit_input(CellInput::SingleChoice(None), window, cx)
+    }));
+    vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let th = p
+            .threat_scenario(p.threat_scenario_idx(&threat_id).unwrap())
+            .unwrap();
+        assert_eq!(th.treatment(), None);
+    });
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    // Threats.scales also opens SingleChoice popover, renders, commits, and undoes cleanly.
+    let (wb, tab, vcx) = open_table(Folder::Threats, None, cx);
+    let before = project_bytes(&wb, vcx);
+    let scales_col = col_index(&tab, "scales", vcx);
+    let threat_id = vcx.read_entity(&tab, |t, _| {
+        match t.displayed_row(0).and_then(|r| r.target) {
+            Some(Selection::Threat(id)) => id,
+            other => panic!("expected threat target, got {other:?}"),
+        }
+    });
+    let choice_ix = vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let th = p
+            .threat_scenario(p.threat_scenario_idx(&threat_id).unwrap())
+            .unwrap();
+        usize::from(th.scales() == Some(true))
+    });
+    select_cell(&tab, 0, scales_col, vcx);
+    assert!(tab.update_in(vcx, |t, window, cx| t.start_edit(window, cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(tab.update_in(vcx, |t, window, cx| {
+        t.commit_input(CellInput::SingleChoice(Some(choice_ix)), window, cx)
+    }));
+    vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let th = p
+            .threat_scenario(p.threat_scenario_idx(&threat_id).unwrap())
+            .unwrap();
+        assert_eq!(th.scales(), Some(choice_ix == 0));
+    });
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+}
+
+#[gpui::test]
+fn multi_choice_properties_edits_and_refuses_clearing_all(cx: &mut TestAppContext) {
+    let (wb, tab, vcx) = open_table(Folder::Assets, None, cx);
+    let before = project_bytes(&wb, vcx);
+    let props_col = col_index(&tab, "properties", vcx);
+
+    let asset_id = vcx.read_entity(&tab, |t, _| {
+        match t.displayed_row(0).and_then(|r| r.target) {
+            Some(Selection::Asset(id)) => id,
+            other => panic!("expected asset target, got {other:?}"),
+        }
+    });
+    let (toggle_ix, expected_flags, checked_indices) = vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let m = p.methodology();
+        let asset = p.asset(p.asset_idx(&asset_id).unwrap()).unwrap();
+        let props = asset.properties();
+        let checked: Vec<usize> = m
+            .properties()
+            .enumerate()
+            .filter_map(|(ix, prop)| props.contains(prop).then_some(ix))
+            .collect();
+        let unchecked = m
+            .properties()
+            .enumerate()
+            .find_map(|(ix, prop)| (!props.contains(prop)).then_some(ix));
+        let toggle_ix = unchecked.unwrap_or(0);
+        let expected: Vec<bool> = m
+            .properties()
+            .enumerate()
+            .map(|(ix, prop)| {
+                if ix == toggle_ix {
+                    !props.contains(prop)
+                } else {
+                    props.contains(prop)
+                }
+            })
+            .collect();
+        assert!(expected.iter().any(|&on| on));
+        (toggle_ix, expected, checked)
+    });
+
+    select_cell(&tab, 0, props_col, vcx);
+    assert!(tab.update_in(vcx, |t, window, cx| t.start_edit(window, cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    tab.update(vcx, |t, cx| t.toggle_multi_choice_option(toggle_ix, cx));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    assert!(tab.update_in(vcx, |t, window, cx| t.apply_multi_choice(window, cx)));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.is_editing());
+        assert!(t.grid_keys_active());
+    });
+    vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let asset = p.asset(p.asset_idx(&asset_id).unwrap()).unwrap();
+        let actual: Vec<bool> = p
+            .methodology()
+            .properties()
+            .map(|prop| asset.properties().contains(prop))
+            .collect();
+        assert_eq!(actual, expected_flags);
+    });
+    assert_ne!(project_bytes(&wb, vcx), before);
+
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    // Toggling all properties off is refused, keeps editor open, sets wb.note(), and leaves project unchanged.
+    assert!(tab.update_in(vcx, |t, window, cx| t.start_edit(window, cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    tab.update(vcx, |t, cx| {
+        for &ix in &checked_indices {
+            t.toggle_multi_choice_option(ix, cx);
+        }
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(!tab.update_in(vcx, |t, window, cx| t.apply_multi_choice(window, cx)));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(t.is_editing());
+        assert!(!t.grid_keys_active());
+    });
+    assert!(vcx.read_entity(&wb, |w, _| w.note().is_some()));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.is_editing());
+        assert!(t.grid_keys_active());
+    });
+}
+
+#[gpui::test]
+fn atomic_impact_ratings_stages_locally_and_undoes_in_one_step(cx: &mut TestAppContext) {
+    let (wb, tab, vcx) = open_table(Folder::Damage, None, cx);
+    let before = project_bytes(&wb, vcx);
+    let impact_col = col_index(&tab, "impact", vcx);
+
+    let damage_id = vcx.read_entity(&tab, |t, _| {
+        match t.displayed_row(0).and_then(|r| r.target) {
+            Some(Selection::Damage(id)) => id,
+            other => panic!("expected damage target, got {other:?}"),
+        }
+    });
+    let (new0, new1, exp0, exp1) = vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let m = p.methodology();
+        let damage = p
+            .damage_scenario(p.damage_scenario_idx(&damage_id).unwrap())
+            .unwrap();
+        let mut cats = m.impact_categories();
+        let cat0 = cats.next().expect("category 0");
+        let cat1 = cats.next().expect("category 1");
+        let cur0 = damage
+            .impact(cat0)
+            .and_then(|lvl| m.levels(cat0).position(|x| x == lvl));
+        let cur1 = damage
+            .impact(cat1)
+            .and_then(|lvl| m.levels(cat1).position(|x| x == lvl));
+        let cnt0 = m.levels(cat0).count();
+        let cnt1 = m.levels(cat1).count();
+        let n0 = cur0.map_or(0, |i| (i + 1) % cnt0);
+        let n1 = cur1.map_or(1 % cnt1, |i| (i + 1) % cnt1);
+        (
+            n0,
+            n1,
+            m.levels(cat0).nth(n0).unwrap(),
+            m.levels(cat1).nth(n1).unwrap(),
+        )
+    });
+
+    select_cell(&tab, 0, impact_col, vcx);
+    assert!(tab.update_in(vcx, |t, window, cx| t.start_edit(window, cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    tab.update(vcx, |t, cx| {
+        t.set_impact_editor_level(0, Some(new0), cx);
+        t.set_impact_editor_level(1, Some(new1), cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    assert!(tab.update_in(vcx, |t, window, cx| t.apply_impact_ratings(window, cx)));
+    vcx.read_entity(&tab, |t, _| {
+        assert!(!t.is_editing());
+        assert!(t.grid_keys_active());
+    });
+    vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        let m = p.methodology();
+        let mut cats = m.impact_categories();
+        let cat0 = cats.next().unwrap();
+        let cat1 = cats.next().unwrap();
+        let damage = p
+            .damage_scenario(p.damage_scenario_idx(&damage_id).unwrap())
+            .unwrap();
+        assert_eq!(damage.impact(cat0), Some(exp0));
+        assert_eq!(damage.impact(cat1), Some(exp1));
+    });
+    assert_ne!(project_bytes(&wb, vcx), before);
+
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
     assert_eq!(project_bytes(&wb, vcx), before);
 }
