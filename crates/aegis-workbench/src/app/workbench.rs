@@ -335,6 +335,7 @@ impl Workbench {
         skip: Option<gpui::EntityId>,
         cx: &mut Context<Self>,
     ) {
+        let dev_source = self.developer_source_view();
         let updates: Vec<_> = self
             .tabs
             .iter()
@@ -352,7 +353,7 @@ impl Workbench {
             .collect();
         for (e, title, cols) in updates {
             e.update(cx, |t, cx| {
-                t.refresh(title, &self.workspace, cols, skip, cx)
+                t.refresh(title, &self.workspace, cols, dev_source, skip, cx)
             });
         }
     }
@@ -517,8 +518,13 @@ impl Workbench {
         {
             let title = self.table_title(key, table_id);
             let cols = self.visible_columns_for(table_id);
+            let dev_source = self.developer_source_view();
             let (cat, wb, ws) = (Rc::clone(&self.catalog), cx.weak_entity(), &self.workspace);
-            let t = cx.new(|cx| TableTab::new(title, table_id, owner, ws, cols, cat, wb, cx));
+            let t = cx.new(|cx| {
+                TableTab::new(
+                    title, table_id, owner, ws, cols, dev_source, cat, wb, window, cx,
+                )
+            });
             let handle = panel_handle(t.clone());
             self.tabs.insert(
                 key,
@@ -920,6 +926,7 @@ impl Workbench {
                 eprintln!("could not save the developer source view setting: {err}");
             }
         }
+        self.refresh_tables(None, None, cx);
         cx.notify();
     }
 

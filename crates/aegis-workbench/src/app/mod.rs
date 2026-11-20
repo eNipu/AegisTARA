@@ -10,6 +10,7 @@ mod picker_view;
 mod server;
 mod shell;
 mod start;
+mod table_chrome;
 mod table_tab;
 mod workbench;
 
