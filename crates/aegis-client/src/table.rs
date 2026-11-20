@@ -169,7 +169,7 @@ pub fn selection_label(p: &Project, sel: Selection) -> String {
     .to_owned()
 }
 
-fn selection_element_ref(sel: Selection) -> Option<ElementRef> {
+pub(crate) fn selection_element_ref(sel: Selection) -> Option<ElementRef> {
     use ElementRef as E;
     use Selection as S;
     Some(match sel {
@@ -193,14 +193,17 @@ fn exclusion_state(
     app: &Applicability,
     target: Option<Selection>,
 ) -> (bool, Option<String>) {
-    let Some(elem) = target
-        .and_then(selection_element_ref)
-        .filter(|&e| app.is_excluded(e))
-    else {
-        return (false, None);
+    let reasons = match target {
+        Some(Selection::TreeNode(tree, node)) if app.is_node_excluded(tree, node) => {
+            app.node_reasons(tree, node)
+        }
+        Some(sel) => match selection_element_ref(sel).filter(|&e| app.is_excluded(e)) {
+            Some(elem) => app.reasons(elem),
+            None => return (false, None),
+        },
+        None => return (false, None),
     };
-    let text = app
-        .reasons(elem)
+    let text = reasons
         .iter()
         .map(|&r| match r {
             Reason::ConditionOff(cid) => {
@@ -233,7 +236,11 @@ pub fn selection_exclusion(p: &Project, sel: Selection) -> (bool, Option<String>
     exclusion_state(p, &p.applicability(), Some(sel))
 }
 
-fn selection_system_set(p: &Project, u: &SystemUse, sel: Selection) -> Option<SystemSet> {
+pub(crate) fn selection_system_set(
+    p: &Project,
+    u: &SystemUse,
+    sel: Selection,
+) -> Option<SystemSet> {
     use Selection as S;
     match sel {
         S::Component(id) => p.component_idx(&id).map(|i| u.component(i)),
