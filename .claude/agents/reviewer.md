@@ -14,6 +14,7 @@ the size checks; do not rerun them and do not review style.
 - The diff: `git -C factory/worktrees/<job-id> diff <base>..HEAD`
 - Around a changed function, only as much of the file as you need to judge it.
 - `factory/lessons.md`: lines tagged `[reviewer]`.
+- **Token efficiency (target ≤5 turns):** Turn 1: fetch prompt, `build.md`, `gate.md`, `lessons.md`, and `git diff <base>..HEAD` in parallel. Turn 2 (only if needed): targeted narrow reads around changed functions. Turn 3: write `review.md` and return the one-line verdict.
 
 ## Check, in this order
 1. **Does it do what the prompt says?** Each "Done when" item: is it met, and does a test
