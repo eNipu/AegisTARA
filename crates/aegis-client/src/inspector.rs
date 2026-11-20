@@ -3,15 +3,17 @@
 
 use aegis_canvas::Tone;
 use aegis_model::{
-    CeilingSource, ElementRef, Evaluation, FeasibilityLevel, GateKind, ItemRef, Node, Project,
-    Reason, StepCeiling, ThreatId, TreeId, TreeIdx,
+    CeilingSource, ElementRef, Evaluation, FeasibilityLevel, GateKind, ItemRef, Methodology, Node,
+    PartyKind, Project, Reason, StepCeiling, ThreatId, TreeId, TreeIdx,
 };
 
 use crate::i18n::Catalog;
 use crate::pages::{self, selection_visual_id};
-use crate::relations::RelationKey;
-use crate::table::{LinkChip, selection_label};
-use crate::view::{Selection, through_label};
+use crate::relations::{ElementKind, RELATIONS, RelationKey};
+use crate::table::{
+    LinkChip, selection_element_ref, selection_exclusion, selection_label, selection_system_set,
+};
+use crate::view::{Selection, steps_through, through_label};
 use crate::workspace::Workspace;
 
 /// One forward or reverse relation row in the inspector (WBX-06, UI-15).
@@ -444,4 +446,468 @@ pub fn primary_cause(ws: &Workspace, sel: Selection) -> Option<Selection> {
         return Some(first.target);
     }
     exclusion_targets(ws.project(), sel).into_iter().next()
+}
+
+fn feasibility_tone(m: &Methodology, level: FeasibilityLevel) -> Tone {
+    let index = m
+        .feasibility_levels()
+        .position(|(l, _, _)| l == level)
+        .unwrap_or(0);
+    Tone::from_level(index, m.feasibility_levels().len())
+}
+
+fn feasibility_text(m: &Methodology, lang: &str, level: FeasibilityLevel) -> String {
+    m.feasibility_level_label_for_lang(level, lang)
+        .or_else(|| m.feasibility_level_label(level))
+        .unwrap_or("?")
+        .to_owned()
+}
+
+fn field(label: impl Into<String>, value: impl Into<String>, tone: Option<Tone>) -> InspectorField {
+    InspectorField {
+        label: label.into(),
+        value: value.into(),
+        tone,
+    }
+}
+
+fn to_chips(project: &Project, targets: Vec<Selection>) -> Vec<LinkChip> {
+    targets
+        .into_iter()
+        .map(|target| LinkChip {
+            target,
+            visual_id: selection_visual_id(project, target),
+            label: selection_label(project, target),
+        })
+        .collect()
+}
+
+/// Complete toolkit-independent inspector view model for `sel` (WBX-06, UI-15).
+///
+/// Returns `None` if `sel` does not exist in `ws.project()`.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Option<InspectorView> {
+    let project = ws.project();
+    let m = project.methodology();
+    let lang = catalog.language().code();
+    let vocab = pages::vocabulary_for_lang(m, lang);
+    let names = &vocab.element_names;
+    let unrated = || catalog.tr("not-rated");
+    let mut fields = Vec::new();
+
+    let (kind, changed) = match sel {
+        Selection::Component(id) => {
+            let d = pages::component_detail(ws, id)?;
+            let sys = if !d.system_from_parent.is_empty() {
+                d.system_from_parent
+            } else {
+                d.system
+                    .and_then(|s| crate::systems::system_name(project, s))
+                    .unwrap_or_default()
+            };
+            if !sys.is_empty() {
+                fields.push(field(catalog.tr("report-systems"), sys, None));
+            }
+            (names.component.singular.to_string(), d.changed)
+        }
+        Selection::Interface(id) => {
+            let d = pages::interface_detail(ws, id)?;
+            if let Some(k) = vocab.interface_kinds.get(d.kind) {
+                fields.push(field(catalog.tr("kind"), k.clone(), None));
+            }
+            (names.interface.singular.to_string(), d.changed)
+        }
+        Selection::DataFlow(id) => {
+            let d = pages::data_flow_detail(ws, id)?;
+            if let Some(b) = d.boundary {
+                fields.push(field(names.trust_boundary.singular.to_string(), b, None));
+            } else if d.crosses_boundary {
+                fields.push(field(
+                    names.trust_boundary.singular.to_string(),
+                    catalog.tr("yes"),
+                    None,
+                ));
+            }
+            (names.data_flow.singular.to_string(), d.changed)
+        }
+        Selection::TrustBoundary(id) => {
+            let d = pages::trust_boundary_detail(ws, id)?;
+            (names.trust_boundary.singular.to_string(), d.changed)
+        }
+        Selection::Asset(id) => {
+            let a = project.asset(project.asset_idx(&id)?)?;
+            let props = m
+                .properties()
+                .zip(&vocab.properties)
+                .filter(|(p, _)| a.properties().contains(*p))
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            fields.push(field(catalog.tr("properties"), props, None));
+            (
+                names.asset.singular.to_string(),
+                pages::changed_text(a.provenance()),
+            )
+        }
+        Selection::Damage(id) => {
+            let d = project.damage_scenario(project.damage_scenario_idx(&id)?)?;
+            for (cat, cv) in m.impact_categories().zip(&vocab.impact_categories) {
+                if let Some(lvl) = d.impact(cat)
+                    && let Some(pos) = m.levels(cat).position(|x| x == lvl)
+                    && let Some(lbl) = cv.levels.get(pos)
+                {
+                    fields.push(field(cv.label.clone(), lbl.clone(), None));
+                }
+            }
+            if fields.is_empty() {
+                fields.push(field(catalog.tr("impact"), unrated(), None));
+            }
+            if !d.impact_rationale().is_empty() {
+                fields.push(field(catalog.tr("rationale"), d.impact_rationale(), None));
+            }
+            (
+                names.damage_scenario.singular.to_string(),
+                pages::changed_text(d.provenance()),
+            )
+        }
+        Selection::Threat(id) => {
+            let d = pages::threat_detail(ws, id)?;
+            fields.push(field(
+                catalog.tr("risk-before-controls"),
+                d.inherent
+                    .as_ref()
+                    .map_or_else(unrated, |r| r.label.clone()),
+                d.inherent.as_ref().map(|r| r.tone),
+            ));
+            fields.push(field(
+                catalog.tr("risk-after-controls"),
+                d.residual
+                    .as_ref()
+                    .map_or_else(unrated, |r| r.label.clone()),
+                d.residual.as_ref().map(|r| r.tone),
+            ));
+            if let Some(cat) = vocab.threat_categories.get(d.category) {
+                fields.push(field(catalog.tr("category"), cat.clone(), None));
+            }
+            fields.push(field(
+                catalog.tr("feasibility"),
+                d.residual_feasibility
+                    .or(d.feasibility)
+                    .unwrap_or_else(unrated),
+                None,
+            ));
+            if let Ok(risk) = ws.cache().evaluate_risk(project, id)
+                && let Some(entry) = risk.deciding_entry()
+            {
+                let dmg = selection_label(project, Selection::Damage(entry.damage()));
+                let cat = m
+                    .impact_category_label_for_lang(entry.category(), lang)
+                    .unwrap_or("?");
+                let lvl = m
+                    .level_label_for_lang(entry.category(), entry.impact(), lang)
+                    .unwrap_or("?");
+                fields.push(field(
+                    catalog.tr("deciding-damage"),
+                    format!("{dmg} ({cat}: {lvl})"),
+                    None,
+                ));
+            }
+            if let Some(pos) = d.treatment
+                && let Some(tr) = vocab.treatments.get(pos)
+            {
+                fields.push(field(catalog.tr("treatment"), tr.clone(), None));
+            }
+            if let Some(scales) = d.scales {
+                let yn = catalog.tr(if scales { "yes" } else { "no" });
+                let val = if d.scaling_reason.is_empty() {
+                    yn
+                } else {
+                    format!("{yn} ({})", d.scaling_reason)
+                };
+                fields.push(field(catalog.tr("scales"), val, None));
+            }
+            if !d.catalog_refs.is_empty() {
+                fields.push(field(
+                    catalog.tr("catalog-references"),
+                    d.catalog_refs.join(", "),
+                    None,
+                ));
+            }
+            if !d.rationale.is_empty() {
+                fields.push(field(catalog.tr("pair-rationale"), d.rationale, None));
+            }
+            if !d.feasibility_rationale.is_empty() {
+                fields.push(field(
+                    catalog.tr("feasibility-rationale"),
+                    d.feasibility_rationale,
+                    None,
+                ));
+            }
+            (names.threat_scenario.singular.to_string(), d.changed)
+        }
+        Selection::Tree(id) => {
+            let idx = project.attack_tree_idx(&id)?;
+            let inh = ws
+                .cache()
+                .evaluate_tree(project, id)
+                .ok()
+                .map(|e| *e.root_value());
+            let res = ws
+                .cache()
+                .evaluate_residual_tree(project, id)
+                .ok()
+                .map(|e| *e.root_value());
+            for lvl in [inh, res].into_iter().flatten() {
+                fields.push(field(
+                    catalog.tr("feasibility"),
+                    feasibility_text(m, lang, lvl),
+                    Some(feasibility_tone(m, lvl)),
+                ));
+            }
+            if fields.is_empty() {
+                fields.push(field(catalog.tr("feasibility"), unrated(), None));
+            }
+            let changed = project
+                .attack_tree_provenance(idx)
+                .map(pages::changed_text)
+                .unwrap_or_default();
+            (names.attack_tree.singular.to_string(), changed)
+        }
+        Selection::TreeNode(tree_id, node_id) => {
+            let t_idx = project.attack_tree_idx(&tree_id)?;
+            let tree = project.attack_tree(t_idx)?;
+            let n_idx = tree.idx_of(&node_id)?;
+            let node = tree.get(n_idx)?;
+            let kind = match node.gate_kind() {
+                None => "Step",
+                Some(GateKind::Or) => "OR gate",
+                Some(GateKind::And) => "AND gate",
+                Some(GateKind::SeqAnd) => "Sequential AND gate",
+            };
+            if node.gate_kind().is_some() {
+                let eval = ws
+                    .cache()
+                    .evaluate_residual_tree(project, tree_id)
+                    .or_else(|_| ws.cache().evaluate_tree(project, tree_id))
+                    .ok();
+                if let Some(lvl) = eval.and_then(|e| e.get(n_idx).copied()) {
+                    fields.push(field(
+                        catalog.tr("feasibility"),
+                        feasibility_text(m, lang, lvl),
+                        Some(feasibility_tone(m, lvl)),
+                    ));
+                } else {
+                    fields.push(field(catalog.tr("feasibility"), unrated(), None));
+                }
+            } else {
+                if let Some(inh) = project.effective_step_feasibility(t_idx, n_idx) {
+                    fields.push(field(
+                        catalog.tr("before-controls"),
+                        feasibility_text(m, lang, inh),
+                        Some(feasibility_tone(m, inh)),
+                    ));
+                } else {
+                    fields.push(field(catalog.tr("before-controls"), unrated(), None));
+                }
+                if let Some(res) = project.residual_step_feasibility(t_idx, n_idx) {
+                    fields.push(field(
+                        catalog.tr("after-controls"),
+                        feasibility_text(m, lang, res),
+                        Some(feasibility_tone(m, res)),
+                    ));
+                }
+                if let Some(p) = project.step_attack_potential(t_idx, n_idx) {
+                    let lvl = feasibility_text(m, lang, p.feasibility());
+                    fields.push(field(
+                        catalog.tr("feasibility"),
+                        format!("{} ({lvl})", p.score()),
+                        Some(feasibility_tone(m, p.feasibility())),
+                    ));
+                }
+                if let Some(at) = project.step_attack_type(t_idx, n_idx) {
+                    let lbl = m
+                        .attack_type_label_for_lang(at, lang)
+                        .or_else(|| m.attack_type_label(at))
+                        .unwrap_or("?");
+                    fields.push(field(catalog.tr("attack-type"), lbl, None));
+                }
+                for f in m.feasibility_factors() {
+                    if let Some(lvl) = project.step_factor(t_idx, n_idx, f) {
+                        let f_lbl = m.feasibility_factor_label(f).unwrap_or("?");
+                        let l_lbl = m.factor_level_label(f, lvl).unwrap_or("?");
+                        let pts = m.factor_level_points(f, lvl).unwrap_or(0);
+                        fields.push(field(f_lbl, format!("{l_lbl} ({pts})"), None));
+                    }
+                }
+            }
+            let changed = project
+                .attack_tree_provenance(t_idx)
+                .map(pages::changed_text)
+                .unwrap_or_default();
+            (kind.to_owned(), changed)
+        }
+        Selection::Control(id) => {
+            let c = project.security_control(project.security_control_idx(&id)?)?;
+            if let Some(k) = c.kind()
+                && let Some(lbl) = m
+                    .control_kind_label_for_lang(k, lang)
+                    .or_else(|| m.control_kind_label(k))
+            {
+                fields.push(field(catalog.tr("setting"), lbl, None));
+            }
+            if !c.rules().is_empty() {
+                let rules = c
+                    .rules()
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{} \u{2192} {}",
+                            m.attack_type_label_for_lang(r.attack_type(), lang)
+                                .unwrap_or("?"),
+                            feasibility_text(m, lang, r.ceiling())
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                fields.push(field(catalog.tr("rules"), rules, None));
+            }
+            (
+                names.security_control.singular.to_string(),
+                pages::changed_text(c.provenance()),
+            )
+        }
+        Selection::Goal(id) => {
+            let g = project.cybersecurity_goal(project.cybersecurity_goal_idx(&id)?)?;
+            (
+                names.cybersecurity_goal.singular.to_string(),
+                pages::changed_text(g.provenance()),
+            )
+        }
+        Selection::Claim(id) => {
+            let c = project.cybersecurity_claim(project.cybersecurity_claim_idx(&id)?)?;
+            (
+                names.cybersecurity_claim.singular.to_string(),
+                pages::changed_text(c.provenance()),
+            )
+        }
+        Selection::Party(id) => {
+            let p = project.party(project.party_idx(&id)?)?;
+            let role_key = match p.kind() {
+                PartyKind::Us => "party-us",
+                PartyKind::Customer => "party-customer",
+                PartyKind::Supplier => "party-supplier",
+                PartyKind::Other => "party-other",
+            };
+            fields.push(field(catalog.tr("kind"), catalog.tr(role_key), None));
+            (
+                catalog.tr("responsible"),
+                pages::changed_text(p.provenance()),
+            )
+        }
+        Selection::Condition(id) => {
+            let c = project.condition(project.condition_idx(&id)?)?;
+            fields.push(field(
+                catalog.tr("condition-present"),
+                catalog.tr(if c.present() { "yes" } else { "no" }),
+                None,
+            ));
+            (catalog.tr("condition"), pages::changed_text(c.provenance()))
+        }
+    };
+
+    let systems = if project.element_count(aegis_model::ElementKind::System) > 0 {
+        let usage = project.system_use();
+        selection_system_set(project, &usage, sel)
+            .map(|set| {
+                usage
+                    .ids(set)
+                    .filter_map(|id| crate::systems::system_name(project, id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let description = match sel {
+        Selection::Condition(id) => project
+            .condition_idx(&id)
+            .and_then(|i| project.condition(i))
+            .map_or_else(String::new, |c| c.description().to_owned()),
+        _ => selection_element_ref(sel)
+            .and_then(|e| project.description(e))
+            .unwrap_or_default()
+            .to_owned(),
+    };
+
+    let elem_kind = ElementKind::kind_of(sel);
+    let relations = RELATIONS
+        .iter()
+        .filter(|rel| Some(rel.from) == elem_kind)
+        .map(|rel| InspectorRelationRow {
+            key: rel.key,
+            label: catalog.tr(rel.label),
+            editable: rel.link.is_some(),
+            chips: to_chips(project, crate::relations::related(project, rel.key, sel)),
+        })
+        .collect();
+
+    let mut reverse_relations = Vec::new();
+    for rel in RELATIONS {
+        if !elem_kind.is_some_and(|k| rel.to.contains(&k)) {
+            continue;
+        }
+        let sources = match (sel, rel.key) {
+            (Selection::Component(cid), RelationKey::STEP_VIA) => {
+                steps_through(project, ItemRef::Component(cid))
+                    .into_iter()
+                    .map(|s| Selection::TreeNode(s.tree, s.node))
+                    .collect()
+            }
+            (Selection::Control(cid), RelationKey::STEP_MITIGATIONS) => {
+                let mut out = Vec::new();
+                if let Some(c_idx) = project.security_control_idx(&cid) {
+                    for (t_idx, tree_id, tree) in project.attack_trees() {
+                        for (n_idx, node_id, _) in tree.iter() {
+                            if project
+                                .step_ceilings(t_idx, n_idx)
+                                .iter()
+                                .any(|s| s.control() == c_idx)
+                            {
+                                out.push(Selection::TreeNode(tree_id, node_id));
+                            }
+                        }
+                    }
+                }
+                out
+            }
+            _ => crate::relations::reverse_related(project, rel.key, sel),
+        };
+        if !sources.is_empty() {
+            reverse_relations.push(InspectorRelationRow {
+                key: rel.key,
+                label: reverse_relation_label(rel.key, catalog),
+                editable: false,
+                chips: to_chips(project, sources),
+            });
+        }
+    }
+
+    Some(InspectorView {
+        selection: sel,
+        visual_id: selection_visual_id(project, sel),
+        name: selection_label(project, sel),
+        kind,
+        systems,
+        excluded_reason: selection_exclusion(project, sel).1,
+        exclusion_causes: exclusion_causes(project, sel, catalog),
+        changed,
+        description,
+        fields,
+        explain: explain_selection(ws, sel, catalog),
+        primary_cause: primary_cause(ws, sel),
+        relations,
+        reverse_relations,
+    })
 }
