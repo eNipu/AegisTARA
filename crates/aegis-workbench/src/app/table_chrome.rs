@@ -1,6 +1,7 @@
 //! Toolbar, persisted column chooser, per-column filter popover, and opt-in
 //! read-only developer source view for [`TableTab`].
 
+use aegis_client::command_table::command;
 use aegis_client::explorer::{ExplorerKey, Folder};
 use aegis_client::table::table_source_json;
 use aegis_client::table_filter::{ColumnFilter, TableFilters};
@@ -14,9 +15,11 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, Theme, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, Theme,
+    h_flex, v_flex,
 };
 
+use super::icons::icon;
 use super::table_tab::TableTab;
 
 fn folder_for_table(table: TableId) -> Folder {
@@ -215,6 +218,16 @@ impl TableTab {
         self.set_source_mode(next, || json, cx);
     }
 
+    fn grid_btn(&self, id: &'static str, disabled: bool) -> Option<Button> {
+        let spec = command(id)?;
+        Some(
+            ghost_btn(id)
+                .icon(icon(spec.icon)?)
+                .tooltip(self.catalog.tr(&spec.tooltip_id()))
+                .disabled(disabled),
+        )
+    }
+
     pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let th = cx.theme().clone();
         let source_key = if self.source_mode {
@@ -222,6 +235,21 @@ impl TableTab {
         } else {
             "grid-source"
         };
+        let ro = self
+            .workbench
+            .upgrade()
+            .is_none_or(|wb| wb.read(cx).read_only().is_some());
+        let off = self.table == TableId::Problems || !self.can_run_grid_command() || ro;
+        let rows_sel = self.selection.map_or(0, |s| s.row_count());
+        let add_btn = self
+            .grid_btn("grid-add-row", off)
+            .map(|b| b.on_click(cx.listener(|t, _, w, cx| _ = t.add_row(w, cx))));
+        let del_btn = self
+            .grid_btn("grid-delete-rows", off || rows_sel == 0)
+            .map(|b| b.on_click(cx.listener(|t, _, _, cx| _ = t.delete_selected(cx))));
+        let fill_btn = self
+            .grid_btn("grid-fill-down", off || rows_sel < 2)
+            .map(|b| b.on_click(cx.listener(|t, _, _, cx| _ = t.fill_down(cx))));
         let chips = self
             .table
             .columns()
@@ -243,6 +271,9 @@ impl TableTab {
             });
         bar_box(&th)
             .text_color(th.muted_foreground)
+            .children(add_btn)
+            .children(del_btn)
+            .children(fill_btn)
             .children(chips)
             .when(self.filters.is_active(), |bar| {
                 bar.child(
