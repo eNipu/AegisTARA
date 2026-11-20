@@ -61,6 +61,12 @@ command_actions! {
     "reset-layout" => ResetLayout,
     "show-shortcuts" => ShowShortcuts,
     "quit" => Quit,
+    "grid-add-row" => GridAddRow,
+    "grid-delete-rows" => GridDeleteRows,
+    "grid-fill-down" => GridFillDown,
+    "grid-copy" => GridCopy,
+    "grid-paste" => GridPaste,
+    "toggle-developer-source" => ToggleDeveloperSource,
 }
 
 /// The key binding of every command with keys, on this platform's

@@ -37,6 +37,13 @@ pub fn icon(key: &str) -> Option<IconName> {
         "layout-dashboard" => IconName::LayoutDashboard,
         "info" => IconName::Info,
         "window-close" => IconName::WindowClose,
+        "plus" => IconName::Plus,
+        "delete" => IconName::Delete,
+        "replace" => IconName::Replace,
+        "square-terminal" => IconName::SquareTerminal,
+        "settings-2" => IconName::Settings2,
+        "check" => IconName::Check,
+        "asterisk" => IconName::Asterisk,
         _ => return None,
     })
 }

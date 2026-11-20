@@ -16,7 +16,8 @@ use aegis_client::license_file::LocalLicense;
 use aegis_client::pages::{problems, selection_visual_id};
 use aegis_client::palette::{PaletteEntry, PaletteTarget, entries, search};
 use aegis_client::settings::{Appearance, Settings, WorkbenchLayout};
-use aegis_client::view::Selection;
+use aegis_client::table::table_for_folder;
+use aegis_client::view::{ColumnSpec, Selection, TableId};
 use aegis_client::workspace::Workspace;
 use aegis_model::{ElementNamesDef, Methodology, Project};
 use gpui::{
@@ -37,11 +38,12 @@ use super::apply_appearance;
 use super::commands::{dispatch_id, on_every_command};
 use super::files::Leave;
 use super::icons::icon;
+use super::inspector::InspectorPanel;
 use super::layout::{apply_layout, default_layout, read_layout};
 use super::panels::{
-    BottomPanel, ElementTab, ExplorerPanel, InspectorPanel, ListTab, OverviewTab, ShortcutGroup,
-    ShortcutsTab,
+    BottomPanel, ElementTab, ExplorerPanel, ListTab, OverviewTab, ShortcutGroup, ShortcutsTab,
 };
+use super::table_tab::TableTab;
 use crate::local;
 use crate::sample::{SAMPLE_KEY, SAMPLE_NAME, workbench_sample};
 
@@ -66,6 +68,7 @@ const TOOLBAR: [&str; 6] = [
 pub(super) enum Body {
     Overview(Entity<OverviewTab>),
     List(Entity<ListTab>),
+    Table(Entity<TableTab>),
     Element(Entity<ElementTab>),
 }
 
@@ -92,6 +95,7 @@ pub struct Workbench {
     pub(super) names: ElementNamesDef,
     actor: String,
     explorer: Entity<ExplorerPanel>,
+    inspector: Entity<InspectorPanel>,
     filter: Entity<InputState>,
     pub(super) area: Entity<DockArea>,
     pub(super) tabs: HashMap<ExplorerKey, Tab>,
@@ -116,6 +120,8 @@ pub struct Workbench {
     pub(super) asking: bool,
     /// The window may close now.
     pub(super) leaving: bool,
+    /// Loaded user settings (column visibility, developer source view, layout).
+    pub(super) settings: Settings,
     settings_path: Option<PathBuf>,
     saved: Option<WorkbenchLayout>,
     _skin: Rc<DockSkin>,
@@ -152,7 +158,7 @@ fn all_rows(index: &ExplorerIndex) -> Vec<ExplorerRow> {
 }
 
 /// The singular name of the kind of `sel`, if the pack names it.
-fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
+pub(super) fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
     let n = match sel {
         Selection::Component(_) => &names.component,
         Selection::Interface(_) => &names.interface,
@@ -217,22 +223,24 @@ impl Workbench {
                 this.show_rows(cx);
             }
         });
-        let explorer =
-            cx.new(|cx| ExplorerPanel::new(tr("workbench-explorer"), filter.clone(), me, cx));
-        let inspector_text = vec![tr("workbench-inspector-empty")];
-        let inspector =
-            cx.new(|cx| InspectorPanel::new(tr("workbench-inspector"), None, inspector_text, cx));
+        let explorer = cx
+            .new(|cx| ExplorerPanel::new(tr("workbench-explorer"), filter.clone(), me.clone(), cx));
+        let inspector = cx
+            .new(|cx| InspectorPanel::new(tr("workbench-inspector"), Rc::clone(&catalog), me, cx));
         let bottom_text = vec![tr("workbench-bottom-empty")];
         let bottom = cx.new(|cx| BottomPanel::new(tr("workbench-bottom"), None, bottom_text, cx));
 
-        let layout = settings_path
-            .as_ref()
-            .and_then(|p| Settings::load(p).workbench_layout(SAMPLE_KEY))
+        let settings = settings_path
+            .as_deref()
+            .map(Settings::load)
+            .unwrap_or_default();
+        let layout = settings
+            .workbench_layout(SAMPLE_KEY)
             .unwrap_or_else(|| default_layout(SAMPLE_KEY));
         let (area, skin) = DockSkin::dock_area("workbench", None, window, cx);
         let center = DockLayout::tabs().panel_view(panel_handle(overview.clone()), cx);
         let left = DockLayout::tabs().panel_view(panel_handle(explorer.clone()), cx);
-        let right = DockLayout::tabs().panel_view(panel_handle(inspector), cx);
+        let right = DockLayout::tabs().panel_view(panel_handle(inspector.clone()), cx);
         let below = DockLayout::tabs().panel_view(panel_handle(bottom), cx);
         let saved = area.update(cx, |area, cx| {
             area.set_center(center, window, cx);
@@ -273,6 +281,7 @@ impl Workbench {
             names,
             actor: local::actor(),
             explorer,
+            inspector,
             filter,
             area,
             tabs: HashMap::from([(OVERVIEW, overview)]),
@@ -289,6 +298,7 @@ impl Workbench {
             license: None,
             asking: false,
             leaving: false,
+            settings,
             settings_path,
             saved: Some(saved),
             _skin: skin,
@@ -306,6 +316,105 @@ impl Workbench {
     /// The workspace shown.
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    /// Whether the opt-in read-only developer JSON source toggle is enabled.
+    #[must_use]
+    pub fn developer_source_view(&self) -> bool {
+        self.settings.developer_source_view
+    }
+
+    /// Visible columns for `table` according to the loaded user settings.
+    pub(super) fn visible_columns_for(&self, table: TableId) -> Vec<&'static ColumnSpec> {
+        self.settings.visible_columns(table)
+    }
+
+    fn refresh_tables(
+        &self,
+        only: Option<TableId>,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        let dev_source = self.developer_source_view();
+        let updates: Vec<_> = self
+            .tabs
+            .iter()
+            .filter_map(|(&k, t)| match &t.body {
+                Body::Table(e) if skip != Some(e.entity_id()) => {
+                    let tbl = e.read(cx).table();
+                    if only.is_some_and(|want| want != tbl) {
+                        return None;
+                    }
+                    let title = self.table_title(k, tbl);
+                    Some((e.clone(), title, self.visible_columns_for(tbl)))
+                }
+                _ => None,
+            })
+            .collect();
+        for (e, title, cols) in updates {
+            e.update(cx, |t, cx| {
+                t.refresh(title, &self.workspace, cols, dev_source, skip, cx)
+            });
+        }
+    }
+
+    /// Shows or hides column `key` of `table`, persists the choice, and
+    /// refreshes every open [`TableTab`] for `table` except `skip`.
+    pub(super) fn set_table_column_visible_skipping(
+        &mut self,
+        table: TableId,
+        key: &str,
+        visible: bool,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.set_column_visible(table, key, visible);
+        if let Some(path) = &self.settings_path {
+            let mut disk = Settings::load(path);
+            disk.set_column_visible(table, key, visible);
+            let _ = disk.save(path);
+        }
+        self.refresh_tables(Some(table), skip, cx);
+        cx.notify();
+    }
+
+    /// Shows or hides column `key` of `table`, persists the setting, and
+    /// refreshes every open [`TableTab`] of that table.
+    pub fn set_table_column_visible(
+        &mut self,
+        table: TableId,
+        key: &str,
+        visible: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_table_column_visible_skipping(table, key, visible, None, cx);
+    }
+
+    /// Localized title for a table folder tab, falling back to the pack or
+    /// catalog title when `key` is absent from `ExplorerIndex`.
+    pub(super) fn table_title(&self, key: ExplorerKey, table: TableId) -> SharedString {
+        if let Some(row) = self.row(key) {
+            return SharedString::from(row.label);
+        }
+        match table {
+            TableId::Assets => self.names.asset.plural.to_string().into(),
+            TableId::Damage => self.names.damage_scenario.plural.to_string().into(),
+            TableId::Threats => self.names.threat_scenario.plural.to_string().into(),
+            TableId::Risks => self.catalog.tr("explorer-risk-treatment").into(),
+            TableId::Controls => self.names.security_control.plural.to_string().into(),
+            TableId::Goals => self.names.cybersecurity_goal.plural.to_string().into(),
+            TableId::Claims => self.names.cybersecurity_claim.plural.to_string().into(),
+            TableId::Problems => self.catalog.tr("explorer-problems").into(),
+        }
+    }
+
+    /// The open [`TableTab`] for `key`, if any (normalizing shared keys such as `Problems`).
+    #[must_use]
+    pub fn table_tab(&self, key: ExplorerKey) -> Option<Entity<TableTab>> {
+        match self.tabs.get(&shared(key)).map(|t| &t.body) {
+            Some(Body::Table(e)) => Some(e.clone()),
+            _ => None,
+        }
     }
 
     /// The explorer tree of the workspace.
@@ -336,6 +445,31 @@ impl Workbench {
         &self.area
     }
 
+    /// The right-hand relation-backed inspector dock panel.
+    pub fn inspector(&self) -> &Entity<InspectorPanel> {
+        &self.inspector
+    }
+
+    /// Updates the inspector selection, skipping the inspector entity when its
+    /// [`gpui::EntityId`] matches `skip`.
+    pub fn select_element_skipping(
+        &mut self,
+        sel: Option<Selection>,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        if Some(self.inspector.entity_id()) != skip {
+            self.inspector.update(cx, |i, cx| {
+                i.set_selection(sel, self.workspace.project(), &self.names, skip, cx);
+            });
+        }
+    }
+
+    /// Updates the inspector selection.
+    pub fn select_element(&mut self, sel: Option<Selection>, cx: &mut Context<Self>) {
+        self.select_element_skipping(sel, None, cx);
+    }
+
     /// The component being moved with the keyboard, if any.
     pub fn picked(&self) -> Option<ExplorerKey> {
         self.picked.as_ref().map(|(k, _)| *k)
@@ -353,6 +487,9 @@ impl Workbench {
     pub fn select(&mut self, key: ExplorerKey, cx: &mut Context<Self>) {
         self.state.select(key);
         self.show_rows(cx);
+        if let ExplorerKey::Element(_, _, sel) = key {
+            self.select_element(Some(sel), cx);
+        }
     }
 
     /// Selects the first row of `sel` and opens its ancestors.
@@ -374,6 +511,28 @@ impl Workbench {
         if matches!(key, ExplorerKey::System(_) | ExplorerKey::Unassigned) {
             self.toggle(key, cx);
             return;
+        }
+        if !self.tabs.contains_key(&key)
+            && let ExplorerKey::Folder(owner, folder) = key
+            && let Some(table_id) = table_for_folder(folder)
+        {
+            let title = self.table_title(key, table_id);
+            let cols = self.visible_columns_for(table_id);
+            let dev_source = self.developer_source_view();
+            let (cat, wb, ws) = (Rc::clone(&self.catalog), cx.weak_entity(), &self.workspace);
+            let t = cx.new(|cx| {
+                TableTab::new(
+                    title, table_id, owner, ws, cols, dev_source, cat, wb, window, cx,
+                )
+            });
+            let handle = panel_handle(t.clone());
+            self.tabs.insert(
+                key,
+                Tab {
+                    handle,
+                    body: Body::Table(t),
+                },
+            );
         }
         if !self.tabs.contains_key(&key) {
             let Some((title, lines)) = self.content(key) else {
@@ -452,9 +611,21 @@ impl Workbench {
         Some((title, if lines.is_empty() { empty() } else { lines }))
     }
 
-    /// Rebuilds the tree and every open tab after the project changed.
-    pub(super) fn changed(&mut self, res: Result<(), String>, cx: &mut Context<Self>) {
-        self.note = res.err();
+    /// Sets or clears the transient status-bar note.
+    pub(super) fn set_note(&mut self, note: Option<String>, cx: &mut Context<Self>) {
+        self.note = note;
+        cx.notify();
+    }
+
+    /// Rebuilds the tree and every open tab after the project changed,
+    /// skipping any child entity whose id matches `skip`.
+    pub(super) fn changed_skipping(
+        &mut self,
+        res: Result<(), String>,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_note(res.err(), cx);
         self.index = ExplorerIndex::build(&self.workspace, &self.names, &self.catalog, &self.name);
         let updates: Vec<_> = self
             .tabs
@@ -463,12 +634,83 @@ impl Workbench {
             .collect();
         for ((title, lines), body) in updates {
             match body {
-                Body::Overview(_) => {}
-                Body::List(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
-                Body::Element(e) => e.update(cx, |t, cx| t.set(title, None, lines, cx)),
+                Body::Overview(_) | Body::Table(_) => {}
+                Body::List(e) if skip != Some(e.entity_id()) => {
+                    e.update(cx, |t, cx| t.set(title, None, lines, cx));
+                }
+                Body::Element(e) if skip != Some(e.entity_id()) => {
+                    e.update(cx, |t, cx| t.set(title, None, lines, cx));
+                }
+                Body::List(_) | Body::Element(_) => {}
             }
         }
-        self.show_rows(cx);
+        self.refresh_tables(None, skip, cx);
+        if skip != Some(self.explorer.entity_id()) {
+            self.show_rows(cx);
+        }
+        if Some(self.inspector.entity_id()) != skip {
+            let cur = self.inspector.read(cx).selection();
+            self.inspector.update(cx, |i, cx| {
+                i.set_selection(cur, self.workspace.project(), &self.names, skip, cx);
+            });
+        }
+    }
+
+    /// Rebuilds the tree and every open tab after the project changed.
+    pub(super) fn changed(&mut self, res: Result<(), String>, cx: &mut Context<Self>) {
+        self.changed_skipping(res, None, cx);
+    }
+
+    /// Applies `edit` to the workspace and refreshes open views, skipping
+    /// any child entity whose id matches `skip`.
+    pub fn apply_edit_skipping(
+        &mut self,
+        edit: &aegis_client::commands::Edit,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.refuse_read_only(cx) {
+            return false;
+        }
+        let res = local::apply_edit(&mut self.workspace, edit, &self.actor, now_ms());
+        let ok = res.is_ok();
+        self.changed_skipping(res, skip, cx);
+        ok
+    }
+
+    /// Applies `edit` to the workspace and refreshes every open view.
+    pub fn apply_edit(
+        &mut self,
+        edit: &aegis_client::commands::Edit,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.apply_edit_skipping(edit, None, cx)
+    }
+
+    /// Reveals `sel` in the explorer, selects its first element row, opens its
+    /// element tab, and updates the inspector (respecting `skip`).
+    pub fn open_target_skipping(
+        &mut self,
+        sel: Selection,
+        skip: Option<gpui::EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.reveal(sel, cx);
+        if let Some(key) = all_rows(&self.index).into_iter().find_map(|r| match r.key {
+            key @ ExplorerKey::Element(_, _, s) if s == sel => Some(key),
+            _ => None,
+        }) {
+            self.state.select(key);
+            self.show_rows(cx);
+            self.open(key, window, cx);
+        }
+        self.select_element_skipping(Some(sel), skip, cx);
+    }
+
+    /// Reveals `sel` in the explorer and opens its element tab.
+    pub fn open_target(&mut self, sel: Selection, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_target_skipping(sel, None, window, cx);
     }
 
     /// Drops `dragged` on `target`: moves a component to another system.
@@ -573,6 +815,10 @@ impl Workbench {
             "next-tab" => self.step_tab(1, window, cx),
             "previous-tab" => self.step_tab(-1, window, cx),
             "toggle-theme" => self.toggle_theme(window, cx),
+            "toggle-developer-source" => self.toggle_developer_source(cx),
+            "grid-copy" | "grid-add-row" | "grid-delete-rows" | "grid-fill-down" | "grid-paste" => {
+                self.run_grid_command(id, window, cx)
+            }
             "reset-layout" => {
                 let layout = default_layout(SAMPLE_KEY);
                 self.area
@@ -618,6 +864,83 @@ impl Workbench {
         found
     }
 
+    fn active_table_tab(&self, cx: &App) -> Option<Entity<TableTab>> {
+        let (panels, at) = self.center_tabs(cx)?;
+        let id = *panels.get(at)?;
+        self.tabs
+            .values()
+            .find(|t| t.handle.panel_id(cx) == id)
+            .and_then(|t| match &t.body {
+                Body::Table(e) => Some(e.clone()),
+                _ => None,
+            })
+    }
+
+    fn run_grid_command(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_table_tab(cx) else {
+            return;
+        };
+        if !tab.read(cx).can_run_grid_command() {
+            return;
+        }
+        match id {
+            "grid-copy" => {
+                let _ = tab.update(cx, |t, cx| t.copy_selection(cx));
+            }
+            "grid-add-row" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                match tab.read(cx).prepare_add_row(self.workspace.project()) {
+                    Ok((edit, added)) => {
+                        if self.apply_edit(&edit, cx) {
+                            let p = self.workspace.project();
+                            tab.update(cx, |t, cx| t.focus_added_row_with(added, p, window, cx));
+                        }
+                    }
+                    Err(e) => self.set_note(Some(e.to_string()), cx),
+                }
+            }
+            "grid-delete-rows" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                if let Some(edit) = tab.read(cx).prepare_delete_selected() {
+                    self.apply_edit(&edit, cx);
+                }
+            }
+            "grid-fill-down" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                match tab.read(cx).prepare_fill_down(self.workspace.project()) {
+                    Ok(edit) => {
+                        self.apply_edit(&edit, cx);
+                    }
+                    Err(e) => self.set_note(Some(e.to_string()), cx),
+                }
+            }
+            "grid-paste" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                let Some(tsv) = cx.read_from_clipboard().and_then(|i| i.text()) else {
+                    return;
+                };
+                match tab
+                    .read(cx)
+                    .prepare_paste_tsv(self.workspace.project(), &tsv)
+                {
+                    Ok(edit) => {
+                        self.apply_edit(&edit, cx);
+                    }
+                    Err(e) => self.set_note(Some(e.to_string()), cx),
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Shows the tab `step` places right (negative: left), wrapping round.
     fn step_tab(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
         let Some((panels, at)) = self.center_tabs(cx) else {
@@ -648,6 +971,7 @@ impl Workbench {
         match tab.map(|t| &t.body) {
             Some(Body::Overview(e)) => remove(area, e, window, cx),
             Some(Body::List(e)) => remove(area, e, window, cx),
+            Some(Body::Table(e)) => remove(area, e, window, cx),
             Some(Body::Element(e)) => remove(area, e, window, cx),
             None => {}
         }
@@ -668,6 +992,21 @@ impl Workbench {
                 eprintln!("could not save the appearance: {err}");
             }
         }
+        cx.notify();
+    }
+
+    /// Toggles the opt-in read-only developer JSON source view and persists
+    /// the preference when a settings file is configured.
+    fn toggle_developer_source(&mut self, cx: &mut Context<Self>) {
+        self.settings.developer_source_view = !self.settings.developer_source_view;
+        if let Some(path) = &self.settings_path {
+            let mut settings = Settings::load(path);
+            settings.developer_source_view = self.settings.developer_source_view;
+            if let Err(err) = settings.save(path) {
+                eprintln!("could not save the developer source view setting: {err}");
+            }
+        }
+        self.refresh_tables(None, None, cx);
         cx.notify();
     }
 
@@ -948,5 +1287,115 @@ impl Render for Workbench {
                     .child(status),
             )
             .children(layer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use aegis_client::commands::Edit;
+    use aegis_client::i18n::Language;
+
+    use super::*;
+
+    #[gpui::test]
+    fn apply_edit_skipping_avoids_double_lease_and_refreshes_siblings(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let catalog = Rc::new(Catalog::load(Language::En));
+        let (wb, vcx) = cx.add_window_view(|window, cx| {
+            Workbench::new(Rc::clone(&catalog), Appearance::Light, None, window, cx)
+        });
+        let Some(asset) = vcx.read_entity(&wb, |w, _| {
+            w.workspace().project().assets().next().map(|(_, id, _)| id)
+        }) else {
+            panic!("sample project must contain an asset");
+        };
+
+        // Open both an element tab and its parent folder list tab so all three skip arms are live.
+        wb.update_in(vcx, |w, window, cx| {
+            w.open_target(Selection::Asset(asset), window, cx);
+            if let Some(ExplorerKey::Element(owner, folder, _)) = w.state.selected {
+                w.open(ExplorerKey::Folder(owner, folder), window, cx);
+            }
+        });
+
+        let (elem_tab, list_tab, explorer) = vcx.read_entity(&wb, |w, _| {
+            let elem = w.tabs.values().find_map(|t| match &t.body {
+                Body::Element(e) => Some(e.clone()),
+                _ => None,
+            });
+            let list = w.tabs.values().find_map(|t| match &t.body {
+                Body::Table(e) => Some(e.clone()),
+                _ => None,
+            });
+            (elem, list, w.explorer.clone())
+        });
+        let (Some(elem_tab), Some(list_tab)) = (elem_tab, list_tab) else {
+            panic!("both element and list tabs must be open");
+        };
+
+        let hits = [
+            Rc::new(Cell::new(0usize)),
+            Rc::new(Cell::new(0usize)),
+            Rc::new(Cell::new(0usize)),
+        ];
+        let _subs = vcx.update(|_, cx| {
+            let [eh, lh, xh] = hits.clone();
+            [
+                cx.observe(&elem_tab, move |_, _| eh.set(eh.get() + 1)),
+                cx.observe(&list_tab, move |_, _| lh.set(lh.get() + 1)),
+                cx.observe(&explorer, move |_, _| xh.set(xh.get() + 1)),
+            ]
+        });
+        let rename = |name: &str| Edit::RenameAsset {
+            asset,
+            name: name.into(),
+        };
+        let reset = || hits.iter().for_each(|h| h.set(0));
+        let has_row = |vcx: &gpui::VisualTestContext, needle: &str| {
+            vcx.read_entity(&explorer, |p, _| {
+                p.rows().iter().any(|r| r.label.contains(needle))
+            })
+        };
+
+        // 1. Inside ElementTab::update skipping elem_tab.
+        let id = elem_tab.entity_id();
+        assert!(elem_tab.update(vcx, |_, cx| {
+            wb.update(cx, |w, cx| {
+                w.apply_edit_skipping(&rename("Skip Elem"), Some(id), cx)
+            })
+        }));
+        vcx.run_until_parked();
+        assert_eq!(hits[0].get(), 0);
+        assert!(hits[1].get() > 0 && hits[2].get() > 0 && has_row(vcx, "Skip Elem"));
+
+        // 2. Inside ListTab::update skipping list_tab.
+        reset();
+        let id = list_tab.entity_id();
+        assert!(list_tab.update(vcx, |_, cx| {
+            wb.update(cx, |w, cx| {
+                w.apply_edit_skipping(&rename("Skip List"), Some(id), cx)
+            })
+        }));
+        vcx.run_until_parked();
+        assert_eq!(hits[1].get(), 0);
+        assert!(hits[0].get() > 0 && hits[2].get() > 0 && has_row(vcx, "Skip List"));
+
+        // 3. Inside ExplorerPanel::update skipping explorer.
+        reset();
+        let id = explorer.entity_id();
+        assert!(explorer.update(vcx, |_, cx| {
+            wb.update(cx, |w, cx| {
+                w.apply_edit_skipping(&rename("Skip Explorer"), Some(id), cx)
+            })
+        }));
+        vcx.run_until_parked();
+        assert_eq!(hits[2].get(), 0);
+        assert!(hits[0].get() > 0 && hits[1].get() > 0);
+        assert!(has_row(vcx, "Skip List") && !has_row(vcx, "Skip Explorer"));
     }
 }

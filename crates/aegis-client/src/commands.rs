@@ -143,6 +143,13 @@ pub enum Edit {
         /// On or off.
         on: bool,
     },
+    /// Replaces an asset's security properties in one step (must be non-empty).
+    SetAssetProperties {
+        /// The asset.
+        asset: AssetId,
+        /// Positions in the methodology's properties.
+        properties: Vec<usize>,
+    },
     /// Binds an asset to a component in the item definition, or unbinds it.
     SetAssetComponent {
         /// The asset.
@@ -1518,6 +1525,20 @@ impl Edit {
                         .filter(|q| *q != prop)
                         .fold(PropertySet::default(), PropertySet::with)
                 };
+                if set.is_empty() {
+                    return Err(EditError::NoProperties);
+                }
+                vec![Op::SetAssetProperties {
+                    id: *asset,
+                    properties: set,
+                    provenance: p,
+                }]
+            }
+            Edit::SetAssetProperties { asset, properties } => {
+                let mut set = PropertySet::default();
+                for &i in properties {
+                    set = set.with(m.properties().nth(i).ok_or(EditError::UnknownChoice)?);
+                }
                 if set.is_empty() {
                     return Err(EditError::NoProperties);
                 }
@@ -2952,6 +2973,19 @@ impl Edit {
                     _ => false,
                 }
             }
+            Edit::SetAssetProperties { asset, properties } => {
+                let Some(a) = project.asset_idx(asset).and_then(|i| project.asset(i)) else {
+                    return false;
+                };
+                let mut set = PropertySet::default();
+                for &i in properties {
+                    let Some(prop) = m.properties().nth(i) else {
+                        return false;
+                    };
+                    set = set.with(prop);
+                }
+                !set.is_empty() && a.properties() == set
+            }
             Edit::SetImpact {
                 damage,
                 category,
@@ -3056,7 +3090,9 @@ impl Edit {
             Edit::RemoveThreat { .. } => ("remove", "threat scenarios"),
             Edit::RemoveControl { .. } => ("remove", "security controls"),
             Edit::SetTreatment { .. } => ("set treatment of", "threat scenarios"),
-            Edit::SetAssetProperty { .. } => ("change properties of", "assets"),
+            Edit::SetAssetProperty { .. } | Edit::SetAssetProperties { .. } => {
+                ("change properties of", "assets")
+            }
             Edit::SetImpact { .. } => ("rate", "damage scenarios"),
             Edit::SetThreatGoal { .. } => ("set goal of", "threat scenarios"),
             Edit::SetThreatClaim { .. } => ("set claim of", "threat scenarios"),

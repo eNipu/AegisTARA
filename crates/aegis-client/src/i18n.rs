@@ -118,6 +118,7 @@ fn strip_bidi_controls(text: &str) -> String {
 
 /// A loaded Fluent catalog for one language.
 pub struct Catalog {
+    language: Language,
     bundle: FluentBundle<FluentResource>,
 }
 
@@ -140,7 +141,13 @@ impl Catalog {
         bundle
             .add_resource(resource)
             .expect("the bundled Fluent catalog loads");
-        Catalog { bundle }
+        Catalog { language, bundle }
+    }
+
+    /// The language this catalog was loaded for.
+    #[must_use]
+    pub const fn language(&self) -> Language {
+        self.language
     }
 
     /// Looks up a message with no arguments. Missing keys return the key in
