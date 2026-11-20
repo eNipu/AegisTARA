@@ -16,7 +16,7 @@ Owner rule (2026-11-18): this group comes before every other open line; only the
 - [x] Workbench skeleton (owner 2026-11-18: go ahead before Q6 and the mockup sign-off): crate `aegis-workbench`, docks, the project explorer (pgAdmin-style tree with counts, marks, drag and drop, `docs/design/project-explorer.md`), command palette and one command table, themes from the new palette, keyboard (WBX-02 to WBX-04, WBX-10, WBX-11) (182-workbench-skeleton)
 - [x] Sign-in and project list in GPUI (owner 2026-11-18: next GUI job): server choice, company sign-in, user name and password, standalone folder and license, the five connection states, the project list and new workspace (208-gpui-sign-in)
 - [x] Grids (owner 2026-11-19: next GUI job): every element table from `ColumnSpec`, inline edit, multi-cell edit, fill down, paste from Excel, column filters, link chips, the multi-link picker (WBX-07, UI-14, UI-15) (189-table-tabs)
-- [design] Inspector with explain-why and go to cause (WBX-06) (188-inspector)
+- [x] Inspector with explain-why and go to cause (owner 2026-11-20: next GUI job): (WBX-06) (188-inspector)
 - [design] Attack tree canvas tab with the right-click menu and keyboard (WBX-05) (187-tree-tab)
 - [design] Item definition per system: one Markdown editor component for every text (live mode, toolbar, `@` mentions, source toggle; owner Q3), free figures later (owner Q4), functions, assumptions, the schematic block-diagram editor where boxes are components (195-item-tab, with 193 and 194)
 - [design] Bottom dock: problems, changes, task output (WBX-09) (191-bottom-dock)

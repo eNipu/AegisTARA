@@ -2833,6 +2833,54 @@
       ],
       "decision": null,
       "updated": "2026-11-20T11:02:50Z"
+    },
+    {
+      "id": "188-inspector",
+      "title": "Inspector with explain-why and go to cause",
+      "branch": "factory/188-inspector",
+      "stage": "merged",
+      "slice": "188c",
+      "base": "a8c20c28a50feef8c0809d37a4c38450434a8eb4",
+      "reviews": {
+        "slice": "188c",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "188a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 538
+        },
+        {
+          "slice": "188b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 501
+        },
+        {
+          "slice": "188c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "sonnet",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 467
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-20T12:24:40Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
