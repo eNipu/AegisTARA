@@ -13,6 +13,7 @@ Rules that hold for every slice:
 - Before any cargo command, run `export CARGO_TARGET_DIR="$(git rev-parse --git-common-dir)/../target"`
   so the worktree reuses the main checkout's build folder instead of filling its own.
 - Read what the prompt lists and what you need to compile. Do not explore the repository.
+- **Token efficiency (target ≤20 turns):** Read all `"Read first"` files/line ranges in a single parallel batch on Turn 1 (never read entire large files when a line range is given). Batch edits/writes in parallel. Chain `cargo fmt --all && scripts/ci.sh ...` in one command instead of running many incremental `cargo check` turns.
 - Never touch `.claude/`, `factory/verify.py`, `factory/lessons.md`, `scripts/`, `.github/` or
   `deny.toml`. Never touch `master`. Never push.
 - No `unwrap` or `expect` in library code, no `unsafe`, no new dependency unless the prompt says so.

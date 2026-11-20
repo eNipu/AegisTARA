@@ -30,3 +30,18 @@ EGM defaults to `docs/designs/`, whereas AegisTARA keeps existing paths fixed (d
 - `*.md` files are listed in `NOT_COUNTED` in `factory/verify.py`, so documentation does not consume `max_lines`. However, `egm-bootstrap-orchestrator` README refreshes and project-level drift fixes must be committed separately from feature slices so they stay within each slice's `allow` list.
 - Run Goldfish personas **sequentially (one at a time)** when quota is constrained, matching `/factory`'s "one agent at a time" rule.
 - Never auto-apply adversarial architectural changes from Tier 1 reviews without owner approval if they alter a decision in `docs/decisions.md`, a file/snapshot format, licensing, or security boundaries.
+
+## Token & quota optimization
+
+Empirical profiling of `189-table-tabs` (10 completed slices, 902 LLM turns, ~229 MB cumulative context) showed where tokens actually burn:
+- **Builders: 59.3%** (over-slicing into 14 micro-slices + 40–60 sequential turns per builder at 250–450 kB context).
+- **EGM Spec Audit: 16.8%** (`egm-codebase-details` alone burned 30.4 MB / 1.5 MB context by reading 32 large file chunks across 9 prompts in one session).
+- **Planner: 13.4%** (3 runs due to initial size/API misses).
+- **Reviewers: 10.5%** (10–32 sequential turns re-reading surrounding files).
+
+Enforced optimizations:
+1. **Lean EGM Spec Audit (≤15 turns, `grep` + narrow `<= 80`-line slices only):** Never read full 800-line files in `egm-codebase-details`. Verify referenced symbols/signatures via `grep` and targeted 40–80 line reads, batched in parallel. Run `egm-implementation-readiness` on a fast/light model (`flash`).
+2. **Batch tool calls in builders (target ≤20 turns) and reviewers (target ≤5 turns):** Read all `"Read first"` files in a single parallel batch on Turn 1; batch file writes/edits; chain `cargo fmt --all && scripts/ci.sh ...` in one shell command instead of repeated `cargo check` turns.
+3. **Model tiering by role and risk:** Use the top model for `planner`, `egm-codebase-details` (strictly read-bounded), `hard`/`high`-risk `builder`, and `high`-risk `reviewer`. Use a faster/lighter model (`flash`) for `egm-implementation-readiness`, `normal`-risk `reviewer`, and `small` mechanical slices.
+4. **Avoid micro-slicing:** Keep jobs to 3–7 cohesive slices rather than 12–15 micro-slices so builders and reviewers do not repeatedly cold-start on the same files.
+

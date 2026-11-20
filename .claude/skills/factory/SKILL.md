@@ -80,16 +80,18 @@ factory/worktrees/<job-id>/                 the job's git worktree (gitignored)
 
 ## Which model runs what
 
-Pass `model` on every spawn; it overrides the agent file.
+Pass `model` on every spawn; it overrides the agent file. Tier models by risk/role to protect
+quota (see `docs/egm-workflow.md` — builders and un-bounded EGM reads are ~76% of token burn):
 
-| Agent | Model |
-|---|---|
-| planner | opus |
-| builder | opus |
-| reviewer | opus |
-
-Owner directive 2026-11-17: Opus for every agent, every tier and risk. This replaces the
-2026-11-16/17 opencode-go model choice.
+| Role / Stage | Model tier | Turn / read budget |
+|---|---|---|
+| `planner` | top (`opus` / `inherit`) | Batch reads; narrow `grep` + line ranges |
+| `egm-codebase-details` | top (`opus` / `inherit`) | **≤15 turns**; `grep` + `<=80`-line reads only (never whole files) |
+| `egm-implementation-readiness` | fast (`flash` / `sonnet`) | **≤8 turns**; reads only `spec.md`, `plan.json`, `prompts/` |
+| `builder` (`hard` or `high` risk) | top (`opus` / `inherit`) | **≤25 turns**; parallel reads/edits, chained cargo check |
+| `builder` (`standard` / `small`) | `pro` / `flash` | **≤20 turns**; parallel reads/edits, chained cargo check |
+| `reviewer` (`high` risk) | top (`opus` / `inherit`) | **≤6 turns**; parallel read of prompt/build/gate/diff |
+| `reviewer` (`normal` risk) | fast (`flash` / `sonnet`) | **≤5 turns**; parallel read of prompt/build/gate/diff |
 
 **Outside models:** a build prompt is a complete task on its own, so the owner can run
 `factory/jobs/<job-id>/prompts/<slice>.md` in any other session or tool, inside
