@@ -1,7 +1,5 @@
 //! Keyboard navigation, inline cell editors, and multi-cell commits for [`TableTab`].
 
-use std::rc::Rc;
-
 use aegis_client::explorer::{ExplorerKey, Folder};
 use aegis_client::grid::{self, CellEditorKind, CellInput, GridSelection};
 use aegis_client::pages::vocabulary_for_lang;
@@ -96,22 +94,18 @@ impl TableTab {
         skip: Option<EntityId>,
         cx: &mut Context<Self>,
     ) {
-        match &self.editor {
-            Some(ActiveEditor::LinkPicker { view, .. }) => {
-                if Some(view.entity_id()) != skip
-                    && let Some(p) = project
-                {
-                    let view = view.clone();
-                    view.update(cx, |v, cx| v.refresh(p, cx));
-                }
+        if let Some(ActiveEditor::LinkPicker { view, .. }) = &self.editor {
+            if Some(view.entity_id()) != skip
+                && let Some(p) = project
+            {
+                let view = view.clone();
+                view.update(cx, |v, cx| v.refresh(p, cx));
             }
-            Some(ed) => {
-                let (r, c) = ed.pos();
-                if r >= self.filtered_indices.len() || c >= self.visible_cols.len() {
-                    self.editor = None;
-                }
+        } else if let Some(ed) = &self.editor {
+            let (r, c) = ed.pos();
+            if r >= self.filtered_indices.len() || c >= self.visible_cols.len() {
+                self.editor = None;
             }
-            None => {}
         }
     }
 
@@ -120,11 +114,10 @@ impl TableTab {
         let project = {
             let w = wb.read(cx);
             let key = ExplorerKey::Folder(self.owner, folder_for(self.table));
-            let cols = w.visible_columns_for(self.table);
             self.apply_refresh(
                 w.table_title(key, self.table),
                 w.workspace(),
-                cols,
+                w.visible_columns_for(self.table),
                 w.developer_source_view(),
             );
             self.active_link_picker()
@@ -192,15 +185,15 @@ impl TableTab {
                 }
             }
             K::SingleChoice {
-                options: o,
-                selected: s,
-                allow_clear: c,
+                options,
+                selected,
+                allow_clear,
             } => E::SingleChoice {
                 row,
                 col,
-                options: o,
-                selected: s,
-                allow_clear: c,
+                options,
+                selected,
+                allow_clear,
             },
             K::MultiChoice { options } => E::MultiChoice { row, col, options },
             K::ImpactRatings { categories } => E::ImpactRatings {
@@ -213,7 +206,7 @@ impl TableTab {
                     return false;
                 };
                 let (cat, wb, me) = (
-                    Rc::clone(&self.catalog),
+                    self.catalog.clone(),
                     self.workbench.clone(),
                     cx.weak_entity(),
                 );
@@ -240,20 +233,18 @@ impl TableTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.source_mode {
-            return false;
-        }
-        self.prepare_cell(project)
-            .is_some_and(|p| self.open_editor_kind(p, window, cx))
+        !self.source_mode
+            && self
+                .prepare_cell(project)
+                .is_some_and(|p| self.open_editor_kind(p, window, cx))
     }
 
     /// Opens the inline editor for the active cell, refusing in read-only mode.
     pub fn start_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(wb) = self.edit_workbench(cx) else {
-            return false;
-        };
-        let prepared = self.prepare_cell(wb.read(cx).workspace().project());
-        prepared.is_some_and(|p| self.open_editor_kind(p, window, cx))
+        self.edit_workbench(cx).is_some_and(|wb| {
+            let p = self.prepare_cell(wb.read(cx).workspace().project());
+            p.is_some_and(|p| self.open_editor_kind(p, window, cx))
+        })
     }
 
     /// Closes any active inline editor without committing and restores focus.
@@ -287,10 +278,7 @@ impl TableTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(wb) = self.edit_workbench(cx) else {
-            return false;
-        };
-        let Some(sel) = self.selection else {
+        let (Some(wb), Some(sel)) = (self.edit_workbench(cx), self.selection) else {
             return false;
         };
         let col_ix = self.editor.as_ref().map_or(sel.active_col, |e| e.pos().1);
@@ -339,14 +327,11 @@ impl TableTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if key == "escape" {
-            if self.editor.is_some() {
-                self.cancel_edit(window, cx);
-                return true;
-            }
-            return false;
+        if key == "escape" && self.is_editing() {
+            self.cancel_edit(window, cx);
+            return true;
         }
-        if self.editor.is_some() || self.source_mode || self.filter_col.is_some() {
+        if key == "escape" || self.is_editing() || self.source_mode || self.filter_col.is_some() {
             return false;
         }
         match key {
@@ -407,21 +392,11 @@ impl TableTab {
         };
         let th = cx.theme();
         let heading = self.headings.get(*col).cloned().unwrap_or_default();
-        let header = h_flex()
-            .justify_between()
-            .px_2()
-            .py_1()
-            .bg(th.title_bar)
-            .border_b_1()
-            .border_color(th.border)
-            .child(div().text_xs().font_semibold().child(heading))
-            .child(
-                Button::new("table-editor-close")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Close)
-                    .on_click(cx.listener(|this, _, w, cx| this.cancel_edit(w, cx))),
-            );
+        let close = Button::new("table-editor-close")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Close)
+            .on_click(cx.listener(|this, _, w, cx| this.cancel_edit(w, cx)));
         Some(
             v_flex()
                 .id("table-editor-overlay")
@@ -435,7 +410,17 @@ impl TableTab {
                 .rounded_md()
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(header)
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .px_2()
+                        .py_1()
+                        .bg(th.title_bar)
+                        .border_b_1()
+                        .border_color(th.border)
+                        .child(div().text_xs().font_semibold().child(heading))
+                        .child(close),
+                )
                 .child(div().p_2().child(view.clone()))
                 .into_any_element(),
         )
