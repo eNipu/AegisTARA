@@ -18,7 +18,7 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div, px,
 };
-use gpui_component::input::{InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
@@ -26,6 +26,7 @@ use gpui_component::{
 
 use super::color;
 use super::panels::dock_panel;
+use super::table_edit::ActiveEditor;
 use super::workbench::Workbench;
 use crate::theme::{Tokens, dark, light};
 
@@ -123,6 +124,7 @@ pub struct TableTab {
     pub(super) filters: TableFilters,
     pub(super) filtered_indices: Vec<usize>,
     pub(super) selection: Option<GridSelection>,
+    pub(super) editor: Option<ActiveEditor>,
     pub(super) chooser_open: bool,
     pub(super) filter_col: Option<&'static str>,
     pub(super) filter_input: Entity<InputState>,
@@ -184,6 +186,7 @@ impl TableTab {
             filters,
             filtered_indices,
             selection: None,
+            editor: None,
             chooser_open: false,
             filter_col: None,
             filter_input,
@@ -237,10 +240,11 @@ impl TableTab {
         ws: &Workspace,
         visible_cols: Vec<&'static ColumnSpec>,
         developer_source_enabled: bool,
-        _skip: Option<EntityId>,
+        skip: Option<EntityId>,
         cx: &mut Context<Self>,
     ) {
         self.apply_refresh(title, ws, visible_cols, developer_source_enabled);
+        self.sync_editor_on_refresh(Some(ws.project()), skip, cx);
         cx.notify();
     }
 
@@ -313,7 +317,7 @@ impl TableTab {
     /// Whether the `"Grid"` key context is active for this tab.
     #[must_use]
     pub fn grid_keys_active(&self) -> bool {
-        !self.source_mode && self.filter_col.is_none()
+        !self.is_editing() && !self.source_mode && self.filter_col.is_none()
     }
 
     fn select_cell(
@@ -331,13 +335,7 @@ impl TableTab {
         }
         self.clamp_selection();
         window.focus(&self.focus_handle, cx);
-        let target = self.displayed_row(vis_row).and_then(|r| r.target);
-        let my_id = cx.entity_id();
-        if let Some(wb) = self.workbench.upgrade() {
-            wb.update(cx, |w, cx| {
-                w.select_element_skipping(target, Some(my_id), cx);
-            });
-        }
+        self.sync_workbench_selection(cx);
         cx.notify();
     }
 
@@ -477,6 +475,19 @@ impl TableTab {
         } else {
             content
         };
+        let body = match &self.editor {
+            Some(ActiveEditor::Text {
+                row: er,
+                col: ec,
+                input,
+                ..
+            }) if *er == vis_row && *ec == vis_col => div()
+                .flex_1()
+                .min_w_0()
+                .child(Input::new(input).small())
+                .into_any_element(),
+            _ => body,
+        };
         let stride = self.visible_cols.len().max(1);
         cell_box(col.width, line)
             .id(("table-cell", vis_row * stride + vis_col))
@@ -490,7 +501,16 @@ impl TableTab {
             .when(computed || row.excluded, |d| d.text_color(muted))
             .when(active, |d| d.border_1().border_color(accent))
             .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
+                if let Some(ed) = &this.editor {
+                    if ed.pos() == (vis_row, vis_col) {
+                        return;
+                    }
+                    this.cancel_edit(window, cx);
+                }
                 this.select_cell(vis_row, vis_col, ev.modifiers().shift, window, cx);
+                if ev.click_count() >= 2 {
+                    this.start_edit(window, cx);
+                }
             }))
             .child(body)
     }
@@ -639,8 +659,11 @@ impl Render for TableTab {
 
         v_flex()
             .id("table-tab")
+            .relative()
             .when(self.grid_keys_active(), |d| d.key_context("Grid"))
             .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(|t, ev, w, cx| t.handle_key_event(ev, true, w, cx)))
+            .on_key_down(cx.listener(|t, ev, w, cx| t.handle_key_event(ev, false, w, cx)))
             .size_full()
             .bg(color(&t.surface))
             .text_color(color(&t.ink))
@@ -663,5 +686,6 @@ impl Render for TableTab {
                             .child(body),
                     ),
             )
+            .children(self.render_editor_overlay(cx))
     }
 }
