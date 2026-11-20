@@ -23,7 +23,7 @@ fn ids_are_unique_and_icons_are_kebab() {
         assert!(!c.icon.starts_with('-') && !c.icon.ends_with('-'));
         assert_eq!(command(c.id), Some(c));
     }
-    assert_eq!(commands().len(), 32);
+    assert_eq!(commands().len(), 33);
     assert_eq!(command("no-such-command"), None);
 }
 

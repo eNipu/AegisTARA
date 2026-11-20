@@ -67,6 +67,7 @@ command_actions! {
     "grid-copy" => GridCopy,
     "grid-paste" => GridPaste,
     "toggle-developer-source" => ToggleDeveloperSource,
+    "go-to-cause" => GoToCause,
 }
 
 /// The key binding of every command with keys, on this platform's
@@ -132,6 +133,6 @@ pub fn set_menus(catalog: &Catalog, cx: &App) {
                 "previous-tab",
             ],
         ),
-        menu(CommandGroup::Navigate.name(), &["palette"]),
+        menu(CommandGroup::Navigate.name(), &["palette", "go-to-cause"]),
     ]);
 }
