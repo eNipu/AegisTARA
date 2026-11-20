@@ -816,6 +816,9 @@ impl Workbench {
             "previous-tab" => self.step_tab(-1, window, cx),
             "toggle-theme" => self.toggle_theme(window, cx),
             "toggle-developer-source" => self.toggle_developer_source(cx),
+            "grid-copy" | "grid-add-row" | "grid-delete-rows" | "grid-fill-down" | "grid-paste" => {
+                self.run_grid_command(id, window, cx)
+            }
             "reset-layout" => {
                 let layout = default_layout(SAMPLE_KEY);
                 self.area
@@ -859,6 +862,83 @@ impl Workbench {
             }
         });
         found
+    }
+
+    fn active_table_tab(&self, cx: &App) -> Option<Entity<TableTab>> {
+        let (panels, at) = self.center_tabs(cx)?;
+        let id = *panels.get(at)?;
+        self.tabs
+            .values()
+            .find(|t| t.handle.panel_id(cx) == id)
+            .and_then(|t| match &t.body {
+                Body::Table(e) => Some(e.clone()),
+                _ => None,
+            })
+    }
+
+    fn run_grid_command(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_table_tab(cx) else {
+            return;
+        };
+        if !tab.read(cx).can_run_grid_command() {
+            return;
+        }
+        match id {
+            "grid-copy" => {
+                let _ = tab.update(cx, |t, cx| t.copy_selection(cx));
+            }
+            "grid-add-row" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                match tab.read(cx).prepare_add_row(self.workspace.project()) {
+                    Ok((edit, added)) => {
+                        if self.apply_edit(&edit, cx) {
+                            let p = self.workspace.project();
+                            tab.update(cx, |t, cx| t.focus_added_row_with(added, p, window, cx));
+                        }
+                    }
+                    Err(e) => self.set_note(Some(e.to_string()), cx),
+                }
+            }
+            "grid-delete-rows" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                if let Some(edit) = tab.read(cx).prepare_delete_selected() {
+                    self.apply_edit(&edit, cx);
+                }
+            }
+            "grid-fill-down" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                match tab.read(cx).prepare_fill_down(self.workspace.project()) {
+                    Ok(edit) => {
+                        self.apply_edit(&edit, cx);
+                    }
+                    Err(e) => self.set_note(Some(e.to_string()), cx),
+                }
+            }
+            "grid-paste" => {
+                if self.refuse_read_only(cx) {
+                    return;
+                }
+                let Some(tsv) = cx.read_from_clipboard().and_then(|i| i.text()) else {
+                    return;
+                };
+                match tab
+                    .read(cx)
+                    .prepare_paste_tsv(self.workspace.project(), &tsv)
+                {
+                    Ok(edit) => {
+                        self.apply_edit(&edit, cx);
+                    }
+                    Err(e) => self.set_note(Some(e.to_string()), cx),
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Shows the tab `step` places right (negative: left), wrapping round.

@@ -14,7 +14,9 @@ use aegis_client::view::Selection;
 use aegis_model::{AssetId, GoalId, Op, PartyId, PartyKind, Project, Provenance, RiskTreatment};
 use aegis_workbench::app::{TableTab, Workbench, apply_appearance, bind_all};
 use aegis_workbench::sample::workbench_sample;
-use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
+use gpui::{
+    AppContext as _, ClipboardItem, Entity, Focusable as _, TestAppContext, VisualTestContext,
+};
 
 fn saved_bytes(project: &Project) -> Vec<u8> {
     let mut out = Vec::new();
@@ -623,5 +625,376 @@ fn atomic_impact_ratings_stages_locally_and_undoes_in_one_step(cx: &mut TestAppC
     assert_ne!(project_bytes(&wb, vcx), before);
 
     wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+}
+
+#[gpui::test]
+fn fill_down_copies_top_row_editable_values_skips_computed_and_undoes(cx: &mut TestAppContext) {
+    let (wb, tab, vcx) = open_table(Folder::Assets, None, cx);
+    wb.update(vcx, |w, cx| {
+        assert!(w.apply_edit(
+            &Edit::AddAsset {
+                id: AssetId::new_v7(),
+                name: "Secondary CAN Bus".into(),
+                properties: vec![0],
+            },
+            cx,
+        ));
+    });
+    let props_col = col_index(&tab, "properties", vcx);
+    // Give row 0 multiple properties so row 0 and row 1 differ in both name and properties.
+    let all_props: Vec<bool> = vcx.read_entity(&wb, |w, _| {
+        let count = w.workspace().project().methodology().properties().count();
+        vec![true; count]
+    });
+    select_cell(&tab, 0, props_col, vcx);
+    assert!(tab.update_in(vcx, |t, window, cx| {
+        t.commit_input(CellInput::MultiChoice(all_props.clone()), window, cx)
+    }));
+
+    let before = project_bytes(&wb, vcx);
+    let threats_col = vcx.read_entity(&tab, |t, _| {
+        t.table()
+            .columns()
+            .iter()
+            .position(|c| c.key == "threats")
+            .unwrap()
+    });
+    let (top_id, dst_id, top_name, dst_threats_text) = vcx.read_entity(&wb, |w, cx| {
+        let t = tab.read(cx);
+        let top_row = t.displayed_row(0).unwrap();
+        let dst_row = t.displayed_row(1).unwrap();
+        let Some(Selection::Asset(top_id)) = top_row.target else {
+            panic!("row 0 must be asset");
+        };
+        let Some(Selection::Asset(dst_id)) = dst_row.target else {
+            panic!("row 1 must be asset");
+        };
+        let p = w.workspace().project();
+        let top_name = p
+            .asset(p.asset_idx(&top_id).unwrap())
+            .unwrap()
+            .name()
+            .to_owned();
+        let dst_name = p
+            .asset(p.asset_idx(&dst_id).unwrap())
+            .unwrap()
+            .name()
+            .to_owned();
+        assert_ne!(top_name, dst_name);
+        (
+            top_id,
+            dst_id,
+            top_name,
+            dst_row.cells[threats_col].text.clone(),
+        )
+    });
+
+    // Select rows 0..=1 across all visible columns (including Id and Computed).
+    let last_col = vcx.read_entity(&tab, |t, _| t.visible_columns().len() - 1);
+    tab.update(vcx, |t, cx| {
+        let mut sel = GridSelection::single(0, 0);
+        sel.extend_to(1, last_col);
+        t.set_selection(Some(sel), cx);
+    });
+
+    wb.update_in(vcx, |w, window, cx| w.run("grid-fill-down", window, cx));
+
+    vcx.read_entity(&wb, |w, cx| {
+        assert!(w.note().is_none());
+        let p = w.workspace().project();
+        let top = p.asset(p.asset_idx(&top_id).unwrap()).unwrap();
+        let dst = p.asset(p.asset_idx(&dst_id).unwrap()).unwrap();
+        assert_eq!(dst.name(), top_name);
+        assert_eq!(dst.properties(), top.properties());
+        // Computed threats column and distinct AssetId stayed intact.
+        assert_ne!(top_id, dst_id);
+        let t = tab.read(cx);
+        assert_eq!(
+            t.displayed_row(1).unwrap().cells[threats_col].text,
+            dst_threats_text
+        );
+    });
+    assert_ne!(project_bytes(&wb, vcx), before);
+
+    // Single undo restores exact prior bytes.
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+}
+
+#[gpui::test]
+fn tsv_copy_paste_reversed_selection_updates_appends_and_undoes(cx: &mut TestAppContext) {
+    let (wb, tab, vcx) = open_table(Folder::Assets, None, cx);
+    wb.update(vcx, |w, cx| {
+        assert!(w.apply_edit(
+            &Edit::AddAsset {
+                id: AssetId::new_v7(),
+                name: "Gateway Link".into(),
+                properties: vec![0],
+            },
+            cx,
+        ));
+    });
+    let before = project_bytes(&wb, vcx);
+    let name_col = col_index(&tab, "name", vcx);
+    let props_col = col_index(&tab, "properties", vcx);
+
+    // Bottom-to-top, right-to-left reversed selection covering rows 0..=1 and name..=properties.
+    tab.update(vcx, |t, cx| {
+        let mut sel = GridSelection::single(1, props_col);
+        sel.extend_to(0, name_col);
+        t.set_selection(Some(sel), cx);
+    });
+
+    wb.update_in(vcx, |w, window, cx| w.run("grid-copy", window, cx));
+    let copied = vcx.update(|_, cx| cx.read_from_clipboard().and_then(|i| i.text()));
+    let copied = copied.expect("clipboard holds copied TSV");
+    assert_eq!(copied.lines().count(), 2);
+    assert!(copied.contains('\t'));
+
+    let (row0_id, prop_label, init_count) = vcx.read_entity(&wb, |w, cx| {
+        let t = tab.read(cx);
+        let Some(Selection::Asset(id)) = t.displayed_row(0).and_then(|r| r.target) else {
+            panic!("row 0 asset");
+        };
+        let p = w.workspace().project();
+        let a0 = p.asset(p.asset_idx(&id).unwrap()).unwrap();
+        let m = p.methodology();
+        let all_props = m
+            .properties()
+            .filter_map(|prop| m.property_label(prop))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = a0;
+        (id, all_props, p.asset_count())
+    });
+
+    // Keep a reversed selection whose top-left corner is (0, name_col), and paste 4 rows
+    // (updating rows 0 and 1, plus appending 2 new assets).
+    let tsv = format!(
+        "Renamed Asset 0\t{prop_label}\nRenamed Asset 1\t{prop_label}\nAppended Asset A\t{prop_label}\nAppended Asset B\t{prop_label}\n"
+    );
+    vcx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(tsv)));
+    wb.update_in(vcx, |w, window, cx| w.run("grid-paste", window, cx));
+
+    vcx.read_entity(&wb, |w, _| {
+        assert!(w.note().is_none());
+        let p = w.workspace().project();
+        assert_eq!(p.asset_count(), init_count + 2);
+        let a0 = p.asset(p.asset_idx(&row0_id).unwrap()).unwrap();
+        assert_eq!(a0.name(), "Renamed Asset 0");
+        let names: Vec<&str> = p.assets().map(|(_, _, a)| a.name()).collect();
+        assert!(names.contains(&"Renamed Asset 1"));
+        assert!(names.contains(&"Appended Asset A"));
+        assert!(names.contains(&"Appended Asset B"));
+    });
+
+    // Single undo restores exact prior bytes!
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    // Bad TSV (unknown rating) sets wb.note() and leaves project bytes untouched.
+    let bad_tsv = "Valid Name\tNoSuchProperty_999\n";
+    vcx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(bad_tsv.into())));
+    wb.update_in(vcx, |w, window, cx| w.run("grid-paste", window, cx));
+    assert!(vcx.read_entity(&wb, |w, _| w.note().is_some()));
+    assert_eq!(project_bytes(&wb, vcx), before);
+}
+
+#[gpui::test]
+fn add_delete_rows_problems_safety_no_asset_guard_and_filtered_add(cx: &mut TestAppContext) {
+    // 1. Add row and delete rows on Damage, with single-step undo each.
+    let (wb, tab, vcx) = open_table(Folder::Damage, None, cx);
+    let before = project_bytes(&wb, vcx);
+    let init_rows = vcx.read_entity(&tab, |t, _| t.visible_row_count());
+
+    wb.update_in(vcx, |w, window, cx| w.run("grid-add-row", window, cx));
+    vcx.read_entity(&tab, |t, _| {
+        assert_eq!(t.visible_row_count(), init_rows + 1);
+        assert!(t.is_editing());
+    });
+    tab.update_in(vcx, |t, window, cx| t.cancel_edit(window, cx));
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    select_cell(&tab, 0, 0, vcx);
+    wb.update_in(vcx, |w, window, cx| w.run("grid-delete-rows", window, cx));
+    assert_eq!(
+        vcx.read_entity(&tab, |t, _| t.visible_row_count()),
+        init_rows - 1
+    );
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before);
+
+    // 2. DATA LOSS REGRESSION TEST (Problems): add an unlinked asset so a lint problem with
+    // row.target.is_some() exists, select it in Problems, and verify delete/add are refused.
+    wb.update(vcx, |w, cx| {
+        assert!(w.apply_edit(
+            &Edit::AddAsset {
+                id: AssetId::new_v7(),
+                name: "Unlinked Problem Asset".into(),
+                properties: vec![0],
+            },
+            cx,
+        ));
+    });
+    let prob_key = ExplorerKey::Folder(Owner::Project, Folder::Problems);
+    wb.update_in(vcx, |w, window, cx| w.open(prob_key, window, cx));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let prob_tab = vcx
+        .read_entity(&wb, |w, _| w.table_tab(prob_key))
+        .expect("Problems tab opens");
+    let target_row = vcx.read_entity(&prob_tab, |t, _| {
+        (0..t.visible_row_count())
+            .find(|&r| t.displayed_row(r).and_then(|row| row.target).is_some())
+            .expect("at least one lint problem with target must exist")
+    });
+    let before_prob = project_bytes(&wb, vcx);
+    let counts_before = vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        (
+            p.asset_count(),
+            p.damage_scenario_count(),
+            p.threat_scenario_count(),
+        )
+    });
+    select_cell(&prob_tab, target_row, 0, vcx);
+    assert!(!prob_tab.update(vcx, |t, cx| t.delete_selected(cx)));
+    wb.update_in(vcx, |w, window, cx| w.run("grid-delete-rows", window, cx));
+    wb.update_in(vcx, |w, window, cx| w.run("grid-add-row", window, cx));
+    assert_eq!(project_bytes(&wb, vcx), before_prob);
+    let counts_after = vcx.read_entity(&wb, |w, _| {
+        let p = w.workspace().project();
+        (
+            p.asset_count(),
+            p.damage_scenario_count(),
+            p.threat_scenario_count(),
+        )
+    });
+    assert_eq!(counts_after, counts_before);
+
+    // 3. Filtered-out add_row test: filter hides the newly added row, so is_editing() stays false.
+    let dmg_key = ExplorerKey::Folder(Owner::Project, Folder::Damage);
+    wb.update_in(vcx, |w, window, cx| w.open(dmg_key, window, cx));
+    let dmg_before = vcx.read_entity(&wb, |w, _| w.workspace().project().damage_scenario_count());
+    tab.update(vcx, |t, cx| {
+        t.set_column_filter_query("name", "zzzz_nomatch", cx)
+    });
+    assert_eq!(vcx.read_entity(&tab, |t, _| t.visible_row_count()), 0);
+    wb.update_in(vcx, |w, window, cx| w.run("grid-add-row", window, cx));
+    vcx.read_entity(&wb, |w, cx| {
+        assert_eq!(
+            w.workspace().project().damage_scenario_count(),
+            dmg_before + 1
+        );
+        assert!(!tab.read(cx).is_editing());
+    });
+
+    // 4. NoAssetForThreat guard test on a fresh empty project (0 assets).
+    let empty_proj = Project::new(vcx.read_entity(&wb, |w, _| {
+        std::sync::Arc::clone(w.workspace().project().methodology())
+    }));
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(empty_proj, "Empty", None, window, cx);
+        w.open(
+            ExplorerKey::Folder(Owner::Project, Folder::Threats),
+            window,
+            cx,
+        );
+    });
+    let empty_bytes = project_bytes(&wb, vcx);
+    wb.update_in(vcx, |w, window, cx| w.run("grid-add-row", window, cx));
+    let note = vcx
+        .read_entity(&wb, |w, _| w.note().map(str::to_owned))
+        .expect("NoAssetForThreat must set status note");
+    assert!(
+        note.to_lowercase().contains("asset"),
+        "expected asset mention in note: {note}"
+    );
+    assert_eq!(project_bytes(&wb, vcx), empty_bytes);
+}
+
+#[gpui::test]
+fn simulate_keystrokes_in_grid_context_and_input_isolation(cx: &mut TestAppContext) {
+    let (wb, tab, vcx) = open_table(Folder::Damage, None, cx);
+    let focus = vcx.read_entity(&tab, |t, cx| t.focus_handle(cx));
+    vcx.update(|window, cx| {
+        window.focus(&focus, cx);
+        window.draw(cx).clear(cx);
+    });
+    let init_count = vcx.read_entity(&wb, |w, _| w.workspace().project().damage_scenario_count());
+    let add_keys = command("grid-add-row")
+        .unwrap()
+        .keys_for(cfg!(target_os = "macos"))
+        .unwrap();
+    let del_keys = command("grid-delete-rows")
+        .unwrap()
+        .keys_for(cfg!(target_os = "macos"))
+        .unwrap();
+
+    vcx.simulate_keystrokes(&add_keys);
+    vcx.run_until_parked();
+    vcx.read_entity(&wb, |w, cx| {
+        assert_eq!(
+            w.workspace().project().damage_scenario_count(),
+            init_count + 1
+        );
+        assert!(tab.read(cx).is_editing());
+    });
+
+    // While is_editing() == true, sending grid-add-row and grid-delete-rows shortcuts
+    // must NOT add or delete any rows (Grid key context is inactive inside inline InputState).
+    vcx.simulate_keystrokes(&add_keys);
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes(&del_keys);
+    vcx.run_until_parked();
+    vcx.read_entity(&wb, |w, cx| {
+        assert_eq!(
+            w.workspace().project().damage_scenario_count(),
+            init_count + 1
+        );
+        assert!(tab.read(cx).is_editing());
+    });
+}
+
+#[gpui::test]
+fn read_only_blocks_grid_mutating_commands_but_allows_copy(cx: &mut TestAppContext) {
+    let (wb, tab, vcx) = open_table(Folder::Assets, None, cx);
+    wb.update(vcx, |w, cx| {
+        assert!(w.apply_edit(
+            &Edit::AddAsset {
+                id: AssetId::new_v7(),
+                name: "Second Asset".into(),
+                properties: vec![0],
+            },
+            cx,
+        ));
+        w.set_read_only(Some("Read-only".into()), cx);
+    });
+    let before = project_bytes(&wb, vcx);
+    let name_col = col_index(&tab, "name", vcx);
+    tab.update(vcx, |t, cx| {
+        let mut sel = GridSelection::single(0, name_col);
+        sel.extend_to(1, name_col);
+        t.set_selection(Some(sel), cx);
+    });
+    vcx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("Pasted Name\n".into())));
+
+    for cmd in [
+        "grid-fill-down",
+        "grid-paste",
+        "grid-add-row",
+        "grid-delete-rows",
+    ] {
+        wb.update_in(vcx, |w, window, cx| w.run(cmd, window, cx));
+        assert_eq!(project_bytes(&wb, vcx), before, "{cmd} must be refused");
+    }
+
+    // grid-copy is allowed in read-only mode.
+    wb.update_in(vcx, |w, window, cx| w.run("grid-copy", window, cx));
+    let clip = vcx
+        .update(|_, cx| cx.read_from_clipboard().and_then(|i| i.text()))
+        .expect("clipboard text");
+    assert!(clip.contains("Second Asset"));
     assert_eq!(project_bytes(&wb, vcx), before);
 }

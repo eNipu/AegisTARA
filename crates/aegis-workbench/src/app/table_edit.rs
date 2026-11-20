@@ -1,15 +1,17 @@
 //! Keyboard navigation, inline cell editors, and multi-cell commits for [`TableTab`].
 
+use aegis_client::commands::Edit;
 use aegis_client::explorer::{ExplorerKey, Folder};
-use aegis_client::grid::{self, CellEditorKind, CellInput, GridSelection};
+use aegis_client::grid::{self, CellEditorKind, CellInput, GridError, GridSelection};
 use aegis_client::pages::vocabulary_for_lang;
 use aegis_client::picker::MultiLinkPicker;
-use aegis_client::view::TableId;
+use aegis_client::table::TableRow;
+use aegis_client::view::{Selection, TableId};
 use aegis_model::Project;
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, EntityId, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, div, px,
+    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, EntityId,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{InputEvent, InputState};
@@ -232,7 +234,6 @@ impl TableTab {
     }
 
     /// Opens an inline editor using `project` directly without borrowing `Workbench`.
-    #[allow(dead_code)] // Used by 189e2's grid-add-row without re-leasing Workbench.
     pub(super) fn start_edit_with_project(
         &mut self,
         project: &Project,
@@ -243,6 +244,218 @@ impl TableTab {
             && self
                 .prepare_cell(project)
                 .is_some_and(|p| self.open_editor_kind(p, window, cx))
+    }
+
+    pub(super) fn can_run_grid_command(&self) -> bool {
+        !self.is_editing() && !self.source_mode && self.filter_col.is_none()
+    }
+
+    fn shown_rows(&self) -> Vec<TableRow> {
+        self.filtered_indices
+            .iter()
+            .filter_map(|&i| self.rows.get(i).cloned())
+            .collect()
+    }
+
+    pub(super) fn prepare_add_row(
+        &self,
+        project: &Project,
+    ) -> Result<(Edit, Selection), GridError> {
+        if !self.can_run_grid_command() || self.table == TableId::Problems {
+            return Err(GridError::NotEditable);
+        }
+        let n = project.methodology().element_names();
+        let singular = match self.table {
+            TableId::Assets => &n.asset.singular,
+            TableId::Damage => &n.damage_scenario.singular,
+            TableId::Threats | TableId::Risks => &n.threat_scenario.singular,
+            TableId::Controls => &n.security_control.singular,
+            TableId::Goals => &n.cybersecurity_goal.singular,
+            TableId::Claims => &n.cybersecurity_claim.singular,
+            TableId::Problems => return Err(GridError::NotEditable),
+        };
+        grid::add_row_edit(project, self.table, self.owner, format!("New {singular}"))
+    }
+
+    pub(super) fn prepare_delete_selected(&self) -> Option<Edit> {
+        if !self.can_run_grid_command() || self.table == TableId::Problems || self.source_mode {
+            return None;
+        }
+        let targets: Vec<_> = self
+            .selection?
+            .row_range()
+            .filter_map(|r| self.displayed_row(r)?.target)
+            .collect();
+        grid::delete_rows_edit(&targets)
+    }
+
+    pub(super) fn prepare_fill_down(&self, project: &Project) -> Result<Edit, GridError> {
+        if !self.can_run_grid_command() || self.table == TableId::Problems {
+            return Err(GridError::NotEditable);
+        }
+        let Some(sel) = self.selection else {
+            return Err(GridError::NothingToFill);
+        };
+        grid::fill_down(
+            project,
+            self.table,
+            &self.shown_rows(),
+            &self.visible_cols,
+            sel,
+        )
+    }
+
+    pub(super) fn prepare_paste_tsv(
+        &self,
+        project: &Project,
+        tsv: &str,
+    ) -> Result<Edit, GridError> {
+        if !self.can_run_grid_command() || self.table == TableId::Problems {
+            return Err(GridError::NotEditable);
+        }
+        let (start_row, start_col) = self
+            .selection
+            .map_or((0, 0), |s| (*s.row_range().start(), *s.col_range().start()));
+        let vocab = vocabulary_for_lang(project.methodology(), self.catalog.language().code());
+        grid::paste_tsv(
+            project,
+            self.table,
+            self.owner,
+            &self.shown_rows(),
+            &self.visible_cols,
+            start_row,
+            start_col,
+            tsv,
+            &vocab,
+            &self.catalog,
+        )
+    }
+
+    pub(super) fn focus_added_row_with(
+        &mut self,
+        added: Selection,
+        project: &Project,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let vis_row = self
+            .filtered_indices
+            .iter()
+            .position(|&idx| self.rows.get(idx).and_then(|r| r.target) == Some(added));
+        let vis_col = self.visible_cols.iter().position(|col| col.key == "name");
+        if let (Some(vis_row), Some(vis_col)) = (vis_row, vis_col) {
+            self.selection = Some(GridSelection::single(vis_row, vis_col));
+            self.start_edit_with_project(project, window, cx);
+        }
+    }
+
+    fn apply_grid_edit(
+        &mut self,
+        res: Result<Edit, GridError>,
+        wb: &Entity<Workbench>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let edit = match res {
+            Ok(edit) => edit,
+            Err(err) => {
+                wb.update(cx, |w, cx| w.set_note(Some(err.to_string()), cx));
+                return false;
+            }
+        };
+        let id = cx.entity_id();
+        if !wb.update(cx, |w, cx| w.apply_edit_skipping(&edit, Some(id), cx)) {
+            return false;
+        }
+        self.self_refresh(wb, cx);
+        true
+    }
+
+    /// Appends a new row to this table and opens inline editing on its `"name"` cell.
+    pub fn add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.can_run_grid_command() {
+            return false;
+        }
+        let Some(wb) = self.edit_workbench(cx) else {
+            return false;
+        };
+        let res = self.prepare_add_row(wb.read(cx).workspace().project());
+        let (edit, added) = match res {
+            Ok(pair) => pair,
+            Err(err) => {
+                wb.update(cx, |w, cx| w.set_note(Some(err.to_string()), cx));
+                return false;
+            }
+        };
+        if !self.apply_grid_edit(Ok(edit), &wb, cx) {
+            return false;
+        }
+        let project = wb.read(cx).workspace().project().clone();
+        self.focus_added_row_with(added, &project, window, cx);
+        true
+    }
+
+    /// Deletes all selected rows in a single undo step (refused on `Problems`).
+    pub fn delete_selected(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.can_run_grid_command() || self.table == TableId::Problems {
+            return false;
+        }
+        let (Some(wb), Some(edit)) = (self.edit_workbench(cx), self.prepare_delete_selected())
+        else {
+            return false;
+        };
+        self.apply_grid_edit(Ok(edit), &wb, cx)
+    }
+
+    /// Fills editable values from the top selected row into lower selected rows.
+    pub fn fill_down(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.can_run_grid_command() {
+            return false;
+        }
+        let Some(wb) = self.edit_workbench(cx) else {
+            return false;
+        };
+        let res = self.prepare_fill_down(wb.read(cx).workspace().project());
+        self.apply_grid_edit(res, &wb, cx)
+    }
+
+    /// Formats the selected cells as TSV and writes them to the clipboard.
+    pub fn copy_selection(&self, cx: &mut App) -> Option<String> {
+        if !self.can_run_grid_command() {
+            return None;
+        }
+        let sel = self.selection?;
+        let all_cols = self.table.columns();
+        let col_indices: Vec<usize> = self
+            .visible_cols
+            .iter()
+            .filter_map(|vc| all_cols.iter().position(|c| c.key == vc.key))
+            .collect();
+        let tsv = grid::format_tsv(&self.shown_rows(), &col_indices, sel);
+        cx.write_to_clipboard(ClipboardItem::new_string(tsv.clone()));
+        Some(tsv)
+    }
+
+    /// Parses `tsv` and applies it at the selection anchor in a single undo step.
+    pub fn paste_tsv_text(&mut self, tsv: &str, cx: &mut Context<Self>) -> bool {
+        if !self.can_run_grid_command() {
+            return false;
+        }
+        let Some(wb) = self.edit_workbench(cx) else {
+            return false;
+        };
+        let res = self.prepare_paste_tsv(wb.read(cx).workspace().project(), tsv);
+        self.apply_grid_edit(res, &wb, cx)
+    }
+
+    /// Reads TSV text from the system clipboard and pastes it into this table.
+    pub fn paste_clipboard(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.can_run_grid_command() {
+            return false;
+        }
+        let Some(tsv) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return false;
+        };
+        self.paste_tsv_text(&tsv, cx)
     }
 
     /// Opens the inline editor for the active cell, refusing in read-only mode.
