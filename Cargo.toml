@@ -66,9 +66,10 @@ aegis-proto = { path = "crates/aegis-proto" }
 aegis-canvas = { path = "crates/aegis-canvas" }
 aegis-client = { path = "crates/aegis-client" }
 aegis-server = { path = "crates/aegis-server" }
-aegis-shell = { path = "crates/aegis-shell" }
 aegis-license = { path = "crates/aegis-license" }
-aegis-workbench = { path = "crates/aegis-workbench" }
+# aegis-shell and aegis-workbench are binaries nobody depends on, so they are
+# not listed here (an unused entry triggers `unused_workspace_dependencies`).
+# Add the entry back with the first crate that depends on one of them.
 png = "0.18"
 rstar = "0.12"
 # Skia is the default GPU renderer (ADR 0063, D25); the software renderer
