@@ -158,7 +158,7 @@ fn all_rows(index: &ExplorerIndex) -> Vec<ExplorerRow> {
 }
 
 /// The singular name of the kind of `sel`, if the pack names it.
-pub(super) fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
+fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
     let n = match sel {
         Selection::Component(_) => &names.component,
         Selection::Interface(_) => &names.interface,
@@ -460,7 +460,7 @@ impl Workbench {
     ) {
         if Some(self.inspector.entity_id()) != skip {
             self.inspector.update(cx, |i, cx| {
-                i.set_selection(sel, self.workspace.project(), &self.names, skip, cx);
+                i.set_selection(sel, &self.workspace, skip, cx);
             });
         }
     }
@@ -651,7 +651,7 @@ impl Workbench {
         if Some(self.inspector.entity_id()) != skip {
             let cur = self.inspector.read(cx).selection();
             self.inspector.update(cx, |i, cx| {
-                i.set_selection(cur, self.workspace.project(), &self.names, skip, cx);
+                i.set_selection(cur, &self.workspace, skip, cx);
             });
         }
     }
@@ -696,9 +696,13 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.reveal(sel, cx);
+        let row_sel = match sel {
+            Selection::TreeNode(tree_id, _) => Selection::Tree(tree_id),
+            other => other,
+        };
+        self.reveal(row_sel, cx);
         if let Some(key) = all_rows(&self.index).into_iter().find_map(|r| match r.key {
-            key @ ExplorerKey::Element(_, _, s) if s == sel => Some(key),
+            key @ ExplorerKey::Element(_, _, s) if s == row_sel => Some(key),
             _ => None,
         }) {
             self.state.select(key);
@@ -711,6 +715,25 @@ impl Workbench {
     /// Reveals `sel` in the explorer and opens its element tab.
     pub fn open_target(&mut self, sel: Selection, window: &mut Window, cx: &mut Context<Self>) {
         self.open_target_skipping(sel, None, window, cx);
+    }
+
+    /// Jumps the inspector and center dock to the primary cause of the current selection.
+    pub fn go_to_cause(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Selection> {
+        let current = self
+            .inspector
+            .read(cx)
+            .selection()
+            .or(match self.state.selected {
+                Some(ExplorerKey::Element(_, _, s)) => Some(s),
+                _ => None,
+            })?;
+        let cause = aegis_client::inspector::primary_cause(&self.workspace, current)?;
+        self.open_target(cause, window, cx);
+        Some(cause)
     }
 
     /// Drops `dragged` on `target`: moves a component to another system.
@@ -816,6 +839,9 @@ impl Workbench {
             "previous-tab" => self.step_tab(-1, window, cx),
             "toggle-theme" => self.toggle_theme(window, cx),
             "toggle-developer-source" => self.toggle_developer_source(cx),
+            "go-to-cause" => {
+                self.go_to_cause(window, cx);
+            }
             "grid-copy" | "grid-add-row" | "grid-delete-rows" | "grid-fill-down" | "grid-paste" => {
                 self.run_grid_command(id, window, cx)
             }
