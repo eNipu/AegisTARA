@@ -18,6 +18,7 @@ fn scene() -> Scene {
         ghost: false,
         via: None,
         capped: None,
+        excluded: None,
     })
 }
 
@@ -144,4 +145,29 @@ fn a_big_tree_is_described_in_time_for_what_is_visible_only() {
         "{:?}",
         started.elapsed()
     );
+}
+
+#[test]
+fn an_excluded_node_carries_its_reasons_in_describe_and_sentence() {
+    let tree = common::sample();
+    let s = Scene::from_tree(&tree, LayoutConfig::default(), |i| NodeStyle {
+        excluded: (i.index() == 3).then(|| "Needs CF00 Ethernet (off)".into()),
+        ..NodeStyle::default()
+    });
+
+    let excluded = describe(&s, 3).expect("excluded step");
+    assert_eq!(
+        excluded.excluded.as_deref(),
+        Some("Needs CF00 Ethernet (off)")
+    );
+    let spoken = sentence(&excluded, false);
+    assert!(
+        spoken.contains(" Excluded: Needs CF00 Ethernet (off)."),
+        "{spoken}"
+    );
+
+    let included = describe(&s, 4).expect("included step");
+    assert_eq!(included.excluded, None);
+    let included_spoken = sentence(&included, false);
+    assert!(!included_spoken.contains("Excluded:"), "{included_spoken}");
 }

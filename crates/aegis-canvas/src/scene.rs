@@ -77,6 +77,9 @@ pub struct NodeStyle {
     /// What caps a step's feasibility, `Secure boot on ADAS ECU`, shown as a
     /// shield badge and spoken to screen readers (CFG-04).
     pub capped: Option<String>,
+    /// Human-readable exclusion reasons when the node is excluded by
+    /// applicability (`None` when included).
+    pub excluded: Option<String>,
 }
 
 /// A connection between two nodes.
