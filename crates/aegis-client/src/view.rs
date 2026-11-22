@@ -1546,6 +1546,7 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
         .and_then(|branch| branch.preview_tree(project, tree_id));
     let usage =
         (project.element_count(aegis_model::ElementKind::System) > 0).then(|| project.system_use());
+    let app = project.applicability();
     let style = |idx: NodeIdx| -> NodeStyle {
         if let Some((ref preview_tree, ref ghosts)) = ghost_overlay
             && let Some(nid) = preview_tree.id_of(idx)
@@ -1561,8 +1562,13 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
                 ghost: true,
                 via: None,
                 capped: None,
+                excluded: None,
             };
         }
+        let excluded = tree
+            .id_of(idx)
+            .filter(|&nid| app.is_node_excluded(tree_id, nid))
+            .map(|nid| crate::exclusion::reasons_text(project, app.node_reasons(tree_id, nid)));
         let value = evaluation.and_then(|e| e.get(idx).copied());
         let is_step = tree.get(idx).is_some_and(|n| n.gate_kind().is_none());
         let capped = if is_step
@@ -1594,9 +1600,18 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
         } else {
             value.map(|v| level_label(m, v))
         };
+        let (score, tone, capped) = if excluded.is_some() {
+            (None, Tone::Unrated, None)
+        } else {
+            (
+                score,
+                value.map_or(Tone::Unrated, |v| level_tone(m, v)),
+                capped,
+            )
+        };
         NodeStyle {
             score,
-            tone: value.map_or(Tone::Unrated, |v| level_tone(m, v)),
+            tone,
             critical: false,
             ghost: false,
             via: project.step_via(tree_idx, idx).map(|item| {
@@ -1610,6 +1625,7 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
                 }
             }),
             capped,
+            excluded,
         }
     };
     let layout_tree = ghost_overlay.as_ref().map_or(tree, |(pt, _)| pt);

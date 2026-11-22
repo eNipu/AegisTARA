@@ -107,6 +107,7 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
     let style = scene.style(v);
     let critical = style.is_some_and(|s| s.critical);
     let ghost = style.is_some_and(|s| s.ghost);
+    let excluded = style.and_then(|s| s.excluded.as_deref()).is_some() && !ghost;
     let tone = tone_of(scene, v);
 
     if z < DETAIL_ZOOM {
@@ -155,6 +156,31 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
         radius: 0.0,
         node: None,
     });
+    if excluded {
+        let step = 12.0 * z;
+        let stroke = Stroke::solid(Paint::Rule, (1.0 * z).max(0.75));
+        let mut k = 1u32;
+        loop {
+            let d = k as f32 * step;
+            if d >= rect.size.w + rect.size.h {
+                break;
+            }
+            items.push(Item::Polyline {
+                points: vec![
+                    Point::new(
+                        rect.origin.x + (d - rect.size.h).max(0.0),
+                        rect.origin.y + d.min(rect.size.h),
+                    ),
+                    Point::new(
+                        rect.origin.x + d.min(rect.size.w),
+                        rect.origin.y + (d - rect.size.w).max(0.0),
+                    ),
+                ],
+                stroke,
+            });
+            k += 1;
+        }
+    }
 
     if z < TEXT_ZOOM {
         return;
@@ -173,7 +199,16 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
     }
     let base = rect.origin.y + (world.size.h - 8.0) * z;
     let capped = style.and_then(|s| s.capped.as_deref()).is_some() && !ghost;
-    if let Some(score) = style.and_then(|s| s.score.as_deref()) {
+    if excluded {
+        items.push(Item::Text {
+            at: Point::new(text_left, base),
+            text: "excluded".to_owned(),
+            size: FONT * z,
+            bold: true,
+            paint: Paint::Graphite,
+            align: Align::Start,
+        });
+    } else if let Some(score) = style.and_then(|s| s.score.as_deref()) {
         let text = if capped {
             format!("{score} \u{1f6e1}")
         } else {
@@ -203,10 +238,14 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
         .and_then(|s| s.via.as_deref())
         .filter(|_| !ghost)
         .map(|via| {
-            let score_chars = style
-                .and_then(|s| s.score.as_deref())
-                .map_or(0, |s| s.chars().count())
-                + usize::from(capped) * 2;
+            let score_chars = if excluded {
+                "excluded".len()
+            } else {
+                style
+                    .and_then(|s| s.score.as_deref())
+                    .map_or(0, |s| s.chars().count())
+                    + usize::from(capped) * 2
+            };
             let room =
                 chars_that_fit(world.size.w - 26.0, FONT_SMALL).saturating_sub(score_chars + 2);
             let text = format!("\u{27f6} {via}");
