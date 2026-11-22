@@ -2710,12 +2710,17 @@ impl<P: CredentialProvider> Actor<P> {
         let setting_snap = (origin == Origin::Edit)
             .then(|| setting_toast_before(&open.ws, &ops))
             .flatten();
+        let condition_snap = (origin == Origin::Edit)
+            .then(|| crate::exclusion::ConditionSnapshot::capture(&open.ws, &ops))
+            .flatten();
         match open.ws.apply_labeled(ops, origin, label) {
             Ok(()) => {
                 open.cached_scene = None;
                 open.cached_lint_count = None;
                 let toast = if let Some(snap) = setting_snap {
                     Some(setting_toast_after(&open.ws, snap))
+                } else if let Some(snap) = condition_snap {
+                    Some(snap.toast(&open.ws))
                 } else {
                     // UI-10.9: a removal happens at once; the toast says what was
                     // removed and offers the way back.
