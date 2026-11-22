@@ -105,6 +105,8 @@ pub enum Page {
     Item,
     /// The item definition's description and scope texts (ARC-05).
     Scope,
+    /// Configuration conditions and applicability (job 135).
+    Configuration,
 }
 
 /// The group of pages a page sits in on the sidebar: the phases of
@@ -387,6 +389,12 @@ impl TableId {
                     col("properties", Rating, msg("properties"), 200),
                     THREATS,
                     col("worst-risk", Computed, msg("worst-risk"), 110),
+                    hidden(
+                        "conditions",
+                        Links(RelationKey::ASSET_CONDITIONS),
+                        msg("conditions"),
+                        160,
+                    ),
                 ];
                 C
             }
@@ -412,6 +420,12 @@ impl TableId {
                     col("scales", Rating, msg("scales"), 64),
                     BEFORE,
                     AFTER,
+                    hidden(
+                        "conditions",
+                        Links(RelationKey::THREAT_CONDITIONS),
+                        msg("conditions"),
+                        160,
+                    ),
                 ];
                 C
             }
@@ -454,11 +468,28 @@ impl TableId {
                     RESPONSIBLE_G,
                     col("controls", Computed, msg("controls"), 90),
                     THREATS,
+                    hidden(
+                        "conditions",
+                        Links(RelationKey::GOAL_CONDITIONS),
+                        msg("conditions"),
+                        160,
+                    ),
                 ];
                 C
             }
             TableId::Claims => {
-                const C: &[ColumnSpec] = &[ID, name(E::CybersecurityClaim), RESPONSIBLE_C, THREATS];
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    name(E::CybersecurityClaim),
+                    RESPONSIBLE_C,
+                    THREATS,
+                    hidden(
+                        "conditions",
+                        Links(RelationKey::CLAIM_CONDITIONS),
+                        msg("conditions"),
+                        160,
+                    ),
+                ];
                 C
             }
             TableId::Problems => {
@@ -487,10 +518,11 @@ pub enum PageLayout {
 impl Page {
     /// Every page, in menu and sidebar order: the analysis in the order of
     /// its phases, item definition first (UI-13).
-    pub const ALL: [Page; 15] = [
+    pub const ALL: [Page; 16] = [
         Page::Overview,
         Page::Item,
         Page::Scope,
+        Page::Configuration,
         Page::Damage,
         Page::Assets,
         Page::Threats,
@@ -510,7 +542,7 @@ impl Page {
     pub fn group(self) -> Option<PageGroup> {
         Some(match self {
             Page::Overview => return None,
-            Page::Item | Page::Scope => PageGroup::ItemDefinition,
+            Page::Item | Page::Scope | Page::Configuration => PageGroup::ItemDefinition,
             Page::Damage => PageGroup::Impact,
             Page::Assets | Page::Threats => PageGroup::AssetsThreats,
             Page::Trees => PageGroup::Feasibility,
@@ -550,6 +582,7 @@ impl Page {
             Page::Overview => "overview",
             Page::Item => "item",
             Page::Scope => "scope",
+            Page::Configuration => "configuration",
             Page::Damage => "damage",
             Page::Assets => "assets",
             Page::Threats => "threats",
@@ -584,7 +617,8 @@ impl Page {
             | Page::Reports
             | Page::Admin
             | Page::Item
-            | Page::Scope => &[],
+            | Page::Scope
+            | Page::Configuration => &[],
         }
     }
 
@@ -617,6 +651,7 @@ impl Page {
             Page::Admin => "Administration",
             Page::Item => "Item definition",
             Page::Scope => "Description and scope",
+            Page::Configuration => "Configuration",
         }
     }
 }
@@ -874,6 +909,8 @@ pub struct UiState {
     pub selected_data_flow: Option<DataFlowId>,
     /// The selected trust boundary on the Item definition page.
     pub selected_trust_boundary: Option<TrustBoundaryId>,
+    /// The selected condition on the Configuration page.
+    pub selected_condition: Option<aegis_model::ConditionId>,
 }
 
 /// Converts an [`ElementRef`] to the wire target string used by figure
@@ -1069,7 +1106,12 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
                 );
             }
         }
-        Page::Problems | Page::Versions | Page::History | Page::Reports | Page::Admin => {}
+        Page::Configuration
+        | Page::Problems
+        | Page::Versions
+        | Page::History
+        | Page::Reports
+        | Page::Admin => {}
     }
     targets
         .into_iter()

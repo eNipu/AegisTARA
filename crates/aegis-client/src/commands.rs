@@ -762,6 +762,27 @@ pub enum Edit {
         /// Link or unlink.
         linked: bool,
     },
+    /// Adds a condition to the project's configuration (job 135).
+    AddCondition {
+        /// New ID.
+        id: aegis_model::ConditionId,
+        /// Name.
+        name: String,
+    },
+    /// Renames a condition.
+    RenameCondition {
+        /// The condition.
+        condition: aegis_model::ConditionId,
+        /// New name.
+        name: String,
+    },
+    /// Switches whether a condition is present in the project.
+    SetConditionPresent {
+        /// The condition.
+        condition: aegis_model::ConditionId,
+        /// Whether the condition is present.
+        present: bool,
+    },
     /// Makes an element need a condition, or stop needing it (APL-01).
     SetConditionLink {
         /// The asset, component, interface, threat, tree, goal or claim.
@@ -2621,6 +2642,29 @@ impl Edit {
                     provenance: p,
                 }
             }],
+            Edit::AddCondition { id, name: n } => vec![Op::AddCondition {
+                id: *id,
+                name: name(n)?,
+                description: "".into(),
+                present: true,
+                provenance: p,
+            }],
+            Edit::RenameCondition { condition, name: n } => {
+                project.condition_idx(condition).ok_or(EditError::Missing)?;
+                vec![Op::RenameCondition {
+                    id: *condition,
+                    name: name(n)?,
+                    provenance: p,
+                }]
+            }
+            Edit::SetConditionPresent { condition, present } => {
+                project.condition_idx(condition).ok_or(EditError::Missing)?;
+                vec![Op::SetConditionPresent {
+                    id: *condition,
+                    present: *present,
+                    provenance: p,
+                }]
+            }
             Edit::SetConditionLink {
                 element,
                 condition,
@@ -3050,6 +3094,14 @@ impl Edit {
             Edit::MoveToSystem { components, system } => {
                 move_targets(project, components, *system).is_ok_and(|v| v.is_empty())
             }
+            Edit::RenameCondition { condition, name } => project
+                .condition_idx(condition)
+                .and_then(|i| project.condition(i))
+                .is_some_and(|c| c.name() == name.trim()),
+            Edit::SetConditionPresent { condition, present } => project
+                .condition_idx(condition)
+                .and_then(|i| project.condition(i))
+                .is_some_and(|c| c.present() == *present),
             _ => false,
         }
     }
@@ -3130,6 +3182,7 @@ impl Edit {
             } => Some(Selection::Tree(*id)),
             Edit::AddControl { id, .. } => Some(Selection::Control(*id)),
             Edit::AddGoal { id, .. } | Edit::AddGoalFor { id, .. } => Some(Selection::Goal(*id)),
+            Edit::AddCondition { id, .. } => Some(Selection::Condition(*id)),
             Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),
             Edit::LinkGoalParty { goal, .. } => Some(Selection::Goal(*goal)),
             Edit::SetStepConditionLink { tree, node, .. } => {

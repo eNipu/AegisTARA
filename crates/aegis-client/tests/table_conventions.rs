@@ -293,14 +293,23 @@ fn only_inputs_are_editable() {
     };
     assert_eq!(
         editable(TableId::Assets),
-        ["name", "component", "properties"]
+        ["name", "component", "properties", "conditions"]
     );
     assert_eq!(editable(TableId::Damage), ["name", "impact"]);
-    assert_eq!(editable(TableId::Threats), ["name", "asset", "scales"]);
+    assert_eq!(
+        editable(TableId::Threats),
+        ["name", "asset", "scales", "conditions"]
+    );
     assert_eq!(editable(TableId::Risks), ["name", "asset", "treatment"]);
     assert_eq!(editable(TableId::Controls), ["name"]);
-    assert_eq!(editable(TableId::Goals), ["name", "responsible"]);
-    assert_eq!(editable(TableId::Claims), ["name", "responsible"]);
+    assert_eq!(
+        editable(TableId::Goals),
+        ["name", "responsible", "conditions"]
+    );
+    assert_eq!(
+        editable(TableId::Claims),
+        ["name", "responsible", "conditions"]
+    );
     assert_eq!(editable(TableId::Problems), [""; 0]);
 }
 
