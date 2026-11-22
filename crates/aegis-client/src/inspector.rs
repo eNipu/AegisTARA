@@ -121,7 +121,7 @@ pub fn reverse_relation_label(key: RelationKey, catalog: &Catalog) -> String {
     catalog.tr(id)
 }
 
-fn reason_target(reason: Reason) -> Option<Selection> {
+pub(crate) fn reason_target(reason: Reason) -> Option<Selection> {
     match reason {
         Reason::ConditionOff(cid) => Some(Selection::Condition(cid)),
         Reason::OwnerExcluded(owner) => match owner {

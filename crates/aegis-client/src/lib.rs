@@ -8,6 +8,7 @@ pub mod configuration;
 pub mod connection;
 pub mod error;
 pub mod excel;
+pub mod exclusion;
 pub mod explorer;
 pub mod find;
 pub mod folder;
