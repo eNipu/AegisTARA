@@ -4,6 +4,7 @@ pub mod audit;
 pub mod combined;
 pub mod command_table;
 pub mod commands;
+pub mod configuration;
 pub mod connection;
 pub mod error;
 pub mod excel;

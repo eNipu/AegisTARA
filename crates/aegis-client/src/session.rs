@@ -3410,7 +3410,12 @@ fn page_data(open: &Open) -> PageData {
             d.claim = ui.selected_claim.and_then(|id| pages::claim_detail(ws, id));
         }
         Page::Problems => d.problems = pages::problems(ws),
-        Page::Versions | Page::History | Page::Reports | Page::Admin | Page::Scope => {}
+        Page::Versions
+        | Page::History
+        | Page::Reports
+        | Page::Admin
+        | Page::Scope
+        | Page::Configuration => {}
     }
     crate::systems::filter_page(ws.project(), &ui.system_view, ui.page, &mut d);
     d
@@ -3504,7 +3509,7 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
             let n = pages::page_count(p, page, open.baselines.len(), lint);
             match page {
                 Page::Overview | Page::Scope | Page::Reports | Page::History | Page::Admin => None,
-                Page::Item | Page::Versions => Some(n).filter(|n| *n > 0),
+                Page::Item | Page::Configuration | Page::Versions => Some(n).filter(|n| *n > 0),
                 _ => Some(n),
             }
         })
