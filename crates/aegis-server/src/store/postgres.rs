@@ -334,7 +334,12 @@ impl PostgresStore {
             .map_err(backend)?;
             tracing::info!(version, "applied database migration");
         }
-        tx.commit().await.map_err(backend)
+        // Every error above aborts the transaction (definite rejection). Once
+        // COMMIT is sent, a transport or timeout failure leaves the outcome
+        // unknown, so surface `Uncertain` to force actor reconciliation.
+        tx.commit()
+            .await
+            .map_err(|error| StoreFault::Uncertain(error.to_string()))
     }
 }
 
@@ -506,7 +511,12 @@ impl ProjectStore for PostgresStore {
         )
         .await
         .map_err(backend)?;
-        tx.commit().await.map_err(backend)
+        // Every error above aborts the transaction (definite rejection). Once
+        // COMMIT is sent, a transport or timeout failure leaves the outcome
+        // unknown, so surface `Uncertain` to force actor reconciliation.
+        tx.commit()
+            .await
+            .map_err(|error| StoreFault::Uncertain(error.to_string()))
     }
 
     async fn save_snapshot(
@@ -617,7 +627,12 @@ impl ProjectStore for PostgresStore {
         ] {
             tx.execute(sql, &[&id.as_uuid()]).await.map_err(backend)?;
         }
-        tx.commit().await.map_err(backend)
+        // Every error above aborts the transaction (definite rejection). Once
+        // COMMIT is sent, a transport or timeout failure leaves the outcome
+        // unknown, so surface `Uncertain` to force actor reconciliation.
+        tx.commit()
+            .await
+            .map_err(|error| StoreFault::Uncertain(error.to_string()))
     }
 
     async fn recent_ops(&self, id: ProjectId, limit: usize) -> Result<Vec<StoredOp>, StoreFault> {
@@ -889,7 +904,12 @@ impl ProjectStore for PostgresStore {
         )
         .await
         .map_err(backend)?;
-        tx.commit().await.map_err(backend)
+        // Every error above aborts the transaction (definite rejection). Once
+        // COMMIT is sent, a transport or timeout failure leaves the outcome
+        // unknown, so surface `Uncertain` to force actor reconciliation.
+        tx.commit()
+            .await
+            .map_err(|error| StoreFault::Uncertain(error.to_string()))
     }
 
     async fn remove_membership(
@@ -988,7 +1008,12 @@ impl ProjectStore for PostgresStore {
         if n != 1 {
             return Err(StoreFault::Exists);
         }
-        tx.commit().await.map_err(backend)
+        // Every error above aborts the transaction (definite rejection). Once
+        // COMMIT is sent, a transport or timeout failure leaves the outcome
+        // unknown, so surface `Uncertain` to force actor reconciliation.
+        tx.commit()
+            .await
+            .map_err(|error| StoreFault::Uncertain(error.to_string()))
     }
 
     async fn list_figures(&self, project: ProjectId) -> Result<Vec<FigureMeta>, StoreFault> {

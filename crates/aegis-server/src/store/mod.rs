@@ -148,9 +148,25 @@ pub enum StoreFault {
     /// Stored data is not what the server wrote (for example a gap).
     #[error("stored data is corrupt: {0}")]
     Corrupt(String),
-    /// The backend failed (connection, disk, constraint).
+    /// The backend failed before the commit point (definite rejection: nothing
+    /// was persisted).
     #[error("backend failure: {0}")]
     Backend(String),
+    /// The backend failed at or after the commit point, so whether the write
+    /// landed in storage is unknown. Callers must invalidate in-memory state
+    /// and reconcile from storage before accepting further writes.
+    #[error("uncertain commit outcome: {0}")]
+    Uncertain(String),
+}
+
+impl StoreFault {
+    /// Whether an `append` failure leaves the actor's in-memory state
+    /// potentially out of sync with storage and therefore requires unloading
+    /// and reloading the actor.
+    #[must_use]
+    pub fn invalidates_actor(&self) -> bool {
+        matches!(self, StoreFault::Uncertain(_) | StoreFault::Sequence { .. })
+    }
 }
 
 /// The storage backend of the server.

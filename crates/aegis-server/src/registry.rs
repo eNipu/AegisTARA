@@ -643,6 +643,17 @@ mod tests {
         BaselineMeta, LoadedProject, MemoryStore, ProjectMembership, StoredOp, StoredSnapshot,
     };
 
+    #[derive(Clone, Copy)]
+    enum AppendFault {
+        None,
+        /// Definite pre-commit rejection: nothing is written to `inner`.
+        RejectBeforeCommit,
+        /// Commit succeeds in `inner`, then returns `StoreFault::Uncertain`.
+        LostAckAfterCommit,
+        /// Returns `StoreFault::Sequence` without writing to `inner`.
+        SequenceConflict,
+    }
+
     struct GatedStore {
         inner: MemoryStore,
         load_calls: AtomicUsize,
@@ -653,6 +664,7 @@ mod tests {
         pause_append: AtomicBool,
         append_entered: Notify,
         append_release: Notify,
+        append_fault: Mutex<AppendFault>,
         pause_snapshot: AtomicBool,
         snapshot_entered: Notify,
         snapshot_release: Notify,
@@ -670,10 +682,18 @@ mod tests {
                 pause_append: AtomicBool::new(false),
                 append_entered: Notify::new(),
                 append_release: Notify::new(),
+                append_fault: Mutex::new(AppendFault::None),
                 pause_snapshot: AtomicBool::new(false),
                 snapshot_entered: Notify::new(),
                 snapshot_release: Notify::new(),
             })
+        }
+
+        fn set_append_fault(&self, fault: AppendFault) {
+            *self
+                .append_fault
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = fault;
         }
     }
 
@@ -703,7 +723,24 @@ mod tests {
                 self.append_entered.notify_one();
                 self.append_release.notified().await;
             }
-            self.inner.append(id, ops).await
+            let fault = *self
+                .append_fault
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match fault {
+                AppendFault::None => self.inner.append(id, ops).await,
+                AppendFault::RejectBeforeCommit => {
+                    Err(StoreFault::Backend("pre-commit rejection".into()))
+                }
+                AppendFault::LostAckAfterCommit => {
+                    self.inner.append(id, ops).await?;
+                    Err(StoreFault::Uncertain("lost commit acknowledgement".into()))
+                }
+                AppendFault::SequenceConflict => Err(StoreFault::Sequence {
+                    expected: ops.first().map_or(1, |o| o.seq + 1),
+                    found: ops.first().map_or(0, |o| o.seq),
+                }),
+            }
         }
         async fn verify_chain(&self, id: ProjectId) -> Result<ChainReport, StoreFault> {
             self.inner.verify_chain(id).await
@@ -1041,5 +1078,203 @@ mod tests {
         let completed = reopened.shutdown_within(Duration::from_millis(30)).await;
         assert!(!completed, "wedged snapshot must hit the shutdown bound");
         store.snapshot_release.notify_one();
+    }
+
+    #[tokio::test]
+    async fn uncertain_append_that_committed_reloads_and_reconciles_repeat_submission() {
+        let store = GatedStore::new();
+        let (registry, key) = test_registry(Arc::clone(&store));
+        let meta = registry.create("Epsilon", &key).await.expect("create");
+        let op1 = encode_condition_op(&registry, &key);
+        let op2 = encode_condition_op(&registry, &key);
+        let editor = crate::auth::Principal::user("alice");
+
+        let grant = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                async move { h.acquire(who).await }
+            })
+            .await
+            .expect("acquire");
+        assert_eq!(store.load_calls.load(Ordering::SeqCst), 1);
+
+        // Commit succeeds in storage, then returns Uncertain (lost ack).
+        store.set_append_fault(AppendFault::LostAckAfterCommit);
+        let err = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = grant.token.as_str().to_owned();
+                let op1 = op1.clone();
+                async move { h.submit(who, tok, 0, vec![op1]).await }
+            })
+            .await;
+        assert!(matches!(
+            err,
+            Err(ServerError::Store(StoreFault::Uncertain(_)))
+        ));
+
+        // The next call reloads the actor from storage; memory, sequence,
+        // history, and risks all reflect the committed op.
+        store.set_append_fault(AppendFault::None);
+        let status = registry
+            .with(meta.id, |h| async move { h.status().await })
+            .await
+            .expect("status after reload");
+        assert_eq!(status.last_seq, 1);
+        assert_eq!(store.load_calls.load(Ordering::SeqCst), 2);
+        let risks = registry
+            .with(meta.id, |h| async move { h.risks().await })
+            .await
+            .expect("risks after reload");
+        assert_eq!(risks.as_of_seq, 1);
+        assert_eq!(store.recent_ops(meta.id, 10).await.expect("ops").len(), 1);
+
+        // Re-acquiring the lease and repeating the exact same (base_seq=0, op1)
+        // reconciles to Ok(1) without duplicating the op.
+        let grant2 = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                async move { h.acquire(who).await }
+            })
+            .await
+            .expect("re-acquire");
+        let repeated = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = grant2.token.as_str().to_owned();
+                let op1 = op1.clone();
+                async move { h.submit(who, tok, 0, vec![op1]).await }
+            })
+            .await
+            .expect("idempotent repeat succeeds");
+        assert_eq!(repeated, 1);
+        assert_eq!(store.recent_ops(meta.id, 10).await.expect("ops").len(), 1);
+
+        // Submitting a DIFFERENT op at stale base_seq=0 is still rejected.
+        let stale = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = grant2.token.as_str().to_owned();
+                let op2 = op2.clone();
+                async move { h.submit(who, tok, 0, vec![op2]).await }
+            })
+            .await;
+        assert!(matches!(
+            stale,
+            Err(ServerError::StaleBase {
+                base: 0,
+                current: 1
+            })
+        ));
+
+        // The next valid edit at base_seq=1 succeeds cleanly.
+        let next_seq = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = grant2.token.as_str().to_owned();
+                let op2 = op2.clone();
+                async move { h.submit(who, tok, 1, vec![op2]).await }
+            })
+            .await
+            .expect("next valid edit");
+        assert_eq!(next_seq, 2);
+        assert_eq!(store.recent_ops(meta.id, 10).await.expect("ops").len(), 2);
+        registry.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn definite_rejection_before_commit_rolls_back_and_retries_cleanly() {
+        let store = GatedStore::new();
+        let (registry, key) = test_registry(Arc::clone(&store));
+        let meta = registry.create("Zeta", &key).await.expect("create");
+        let op1 = encode_condition_op(&registry, &key);
+        let editor = crate::auth::Principal::user("bob");
+
+        let grant = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                async move { h.acquire(who).await }
+            })
+            .await
+            .expect("acquire");
+
+        store.set_append_fault(AppendFault::RejectBeforeCommit);
+        let err = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = grant.token.as_str().to_owned();
+                let op1 = op1.clone();
+                async move { h.submit(who, tok, 0, vec![op1]).await }
+            })
+            .await;
+        assert!(matches!(
+            err,
+            Err(ServerError::Store(StoreFault::Backend(_)))
+        ));
+
+        // Actor rolled back in-place without unloading.
+        assert_eq!(store.load_calls.load(Ordering::SeqCst), 1);
+        let status = registry
+            .with(meta.id, |h| async move { h.status().await })
+            .await
+            .expect("status");
+        assert_eq!(status.last_seq, 0);
+        assert!(store.recent_ops(meta.id, 10).await.expect("ops").is_empty());
+
+        // Retrying the same batch once the backend recovers succeeds on the same lease.
+        store.set_append_fault(AppendFault::None);
+        let seq = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = grant.token.as_str().to_owned();
+                let op1 = op1.clone();
+                async move { h.submit(who, tok, 0, vec![op1]).await }
+            })
+            .await
+            .expect("retry after definite rejection");
+        assert_eq!(seq, 1);
+        registry.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn store_sequence_conflict_invalidates_actor_and_reconciles_on_reload() {
+        let store = GatedStore::new();
+        let (registry, key) = test_registry(Arc::clone(&store));
+        let meta = registry.create("Eta", &key).await.expect("create");
+        let op1 = encode_condition_op(&registry, &key);
+        let editor = crate::auth::Principal::user("carol");
+
+        let grant = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                async move { h.acquire(who).await }
+            })
+            .await
+            .expect("acquire");
+        assert_eq!(store.load_calls.load(Ordering::SeqCst), 1);
+
+        store.set_append_fault(AppendFault::SequenceConflict);
+        let err = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = grant.token.as_str().to_owned();
+                let op1 = op1.clone();
+                async move { h.submit(who, tok, 0, vec![op1]).await }
+            })
+            .await;
+        assert!(matches!(
+            err,
+            Err(ServerError::Store(StoreFault::Sequence { .. }))
+        ));
+
+        // Sequence conflict forced actor invalidation; next request reloads cleanly.
+        store.set_append_fault(AppendFault::None);
+        let status = registry
+            .with(meta.id, |h| async move { h.status().await })
+            .await
+            .expect("status after reload");
+        assert_eq!(status.last_seq, 0);
+        assert_eq!(store.load_calls.load(Ordering::SeqCst), 2);
+        registry.shutdown().await;
     }
 }

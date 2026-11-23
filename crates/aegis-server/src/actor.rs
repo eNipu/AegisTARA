@@ -797,17 +797,22 @@ impl<S: ProjectStore> Actor<S> {
         raw: &[Bytes],
     ) -> Result<u64, ServerError> {
         self.lease.require(Instant::now(), who, token)?;
-        if base_seq != self.seq {
-            return Err(ServerError::StaleBase {
-                base: base_seq,
-                current: self.seq,
-            });
-        }
         if raw.is_empty() {
             return Err(ServerError::InvalidRequest("no ops"));
         }
         if raw.len() > self.max_batch {
             return Err(ServerError::InvalidRequest("too many ops"));
+        }
+        if base_seq != self.seq {
+            if base_seq < self.seq
+                && let Some(end_seq) = self.reconcile_repeat(who, base_seq, raw).await?
+            {
+                return Ok(end_seq);
+            }
+            return Err(ServerError::StaleBase {
+                base: base_seq,
+                current: self.seq,
+            });
         }
 
         // Decode everything before touching the project (R3, Q4).
@@ -849,7 +854,20 @@ impl<S: ProjectStore> Actor<S> {
         }
 
         if let Err(fault) = self.store.append(self.id, &stored).await {
-            self.rollback(inverses);
+            if fault.invalidates_actor() {
+                // Commit outcome is unknown or storage diverged: unload the
+                // actor without writing a snapshot so the next request reloads
+                // authoritative state from storage.
+                tracing::warn!(
+                    project = %self.id,
+                    %fault,
+                    "ambiguous append or sequence conflict; unloading project to reconcile"
+                );
+                self.broken = true;
+            } else {
+                // Definite rejection before commit: roll back in-memory state.
+                self.rollback(inverses);
+            }
             return Err(ServerError::Store(fault));
         }
         if self.broken {
@@ -858,6 +876,66 @@ impl<S: ProjectStore> Actor<S> {
 
         self.seq += stored.len() as u64;
         Ok(self.seq)
+    }
+
+    /// Checks whether a stale-base submission from `who` already landed in
+    /// storage at `base_seq + 1 ..= base_seq + raw.len()` (for example after a
+    /// lost submit response or an actor reload following an uncertain commit).
+    /// Returns `Ok(Some(end_seq))` only when every op's actor and canonical
+    /// bytes match storage exactly, so retries never duplicate operations.
+    async fn reconcile_repeat(
+        &self,
+        who: &Principal,
+        base_seq: u64,
+        raw: &[Bytes],
+    ) -> Result<Option<u64>, ServerError> {
+        let Some(end_seq) = base_seq.checked_add(raw.len() as u64) else {
+            return Ok(None);
+        };
+        let window = self.seq.saturating_sub(base_seq);
+        let max_window = self.max_batch.max(256) as u64;
+        if end_seq > self.seq || window > max_window {
+            return Ok(None);
+        }
+
+        let mut canonical = Vec::with_capacity(raw.len());
+        for (index, bytes) in raw.iter().enumerate() {
+            let op = self
+                .codec
+                .decode(bytes)
+                .map_err(|source| ServerError::MalformedOp { index, source })?;
+            let encoded = self.codec.encode(&op).map_err(|e| {
+                tracing::error!(project = %self.id, error = %e, "decoded op does not re-encode");
+                ServerError::Internal
+            })?;
+            canonical.push(encoded);
+        }
+
+        let recent = self
+            .store
+            .recent_ops(self.id, window as usize)
+            .await
+            .map_err(ServerError::Store)?;
+        // `recent_ops` is newest-first; match the exact slice `base_seq + 1 ..= end_seq`.
+        let mut matched = 0usize;
+        for stored in recent.into_iter().rev() {
+            if stored.seq <= base_seq || stored.seq > end_seq {
+                continue;
+            }
+            let expected_seq = base_seq + 1 + matched as u64;
+            if stored.seq != expected_seq
+                || stored.actor != who.subject.as_ref()
+                || stored.op != canonical[matched]
+            {
+                return Ok(None);
+            }
+            matched += 1;
+        }
+        if matched == canonical.len() {
+            Ok(Some(end_seq))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Undoes applied ops, newest first. If an inverse is refused the
