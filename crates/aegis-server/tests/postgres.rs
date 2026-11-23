@@ -829,3 +829,160 @@ async fn an_ended_session_stays_ended_after_a_restart_in_postgres() {
         .collect();
     assert!(kinds.contains(&AuditKind::SessionRevoked));
 }
+
+#[tokio::test]
+async fn event_chain_retention_is_atomic_recoverable_concurrent_safe_and_detects_tampering() {
+    let Some(f) = fresh().await else {
+        return;
+    };
+    let pg = PostgresAccounts::new(f.store.pool(), f.store.org());
+    let log =
+        aegis_server::accounts::events::EventLog::standalone(AccountBackend::Postgres(pg.clone()));
+
+    // 1. Seed 12 events and verify initial chain.
+    for i in 1u64..=12 {
+        log.record(
+            "alice",
+            AuditKind::SessionRevoked,
+            &format!("proj-{i}"),
+            &format!("detail-{i}"),
+        )
+        .await;
+    }
+    let initial = pg.verify_events().await.expect("initial verify");
+    assert!(
+        initial.first_bad.is_none(),
+        "initial chain must verify: {initial:?}"
+    );
+    assert_eq!(initial.verified, 12);
+
+    // 2. Full retention (keep=1000, cutoff=0): nothing removed, chain stays valid.
+    let none = pg
+        .trim_events_bounded(0, 1000, 2000, 3, None)
+        .await
+        .expect("noop trim");
+    assert_eq!(none, 0);
+    assert!(
+        pg.verify_events()
+            .await
+            .expect("verify after noop")
+            .first_bad
+            .is_none()
+    );
+
+    // 3. Interrupted multi-batch trim: keep=3 trims 9 rows in batches of 3,
+    //    stopping after batch 1, verifying on a fresh handle ("restart"), then
+    //    stopping after batch 2, verifying again, then completing the trim.
+    let b1 = pg
+        .trim_events_bounded(0, 3, 2000, 3, Some(1))
+        .await
+        .expect("batch 1");
+    assert_eq!(b1, 3);
+    let restarted = PostgresAccounts::new(f.store.pool(), f.store.org());
+    let after_b1 = restarted.verify_events().await.expect("verify after b1");
+    assert!(
+        after_b1.first_bad.is_none(),
+        "chain must be valid after batch 1: {after_b1:?}"
+    );
+    assert_eq!(after_b1.verified, 9);
+
+    let b2 = restarted
+        .trim_events_bounded(0, 3, 2000, 3, Some(1))
+        .await
+        .expect("batch 2");
+    assert_eq!(b2, 3);
+    let after_b2 = restarted.verify_events().await.expect("verify after b2");
+    assert!(
+        after_b2.first_bad.is_none(),
+        "chain must be valid after batch 2: {after_b2:?}"
+    );
+    assert_eq!(after_b2.verified, 6);
+
+    let rest = restarted
+        .trim_events_bounded(0, 3, 2000, 3, None)
+        .await
+        .expect("resume remaining");
+    assert_eq!(rest, 3);
+    let after_full = restarted.verify_events().await.expect("verify after full");
+    assert!(
+        after_full.first_bad.is_none(),
+        "chain must be valid after resume: {after_full:?}"
+    );
+    // 3 kept events + 1 EventsTrimmed event = 4.
+    assert_eq!(after_full.verified, 4);
+
+    // 4. Empty retention (keep=0): removes all 4 rows and records EventsTrimmed.
+    let emptied = restarted
+        .trim_events_bounded(0, 0, 3000, 2, None)
+        .await
+        .expect("empty retention");
+    assert_eq!(emptied, 4);
+    let after_empty = restarted.verify_events().await.expect("verify after empty");
+    assert!(
+        after_empty.first_bad.is_none(),
+        "chain must be valid after keep=0: {after_empty:?}"
+    );
+    assert_eq!(after_empty.verified, 1);
+
+    // 5. Concurrent append + trim + verify: valid chains never report corruption.
+    let writer_log = log.clone();
+    let writer = tokio::spawn(async move {
+        for i in 1u64..=30 {
+            writer_log
+                .record(
+                    "bob",
+                    AuditKind::SessionRevoked,
+                    &format!("c-{i}"),
+                    &format!("d-{i}"),
+                )
+                .await;
+        }
+    });
+    let trimmer_pg = pg.clone();
+    let trimmer = tokio::spawn(async move {
+        for i in 0u64..10 {
+            let _ = trimmer_pg
+                .trim_events_bounded(0, 5, 5000 + i, 2, None)
+                .await
+                .expect("concurrent trim");
+        }
+    });
+    let verifier_pg = pg.clone();
+    let verifier = tokio::spawn(async move {
+        for _ in 0..25 {
+            let report = verifier_pg
+                .verify_events()
+                .await
+                .expect("concurrent verify");
+            assert!(
+                report.first_bad.is_none(),
+                "concurrent verify reported false corruption: {report:?}"
+            );
+        }
+    });
+    writer.await.expect("join writer");
+    trimmer.await.expect("join trimmer");
+    verifier.await.expect("join verifier");
+    assert!(
+        pg.verify_events()
+            .await
+            .expect("final verify")
+            .first_bad
+            .is_none()
+    );
+
+    // 6. Deliberate tampering is detected.
+    f.raw
+        .execute(
+            "UPDATE aegis_event SET detail = 'tampered'
+             WHERE event_id = (SELECT max(event_id) FROM aegis_event WHERE org_id = $1)",
+            &[&f.store.org()],
+        )
+        .await
+        .expect("tamper");
+    let tampered = pg.verify_events().await.expect("verify tampered");
+    assert!(
+        tampered.first_bad.is_some(),
+        "tampered chain must fail verification"
+    );
+}

@@ -383,25 +383,44 @@ impl PostgresAccounts {
     }
 
     /// Removes events older than `cutoff_ms`, then the oldest beyond `keep`,
-    /// advances the hash-chain tail anchor, and records an
-    /// [`AuditKind::EventsTrimmed`] event in the chain (SEC-06).
+    /// advancing the hash-chain tail anchor atomically with each deleted batch
+    /// and recording an [`AuditKind::EventsTrimmed`] event in the chain (SEC-06).
     ///
-    /// Works in batches from the oldest rows in primary key order. Events
-    /// are written in time order, so a batch with a young row ends the age
-    /// pass: a log with nothing old costs one indexed read of
-    /// [`TRIM_BATCH`] rows, and no call holds a long lock.
+    /// Works in bounded batches from the oldest rows in primary key order.
+    /// Every committed batch leaves `(aegis_event_chain, aegis_event)` valid,
+    /// so an interrupted trim never corrupts the chain and can be resumed.
     pub(super) async fn trim_events(
         &self,
         cutoff_ms: u64,
         keep: usize,
         now_ms: u64,
     ) -> Result<u64, StoreFault> {
+        self.trim_events_bounded(cutoff_ms, keep, now_ms, TRIM_BATCH as usize, None)
+            .await
+    }
+
+    /// Runs [`trim_events`](Self::trim_events) with an explicit per-transaction
+    /// `batch_size` and optional `max_batches` cap (used to bound work or
+    /// simulate an interruption after any batch boundary).
+    ///
+    /// # Errors
+    ///
+    /// A storage failure or corrupt stored hash.
+    pub async fn trim_events_bounded(
+        &self,
+        cutoff_ms: u64,
+        keep: usize,
+        now_ms: u64,
+        batch_size: usize,
+        max_batches: Option<usize>,
+    ) -> Result<u64, StoreFault> {
+        let batch_limit = to_i64(batch_size.max(1) as u64)?;
         let mut client = self.client().await?;
         let cutoff = to_i64(cutoff_ms)?;
         let cut_row = if keep == 0 {
             client
                 .query_opt(
-                    "SELECT event_id, hash FROM aegis_event
+                    "SELECT event_id FROM aegis_event
                      WHERE org_id = $1 ORDER BY event_id DESC LIMIT 1",
                     &[&self.org],
                 )
@@ -431,7 +450,7 @@ impl PostgresAccounts {
                              (SELECT id FROM cap_cut)
                          ) AS id
                      )
-                     SELECT e.event_id, e.hash
+                     SELECT e.event_id
                      FROM aegis_event e JOIN chosen c ON e.event_id = c.id
                      WHERE e.org_id = $1",
                     &[&self.org, &cutoff, &offset],
@@ -443,46 +462,74 @@ impl PostgresAccounts {
             return Ok(0);
         };
         let cut_id: i64 = cut_row.try_get(0).map_err(backend)?;
-        let cut_hash = hash_of(cut_row.try_get(1).map_err(backend)?)?;
 
         let mut removed = 0u64;
+        let mut batches = 0usize;
+        let mut interrupted = false;
         loop {
-            let n = client
-                .execute(
-                    "DELETE FROM aegis_event WHERE event_id IN (
-                         SELECT event_id FROM aegis_event
+            if max_batches.is_some_and(|limit| batches >= limit) {
+                interrupted = true;
+                break;
+            }
+            let tx = client.transaction().await.map_err(backend)?;
+            let (mut tail, mut head) = Self::lock_chain(&tx, self.org).await?;
+            let row = tx
+                .query_one(
+                    "WITH victim AS (
+                         SELECT event_id, hash
+                         FROM aegis_event
                          WHERE org_id = $1 AND event_id <= $2
-                         ORDER BY event_id LIMIT $3)",
-                    &[&self.org, &cut_id, &TRIM_BATCH],
+                         ORDER BY event_id ASC
+                         LIMIT $3
+                     ),
+                     deleted AS (
+                         DELETE FROM aegis_event e
+                         USING victim v
+                         WHERE e.event_id = v.event_id
+                         RETURNING v.event_id, v.hash
+                     )
+                     SELECT count(*)::bigint AS removed,
+                            (SELECT hash FROM deleted ORDER BY event_id DESC LIMIT 1) AS last_hash
+                     FROM deleted",
+                    &[&self.org, &cut_id, &batch_limit],
                 )
                 .await
                 .map_err(backend)?;
-            removed += n;
-            if n < TRIM_BATCH as u64 {
+            let batch_removed = to_u64(row.try_get(0).map_err(backend)?)?;
+            if batch_removed == 0 {
+                tx.commit().await.map_err(backend)?;
+                break;
+            }
+            let last_hash_opt: Option<Vec<u8>> = row.try_get(1).map_err(backend)?;
+            if let Some(raw) = last_hash_opt {
+                let last_hash = hash_of(raw)?;
+                if last_hash != [0u8; 32] {
+                    if tail == head {
+                        head = last_hash;
+                    }
+                    tail = last_hash;
+                    tx.execute(
+                        "UPDATE aegis_event_chain SET tail_hash = $2, head_hash = $3 WHERE org_id = $1",
+                        &[&self.org, &tail.as_slice(), &head.as_slice()],
+                    )
+                    .await
+                    .map_err(backend)?;
+                }
+            }
+            tx.commit().await.map_err(backend)?;
+            removed += batch_removed;
+            batches += 1;
+            if batch_removed < batch_limit as u64 {
                 break;
             }
         }
 
-        let tx = client.transaction().await.map_err(backend)?;
-        let stragglers = tx
-            .execute(
-                "DELETE FROM aegis_event WHERE org_id = $1 AND event_id <= $2",
-                &[&self.org, &cut_id],
-            )
-            .await
-            .map_err(backend)?;
-        removed += stragglers;
-        if removed == 0 {
-            return Ok(0);
+        if removed == 0 || interrupted {
+            return Ok(removed);
         }
 
-        let (mut tail, mut head) = Self::lock_chain(&tx, self.org).await?;
-        if cut_hash != [0u8; 32] {
-            if tail == head {
-                head = cut_hash;
-            }
-            tail = cut_hash;
-        }
+        let tx = client.transaction().await.map_err(backend)?;
+        let (_tail, head) = Self::lock_chain(&tx, self.org).await?;
         let trim_event = AuditEvent {
             at_ms: now_ms,
             actor: "system".to_owned(),
@@ -492,8 +539,8 @@ impl PostgresAccounts {
         };
         let next = Self::append_chained_event(&tx, self.org, &head, &trim_event).await?;
         tx.execute(
-            "UPDATE aegis_event_chain SET tail_hash = $2, head_hash = $3 WHERE org_id = $1",
-            &[&self.org, &tail.as_slice(), &next.as_slice()],
+            "UPDATE aegis_event_chain SET head_hash = $2 WHERE org_id = $1",
+            &[&self.org, &next.as_slice()],
         )
         .await
         .map_err(backend)?;
@@ -501,10 +548,23 @@ impl PostgresAccounts {
         Ok(removed)
     }
 
-    pub(super) async fn verify_events(&self) -> Result<ChainReport, StoreFault> {
-        let client = self.client().await?;
+    /// Verifies the event hash chain and its retained-prefix anchor inside one
+    /// consistent `REPEATABLE READ` database snapshot.
+    ///
+    /// # Errors
+    ///
+    /// A storage failure or corrupt stored row.
+    pub async fn verify_events(&self) -> Result<ChainReport, StoreFault> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()
+            .await
+            .map_err(backend)?;
         let genesis = event_genesis(self.org);
-        let chain_row = client
+        let chain_row = tx
             .query_opt(
                 "SELECT tail_hash, head_hash FROM aegis_event_chain WHERE org_id = $1",
                 &[&self.org],
@@ -518,7 +578,7 @@ impl PostgresAccounts {
             ),
             None => (genesis, genesis),
         };
-        let rows = client
+        let rows = tx
             .query(
                 "SELECT at_ms, actor, kind, target, detail, prev_hash, hash
                  FROM aegis_event
@@ -528,6 +588,7 @@ impl PostgresAccounts {
             )
             .await
             .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
         let mut verifier = EventChainVerifier::new(tail);
         for row in &rows {
             let kind_str: String = row.try_get(2).map_err(backend)?;
