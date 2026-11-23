@@ -1573,3 +1573,6 @@ msgstr "⟦Ítém déscríptíón␣␣⟧"
 
 msgid "Scope"
 msgstr "⟦Scópé␣␣⟧"
+
+msgid "Configuration"
+msgstr "⟦Cónfígúrátíón␣␣⟧"

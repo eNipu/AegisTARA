@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use crate::pages;
 use crate::workspace::Workspace;
 
-use aegis_model::{SystemSet, SystemUse};
+use aegis_model::{Applicability, ElementRef, Project, SystemSet, SystemUse, ThreatId};
 
 use super::ReportContext;
 
@@ -351,10 +351,35 @@ fn end_row(rows: &mut [Vec<String>], cell: Vec<String>) {
     }
 }
 
+fn excluded_cell(p: &Project, app: Option<&Applicability>, eref: ElementRef) -> Option<String> {
+    let app = app?;
+    Some(if app.is_excluded(eref) {
+        crate::exclusion::reasons_text(p, app.reasons(eref))
+    } else {
+        String::new()
+    })
+}
+
+fn risk_cell(
+    ws: &Workspace,
+    has_conditions: bool,
+    threat: ThreatId,
+    residual: bool,
+    view: Option<&crate::view::RiskView>,
+) -> String {
+    if has_conditions && crate::exclusion::threat_risk_not_applicable(ws, threat, residual) {
+        "not applicable".to_owned()
+    } else {
+        view.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
+    }
+}
+
 fn risk_register_sheet(ws: &Workspace, sys: &Rows<'_>) -> Sheet {
     let p = ws.project();
+    let has_conditions = p.conditions().next().is_some();
+    let app = has_conditions.then(|| p.applicability());
     let names = p.methodology().element_names();
-    let header = vec![
+    let mut header = vec![
         "ID".to_owned(),
         names.threat_scenario.singular.to_string(),
         names.asset.singular.to_string(),
@@ -367,29 +392,33 @@ fn risk_register_sheet(ws: &Workspace, sys: &Rows<'_>) -> Sheet {
         "Treatment".to_owned(),
         "Goal or claim".to_owned(),
     ];
+    if has_conditions {
+        header.push("Excluded".to_owned());
+    }
     let mut rows = vec![header];
     sys.head(&mut rows);
     for r in pages::risk_rows(ws) {
         let Some(cell) = sys.cell(|u| Some(u.threat(p.threat_scenario_idx(&r.id)?))) else {
             continue;
         };
-        let risk = |v: Option<&crate::view::RiskView>| {
-            v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
-        };
         let reduced = reduced_by_cell(&r);
-        rows.push(vec![
+        let mut row = vec![
             r.visual_id,
             r.threat,
             r.asset,
             r.damage,
             r.impact,
             r.feasibility,
-            risk(r.inherent.as_ref()),
-            risk(r.residual.as_ref()),
+            risk_cell(ws, has_conditions, r.id, false, r.inherent.as_ref()),
+            risk_cell(ws, has_conditions, r.id, true, r.residual.as_ref()),
             reduced,
             r.treatment,
             r.backing,
-        ]);
+        ];
+        if let Some(ex) = excluded_cell(p, app.as_ref(), ElementRef::Threat(r.id)) {
+            row.push(ex);
+        }
+        rows.push(row);
         end_row(&mut rows, cell);
     }
     Sheet {
@@ -429,6 +458,8 @@ pub fn report_workbook_xlsx_in(
     view: &crate::systems::SystemView,
 ) -> Vec<u8> {
     let p = ws.project();
+    let has_conditions = p.conditions().next().is_some();
+    let app = has_conditions.then(|| p.applicability());
     let sys = Rows::new(p, view);
     let names = p.methodology().element_names();
     let vocab = pages::vocabulary(p.methodology());
@@ -496,18 +527,25 @@ pub fn report_workbook_xlsx_in(
             names.interface.plural.to_string(),
             names.asset.plural.to_string(),
         ]];
+        if has_conditions {
+            comps[0].push("Excluded".to_owned());
+        }
         sys.head(&mut comps);
         for c in pages::component_rows(ws) {
             let Some(cell) = sys.cell(|u| Some(u.component(p.component_idx(&c.id)?))) else {
                 continue;
             };
-            comps.push(vec![
+            let mut row = vec![
                 c.visual_id,
                 c.name,
                 c.parent,
                 c.interfaces.to_string(),
                 c.assets.to_string(),
-            ]);
+            ];
+            if let Some(ex) = excluded_cell(p, app.as_ref(), ElementRef::Component(c.id)) {
+                row.push(ex);
+            }
+            comps.push(row);
             end_row(&mut comps, cell);
         }
         counts.push(comps.len().saturating_sub(1));
@@ -523,18 +561,25 @@ pub fn report_workbook_xlsx_in(
             "Kind".to_owned(),
             names.data_flow.plural.to_string(),
         ]];
+        if has_conditions {
+            ifaces[0].push("Excluded".to_owned());
+        }
         sys.head(&mut ifaces);
         for i in pages::interface_rows(ws) {
             let Some(cell) = sys.cell(|u| Some(u.interface(p.interface_idx(&i.id)?))) else {
                 continue;
             };
-            ifaces.push(vec![
+            let mut row = vec![
                 i.visual_id,
                 i.name,
                 i.component,
                 i.kind,
                 i.flows.to_string(),
-            ]);
+            ];
+            if let Some(ex) = excluded_cell(p, app.as_ref(), ElementRef::Interface(i.id)) {
+                row.push(ex);
+            }
+            ifaces.push(row);
             end_row(&mut ifaces, cell);
         }
         counts.push(ifaces.len().saturating_sub(1));
@@ -616,6 +661,9 @@ pub fn report_workbook_xlsx_in(
     let mut assets = vec![vec!["ID".to_owned(), names.asset.singular.to_string()]];
     assets[0].extend(vocab.properties.iter().cloned());
     assets[0].push("Threats".to_owned());
+    if has_conditions {
+        assets[0].push("Excluded".to_owned());
+    }
     sys.head(&mut assets);
     for a in pages::asset_rows(ws) {
         let Some(cell) = sys.cell(|u| Some(u.asset(p.asset_idx(&a.id)?))) else {
@@ -628,6 +676,9 @@ pub fn report_workbook_xlsx_in(
                 .map(|p| if *p { "yes" } else { "" }.to_owned()),
         );
         row.push(a.threats.to_string());
+        if let Some(ex) = excluded_cell(p, app.as_ref(), ElementRef::Asset(a.id)) {
+            row.push(ex);
+        }
         assets.push(row);
         end_row(&mut assets, cell);
     }
@@ -693,6 +744,9 @@ pub fn report_workbook_xlsx_in(
         "Reduced by".to_owned(),
         "Treatment".to_owned(),
     ]];
+    if has_conditions {
+        threats[0].push("Excluded".to_owned());
+    }
     sys.head(&mut threats);
     for r in pages::risk_rows(ws) {
         let Some(cell) = sys.cell(|u| Some(u.threat(p.threat_scenario_idx(&r.id)?))) else {
@@ -707,11 +761,8 @@ pub fn report_workbook_xlsx_in(
         let refs = t
             .as_ref()
             .map_or(String::new(), |t| t.catalog_refs.join(", "));
-        let risk = |v: Option<&crate::view::RiskView>| {
-            v.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
-        };
         let reduced = reduced_by_cell(&r);
-        threats.push(vec![
+        let mut row = vec![
             r.visual_id,
             r.threat,
             r.asset,
@@ -730,11 +781,15 @@ pub fn report_workbook_xlsx_in(
             .to_owned(),
             t.as_ref()
                 .map_or_else(String::new, |t| t.scaling_reason.clone()),
-            risk(r.inherent.as_ref()),
-            risk(r.residual.as_ref()),
+            risk_cell(ws, has_conditions, r.id, false, r.inherent.as_ref()),
+            risk_cell(ws, has_conditions, r.id, true, r.residual.as_ref()),
             reduced,
             r.treatment,
-        ]);
+        ];
+        if let Some(ex) = excluded_cell(p, app.as_ref(), ElementRef::Threat(r.id)) {
+            row.push(ex);
+        }
+        threats.push(row);
         end_row(&mut threats, cell);
     }
     counts.push(threats.len().saturating_sub(1));
@@ -916,6 +971,28 @@ pub fn report_workbook_xlsx_in(
         name: "Problems".to_owned(),
         rows: problems,
     });
+
+    if has_conditions {
+        let catalog = crate::i18n::Catalog::load(crate::i18n::Language::En);
+        let mut cond_rows = vec![vec![
+            "ID".to_owned(),
+            "Name".to_owned(),
+            "Present".to_owned(),
+            "Needed by".to_owned(),
+        ]];
+        for row in crate::configuration::configuration_view(ws, &catalog).rows {
+            cond_rows.push(vec![
+                row.visual_id,
+                row.name,
+                if row.present { "yes" } else { "no" }.to_owned(),
+                (row.needed_by_elements + row.needed_by_steps).to_string(),
+            ]);
+        }
+        sheets.push(Sheet {
+            name: "Conditions".to_owned(),
+            rows: cond_rows,
+        });
+    }
 
     let figures: Vec<&super::profile::FigureAttachment> = figures
         .iter()

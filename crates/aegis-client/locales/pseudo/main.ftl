@@ -15,7 +15,14 @@ item-scope = ⟦Scôpé ôf thé ânâlýsîs␣⟧
 section-figures = ⟦Fîgûrés␣⟧
 section-risks = ⟦6. Rîsk régîstér ând tréâtmént␣⟧
 section-problems = ⟦9. Ôpén prôbléms␣⟧
+section-configuration = ⟦Côñfîgûrâtîôñ âñd âssûmptîôñs␣⟧
 section-comparison = ⟦Cômpârîsôn wîth bâsélîné␣⟧
+report-configuration = ⟦Côñfîgûrâtîôñ␣⟧
+report-configuration-value = ⟦{ $present } ôf { $total } çôñdîtîôñs préseñt␣⟧
+report-absent-conditions = ⟦Âbséñt çôñdîtîôñs␣⟧
+report-excluded = ⟦Éxçlûdéd éléméñts âñd stéps␣⟧
+report-excluded-item = ⟦Éléméñt ôr stép␣⟧
+report-excluded-reason = ⟦Réâsôñ␣⟧
 
 risks-by-level = ⟦Rîsks bý lévél␣⟧
 risk-level = ⟦Rîsk lévél␣⟧

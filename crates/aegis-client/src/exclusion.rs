@@ -28,6 +28,60 @@ fn named_target(project: &Project, sel: Selection) -> String {
     }
 }
 
+fn dotted_item(vis: &str, label: &str) -> String {
+    let vis = vis.trim();
+    let label = label.trim();
+    match (vis.is_empty(), label.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => vis.to_owned(),
+        (true, false) => label.to_owned(),
+        (false, false) => format!("{vis} · {label}"),
+    }
+}
+
+/// Returns `true` when `threat`'s inherent (or `residual`) risk is not
+/// applicable because the threat or its attack tree is excluded.
+pub(crate) fn threat_risk_not_applicable(ws: &Workspace, threat: ThreatId, residual: bool) -> bool {
+    let res = if residual {
+        ws.cache().evaluate_residual_risk(ws.project(), threat)
+    } else {
+        ws.cache().evaluate_risk(ws.project(), threat)
+    };
+    matches!(
+        res,
+        Err(ModelError::ThreatNotApplicable(_) | ModelError::TreeNotApplicable(_))
+    )
+}
+
+/// Pairs `(item, reasons_text)` for every excluded element and every excluded
+/// attack-tree leaf step in `project`.
+pub(crate) fn excluded_entries(project: &Project) -> Vec<(String, String)> {
+    let app = project.applicability();
+    let mut out = Vec::new();
+    for (eref, reasons) in app.excluded_elements() {
+        if let Some(sel) = reason_target(Reason::OwnerExcluded(eref)) {
+            let vis = pages::selection_visual_id(project, sel);
+            let label = table::selection_label(project, sel);
+            out.push((dotted_item(&vis, &label), reasons_text(project, reasons)));
+        }
+    }
+    for (tree_id, node_id, reasons) in app.excluded_nodes() {
+        if let Some(tidx) = project.attack_tree_idx(&tree_id)
+            && let Some(tree) = project.attack_tree(tidx)
+            && let Some(nidx) = tree.idx_of(&node_id)
+            && let Some(node) = tree.get(nidx)
+            && node.gate_kind().is_none()
+        {
+            let tree_vis = project.attack_tree_visual_id(tidx).unwrap_or_default();
+            out.push((
+                dotted_item(&tree_vis, node.label()),
+                reasons_text(project, reasons),
+            ));
+        }
+    }
+    out
+}
+
 /// Human-readable exclusion reasons for an element or tree node, joined by `"; "`.
 #[must_use]
 pub fn reasons_text(project: &Project, reasons: &[Reason]) -> String {
