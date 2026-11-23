@@ -22,18 +22,19 @@ global Pages {
     out property <int> overview: 0;
     out property <int> item: 1;
     out property <int> scope: 2;
-    out property <int> damage: 3;
-    out property <int> assets: 4;
-    out property <int> threats: 5;
-    out property <int> trees: 6;
-    out property <int> risks: 7;
-    out property <int> controls: 8;
-    out property <int> goals: 9;
-    out property <int> reports: 10;
-    out property <int> problems: 11;
-    out property <int> versions: 12;
-    out property <int> history: 13;
-    out property <int> admin: 14;
+    out property <int> configuration: 3;
+    out property <int> damage: 4;
+    out property <int> assets: 5;
+    out property <int> threats: 6;
+    out property <int> trees: 7;
+    out property <int> risks: 8;
+    out property <int> controls: 9;
+    out property <int> goals: 10;
+    out property <int> reports: 11;
+    out property <int> problems: 12;
+    out property <int> versions: 13;
+    out property <int> history: 14;
+    out property <int> admin: 15;
 }
 
 // One sidebar entry: its page is its position; `group` is its position in
@@ -527,6 +528,7 @@ in property <string> redo-label;
         { label: @tr("Overview"), icon: @image-url("icons/layout-dashboard.svg"), group: -1 },
         { label: @tr("Item definition"), icon: @image-url("icons/network.svg"), group: 0 },
         { label: @tr("Description and scope"), icon: @image-url("icons/file-text.svg"), group: 0 },
+        { label: @tr("Configuration"), icon: @image-url("icons/list-checks.svg"), group: 0 },
         { label: root.damage-plural, icon: @image-url("icons/triangle-alert.svg"), group: 1 },
         { label: @tr("Assets"), icon: @image-url("icons/box.svg"), group: 2 },
         { label: @tr("Threat scenarios"), icon: @image-url("icons/swords.svg"), group: 2 },

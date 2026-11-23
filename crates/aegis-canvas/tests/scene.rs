@@ -17,6 +17,7 @@ fn styled(tree: &aegis_model::AttackTree) -> Scene {
         ghost: false,
         via: None,
         capped: None,
+        excluded: None,
     })
 }
 
@@ -308,6 +309,7 @@ fn ghost_nodes_render_with_dashed_accent_edges_and_boxes() {
         ghost: i.index() == 3,
         via: None,
         capped: None,
+        excluded: None,
     });
     let view = Viewport::new(Size::new(1600.0, 700.0));
     let list = render(&scene, &view, &RenderOptions::default());
@@ -385,4 +387,98 @@ fn a_capped_step_draws_a_shield_badge_and_says_who_capped_it() {
         spoken.contains("Capped by JTAG disabled on ADAS ECU."),
         "{spoken}"
     );
+}
+
+#[test]
+fn an_excluded_node_draws_diagonal_hatch_lines_and_excluded_label() {
+    let tree = common::sample();
+    let scene = Scene::from_tree(&tree, LayoutConfig::default(), |i| {
+        if i.index() == 3 {
+            NodeStyle {
+                excluded: Some("Needs CF00 Ethernet (off)".into()),
+                ..NodeStyle::default()
+            }
+        } else {
+            NodeStyle {
+                score: Some("14 · Medium".into()),
+                tone: Tone::Medium,
+                ..NodeStyle::default()
+            }
+        }
+    });
+    let view = Viewport::new(Size::new(1600.0, 700.0));
+    let list = render(&scene, &view, &RenderOptions::default());
+
+    let screen_rect = |v: u32| {
+        let world = scene
+            .node_rect(scene.node_idx(v).expect("idx"))
+            .expect("rect");
+        let tl = view.to_screen(world.origin);
+        aegis_canvas::Rect::new(
+            tl.x,
+            tl.y,
+            world.size.w * view.zoom,
+            world.size.h * view.zoom,
+        )
+    };
+    let in_rect = |p: aegis_canvas::Point, r: aegis_canvas::Rect| {
+        let eps = 1e-2;
+        p.x >= r.origin.x - eps
+            && p.x <= r.right() + eps
+            && p.y >= r.origin.y - eps
+            && p.y <= r.bottom() + eps
+    };
+
+    let excl_rect = screen_rect(3);
+    let incl_rect = screen_rect(4);
+
+    let excl_hatches = list
+        .items
+        .iter()
+        .filter(|it| match it {
+            Item::Polyline { points, .. } if points.len() == 2 => {
+                in_rect(points[0], excl_rect) && in_rect(points[1], excl_rect)
+            }
+            _ => false,
+        })
+        .count();
+    assert!(
+        excl_hatches >= 2,
+        "expected multiple hatch polylines inside excluded node rect, got {excl_hatches}"
+    );
+
+    let incl_hatches = list
+        .items
+        .iter()
+        .filter(|it| match it {
+            Item::Polyline { points, .. } if points.len() == 2 => {
+                in_rect(points[0], incl_rect) && in_rect(points[1], incl_rect)
+            }
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        incl_hatches, 0,
+        "included node rect must not contain hatch polylines"
+    );
+
+    let has_excluded_label = list.items.iter().any(|it| {
+        matches!(
+            it,
+            Item::Text {
+                at,
+                text,
+                paint: Paint::Graphite,
+                bold: true,
+                ..
+            } if text == "excluded" && in_rect(*at, excl_rect)
+        )
+    });
+    assert!(
+        has_excluded_label,
+        "excluded node must emit bold Graphite 'excluded' text"
+    );
+
+    let svg = scene_to_svg(&scene, &SvgOptions::light(), &RenderOptions::default());
+    assert!(svg.contains("excluded"), "SVG must contain 'excluded'");
 }

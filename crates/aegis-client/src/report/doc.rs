@@ -506,6 +506,31 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             };
             cover.push(vec![catalog.tr("report-systems"), shown]);
         }
+        if project.conditions().next().is_some() {
+            let total = project.conditions().count();
+            let present = project.conditions().filter(|(_, _, c)| c.present()).count();
+            let absent: Vec<&str> = project
+                .conditions()
+                .filter(|(_, _, c)| !c.present())
+                .map(|(_, _, c)| c.name())
+                .collect();
+            cover.push(vec![
+                catalog.tr("report-configuration"),
+                catalog.tr_with(
+                    "report-configuration-value",
+                    &[
+                        ("present", &present.to_string()),
+                        ("total", &total.to_string()),
+                    ],
+                ),
+            ]);
+            if !absent.is_empty() {
+                cover.push(vec![
+                    catalog.tr("report-absent-conditions"),
+                    absent.join(", "),
+                ]);
+            }
+        }
         b.push(table(&[catalog.tr("field"), catalog.tr("value")], cover));
         if !branding.approvers.is_empty() {
             b.push(Heading(3, catalog.tr("approvers")));
@@ -1172,6 +1197,44 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                         p.text,
                     ]
                 })
+                .collect(),
+        ));
+    }
+
+    // ---- configuration and assumptions ----
+    if project.conditions().next().is_some() {
+        b.push(Heading(2, catalog.tr("section-configuration")));
+        b.push(Heading(3, catalog.tr("conditions")));
+        b.push(table(
+            &[
+                catalog.tr("id"),
+                catalog.tr("condition"),
+                catalog.tr("condition-present"),
+            ],
+            project
+                .conditions()
+                .map(|(idx, _, c)| {
+                    vec![
+                        project.condition_visual_id(idx).unwrap_or_default(),
+                        c.name().to_owned(),
+                        if c.present() {
+                            catalog.tr("yes")
+                        } else {
+                            catalog.tr("no")
+                        },
+                    ]
+                })
+                .collect(),
+        ));
+        b.push(Heading(3, catalog.tr("report-excluded")));
+        b.push(table(
+            &[
+                catalog.tr("report-excluded-item"),
+                catalog.tr("report-excluded-reason"),
+            ],
+            crate::exclusion::excluded_entries(project)
+                .into_iter()
+                .map(|(item, reason)| vec![item, reason])
                 .collect(),
         ));
     }

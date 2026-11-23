@@ -2710,12 +2710,17 @@ impl<P: CredentialProvider> Actor<P> {
         let setting_snap = (origin == Origin::Edit)
             .then(|| setting_toast_before(&open.ws, &ops))
             .flatten();
+        let condition_snap = (origin == Origin::Edit)
+            .then(|| crate::exclusion::ConditionSnapshot::capture(&open.ws, &ops))
+            .flatten();
         match open.ws.apply_labeled(ops, origin, label) {
             Ok(()) => {
                 open.cached_scene = None;
                 open.cached_lint_count = None;
                 let toast = if let Some(snap) = setting_snap {
                     Some(setting_toast_after(&open.ws, snap))
+                } else if let Some(snap) = condition_snap {
+                    Some(snap.toast(&open.ws))
                 } else {
                     // UI-10.9: a removal happens at once; the toast says what was
                     // removed and offers the way back.
@@ -3410,7 +3415,12 @@ fn page_data(open: &Open) -> PageData {
             d.claim = ui.selected_claim.and_then(|id| pages::claim_detail(ws, id));
         }
         Page::Problems => d.problems = pages::problems(ws),
-        Page::Versions | Page::History | Page::Reports | Page::Admin | Page::Scope => {}
+        Page::Versions
+        | Page::History
+        | Page::Reports
+        | Page::Admin
+        | Page::Scope
+        | Page::Configuration => {}
     }
     crate::systems::filter_page(ws.project(), &ui.system_view, ui.page, &mut d);
     d
@@ -3504,7 +3514,7 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
             let n = pages::page_count(p, page, open.baselines.len(), lint);
             match page {
                 Page::Overview | Page::Scope | Page::Reports | Page::History | Page::Admin => None,
-                Page::Item | Page::Versions => Some(n).filter(|n| *n > 0),
+                Page::Item | Page::Configuration | Page::Versions => Some(n).filter(|n| *n > 0),
                 _ => Some(n),
             }
         })

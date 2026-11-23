@@ -3258,6 +3258,7 @@ pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize)
                 + p.trust_boundary_count()
         }
         Page::Scope => 0,
+        Page::Configuration => p.conditions().count(),
         Page::Damage => p.damage_scenario_count(),
         Page::Assets => p.asset_count(),
         Page::Threats | Page::Risks => p.threat_scenario_count(),
@@ -3287,8 +3288,7 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Tree(_) | Selection::TreeNode(_, _) => Page::Trees,
         Selection::Control(_) => Page::Controls,
         Selection::Goal(_) | Selection::Claim(_) | Selection::Party(_) => Page::Goals,
-        // The Configuration page that lists conditions is job 135.
-        Selection::Condition(_) => Page::Overview,
+        Selection::Condition(_) => Page::Configuration,
     }
 }
 
@@ -3319,8 +3319,7 @@ pub fn select(ui: &mut UiState, s: Selection) {
         Selection::Claim(id) => ui.selected_claim = Some(id),
         // Parties have no editor view of their own; selection stays on Goals.
         Selection::Party(_) => {}
-        // Conditions get their page in job 135.
-        Selection::Condition(_) => {}
+        Selection::Condition(id) => ui.selected_condition = Some(id),
     }
 }
 

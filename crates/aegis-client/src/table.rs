@@ -5,7 +5,7 @@
 
 pub use aegis_canvas::Tone;
 
-use aegis_model::{Applicability, ElementRef, Project, Reason, SystemSet, SystemUse};
+use aegis_model::{Applicability, ElementRef, Project, SystemSet, SystemUse};
 
 use crate::explorer::{Folder, Owner};
 use crate::i18n::Catalog;
@@ -203,30 +203,7 @@ fn exclusion_state(
         },
         None => return (false, None),
     };
-    let text = reasons
-        .iter()
-        .map(|&r| match r {
-            Reason::ConditionOff(cid) => {
-                let s = Selection::Condition(cid);
-                let vis = pages::selection_visual_id(p, s);
-                let name = selection_label(p, s);
-                let joined = format!("{vis} {name}");
-                let trimmed = joined.trim();
-                if trimmed.is_empty() {
-                    "condition off"
-                } else {
-                    trimmed
-                }
-                .to_owned()
-            }
-            Reason::OwnerExcluded(_) => "owner excluded".to_owned(),
-            Reason::ViaExcluded(_) => "via excluded".to_owned(),
-            Reason::AllPathsExcluded => "all paths excluded".to_owned(),
-            _ => "excluded".to_owned(),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    (true, Some(text))
+    (true, Some(crate::exclusion::reasons_text(p, reasons)))
 }
 
 /// Whether `sel` is excluded by an off condition in `p`, with its human-readable
@@ -355,6 +332,7 @@ pub fn table_rows_for_owner(
                 ),
                 "threats" => count(r.threats),
                 "worst-risk" => risk(r.worst.as_ref(), String::new()),
+                "conditions" => text(String::new()),
                 _ => None,
             },
         ),
@@ -385,6 +363,7 @@ pub fn table_rows_for_owner(
                 }),
                 "before" => risk(r.inherent.as_ref(), unrated()),
                 "after" => risk(r.residual.as_ref(), unrated()),
+                "conditions" => text(String::new()),
                 _ => None,
             },
         ),
@@ -431,6 +410,7 @@ pub fn table_rows_for_owner(
                 "responsible" => text(r.responsible.join(", ")),
                 "controls" => count(r.controls),
                 "threats" => count(r.threats),
+                "conditions" => text(String::new()),
                 _ => None,
             },
         ),
@@ -443,6 +423,7 @@ pub fn table_rows_for_owner(
                 "name" => text(&r.name),
                 "responsible" => text(r.responsible.join(", ")),
                 "threats" => count(r.threats),
+                "conditions" => text(String::new()),
                 _ => None,
             },
         ),

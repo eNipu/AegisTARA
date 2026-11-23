@@ -16,7 +16,14 @@ item-scope = Scope of the analysis
 section-figures = Figures
 section-risks = 6. Risk register and treatment
 section-problems = 9. Open problems
+section-configuration = Configuration and assumptions
 section-comparison = Comparison with baseline
+report-configuration = Configuration
+report-configuration-value = { $present } of { $total } conditions present
+report-absent-conditions = Absent conditions
+report-excluded = Excluded elements and steps
+report-excluded-item = Element or step
+report-excluded-reason = Reason
 
 # Executive summary.
 risks-by-level = Risks by level
@@ -148,7 +155,10 @@ relation-dataflow-interface = Flow interface
 relation-interface-component = Owning component
 relation-boundary-members = Member components
 condition = Condition
+conditions = Conditions
 condition-present = Present
+configuration-explainer = Switching a condition off excludes the elements and steps that need it. { $n } excluded.
+configuration-explainer-none = Switching a condition off excludes the elements and steps that need it. Nothing is excluded.
 relation-asset-conditions = Asset conditions
 relation-component-conditions = Component conditions
 relation-interface-conditions = Interface conditions
