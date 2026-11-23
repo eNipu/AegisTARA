@@ -511,14 +511,11 @@ impl From<DefWire> for MethodologyDef {
             risk_levels: w.risk_levels.0.into_iter().map(entry).collect(),
             attack_potential: w.attack_potential.map(|Object(ap)| ap.into()),
             require_rationale: w.require_rationale,
-            clause_refs: w
-                .clause_refs
-                .map(|m| {
-                    m.0.into_iter()
-                        .map(|(k, v)| (k, v.0.into_iter().map(|l| l.0).collect()))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            clause_refs: w.clause_refs.map_or_default(|m| {
+                m.0.into_iter()
+                    .map(|(k, v)| (k, v.0.into_iter().map(|l| l.0).collect()))
+                    .collect()
+            }),
             properties: w
                 .properties
                 .0

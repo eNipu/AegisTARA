@@ -675,12 +675,14 @@ enum OpView<'a> {
 #[serde(rename_all = "snake_case")]
 pub(super) enum LinkView {
     Threat(Text<ThreatId>),
+    Component(Text<ComponentId>),
 }
 
 impl LinkView {
     pub(super) fn of(t: crate::element::LinkTarget) -> LinkView {
         match t {
             crate::element::LinkTarget::Threat(id) => LinkView::Threat(Text(id)),
+            crate::element::LinkTarget::Component(id) => LinkView::Component(Text(id)),
         }
     }
 }

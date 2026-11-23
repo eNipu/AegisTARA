@@ -297,6 +297,11 @@ pub enum LintCode {
         /// The component in no system.
         component: ComponentId,
     },
+    /// A function of the item is not implemented by any component (ARC-06).
+    FunctionWithoutComponents {
+        /// The function with no implementing components.
+        function: ElementId,
+    },
     /// A data flow links components of two systems, but neither its source
     /// nor its destination component has any bound asset with a threat
     /// scenario.
@@ -360,6 +365,7 @@ impl LintCode {
             | Self::AssetUnbound { .. }
             | Self::BoundaryCrossingDataFlowWithoutThreat { .. }
             | Self::ComponentWithoutSystem { .. }
+            | Self::FunctionWithoutComponents { .. }
             | Self::SystemBoundaryFlowWithoutThreat { .. }
             | Self::SystemNameShared { .. }
             | Self::LibraryRatingNotReviewed { .. } => LintSeverity::Warning,
@@ -507,6 +513,9 @@ impl fmt::Display for LintCode {
             ),
             Self::ComponentWithoutSystem { component } => {
                 write!(f, "component {component} is in no system")
+            }
+            Self::FunctionWithoutComponents { function } => {
+                write!(f, "function {function} is not implemented by any component")
             }
             Self::SystemBoundaryFlowWithoutThreat { flow } => write!(
                 f,

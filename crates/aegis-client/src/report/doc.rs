@@ -698,7 +698,8 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     let item_elements = project.component_count() > 0
         || project.interface_count() > 0
         || project.data_flow_count() > 0
-        || project.trust_boundary_count() > 0;
+        || project.trust_boundary_count() > 0
+        || project.element_count(ElementKind::Function) > 0;
     let item_text = item_description.is_some() || item_scope.is_some();
     if sections.item_definition && (item_elements || item_text) {
         b.push(Heading(2, catalog.tr("section-item-definition")));
@@ -813,6 +814,41 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         ));
         for tb in &tb_rows {
             push_target_figures(&mut b, &profile.figures, ElementRef::TrustBoundary(tb.id));
+        }
+
+        if project.element_count(ElementKind::Function) > 0 {
+            let (heading, col_fn, col_impl) = if lang == Language::Ja {
+                ("機能", "機能", "実装コンポーネント")
+            } else {
+                ("Functions", "Function", "Implemented by")
+            };
+            b.push(Heading(3, heading.to_owned()));
+            let fn_rows: Vec<Vec<String>> = project
+                .elements(ElementKind::Function)
+                .map(|(id, f)| {
+                    let vis = project.element_visual_id(id).unwrap_or_default();
+                    let comps: Vec<&str> = f
+                        .links()
+                        .iter()
+                        .filter_map(|t| match t {
+                            aegis_model::LinkTarget::Component(cid) => project
+                                .component_idx(cid)
+                                .and_then(|i| project.component(i))
+                                .map(|c| c.name()),
+                            _ => None,
+                        })
+                        .collect();
+                    vec![
+                        format!("{vis} · {}", f.name()),
+                        if comps.is_empty() {
+                            "—".to_owned()
+                        } else {
+                            comps.join(", ")
+                        },
+                    ]
+                })
+                .collect();
+            b.push(table(&[col_fn.to_owned(), col_impl.to_owned()], fn_rows));
         }
         let mut settings = pages::applied_settings(ws, lang.code());
         settings.retain(|s| {

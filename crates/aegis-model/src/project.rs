@@ -5386,9 +5386,9 @@ impl Project {
             (base_f, base_r)
         };
 
-        let impact_tipping_points = baseline_risk
-            .map(|from_risk| self.impact_tipping_points_for(t, baseline_feasibility, from_risk))
-            .unwrap_or_default();
+        let impact_tipping_points = baseline_risk.map_or_default(|from_risk| {
+            self.impact_tipping_points_for(t, baseline_feasibility, from_risk)
+        });
 
         Ok(ThreatSensitivity {
             feasibility: baseline_feasibility,
@@ -5794,6 +5794,7 @@ impl Project {
         self.lint_data_flows(&mut findings);
         self.lint_components(&mut findings);
         self.lint_systems(&mut findings);
+        self.lint_functions(&mut findings);
         findings.sort_unstable();
         findings
     }
@@ -6162,6 +6163,16 @@ impl Project {
                 }));
             } else {
                 first_by_name.insert(system.name(), id);
+            }
+        }
+    }
+
+    fn lint_functions(&self, findings: &mut Vec<LintFinding>) {
+        for (id, function) in self.elements(ElementKind::Function) {
+            if function.links().is_empty() {
+                findings.push(LintFinding::new(LintCode::FunctionWithoutComponents {
+                    function: id,
+                }));
             }
         }
     }
@@ -6618,13 +6629,9 @@ impl Project {
                 return true;
             }
         }
-        if t.claim
+        t.claim
             .and_then(|claim_idx| self.claims.id(claim_idx))
             .is_some_and(|cl| claims.modified().binary_search(&cl).is_ok())
-        {
-            return true;
-        }
-        false
     }
 
     fn tree_affected_by_controls(
@@ -10064,6 +10071,15 @@ impl Project {
             return Err(ModelError::ComponentHasControls {
                 component: id,
                 controls,
+            });
+        }
+        let elements = self
+            .elements
+            .inbound(crate::element::LinkTarget::Component(id));
+        if elements > 0 {
+            return Err(ModelError::ComponentLinkedFromElements {
+                component: id,
+                elements,
             });
         }
         Ok(())

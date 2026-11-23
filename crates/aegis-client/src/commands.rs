@@ -1707,6 +1707,16 @@ impl Edit {
                     ItemRef::Component(*component),
                     &p,
                 ));
+                let target = aegis_model::LinkTarget::Component(*component);
+                for (id, e) in project.elements(aegis_model::ElementKind::Function) {
+                    if e.links().contains(&target) {
+                        ops.push(Op::UnlinkElement {
+                            id,
+                            target,
+                            provenance: p.clone(),
+                        });
+                    }
+                }
                 for (_, iface_id, iface) in project.interfaces() {
                     if iface.component() == c_idx {
                         ops.extend(clear_via_ops(project, ItemRef::Interface(iface_id), &p));

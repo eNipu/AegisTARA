@@ -404,6 +404,15 @@ pub enum ModelError {
         /// How many elements link it.
         elements: u32,
     },
+    /// Elements (for example functions) still link the component, so it cannot
+    /// be removed (ARC-06).
+    #[error("component {component} is still linked from {elements} elements")]
+    ComponentLinkedFromElements {
+        /// The component.
+        component: ComponentId,
+        /// How many elements link it.
+        elements: u32,
+    },
     /// A component with this ID already exists in the project.
     #[error("component {0} already exists in the project")]
     DuplicateComponent(ComponentId),

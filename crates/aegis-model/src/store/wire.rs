@@ -2795,12 +2795,14 @@ pub(super) enum OpWire {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum LinkWire {
     Threat(WireId<ThreatId>),
+    Component(WireId<ComponentId>),
 }
 
 impl LinkWire {
     pub(super) fn into_target(self) -> crate::element::LinkTarget {
         match self {
             Self::Threat(t) => crate::element::LinkTarget::Threat(t.0),
+            Self::Component(c) => crate::element::LinkTarget::Component(c.0),
         }
     }
 }
@@ -3819,8 +3821,7 @@ mod tests {
         let order = KeyOrder::new(&m);
         let keys: Vec<_> = order
             .sorted_properties(m.all_properties())
-            .map(|it| it.filter_map(|p| m.property_key(p)).collect())
-            .unwrap_or_default();
+            .map_or_default(|it| it.filter_map(|p| m.property_key(p)).collect());
         assert_eq!(keys, ["a", "c", "i"]);
         let cats: Vec<_> = order
             .impact_categories

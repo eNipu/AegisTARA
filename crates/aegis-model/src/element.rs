@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::diff::EntityDiff;
 use crate::error::{EntityKind, ModelError};
-use crate::id::{ElementId, ThreatId, parse_visual_num};
+use crate::id::{ComponentId, ElementId, ThreatId, parse_visual_num};
 use crate::op::Op;
 use crate::project::{Project, check_name, check_provenance};
 use crate::provenance::Provenance;
@@ -36,6 +36,8 @@ pub enum ElementKind {
     MisuseCase,
     /// A system: a named group of components (`SYS00`, ...).
     System,
+    /// A function of the item (`F00`, ...) implemented by components (ARC-06).
+    Function,
 }
 
 /// The kind of thing an element may link to.
@@ -44,6 +46,8 @@ pub enum ElementKind {
 pub enum TargetKind {
     /// A threat scenario.
     Threat,
+    /// A component of the item definition.
+    Component,
 }
 
 /// The target of one element link.
@@ -59,6 +63,8 @@ pub enum TargetKind {
 pub enum LinkTarget {
     /// A threat scenario.
     Threat(ThreatId),
+    /// A component of the item definition.
+    Component(ComponentId),
 }
 
 impl LinkTarget {
@@ -67,6 +73,7 @@ impl LinkTarget {
     pub const fn kind(self) -> TargetKind {
         match self {
             Self::Threat(_) => TargetKind::Threat,
+            Self::Component(_) => TargetKind::Component,
         }
     }
 }
@@ -127,12 +134,27 @@ const SYSTEM: KindDef = KindDef {
     max_links: 0,
 };
 
+const FUNCTION: KindDef = KindDef {
+    kind: ElementKind::Function,
+    key: "function",
+    prefix: "F",
+    file_stem: "functions",
+    label: "function",
+    targets: &[TargetKind::Component],
+    max_elements: MAX_ELEMENTS_PER_KIND,
+    max_links: MAX_ELEMENT_LINKS,
+};
+
 /// The kernel kind table, in [`ElementKind`] order.
-pub const KINDS: &[KindDef] = &[MISUSE_CASE, SYSTEM];
+pub const KINDS: &[KindDef] = &[MISUSE_CASE, SYSTEM, FUNCTION];
 
 impl ElementKind {
     /// Every kind, in table order.
-    pub const ALL: &'static [ElementKind] = &[ElementKind::MisuseCase, ElementKind::System];
+    pub const ALL: &'static [ElementKind] = &[
+        ElementKind::MisuseCase,
+        ElementKind::System,
+        ElementKind::Function,
+    ];
 
     /// The table row of this kind. Time O(1).
     ///
@@ -146,6 +168,7 @@ impl ElementKind {
         match self {
             Self::MisuseCase => &MISUSE_CASE,
             Self::System => &SYSTEM,
+            Self::Function => &FUNCTION,
         }
     }
 
@@ -603,6 +626,11 @@ impl Project {
             LinkTarget::Threat(t) => {
                 if self.threat_scenario_idx(&t).is_none() {
                     return Err(ModelError::UnknownThreatScenario(t));
+                }
+            }
+            LinkTarget::Component(c) => {
+                if self.component_idx(&c).is_none() {
+                    return Err(ModelError::UnknownComponent(c));
                 }
             }
         }

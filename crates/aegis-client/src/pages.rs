@@ -2876,6 +2876,15 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 s,
             )
         }
+        L::FunctionWithoutComponents { function } => {
+            let name = project.element(function).map_or("?", |e| e.name());
+            return ProblemRow {
+                error: code.severity() == LintSeverity::Error,
+                visual_id: project.element_visual_id(function).unwrap_or_default(),
+                text: format!("Function \"{name}\" is not implemented by any component."),
+                target: None,
+            };
+        }
         L::SystemBoundaryFlowWithoutThreat { flow } => {
             let s = Selection::DataFlow(flow);
             (
