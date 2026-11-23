@@ -1042,7 +1042,7 @@ impl Project {
         let view = SnapshotView {
             format: "aegis-project",
             version: FORMAT_VERSION,
-            methodology: MethodologyView::of(m),
+            methodology: MethodologyView::of_project(self),
             assets: Assets(ctx),
             damage_scenarios: Damages(ctx),
             threat_scenarios: Threats(ctx),
@@ -1167,6 +1167,7 @@ impl Project {
         }
         let snapshot = decoded?;
         let mut project = Project::new(methodology);
+        project.set_methodology_pin(snapshot.methodology.digest);
         // Add components in two passes (roots first, then parent links) so
         // parent-after-child ID ordering in snapshots never fails.
         let mut pending_parents = Vec::new();
@@ -1715,11 +1716,11 @@ mod tests {
         assert!(p.save(&mut bytes).is_ok());
         // The test methodology is named only through the test kit, so no
         // `src` file names it (job 012, AC6).
-        let (key, version) = (m.key(), m.version());
+        let (key, version, digest) = (m.key(), m.version(), m.pack_digest());
         assert_eq!(
             String::from_utf8_lossy(&bytes),
             format!(
-                "{{\"format\":\"aegis-project\",\"version\":1,\"methodology\":{{\"key\":\"{key}\",\"version\":\"{version}\"}},\"assets\":[],\"damage_scenarios\":[],\"threat_scenarios\":[]}}\n"
+                "{{\"format\":\"aegis-project\",\"version\":1,\"methodology\":{{\"key\":\"{key}\",\"version\":\"{version}\",\"digest\":\"{digest}\"}},\"assets\":[],\"damage_scenarios\":[],\"threat_scenarios\":[]}}\n"
             )
         );
         assert_eq!(Project::load(bytes.as_slice(), m).ok(), Some(p));

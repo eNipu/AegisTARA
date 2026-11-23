@@ -624,6 +624,9 @@ impl RefCounts {
 #[derive(Clone, Debug)]
 pub struct Project {
     methodology: Arc<Methodology>,
+    /// Immutable methodology pack digest pinned on this project (`None` for
+    /// legacy unpinned v1 files until explicitly pinned).
+    pinned_digest: Option<Arc<str>>,
     /// Most slots per arena, tombstones included.
     slot_limit: u32,
     assets: Arena<AssetId, AssetIdx, Asset>,
@@ -779,8 +782,10 @@ impl Project {
     /// ```
     #[must_use]
     pub fn with_slot_limit(methodology: Arc<Methodology>, limit: u32) -> Self {
+        let pinned_digest = Some(Arc::from(methodology.pack_digest()));
         Project {
             methodology,
+            pinned_digest,
             slot_limit: limit,
             assets: Arena::new(),
             damages: Arena::new(),
@@ -821,6 +826,23 @@ impl Project {
     #[must_use]
     pub fn methodology(&self) -> &Arc<Methodology> {
         &self.methodology
+    }
+
+    /// The pinned methodology pack digest (`sha256:<hex>`), or `None` for an
+    /// unpinned legacy project loaded without a digest.
+    #[must_use]
+    pub fn methodology_pin(&self) -> Option<&str> {
+        self.pinned_digest.as_deref()
+    }
+
+    /// Explicitly pins this project to its current methodology's immutable
+    /// content digest (used after verifying a legacy unpinned project).
+    pub fn pin_methodology(&mut self) {
+        self.pinned_digest = Some(Arc::from(self.methodology.pack_digest()));
+    }
+
+    pub(crate) fn set_methodology_pin(&mut self, pin: Option<Arc<str>>) {
+        self.pinned_digest = pin;
     }
 
     // -- Assets ------------------------------------------------------------------

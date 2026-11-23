@@ -1308,36 +1308,48 @@ impl<'de> Deserialize<'de> for CatalogRefText {
     }
 }
 
-/// `{"key": ..., "version": ...}` as read.
+/// `{"key": ..., "version": ..., "digest": ...}` as read.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawMethodology {
     key: Key,
     version: VersionText,
+    #[serde(default)]
+    digest: Option<VersionText>,
 }
 
 /// The file's methodology, checked as it is read: the key must equal the
-/// supplied methodology's key, else [`StoreError::MethodologyMismatch`]
-/// before any vocabulary key is looked up. Any version is accepted (ADR
-/// 0009, open question 1) and kept.
+/// supplied methodology's key, and when a content `digest` pin is present it
+/// must equal `methodology.pack_digest()`, else [`StoreError::MethodologyMismatch`]
+/// before any vocabulary key is looked up.
 pub(super) struct CheckedMethodology {
     pub(super) version: Arc<str>,
+    pub(super) digest: Option<Arc<str>>,
 }
 
 impl<'de> Deserialize<'de> for CheckedMethodology {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = RawMethodology::deserialize(d)?;
         let m = context().map_err(raise)?;
-        if &*raw.key.0 == m.key() {
-            Ok(CheckedMethodology {
-                version: raw.version.0,
-            })
-        } else {
-            Err(raise(Fault::MethodologyMismatch {
+        if &*raw.key.0 != m.key() {
+            return Err(raise(Fault::MethodologyMismatch {
                 expected: Arc::from(m.key()),
                 found: raw.key.0,
-            }))
+            }));
         }
+        let digest = raw.digest.map(|d| d.0);
+        if let Some(found) = &digest
+            && &**found != m.pack_digest()
+        {
+            return Err(raise(Fault::MethodologyMismatch {
+                expected: Arc::from(m.pack_digest()),
+                found: Arc::clone(found),
+            }));
+        }
+        Ok(CheckedMethodology {
+            version: raw.version.0,
+            digest,
+        })
     }
 }
 
@@ -1532,7 +1544,7 @@ pub(super) struct SnapshotWire {
     #[serde(rename = "version")]
     _version: FormatVersion,
     #[serde(rename = "methodology")]
-    _methodology: CheckedMethodology,
+    pub(super) methodology: CheckedMethodology,
     pub(super) assets: Vec<AssetWire>,
     pub(super) damage_scenarios: Vec<DamageWire>,
     pub(super) threat_scenarios: Vec<ThreatWire>,
@@ -2905,11 +2917,13 @@ impl<D: fmt::Display> Serialize for Text<D> {
     }
 }
 
-/// `{"key": ..., "version": ...}`.
+/// `{"key": ..., "version": ..., "digest": ...}`.
 #[derive(serde::Serialize)]
 pub(super) struct MethodologyView<'a> {
     pub(super) key: &'a str,
     pub(super) version: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) digest: Option<&'a str>,
 }
 
 impl<'a> MethodologyView<'a> {
@@ -2917,6 +2931,16 @@ impl<'a> MethodologyView<'a> {
         MethodologyView {
             key: m.key(),
             version: m.version(),
+            digest: None,
+        }
+    }
+
+    pub(super) fn of_project(p: &'a crate::Project) -> Self {
+        let m = p.methodology();
+        MethodologyView {
+            key: m.key(),
+            version: m.version(),
+            digest: p.methodology_pin(),
         }
     }
 }

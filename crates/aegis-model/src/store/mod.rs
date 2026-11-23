@@ -53,6 +53,65 @@ use std::fmt;
 pub use op_log::{LoggedOp, OpCodec, OpLogReader, OpLogWriter};
 pub use workspace::WorkspaceFile;
 
+/// The methodology identity read from a snapshot or workspace header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MethodologyPin {
+    /// A pinned snapshot/workspace carrying an immutable pack content digest.
+    Pinned {
+        /// Methodology key.
+        key: String,
+        /// Methodology version string.
+        version: String,
+        /// Immutable pack digest (`sha256:<hex>`).
+        digest: String,
+    },
+    /// A legacy v1 file written before methodology pinning existed (no digest).
+    /// Callers must never silently guess the original pack; require explicit
+    /// verification/migration.
+    LegacyUnpinned {
+        /// Methodology key.
+        key: String,
+        /// Methodology version string.
+        version: String,
+    },
+}
+
+/// Inspects the `methodology` header of a project snapshot JSON byte slice
+/// without decoding the full project.
+///
+/// # Errors
+///
+/// [`crate::StoreError::Decode`] if the input is not valid JSON or lacks a
+/// `methodology` object with `key` and `version`.
+pub fn inspect_methodology_pin(bytes: &[u8]) -> Result<MethodologyPin, crate::StoreError> {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        methodology: HeaderMethodology,
+    }
+    #[derive(serde::Deserialize)]
+    struct HeaderMethodology {
+        key: String,
+        version: String,
+        #[serde(default)]
+        digest: Option<String>,
+    }
+    let header: Header = serde_json::from_slice(bytes).map_err(|e| crate::StoreError::Decode {
+        line: e.line() as u64,
+        column: e.column() as u64,
+    })?;
+    Ok(match header.methodology.digest {
+        Some(digest) if !digest.is_empty() => MethodologyPin::Pinned {
+            key: header.methodology.key,
+            version: header.methodology.version,
+            digest,
+        },
+        _ => MethodologyPin::LegacyUnpinned {
+            key: header.methodology.key,
+            version: header.methodology.version,
+        },
+    })
+}
+
 use crate::applicability::{MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
 use crate::control::{
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS,

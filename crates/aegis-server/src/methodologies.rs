@@ -12,7 +12,33 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
-use aegis_model::{MAX_PACK_FILE_BYTES, Methodology, PackError};
+use aegis_model::{MAX_PACK_FILE_BYTES, Methodology, MethodologyPin, PackError};
+
+/// Why a pinned methodology could not be resolved for an existing project.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PinError {
+    /// The project pins an immutable pack digest that this server does not hold.
+    #[error("pinned methodology pack {digest} ({key} {version}) is not available on this server")]
+    MissingPinnedPack {
+        /// Methodology key recorded in the project header.
+        key: String,
+        /// Methodology version recorded in the project header.
+        version: String,
+        /// Immutable pack digest (`sha256:<hex>`).
+        digest: String,
+    },
+    /// The project is a legacy unpinned file with no content digest. Never
+    /// guess the original pack; require explicit verification and migration.
+    #[error(
+        "legacy project ({key} {version}) has no methodology pin and requires explicit migration"
+    )]
+    UnpinnedLegacy {
+        /// Methodology key recorded in the legacy header.
+        key: String,
+        /// Methodology version recorded in the legacy header.
+        version: String,
+    },
+}
 
 /// A failure while loading packs.
 #[derive(Debug, thiserror::Error)]
@@ -47,10 +73,13 @@ pub struct HostedMethodology {
     pub pack: Arc<[u8]>,
 }
 
-/// All hosted methodologies, by key. Ordered, so listings are stable (P4).
+/// All hosted methodologies, indexed by active key (for new projects) and by
+/// immutable content digest (for loading pinned projects and baselines).
+/// Ordered, so listings are stable (P4).
 #[derive(Clone, Debug, Default)]
 pub struct Methodologies {
     by_key: BTreeMap<String, HostedMethodology>,
+    by_digest: BTreeMap<String, HostedMethodology>,
 }
 
 impl Methodologies {
@@ -117,20 +146,76 @@ impl Methodologies {
         if self.by_key.contains_key(&key) {
             return Err(PackLoadError::Duplicate(key));
         }
-        self.by_key.insert(
-            key,
-            HostedMethodology {
-                methodology: Arc::new(methodology),
-                pack: pack.into(),
-            },
-        );
+        let digest = methodology.pack_digest().to_owned();
+        let hosted = HostedMethodology {
+            methodology: Arc::new(methodology),
+            pack: pack.into(),
+        };
+        self.by_digest.insert(digest, hosted.clone());
+        self.by_key.insert(key, hosted);
         Ok(())
     }
 
-    /// Looks a methodology up by key. Time O(log n).
+    /// Registers a historical/pinned pack by its immutable content digest
+    /// without replacing the active `by_key` pack used for new projects.
+    /// Returns the immutable digest (`sha256:<hex>`).
+    ///
+    /// # Errors
+    ///
+    /// [`PackLoadError::Invalid`] if `pack` fails validation.
+    pub fn add_pinned_bytes(&mut self, origin: &str, pack: &[u8]) -> Result<String, PackLoadError> {
+        let methodology =
+            Methodology::read_pack(pack).map_err(|source| PackLoadError::Invalid {
+                path: origin.to_owned(),
+                source,
+            })?;
+        let digest = methodology.pack_digest().to_owned();
+        self.by_digest
+            .entry(digest.clone())
+            .or_insert_with(|| HostedMethodology {
+                methodology: Arc::new(methodology),
+                pack: pack.into(),
+            });
+        Ok(digest)
+    }
+
+    /// Looks a methodology up by key (for creating new projects). Time O(log n).
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&HostedMethodology> {
         self.by_key.get(key)
+    }
+
+    /// Looks a methodology up strictly by its immutable content digest.
+    #[must_use]
+    pub fn get_by_digest(&self, digest: &str) -> Option<&HostedMethodology> {
+        self.by_digest.get(digest)
+    }
+
+    /// Resolves a [`MethodologyPin`] strictly: pinned projects load only by
+    /// immutable digest (never falling back to `by_key`), and legacy unpinned
+    /// projects are reported explicitly instead of guessing.
+    ///
+    /// # Errors
+    ///
+    /// [`PinError::MissingPinnedPack`] or [`PinError::UnpinnedLegacy`].
+    pub fn resolve_pin(&self, pin: &MethodologyPin) -> Result<&HostedMethodology, PinError> {
+        match pin {
+            MethodologyPin::Pinned {
+                key,
+                version,
+                digest,
+            } => self
+                .get_by_digest(digest)
+                .ok_or_else(|| PinError::MissingPinnedPack {
+                    key: key.clone(),
+                    version: version.clone(),
+                    digest: digest.clone(),
+                }),
+            MethodologyPin::LegacyUnpinned { key, version } => Err(PinError::UnpinnedLegacy {
+                key: key.clone(),
+                version: version.clone(),
+            }),
+        }
     }
 
     /// All hosted methodologies in key order.
@@ -169,5 +254,68 @@ mod tests {
         let bad = me.add_bytes("junk", b"{}");
         assert!(matches!(bad, Err(PackLoadError::Invalid { .. })));
         assert_eq!(me.iter().count(), 3);
+    }
+
+    #[test]
+    fn pinned_pack_resolution_retains_historical_pack_and_refuses_legacy_guessing() {
+        let orig_bytes = Methodology::iso21434_r155_pack().as_bytes().to_vec();
+        let mut altered_def =
+            aegis_model::MethodologyDef::read_pack(orig_bytes.as_slice()).expect("read");
+        let highest = altered_def
+            .risk_levels
+            .last()
+            .expect("risk levels")
+            .key
+            .clone();
+        altered_def.impact_categories[0].risk_matrix[0][0] = highest;
+        let mut altered_bytes = Vec::new();
+        altered_def
+            .write_pack(&mut altered_bytes)
+            .expect("write altered");
+
+        let mut hosted = Methodologies::default();
+        // Host altered pack as today's active pack for `iso21434-r155`.
+        hosted
+            .add_bytes("active", &altered_bytes)
+            .expect("add active");
+        // Retain the historical original pack by immutable digest.
+        let orig_digest = hosted
+            .add_pinned_bytes("historical", &orig_bytes)
+            .expect("add historical");
+        let active_digest = hosted
+            .get("iso21434-r155")
+            .expect("active")
+            .methodology
+            .pack_digest()
+            .to_owned();
+        assert_ne!(orig_digest, active_digest);
+
+        let pin = MethodologyPin::Pinned {
+            key: "iso21434-r155".into(),
+            version: "0.1.0".into(),
+            digest: orig_digest.clone(),
+        };
+        let resolved = hosted.resolve_pin(&pin).expect("resolves historical pack");
+        assert_eq!(resolved.methodology.pack_digest(), orig_digest);
+
+        let missing = MethodologyPin::Pinned {
+            key: "iso21434-r155".into(),
+            version: "0.1.0".into(),
+            digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .into(),
+        };
+        assert!(matches!(
+            hosted.resolve_pin(&missing),
+            Err(PinError::MissingPinnedPack { .. })
+        ));
+
+        let legacy = MethodologyPin::LegacyUnpinned {
+            key: "iso21434-r155".into(),
+            version: "0.1.0".into(),
+        };
+        assert!(matches!(
+            hosted.resolve_pin(&legacy),
+            Err(PinError::UnpinnedLegacy { .. })
+        ));
     }
 }

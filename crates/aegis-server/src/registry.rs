@@ -490,9 +490,31 @@ impl<S: ProjectStore> Registry<S> {
             .load(id)
             .await?
             .ok_or(ServerError::UnknownProject(id))?;
-        let Some(hosted) = self.methodologies.get(&stored.meta.methodology_key) else {
-            tracing::error!(project = %id, key = %stored.meta.methodology_key, "stored project uses a methodology this server does not host");
-            return Err(ServerError::Internal);
+        let hosted = match aegis_model::inspect_methodology_pin(&stored.snapshot.bytes) {
+            Ok(aegis_model::MethodologyPin::Pinned {
+                key,
+                version,
+                digest,
+            }) => {
+                let Some(h) = self.methodologies.get_by_digest(&digest) else {
+                    tracing::error!(
+                        project = %id,
+                        key = %key,
+                        version = %version,
+                        digest = %digest,
+                        "stored project pins a methodology pack digest this server does not hold"
+                    );
+                    return Err(ServerError::Internal);
+                };
+                h
+            }
+            _ => {
+                let Some(h) = self.methodologies.get(&stored.meta.methodology_key) else {
+                    tracing::error!(project = %id, key = %stored.meta.methodology_key, "stored project uses a methodology this server does not host");
+                    return Err(ServerError::Internal);
+                };
+                h
+            }
         };
         let methodology = Arc::clone(&hosted.methodology);
         let rebuilt = tokio::task::spawn_blocking(move || Loaded::rebuild(stored, methodology))

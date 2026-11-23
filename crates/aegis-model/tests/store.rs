@@ -672,13 +672,24 @@ fn reordered_methodology_keeps_meaning() {
         r.factor_level(factor(&r, "skill"), "expert")
     );
 
-    // Snapshot: same keys per entity, identical bytes when saved again.
+    // Pinned snapshot rejects the altered methodology pack (223-methodology-pins).
     let ops = second_ops(&m);
     let p = apply_all(&m, &ops);
     let bytes = save(&p);
-    let loaded = load(&bytes, &r).expect("loads under the reordered methodology");
+    assert!(matches!(
+        load(&bytes, &r),
+        Err(StoreError::MethodologyMismatch { .. })
+    ));
+
+    // Legacy unpinned snapshot: same keys per entity, identical bytes when saved again.
+    let needle = format!(r#","digest":"{}""#, m.pack_digest());
+    let unpinned_bytes = String::from_utf8(bytes.clone())
+        .expect("utf8")
+        .replacen(&needle, "", 1)
+        .into_bytes();
+    let loaded = load(&unpinned_bytes, &r).expect("unpinned snapshot loads under reordered");
     assert_eq!(describe(&loaded), describe(&p));
-    assert_eq!(save(&loaded), bytes);
+    assert_eq!(save(&loaded), unpinned_bytes);
 
     // Op log: every op reads back, and re-encodes to identical bytes.
     let log = write_log(&m, &ops);

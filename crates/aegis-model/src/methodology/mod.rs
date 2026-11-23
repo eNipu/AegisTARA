@@ -1298,6 +1298,51 @@ pub struct Methodology {
     clause_refs: BTreeMap<Arc<str>, Vec<Arc<str>>>,
     /// Every declared property.
     all_properties: PropertySet,
+    /// Immutable content digest (`sha256:<hex>`) of the canonical pack JSON.
+    pack_digest: Arc<str>,
+}
+
+/// Computes `sha256:<64 lowercase hex>` over the canonical JSON encoding of
+/// `def`, sorting unordered vocabulary collections by key so declaration order
+/// does not alter the digest while every semantic rule (matrices, level order,
+/// attack potential bands, and keys) is pinned.
+fn pack_digest_of(def: &MethodologyDef) -> Arc<str> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    let mut normalized = def.clone();
+    normalized.properties.sort_by(|a, b| a.key.cmp(&b.key));
+    normalized
+        .threat_categories
+        .sort_by(|a, b| a.key.cmp(&b.key));
+    normalized.catalog_schemes.sort_by(|a, b| a.key.cmp(&b.key));
+    normalized
+        .impact_categories
+        .sort_by(|a, b| a.key.cmp(&b.key));
+    normalized
+        .element_names
+        .interface_kinds
+        .sort_by(|a, b| a.key.cmp(&b.key));
+    normalized
+        .element_names
+        .attack_types
+        .sort_by(|a, b| a.key.cmp(&b.key));
+    normalized
+        .element_names
+        .control_kinds
+        .sort_by(|a, b| a.key.cmp(&b.key));
+
+    let mut canonical = Vec::new();
+    // Serializing an in-memory `MethodologyDef` to a `Vec<u8>` cannot fail
+    // for valid definitions; fall back to empty bytes only if unreachable.
+    let _ = normalized.write_pack(&mut canonical);
+    let hash = Sha256::digest(&canonical);
+    let mut out = String::with_capacity(7 + 64);
+    out.push_str("sha256:");
+    for b in hash {
+        let _ = write!(out, "{b:02x}");
+    }
+    Arc::from(out)
 }
 
 /// Checks `[a-z][a-z0-9_-]{0,63}`. The length is checked first, so an
@@ -1476,6 +1521,7 @@ impl Methodology {
         )?;
         Self::check_translations(&def.element_names.translations)?;
         Self::check_clause_refs(&def.clause_refs)?;
+        let pack_digest = pack_digest_of(&def);
         let translations = def.element_names.translations.clone();
 
         Ok(Methodology {
@@ -1508,7 +1554,19 @@ impl Methodology {
             require_rationale: def.require_rationale,
             clause_refs: def.clause_refs,
             all_properties,
+            pack_digest,
         })
+    }
+
+    /// Immutable content digest (`sha256:<64 lowercase hex>`) of this
+    /// methodology's canonical pack JSON (223-methodology-pins).
+    ///
+    /// Any change to the risk matrix, impact/feasibility levels, attack
+    /// potential bands, or vocabularies changes this digest even when
+    /// [`key`](Self::key) and [`version`](Self::version) stay the same.
+    #[must_use]
+    pub fn pack_digest(&self) -> &str {
+        &self.pack_digest
     }
 
     fn check_element_names(names: &ElementNamesDef) -> Result<(), MethodologyError> {
