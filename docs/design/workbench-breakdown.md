@@ -1,14 +1,14 @@
 # Workbench breakdown: requirements and jobs
 
 - Date: 2026-11-10
-- Status: agreed direction (D32 to D39), cut into requirements and jobs. Nothing here is in `factory/backlog.md` yet; the owner moves lines there when a group should start.
+- Status: agreed direction (D32 to D39), cut into requirements and jobs. Selected jobs are now delivered or queued; `factory/backlog.md` is the execution order and `factory/board.json` records started jobs. Architecture-review update 2026-11-22: safety jobs 214 to 224 precede new feature work; the GPUI runtime/migration contract is in `factory/jobs/207-gpui-spec/spec.md`.
 - Reads with: [workbench-architecture.md](workbench-architecture.md) and [workbench-gui-first.md](workbench-gui-first.md), whose section 7 changes jobs 168, 187, 189 and 195 and adds 203 and 204.
 - Job numbers start at 162 (161 is the highest used). Sizes: S is a day or two, M is about a week, L is two weeks or more.
 
 ## TLDR
 
-- Eight groups, 43 jobs. Groups 1 to 4 are mostly model, store and API work and run under the current app.
-- **Start with job 162** (workspace files in `aegis-model`). Its brief is [factory/jobs/162-workspace-files/spec.md](../../factory/jobs/162-workspace-files/spec.md).
+- Eight original feature groups. Groups 1 to 4 are mostly model, store and API work and run under the current app; the later safety and migration follow-ups are scheduled in the backlog.
+- Job 162 (workspace files in `aegis-model`) is delivered. Its brief is [factory/jobs/162-workspace-files/spec.md](../../factory/jobs/162-workspace-files/spec.md). Do not restart it from this historical dependency outline.
 - Group 5 begins with the toolkit spike (job 181). No new screen work goes into Slint after job 182 starts.
 - Open backlog jobs are sorted into keep, split and drop in section 3.
 
@@ -138,10 +138,14 @@ Every job follows the element recipe in [architecture.md](../architecture.md) II
 | 188-inspector | WBX-06 | M | 187 | Go to cause from a risk lands on the deciding step |
 | 189-table-tabs | WBX-07 (uses the open relation registry and table convention jobs); carries the screen part of UI-14 that job 129 left out: UI-14.1 computed header mark and cell text, UI-14.2 link chips, UI-14.3 excluded-row hatch (needed by 135), every table rendered from `TableId::columns` and `table_rows` with no visible loss | L | 182 | Assets, threats and the risk register are edited in tabs |
 | 190-settings-layers | WBX-08 | M | 171, 172, 182 | The settings mock-up works on the sample; reset removes an override |
-| 191-bottom-dock | WBX-09 | M | 165, 185, 182 | A hand edit, a task proposal and a lint finding each appear and can be acted on |
-| 203-embedded-versions | A git library inside the app: save version, mark baseline, restore; license check; no git installation needed (D40) | M | 164 | A machine with no git saves, tags, compares and restores |
+| 191-bottom-dock | WBX-09 retirement slice: problems and saved/pending changes from existing client state | M | 182, 219; split approved in 207 | Lint navigation and saved/pending status work by keyboard; external-file changes (165) and task output (183/185) stay follow-ups |
+| 203-embedded-versions | A git library inside the app: save version, mark baseline, restore; license check; no git installation needed (D40) | M | 164, 219, 223, 224 | A machine with no git saves, tags, compares and restores with pinned calculation identities and no pending draft lost |
 | 204-guided-steps | New workspace, new system, new configuration, each three steps at most (D40) | M | 182, 200 | A new user creates a gateway system from a template without help |
-| 192-retire-slint | Remove `aegis-shell` and the Slint license exception | S | 187 to 191, 195 | The owner has done one real TARA in the new shell |
+| 225-gpui-hosted-editing | Hosted edits, undo, leases, confirmation, reconnect and close through the shared Session; not a separately writable downloaded snapshot | M | approved 206/207, 208, 214, 218, 219, 224 | Real-server edit/undo/reopen, rejection, competing editor and disconnect/drain tests pass |
+| 227-legacy-workspace-migration | Implement safe legacy conversion and archive unsupported historical artifacts explicitly, without changing the original | M | approved 207 contract, 203, 215, 219, 223, 224 | Legacy fixtures, recovery/interruption, retry, changed-destination protection and rollback pass with preserved calculation inputs |
+| 192-retire-slint | Remove `aegis-shell` and the Slint license exception only after workflow parity | S | 214 to 224, 225, 227, 187, 191, 195, 203, 209, admin/accounts/license in 213; remaining accepted screen scope in 207 | 207's local/hosted capability matrix, recovery and legacy conversion tests pass; owner completes a real TARA; intentional removals are explicit |
+
+The runtime migration is not only a toolkit swap: GPUI local mode saves workspace files directly, while hosted editing must use the existing Session/server authority. Section 2 of `factory/jobs/207-gpui-spec/spec.md` defines saved state, asynchronous transitions, legacy-data preservation and the retirement evidence. Jobs remain `[design]` where the backlog says so; this table does not approve a mockup or claim a test passed. Job 207 must resolve any older dependency chain not yet queued (notably 169 → 193 → 194 → 195) before unlocking its dependant. Current project settings/report parity in 209 is separate from the later 171/172/190 configuration-layer work.
 
 ### Group 6: item definition and reports (D38)
 
