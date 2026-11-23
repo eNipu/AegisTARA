@@ -534,10 +534,12 @@ async fn serve<S: ProjectStore>(
     let serving = server::router(service, public, layer).serve_with_shutdown(listen, async move {
         stop_signal().await;
         tracing::info!("shutting down");
-        // Unloading the projects writes their snapshots before the
-        // graceful drain finishes.
-        registry.shutdown().await;
+        // Start the grace timer before draining projects so a wedged store
+        // cannot keep the process alive past SHUTDOWN_GRACE.
         let _ = stopping.send(());
+        if !registry.shutdown_within(SHUTDOWN_GRACE).await {
+            tracing::warn!("project shutdown did not finish in time");
+        }
     });
     // A client that keeps a stream open must not keep the process alive for
     // ever (R6): after the grace period the server exits anyway. Everything

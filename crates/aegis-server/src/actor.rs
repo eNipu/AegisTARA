@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use aegis_model::{OpCodec, Project, ProjectEvalCache, ThreatId};
 use bytes::Bytes;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use crate::auth::Principal;
@@ -145,6 +145,7 @@ pub struct ProjectHandle {
     id: ProjectId,
     tx: mpsc::Sender<Cmd>,
     wait: Duration,
+    stopped: watch::Receiver<bool>,
 }
 
 impl ProjectHandle {
@@ -158,6 +159,14 @@ impl ProjectHandle {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.tx.is_closed()
+    }
+
+    /// Waits until the actor task has finished its final snapshot and exited.
+    /// Callers replacing a closed handle wait on this so at most one actor
+    /// touches storage for a project at a time.
+    pub async fn wait_stopped(&self) {
+        let mut rx = self.stopped.clone();
+        let _ = rx.wait_for(|done| *done).await;
     }
 
     async fn call<T>(&self, make: impl FnOnce(Reply<T>) -> Cmd) -> Result<T, ServerError> {
@@ -431,6 +440,7 @@ pub fn spawn<S: ProjectStore>(
     config: &ServerConfig,
 ) -> ProjectHandle {
     let (tx, rx) = mpsc::channel(config.mailbox);
+    let (stopped_tx, stopped) = watch::channel(false);
     let id = loaded.meta.id;
     let codec = OpCodec::new(Arc::clone(loaded.project.methodology()));
     let now = Instant::now();
@@ -453,17 +463,27 @@ pub fn spawn<S: ProjectStore>(
         broken: false,
         deleted: false,
     };
-    tokio::spawn(actor.run(rx));
+    tokio::spawn(actor.run(rx, stopped_tx));
     ProjectHandle {
         id,
         tx,
         wait: config.mailbox_wait,
+        stopped,
+    }
+}
+
+struct StopGuard(watch::Sender<bool>);
+
+impl Drop for StopGuard {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
     }
 }
 
 enum Flow {
     Continue,
     Stop,
+    Shutdown(Reply<()>),
 }
 
 struct Actor<S> {
@@ -492,7 +512,9 @@ struct Actor<S> {
 }
 
 impl<S: ProjectStore> Actor<S> {
-    async fn run(mut self, mut rx: mpsc::Receiver<Cmd>) {
+    async fn run(mut self, mut rx: mpsc::Receiver<Cmd>, stopped_tx: watch::Sender<bool>) {
+        let stop_guard = StopGuard(stopped_tx);
+        let mut shutdown_reply = None;
         loop {
             let wake = self.next_wake();
             let cmd = tokio::select! {
@@ -506,8 +528,15 @@ impl<S: ProjectStore> Actor<S> {
             };
             let Some(cmd) = cmd else { break };
             self.touch();
-            let flow = self.handle(cmd).await;
-            if self.broken || matches!(flow, Flow::Stop) {
+            match self.handle(cmd).await {
+                Flow::Continue => {}
+                Flow::Stop => break,
+                Flow::Shutdown(reply) => {
+                    shutdown_reply = Some(reply);
+                    break;
+                }
+            }
+            if self.broken {
                 break;
             }
             self.maintain().await;
@@ -515,10 +544,16 @@ impl<S: ProjectStore> Actor<S> {
                 break;
             }
         }
-        // Close the mailbox first so late callers fail fast and reload.
+        // Close the mailbox first so late callers fail fast and wait for exit.
         rx.close();
         if !self.broken && !self.deleted {
             self.snapshot_now().await;
+        }
+        // Signal waiters only after the final snapshot completes, then answer
+        // the shutdown caller so it observes both a closed mailbox and a stored snapshot.
+        drop(stop_guard);
+        if let Some(reply) = shutdown_reply {
+            let _ = reply.send(Ok(()));
         }
         tracing::debug!(project = %self.id, "project unloaded");
     }
@@ -697,11 +732,9 @@ impl<S: ProjectStore> Actor<S> {
                 }
             }
             Cmd::Shutdown(reply) => {
-                // Snapshot before answering, so a caller that waits for the
-                // reply knows the state is stored.
-                self.snapshot_now().await;
-                let _ = reply.send(Ok(()));
-                return Flow::Stop;
+                // Close the mailbox and write the final snapshot in `run` before
+                // answering, so the caller observes a stopped actor and stored state.
+                return Flow::Shutdown(reply);
             }
         }
         Flow::Continue

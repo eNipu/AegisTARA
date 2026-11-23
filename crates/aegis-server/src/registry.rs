@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use aegis_model::Project;
 use tokio::sync::OnceCell;
@@ -421,11 +422,16 @@ impl<S: ProjectStore> Registry<S> {
                     if self.closing.load(Ordering::SeqCst) {
                         self.remove_cell_if(id, &cell);
                         let _ = handle.shutdown().await;
+                        handle.wait_stopped().await;
                         return Err(ServerError::ShuttingDown);
                     }
                     if !handle.is_closed() {
                         return Ok(handle);
                     }
+                    // Wait for the retiring actor to finish its final snapshot
+                    // and exit before dropping its cell, so a replacement actor
+                    // can never overlap with it on storage.
+                    handle.wait_stopped().await;
                 }
                 LoadOutcome::Failed(failure) => {
                     self.remove_cell_if(id, &cell);
@@ -500,6 +506,7 @@ impl<S: ProjectStore> Registry<S> {
         let handle = actor::spawn(rebuilt, Arc::clone(&self.store), &self.config);
         if self.closing.load(Ordering::SeqCst) {
             let _ = handle.shutdown().await;
+            handle.wait_stopped().await;
             return Err(ServerError::ShuttingDown);
         }
         Ok(handle)
@@ -546,22 +553,40 @@ impl<S: ProjectStore> Registry<S> {
     /// Asks every loaded project to write a snapshot and stop. Call it
     /// when the server shuts down. New loads are refused once this starts.
     pub async fn shutdown(&self) {
-        let handles: Vec<ProjectHandle> = {
+        let _ = self.shutdown_within(Duration::from_secs(30)).await;
+    }
+
+    /// Closes registry admission, drains all active and in-flight project
+    /// cells concurrently, and waits up to `timeout` for every actor to write
+    /// its final snapshot and stop. Returns `true` if all actors finished
+    /// within the deadline.
+    pub async fn shutdown_within(&self, timeout: Duration) -> bool {
+        let cells: Vec<Cell> = {
             let mut map = self.lock();
             self.closing.store(true, Ordering::SeqCst);
-            map.drain()
-                .filter_map(|(_, cell)| match cell.get() {
-                    Some(LoadOutcome::Loaded(handle)) if !handle.is_closed() => {
-                        Some(handle.clone())
-                    }
-                    _ => None,
-                })
-                .collect()
+            map.drain().map(|(_, cell)| cell).collect()
         };
-        for handle in handles {
-            // Already stopped is fine.
-            let _ = handle.shutdown().await;
+        let mut tasks = tokio::task::JoinSet::new();
+        for cell in cells {
+            tasks.spawn(async move {
+                // If an in-flight loader already entered `get_or_init`, this
+                // waits for it to settle; if it had not entered yet, this
+                // settles the cell to `ShuttingDown` so it never starts.
+                let outcome = cell
+                    .get_or_init(|| async { LoadOutcome::Failed(LoadFailure::ShuttingDown) })
+                    .await
+                    .clone();
+                if let LoadOutcome::Loaded(handle) = outcome {
+                    let _ = handle.shutdown().await;
+                    handle.wait_stopped().await;
+                }
+            });
         }
+        tokio::time::timeout(timeout, async move {
+            while tasks.join_next().await.is_some() {}
+        })
+        .await
+        .is_ok()
     }
 
     /// How many projects are loaded right now.
@@ -625,6 +650,12 @@ mod tests {
         pause_load: AtomicBool,
         entered: Notify,
         release: Notify,
+        pause_append: AtomicBool,
+        append_entered: Notify,
+        append_release: Notify,
+        pause_snapshot: AtomicBool,
+        snapshot_entered: Notify,
+        snapshot_release: Notify,
     }
 
     impl GatedStore {
@@ -636,6 +667,12 @@ mod tests {
                 pause_load: AtomicBool::new(false),
                 entered: Notify::new(),
                 release: Notify::new(),
+                pause_append: AtomicBool::new(false),
+                append_entered: Notify::new(),
+                append_release: Notify::new(),
+                pause_snapshot: AtomicBool::new(false),
+                snapshot_entered: Notify::new(),
+                snapshot_release: Notify::new(),
             })
         }
     }
@@ -662,6 +699,10 @@ mod tests {
             self.inner.load(id).await
         }
         async fn append(&self, id: ProjectId, ops: &[StoredOp]) -> Result<(), StoreFault> {
+            if self.pause_append.load(Ordering::SeqCst) {
+                self.append_entered.notify_one();
+                self.append_release.notified().await;
+            }
             self.inner.append(id, ops).await
         }
         async fn verify_chain(&self, id: ProjectId) -> Result<ChainReport, StoreFault> {
@@ -672,6 +713,10 @@ mod tests {
             id: ProjectId,
             snapshot: &StoredSnapshot,
         ) -> Result<(), StoreFault> {
+            if self.pause_snapshot.load(Ordering::SeqCst) {
+                self.snapshot_entered.notify_one();
+                self.snapshot_release.notified().await;
+            }
             self.inner.save_snapshot(id, snapshot).await
         }
         async fn rename(&self, id: ProjectId, name: &str) -> Result<(), StoreFault> {
@@ -831,6 +876,19 @@ mod tests {
         registry.shutdown().await;
     }
 
+    fn encode_condition_op(registry: &Registry<GatedStore>, key: &str) -> bytes::Bytes {
+        let hosted = registry.methodologies().get(key).expect("methodology");
+        let codec = aegis_model::OpCodec::new(Arc::clone(&hosted.methodology));
+        let op = aegis_model::Op::AddCondition {
+            id: aegis_model::ConditionId::new_v7(),
+            name: "Ethernet".into(),
+            description: "".into(),
+            present: true,
+            provenance: aegis_model::Provenance::default(),
+        };
+        bytes::Bytes::from(codec.encode(&op).expect("encode op"))
+    }
+
     #[tokio::test]
     async fn shutdown_rejects_inflight_and_subsequent_loads() {
         let store = GatedStore::new();
@@ -843,16 +901,145 @@ mod tests {
         let inflight = tokio::spawn(async move { r1.with(meta.id, |_| async { Ok(()) }).await });
         store.entered.notified().await;
 
-        registry.shutdown().await;
+        let r2 = Arc::clone(&registry);
+        let shutting =
+            tokio::spawn(async move { r2.shutdown_within(Duration::from_secs(5)).await });
+        tokio::task::yield_now().await;
+
         store.release.notify_one();
 
         let res = inflight.await.expect("join inflight");
         assert!(matches!(res, Err(ServerError::ShuttingDown)));
+        assert!(shutting.await.expect("join shutdown"));
         assert_eq!(registry.loaded_count(), 0);
 
         store.pause_load.store(false, Ordering::SeqCst);
         let after = registry.with(meta.id, |_| async { Ok(()) }).await;
         assert!(matches!(after, Err(ServerError::ShuttingDown)));
         assert_eq!(registry.loaded_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn retiring_actor_finishes_snapshot_before_replacement_spawns() {
+        let store = GatedStore::new();
+        let (registry, key) = test_registry(Arc::clone(&store));
+        let meta = registry.create("Gamma", &key).await.expect("create");
+        let op = encode_condition_op(&registry, &key);
+        let editor = crate::auth::Principal::user("alice");
+
+        // Load actor 1 and commit one edit so shutdown writes a snapshot.
+        let handle = registry.handle(meta.id).await.expect("initial load");
+        let grant = handle.acquire(editor.clone()).await.expect("acquire");
+        let seq = handle
+            .submit(editor, grant.token.as_str().to_owned(), 0, vec![op])
+            .await
+            .expect("submit");
+        assert_eq!(seq, 1);
+        assert_eq!(store.load_calls.load(Ordering::SeqCst), 1);
+
+        // Pause actor 1 in its final snapshot while retiring it.
+        store.pause_snapshot.store(true, Ordering::SeqCst);
+        let retiring = tokio::spawn(async move { handle.shutdown().await });
+        store.snapshot_entered.notified().await;
+
+        // A new caller sees the closed handle and must wait for actor 1's
+        // final snapshot before loading a replacement actor.
+        let r2 = Arc::clone(&registry);
+        let replacement =
+            tokio::spawn(
+                async move { r2.with(meta.id, |h| async move { h.status().await }).await },
+            );
+        tokio::task::yield_now().await;
+        assert_eq!(
+            store.load_calls.load(Ordering::SeqCst),
+            1,
+            "replacement must not load while retiring actor is still snapshotting"
+        );
+
+        store.snapshot_release.notify_one();
+        retiring.await.expect("join retiring").expect("retire ok");
+        let status = replacement
+            .await
+            .expect("join replacement")
+            .expect("replacement status");
+        assert_eq!(status.last_seq, 1);
+        assert_eq!(store.load_calls.load(Ordering::SeqCst), 2);
+        registry.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_racing_with_submit_preserves_acknowledged_edits_and_is_bounded() {
+        let store = GatedStore::new();
+        let (registry, key) = test_registry(Arc::clone(&store));
+        let meta = registry.create("Delta", &key).await.expect("create");
+        let op = encode_condition_op(&registry, &key);
+        let editor = crate::auth::Principal::user("bob");
+
+        let grant = registry
+            .with(meta.id, |h| {
+                let who = editor.clone();
+                async move { h.acquire(who).await }
+            })
+            .await
+            .expect("acquire");
+
+        // Pause the in-flight submit inside store.append, then race shutdown.
+        store.pause_append.store(true, Ordering::SeqCst);
+        let r1 = Arc::clone(&registry);
+        let token = grant.token.as_str().to_owned();
+        let submit = tokio::spawn(async move {
+            r1.with(meta.id, |h| {
+                let who = editor.clone();
+                let tok = token.clone();
+                let op = op.clone();
+                async move { h.submit(who, tok, 0, vec![op]).await }
+            })
+            .await
+        });
+        store.append_entered.notified().await;
+
+        let r2 = Arc::clone(&registry);
+        let shutting =
+            tokio::spawn(async move { r2.shutdown_within(Duration::from_secs(5)).await });
+        tokio::task::yield_now().await;
+
+        store.append_release.notify_one();
+        let seq = submit.await.expect("join submit").expect("submit ack");
+        assert_eq!(seq, 1);
+        assert!(shutting.await.expect("join shutdown"));
+        assert_eq!(registry.loaded_count(), 0);
+
+        // Reopening from the same store observes the acknowledged edit.
+        store.pause_append.store(false, Ordering::SeqCst);
+        let (reopened, _) = test_registry(Arc::clone(&store));
+        let status = reopened
+            .with(meta.id, |h| async move { h.status().await })
+            .await
+            .expect("reopen status");
+        assert_eq!(status.last_seq, 1);
+
+        // A wedged final snapshot is bounded by shutdown_within.
+        let op2 = encode_condition_op(&reopened, &key);
+        let editor2 = crate::auth::Principal::user("carol");
+        let grant2 = reopened
+            .with(meta.id, |h| {
+                let who = editor2.clone();
+                async move { h.acquire(who).await }
+            })
+            .await
+            .expect("acquire 2");
+        reopened
+            .with(meta.id, |h| {
+                let who = editor2.clone();
+                let tok = grant2.token.as_str().to_owned();
+                let op2 = op2.clone();
+                async move { h.submit(who, tok, 1, vec![op2]).await }
+            })
+            .await
+            .expect("submit 2");
+        store.pause_snapshot.store(true, Ordering::SeqCst);
+        let completed = reopened.shutdown_within(Duration::from_millis(30)).await;
+        assert!(!completed, "wedged snapshot must hit the shutdown bound");
+        store.snapshot_release.notify_one();
     }
 }
