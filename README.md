@@ -29,10 +29,13 @@ Running the server: [docs/deployment.md](docs/deployment.md).
 | [`aegis-auth`](crates/aegis-auth) | Login: OIDC with PKCE, DPoP, keychain, shared TLS setup |
 | [`aegis-canvas`](crates/aegis-canvas) | Attack tree layout, hit testing, display list, SVG |
 | [`aegis-client`](crates/aegis-client) | Client core with no UI toolkit: editing, sync, view model, update checks |
-| [`aegis-shell`](crates/aegis-shell) | The Slint desktop window (the only crate that uses Slint) |
+| [`aegis-shell`](crates/aegis-shell) | Current full-workflow Slint desktop window (hosted and embedded standalone; slated for retirement after GPUI parity) |
+| [`aegis-workbench`](crates/aegis-workbench) | Next-generation GPUI desktop workbench (standalone workspace folders, server sign-in/preview, grids, inspector) |
 | [`aegis-license`](crates/aegis-license) | License files and signed update manifests |
 
-Every struct, field, and call flow is documented in
+Start with [docs/current-architecture.md](docs/current-architecture.md) for the
+post-hardening overview of all nine crates, runtime modes, authoritative state,
+and recovery paths. Struct-level detail lives in
 [docs/architecture.md](docs/architecture.md) (Part I: `aegis-model`, Part II:
 the rest of the system). Build and test from the repo
 root:
@@ -71,10 +74,11 @@ recreate or customize them manually in **Run → Edit Configurations…**
 (`+` → **Cargo** / **Compound**) with working directory `$PROJECT_DIR$`:
 
 1. **Server (`aegis-server`)**
-   - **Command:** `run --package aegis-server --bin aegis-server --features aegis-server/dev-license,aegis-auth/os-keychain`
+   - **Command (Password Login):** `run --package aegis-server --bin aegis-server --features aegis-server/dev-license,aegis-auth/os-keychain`
+   - **Command (Dev Auto-Login, loopback-only opt-in):** `run --package aegis-server --bin aegis-server --features aegis-server/dev-license,aegis-server/dev-auth,aegis-auth/os-keychain`
    - **Environment variables (Password Login):**
      `AEGIS_DEV_LICENSE=1`; `AEGIS_AUTH=password`; `AEGIS_ADMIN_USERNAME=admin`; `AEGIS_ADMIN_PASSWORD=aegis-admin-dev`; `AEGIS_LISTEN=127.0.0.1:50051`; `AEGIS_SERVER_NAME=AegisTARA Local`; `RUST_LOG=info`
-   - **Environment variables (Dev Auto-Login):**
+   - **Environment variables (Dev Auto-Login — rejected in normal builds without `dev-auth`):**
      `AEGIS_DEV_LICENSE=1`; `AEGIS_AUTH=dev`; `AEGIS_LISTEN=127.0.0.1:50051`; `AEGIS_SERVER_NAME=AegisTARA Dev`; `RUST_LOG=info`
 2. **GUI (`aegis-shell`)**
    - **Command:** `run --package aegis-shell --bin aegis-shell --features aegis-server/dev-license,aegis-auth/os-keychain`
@@ -93,15 +97,16 @@ recreate or customize them manually in **Run → Edit Configurations…**
 2. [docs/direction-v1.md](docs/direction-v1.md): desktop client, customer-hosted server, login, v1 scope.
 3. [docs/ai-backlog.md](docs/ai-backlog.md): how AI features fit, and in which order.
 4. [docs/engineering-standards.md](docs/engineering-standards.md): coding requirements for performance, data structures, algorithms, and learning.
-5. [docs/status-and-roadmap.md](docs/status-and-roadmap.md): project status and the handoff roadmap.
-6. [docs/architecture.md](docs/architecture.md): architecture reference for the whole system.
-7. [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spike results (Slint chosen).
-8. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
-9. [docs/deployment.md](docs/deployment.md) and [docs/release-checklist.md](docs/release-checklist.md): running and shipping the server.
-10. [docs/adr/](docs/adr): one decision record per job (0025 to 0038 cover the server, login, canvas, client, shell, licensing, observers, release, password login, gRPC-Web, baselines and the TARA pages).
-11. [docs/review-requirements.md](docs/review-requirements.md): what to review before the work is accepted.
-12. [docs/railway.md](docs/railway.md): the test server on Railway.
-13. [docs/security-pack/](docs/security-pack/README.md): the product security pack, in English and Japanese, for a buyer's security team and for answering vendor questionnaires.
+5. [docs/current-architecture.md](docs/current-architecture.md): post-hardening architecture overview (all nine crates, modes, recovery, security/identity/compatibility boundaries).
+6. [docs/status-and-roadmap.md](docs/status-and-roadmap.md): historical delivery log and handoff roadmap.
+7. [docs/architecture.md](docs/architecture.md): struct-level architecture reference.
+8. [spikes/gpui-shell/RESULTS.md](spikes/gpui-shell/RESULTS.md) and [spikes/RESULTS.md](spikes/RESULTS.md): UI toolkit spikes (Slint for v1; GPUI chosen for the workbench replacement in ADR 0066).
+9. [docs/brainstorm.md](docs/brainstorm.md): the full first brainstorm.
+10. [docs/deployment.md](docs/deployment.md) and [docs/release-checklist.md](docs/release-checklist.md): running and shipping the server.
+11. [docs/adr/](docs/adr): decision records `0001` through `0075` (covering the model, workspace, server, auth, canvas, client, shell, licensing, reports, GPUI workbench, origin isolation, qualified identities, methodology pins, and engine compatibility).
+12. [docs/review-requirements.md](docs/review-requirements.md): what to review before the work is accepted.
+13. [docs/railway.md](docs/railway.md): the test server on Railway.
+14. [docs/security-pack/](docs/security-pack/README.md): the product security pack, in English and Japanese, for a buyer's security team and for answering vendor questionnaires.
 
 ## Continuous integration
 
