@@ -446,6 +446,20 @@ pub enum Edit {
         /// The goal, or `None`.
         goal: Option<GoalId>,
     },
+    /// Links a cybersecurity goal to a threat scenario (FND-14).
+    LinkThreatGoal {
+        /// The threat.
+        threat: ThreatId,
+        /// The goal to link.
+        goal: GoalId,
+    },
+    /// Unlinks a cybersecurity goal from a threat scenario (FND-14).
+    UnlinkThreatGoal {
+        /// The threat.
+        threat: ThreatId,
+        /// The goal to unlink.
+        goal: GoalId,
+    },
     /// Links a cybersecurity claim to a threat, or unlinks it.
     SetThreatClaim {
         /// The threat.
@@ -2061,6 +2075,16 @@ impl Edit {
                 goal: *goal,
                 provenance: p,
             }],
+            Edit::LinkThreatGoal { threat, goal } => vec![Op::LinkThreatGoal {
+                threat: *threat,
+                goal: *goal,
+                provenance: p,
+            }],
+            Edit::UnlinkThreatGoal { threat, goal } => vec![Op::UnlinkThreatGoal {
+                threat: *threat,
+                goal: *goal,
+                provenance: p,
+            }],
             Edit::SetThreatClaim { threat, claim } => vec![Op::SetThreatClaim {
                 threat: *threat,
                 claim: *claim,
@@ -2123,12 +2147,14 @@ impl Edit {
                         provenance: p.clone(),
                     });
                 }
-                if t.goal().is_some() {
-                    ops.push(Op::SetThreatGoal {
-                        threat: *threat,
-                        goal: None,
-                        provenance: p.clone(),
-                    });
+                for &g_idx in t.goals() {
+                    if let Some(goal) = project.cybersecurity_goal_id(g_idx) {
+                        ops.push(Op::UnlinkThreatGoal {
+                            threat: *threat,
+                            goal,
+                            provenance: p.clone(),
+                        });
+                    }
                 }
                 if t.claim().is_some() {
                     ops.push(Op::SetThreatClaim {
@@ -2788,10 +2814,10 @@ impl Edit {
                     .ok_or(EditError::Missing)?;
                 let mut ops: Vec<Op> = project
                     .threat_scenarios()
-                    .filter(|(_, _, t)| t.goal() == Some(g_idx))
-                    .map(|(_, threat, _)| Op::SetThreatGoal {
+                    .filter(|(_, _, t)| t.goals().contains(&g_idx))
+                    .map(|(_, threat, _)| Op::UnlinkThreatGoal {
                         threat,
-                        goal: None,
+                        goal: *goal,
                         provenance: p.clone(),
                     })
                     .collect();

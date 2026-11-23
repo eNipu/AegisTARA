@@ -1612,6 +1612,8 @@ pub fn preview_import(
                         | Op::LinkGoalParty { .. }
                         | Op::LinkClaimParty { .. }
                         | Op::SetThreatGoal { .. }
+                        | Op::LinkThreatGoal { .. }
+                        | Op::UnlinkThreatGoal { .. }
                         | Op::SetThreatClaim { .. }
                         | Op::SetThreatScaling { .. }
                 )

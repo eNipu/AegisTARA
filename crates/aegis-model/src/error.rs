@@ -1308,6 +1308,40 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// The threat scenario already links this cybersecurity goal.
+    #[error("threat scenario {threat} already links cybersecurity goal {goal}")]
+    ThreatGoalAlreadyLinked {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The cybersecurity goal.
+        goal: GoalId,
+    },
+    /// The threat scenario does not link this cybersecurity goal.
+    #[error("threat scenario {threat} does not link cybersecurity goal {goal}")]
+    ThreatGoalNotLinked {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The cybersecurity goal.
+        goal: GoalId,
+    },
+    /// A threat scenario may link at most [`MAX_THREAT_GOALS`](crate::MAX_THREAT_GOALS)
+    /// cybersecurity goals.
+    #[error("threat scenario {threat} would link more than {max} cybersecurity goals")]
+    TooManyThreatGoals {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// The limit.
+        max: usize,
+    },
+    /// Legacy single-goal `SetThreatGoal` cannot overwrite a threat that links
+    /// multiple goals; use `LinkThreatGoal` / `UnlinkThreatGoal` instead.
+    #[error("threat scenario {threat} has {count} cybersecurity goals; use unlink instead")]
+    ThreatHasMultipleGoals {
+        /// The threat scenario.
+        threat: ThreatId,
+        /// Number of currently linked goals.
+        count: usize,
+    },
     /// A party cannot be removed while a goal or claim still lists it.
     /// ```
     /// use aegis_model::{ModelError, PartyId};

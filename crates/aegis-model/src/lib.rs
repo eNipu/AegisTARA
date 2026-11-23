@@ -335,5 +335,7 @@ pub use suggest::{
     MAX_SUGGESTIONS_PER_BRANCH, SuggestionBranch, SuggestionError, SuggestionItem,
 };
 pub use system::{SystemSet, SystemUse};
-pub use threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
+pub use threat::{
+    ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, MAX_THREAT_GOALS, ThreatRisk, ThreatScenario,
+};
 pub use tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Node, RemovedNode};

@@ -480,6 +480,18 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    LinkThreatGoal {
+        threat: Text<ThreatId>,
+        goal: Text<GoalId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkThreatGoal {
+        threat: Text<ThreatId>,
+        goal: Text<GoalId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetThreatClaim {
         threat: Text<ThreatId>,
         claim: Option<Text<ClaimId>>,
@@ -1407,6 +1419,24 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             goal: goal.map(Text),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::LinkThreatGoal {
+            threat,
+            goal,
+            provenance,
+        } => OpView::LinkThreatGoal {
+            threat: Text(*threat),
+            goal: Text(*goal),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkThreatGoal {
+            threat,
+            goal,
+            provenance,
+        } => OpView::UnlinkThreatGoal {
+            threat: Text(*threat),
+            goal: Text(*goal),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::SetThreatClaim {
             threat,
             claim,
@@ -2317,6 +2347,24 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::SetThreatGoal {
             threat: threat.0,
             goal: goal.map(|g| g.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::LinkThreatGoal {
+            threat,
+            goal,
+            provenance,
+        } => Op::LinkThreatGoal {
+            threat: threat.0,
+            goal: goal.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkThreatGoal {
+            threat,
+            goal,
+            provenance,
+        } => Op::UnlinkThreatGoal {
+            threat: threat.0,
+            goal: goal.0,
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetThreatClaim {

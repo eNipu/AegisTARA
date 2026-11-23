@@ -1846,6 +1846,8 @@ pub(super) struct ThreatWire {
     pub(super) treatment: Option<RiskTreatmentWire>,
     #[serde(default, deserialize_with = "some")]
     pub(super) goal: Option<WireId<GoalId>>,
+    #[serde(default)]
+    pub(super) goals: BoundedVec<WireId<GoalId>, GoalControlsCap>,
     #[serde(default, deserialize_with = "some")]
     pub(super) claim: Option<WireId<ClaimId>>,
     #[serde(default, deserialize_with = "some")]
@@ -2586,6 +2588,18 @@ pub(super) enum OpWire {
         threat: WireId<ThreatId>,
         #[serde(deserialize_with = "Option::deserialize")]
         goal: Option<WireId<GoalId>>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    LinkThreatGoal {
+        threat: WireId<ThreatId>,
+        goal: WireId<GoalId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkThreatGoal {
+        threat: WireId<ThreatId>,
+        goal: WireId<GoalId>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

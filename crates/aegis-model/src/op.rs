@@ -102,6 +102,8 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `NeedStepCondition` | `UnneedStepCondition` with the same provenance | O(log n) |
 /// | `UnneedStepCondition` | `NeedStepCondition` with the same provenance | O(log n) |
 /// | `SetThreatGoal` | the same with the old goal and provenance | O(log n) |
+/// | `LinkThreatGoal` | `UnlinkThreatGoal` with the old provenance | O(log n + g) |
+/// | `UnlinkThreatGoal` | `LinkThreatGoal` with the old provenance | O(log n + g) |
 /// | `SetThreatClaim` | the same with the old claim and provenance | O(log n) |
 /// | `SetThreatScaling` | the same with the old rating, reason and provenance | O(log n + r) |
 /// | `SetImpactRationale` | the same with the old text and provenance | O(log n + r) |
@@ -855,6 +857,26 @@ pub enum Op {
         /// Provenance of linking or unlinking the cybersecurity goal.
         provenance: Provenance,
     },
+    /// Links a [`CybersecurityGoal`](crate::CybersecurityGoal) to a
+    /// [`ThreatScenario`](crate::ThreatScenario) (FND-14).
+    LinkThreatGoal {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// Existing cybersecurity goal to link.
+        goal: GoalId,
+        /// Provenance of the link change.
+        provenance: Provenance,
+    },
+    /// Unlinks a [`CybersecurityGoal`](crate::CybersecurityGoal) from a
+    /// [`ThreatScenario`](crate::ThreatScenario) (FND-14).
+    UnlinkThreatGoal {
+        /// Existing threat scenario.
+        threat: ThreatId,
+        /// Linked cybersecurity goal to unlink.
+        goal: GoalId,
+        /// Provenance of the link change.
+        provenance: Provenance,
+    },
     /// Links a threat scenario to a cybersecurity claim, replaces its linked
     /// claim, or unlinks it (`None`).
     SetThreatClaim {
@@ -1232,6 +1254,8 @@ impl Op {
             | Self::LinkElement { provenance, .. }
             | Self::UnlinkElement { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
+            | Self::LinkThreatGoal { provenance, .. }
+            | Self::UnlinkThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }
             | Self::SetImpactRationale { provenance, .. }
@@ -1357,6 +1381,8 @@ impl Op {
             | Self::LinkElement { provenance, .. }
             | Self::UnlinkElement { provenance, .. }
             | Self::SetThreatGoal { provenance, .. }
+            | Self::LinkThreatGoal { provenance, .. }
+            | Self::UnlinkThreatGoal { provenance, .. }
             | Self::SetThreatClaim { provenance, .. }
             | Self::SetThreatScaling { provenance, .. }
             | Self::SetImpactRationale { provenance, .. }

@@ -43,7 +43,9 @@ use crate::provenance::Provenance;
 use crate::sensitivity::{
     FeasibilityTippingPoint, ImpactTippingPoint, StepTippingPoint, ThreatSensitivity,
 };
-use crate::threat::{ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, ThreatRisk, ThreatScenario};
+use crate::threat::{
+    ImpactRisk, MAX_CATALOG_REFS, MAX_DAMAGE_LINKS, MAX_THREAT_GOALS, ThreatRisk, ThreatScenario,
+};
 use crate::tree::{AttackTree, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Node};
 
 /// Longest entity name, in chars.
@@ -532,7 +534,7 @@ impl RefCounts {
         if let Some(tree) = t.attack_tree {
             bump(&mut self.trees, Some(tree.index()), up);
         }
-        if let Some(goal) = t.goal {
+        for &goal in &t.goals {
             bump(&mut self.goals, Some(goal.index()), up);
         }
         if let Some(claim) = t.claim {
@@ -5899,7 +5901,7 @@ impl Project {
                             threat: id,
                         }));
                     }
-                    if threat.goal().is_none() {
+                    if threat.goals().is_empty() {
                         findings.push(LintFinding::new(LintCode::ReduceTreatmentWithoutGoal {
                             threat: id,
                         }));
@@ -5918,15 +5920,15 @@ impl Project {
                 }
                 Some(RiskTreatment::Avoid) => {}
             }
-            if let Some(goal) = threat
-                .goal()
-                .filter(|_| threat.treatment() != Some(RiskTreatment::Reduce))
-                .and_then(|goal_idx| self.goals.id(goal_idx))
-            {
-                findings.push(LintFinding::new(LintCode::GoalOnNonReduceThreat {
-                    threat: id,
-                    goal,
-                }));
+            if threat.treatment() != Some(RiskTreatment::Reduce) {
+                for &goal_idx in threat.goals() {
+                    if let Some(goal) = self.goals.id(goal_idx) {
+                        findings.push(LintFinding::new(LintCode::GoalOnNonReduceThreat {
+                            threat: id,
+                            goal,
+                        }));
+                    }
+                }
             }
             if let Some(claim) = threat
                 .claim()
@@ -6597,7 +6599,7 @@ impl Project {
                 return true;
             }
         }
-        if let Some(goal_idx) = t.goal {
+        for &goal_idx in &t.goals {
             if self
                 .goals
                 .id(goal_idx)
@@ -7138,6 +7140,12 @@ impl Project {
             }
             Op::SetThreatGoal { threat, goal, .. } => {
                 self.check_set_threat_goal(*threat, *goal)?;
+            }
+            Op::LinkThreatGoal { threat, goal, .. } => {
+                self.check_threat_goal_link(*threat, *goal, true)?;
+            }
+            Op::UnlinkThreatGoal { threat, goal, .. } => {
+                self.check_threat_goal_link(*threat, *goal, false)?;
             }
             Op::SetThreatClaim { threat, claim, .. } => {
                 self.check_set_threat_claim(*threat, *claim)?;
@@ -7726,6 +7734,16 @@ impl Project {
                 goal,
                 provenance,
             } => self.commit_set_threat_goal(threat, goal, provenance),
+            Op::LinkThreatGoal {
+                threat,
+                goal,
+                provenance,
+            } => self.commit_link_threat_goal(threat, goal, provenance),
+            Op::UnlinkThreatGoal {
+                threat,
+                goal,
+                provenance,
+            } => self.commit_unlink_threat_goal(threat, goal, provenance),
             Op::SetThreatClaim {
                 threat,
                 claim,
@@ -8273,11 +8291,6 @@ impl Project {
             .filter(|(_, v)| *v == item)
             .count();
         u32::try_from(n).unwrap_or(u32::MAX)
-    }
-
-    /// The public ID of a linked cybersecurity goal, if any.
-    fn goal_key(&self, idx: Option<GoalIdx>) -> Option<GoalId> {
-        idx.and_then(|i| self.goals.id(i))
     }
 
     /// The public ID of a linked cybersecurity claim, if any.
@@ -9126,7 +9139,7 @@ impl Project {
                 treatment,
             });
         }
-        if let Some(goal_idx) = t.goal {
+        if let Some(&goal_idx) = t.goals.first() {
             let goal = self
                 .goals
                 .id(goal_idx)
@@ -9793,9 +9806,42 @@ impl Project {
         threat: ThreatId,
         goal: Option<GoalId>,
     ) -> Result<(), ModelError> {
-        self.live_threat(threat)?;
+        let t_idx = self.live_threat(threat)?;
+        let count = self.threats.get(t_idx).map_or(0, |t| t.goals.len());
+        if count > 1 {
+            return Err(ModelError::ThreatHasMultipleGoals { threat, count });
+        }
         if let Some(goal) = goal {
             self.live_goal(goal)?;
+        }
+        Ok(())
+    }
+
+    fn check_threat_goal_link(
+        &self,
+        threat: ThreatId,
+        goal: GoalId,
+        link: bool,
+    ) -> Result<(), ModelError> {
+        let t_idx = self.live_threat(threat)?;
+        let (g_idx, _) = self.live_goal(goal)?;
+        let t = self
+            .threats
+            .get(t_idx)
+            .ok_or(ModelError::UnknownThreatScenario(threat))?;
+        let present = t.goals.contains(&g_idx);
+        if link {
+            if present {
+                return Err(ModelError::ThreatGoalAlreadyLinked { threat, goal });
+            }
+            if t.goals.len() >= MAX_THREAT_GOALS {
+                return Err(ModelError::TooManyThreatGoals {
+                    threat,
+                    max: MAX_THREAT_GOALS,
+                });
+            }
+        } else if !present {
+            return Err(ModelError::ThreatGoalNotLinked { threat, goal });
         }
         Ok(())
     }
@@ -10491,7 +10537,7 @@ impl Project {
             direct_feasibility: None,
             attack_tree: None,
             treatment: None,
-            goal: None,
+            goals: Vec::new(),
             claim: None,
             scales: None,
             scaling_reason: Arc::from(""),
@@ -11574,7 +11620,9 @@ impl Project {
             .threats
             .get(idx)
             .ok_or(ModelError::UnknownThreatScenario(threat))?
-            .goal;
+            .goals
+            .first()
+            .copied();
         let old_goal = old_idx
             .map(|i| {
                 self.goals
@@ -11586,7 +11634,10 @@ impl Project {
             .threats
             .get_mut(idx)
             .ok_or(ModelError::UnknownThreatScenario(threat))?;
-        t.goal = new_idx;
+        t.goals.clear();
+        if let Some(new) = new_idx {
+            t.goals.push(new);
+        }
         let provenance = std::mem::replace(&mut t.provenance, provenance);
         if let Some(old) = old_idx {
             bump(&mut self.refs.goals, Some(old.index()), false);
@@ -11597,6 +11648,61 @@ impl Project {
         Ok(Op::SetThreatGoal {
             threat,
             goal: old_goal,
+            provenance,
+        })
+    }
+
+    fn commit_link_threat_goal(
+        &mut self,
+        threat: ThreatId,
+        goal: GoalId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.threat_index(threat)?;
+        let g_idx = self.goal_index(goal)?;
+        let pos = {
+            let t = self
+                .threats
+                .get(idx)
+                .ok_or(ModelError::UnknownThreatScenario(threat))?;
+            t.goals
+                .binary_search_by(|&i| self.goals.id(i).cmp(&Some(goal)))
+                .unwrap_or_else(|p| p)
+        };
+        let t = self
+            .threats
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownThreatScenario(threat))?;
+        t.goals.insert(pos, g_idx);
+        let provenance = std::mem::replace(&mut t.provenance, provenance);
+        bump(&mut self.refs.goals, Some(g_idx.index()), true);
+        Ok(Op::UnlinkThreatGoal {
+            threat,
+            goal,
+            provenance,
+        })
+    }
+
+    fn commit_unlink_threat_goal(
+        &mut self,
+        threat: ThreatId,
+        goal: GoalId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.threat_index(threat)?;
+        let g_idx = self.goal_index(goal)?;
+        let t = self
+            .threats
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownThreatScenario(threat))?;
+        if let Some(pos) = t.goals.iter().position(|&g| g == g_idx) {
+            t.goals.remove(pos);
+        }
+        let provenance = std::mem::replace(&mut t.provenance, provenance);
+        bump(&mut self.refs.goals, Some(g_idx.index()), false);
+        Ok(Op::LinkThreatGoal {
+            threat,
+            goal,
             provenance,
         })
     }
@@ -12374,7 +12480,11 @@ impl Project {
             && x.provenance == y.provenance
             && self.assets.id(x.asset) == other.assets.id(y.asset)
             && self.tree_key(x.attack_tree) == other.tree_key(y.attack_tree)
-            && self.goal_key(x.goal) == other.goal_key(y.goal)
+            && x.goals.len() == y.goals.len()
+            && x.goals
+                .iter()
+                .zip(&y.goals)
+                .all(|(&a, &b)| self.goals.id(a) == other.goals.id(b))
             && self.claim_key(x.claim) == other.claim_key(y.claim)
             && x.damages.len() == y.damages.len()
             && x.damages
@@ -12541,7 +12651,7 @@ impl Project {
                     .ok_or_else(|| format!("threat {id} links a dead tree slot"))?;
                 bump(&mut trees, Some(tree.index()), true);
             }
-            if let Some(goal) = t.goal {
+            for &goal in &t.goals {
                 self.goals
                     .get(goal)
                     .ok_or_else(|| format!("threat {id} links a dead goal slot"))?;
@@ -13149,6 +13259,8 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::RemoveParty { .. }
         | Op::RenameCondition { .. }
         | Op::SetThreatGoal { .. }
+        | Op::LinkThreatGoal { .. }
+        | Op::UnlinkThreatGoal { .. }
         | Op::SetThreatClaim { .. }
         | Op::SetImpactRationale { .. }
         | Op::SetFeasibilityRationale { .. }
@@ -13499,6 +13611,8 @@ impl ProjectEvalCache {
             | Op::RemoveCatalogRef { .. }
             | Op::SetRiskTreatment { .. }
             | Op::SetThreatGoal { .. }
+            | Op::LinkThreatGoal { .. }
+            | Op::UnlinkThreatGoal { .. }
             | Op::SetThreatClaim { .. }
             | Op::SetThreatScaling { .. }
             | Op::SetImpactRationale { .. }

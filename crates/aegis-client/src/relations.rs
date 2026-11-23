@@ -131,7 +131,7 @@ pub static RELATIONS: &[Relation] = &[
     rel(RelationKey::THREAT_ASSET, ElementKind::Threat, &[ElementKind::Asset], "relation-threat-asset", false, read_threat_asset, None, None),
     rel(RelationKey::THREAT_DAMAGES, ElementKind::Threat, &[ElementKind::Damage], "relation-threat-damages", true, read_threat_damages, Some(link_threat_damages), Some(unlink_threat_damages)),
     rel(RelationKey::THREAT_TREE, ElementKind::Threat, &[ElementKind::Tree], "relation-threat-tree", false, read_threat_tree, Some(link_threat_tree), Some(unlink_threat_tree)),
-    rel(RelationKey::THREAT_GOAL, ElementKind::Threat, &[ElementKind::Goal], "relation-threat-goal", false, read_threat_goal, Some(link_threat_goal), Some(unlink_threat_goal)),
+    rel(RelationKey::THREAT_GOAL, ElementKind::Threat, &[ElementKind::Goal], "relation-threat-goal", true, read_threat_goal, Some(link_threat_goal), Some(unlink_threat_goal)),
     rel(RelationKey::THREAT_CLAIM, ElementKind::Threat, &[ElementKind::Claim], "relation-threat-claim", false, read_threat_claim, Some(link_threat_claim), Some(unlink_threat_claim)),
     rel(RelationKey::GOAL_CONTROLS, ElementKind::Goal, &[ElementKind::Control], "relation-goal-controls", true, read_goal_controls, Some(link_goal_controls), Some(unlink_goal_controls)),
     rel(RelationKey::GOAL_RESPONSIBLE, ElementKind::Goal, &[ElementKind::Party], "relation-goal-responsible", true, read_goal_responsible, Some(link_goal_responsible), Some(unlink_goal_responsible)),
@@ -291,7 +291,15 @@ fn read_threat_tree(project: &Project, from: Selection) -> Vec<Selection> {
 }
 #[rustfmt::skip]
 fn read_threat_goal(project: &Project, from: Selection) -> Vec<Selection> {
-    threat(project, from).and_then(|t| t.goal()).and_then(|g| project.cybersecurity_goal_id(g)).map(Selection::Goal).into_iter().collect()
+    threat(project, from)
+        .map(|t| {
+            t.goals()
+                .iter()
+                .filter_map(|&g| project.cybersecurity_goal_id(g))
+                .map(Selection::Goal)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 #[rustfmt::skip]
 fn read_threat_claim(project: &Project, from: Selection) -> Vec<Selection> {
@@ -444,11 +452,11 @@ fn unlink_threat_tree(from: Selection, to: Selection) -> Option<Edit> {
 }
 #[rustfmt::skip]
 fn link_threat_goal(from: Selection, to: Selection) -> Option<Edit> {
-    match (from, to) { (Selection::Threat(t), Selection::Goal(g)) => Some(Edit::SetThreatGoal { threat: t, goal: Some(g) }), _ => None }
+    match (from, to) { (Selection::Threat(t), Selection::Goal(g)) => Some(Edit::LinkThreatGoal { threat: t, goal: g }), _ => None }
 }
 #[rustfmt::skip]
 fn unlink_threat_goal(from: Selection, to: Selection) -> Option<Edit> {
-    match (from, to) { (Selection::Threat(t), Selection::Goal(_)) => Some(Edit::SetThreatGoal { threat: t, goal: None }), _ => None }
+    match (from, to) { (Selection::Threat(t), Selection::Goal(g)) => Some(Edit::UnlinkThreatGoal { threat: t, goal: g }), _ => None }
 }
 #[rustfmt::skip]
 fn link_threat_claim(from: Selection, to: Selection) -> Option<Edit> {

@@ -250,6 +250,8 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::SetThreatAttackTree { threat, .. }
         | Op::SetRiskTreatment { threat, .. }
         | Op::SetThreatGoal { threat, .. }
+        | Op::LinkThreatGoal { threat, .. }
+        | Op::UnlinkThreatGoal { threat, .. }
         | Op::SetThreatClaim { threat, .. }
         | Op::SetThreatScaling { threat, .. }
         | Op::SetFeasibilityRationale { threat, .. }
@@ -408,6 +410,10 @@ fn parts(op: &Op, p: &Project) -> Parts {
             ("change", "risk treatment of threat scenario", threat(t))
         }
         Op::SetThreatGoal { threat: t, .. } => ("change", "goal of threat scenario", threat(t)),
+        Op::LinkThreatGoal { threat: t, .. } => ("link", "goal to threat scenario", threat(t)),
+        Op::UnlinkThreatGoal { threat: t, .. } => {
+            ("unlink", "goal from threat scenario", threat(t))
+        }
         Op::SetThreatClaim { threat: t, .. } => ("change", "claim of threat scenario", threat(t)),
         Op::SetThreatScaling { threat: t, .. } => {
             ("change", "scaling of threat scenario", threat(t))

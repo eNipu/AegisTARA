@@ -391,6 +391,8 @@ struct ThreatView<'a> {
     treatment: Option<RiskTreatmentWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     goal: Option<Required<Text<GoalId>>>,
+    #[serde(skip_serializing_if = "LinkedThreatGoals::is_empty")]
+    goals: LinkedThreatGoals<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     claim: Option<Required<Text<ClaimId>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -647,9 +649,14 @@ impl Serialize for Threats<'_> {
                     .attack_tree()
                     .map(|idx| Required(p.attack_tree_id(idx).map(Text))),
                 treatment: t.treatment().map(RiskTreatmentWire::from),
-                goal: t
-                    .goal()
+                goal: (t.goals().len() == 1)
+                    .then(|| t.goals().first().copied())
+                    .flatten()
                     .map(|idx| Required(p.cybersecurity_goal_id(idx).map(Text))),
+                goals: LinkedThreatGoals {
+                    project: p,
+                    ids: if t.goals().len() > 1 { t.goals() } else { &[] },
+                },
                 claim: t
                     .claim()
                     .map(|idx| Required(p.cybersecurity_claim_id(idx).map(Text))),
@@ -1593,13 +1600,49 @@ fn apply_snapshot_element(
     Ok(())
 }
 
+struct LinkedThreatGoals<'a> {
+    project: &'a Project,
+    ids: &'a [crate::GoalIdx],
+}
+
+impl LinkedThreatGoals<'_> {
+    fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+}
+
+impl Serialize for LinkedThreatGoals<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = s.serialize_seq(Some(self.ids.len()))?;
+        for &idx in self.ids {
+            let id = self
+                .project
+                .cybersecurity_goal_id(idx)
+                .ok_or_else(|| serde::ser::Error::custom("dangling goal idx"))?;
+            seq.serialize_element(&Text(id))?;
+        }
+        seq.end()
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(), StoreError> {
     let provenance = wire::unwrap_provenance(t.provenance);
     let id = t.id.0;
     let direct_feasibility = t.direct_feasibility.map(|w| w.0);
     let attack_tree = t.attack_tree.map(|w| w.0);
     let treatment = t.treatment.map(Into::into);
-    let goal = t.goal.map(|w| w.0);
+    if t.goal.is_some() && !t.goals.0.is_empty() {
+        return Err(StoreError::Decode { line: 1, column: 1 });
+    }
+    let mut goals: Vec<GoalId> = Vec::new();
+    if let Some(g) = t.goal {
+        goals.push(g.0);
+    }
+    for g in t.goals.0 {
+        goals.push(g.0);
+    }
     let claim = t.claim.map(|w| w.0);
     let scales = t.scales;
     let scaling_reason = t.scaling_reason.map(|w| w.0);
@@ -1658,10 +1701,10 @@ fn apply_snapshot_threat(project: &mut Project, t: wire::ThreatWire) -> Result<(
             provenance: provenance.clone(),
         })?;
     }
-    if let Some(goal) = goal {
-        project.apply(Op::SetThreatGoal {
+    for goal in goals {
+        project.apply(Op::LinkThreatGoal {
             threat: id,
-            goal: Some(goal),
+            goal,
             provenance: provenance.clone(),
         })?;
     }

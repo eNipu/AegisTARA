@@ -24,6 +24,13 @@ pub const MAX_CATALOG_REFS: usize = 16;
 /// ```
 pub const MAX_DAMAGE_LINKS: usize = 256;
 
+/// Most cybersecurity goals one threat scenario may link to (FND-14).
+///
+/// ```
+/// assert_eq!(aegis_model::MAX_THREAT_GOALS, 16);
+/// ```
+pub const MAX_THREAT_GOALS: usize = 16;
+
 /// One damage link of a threat scenario and its rationale (FND-09).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DamageLink {
@@ -91,7 +98,9 @@ pub struct ThreatScenario {
     pub(crate) direct_feasibility: Option<FeasibilityLevel>,
     pub(crate) attack_tree: Option<TreeIdx>,
     pub(crate) treatment: Option<RiskTreatment>,
-    pub(crate) goal: Option<GoalIdx>,
+    /// Linked cybersecurity goals, sorted by the target's `GoalId`, unique, at
+    /// most [`MAX_THREAT_GOALS`] (FND-14).
+    pub(crate) goals: Vec<GoalIdx>,
     pub(crate) claim: Option<ClaimIdx>,
     /// Whether the attack scales to many vehicles (FND-10); `None` is not
     /// rated.
@@ -411,9 +420,19 @@ impl ThreatScenario {
     /// # Ok(())
     /// # }
     /// ```
+    /// Returns the linked [`CybersecurityGoal`](crate::CybersecurityGoal)s'
+    /// arena indices, sorted by public [`GoalId`](crate::GoalId) (FND-14).
+    /// Time O(1), space O(1).
     #[must_use]
-    pub const fn goal(&self) -> Option<GoalIdx> {
-        self.goal
+    pub fn goals(&self) -> &[GoalIdx] {
+        &self.goals
+    }
+
+    /// Returns the first linked [`CybersecurityGoal`](crate::CybersecurityGoal)'s
+    /// arena index, if any. Time O(1), space O(1).
+    #[must_use]
+    pub fn goal(&self) -> Option<GoalIdx> {
+        self.goals.first().copied()
     }
 
     /// Returns the linked [`CybersecurityClaim`](crate::CybersecurityClaim)'s

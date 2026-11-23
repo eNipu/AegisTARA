@@ -88,9 +88,10 @@ fn project() -> Project {
         ThreatId::new_v7(),
     );
     let (tree_id, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
-    let (control1, control2, goal, claim) = (
+    let (control1, control2, goal, goal2, claim) = (
         ControlId::new_v7(),
         ControlId::new_v7(),
+        GoalId::new_v7(),
         GoalId::new_v7(),
         ClaimId::new_v7(),
     );
@@ -228,9 +229,20 @@ fn project() -> Project {
             controls: vec![control1, control2],
             provenance: provenance.clone(),
         },
-        Op::SetThreatGoal {
+        Op::AddCybersecurityGoal {
+            id: goal2,
+            name: "goal2".into(),
+            controls: vec![],
+            provenance: provenance.clone(),
+        },
+        Op::LinkThreatGoal {
             threat,
-            goal: Some(goal),
+            goal,
+            provenance: provenance.clone(),
+        },
+        Op::LinkThreatGoal {
+            threat,
+            goal: goal2,
             provenance: provenance.clone(),
         },
         Op::AddCybersecurityClaim {
@@ -376,8 +388,10 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
         if let Some(tree) = threat.attack_tree().and_then(|t| project.attack_tree_id(t)) {
             out.insert((source, Sel(Selection::Tree(tree))));
         }
-        if let Some(goal) = threat.goal().and_then(|g| project.cybersecurity_goal_id(g)) {
-            out.insert((source, Sel(Selection::Goal(goal))));
+        for &g in threat.goals() {
+            if let Some(goal) = project.cybersecurity_goal_id(g) {
+                out.insert((source, Sel(Selection::Goal(goal))));
+            }
         }
         if let Some(claim) = threat
             .claim()

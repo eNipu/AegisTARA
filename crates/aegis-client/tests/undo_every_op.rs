@@ -569,6 +569,53 @@ fn walk_parties(seen: &mut BTreeSet<String>) {
         },
     );
     // Tear down: no responsible links remain, so the party can be removed.
+    let asset = AssetId::new_v7();
+    let threat = ThreatId::new_v7();
+    let m = Arc::clone(ws.project().methodology());
+    let cat = m.threat_categories().next().expect("cat");
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::AddAsset {
+            id: asset,
+            name: "Gateway".into(),
+            properties: m.all_properties(),
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::AddThreatScenario {
+            id: threat,
+            name: "Spoof bus".into(),
+            asset,
+            category: cat,
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::LinkThreatGoal {
+            threat,
+            goal,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(
+        &mut ws,
+        seen,
+        Op::UnlinkThreatGoal {
+            threat,
+            goal,
+            provenance: who(),
+        },
+    );
+    apply_undo_redo(&mut ws, seen, Op::RemoveThreatScenario { id: threat });
+    apply_undo_redo(&mut ws, seen, Op::RemoveAsset { id: asset });
     apply_undo_redo(&mut ws, seen, Op::RemoveCybersecurityGoal { id: goal });
     apply_undo_redo(&mut ws, seen, Op::RemoveCybersecurityClaim { id: claim });
     apply_undo_redo(&mut ws, seen, Op::RemoveParty { id });

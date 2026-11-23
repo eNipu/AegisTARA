@@ -1831,16 +1831,20 @@ pub fn risk_rows(ws: &Workspace) -> Vec<RiskRow> {
                 })
                 .unwrap_or_default();
             let (reduced_by, deciding_step, lowered) = reduction(ws, id);
-            let backing = t
-                .goal()
-                .and_then(|g| project.cybersecurity_goal(g))
-                .map(|g| format!("Goal: {}", g.name()))
-                .or_else(|| {
-                    t.claim()
-                        .and_then(|c| project.cybersecurity_claim(c))
-                        .map(|c| format!("Claim: {}", c.name()))
-                })
-                .unwrap_or_default();
+            let goal_names: Vec<&str> = t
+                .goals()
+                .iter()
+                .filter_map(|&g| project.cybersecurity_goal(g).map(|g| g.name()))
+                .collect();
+            let backing = match goal_names.as_slice() {
+                [one] => format!("Goal: {one}"),
+                many if !many.is_empty() => format!("Goals: {}", many.join(", ")),
+                _ => t
+                    .claim()
+                    .and_then(|c| project.cybersecurity_claim(c))
+                    .map(|c| format!("Claim: {}", c.name()))
+                    .unwrap_or_default(),
+            };
             (
                 pos,
                 RiskRow {
@@ -2240,7 +2244,7 @@ pub fn goal_rows(ws: &Workspace) -> Vec<GoalRow> {
             controls: g.controls().len(),
             threats: project
                 .threat_scenarios()
-                .filter(|(_, _, t)| t.goal() == Some(idx))
+                .filter(|(_, _, t)| t.goals().contains(&idx))
                 .count(),
             responsible: responsible_text(project, g.responsible()),
         })
@@ -2295,7 +2299,7 @@ pub fn goal_detail(ws: &Workspace, id: GoalId) -> Option<GoalDetail<GoalId>> {
         responsible: party_links(project, g.responsible()),
         threats: project
             .threat_scenarios()
-            .filter(|(_, _, t)| t.goal() == Some(idx))
+            .filter(|(_, _, t)| t.goals().contains(&idx))
             .map(|(t_idx, tid, t)| LinkRow {
                 visual_id: project.threat_scenario_visual_id(t_idx).unwrap_or_default(),
                 label: t.name().to_owned(),

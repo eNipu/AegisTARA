@@ -355,7 +355,7 @@ impl Project {
             if let Some(tree) = t.attack_tree {
                 add(&mut u.trees, tree.index(), set);
             }
-            if let Some(goal) = t.goal {
+            for &goal in &t.goals {
                 add(&mut u.goals, goal.index(), set);
             }
             if let Some(claim) = t.claim {
