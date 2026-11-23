@@ -812,10 +812,14 @@ impl Launcher {
     }
 
     /// Shuts down the client and, in standalone mode, the embedded server.
+    /// Drains pending session edits before stopping the embedded server so
+    /// in-flight and queued edits commit cleanly.
     pub async fn shutdown(&self) {
         self.cancel_auth();
         if let Some(session) = self.controller().session() {
-            let _ = session.send(Command::Shutdown);
+            let _ = session
+                .drain_and_shutdown(std::time::Duration::from_secs(5))
+                .await;
         }
         let server = self.standalone.borrow_mut().take();
         if let Some(server) = server {

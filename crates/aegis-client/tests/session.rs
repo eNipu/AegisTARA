@@ -2067,3 +2067,160 @@ async fn snapshot_is_the_downloaded_version() {
     drop(bob);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn drain_and_shutdown_commits_inflight_and_queued_batches_and_releases_lease() {
+    use aegis_model::AssetId;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    let server = TestServer::start(Duration::from_millis(80)).await;
+    let alice = server.session("alice", false);
+    let id = create_and_open(&alice, "DrainShutdown").await;
+    start_editing(&alice).await;
+
+    // Two edits back-to-back: first is in flight, second is queued.
+    alice
+        .send(Command::Edit(Edit::AddAsset {
+            id: AssetId::new_v7(),
+            name: "ECU".into(),
+            properties: vec![0],
+        }))
+        .expect("sent 1");
+    alice
+        .send(Command::Edit(Edit::AddAsset {
+            id: AssetId::new_v7(),
+            name: "Gateway".into(),
+            properties: vec![0],
+        }))
+        .expect("sent 2");
+    until(&alice, "two pending batches", |vm| {
+        matches!(p(vm).sync, SyncView::Syncing { pending: 2 })
+    })
+    .await;
+
+    let outcome = alice.drain_and_shutdown(Duration::from_secs(5)).await;
+    assert_eq!(outcome, aegis_client::session::DrainOutcome::Committed);
+
+    // A second user reopens and sees both edits committed and the lock free.
+    let bob = server.session("bob", false);
+    until(&bob, "online", online).await;
+    bob.send(Command::OpenProject { id }).expect("sent");
+    let view = until(&bob, "bob opens", |vm| vm.project.is_some()).await;
+    let mut names: Vec<&str> = p(&view)
+        .snapshot
+        .assets()
+        .map(|(_, _, a)| a.name())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["ECU", "Gateway"]);
+    assert!(p(&view).lock_holder.is_none());
+
+    drop(bob);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn project_switch_drains_pending_edits_before_leaving() {
+    use aegis_model::AssetId;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    let server = TestServer::start(Duration::from_millis(60)).await;
+    let alice = server.session("alice", false);
+    let id1 = create_and_open(&alice, "SwitchFrom").await;
+    alice.send(Command::CloseProject).expect("close 1");
+    until(&alice, "closed 1", |vm| vm.project.is_none()).await;
+    let id2 = create_and_open(&alice, "SwitchTo").await;
+    assert_ne!(id1, id2);
+    alice
+        .send(Command::OpenProject { id: id1.clone() })
+        .expect("open 1");
+    until(&alice, "opened first project", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.entry.id == id1)
+    })
+    .await;
+
+    start_editing(&alice).await;
+    alice
+        .send(Command::Edit(Edit::AddAsset {
+            id: AssetId::new_v7(),
+            name: "Radar".into(),
+            properties: vec![0],
+        }))
+        .expect("sent 1");
+    alice
+        .send(Command::Edit(Edit::AddAsset {
+            id: AssetId::new_v7(),
+            name: "Lidar".into(),
+            properties: vec![0],
+        }))
+        .expect("sent 2");
+
+    // Immediately switch to the second project while edits are still saving.
+    alice
+        .send(Command::OpenProject { id: id2.clone() })
+        .expect("switch");
+    until(&alice, "switched to second project", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.entry.id == id2)
+    })
+    .await;
+
+    // Reopen the first project and verify both edits survived.
+    alice
+        .send(Command::OpenProject { id: id1.clone() })
+        .expect("reopen 1");
+    let view = until(&alice, "reopened first project", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.entry.id == id1)
+    })
+    .await;
+    let mut names: Vec<&str> = p(&view)
+        .snapshot
+        .assets()
+        .map(|(_, _, a)| a.name())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Lidar", "Radar"]);
+
+    drop(alice);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn drain_and_shutdown_timeout_reports_incomplete_without_hanging() {
+    use aegis_model::AssetId;
+    fn p(vm: &ViewModel) -> &aegis_client::state::ProjectView {
+        vm.project.as_ref().expect("project")
+    }
+    let server = TestServer::start(Duration::from_secs(2)).await;
+    let alice = server.session("alice", false);
+    let _id = create_and_open(&alice, "DrainTimeout").await;
+    start_editing(&alice).await;
+
+    alice
+        .send(Command::Edit(Edit::AddAsset {
+            id: AssetId::new_v7(),
+            name: "SlowAsset".into(),
+            properties: vec![0],
+        }))
+        .expect("sent");
+    until(&alice, "saving", |vm| {
+        matches!(p(vm).sync, SyncView::Syncing { pending: 1 })
+    })
+    .await;
+
+    let started = Instant::now();
+    let outcome = alice.drain_and_shutdown(Duration::from_millis(50)).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "drain_and_shutdown must be bounded by timeout"
+    );
+    assert!(
+        matches!(
+            outcome,
+            aegis_client::session::DrainOutcome::Incomplete { pending: 1, .. }
+        ),
+        "expected Incomplete(1), got {outcome:?}"
+    );
+    server.stop().await;
+}

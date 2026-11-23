@@ -46,7 +46,7 @@ use aegis_model::{
     Methodology, OpCodec, Project, ThreatId, TreeId, TrustBoundaryId,
 };
 use aegis_proto as pb;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -164,10 +164,31 @@ fn system_clock_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// Outcome of draining pending edits before closing or shutting down a session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DrainOutcome {
+    /// Every pending edit was accepted by the server and the lease was released.
+    Committed,
+    /// Pending edits could not be committed before the drain ended (server
+    /// rejection, lost lease, or timeout).
+    Incomplete {
+        /// Number of uncommitted batches still queued when the drain ended.
+        pending: usize,
+        /// Why the drain could not complete.
+        reason: String,
+    },
+}
+
+struct DrainRequest {
+    timeout: Duration,
+    reply: oneshot::Sender<DrainOutcome>,
+}
+
 /// A handle to a running session.
 #[derive(Clone)]
 pub struct Session {
     commands: mpsc::Sender<Command>,
+    drain: mpsc::Sender<DrainRequest>,
     view: watch::Receiver<Arc<ViewModel>>,
 }
 
@@ -182,6 +203,7 @@ impl Session {
         config: SessionConfig,
     ) -> (Session, JoinHandle<()>) {
         let (commands, command_rx) = mpsc::channel(COMMAND_QUEUE);
+        let (drain, drain_rx) = mpsc::channel(4);
         let (events, event_rx) = mpsc::channel(EVENT_QUEUE);
         let initial = Arc::new(ViewModel {
             revision: 0,
@@ -212,6 +234,9 @@ impl Session {
             verified: None,
             distrusted: None,
             commands: command_rx,
+            drain_rx,
+            drain: None,
+            exiting: false,
             events,
             event_rx,
             view_tx,
@@ -238,7 +263,29 @@ impl Session {
             downloading: false,
         };
         let task = tokio::spawn(actor.run());
-        (Session { commands, view }, task)
+        (
+            Session {
+                commands,
+                drain,
+                view,
+            },
+            task,
+        )
+    }
+
+    /// Drains any in-flight and queued edits up to `timeout`, releases the edit
+    /// lease if held, and shuts down the session actor.
+    pub async fn drain_and_shutdown(&self, timeout: Duration) -> DrainOutcome {
+        let (reply, done) = oneshot::channel();
+        if self
+            .drain
+            .send(DrainRequest { timeout, reply })
+            .await
+            .is_err()
+        {
+            return DrainOutcome::Committed;
+        }
+        done.await.unwrap_or(DrainOutcome::Committed)
     }
 
     /// Sends a command. Never blocks: if the queue is full (the actor is far
@@ -444,6 +491,19 @@ enum Internal<P> {
     LoggedOut,
 }
 
+enum DrainAction {
+    EndEdit,
+    CloseProject,
+    OpenProject(String),
+    Shutdown,
+}
+
+struct DrainState {
+    action: DrainAction,
+    deadline: Option<Instant>,
+    reply: Option<oneshot::Sender<DrainOutcome>>,
+}
+
 struct Actor<P: CredentialProvider> {
     url: String,
     provider: Arc<P>,
@@ -459,6 +519,9 @@ struct Actor<P: CredentialProvider> {
     /// numbers come from the server from then on.
     distrusted: Option<String>,
     commands: mpsc::Receiver<Command>,
+    drain_rx: mpsc::Receiver<DrainRequest>,
+    drain: Option<DrainState>,
+    exiting: bool,
     events: mpsc::Sender<Internal<P>>,
     event_rx: mpsc::Receiver<Internal<P>>,
     view_tx: watch::Sender<Arc<ViewModel>>,
@@ -495,7 +558,7 @@ impl<P: CredentialProvider> Actor<P> {
     async fn run(mut self) {
         self.connect();
         self.publish();
-        loop {
+        while !self.exiting {
             let renew_tick = async {
                 match self.renew.as_mut() {
                     Some(interval) => {
@@ -512,16 +575,50 @@ impl<P: CredentialProvider> Actor<P> {
                     None => std::future::pending().await,
                 }
             };
+            let drain_deadline = async {
+                match self.drain.as_ref().and_then(|d| d.deadline) {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 command = self.commands.recv() => {
                     match command {
-                        Some(Command::Shutdown) | None => break,
+                        Some(Command::Shutdown) => {
+                            self.begin_drain(
+                                DrainAction::Shutdown,
+                                Some(Duration::from_secs(5)),
+                                None,
+                            )
+                            .await;
+                        }
+                        None => break,
                         Some(command) => self.on_command(command),
                     }
+                }
+                Some(req) = self.drain_rx.recv() => {
+                    self.begin_drain(
+                        DrainAction::Shutdown,
+                        Some(req.timeout),
+                        Some(req.reply),
+                    )
+                    .await;
                 }
                 Some(event) = self.event_rx.recv() => self.on_event(event),
                 () = renew_tick => self.renew_lease(),
                 () = check_tick => self.request_status(),
+                () = drain_deadline => {
+                    self.abort_drain("timed out waiting for pending edits to save");
+                }
+            }
+            if !self.exiting
+                && self.drain.is_some()
+                && self
+                    .open
+                    .as_ref()
+                    .is_none_or(|o| o.ws.pending_batches() == 0)
+            {
+                self.finish_drain().await;
             }
             self.publish();
         }
@@ -1902,7 +1999,110 @@ impl<P: CredentialProvider> Actor<P> {
             return;
         }
         open.ending = true;
+        self.drain = Some(DrainState {
+            action: DrainAction::EndEdit,
+            deadline: None,
+            reply: None,
+        });
         self.finish_ending();
+    }
+
+    async fn begin_drain(
+        &mut self,
+        action: DrainAction,
+        timeout: Option<Duration>,
+        reply: Option<oneshot::Sender<DrainOutcome>>,
+    ) {
+        if let Some(prev) = self.drain.take()
+            && let Some(tx) = prev.reply
+        {
+            let _ = tx.send(DrainOutcome::Incomplete {
+                pending: self.open.as_ref().map_or(0, |o| o.ws.pending_batches()),
+                reason: "superseded by another drain".to_owned(),
+            });
+        }
+        let has_pending = self
+            .open
+            .as_ref()
+            .is_some_and(|o| o.ws.pending_batches() > 0 && o.lease.is_some());
+        if let Some(open) = self.open.as_mut()
+            && has_pending
+        {
+            open.ending = true;
+        }
+        self.drain = Some(DrainState {
+            action,
+            deadline: timeout.map(|t| Instant::now() + t),
+            reply,
+        });
+        if has_pending {
+            self.pump();
+        } else {
+            self.finish_drain().await;
+        }
+    }
+
+    async fn finish_drain(&mut self) {
+        let Some(drain) = self.drain.take() else {
+            return;
+        };
+        match drain.action {
+            DrainAction::EndEdit => self.finish_ending(),
+            DrainAction::CloseProject => {
+                self.close_project(true);
+            }
+            DrainAction::OpenProject(id) => {
+                self.open_project(&id);
+            }
+            DrainAction::Shutdown => {
+                if let Some(open) = self.open.as_mut()
+                    && let Some(lease) = open.lease.take()
+                    && let Some(conn) = self.conn.clone()
+                {
+                    let id = open.id.clone();
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(1),
+                        conn.release(&id, &lease.token),
+                    )
+                    .await;
+                }
+                self.close_project(false);
+                if let Some(tx) = drain.reply {
+                    let _ = tx.send(DrainOutcome::Committed);
+                }
+                self.exiting = true;
+            }
+        }
+    }
+
+    fn abort_drain(&mut self, reason: &str) {
+        let Some(drain) = self.drain.take() else {
+            return;
+        };
+        let pending = self.open.as_ref().map_or(0, |o| o.ws.pending_batches());
+        if let Some(open) = self.open.as_mut() {
+            open.ending = false;
+        }
+        match drain.action {
+            DrainAction::Shutdown => {
+                if let Some(tx) = drain.reply {
+                    let _ = tx.send(DrainOutcome::Incomplete {
+                        pending,
+                        reason: reason.to_owned(),
+                    });
+                }
+                self.exiting = true;
+            }
+            DrainAction::CloseProject | DrainAction::OpenProject(_) => {
+                self.notice(
+                    Severity::Warning,
+                    format!(
+                        "Pending changes could not be saved ({reason}); stayed on the current project."
+                    ),
+                );
+            }
+            DrainAction::EndEdit => {}
+        }
     }
 
     /// The user is done editing: save what is pending, then release.
@@ -1983,6 +2183,7 @@ impl<P: CredentialProvider> Actor<P> {
     /// The lease is gone: unsaved edits cannot be saved. Roll them back,
     /// go read-only, and reload so the user sees the server's truth.
     fn lose_lease(&mut self, why: &str) {
+        self.abort_drain(why);
         let Some(open) = self.open.as_mut() else {
             return;
         };
@@ -2079,7 +2280,6 @@ impl<P: CredentialProvider> Actor<P> {
                 {
                     self.request_risks();
                 }
-                self.finish_ending();
             }
             Err(e) => self.on_submit_failed(epoch, &e),
         }
@@ -2088,6 +2288,7 @@ impl<P: CredentialProvider> Actor<P> {
     fn on_submit_failed(&mut self, epoch: u64, error: &ClientError) {
         match error.code() {
             Some(ServerCode::StaleBase { .. }) => {
+                self.abort_drain("the project changed on the server");
                 if let Some(open) = self.open.as_mut() {
                     open.ws.on_rejected();
                 }
@@ -2099,6 +2300,7 @@ impl<P: CredentialProvider> Actor<P> {
                 self.lose_lease("The edit lock was lost.");
             }
             Some(ServerCode::MalformedOp | ServerCode::RejectedOp) => {
+                self.abort_drain(&format!("the server refused the change: {error}"));
                 if let Some(open) = self.open.as_mut() {
                     open.ws.on_rejected();
                 }
@@ -2118,6 +2320,7 @@ impl<P: CredentialProvider> Actor<P> {
                 );
             }
             _ => {
+                self.abort_drain(&format!("could not save the change: {error}"));
                 if let Some(open) = self.open.as_mut() {
                     open.ws.on_rejected();
                 }
@@ -2145,8 +2348,44 @@ impl<P: CredentialProvider> Actor<P> {
                     Internal::Created(conn.create_project(&name, &methodology_key).await)
                 });
             }
-            Command::OpenProject { id } => self.open_project(&id),
-            Command::CloseProject => self.close_project(true),
+            Command::OpenProject { id } => {
+                if self
+                    .open
+                    .as_ref()
+                    .is_some_and(|o| o.ws.pending_batches() > 0 && o.lease.is_some())
+                {
+                    if let Some(open) = self.open.as_mut() {
+                        open.ending = true;
+                    }
+                    self.drain = Some(DrainState {
+                        action: DrainAction::OpenProject(id),
+                        deadline: None,
+                        reply: None,
+                    });
+                    self.pump();
+                } else {
+                    self.open_project(&id);
+                }
+            }
+            Command::CloseProject => {
+                if self
+                    .open
+                    .as_ref()
+                    .is_some_and(|o| o.ws.pending_batches() > 0 && o.lease.is_some())
+                {
+                    if let Some(open) = self.open.as_mut() {
+                        open.ending = true;
+                    }
+                    self.drain = Some(DrainState {
+                        action: DrainAction::CloseProject,
+                        deadline: None,
+                        reply: None,
+                    });
+                    self.pump();
+                } else {
+                    self.close_project(true);
+                }
+            }
             Command::SelectThreat(position) => {
                 if let Some(open) = self.open.as_mut() {
                     open.ui.selected_threat = shown_threats(open).get(position).map(|t| t.id);
