@@ -53,6 +53,7 @@ pub struct ServerPane {
     company_offered: bool,
     shown: Option<(String, u64)>,
     closing: Option<Arc<Project>>,
+    accept_open: bool,
     _subscriptions: [Subscription; 4],
 }
 
@@ -113,6 +114,7 @@ impl ServerPane {
             company_offered: false,
             shown: None,
             closing: None,
+            accept_open: false,
             _subscriptions: subs,
         }
     }
@@ -176,14 +178,19 @@ impl ServerPane {
 
     /// Leaves the current server and returns to the address form.
     pub fn change_server(&mut self, cx: &mut Context<Self>) {
-        (self.company_offered, self.shown, self.closing) = (false, None, None);
+        (
+            self.company_offered,
+            self.shown,
+            self.closing,
+            self.accept_open,
+        ) = (false, None, None, false);
         self.signin.change_server();
         cx.notify();
     }
 
     /// Signs out of the current server.
     pub fn sign_out(&mut self, cx: &mut Context<Self>) {
-        (self.shown, self.closing) = (None, None);
+        (self.shown, self.closing, self.accept_open) = (None, None, false);
         self.signin.sign_out();
         cx.notify();
     }
@@ -196,6 +203,7 @@ impl ServerPane {
 
     /// Opens the server project with `id`.
     pub fn open_project(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.accept_open = true;
         self.send(Command::OpenProject { id: id.to_owned() });
         cx.notify();
     }
@@ -210,6 +218,7 @@ impl ServerPane {
             .get(self.methodology)
             .copied()
             .unwrap_or(METHODOLOGIES[0]);
+        self.accept_open = true;
         self.send(Command::CreateProject {
             name,
             methodology_key: key.to_owned(),
@@ -218,8 +227,9 @@ impl ServerPane {
         cx.notify();
     }
 
-    /// Closes the open server project and clears what was shown.
+    /// Closes the open server project and invalidates any in-flight open.
     pub fn close_project(&mut self, cx: &mut Context<Self>) {
+        self.accept_open = false;
         self.closing = self
             .signin
             .session()
@@ -275,6 +285,14 @@ impl ServerPane {
         });
         match open {
             None => (self.closing, self.shown) = (None, None),
+            Some((_, _, _, s)) if !self.accept_open => {
+                // Local mode invalidated an in-flight remote open: drop the
+                // late download instead of emitting `ShowProject`.
+                if self.closing.as_ref().is_none_or(|c| !Arc::ptr_eq(c, &s)) {
+                    self.closing = Some(s);
+                    self.send(Command::CloseProject);
+                }
+            }
             Some((_, _, _, s)) if self.closing.as_ref().is_some_and(|c| Arc::ptr_eq(c, &s)) => {}
             Some((key, name, holder, project)) => {
                 self.closing = None;

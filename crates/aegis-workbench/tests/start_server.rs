@@ -429,3 +429,86 @@ fn sign_out_and_change_server(cx: &mut TestAppContext) {
     assert!(w.cx.update(|_, cx| pane.read(cx).session().is_none()));
     let _ = stop.send(());
 }
+
+#[gpui::test]
+fn delayed_server_download_does_not_replace_edited_sample(cx: &mut TestAppContext) {
+    let rt = runtime();
+    let (url, stop, _task) = rt.block_on(password_server());
+    let mut w = open(cx, &rt, "delayed-remote");
+
+    w.connect(&url);
+    w.until("password form", |w| {
+        w.view().stage == Stage::LoginRequired && w.view().form == Some(LoginForm::Password)
+    });
+    w.log_in("admin", "a long admin password");
+    w.until("online", |w| w.view().stage == Stage::Online);
+
+    // Create a remote project, then return to Start so we have its ID.
+    let pane = w.pane();
+    pane.update_in(w.cx, |p, window, cx| {
+        p.set_new_name("RemoteProj", window, cx);
+        p.create_project(window, cx);
+    });
+    w.until("remote project opened", |w| w.workbench().is_some());
+    w.run("back-to-start");
+    w.until("back at start with project listed", |w| {
+        w.workbench().is_none() && w.view().projects.iter().any(|p| p.name == "RemoteProj")
+    });
+    let remote_id = w
+        .view()
+        .projects
+        .iter()
+        .find(|p| p.name == "RemoteProj")
+        .expect("remote project")
+        .id
+        .clone();
+
+    // Start opening the remote project, then immediately open the local sample
+    // before the remote download completes.
+    pane.update(w.cx, |p, cx| p.open_project(&remote_id, cx));
+    let start_screen =
+        w.cx.update(|_, cx| w.shell.read(cx).start_screen().cloned())
+            .expect("start screen");
+    start_screen.update(w.cx, |s, cx| s.open_sample(cx));
+    w.cx.run_until_parked();
+
+    let wb = w.workbench().expect("sample workbench");
+    wb.update(w.cx, |wb, cx| {
+        assert!(wb.apply_edit(
+            &aegis_client::commands::Edit::AddAsset {
+                id: aegis_model::AssetId::new_v7(),
+                name: "Local Sample Asset".into(),
+                properties: vec![0],
+            },
+            cx,
+        ));
+    });
+    assert!(w.cx.update(|_, cx| wb.read(cx).has_unsaved_changes()));
+
+    // Pump repeatedly so any delayed remote response arrives; local sample must stay.
+    for _ in 0..25 {
+        w.shell.update_in(w.cx, |s, window, cx| s.pump(window, cx));
+        w.cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let current = w.workbench().expect("still workbench");
+    let (name, has_local_asset, unsaved) = w.cx.update(|_, cx| {
+        let r = current.read(cx);
+        (
+            r.project_name().to_owned(),
+            r.workspace()
+                .project()
+                .assets()
+                .any(|(_, _, a)| a.name() == "Local Sample Asset"),
+            r.has_unsaved_changes(),
+        )
+    });
+    assert_ne!(
+        name, "RemoteProj",
+        "delayed server download replaced sample"
+    );
+    assert!(has_local_asset, "local sample edit was lost");
+    assert!(unsaved, "local sample must still report unsaved changes");
+    let _ = stop.send(());
+}

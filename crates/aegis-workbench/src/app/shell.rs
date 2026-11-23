@@ -131,6 +131,11 @@ impl Shell {
     }
 
     fn on_server(&mut self, ev: &ServerEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Never overwrite an active local folder or sample workbench with a
+        // delayed remote download.
+        if matches!(self.screen, Screen::Workbench(_)) && !self.server_project {
+            return;
+        }
         let ServerEvent::ShowProject {
             project,
             name,
@@ -160,6 +165,11 @@ impl Shell {
                 Ok(())
             }
         };
+        if res.is_ok()
+            && let Some(pane) = &self.server
+        {
+            pane.update(cx, |p, cx| p.close_project(cx));
+        }
         if let Err(e) = res
             && let Some(s) = self.start_screen()
         {

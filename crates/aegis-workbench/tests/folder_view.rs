@@ -530,3 +530,132 @@ fn an_old_folder_converts_when_opened(cx: &mut TestAppContext) {
     let _ = fs::remove_dir_all(&dir);
     let _ = fs::remove_dir_all(&release);
 }
+
+#[gpui::test]
+fn typing_in_cell_without_enter_marks_dirty_and_commits_on_save(cx: &mut TestAppContext) {
+    use aegis_client::explorer::{ExplorerKey, Folder, Owner};
+    use aegis_client::grid::GridSelection;
+    use gpui::AppContext as _;
+
+    let (view, cx) = open(cx);
+    let dir = other_folder("cell-draft-save");
+    open_folder(&view, cx, &dir).expect("open");
+    view.update(cx, |w, cx| {
+        assert!(w.apply_edit(
+            &Edit::AddAsset {
+                id: aegis_model::AssetId::new_v7(),
+                name: "Initial ECU".into(),
+                properties: vec![0],
+            },
+            cx,
+        ));
+        w.save(cx).expect("initial save");
+    });
+    assert!(!unsaved(&view, cx));
+
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Assets);
+    view.update_in(cx, |w, window, cx| w.open(key, window, cx));
+    cx.run_until_parked();
+    let tab = cx
+        .read_entity(&view, |w, _| w.table_tab(key))
+        .expect("assets tab");
+    let name_col = cx.read_entity(&tab, |t, _| {
+        t.visible_columns()
+            .iter()
+            .position(|c| c.key == "name")
+            .expect("name column")
+    });
+    tab.update_in(cx, |t, window, cx| {
+        t.set_selection(Some(GridSelection::single(0, name_col)), cx);
+        assert!(t.start_edit(window, cx));
+        assert!(t.set_editor_text("Typed Without Enter", window, cx));
+    });
+    cx.run_until_parked();
+
+    assert!(
+        unsaved(&view, cx),
+        "uncommitted cell draft must mark workbench dirty"
+    );
+    view.update(cx, |w, cx| w.save(cx))
+        .expect("save commits active cell draft");
+    assert!(!unsaved(&view, cx));
+    assert!(!cx.read_entity(&tab, |t, _| t.is_editing()));
+
+    // Reopen from disk in another folder cycle to verify persistence.
+    let release = other_folder("cell-draft-release");
+    open_folder(&view, cx, &release).expect("release");
+    let (_, disk) = WorkspaceFolder::open(&dir, methodology()).expect("reopen");
+    assert!(
+        disk.assets()
+            .any(|(_, _, a)| a.name() == "Typed Without Enter"),
+        "typed cell draft must be saved to disk"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&release);
+}
+
+#[gpui::test]
+fn invalid_cell_draft_blocks_save_and_cancel_keeps_editor_open(cx: &mut TestAppContext) {
+    use aegis_client::explorer::{ExplorerKey, Folder, Owner};
+    use aegis_client::grid::GridSelection;
+    use gpui::AppContext as _;
+
+    let (view, cx) = open(cx);
+    let dir = other_folder("cell-draft-invalid");
+    open_folder(&view, cx, &dir).expect("open");
+    view.update(cx, |w, cx| {
+        assert!(w.apply_edit(
+            &Edit::AddAsset {
+                id: aegis_model::AssetId::new_v7(),
+                name: "Initial ECU".into(),
+                properties: vec![0],
+            },
+            cx,
+        ));
+        w.save(cx).expect("initial save");
+    });
+
+    let key = ExplorerKey::Folder(Owner::Project, Folder::Assets);
+    view.update_in(cx, |w, window, cx| w.open(key, window, cx));
+    cx.run_until_parked();
+    let tab = cx
+        .read_entity(&view, |w, _| w.table_tab(key))
+        .expect("assets tab");
+    let name_col = cx.read_entity(&tab, |t, _| {
+        t.visible_columns()
+            .iter()
+            .position(|c| c.key == "name")
+            .expect("name column")
+    });
+    tab.update_in(cx, |t, window, cx| {
+        t.set_selection(Some(GridSelection::single(0, name_col)), cx);
+        assert!(t.start_edit(window, cx));
+        assert!(t.set_editor_text("   ", window, cx));
+    });
+    cx.run_until_parked();
+
+    assert!(unsaved(&view, cx));
+    assert!(
+        view.update(cx, |w, cx| w.save(cx)).is_err(),
+        "blank asset name must fail validation on save"
+    );
+    assert!(
+        cx.read_entity(&tab, |t, _| t.is_editing()),
+        "editor must stay open after validation failure"
+    );
+    assert!(unsaved(&view, cx));
+
+    // Closing prompts (Try again / Don't save / Cancel); Cancel keeps window and draft.
+    assert!(!request_close(&view, cx));
+    let cancel = Catalog::load(Language::En).tr("workbench-leave-cancel");
+    answer(cx, &cancel);
+    assert!(window_open(cx));
+    assert!(cx.read_entity(&tab, |t, _| t.is_editing()));
+
+    let release = other_folder("cell-draft-invalid-release");
+    leave(&view, cx, Leave::Open(release.clone()));
+    let discard = Catalog::load(Language::En).tr("workbench-leave-discard");
+    answer(cx, &discard);
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&release);
+}

@@ -39,6 +39,7 @@ pub(super) enum ActiveEditor {
     Text {
         row: usize,
         col: usize,
+        initial: String,
         input: Entity<InputState>,
         _sub: Subscription,
     },
@@ -172,16 +173,23 @@ impl TableTab {
         let editor = match kind {
             K::ReadOnly => return false,
             K::Text { current } => {
+                let initial = current.clone();
                 let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
                 input.update(cx, |s, cx| s.focus(window, cx));
-                let _sub = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, w, cx| {
-                    if let InputEvent::PressEnter { .. } = ev {
-                        this.commit_text_edit(w, cx);
-                    }
-                });
+                let _sub =
+                    cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, w, cx| match ev {
+                        InputEvent::PressEnter { .. } => {
+                            this.commit_text_edit(w, cx);
+                        }
+                        InputEvent::Change => {
+                            this.notify_workbench_dirty(cx);
+                        }
+                        _ => {}
+                    });
                 E::Text {
                     row,
                     col,
+                    initial,
                     input,
                     _sub,
                 }
@@ -469,8 +477,88 @@ impl TableTab {
     /// Closes any active inline editor without committing and restores focus.
     pub fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editor = None;
+        self.notify_workbench_dirty(cx);
         window.focus(&self.focus_handle, cx);
         cx.notify();
+    }
+
+    /// Whether this tab has an uncommitted cell-editor draft whose text
+    /// differs from the cell's committed value.
+    #[must_use]
+    pub fn has_pending_edit(&self, cx: &App) -> bool {
+        match &self.editor {
+            Some(ActiveEditor::Text { initial, input, .. }) => {
+                input.read(cx).value().as_ref() != initial.as_str()
+            }
+            _ => false,
+        }
+    }
+
+    /// Replaces the text in the active [`ActiveEditor::Text`] without
+    /// committing (simulates typing without pressing Enter).
+    pub fn set_editor_text(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(ActiveEditor::Text { input, .. }) = &self.editor else {
+            return false;
+        };
+        let owned = text.to_owned();
+        input.update(cx, |s, cx| s.set_value(owned, window, cx));
+        self.notify_workbench_dirty(cx);
+        true
+    }
+
+    /// Extracts `(table, targets, col_spec, input)` for an uncommitted text
+    /// draft so [`Workbench`] can validate and commit it without re-entrancy.
+    pub(super) fn pending_edit_input(
+        &self,
+        cx: &App,
+    ) -> Option<(
+        TableId,
+        Vec<Selection>,
+        &'static aegis_client::view::ColumnSpec,
+        CellInput,
+    )> {
+        let ActiveEditor::Text {
+            col,
+            initial,
+            input,
+            ..
+        } = self.editor.as_ref()?
+        else {
+            return None;
+        };
+        let val = input.read(cx).value().to_string();
+        if val == *initial {
+            return None;
+        }
+        let sel = self.selection?;
+        let spec = *self.visible_cols.get(*col)?;
+        let targets: Vec<_> = sel
+            .row_range()
+            .filter_map(|r| self.displayed_row(r)?.target)
+            .collect();
+        if targets.is_empty() {
+            return None;
+        }
+        Some((self.table, targets, spec, CellInput::Text(val)))
+    }
+
+    /// Clears the active editor after [`Workbench`] commits its draft.
+    pub(super) fn clear_editor(&mut self, cx: &mut Context<Self>) {
+        self.editor = None;
+        cx.notify();
+    }
+
+    fn notify_workbench_dirty(&self, cx: &mut Context<Self>) {
+        let dirty = self.has_pending_edit(cx);
+        if let Some(wb) = self.workbench.upgrade() {
+            let id = cx.entity_id();
+            wb.update(cx, |w, cx| w.set_tab_editor_dirty(id, dirty, cx));
+        }
     }
 
     /// Whether an inline cell editor or popover is currently active.
@@ -524,6 +612,7 @@ impl TableTab {
             return false;
         }
         self.editor = None;
+        self.notify_workbench_dirty(cx);
         self.self_refresh(&wb, cx);
         window.focus(&self.focus_handle, cx);
         true

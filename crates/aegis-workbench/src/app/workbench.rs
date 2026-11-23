@@ -108,6 +108,8 @@ pub struct Workbench {
     pub(super) folder: Option<WorkspaceFolder>,
     /// The confirmed sequence of the workspace when it was last saved.
     pub(super) saved_seq: u64,
+    /// Whether any open table tab holds an uncommitted cell-editor draft.
+    pub(super) editor_dirty: bool,
     /// The project name: the folder's name, or the sample's.
     pub(super) name: String,
     pub(super) methodology: Arc<Methodology>,
@@ -292,6 +294,7 @@ impl Workbench {
             note: None,
             folder: None,
             saved_seq,
+            editor_dirty: false,
             name: SAMPLE_NAME.to_owned(),
             methodology,
             read_only: None,

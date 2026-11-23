@@ -91,11 +91,71 @@ impl Workbench {
         self.note.as_deref()
     }
 
-    /// Whether the project changed since it was opened or saved. Undoing
-    /// back to the saved state still counts; the next save then writes
-    /// nothing.
+    /// Whether the project changed since it was opened or saved, including
+    /// any uncommitted inline cell-editor draft. Undoing back to the saved
+    /// state still counts; the next save then writes nothing.
     pub fn has_unsaved_changes(&self) -> bool {
-        self.workspace.confirmed_seq() != self.saved_seq
+        self.workspace.confirmed_seq() != self.saved_seq || self.editor_dirty
+    }
+
+    /// Updates `editor_dirty` when a table tab's inline cell draft changes.
+    pub(super) fn set_tab_editor_dirty(
+        &mut self,
+        changed_tab: gpui::EntityId,
+        tab_dirty: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let dirty = tab_dirty
+            || self.tabs.values().any(|tab| match &tab.body {
+                Body::Table(e) if e.entity_id() != changed_tab => e.read(cx).has_pending_edit(cx),
+                _ => false,
+            });
+        if self.editor_dirty != dirty {
+            self.editor_dirty = dirty;
+            cx.notify();
+        }
+    }
+
+    /// Validates and commits every open inline cell-editor draft into the
+    /// workspace before saving or leaving. On validation error, the editor
+    /// stays open and its error message is shown in the status bar.
+    pub(super) fn commit_active_editors(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let pending: Vec<_> = self
+            .tabs
+            .values()
+            .filter_map(|tab| match &tab.body {
+                Body::Table(e) => e
+                    .read(cx)
+                    .pending_edit_input(cx)
+                    .map(|draft| (e.clone(), draft)),
+                _ => None,
+            })
+            .collect();
+        for (tab, (table, targets, spec, input)) in pending {
+            let edit = aegis_client::grid::edit_cells(
+                self.workspace.project(),
+                table,
+                &targets,
+                spec,
+                &input,
+            )
+            .map_err(|err| {
+                let msg = err.to_string();
+                self.note = Some(msg.clone());
+                cx.notify();
+                msg
+            })?;
+            if !self.apply_edit(&edit, cx) {
+                let msg = self
+                    .note
+                    .clone()
+                    .unwrap_or_else(|| "could not apply edit".to_owned());
+                return Err(msg);
+            }
+            tab.update(cx, |t, cx| t.clear_editor(cx));
+        }
+        self.editor_dirty = false;
+        Ok(())
     }
 
     /// Opens the project folder `path`, converting an old project folder
@@ -165,6 +225,7 @@ impl Workbench {
         self.names = project.methodology().element_names().clone();
         self.workspace = Workspace::new(project, 0);
         self.saved_seq = 0;
+        self.editor_dirty = false;
         self.name = name;
         self.folder = folder;
         self.picked = None;
@@ -197,6 +258,7 @@ impl Workbench {
         if let Some(reason) = &self.read_only {
             return Err(reason.clone());
         }
+        self.commit_active_editors(cx)?;
         let Some(folder) = &mut self.folder else {
             return Err("no project folder is open".to_owned());
         };
@@ -230,6 +292,7 @@ impl Workbench {
         if self.folder.as_ref().is_some_and(|f| f.holds(path)) {
             return self.save(cx);
         }
+        self.commit_active_editors(cx)?;
         let folder =
             WorkspaceFolder::create(path, self.workspace.project()).map_err(|e| e.to_string())?;
         self.name = folder.name();
