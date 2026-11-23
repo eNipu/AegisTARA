@@ -2881,6 +2881,64 @@
       ],
       "decision": null,
       "updated": "2026-11-20T12:24:40Z"
+    },
+    {
+      "id": "135-applicability-ui",
+      "title": "Applicability in the app",
+      "branch": "factory/135-applicability-ui",
+      "stage": "merged",
+      "slice": "135d",
+      "base": "0a0a674f3d19443b30760517da387022947a7348",
+      "reviews": {
+        "slice": "135d",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "135a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 254
+        },
+        {
+          "slice": "135b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 246
+        },
+        {
+          "slice": "135c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 76
+        },
+        {
+          "slice": "135d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 287
+        }
+      ],
+      "decision": "135d NEXT: planner \u2014 135a shifted Page::ALL indices, breaking aegis-shell/ui/app.slint (outside allow list)",
+      "updated": "2026-11-23T13:34:13Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

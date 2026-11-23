@@ -1,0 +1,105 @@
+{
+  "job": "135-applicability-ui",
+  "slices": [
+    {
+      "id": "135a",
+      "title": "Condition edits, Configuration page view, and conditions link columns",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/configuration.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/state.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/src/table.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-shell/src/controller.rs",
+        "crates/aegis-shell/src/shortcuts.rs",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 520,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test configuration",
+        "cargo test --locked -p aegis-client --test process_map",
+        "cargo check --locked -p aegis-shell -p aegis-workbench --tests"
+      ]
+    },
+    {
+      "id": "135b",
+      "title": "Reasons text in banner and rows, and the switch toast",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/exclusion.rs",
+        "crates/aegis-client/src/table.rs",
+        "crates/aegis-client/src/inspector.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test excluded_reasons",
+        "cargo test --locked -p aegis-client --test condition_toast"
+      ]
+    },
+    {
+      "id": "135c",
+      "title": "Hatched canvas nodes with the reasons as accessible text",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-canvas/src/scene.rs",
+        "crates/aegis-canvas/src/render.rs",
+        "crates/aegis-canvas/src/access.rs",
+        "crates/aegis-canvas/tests/*",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 300,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-canvas",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-canvas --test access",
+        "cargo test --locked -p aegis-client --test excluded_canvas"
+      ]
+    },
+    {
+      "id": "135d",
+      "title": "Report cover line, Configuration and assumptions section, and XLSX columns",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/report/doc.rs",
+        "crates/aegis-client/src/report/xlsx.rs",
+        "crates/aegis-client/src/exclusion.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-shell/ui/app.slint",
+        "crates/aegis-shell/translations/*"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test report_configuration"
+      ]
+    }
+  ]
+}
