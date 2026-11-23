@@ -90,7 +90,9 @@ impl TestServer {
         let public = Public::connect(&self.url, kind).await.expect("public");
         let session = public.log_in(user, password, "test").await.expect("login");
         let login = Arc::new(PasswordLogin::new());
-        login.set(Some(session.token));
+        login
+            .set(&self.url, Some(session.token))
+            .expect("bind login");
         let conn = Connection::connect_with(&self.url, kind, Arc::clone(&login))
             .await
             .expect("connect");
@@ -164,7 +166,9 @@ async fn without_a_session_every_call_needs_a_login() {
         ));
         // A forged token reaches the server and is refused there.
         let forged = Arc::new(PasswordLogin::new());
-        forged.set(Some("ats_forged".to_owned()));
+        forged
+            .set(&server.url, Some("ats_forged".to_owned()))
+            .expect("bind login");
         let conn = Connection::connect_with(&server.url, kind, forged)
             .await
             .expect("connect");
@@ -394,7 +398,7 @@ async fn the_session_shows_events_and_the_license_to_an_admin() {
         .await
         .expect("login");
     let login = Arc::new(PasswordLogin::new());
-    login.set(Some(s.token));
+    login.set(&server.url, Some(s.token)).expect("bind login");
     let (session, _task) = Session::start(&server.url, login, SessionConfig::new("admin"));
     let mut view = session.subscribe();
     let wait = |ok: fn(&aegis_client::state::ViewModel) -> bool| {
@@ -463,7 +467,7 @@ async fn an_admin_sees_sessions_ends_one_and_the_user_is_logged_out() {
         .await
         .expect("login");
     let login = Arc::new(PasswordLogin::new());
-    login.set(Some(s.token));
+    login.set(&server.url, Some(s.token)).expect("bind login");
     let (session, _task) = Session::start(&server.url, login, SessionConfig::new("admin"));
     let view = session.subscribe();
     let wait = |ok: fn(&aegis_client::state::ViewModel) -> bool| {

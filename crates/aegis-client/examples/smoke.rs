@@ -57,7 +57,9 @@ async fn run() -> Result<(), String> {
     );
 
     let login = Arc::new(PasswordLogin::new());
-    login.set(Some(session.token));
+    login
+        .set(&url, Some(session.token))
+        .map_err(|e| format!("bind login: {e}"))?;
     let conn = Connection::connect_with(&url, kind, Arc::clone(&login))
         .await
         .map_err(|e| format!("connect: {e}"))?;

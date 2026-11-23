@@ -1679,7 +1679,10 @@ nothing (job 164).
 | Module | Types | Notes |
 |---|---|---|
 | `transport.rs` | `TransportKind { Grpc, GrpcWeb }`, `Transport { Grpc(Channel), Web { client, origin } }`, `check_url()` | `auto`: gRPC-Web for `https://`, gRPC otherwise. HTTPS uses rustls with the OS trust store. `CONNECT_TIMEOUT = 10 s`, `CALL_TIMEOUT = 30 s`. |
-| `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name, password_enabled }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` holds the token and sends it as `authorization: Bearer`. |
+| `connection.rs` | `Connection<P>`, `ServerInfo`, `Downloaded`, `Public`, `LoginMethod { Password, Oidc { issuer, client_id, resource }, Development }`, `LoginOptions { method, server_name, password_enabled }`, `PasswordSession { token, expires_in, user }`, `PasswordLogin`, `DevLogin` | One typed call per RPC. `Public` reaches only the `Accounts` service. `PasswordLogin` binds token and origin under one lock and sends `authorization: Bearer` only to that origin. |
+| `origin.rs` | `Origin`, `OriginError` | Strict HTTP(S) scheme/host/effective-port comparison for credential boundaries. RPC paths and queries are allowed; malformed URLs, userinfo and cross-origin requests are refused. Canonical origins key remembered credentials (ADR 0072). |
+| `provider.rs` | `AppProvider { Oidc, Password, Dev }`, `OidcProvider`, `OidcSettings`, `PasswordProvider` | `OidcSettings.server_url` is the API origin, separate from issuer and audience. `PasswordProvider` keeps tokens by canonical origin and migrates legacy aliases. `AppProvider::invalidate()` retires an old provider so its automatic OIDC refresh cannot overwrite or clear a newer login. |
+| `signin.rs` + `signin/{flow,attempt}.rs` | `SignIn`, `AuthAttempt`, `AuthAttempts` | Shared sign-in controller. Every discovery/login/restore carries a unique generation and origin; only the current completion may change UI, settings or credentials. Cancellation aborts tasks and guards OIDC token/keychain commits, including on same-server retry, sign-out and provider replacement (ADR 0072). |
 | `error.rs` | `ClientError`, `ServerCode` | `ServerCode` maps status details to cases the UI can explain (`InvalidCredentials`, `Throttled { retry_after_s }`, `PasswordLoginOff`, `LockHeld`, ...). |
 | `session.rs` | `Session`, `SessionConfig { user, clock_ms, retry_delay, transport, on_log_out, version_check, update_url, update_checker }`, `LogOutHook` | The session actor: one task owns the connection, the workspace and the edit lock; the UI sends `Command`s (`LoadEvents` among them) and watches `ViewModel` (C1, R4). Reconnects with epochs, so late answers from an old connection are dropped. Caches `cached_scene: Option<(TreeId, bool, Arc<Scene>)>` and `cached_lint_count: Option<usize>` on `Open` (invalidated on workspace mutations) so node selection and page switches reuse the Sugiyama layout and lint count in $O(1)$. |
 | `workspace.rs` | `Workspace`, `Submission`, `Origin`, `WorkspaceError`, `MAX_SUBMIT_OPS` | Optimistic local copy. Local ops apply at once and are kept with their inverses until the server confirms. Pending ops are sent in batches of at most `MAX_SUBMIT_OPS`, so a long offline queue is never rejected as too large. `apply_labeled()` takes the label an edit gets in the undo list; a bulk edit passes `Label::bulk` ("remove 3 assets", UI-04). |
@@ -1806,11 +1809,11 @@ flowchart LR
 | File | Types | Notes |
 |---|---|---|
 | `src/main.rs` | | Starts a 2-thread tokio runtime and the window (software renderer). Reads `AEGIS_URL`, `AEGIS_TRANSPORT`, `AEGIS_DEV_USER`, `AEGIS_DEV_ADMIN`. |
-| `src/launcher.rs` | `Launcher` | Owns the login steps: server screen, ask the server for `GetLoginOptions`, password or company login, start the `Session`, log out, change server. Saves `Settings`. Network results come back on a bounded channel and are handled on the UI thread in `pump()`. |
+| `src/launcher.rs` | `Launcher` | Owns the login steps: server screen, ask the server for `GetLoginOptions`, password or company login, start the `Session`, log out, change server. Saves `Settings`. Network results are handled on the UI thread in `pump()` and accepted only through the shared `AuthAttempts` generation/origin guard; transitions also invalidate the old provider. |
 | `src/standalone.rs` | `Standalone` | The embedded server: reads and verifies the license, opens the `FolderStore`, restores seats, binds loopback, serves the normal gRPC service until `stop()` (which waits for the snapshots). `Launcher::open_standalone`/`create_standalone` run it and connect the `Session` with the development login; File > New/Open project folder and the server screen start it. `AEGIS_STANDALONE=<folder>` (with `AEGIS_LICENSE_FILE`) starts in this mode. |
 | `src/adapter.rs` | `DrawItem`, `draw_items()`, `draw_layers()` | Converts a `DisplayList` into Slint `DrawItem` models, coalescing consecutive `Path` items that share stroke token and width into a single SVG path command string and splitting paths, rects, and texts into separate typed layers (`draw-paths`, `draw-rects`, `draw-texts`). |
 | `src/controller.rs` | `Controller`, `Hooks`, `PasswordLogIn` | Diffs the incoming `Arc<ViewModel>` against the previous `ViewModel` (`prev`), updates only changed Slint models, defers screen-reader `AccessNode` formatting during pointer drag (`redraw_inner`), and turns window callbacks (including interactive tree-node expansion) into `Command`s. |
-| `src/provider.rs` | `AppProvider { Oidc, Password, Dev }`, `OidcProvider`, `OidcSettings`, `PasswordProvider` | Credentials for each call. `PasswordProvider` can keep the session token in the OS keychain ("keep me logged in"); the password itself is never stored. |
+
 | `src/headless.rs` | `Headless`, `Frame` | Software-rendered window for tests and screenshots. |
 | `ui/theme.slint` | `Theme` | Tactical Obsidian & Tungsten Crimson-Amber color palette (with runtime `dark` toggle), semantic risk/feasibility tokens, and typographic scale, weight, and tracking tokens. |
 | `ui/app.slint` | `AppWindow` | Menu bar (File, Edit, View, Project, Admin, Help), TARA steps sidebar, one page per `Page`, inspector panel (including interactive attack-tree node editing and leaf/intermediate expansion), status band. Connection screens: `connection` 4 = server, 3 = log in, 1 = online. |
@@ -1837,21 +1840,23 @@ sequenceDiagram
     L->>P: LogIn
     P->>A: log_in (throttle, Argon2id, decoy)
     A-->>P: token, expiry, user
-    P-->>L: PasswordSession
-    L->>L: PasswordProvider.set(token), keychain if kept
+    P-->>L: PasswordSession tagged with attempt generation + origin
+    L->>L: accept only if still current; bind token to origin, keychain if kept
     L->>L: start Session (user = server subject)
     L-->>U: projects page
 ```
 
 The session user is set to the subject the server returns. The edit lock
 holder is compared with it, so the band says "editing" and not "someone
-else".
+else". A late result from another server or an earlier same-server attempt
+is discarded before changing settings, the keychain or the session. Password
+credentials are subsequently issued only to their bound origin (ADR 0072).
 
 ## II.7 Other crates
 
 | Crate | Main types | Role |
 |---|---|---|
-| `aegis-auth` | `OidcClient`, `Session<H, S>`, `Authenticator<H>`, `AccessTokenValidator<H>`, `DpopVerifier`, `DeviceKey`, `JwksCache<H>`, `Vault<S>`, `OsKeychain`, `HyperClient`, `tls::{system_roots, client_config, config_with_roots, https_connector, https_connector_with}`, `HyperClient::with_tls_config` | OIDC with PKCE and DPoP for SSO, token validation on the server, keychain access, and the shared rustls setup (OS trust store, ring). |
+| `aegis-auth` | `OidcClient`, `Session<H, S>`, `LoginAttempt`, `Authenticator<H>`, `AccessTokenValidator<H>`, `DpopVerifier`, `DeviceKey`, `JwksCache<H>`, `Vault<S>`, `OsKeychain`, `HyperClient`, `tls::{system_roots, client_config, config_with_roots, https_connector, https_connector_with}`, `HyperClient::with_tls_config` | OIDC with PKCE and DPoP for SSO, token validation on the server, keychain access, and the shared rustls setup (OS trust store, ring). Guarded login, restore and automatic-refresh commits serialize with `LoginAttempt::cancel()` so stale attempts cannot persist or clear credentials (ADR 0072). |
 | `aegis-license` | `License`, `LicenseState`, `TrustedKeys`, `Issuer`, `SeatLedger`, `Admission`, `Manifest`, `Version`, `Artifact`, `Offer` | Signed license tokens, seat counting (`restore()` after restart), signed update manifests. |
 | `aegis-canvas` | `access::{NodeAccess, VisibleNode, describe, sentence, visible}`, `Scene`, `Layout`, `Forest`, `DisplayList`, `Item`, `Viewport`, `SpatialIndex`, `Tone`, `Paint`, `Stroke`, `SvgOptions`, `RenderOptions` | Attack tree layout, hit testing, pixel and SVG drawing. `Tone` is `Ord`, so it can be a sort key. |
 | `aegis-proto` | generated | `tonic` and `prost` code from `aegis.proto`. |

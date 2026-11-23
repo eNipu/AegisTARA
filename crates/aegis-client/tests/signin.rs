@@ -195,6 +195,70 @@ async fn password_login_is_kept_signed_out_and_left() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn switching_servers_cancels_a_password_login_before_the_next_provider_is_ready() {
+    let (a, _stop_a) = server_with(LoginOptions::password("Server A"), PasswordAuthn).await;
+    let (b, _stop_b) = server_with(LoginOptions::password("Server B"), PasswordAuthn).await;
+    let dir = temp_dir("switch-during-login");
+    let path = dir.join("settings.json");
+    let secrets = memory_secrets();
+    let mut signin = sign_in(&path, &secrets);
+    signin.connect(&a, "auto");
+    until(&mut signin, "A's password provider", |v| {
+        v.stage == Stage::LoginRequired && v.form == Some(LoginForm::Password)
+    })
+    .await;
+
+    // No yield between starting the login and changing servers: cancellation
+    // must stop the old task before it can commit a remembered password token.
+    signin.password_log_in("admin", "a long admin password", true);
+    signin.connect(&b, "auto");
+    assert_eq!(signin.view().form, None);
+    assert!(signin.session().is_none());
+    until(
+        &mut signin,
+        "B's password provider without A's login",
+        |v| v.stage == Stage::LoginRequired && v.server_name == "Server B",
+    )
+    .await;
+    assert_eq!(signin.view().server_url, b);
+    assert!(signin.view().user_name.is_empty());
+    assert!(signin.view().error.is_none());
+    assert!(!signin.view().busy);
+    for server in [&a, &b] {
+        assert!(
+            secrets
+                .get(&format!("password-session|{server}|admin"))
+                .expect("keychain")
+                .is_none()
+        );
+    }
+    let saved = Settings::load(&path);
+    assert_eq!(saved.server_url, b);
+    assert!(saved.username.is_empty());
+
+    signin.password_log_in("admin", "a long admin password", true);
+    until(&mut signin, "a fresh login on B", |v| {
+        v.stage == Stage::Online
+    })
+    .await;
+    assert_eq!(signin.settings().server_url, b);
+    assert_eq!(signin.settings().username, "admin");
+    assert!(
+        secrets
+            .get(&format!("password-session|{a}|admin"))
+            .expect("A's keychain entry")
+            .is_none()
+    );
+    assert!(
+        secrets
+            .get(&format!("password-session|{b}|admin"))
+            .expect("B's keychain entry")
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn development_server_takes_a_user_name() {
     let (url, _stop) = server_with(LoginOptions::development("Dev server"), |_| DevAuthn).await;
     let dir = temp_dir("dev");

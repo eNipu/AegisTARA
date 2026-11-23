@@ -15,6 +15,7 @@ pub mod i18n;
 pub mod inspector;
 pub mod library;
 pub mod license_file;
+pub mod origin;
 pub mod outline;
 pub mod pages;
 pub mod palette;

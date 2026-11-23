@@ -21,6 +21,7 @@ use bytes::Bytes;
 use tower::Layer;
 
 use crate::error::ClientError;
+use crate::origin::{Origin, OriginError};
 use crate::transport::{Transport, TransportKind};
 
 /// Largest answer the client reads (R3): a full project snapshot chunk or
@@ -1061,12 +1062,19 @@ impl Public {
     }
 }
 
-/// Password login credentials: sends the session token as a bearer token.
+/// Password login credentials: sends the session token as a bearer token
+/// only to its bound API origin. Clearing the token does not unbind it.
 /// The token lives in memory here; the shell may also keep it in the OS
 /// keychain so the next start needs no password.
 #[derive(Default)]
 pub struct PasswordLogin {
-    token: std::sync::RwLock<Option<String>>,
+    state: std::sync::RwLock<PasswordLoginState>,
+}
+
+#[derive(Default)]
+struct PasswordLoginState {
+    origin: Option<Origin>,
+    token: Option<String>,
 }
 
 impl PasswordLogin {
@@ -1076,20 +1084,57 @@ impl PasswordLogin {
         Self::default()
     }
 
-    /// Uses this session token from now on.
-    pub fn set(&self, token: Option<String>) {
-        *self
-            .token
+    /// Uses this session token for `server`, binding this login on first use.
+    /// Passing `None` clears the token but keeps the origin binding.
+    ///
+    /// # Errors
+    ///
+    /// [`aegis_auth::AuthError::Http`] if the URL is invalid or attempts to
+    /// retarget an already bound login. The previous state is left intact.
+    pub fn set(&self, server: &str, token: Option<String>) -> Result<(), aegis_auth::AuthError> {
+        self.bound_state(server)?.token = token;
+        Ok(())
+    }
+
+    /// Bind before accessing remembered credentials, even if none are found.
+    pub(crate) fn bind(&self, server: &str) -> Result<(), aegis_auth::AuthError> {
+        drop(self.bound_state(server)?);
+        Ok(())
+    }
+
+    fn bound_state(
+        &self,
+        server: &str,
+    ) -> Result<std::sync::RwLockWriteGuard<'_, PasswordLoginState>, aegis_auth::AuthError> {
+        let origin = Origin::parse(server)?;
+        let mut state = self
+            .state
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = token;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(bound) = &state.origin
+            && *bound != origin
+        {
+            return Err(OriginError::Mismatch.into());
+        }
+        state.origin = Some(origin);
+        Ok(state)
+    }
+
+    /// Forgets the in-memory token without allowing a different origin.
+    pub fn clear(&self) {
+        self.state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .token = None;
     }
 
     /// Whether a session token is held.
     #[must_use]
     pub fn has_token(&self) -> bool {
-        self.token
+        self.state
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .token
             .is_some()
     }
 }
@@ -1098,13 +1143,20 @@ impl CredentialProvider for PasswordLogin {
     async fn credentials(
         &self,
         _method: &str,
-        _url: &str,
+        url: &str,
     ) -> Result<aegis_auth::Credentials, aegis_auth::AuthError> {
-        let token = self
-            .token
+        let state = self
+            .state
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .origin
+            .as_ref()
+            .ok_or(aegis_auth::AuthError::LoginRequired)?
+            .check(url)?;
+        let token = state
+            .token
+            .as_ref()
             .ok_or(aegis_auth::AuthError::LoginRequired)?;
         Ok(aegis_auth::Credentials {
             authorization: format!("Bearer {token}"),

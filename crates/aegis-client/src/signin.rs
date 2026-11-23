@@ -7,7 +7,9 @@ use crate::i18n::Catalog;
 use crate::state::{ConnectionView, ProjectEntry};
 use crate::transport::TransportKind;
 
+mod attempt;
 mod flow;
+pub use attempt::{AuthAttempt, AuthAttempts};
 pub use flow::SignIn;
 
 /// Where the sign-in stands: the five states of the Slint shell (codes 4, 0,

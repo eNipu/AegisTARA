@@ -26,6 +26,7 @@ use aegis_client::connection::{DevLogin, LoginMethod, LoginOptions, PasswordSess
 use aegis_client::error::{ClientError, ServerCode};
 use aegis_client::session::{LogOutHook, Session, SessionConfig};
 use aegis_client::settings::{Appearance, Settings};
+use aegis_client::signin::{AuthAttempt, AuthAttempts};
 use aegis_client::transport::TransportKind;
 use slint::ComponentHandle;
 
@@ -33,10 +34,15 @@ use crate::AppWindow;
 use crate::controller::{Controller, Hooks};
 use aegis_client::provider::{AppProvider, OidcProvider, OidcSettings, PasswordProvider, secrets};
 
+/// Every completion carries the generation and origin that started it.
+struct Event {
+    attempt: AuthAttempt,
+    completion: Completion,
+}
+
 /// What the network tasks report back.
-enum Event {
+enum Completion {
     Options {
-        url: String,
         kind: TransportKind,
         result: Result<LoginOptions, ClientError>,
     },
@@ -73,6 +79,7 @@ pub struct Launcher {
     inbox: mpsc::Receiver<Event>,
     wake: Arc<dyn Fn() + Send + Sync>,
     current: RefCell<Option<Current>>,
+    attempts: RefCell<AuthAttempts>,
     standalone: RefCell<Option<crate::standalone::Standalone>>,
     /// Called with every new session, so the app can wake the UI on its
     /// view model changes.
@@ -147,6 +154,7 @@ impl Launcher {
             inbox,
             wake,
             current: RefCell::new(None),
+            attempts: RefCell::new(AuthAttempts::default()),
             standalone: RefCell::new(None),
             on_session: RefCell::new(None),
         });
@@ -196,7 +204,13 @@ impl Launcher {
         let w7 = weak.clone();
         let w8 = weak.clone();
         let w9 = weak.clone();
+        let w_log_out = weak.clone();
         Hooks {
+            before_log_out: Some(Box::new(move || {
+                if let Some(l) = w_log_out.upgrade() {
+                    l.cancel_auth();
+                }
+            })),
             use_password: Some(Box::new(move || {
                 if let Some(l) = w6.upgrade() {
                     l.use_password();
@@ -294,6 +308,21 @@ impl Launcher {
         *self.on_session.borrow_mut() = Some(Box::new(f));
     }
 
+    fn cancel_auth(&self) {
+        self.attempts.borrow_mut().cancel();
+        if let Some(provider) = self
+            .current
+            .borrow()
+            .as_ref()
+            .and_then(|current| current.provider.as_ref())
+        {
+            provider.invalidate();
+        }
+        if let Some(w) = self.window.upgrade() {
+            w.set_login_busy(false);
+        }
+    }
+
     fn save_settings(&self) {
         if let Some(path) = &self.settings_path
             && let Err(e) = self.settings.borrow().save(path)
@@ -319,6 +348,7 @@ impl Launcher {
     /// Starts directly with a development user (the `AEGIS_DEV_USER`
     /// variable), skipping the screens.
     pub fn start_dev(self: &Rc<Self>, url: &str, user: &str, admin: bool, kind: TransportKind) {
+        self.cancel_auth();
         *self.current.borrow_mut() = Some(Current {
             url: url.to_owned(),
             kind,
@@ -352,6 +382,14 @@ impl Launcher {
         license_path: std::path::PathBuf,
         create: bool,
     ) {
+        self.cancel_auth();
+        // Standalone startup shares the generation so leaving it cannot later
+        // reattach its server (nor can hosted discovery replace it).
+        let attempt = self
+            .attempts
+            .borrow_mut()
+            .begin(&project_folder.to_string_lossy());
+        self.current.borrow_mut().take();
         self.controller().set_session(None);
         // The old server holds the folder lock, so it must be gone before the
         // new one opens (it may be the same folder).
@@ -364,7 +402,7 @@ impl Launcher {
         }
         let events = self.events.clone();
         let wake = Arc::clone(&self.wake);
-        self.runtime.spawn(async move {
+        let task = self.runtime.spawn(async move {
             if let Some(old) = old {
                 let _ = old.stop().await;
             }
@@ -373,13 +411,17 @@ impl Launcher {
             } else {
                 crate::standalone::Standalone::open(&project_folder, &license_path).await
             };
-            let _ = events.send(Event::StandaloneStarted {
-                project_folder,
-                license_path,
-                result,
+            let _ = events.send(Event {
+                attempt,
+                completion: Completion::StandaloneStarted {
+                    project_folder,
+                    license_path,
+                    result,
+                },
             });
             wake();
         });
+        self.attempts.borrow_mut().track(task);
     }
 
     /// Stops the embedded server, if one runs, in the background.
@@ -400,6 +442,7 @@ impl Launcher {
         project_folder: std::path::PathBuf,
         license_path: std::path::PathBuf,
     ) {
+        self.cancel_auth();
         {
             let mut s = self.settings.borrow_mut();
             s.standalone_folder = project_folder.display().to_string();
@@ -429,6 +472,8 @@ impl Launcher {
 
     /// Connects to `url`: asks it how to log in.
     pub fn connect(self: &Rc<Self>, url: &str, transport: i32) {
+        self.cancel_auth();
+        self.current.borrow_mut().take();
         self.controller().set_session(None);
         self.stop_standalone();
         let url = url.trim().trim_end_matches('/').to_owned();
@@ -449,11 +494,16 @@ impl Launcher {
         w.set_connection_text(format!("Connecting to {url}…").into());
         let events = self.events.clone();
         let wake = Arc::clone(&self.wake);
-        self.runtime.spawn(async move {
+        let attempt = self.attempts.borrow_mut().begin(&url);
+        let task = self.runtime.spawn(async move {
             let result = async { Public::connect(&url, kind).await?.login_options().await }.await;
-            let _ = events.send(Event::Options { url, kind, result });
+            let _ = events.send(Event {
+                attempt,
+                completion: Completion::Options { kind, result },
+            });
             wake();
         });
+        self.attempts.borrow_mut().track(task);
         {
             let mut s = self.settings.borrow_mut();
             s.transport = name.to_owned();
@@ -509,6 +559,7 @@ impl Launcher {
                 // Offer the password form only while an admin keeps it on.
                 w.set_password_also(options.password_enabled);
                 let provider = Arc::new(AppProvider::Oidc(OidcProvider::new(OidcSettings {
+                    server_url: url.clone(),
                     issuer,
                     client_id,
                     resource,
@@ -518,13 +569,18 @@ impl Launcher {
                 // A saved login: try the refresh token before asking.
                 let events = self.events.clone();
                 let wake = Arc::clone(&self.wake);
-                self.runtime.spawn(async move {
+                let attempt = self.attempts.borrow_mut().begin(&url);
+                let task = self.runtime.spawn(async move {
                     if let AppProvider::Oidc(oidc) = &*provider {
-                        let ok = matches!(oidc.restore().await, Ok(true));
-                        let _ = events.send(Event::Restored(ok));
+                        let ok = matches!(oidc.restore_guarded(attempt.guard()).await, Ok(true));
+                        let _ = events.send(Event {
+                            attempt,
+                            completion: Completion::Restored(ok),
+                        });
                         wake();
                     }
                 });
+                self.attempts.borrow_mut().track(task);
             }
             LoginMethod::Development => {
                 w.set_password_also(false);
@@ -548,6 +604,7 @@ impl Launcher {
 
     /// "Use a user name and password" on the company login screen.
     fn use_password(self: &Rc<Self>) {
+        self.cancel_auth();
         let Some(w) = self.window.upgrade() else {
             return;
         };
@@ -562,6 +619,7 @@ impl Launcher {
     /// "Use company login" on the password form: ask the server again, so
     /// a switch an admin turned off meanwhile is respected.
     fn use_company(self: &Rc<Self>) {
+        self.cancel_auth();
         let Some(w) = self.window.upgrade() else {
             return;
         };
@@ -614,6 +672,7 @@ impl Launcher {
             .current
             .borrow()
             .as_ref()
+            .filter(|c| matches!(c.provider.as_deref(), Some(AppProvider::Password(_))))
             .map(|c| (c.url.clone(), c.kind))
         else {
             return;
@@ -623,7 +682,8 @@ impl Launcher {
         let (user, password) = (user.trim().to_owned(), password.to_owned());
         let events = self.events.clone();
         let wake = Arc::clone(&self.wake);
-        self.runtime.spawn(async move {
+        let attempt = self.attempts.borrow_mut().begin(&url);
+        let task = self.runtime.spawn(async move {
             let result = async {
                 Public::connect(&url, kind)
                     .await?
@@ -631,17 +691,22 @@ impl Launcher {
                     .await
             }
             .await;
-            let _ = events.send(Event::LoggedIn {
-                user,
-                remember,
-                result,
+            let _ = events.send(Event {
+                attempt,
+                completion: Completion::LoggedIn {
+                    user,
+                    remember,
+                    result,
+                },
             });
             wake();
         });
+        self.attempts.borrow_mut().track(task);
     }
 
     fn on_logged_in(
         self: &Rc<Self>,
+        server: &str,
         user: String,
         remember: bool,
         result: Result<PasswordSession, ClientError>,
@@ -652,17 +717,19 @@ impl Launcher {
         w.set_login_busy(false);
         match result {
             Ok(session) => {
-                w.set_login_password("".into());
                 let current = self.current.borrow();
-                let Some(c) = current.as_ref() else {
+                let Some(c) = current.as_ref().filter(|c| c.url == server) else {
                     return;
                 };
-                if let Some(provider) = &c.provider
-                    && let AppProvider::Password(p) = &**provider
-                {
-                    p.set(&c.url, &session.user.username, session.token, remember);
+                let Some(AppProvider::Password(p)) = c.provider.as_deref() else {
+                    return;
+                };
+                if let Err(e) = p.set(server, &session.user.username, session.token, remember) {
+                    w.set_login_error(e.to_string().into());
+                    return;
                 }
                 drop(current);
+                w.set_login_password("".into());
                 {
                     let mut s = self.settings.borrow_mut();
                     s.username = user;
@@ -689,6 +756,7 @@ impl Launcher {
     }
 
     fn dev_log_in(self: &Rc<Self>, user: &str) {
+        self.cancel_auth();
         let user = user.trim();
         if user.is_empty() {
             return;
@@ -699,27 +767,44 @@ impl Launcher {
     }
 
     fn oidc_log_in(self: &Rc<Self>) {
-        let provider = self
-            .current
-            .borrow()
-            .as_ref()
-            .and_then(|c| c.provider.clone());
-        let Some(provider) = provider else {
+        let current = self.current.borrow();
+        let Some(c) = current.as_ref() else {
             return;
         };
+        let Some(provider) = c
+            .provider
+            .clone()
+            .filter(|p| matches!(&**p, AppProvider::Oidc(_)))
+        else {
+            return;
+        };
+        let attempt = self.attempts.borrow_mut().begin(&c.url);
+        drop(current);
+        if let Some(w) = self.window.upgrade() {
+            w.set_login_busy(true);
+            w.set_login_error("".into());
+        }
         let events = self.events.clone();
         let wake = Arc::clone(&self.wake);
-        self.runtime.spawn(async move {
+        let task = self.runtime.spawn(async move {
             if let AppProvider::Oidc(oidc) = &*provider {
-                let result = oidc.log_in().await.map_err(|e| e.to_string());
-                let _ = events.send(Event::OidcLoggedIn(result));
+                let result = oidc
+                    .log_in_guarded(attempt.guard())
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = events.send(Event {
+                    attempt,
+                    completion: Completion::OidcLoggedIn(result),
+                });
                 wake();
             }
         });
+        self.attempts.borrow_mut().track(task);
     }
 
     /// Back to the server screen.
     pub fn change_server(self: &Rc<Self>) {
+        self.cancel_auth();
         self.controller().set_session(None);
         self.stop_standalone();
         self.current.borrow_mut().take();
@@ -728,6 +813,7 @@ impl Launcher {
 
     /// Shuts down the client and, in standalone mode, the embedded server.
     pub async fn shutdown(&self) {
+        self.cancel_auth();
         if let Some(session) = self.controller().session() {
             let _ = session.send(Command::Shutdown);
         }
@@ -740,33 +826,45 @@ impl Launcher {
     /// Handles the answers of network tasks. Call it on the UI thread.
     pub fn pump(self: &Rc<Self>) {
         while let Ok(event) = self.inbox.try_recv() {
-            match event {
-                Event::Options { url, kind, result } => self.on_options(url, kind, result),
-                Event::LoggedIn {
+            // Aborting a task cannot retract an already queued completion.
+            // Consume its generation before *any* UI, provider or settings work.
+            if !self.attempts.borrow_mut().complete(&event.attempt) {
+                continue;
+            }
+            match event.completion {
+                Completion::Options { kind, result } => {
+                    self.on_options(event.attempt.server().to_owned(), kind, result);
+                }
+                Completion::LoggedIn {
                     user,
                     remember,
                     result,
-                } => self.on_logged_in(user, remember, result),
-                Event::OidcLoggedIn(result) => match result {
-                    Ok(()) => {
-                        if let Some(s) = self.controller().session() {
-                            let _ = s.send(Command::Reconnect);
+                } => self.on_logged_in(event.attempt.server(), user, remember, result),
+                Completion::OidcLoggedIn(result) => {
+                    if let Some(w) = self.window.upgrade() {
+                        w.set_login_busy(false);
+                    }
+                    match result {
+                        Ok(()) => {
+                            if let Some(s) = self.controller().session() {
+                                let _ = s.send(Command::Reconnect);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "login failed");
+                            if let Some(w) = self.window.upgrade() {
+                                w.set_login_error(format!("The login did not finish: {e}").into());
+                            }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "login failed");
-                        if let Some(w) = self.window.upgrade() {
-                            w.set_login_error(format!("The login did not finish: {e}").into());
-                        }
-                    }
-                },
-                Event::Restored(true) => {
+                }
+                Completion::Restored(true) => {
                     if let Some(s) = self.controller().session() {
                         let _ = s.send(Command::Reconnect);
                     }
                 }
-                Event::Restored(false) => {}
-                Event::StandaloneStarted {
+                Completion::Restored(false) => {}
+                Completion::StandaloneStarted {
                     project_folder,
                     license_path,
                     result,
@@ -785,8 +883,21 @@ impl Launcher {
     }
 }
 
+#[cfg(test)]
+#[path = "../tests/common/launcher_auth.rs"]
+mod tests;
+
 impl Drop for Launcher {
     fn drop(&mut self) {
+        self.attempts.get_mut().cancel();
+        if let Some(provider) = self
+            .current
+            .get_mut()
+            .as_ref()
+            .and_then(|current| current.provider.as_ref())
+        {
+            provider.invalidate();
+        }
         let session = self.controller.borrow().as_ref().and_then(|c| c.session());
         if let Some(session) = session {
             let _ = session.send(Command::Shutdown);

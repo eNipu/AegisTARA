@@ -262,6 +262,8 @@ pub type PasswordLogIn = Box<dyn Fn(String, String, bool)>;
 pub struct Hooks {
     /// Company login button.
     pub log_in: Option<Box<dyn Fn()>>,
+    /// Invalidates pending login work before the controller sends `LogOut`.
+    pub before_log_out: Option<Box<dyn Fn()>>,
     /// Connect to a server: address and transport position.
     pub connect_server: Option<Box<dyn Fn(String, i32)>>,
     /// Create a standalone project folder: folder and license paths.
@@ -1027,7 +1029,12 @@ impl Controller {
         on!(on_refresh_events, |c| c.send(Command::LoadEvents));
         on!(on_check_for_updates, |c| c.send(Command::CheckForUpdates));
         on!(on_download_update, |c| c.send(Command::DownloadUpdate));
-        on!(on_log_out, |c| c.send(Command::LogOut));
+        on!(on_log_out, |c| {
+            if let Some(h) = &c.hooks.before_log_out {
+                h();
+            }
+            c.send(Command::LogOut);
+        });
         on!(on_change_password, |c, current, new| c.send(
             Command::ChangePassword {
                 current: current.to_string(),
