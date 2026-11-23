@@ -450,20 +450,52 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), StoreFault> {
     file.sync_all().map_err(backend)
 }
 
-fn commit_state(root: &Path, project: Option<&DiskProject>) -> Result<(), StoreFault> {
+/// The two phases of a [`commit_state_detailed`] failure. The manifest rename
+/// is the commit point: before it, the previous manifest is still what reads
+/// see, so a caller may roll back; after it, the new manifest is visible, so
+/// the files it names are committed and must not be truncated or deleted.
+enum CommitFailure {
+    /// Nothing was published; the old manifest is still visible.
+    Before(StoreFault),
+    /// The rename happened but the directory sync failed, so durability of
+    /// the new manifest is uncertain.
+    After(StoreFault),
+}
+
+fn commit_state_detailed(root: &Path, project: Option<&DiskProject>) -> Result<(), CommitFailure> {
     let manifest = DiskManifest {
         format: FORMAT.into(),
         version: VERSION,
         project: project.cloned(),
     };
-    let bytes = serde_json::to_vec(&manifest).map_err(backend)?;
+    let bytes =
+        serde_json::to_vec(&manifest).map_err(|error| CommitFailure::Before(backend(error)))?;
     if bytes.len() as u64 > MAX_MANIFEST_BYTES {
-        return Err(backend("folder-store manifest exceeds its size cap"));
+        return Err(CommitFailure::Before(backend(
+            "folder-store manifest exceeds its size cap",
+        )));
     }
     let temporary = root.join(format!(".manifest-{}.tmp", Uuid::new_v4()));
-    write_new(&temporary, &bytes)?;
-    std::fs::rename(&temporary, root.join(MANIFEST)).map_err(backend)?;
-    sync_dir(root)
+    write_new(&temporary, &bytes).map_err(CommitFailure::Before)?;
+    std::fs::rename(&temporary, root.join(MANIFEST))
+        .map_err(|error| CommitFailure::Before(backend(error)))?;
+    #[cfg(test)]
+    if fault::take_publish_sync_failure() {
+        return Err(CommitFailure::After(backend(
+            "injected manifest publish-sync failure",
+        )));
+    }
+    sync_dir(root).map_err(CommitFailure::After)
+}
+
+/// Commits `project` without distinguishing the publish phase. Both a
+/// pre-rename failure and an after-rename durability failure surface as one
+/// [`StoreFault`], preserving the previous behaviour for callers that do not
+/// roll back files the manifest references.
+fn commit_state(root: &Path, project: Option<&DiskProject>) -> Result<(), StoreFault> {
+    commit_state_detailed(root, project).map_err(|failure| match failure {
+        CommitFailure::Before(fault) | CommitFailure::After(fault) => fault,
+    })
 }
 
 fn remove_if_exists(path: &Path) -> Result<(), StoreFault> {
@@ -779,11 +811,22 @@ fn write_snapshot_file(root: &Path, bytes: &[u8]) -> Result<(String, String), St
     Ok((id, digest(bytes)))
 }
 
-/// Commits `project`; if that fails, removes the file written for it.
-fn commit_with_file(root: &Path, project: &DiskProject, new_file: &str) -> Result<(), StoreFault> {
-    commit_state(root, Some(project)).inspect_err(|_| {
-        let _ = remove_if_exists(&snapshot_path(root, new_file));
-    })
+/// Commits `project`, removing the snapshot written for it only when the
+/// commit failed before the manifest rename. After the rename the file is
+/// named by the visible manifest and must stay.
+fn commit_with_file(
+    root: &Path,
+    project: &DiskProject,
+    new_file: &str,
+) -> Result<(), CommitFailure> {
+    match commit_state_detailed(root, Some(project)) {
+        Ok(()) => Ok(()),
+        Err(CommitFailure::Before(error)) => {
+            let _ = remove_if_exists(&snapshot_path(root, new_file));
+            Err(CommitFailure::Before(error))
+        }
+        Err(after @ CommitFailure::After(_)) => Err(after),
+    }
 }
 
 impl ProjectStore for FolderStore {
@@ -909,28 +952,46 @@ impl ProjectStore for FolderStore {
                 let mut log = OpenOptions::new()
                     .append(true)
                     .open(inner.path(OPLOG))
-                    .map_err(backend)?;
-                log.write_all(&log_bytes).map_err(backend)?;
-                log.sync_all().map_err(backend)?;
+                    .map_err(|error| CommitFailure::Before(backend(error)))?;
+                log.write_all(&log_bytes)
+                    .map_err(|error| CommitFailure::Before(backend(error)))?;
+                log.sync_all()
+                    .map_err(|error| CommitFailure::Before(backend(error)))?;
                 let mut sidecar = OpenOptions::new()
                     .append(true)
                     .open(inner.path(SIDECAR))
-                    .map_err(backend)?;
-                sidecar.write_all(&sidecar_bytes).map_err(backend)?;
-                sidecar.sync_all().map_err(backend)?;
-                commit_state(&inner.root, Some(&project))
+                    .map_err(|error| CommitFailure::Before(backend(error)))?;
+                sidecar
+                    .write_all(&sidecar_bytes)
+                    .map_err(|error| CommitFailure::Before(backend(error)))?;
+                sidecar
+                    .sync_all()
+                    .map_err(|error| CommitFailure::Before(backend(error)))?;
+                commit_state_detailed(&inner.root, Some(&project))
             })();
             match written {
-                Ok(()) => {
-                    tail.log += log_bytes.len() as u64;
-                    tail.sidecar += sidecar_bytes.len() as u64;
-                    Ok(())
-                }
-                Err(error) => {
+                Ok(()) => {}
+                Err(CommitFailure::Before(error)) => {
+                    // Nothing was published: the visible manifest still names
+                    // the old tail, so truncating the just-written bytes is
+                    // safe.
                     let _ = trim_tail(&inner.root, *tail);
-                    Err(error)
+                    return Err(error);
+                }
+                Err(CommitFailure::After(error)) => {
+                    // The manifest already names these ops. Truncating them
+                    // would leave the manifest pointing past the log, so keep
+                    // them and reconcile the tail instead.
+                    tracing::warn!(
+                        project = %id,
+                        error = %error,
+                        "ops committed but the manifest directory sync failed"
+                    );
                 }
             }
+            tail.log += log_bytes.len() as u64;
+            tail.sidecar += sidecar_bytes.len() as u64;
+            Ok(())
         })
         .await
     }
@@ -966,10 +1027,26 @@ impl ProjectStore for FolderStore {
             let old = std::mem::replace(&mut project.snapshot_id, file.clone());
             project.snapshot_hash = hash;
             project.snapshot_seq = snapshot.seq;
-            commit_with_file(&inner.root, &project, &file)?;
-            // The old file is unnamed now; a failure leaves an orphan that
-            // the next open sweeps.
-            let _ = remove_if_exists(&snapshot_path(&inner.root, &old));
+            let published = match commit_with_file(&inner.root, &project, &file) {
+                Ok(()) => true,
+                Err(CommitFailure::Before(error)) => return Err(error),
+                Err(CommitFailure::After(error)) => {
+                    // The manifest already names `file`; keep it and leave the
+                    // old snapshot as an orphan (a crash could still revert to
+                    // the old manifest, which names it).
+                    tracing::warn!(
+                        project = %id,
+                        error = %error,
+                        "snapshot committed but the manifest directory sync failed"
+                    );
+                    false
+                }
+            };
+            if published {
+                // The old file is unnamed now; a failure leaves an orphan that
+                // the next open sweeps.
+                let _ = remove_if_exists(&snapshot_path(&inner.root, &old));
+            }
             Ok(())
         })
         .await
@@ -1064,7 +1141,18 @@ impl ProjectStore for FolderStore {
                 snapshot_id: file.clone(),
                 snapshot_hash: hash,
             });
-            commit_with_file(&inner.root, &project, &file)
+            match commit_with_file(&inner.root, &project, &file) {
+                Ok(()) => Ok(()),
+                Err(CommitFailure::Before(error)) => Err(error),
+                Err(CommitFailure::After(error)) => {
+                    tracing::warn!(
+                        project = %meta.project,
+                        error = %error,
+                        "baseline committed but the manifest directory sync failed"
+                    );
+                    Ok(())
+                }
+            }
         })
         .await
     }
@@ -1365,4 +1453,229 @@ fn baseline_meta(project: ProjectId, b: &DiskBaseline) -> Result<BaselineMeta, S
         created_ms: b.created_ms,
         snapshot_bytes: b.snapshot_bytes,
     })
+}
+
+#[cfg(test)]
+mod fault {
+    use std::sync::Mutex;
+
+    /// How many upcoming `commit_state_detailed` publish-syncs should fail.
+    /// Test-only: a directory `sync_all` cannot be made to fail portably, so
+    /// the commit path consults this instead.
+    static FAIL_PUBLISH_SYNC: Mutex<u32> = Mutex::new(0);
+
+    pub(super) fn fail_next_publish_sync() {
+        let mut guard = FAIL_PUBLISH_SYNC.lock().unwrap_or_else(|p| p.into_inner());
+        *guard = (*guard).saturating_add(1);
+    }
+
+    pub(super) fn take_publish_sync_failure() -> bool {
+        let mut guard = FAIL_PUBLISH_SYNC.lock().unwrap_or_else(|p| p.into_inner());
+        if *guard > 0 {
+            *guard -= 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use uuid::Uuid;
+
+    use super::fault;
+    use crate::ProjectId;
+    use crate::store::{
+        BaselineMeta, FolderStore, ProjectMeta, ProjectStore, StoreFault, StoredOp, StoredSnapshot,
+    };
+
+    /// Serializes the fault-injection tests so one test's injected failure
+    /// cannot be consumed by another's operation.
+    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct TempFolder(PathBuf);
+
+    impl TempFolder {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("aegis-folder-test-{}", Uuid::new_v4()));
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempFolder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn meta() -> ProjectMeta {
+        ProjectMeta {
+            id: ProjectId::new_v7(),
+            name: "Brake".into(),
+            methodology_key: "iso21434-r155".into(),
+            methodology_version: "0.1.0".into(),
+            created_ms: 1_700_000_000_000,
+        }
+    }
+
+    fn op(seq: u64) -> StoredOp {
+        StoredOp {
+            seq,
+            actor: if seq == 2 { "bob" } else { "alice" }.into(),
+            timestamp_ms: 1_700_000_000_000 + seq,
+            op: format!("{{\"op\":\"remove_asset\",\"id\":\"0199c82c-c001-7000-8000-{seq:012}\"}}")
+                .into_bytes(),
+        }
+    }
+
+    fn baseline(project: ProjectId, name: &str, seq: u64) -> BaselineMeta {
+        BaselineMeta {
+            id: Uuid::now_v7(),
+            project,
+            name: name.into(),
+            seq,
+            created_by: "alice".into(),
+            created_ms: 5,
+            snapshot_bytes: 4,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_publish_sync_failure_keeps_the_appended_ops_and_chain_intact() {
+        let _serial = SERIAL.lock().await;
+        let folder = TempFolder::new();
+        let m = meta();
+        let store = FolderStore::open(folder.path()).expect("open");
+        store.create(&m, b"s0").await.expect("create");
+
+        fault::fail_next_publish_sync();
+        store
+            .append(m.id, &[op(1), op(2)])
+            .await
+            .expect("the manifest already names the ops, so the append is committed");
+
+        let loaded = store.load(m.id).await.expect("load").expect("project");
+        assert_eq!(loaded.ops, vec![op(1), op(2)]);
+        assert!(store.verify_chain(m.id).await.expect("verify").is_intact());
+
+        // The log was not truncated, so the next append continues the chain.
+        store
+            .append(m.id, &[op(3)])
+            .await
+            .expect("append after recovery");
+        assert_eq!(store.verify_chain(m.id).await.expect("verify").verified, 3);
+        drop(store);
+
+        let reopened = FolderStore::open(folder.path()).expect("reopen");
+        assert_eq!(
+            reopened.verify_chain(m.id).await.expect("verify").verified,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn a_publish_sync_failure_keeps_the_new_snapshot_committed() {
+        let _serial = SERIAL.lock().await;
+        let folder = TempFolder::new();
+        let m = meta();
+        let store = FolderStore::open(folder.path()).expect("open");
+        store.create(&m, b"s0").await.expect("create");
+        store.append(m.id, &[op(1), op(2)]).await.expect("append");
+        let snapshots = folder.path().join("snapshots");
+        let before = std::fs::read_dir(&snapshots).expect("dir").count();
+
+        fault::fail_next_publish_sync();
+        store
+            .save_snapshot(
+                m.id,
+                &StoredSnapshot {
+                    seq: 2,
+                    bytes: b"s2".to_vec(),
+                },
+            )
+            .await
+            .expect("the manifest already names the snapshot, so it is committed");
+
+        // The new snapshot is named by the manifest and must stay; the old one
+        // is left as an orphan so a crash that reverts the rename can still
+        // find it.
+        assert_eq!(
+            std::fs::read_dir(&snapshots).expect("dir").count(),
+            before + 1
+        );
+        let loaded = store.load(m.id).await.expect("load").expect("project");
+        assert_eq!(loaded.snapshot.bytes, b"s2");
+        drop(store);
+
+        let reopened = FolderStore::open(folder.path()).expect("reopen");
+        assert_eq!(std::fs::read_dir(&snapshots).expect("dir").count(), 1);
+        let loaded = reopened.load(m.id).await.expect("load").expect("project");
+        assert_eq!(loaded.snapshot.bytes, b"s2");
+    }
+
+    #[tokio::test]
+    async fn a_publish_sync_failure_keeps_the_baseline_committed() {
+        let _serial = SERIAL.lock().await;
+        let folder = TempFolder::new();
+        let m = meta();
+        let store = FolderStore::open(folder.path()).expect("open");
+        store.create(&m, b"s0").await.expect("create");
+        store.append(m.id, &[op(1), op(2)]).await.expect("append");
+        let b = baseline(m.id, "B1", 2);
+
+        fault::fail_next_publish_sync();
+        store
+            .create_baseline(&b, b"snap")
+            .await
+            .expect("the manifest already names the baseline, so it is committed");
+
+        assert_eq!(store.list_baselines(m.id).await.expect("list").len(), 1);
+        let (meta, bytes) = store
+            .load_baseline(m.id, b.id)
+            .await
+            .expect("load")
+            .expect("baseline");
+        assert_eq!(meta.id, b.id);
+        assert_eq!(bytes, b"snap");
+        drop(store);
+
+        let reopened = FolderStore::open(folder.path()).expect("reopen");
+        assert_eq!(reopened.list_baselines(m.id).await.expect("list").len(), 1);
+        let (_, bytes) = reopened
+            .load_baseline(m.id, b.id)
+            .await
+            .expect("load")
+            .expect("baseline");
+        assert_eq!(bytes, b"snap");
+    }
+
+    #[tokio::test]
+    async fn an_unpublished_append_failure_is_still_rolled_back() {
+        let _serial = SERIAL.lock().await;
+        let folder = TempFolder::new();
+        let m = meta();
+        let store = FolderStore::open(folder.path()).expect("open");
+        store.create(&m, b"s0").await.expect("create");
+        store.append(m.id, &[op(1)]).await.expect("append");
+
+        // A conflict is rejected before any bytes are written, so the stored
+        // history is unchanged (the pre-publish rollback path is exercised by
+        // the existing crash/debris tests).
+        assert!(matches!(
+            store.append(m.id, &[op(3)]).await,
+            Err(StoreFault::Sequence { .. })
+        ));
+        assert_eq!(store.verify_chain(m.id).await.expect("verify").verified, 1);
+        assert_eq!(
+            store.load(m.id).await.expect("load").expect("project").ops,
+            vec![op(1)]
+        );
+    }
 }
