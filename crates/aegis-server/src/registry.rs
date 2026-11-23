@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aegis_model::Project;
@@ -28,7 +29,61 @@ use crate::store::{
     validate_and_sanitize_figure, validate_caption, validate_target,
 };
 
-type Cell = Arc<OnceCell<ProjectHandle>>;
+type Cell = Arc<OnceCell<LoadOutcome>>;
+
+/// The settled outcome of loading one project's actor. Once a cell holds an
+/// outcome it never changes, so a cell removed from the map (for example a
+/// failed load, or an actor that stopped) cannot be re-initialized by a
+/// waiter that still holds a clone of it.
+#[derive(Clone)]
+enum LoadOutcome {
+    Loaded(ProjectHandle),
+    Failed(LoadFailure),
+}
+
+/// Why a load failed, in a form every waiter can share without cloning the
+/// full [`ServerError`] (which carries non-`Clone` storage and model errors).
+/// The loader logs the original error; waiters reconstruct a same-code one.
+#[derive(Clone)]
+enum LoadFailure {
+    UnknownProject(ProjectId),
+    /// A storage failure: retriable (`UNAVAILABLE`).
+    Unavailable,
+    /// The server began shutting down before the load finished.
+    ShuttingDown,
+    /// A bug or corrupted state: not retriable.
+    Internal,
+}
+
+impl From<ServerError> for LoadFailure {
+    fn from(error: ServerError) -> Self {
+        match error {
+            ServerError::UnknownProject(id) => LoadFailure::UnknownProject(id),
+            ServerError::Store(fault) => {
+                tracing::error!(%fault, "project load failed");
+                LoadFailure::Unavailable
+            }
+            ServerError::ShuttingDown => LoadFailure::ShuttingDown,
+            other => {
+                tracing::error!(error = %other, "project load failed");
+                LoadFailure::Internal
+            }
+        }
+    }
+}
+
+impl LoadFailure {
+    fn into_server_error(self) -> ServerError {
+        match self {
+            LoadFailure::UnknownProject(id) => ServerError::UnknownProject(id),
+            LoadFailure::Unavailable => ServerError::Store(StoreFault::Backend(
+                "the project could not be loaded".into(),
+            )),
+            LoadFailure::ShuttingDown => ServerError::ShuttingDown,
+            LoadFailure::Internal => ServerError::Internal,
+        }
+    }
+}
 
 /// Hosts projects over one store.
 pub struct Registry<S> {
@@ -37,6 +92,8 @@ pub struct Registry<S> {
     config: Arc<ServerConfig>,
     license: Option<Arc<LicenseGate>>,
     open: Mutex<HashMap<ProjectId, Cell>>,
+    /// Set once shutdown starts: no new project is admitted or loaded after.
+    closing: AtomicBool,
 }
 
 impl<S: ProjectStore> Registry<S> {
@@ -53,6 +110,7 @@ impl<S: ProjectStore> Registry<S> {
             config,
             license: None,
             open: Mutex::new(HashMap::new()),
+            closing: AtomicBool::new(false),
         }
     }
 
@@ -160,10 +218,11 @@ impl<S: ProjectStore> Registry<S> {
     pub async fn delete(&self, id: ProjectId) -> Result<(), ServerError> {
         self.with(id, |h| async move { h.delete().await }).await?;
         let mut map = self.lock();
-        if map
-            .get(&id)
-            .is_some_and(|c| c.get().is_none_or(ProjectHandle::is_closed))
-        {
+        if map.get(&id).is_some_and(|c| match c.get() {
+            None => true,
+            Some(LoadOutcome::Loaded(handle)) => handle.is_closed(),
+            Some(LoadOutcome::Failed(_)) => true,
+        }) {
             map.remove(&id);
         }
         Ok(())
@@ -356,28 +415,35 @@ impl<S: ProjectStore> Registry<S> {
     async fn handle(&self, id: ProjectId) -> Result<ProjectHandle, ServerError> {
         loop {
             let cell = self.cell(id)?;
-            let handle = match cell.get_or_try_init(|| self.load(id)).await {
-                Ok(handle) => handle,
-                Err(e) => {
-                    // A failed load must not hold a slot in the table.
-                    let mut map = self.lock();
-                    if map
-                        .get(&id)
-                        .is_some_and(|c| Arc::ptr_eq(c, &cell) && c.get().is_none())
-                    {
-                        map.remove(&id);
+            let outcome = cell.get_or_init(|| self.load_outcome(id)).await.clone();
+            match outcome {
+                LoadOutcome::Loaded(handle) => {
+                    if self.closing.load(Ordering::SeqCst) {
+                        self.remove_cell_if(id, &cell);
+                        let _ = handle.shutdown().await;
+                        return Err(ServerError::ShuttingDown);
                     }
-                    return Err(e);
+                    if !handle.is_closed() {
+                        return Ok(handle);
+                    }
                 }
-            };
-            if !handle.is_closed() {
-                return Ok(handle.clone());
+                LoadOutcome::Failed(failure) => {
+                    self.remove_cell_if(id, &cell);
+                    return Err(failure.into_server_error());
+                }
             }
-            // The actor stopped; drop its cell (unless someone already did).
-            let mut map = self.lock();
-            if map.get(&id).is_some_and(|c| Arc::ptr_eq(c, &cell)) {
-                map.remove(&id);
-            }
+            // The actor stopped (or the cell was already replaced): drop this
+            // cell if it is still the one in the table, then load a fresh one.
+            self.remove_cell_if(id, &cell);
+        }
+    }
+
+    /// Drops `cell` from the table only while it is still the entry for `id`,
+    /// so a newer replacement cell is never removed by a stale caller.
+    fn remove_cell_if(&self, id: ProjectId, cell: &Cell) {
+        let mut map = self.lock();
+        if map.get(&id).is_some_and(|c| Arc::ptr_eq(c, cell)) {
+            map.remove(&id);
         }
     }
 
@@ -389,12 +455,20 @@ impl<S: ProjectStore> Registry<S> {
 
     fn cell(&self, id: ProjectId) -> Result<Cell, ServerError> {
         let mut map = self.lock();
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(ServerError::ShuttingDown);
+        }
         if let Some(cell) = map.get(&id) {
             return Ok(Arc::clone(cell));
         }
         if map.len() >= self.config.max_open_projects {
-            // Forget cells whose actors already stopped before refusing.
-            map.retain(|_, c| c.get().is_none_or(|h| !h.is_closed()));
+            // Forget settled cells that are no longer useful before refusing:
+            // actors that already stopped and loads that already failed.
+            map.retain(|_, cell| match cell.get() {
+                None => true,
+                Some(LoadOutcome::Loaded(handle)) => !handle.is_closed(),
+                Some(LoadOutcome::Failed(_)) => false,
+            });
             if map.len() >= self.config.max_open_projects {
                 return Err(ServerError::Busy);
             }
@@ -418,7 +492,24 @@ impl<S: ProjectStore> Registry<S> {
         let rebuilt = tokio::task::spawn_blocking(move || Loaded::rebuild(stored, methodology))
             .await
             .map_err(|_| ServerError::Internal)??;
-        Ok(actor::spawn(rebuilt, Arc::clone(&self.store), &self.config))
+        // Admission closes at the spawn point too, so a load that started
+        // before shutdown cannot publish an actor after the drain.
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(ServerError::ShuttingDown);
+        }
+        let handle = actor::spawn(rebuilt, Arc::clone(&self.store), &self.config);
+        if self.closing.load(Ordering::SeqCst) {
+            let _ = handle.shutdown().await;
+            return Err(ServerError::ShuttingDown);
+        }
+        Ok(handle)
+    }
+
+    async fn load_outcome(&self, id: ProjectId) -> LoadOutcome {
+        match self.load(id).await {
+            Ok(handle) => LoadOutcome::Loaded(handle),
+            Err(error) => LoadOutcome::Failed(LoadFailure::from(error)),
+        }
     }
 
     /// Rebuilds the license seat ledger from the stored history: everyone
@@ -453,11 +544,19 @@ impl<S: ProjectStore> Registry<S> {
     }
 
     /// Asks every loaded project to write a snapshot and stop. Call it
-    /// when the server shuts down.
+    /// when the server shuts down. New loads are refused once this starts.
     pub async fn shutdown(&self) {
         let handles: Vec<ProjectHandle> = {
             let mut map = self.lock();
-            map.drain().filter_map(|(_, c)| c.get().cloned()).collect()
+            self.closing.store(true, Ordering::SeqCst);
+            map.drain()
+                .filter_map(|(_, cell)| match cell.get() {
+                    Some(LoadOutcome::Loaded(handle)) if !handle.is_closed() => {
+                        Some(handle.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
         };
         for handle in handles {
             // Already stopped is fine.
@@ -470,7 +569,12 @@ impl<S: ProjectStore> Registry<S> {
     pub fn loaded_count(&self) -> usize {
         self.lock()
             .values()
-            .filter(|c| c.get().is_some_and(|h| !h.is_closed()))
+            .filter(|cell| {
+                matches!(
+                    cell.get(),
+                    Some(LoadOutcome::Loaded(handle)) if !handle.is_closed()
+                )
+            })
             .count()
     }
 }
@@ -500,5 +604,255 @@ fn figure_error(err: FigureError) -> ServerError {
             ServerError::InvalidRequest("figure dimensions are out of range")
         }
         FigureError::UnsafeSvg(msg) => ServerError::InvalidRequest(msg),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use tokio::sync::Notify;
+
+    use super::*;
+    use crate::store::{
+        BaselineMeta, LoadedProject, MemoryStore, ProjectMembership, StoredOp, StoredSnapshot,
+    };
+
+    struct GatedStore {
+        inner: MemoryStore,
+        load_calls: AtomicUsize,
+        fail_load: AtomicBool,
+        pause_load: AtomicBool,
+        entered: Notify,
+        release: Notify,
+    }
+
+    impl GatedStore {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                inner: MemoryStore::new(),
+                load_calls: AtomicUsize::new(0),
+                fail_load: AtomicBool::new(false),
+                pause_load: AtomicBool::new(false),
+                entered: Notify::new(),
+                release: Notify::new(),
+            })
+        }
+    }
+
+    impl ProjectStore for GatedStore {
+        async fn create(&self, meta: &ProjectMeta, snapshot: &[u8]) -> Result<(), StoreFault> {
+            self.inner.create(meta, snapshot).await
+        }
+        async fn list(&self, limit: usize) -> Result<Vec<ProjectMeta>, StoreFault> {
+            self.inner.list(limit).await
+        }
+        async fn count(&self) -> Result<usize, StoreFault> {
+            self.inner.count().await
+        }
+        async fn load(&self, id: ProjectId) -> Result<Option<LoadedProject>, StoreFault> {
+            self.load_calls.fetch_add(1, Ordering::SeqCst);
+            if self.pause_load.load(Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            if self.fail_load.load(Ordering::SeqCst) {
+                return Err(StoreFault::Backend("transient fault".into()));
+            }
+            self.inner.load(id).await
+        }
+        async fn append(&self, id: ProjectId, ops: &[StoredOp]) -> Result<(), StoreFault> {
+            self.inner.append(id, ops).await
+        }
+        async fn verify_chain(&self, id: ProjectId) -> Result<ChainReport, StoreFault> {
+            self.inner.verify_chain(id).await
+        }
+        async fn save_snapshot(
+            &self,
+            id: ProjectId,
+            snapshot: &StoredSnapshot,
+        ) -> Result<(), StoreFault> {
+            self.inner.save_snapshot(id, snapshot).await
+        }
+        async fn rename(&self, id: ProjectId, name: &str) -> Result<(), StoreFault> {
+            self.inner.rename(id, name).await
+        }
+        async fn delete(&self, id: ProjectId) -> Result<(), StoreFault> {
+            self.inner.delete(id).await
+        }
+        async fn recent_ops(
+            &self,
+            id: ProjectId,
+            limit: usize,
+        ) -> Result<Vec<StoredOp>, StoreFault> {
+            self.inner.recent_ops(id, limit).await
+        }
+        async fn active_editors(&self, since_ms: u64) -> Result<Vec<(String, u64)>, StoreFault> {
+            self.inner.active_editors(since_ms).await
+        }
+        async fn create_baseline(
+            &self,
+            meta: &BaselineMeta,
+            snapshot: &[u8],
+        ) -> Result<(), StoreFault> {
+            self.inner.create_baseline(meta, snapshot).await
+        }
+        async fn list_baselines(
+            &self,
+            project: ProjectId,
+        ) -> Result<Vec<BaselineMeta>, StoreFault> {
+            self.inner.list_baselines(project).await
+        }
+        async fn load_baseline(
+            &self,
+            project: ProjectId,
+            id: uuid::Uuid,
+        ) -> Result<Option<(BaselineMeta, Vec<u8>)>, StoreFault> {
+            self.inner.load_baseline(project, id).await
+        }
+        async fn all_memberships(&self) -> Result<Vec<ProjectMembership>, StoreFault> {
+            self.inner.all_memberships().await
+        }
+        async fn project_memberships(
+            &self,
+            project: ProjectId,
+        ) -> Result<Vec<ProjectMembership>, StoreFault> {
+            self.inner.project_memberships(project).await
+        }
+        async fn memberships_for(
+            &self,
+            members: &[String],
+        ) -> Result<Vec<ProjectMembership>, StoreFault> {
+            self.inner.memberships_for(members).await
+        }
+        async fn set_membership(&self, membership: &ProjectMembership) -> Result<(), StoreFault> {
+            self.inner.set_membership(membership).await
+        }
+        async fn remove_membership(
+            &self,
+            project: ProjectId,
+            member: &str,
+        ) -> Result<bool, StoreFault> {
+            self.inner.remove_membership(project, member).await
+        }
+        async fn put_figure(
+            &self,
+            meta: &FigureMeta,
+            data: &[u8],
+            max_count: usize,
+            max_total_bytes: u64,
+        ) -> Result<(), StoreFault> {
+            self.inner
+                .put_figure(meta, data, max_count, max_total_bytes)
+                .await
+        }
+        async fn list_figures(&self, project: ProjectId) -> Result<Vec<FigureMeta>, StoreFault> {
+            self.inner.list_figures(project).await
+        }
+        async fn load_figure(
+            &self,
+            project: ProjectId,
+            id: uuid::Uuid,
+        ) -> Result<Option<(FigureMeta, Vec<u8>)>, StoreFault> {
+            self.inner.load_figure(project, id).await
+        }
+        async fn update_figure(
+            &self,
+            project: ProjectId,
+            id: uuid::Uuid,
+            caption: &str,
+            target: &str,
+        ) -> Result<Option<FigureMeta>, StoreFault> {
+            self.inner.update_figure(project, id, caption, target).await
+        }
+        async fn delete_figure(
+            &self,
+            project: ProjectId,
+            id: uuid::Uuid,
+        ) -> Result<bool, StoreFault> {
+            self.inner.delete_figure(project, id).await
+        }
+    }
+
+    fn test_registry(store: Arc<GatedStore>) -> (Arc<Registry<GatedStore>>, String) {
+        let methodologies = Arc::new(Methodologies::builtin().expect("builtin"));
+        let key = methodologies
+            .iter()
+            .next()
+            .expect("at least one builtin methodology")
+            .methodology
+            .key()
+            .to_owned();
+        let config = Arc::new(ServerConfig {
+            max_open_projects: 1,
+            ..ServerConfig::default()
+        });
+        (Arc::new(Registry::new(store, methodologies, config)), key)
+    }
+
+    #[tokio::test]
+    async fn failed_load_shares_outcome_with_concurrent_waiters_and_allows_retry() {
+        let store = GatedStore::new();
+        let (registry, key) = test_registry(Arc::clone(&store));
+        let meta = registry.create("Alpha", &key).await.expect("create");
+
+        store.fail_load.store(true, Ordering::SeqCst);
+        store.pause_load.store(true, Ordering::SeqCst);
+
+        let r1 = Arc::clone(&registry);
+        let t1 = tokio::spawn(async move { r1.with(meta.id, |_| async { Ok(()) }).await });
+        store.entered.notified().await;
+
+        let r2 = Arc::clone(&registry);
+        let t2 = tokio::spawn(async move { r2.with(meta.id, |_| async { Ok(()) }).await });
+        tokio::task::yield_now().await;
+
+        store.release.notify_one();
+        let res1 = t1.await.expect("join t1");
+        let res2 = t2.await.expect("join t2");
+
+        assert!(matches!(res1, Err(ServerError::Store(_))));
+        assert!(matches!(res2, Err(ServerError::Store(_))));
+        assert_eq!(
+            store.load_calls.load(Ordering::SeqCst),
+            1,
+            "concurrent waiter must share the settled failed outcome"
+        );
+        assert_eq!(registry.loaded_count(), 0);
+
+        // Clearing the transient fault allows a fresh load (failed cell was evicted).
+        store.fail_load.store(false, Ordering::SeqCst);
+        store.pause_load.store(false, Ordering::SeqCst);
+        registry
+            .with(meta.id, |_| async { Ok(()) })
+            .await
+            .expect("retry succeeds");
+        assert_eq!(registry.loaded_count(), 1);
+        registry.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejects_inflight_and_subsequent_loads() {
+        let store = GatedStore::new();
+        let (registry, key) = test_registry(Arc::clone(&store));
+        let meta = registry.create("Beta", &key).await.expect("create");
+
+        store.pause_load.store(true, Ordering::SeqCst);
+
+        let r1 = Arc::clone(&registry);
+        let inflight = tokio::spawn(async move { r1.with(meta.id, |_| async { Ok(()) }).await });
+        store.entered.notified().await;
+
+        registry.shutdown().await;
+        store.release.notify_one();
+
+        let res = inflight.await.expect("join inflight");
+        assert!(matches!(res, Err(ServerError::ShuttingDown)));
+        assert_eq!(registry.loaded_count(), 0);
+
+        store.pause_load.store(false, Ordering::SeqCst);
+        let after = registry.with(meta.id, |_| async { Ok(()) }).await;
+        assert!(matches!(after, Err(ServerError::ShuttingDown)));
+        assert_eq!(registry.loaded_count(), 0);
     }
 }

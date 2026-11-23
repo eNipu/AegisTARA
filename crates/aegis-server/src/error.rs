@@ -90,6 +90,9 @@ pub enum ServerError {
     /// loads it again.
     #[error("project was unloaded; retry")]
     Unloaded,
+    /// The server is shutting down and is no longer loading projects.
+    #[error("server is shutting down")]
+    ShuttingDown,
     /// A bug or corrupted state; details are in the server log.
     #[error("internal error")]
     Internal,
@@ -118,6 +121,7 @@ impl ServerError {
             ServerError::QuotaExceeded(_) => "quota_exceeded",
             ServerError::Store(_) => "storage",
             ServerError::Unloaded => "unloaded",
+            ServerError::ShuttingDown => "shutting_down",
             ServerError::Internal => "internal",
         }
     }
@@ -139,7 +143,9 @@ impl ServerError {
             ServerError::Busy | ServerError::LicenseSeats | ServerError::QuotaExceeded(_) => {
                 Code::ResourceExhausted
             }
-            ServerError::Store(_) | ServerError::Unloaded => Code::Unavailable,
+            ServerError::Store(_) | ServerError::Unloaded | ServerError::ShuttingDown => {
+                Code::Unavailable
+            }
             ServerError::Internal => Code::Internal,
         }
     }
