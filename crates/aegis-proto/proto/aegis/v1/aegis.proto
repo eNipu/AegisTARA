@@ -264,6 +264,12 @@ message BaselineInfo {
   string created_by = 5;
   uint64 created_ms = 6;
   uint64 snapshot_bytes = 7;
+  // Engine and methodology identities recorded at creation time (ADR 0075).
+  string engine_version = 8;
+  uint32 engine_semantics_version = 9;
+  string methodology_key = 10;
+  string methodology_version = 11;
+  string methodology_digest = 12;
 }
 
 message CreateBaselineRequest {
@@ -425,6 +431,12 @@ message GetServerInfoResponse {
   // The server's license, as far as a user needs to know. Absent when the
   // server runs without license checking (development builds).
   LicenseInfo license = 5;
+  // Monotonic identifier of deterministic calculation semantics (ADR 0075).
+  uint32 engine_semantics_version = 6;
+  // Current wire and operation protocol version spoken by the server.
+  uint32 protocol_version = 7;
+  // Oldest wire and operation protocol version accepted for writes.
+  uint32 min_protocol_version = 8;
 }
 
 message LicenseInfo {

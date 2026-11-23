@@ -93,6 +93,10 @@ pub enum ServerError {
     /// The server is shutting down and is no longer loading projects.
     #[error("server is shutting down")]
     ShuttingDown,
+    /// The client's engine semantics or protocol version is incompatible with
+    /// this server's write contract (ADR 0075).
+    #[error("{0}")]
+    IncompatibleClient(String),
     /// A bug or corrupted state; details are in the server log.
     #[error("internal error")]
     Internal,
@@ -122,6 +126,7 @@ impl ServerError {
             ServerError::Store(_) => "storage",
             ServerError::Unloaded => "unloaded",
             ServerError::ShuttingDown => "shutting_down",
+            ServerError::IncompatibleClient(_) => "incompatible_client",
             ServerError::Internal => "internal",
         }
     }
@@ -139,7 +144,8 @@ impl ServerError {
             | ServerError::NotLocked
             | ServerError::LockInvalid
             | ServerError::StaleBase { .. }
-            | ServerError::LicenseExpired => Code::FailedPrecondition,
+            | ServerError::LicenseExpired
+            | ServerError::IncompatibleClient(_) => Code::FailedPrecondition,
             ServerError::Busy | ServerError::LicenseSeats | ServerError::QuotaExceeded(_) => {
                 Code::ResourceExhausted
             }

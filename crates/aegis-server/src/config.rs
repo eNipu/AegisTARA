@@ -41,6 +41,9 @@ pub struct ServerConfig {
     /// Wall clock in milliseconds since the Unix epoch, for audit
     /// timestamps. A function pointer so tests can fix it.
     pub wall_clock: fn() -> u64,
+    /// Engine and protocol compatibility contract advertised and enforced by
+    /// this server (ADR 0075). Defaults to [`aegis_model::EngineContract::current`].
+    pub engine: aegis_model::EngineContract,
 }
 
 /// The system clock in milliseconds since the Unix epoch.
@@ -70,6 +73,7 @@ impl Default for ServerConfig {
             max_project_figures_bytes: crate::store::MAX_PROJECT_FIGURES_BYTES,
             max_history: 500,
             wall_clock: system_clock_ms,
+            engine: aegis_model::EngineContract::current(),
         }
     }
 }

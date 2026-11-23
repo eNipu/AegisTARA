@@ -252,6 +252,18 @@ impl<S: ProjectStore> Registry<S> {
             return Err(ServerError::InvalidRequest("too many baselines"));
         }
         let data = self.with(id, |h| async move { h.open().await }).await?;
+        let (methodology_key, methodology_version, methodology_digest) =
+            match aegis_model::inspect_methodology_pin(&data.snapshot) {
+                Ok(aegis_model::MethodologyPin::Pinned {
+                    key,
+                    version,
+                    digest,
+                }) => (key, version, digest),
+                Ok(aegis_model::MethodologyPin::LegacyUnpinned { key, version }) => {
+                    (key, version, String::new())
+                }
+                Err(_) => (String::new(), String::new(), String::new()),
+            };
         let meta = crate::store::BaselineMeta {
             id: uuid::Uuid::now_v7(),
             project: id,
@@ -260,6 +272,11 @@ impl<S: ProjectStore> Registry<S> {
             created_by: who.to_owned(),
             created_ms: (self.config.wall_clock)(),
             snapshot_bytes: data.snapshot.len() as u64,
+            engine_version: self.config.engine.engine_version.clone(),
+            engine_semantics: self.config.engine.engine_semantics,
+            methodology_key,
+            methodology_version,
+            methodology_digest,
         };
         self.store
             .create_baseline(&meta, &data.snapshot)

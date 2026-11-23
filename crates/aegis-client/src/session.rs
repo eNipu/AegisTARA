@@ -719,16 +719,13 @@ impl<P: CredentialProvider> Actor<P> {
     fn on_connected(&mut self, result: Result<(Connection<P>, ServerInfo), ClientError>) {
         match result {
             Ok((conn, info)) => {
-                let engine_ok = info.engine_version == aegis_model::ENGINE_VERSION;
-                if !engine_ok {
-                    self.notice(
-                        Severity::Warning,
-                        format!(
-                            "The server runs engine {} and this app runs {}. Numbers may differ and editing is off. Please update AegisTARA.",
-                            info.engine_version,
-                            aegis_model::ENGINE_VERSION
-                        ),
-                    );
+                let compat = aegis_model::check_client_compatibility(
+                    &aegis_model::ClientContract::current(),
+                    &info.engine_contract(),
+                );
+                let engine_ok = compat.is_ok();
+                if let Err(err) = compat {
+                    self.notice(Severity::Warning, err.actionable_reason());
                 }
                 let license = info
                     .license
@@ -758,10 +755,17 @@ impl<P: CredentialProvider> Actor<P> {
         }
     }
 
+    fn engine_incompatibility(&self) -> Option<aegis_model::CompatibilityError> {
+        let info = self.info.as_ref()?;
+        aegis_model::check_client_compatibility(
+            &aegis_model::ClientContract::current(),
+            &info.engine_contract(),
+        )
+        .err()
+    }
+
     fn engine_ok(&self) -> bool {
-        self.info
-            .as_ref()
-            .is_some_and(|i| i.engine_version == aegis_model::ENGINE_VERSION)
+        self.info.is_some() && self.engine_incompatibility().is_none()
     }
 
     fn refresh_projects(&self) {
@@ -1894,10 +1898,11 @@ impl<P: CredentialProvider> Actor<P> {
 
     fn begin_edit(&mut self) {
         if !self.engine_ok() {
-            self.notice(
-                Severity::Warning,
-                "Editing is off because this app is older or newer than the server.",
+            let reason = self.engine_incompatibility().map_or_else(
+                || "Editing is off because this app is incompatible with the server.".to_owned(),
+                |e| e.actionable_reason(),
             );
+            self.notice(Severity::Warning, reason);
             return;
         }
         let Some(open) = self.open.as_mut() else {
@@ -1933,6 +1938,9 @@ impl<P: CredentialProvider> Actor<P> {
                     Severity::Warning,
                     "All licensed seats are in use by other people, so you can look but not change anything. Ask your administrator for more seats.",
                 );
+            }
+            Err(e) if matches!(e.code(), Some(ServerCode::IncompatibleClient)) => {
+                self.notice(Severity::Warning, e.to_string());
             }
             Err(e) => {
                 let held = matches!(e.code(), Some(ServerCode::LockHeld));

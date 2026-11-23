@@ -197,6 +197,11 @@ fn baseline(project: ProjectId, name: &str, seq: u64) -> BaselineMeta {
         created_by: "alice".into(),
         created_ms: 5,
         snapshot_bytes: 4,
+        engine_version: String::new(),
+        engine_semantics: 0,
+        methodology_key: String::new(),
+        methodology_version: String::new(),
+        methodology_digest: String::new(),
     }
 }
 

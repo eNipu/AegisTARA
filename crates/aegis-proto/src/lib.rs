@@ -17,3 +17,7 @@ pub const ERROR_CODE_HEADER: &str = "x-aegis-error";
 /// Metadata key carrying the project's current sequence number on
 /// `stale_base` errors.
 pub const CURRENT_SEQ_HEADER: &str = "x-aegis-current-seq";
+/// Request metadata key carrying the client's `ENGINE_SEMANTICS_VERSION` (ADR 0075).
+pub const ENGINE_SEMANTICS_HEADER: &str = "x-aegis-engine-semantics";
+/// Request metadata key carrying the client's `PROTOCOL_VERSION` (ADR 0075).
+pub const PROTOCOL_VERSION_HEADER: &str = "x-aegis-protocol-version";

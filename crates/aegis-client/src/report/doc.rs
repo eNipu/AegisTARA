@@ -497,6 +497,19 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
             ],
             vec![catalog.tr("date"), format_ms_lang(ctx.now_ms, lang)],
             vec![catalog.tr("methodology"), meth_line],
+            vec![
+                "Engine".to_owned(),
+                aegis_model::format_engine_identity(
+                    aegis_model::ENGINE_VERSION,
+                    aegis_model::ENGINE_SEMANTICS_VERSION,
+                ),
+            ],
+            vec![
+                "Methodology pack".to_owned(),
+                project
+                    .methodology_pin()
+                    .map_or_else(|| "unpinned (legacy)".to_owned(), str::to_owned),
+            ],
         ];
         if project.elements(ElementKind::System).next().is_some() {
             let shown = if view.is_all() {

@@ -375,6 +375,11 @@ async fn rename_history_baselines_and_delete() {
         created_by: "alice".into(),
         created_ms: 5,
         snapshot_bytes: 4,
+        engine_version: aegis_model::ENGINE_VERSION.into(),
+        engine_semantics: aegis_model::ENGINE_SEMANTICS_VERSION,
+        methodology_key: "iso21434-r155".into(),
+        methodology_version: "1".into(),
+        methodology_digest: "sha256:test".into(),
     };
     f.store
         .create_baseline(&b, b"snap")

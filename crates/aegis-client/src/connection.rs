@@ -35,12 +35,31 @@ pub struct ServerInfo {
     pub server_version: String,
     /// The engine version compiled into the server.
     pub engine_version: String,
+    /// Calculation semantics version (`0` for legacy servers).
+    pub engine_semantics_version: u32,
+    /// Current protocol version spoken by the server (`0` for legacy servers).
+    pub protocol_version: u32,
+    /// Oldest protocol version accepted for writes (`0` for legacy servers).
+    pub min_protocol_version: u32,
     /// Hosted methodologies.
     pub methodologies: Vec<pb::MethodologyInfo>,
     /// Lease length.
     pub lease: Duration,
     /// The server's license summary, if it has one.
     pub license: Option<pb::LicenseInfo>,
+}
+
+impl ServerInfo {
+    /// Returns the server's advertised compatibility contract (ADR 0075).
+    #[must_use]
+    pub fn engine_contract(&self) -> aegis_model::EngineContract {
+        aegis_model::EngineContract {
+            engine_version: self.engine_version.clone(),
+            engine_semantics: self.engine_semantics_version,
+            protocol_version: self.protocol_version,
+            min_protocol_version: self.min_protocol_version,
+        }
+    }
 }
 
 /// A project as downloaded.
@@ -59,12 +78,14 @@ pub struct Downloaded {
 /// A connection to one server, signing every request.
 pub struct Connection<P> {
     client: AegisClient<Signed<P, Transport>>,
+    contract: aegis_model::ClientContract,
 }
 
 impl<P> Clone for Connection<P> {
     fn clone(&self) -> Self {
         Connection {
             client: self.client.clone(),
+            contract: self.contract.clone(),
         }
     }
 }
@@ -96,7 +117,34 @@ impl<P: CredentialProvider> Connection<P> {
         let signed = SignRequests::new(provider, url).layer(transport);
         Ok(Connection {
             client: AegisClient::new(signed).max_decoding_message_size(MAX_ANSWER_BYTES),
+            contract: aegis_model::ClientContract::current(),
         })
+    }
+
+    /// Overrides the compatibility identity sent on write requests (ADR 0075).
+    /// Setting both `engine_semantics` and `protocol_version` to `0` omits the
+    /// headers to simulate a legacy pre-224 client.
+    #[must_use]
+    pub fn with_client_contract(mut self, contract: aegis_model::ClientContract) -> Self {
+        self.contract = contract;
+        self
+    }
+
+    fn write_request<T>(&self, message: T) -> tonic::Request<T> {
+        let mut req = tonic::Request::new(message);
+        if self.contract.engine_semantics > 0
+            && let Ok(val) = self.contract.engine_semantics.to_string().parse()
+        {
+            req.metadata_mut()
+                .insert(aegis_proto::ENGINE_SEMANTICS_HEADER, val);
+        }
+        if self.contract.protocol_version > 0
+            && let Ok(val) = self.contract.protocol_version.to_string().parse()
+        {
+            req.metadata_mut()
+                .insert(aegis_proto::PROTOCOL_VERSION_HEADER, val);
+        }
+        req
     }
 
     /// Asks who the server is.
@@ -114,6 +162,9 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(ServerInfo {
             server_version: r.server_version,
             engine_version: r.engine_version,
+            engine_semantics_version: r.engine_semantics_version,
+            protocol_version: r.protocol_version,
+            min_protocol_version: r.min_protocol_version,
             methodologies: r.methodologies,
             lease: Duration::from_millis(r.lease_ms),
             license: r.license,
@@ -166,10 +217,10 @@ impl<P: CredentialProvider> Connection<P> {
     ) -> Result<pb::ProjectSummary, ClientError> {
         self.client
             .clone()
-            .create_project(pb::CreateProjectRequest {
+            .create_project(self.write_request(pb::CreateProjectRequest {
                 name: name.to_owned(),
                 methodology_key: methodology_key.to_owned(),
-            })
+            }))
             .await?
             .into_inner()
             .project
@@ -256,10 +307,10 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self
             .client
             .clone()
-            .create_baseline(pb::CreateBaselineRequest {
+            .create_baseline(self.write_request(pb::CreateBaselineRequest {
                 project_id: project.to_owned(),
                 name: name.to_owned(),
-            })
+            }))
             .await?
             .into_inner())
     }
@@ -278,11 +329,11 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self
             .client
             .clone()
-            .rename_project(pb::RenameProjectRequest {
+            .rename_project(self.write_request(pb::RenameProjectRequest {
                 project_id: project.to_owned(),
                 lock_token: token.to_owned(),
                 name: name.to_owned(),
-            })
+            }))
             .await?
             .into_inner())
     }
@@ -295,9 +346,9 @@ impl<P: CredentialProvider> Connection<P> {
     pub async fn delete_project(&self, project: &str) -> Result<(), ClientError> {
         self.client
             .clone()
-            .delete_project(pb::DeleteProjectRequest {
+            .delete_project(self.write_request(pb::DeleteProjectRequest {
                 project_id: project.to_owned(),
-            })
+            }))
             .await?;
         Ok(())
     }
@@ -639,14 +690,14 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self
             .client
             .clone()
-            .put_figure(pb::PutFigureRequest {
+            .put_figure(self.write_request(pb::PutFigureRequest {
                 project_id: project.to_owned(),
                 lock_token: token.to_owned(),
                 caption: caption.to_owned(),
                 target: target.to_owned(),
                 media_type,
                 chunks,
-            })
+            }))
             .await?
             .into_inner())
     }
@@ -735,13 +786,13 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self
             .client
             .clone()
-            .update_figure(pb::UpdateFigureRequest {
+            .update_figure(self.write_request(pb::UpdateFigureRequest {
                 project_id: project.to_owned(),
                 lock_token: token.to_owned(),
                 figure_id: figure_id.to_owned(),
                 caption: caption.to_owned(),
                 target: target.to_owned(),
-            })
+            }))
             .await?
             .into_inner())
     }
@@ -759,11 +810,11 @@ impl<P: CredentialProvider> Connection<P> {
     ) -> Result<(), ClientError> {
         self.client
             .clone()
-            .delete_figure(pb::DeleteFigureRequest {
+            .delete_figure(self.write_request(pb::DeleteFigureRequest {
                 project_id: project.to_owned(),
                 lock_token: token.to_owned(),
                 figure_id: figure_id.to_owned(),
-            })
+            }))
             .await?;
         Ok(())
     }
@@ -827,9 +878,9 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self
             .client
             .clone()
-            .acquire_lock(pb::LockRequest {
+            .acquire_lock(self.write_request(pb::LockRequest {
                 project_id: project.to_owned(),
-            })
+            }))
             .await?
             .into_inner())
     }
@@ -843,10 +894,10 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self
             .client
             .clone()
-            .renew_lock(pb::RenewLockRequest {
+            .renew_lock(self.write_request(pb::RenewLockRequest {
                 project_id: project.to_owned(),
                 token: token.to_owned(),
-            })
+            }))
             .await?
             .into_inner())
     }
@@ -883,12 +934,12 @@ impl<P: CredentialProvider> Connection<P> {
         Ok(self
             .client
             .clone()
-            .submit_ops(pb::SubmitOpsRequest {
+            .submit_ops(self.write_request(pb::SubmitOpsRequest {
                 project_id: project.to_owned(),
                 lock_token: token.to_owned(),
                 base_seq,
                 ops,
-            })
+            }))
             .await?
             .into_inner()
             .last_seq)

@@ -153,6 +153,21 @@ impl<S: ProjectStore> AegisService<S> {
         }
     }
 
+    fn require_compatible_write<T>(&self, request: &Request<T>) -> Result<(), ServerError> {
+        let md = request.metadata();
+        let semantics = parse_u32_header(md, aegis_proto::ENGINE_SEMANTICS_HEADER)?;
+        let protocol = parse_u32_header(md, aegis_proto::PROTOCOL_VERSION_HEADER)?;
+        if semantics.is_none() && protocol.is_none() {
+            tracing::debug!("legacy write request without engine compatibility headers");
+        }
+        aegis_model::check_server_write_compatibility(
+            semantics,
+            protocol,
+            &self.registry.config().engine,
+        )
+        .map_err(|e| ServerError::IncompatibleClient(e.actionable_reason()))
+    }
+
     async fn audit(&self, who: &Principal, kind: AuditKind, target: &str, detail: &str) {
         let actor = who.audit_actor();
         match &self.events {
@@ -174,6 +189,28 @@ impl<S: ProjectStore> AegisService<S> {
     pub fn into_server(self) -> pb::aegis_server::AegisServer<Self> {
         pb::aegis_server::AegisServer::new(self).max_decoding_message_size(MAX_REQUEST_BYTES)
     }
+}
+
+fn parse_u32_header(
+    md: &tonic::metadata::MetadataMap,
+    name: &'static str,
+) -> Result<Option<u32>, ServerError> {
+    let Some(val) = md.get(name) else {
+        return Ok(None);
+    };
+    let text = val
+        .to_str()
+        .map_err(|_| ServerError::IncompatibleClient(format!("invalid {name} header")))?;
+    let parsed = text
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| ServerError::IncompatibleClient(format!("invalid {name} header")))?;
+    if parsed == 0 {
+        return Err(ServerError::IncompatibleClient(format!(
+            "invalid {name} header"
+        )));
+    }
+    Ok(Some(parsed))
 }
 
 fn project_id(text: &str) -> Result<ProjectId, ServerError> {
@@ -228,6 +265,11 @@ fn baseline_info(b: &BaselineMeta) -> pb::BaselineInfo {
         created_by: b.created_by.clone(),
         created_ms: b.created_ms,
         snapshot_bytes: b.snapshot_bytes,
+        engine_version: b.engine_version.clone(),
+        engine_semantics_version: b.engine_semantics,
+        methodology_key: b.methodology_key.clone(),
+        methodology_version: b.methodology_version.clone(),
+        methodology_digest: b.methodology_digest.clone(),
     }
 }
 
@@ -348,12 +390,16 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
                 label: h.methodology.label().to_owned(),
             })
             .collect();
+        let engine = &self.registry.config().engine;
         Ok(Response::new(pb::GetServerInfoResponse {
             server_version: env!("CARGO_PKG_VERSION").to_owned(),
-            engine_version: aegis_model::ENGINE_VERSION.to_owned(),
+            engine_version: engine.engine_version.clone(),
             methodologies,
             lease_ms: u64::try_from(self.registry.config().lease.as_millis()).unwrap_or(u64::MAX),
             license: self.registry.license().map(LicenseGate::info),
+            engine_semantics_version: engine.engine_semantics,
+            protocol_version: engine.protocol_version,
+            min_protocol_version: engine.min_protocol_version,
         }))
     }
 
@@ -380,6 +426,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         request: Request<pb::CreateProjectRequest>,
     ) -> Result<Response<pb::CreateProjectResponse>, Status> {
         let who = Principal::of(&request)?.clone();
+        self.require_compatible_write(&request)?;
         let req = request.get_ref();
         let meta = self
             .registry
@@ -435,6 +482,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::LockRequest>,
     ) -> Result<Response<pb::Lease>, Status> {
+        self.require_compatible_write(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
         // Taking the lease is what uses a seat. Reading is never gated.
@@ -455,6 +503,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::RenewLockRequest>,
     ) -> Result<Response<pb::Lease>, Status> {
+        self.require_compatible_write(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
         let tok = token(&request.get_ref().token)?;
@@ -506,6 +555,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::SubmitOpsRequest>,
     ) -> Result<Response<pb::SubmitOpsResponse>, Status> {
+        self.require_compatible_write(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
         let req = request.into_inner();
@@ -806,6 +856,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::CreateBaselineRequest>,
     ) -> Result<Response<pb::BaselineInfo>, Status> {
+        self.require_compatible_write(&request)?;
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
@@ -876,6 +927,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::PutFigureRequest>,
     ) -> Result<Response<pb::FigureInfo>, Status> {
+        self.require_compatible_write(&request)?;
         let id = project_id(&request.get_ref().project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
         let req = request.into_inner();
@@ -957,6 +1009,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::UpdateFigureRequest>,
     ) -> Result<Response<pb::FigureInfo>, Status> {
+        self.require_compatible_write(&request)?;
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
@@ -976,6 +1029,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::DeleteFigureRequest>,
     ) -> Result<Response<pb::DeleteFigureResponse>, Status> {
+        self.require_compatible_write(&request)?;
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
@@ -992,6 +1046,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::RenameProjectRequest>,
     ) -> Result<Response<pb::ProjectSummary>, Status> {
+        self.require_compatible_write(&request)?;
         let req = request.get_ref();
         let id = project_id(&req.project_id)?;
         let who = self.require_access(&request, id, Permission::Write)?;
@@ -1011,6 +1066,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
         &self,
         request: Request<pb::DeleteProjectRequest>,
     ) -> Result<Response<pb::DeleteProjectResponse>, Status> {
+        self.require_compatible_write(&request)?;
         let who = Principal::of(&request)?.clone();
         if !who.admin {
             return Err(ServerError::NotAdmin.into());

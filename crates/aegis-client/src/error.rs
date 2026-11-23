@@ -61,6 +61,9 @@ pub enum ServerCode {
     NoCompanyLogin,
     /// A per-file or per-project quota (figures, bytes) was exceeded.
     QuotaExceeded,
+    /// The client's engine semantics or protocol version is incompatible with
+    /// the server's write contract (ADR 0075).
+    IncompatibleClient,
     /// Anything else, with the raw code.
     Other(String),
 }
@@ -176,6 +179,7 @@ impl From<tonic::Status> for ClientError {
             "password_login_off" => ServerCode::PasswordLoginOff,
             "no_company_login" => ServerCode::NoCompanyLogin,
             "quota_exceeded" => ServerCode::QuotaExceeded,
+            "incompatible_client" => ServerCode::IncompatibleClient,
             other => ServerCode::Other(other.to_owned()),
         };
         ClientError::Server {

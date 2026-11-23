@@ -62,6 +62,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (4, include_str!("../../migrations/004_event_chain.sql")),
     (5, include_str!("../../migrations/005_figures.sql")),
     (6, include_str!("../../migrations/006_project_access.sql")),
+    (
+        7,
+        include_str!("../../migrations/007_baseline_identities.sql"),
+    ),
 ];
 
 /// How the server talks to PostgreSQL.
@@ -700,11 +704,15 @@ impl ProjectStore for PostgresStore {
         if exists.is_none() {
             return Err(StoreFault::Missing);
         }
+        let semantics = i32::try_from(meta.engine_semantics)
+            .map_err(|_| StoreFault::Corrupt("engine_semantics does not fit in i32".into()))?;
         let n = client
             .execute(
                 "INSERT INTO aegis_baseline
-                     (baseline_id, project_id, name, seq, created_by, created_ms, snapshot)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     (baseline_id, project_id, name, seq, created_by, created_ms, snapshot,
+                      engine_version, engine_semantics, methodology_key, methodology_version,
+                      methodology_digest)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT (baseline_id) DO NOTHING",
                 &[
                     &meta.id,
@@ -714,6 +722,11 @@ impl ProjectStore for PostgresStore {
                     &meta.created_by,
                     &to_i64(meta.created_ms)?,
                     &snapshot,
+                    &meta.engine_version,
+                    &semantics,
+                    &meta.methodology_key,
+                    &meta.methodology_version,
+                    &meta.methodology_digest,
                 ],
             )
             .await
@@ -740,7 +753,9 @@ impl ProjectStore for PostgresStore {
         client
             .query(
                 "SELECT baseline_id, project_id, name, seq, created_by, created_ms,
-                        octet_length(snapshot)::bigint
+                        octet_length(snapshot)::bigint,
+                        engine_version, engine_semantics, methodology_key,
+                        methodology_version, methodology_digest
                  FROM aegis_baseline WHERE project_id = $1 ORDER BY baseline_id",
                 &[&project.as_uuid()],
             )
@@ -760,14 +775,16 @@ impl ProjectStore for PostgresStore {
         let row = client
             .query_opt(
                 "SELECT b.baseline_id, b.project_id, b.name, b.seq, b.created_by, b.created_ms,
-                        octet_length(b.snapshot)::bigint, b.snapshot
+                        octet_length(b.snapshot)::bigint,
+                        b.engine_version, b.engine_semantics, b.methodology_key,
+                        b.methodology_version, b.methodology_digest, b.snapshot
                  FROM aegis_baseline b JOIN aegis_project p ON p.project_id = b.project_id
                  WHERE b.project_id = $1 AND b.baseline_id = $2 AND p.org_id = $3",
                 &[&project.as_uuid(), &id, &self.org],
             )
             .await
             .map_err(backend)?;
-        row.map(|row| Ok((baseline_of(&row)?, row.try_get(7).map_err(backend)?)))
+        row.map(|row| Ok((baseline_of(&row)?, row.try_get(12).map_err(backend)?)))
             .transpose()
     }
 
@@ -1141,6 +1158,9 @@ fn figure_of(row: &Row) -> Result<FigureMeta, StoreFault> {
 
 fn baseline_of(row: &Row) -> Result<BaselineMeta, StoreFault> {
     let project: Uuid = row.try_get(1).map_err(backend)?;
+    let raw_semantics: i32 = row.try_get(8).map_err(backend)?;
+    let engine_semantics = u32::try_from(raw_semantics)
+        .map_err(|_| StoreFault::Corrupt("negative engine_semantics".into()))?;
     Ok(BaselineMeta {
         id: row.try_get(0).map_err(backend)?,
         project: ProjectId::from_uuid(project),
@@ -1149,6 +1169,11 @@ fn baseline_of(row: &Row) -> Result<BaselineMeta, StoreFault> {
         created_by: row.try_get(4).map_err(backend)?,
         created_ms: to_u64(row.try_get(5).map_err(backend)?)?,
         snapshot_bytes: to_u64(row.try_get(6).map_err(backend)?)?,
+        engine_version: row.try_get(7).map_err(backend)?,
+        engine_semantics,
+        methodology_key: row.try_get(9).map_err(backend)?,
+        methodology_version: row.try_get(10).map_err(backend)?,
+        methodology_digest: row.try_get(11).map_err(backend)?,
     })
 }
 

@@ -109,6 +109,16 @@ pub struct BaselineMeta {
     pub created_ms: u64,
     /// Size of the snapshot.
     pub snapshot_bytes: u64,
+    /// Engine version that created this baseline (empty for pre-224 baselines).
+    pub engine_version: String,
+    /// Calculation semantics version (`0` for pre-224 baselines).
+    pub engine_semantics: u32,
+    /// Methodology key of the baseline snapshot (empty for pre-224 baselines).
+    pub methodology_key: String,
+    /// Methodology version of the baseline snapshot (empty for pre-224 baselines).
+    pub methodology_version: String,
+    /// Immutable methodology pack digest (empty for unpinned or pre-224 baselines).
+    pub methodology_digest: String,
 }
 
 /// One user or SSO group assigned a built-in role on a project.

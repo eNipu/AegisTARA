@@ -226,6 +226,7 @@ extern crate self as aegis_model;
 mod applicability;
 mod asset;
 pub mod catalog_pack;
+mod compat;
 mod control;
 mod damage;
 mod description;
@@ -266,6 +267,11 @@ pub use applicability::{
     Applicability, Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, Reason,
 };
 pub use asset::{Asset, PropertySet};
+pub use compat::{
+    ClientContract, CompatibilityError, ENGINE_SEMANTICS_VERSION, EngineContract, FORMAT_VERSION,
+    MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, check_client_compatibility,
+    check_server_write_compatibility, format_engine_identity,
+};
 pub use control::{
     CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,

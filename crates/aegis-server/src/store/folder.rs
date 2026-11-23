@@ -92,6 +92,20 @@ struct DiskBaseline {
     snapshot_bytes: u64,
     snapshot_id: String,
     snapshot_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    engine_version: String,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    engine_semantics: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    methodology_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    methodology_version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    methodology_digest: String,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1140,6 +1154,11 @@ impl ProjectStore for FolderStore {
                 snapshot_bytes: meta.snapshot_bytes,
                 snapshot_id: file.clone(),
                 snapshot_hash: hash,
+                engine_version: meta.engine_version,
+                engine_semantics: meta.engine_semantics,
+                methodology_key: meta.methodology_key,
+                methodology_version: meta.methodology_version,
+                methodology_digest: meta.methodology_digest,
             });
             match commit_with_file(&inner.root, &project, &file) {
                 Ok(()) => Ok(()),
@@ -1452,6 +1471,11 @@ fn baseline_meta(project: ProjectId, b: &DiskBaseline) -> Result<BaselineMeta, S
         created_by: b.created_by.clone(),
         created_ms: b.created_ms,
         snapshot_bytes: b.snapshot_bytes,
+        engine_version: b.engine_version.clone(),
+        engine_semantics: b.engine_semantics,
+        methodology_key: b.methodology_key.clone(),
+        methodology_version: b.methodology_version.clone(),
+        methodology_digest: b.methodology_digest.clone(),
     })
 }
 
@@ -1544,6 +1568,11 @@ mod tests {
             created_by: "alice".into(),
             created_ms: 5,
             snapshot_bytes: 4,
+            engine_version: String::new(),
+            engine_semantics: 0,
+            methodology_key: String::new(),
+            methodology_version: String::new(),
+            methodology_digest: String::new(),
         }
     }
 
