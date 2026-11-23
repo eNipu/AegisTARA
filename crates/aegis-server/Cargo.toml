@@ -11,6 +11,10 @@ license.workspace = true
 # Lets `AEGIS_DEV_LICENSE=1` start the server without a license file. Never
 # enable it in a shipped binary (docs/release-checklist.md).
 dev-license = []
+# Lets `AEGIS_AUTH=dev`, `AEGIS_AUTH=development`, or `AEGIS_DEV_AUTH=1`
+# trust caller identity/admin headers on a loopback bind. Never enable in a
+# shipped customer binary or image (docs/release-checklist.md).
+dev-auth = []
 
 [dependencies]
 aegis-auth.workspace = true

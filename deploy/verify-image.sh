@@ -61,6 +61,14 @@ echo "$out" | grep -q "AEGIS_LICENSE_FILE is required" ||
     fail "the customer image stopped for another reason: $out"
 echo "ok    the customer image refuses to start without a license"
 
+for dev_env in "AEGIS_AUTH=dev" "AEGIS_AUTH=development" "AEGIS_DEV_AUTH=1"; do
+    out=$(docker run --rm --name "$name" -e "$dev_env" "$customer" 2>&1) && status=0 || status=$?
+    [ "$status" -ne 0 ] || fail "the customer image accepted $dev_env"
+    echo "$out" | grep -q "not enabled in this build" ||
+        fail "the customer image stopped for an unexpected reason on $dev_env: $out"
+done
+echo "ok    the customer image refuses all development-auth aliases"
+
 echo "== build the test image"
 docker build -f deploy/Dockerfile --build-arg CARGO_FEATURES=dev-license -t "$tested" .
 

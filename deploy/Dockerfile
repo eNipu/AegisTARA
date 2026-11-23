@@ -14,8 +14,9 @@
 FROM rust:1.99.1-slim-bookworm AS build
 # Extra cargo features. Empty for a customer image. A TEST server may set
 # `dev-license` (a server without a vendor license, see docs/railway.md);
-# docs/release-checklist.md forbids it in a shipped image. Railway passes
-# a service variable of the same name as this build argument.
+# `docs/release-checklist.md` forbids both `dev-license` and `dev-auth` in a
+# shipped customer image. Railway passes a service variable of the same name
+# as this build argument.
 ARG CARGO_FEATURES=""
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./

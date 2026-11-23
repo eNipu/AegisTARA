@@ -65,3 +65,54 @@ async fn a_valid_folder_still_needs_a_license_before_any_database_is_touched() {
         text(&out)
     );
 }
+
+fn run_with_env(vars: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aegis-server"));
+    cmd.env_clear();
+    for (k, v) in vars {
+        cmd.env(k, v);
+    }
+    cmd.output().expect("runs")
+}
+
+#[test]
+fn production_binary_refuses_all_development_auth_aliases() {
+    for (vars, expected) in [
+        (
+            &[("AEGIS_AUTH", "dev")][..],
+            "development authentication is not enabled in this build",
+        ),
+        (
+            &[("AEGIS_AUTH", "development")][..],
+            "development authentication is not enabled in this build",
+        ),
+        (
+            &[("AEGIS_DEV_AUTH", "1")][..],
+            "AEGIS_DEV_AUTH is not enabled in this build",
+        ),
+    ] {
+        let out = run_with_env(vars);
+        assert!(
+            !out.status.success(),
+            "server must refuse {vars:?}, got success"
+        );
+        let output = text(&out);
+        assert!(
+            output.contains(expected),
+            "unexpected output for {vars:?}: {output}"
+        );
+    }
+}
+
+#[test]
+fn production_binary_accepts_password_and_oidc_auth_modes() {
+    for mode in ["password", "oidc"] {
+        let out = run_with_env(&[("AEGIS_AUTH", mode)]);
+        assert!(!out.status.success());
+        let output = text(&out);
+        assert!(
+            output.contains("AEGIS_LICENSE_FILE is required"),
+            "expected auth mode {mode:?} to proceed to license check, got: {output}"
+        );
+    }
+}

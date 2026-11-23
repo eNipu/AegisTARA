@@ -54,3 +54,15 @@ importers, and the server image in `deploy/`.
 
 Out of scope: findings that need a compromised operating system account, and
 denial of service by a logged in administrator.
+
+## Deployment and standalone trust boundary
+
+- Shipped `aegis-server` binaries and customer container images are built without
+  `dev-auth` or `dev-license`: they refuse `AEGIS_AUTH=dev`,
+  `AEGIS_AUTH=development`, and `AEGIS_DEV_AUTH=1` at startup.
+- When `dev-auth` is explicitly compiled into a local development build,
+  `aegis-server` refuses to bind to non-loopback addresses.
+- Licensed standalone mode in the desktop app embeds a loopback-only
+  (`127.0.0.1`) server on the user's workstation. It relies on the
+  trusted-local-machine assumption (another process running under a compromised
+  OS account on the same host is outside the threat model).

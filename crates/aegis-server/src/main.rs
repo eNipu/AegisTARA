@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | `AEGIS_LISTEN` | `127.0.0.1:50051` | Address to serve on |
 //! | `PORT` | unset | Set by hosting platforms (Railway): serve on `0.0.0.0:$PORT` when `AEGIS_LISTEN` is unset |
-//! | `AEGIS_AUTH` | from the variables below | `password`, `oidc`, `both` or `dev`: how callers log in. `both` is company login plus password login, which an admin can turn off in the app |
+//! | `AEGIS_AUTH` | from the variables below | `password`, `oidc`, `both`, or (with `--features dev-auth` on loopback only) `dev` / `development`: how callers log in. `both` is company login plus password login, which an admin can turn off in the app |
 //! | `AEGIS_PASSWORD_LOGIN` | unset | With `both`: `on` or `off` forces the switch at start (the way back in when the company login is broken) |
 //! | `AEGIS_ADMIN_USERNAME` | `admin` | Password login: name of the first administrator |
 //! | `AEGIS_ADMIN_PASSWORD` | (required while no user exists) | Password login: password of the first administrator, used only when the user table is empty |
@@ -20,7 +20,7 @@
 //! | `AEGIS_OIDC_RESOURCE` | unset | The API resource, told to clients |
 //! | `AEGIS_DPOP` | `required` | `optional` accepts unbound bearer tokens (weaker) |
 //! | `AEGIS_ADMIN_CLAIM` / `AEGIS_ADMIN_VALUE` | `roles` / `aegis-admin` | Token claim that grants admin |
-//! | `AEGIS_DEV_AUTH` | unset | `1` trusts the `x-aegis-dev-user` header. **Development only.** |
+//! | `AEGIS_DEV_AUTH` | unset | `1` trusts the `x-aegis-dev-user` header. Only in builds with the `dev-auth` feature, bound to loopback. |
 //! | `AEGIS_DATABASE_URL` | unset | PostgreSQL connection string. Unset keeps everything in memory only. `DATABASE_URL` is read when this is unset. |
 //! | `AEGIS_DB_TLS` | `off` | `off`, `encrypt` (libpq `require`) or `verify` (libpq `verify-full`) |
 //! | `AEGIS_LICENSE_FILE` | (required) | Path of the signed license file. The server does not start without a valid one. |
@@ -61,8 +61,10 @@ use aegis_server::accounts::{
     Retention, spawn_purger,
 };
 use aegis_server::auth::Principal;
+#[cfg(feature = "dev-auth")]
+use aegis_server::auth_layer::DevAuthn;
 use aegis_server::auth_layer::{
-    AuthLayer, Authn, DevAuthn, HybridAuthn, OidcAuthn, PasswordAuthn, RequestInfo,
+    AuthLayer, Authn, HybridAuthn, OidcAuthn, PasswordAuthn, RequestInfo,
 };
 use aegis_server::config::ServerConfig;
 use aegis_server::license::system_clock_arc;
@@ -79,6 +81,7 @@ enum Mode {
     Oidc(OidcAuthn<HyperClient>),
     Password(PasswordAuthn),
     Both(HybridAuthn<HyperClient>),
+    #[cfg(feature = "dev-auth")]
     Dev(DevAuthn),
 }
 
@@ -88,6 +91,7 @@ impl Authn for Mode {
             Mode::Oidc(a) => a.authenticate(request).await,
             Mode::Password(a) => a.authenticate(request).await,
             Mode::Both(a) => a.authenticate(request).await,
+            #[cfg(feature = "dev-auth")]
             Mode::Dev(a) => a.authenticate(request).await,
         }
     }
@@ -100,6 +104,7 @@ enum AuthKind {
     Oidc,
     /// Company login plus password login, which an admin may turn off.
     Both,
+    #[cfg(feature = "dev-auth")]
     Dev,
 }
 
@@ -140,13 +145,35 @@ fn auth_kind() -> Result<AuthKind, String> {
         Some("password") => Ok(AuthKind::Password),
         Some("oidc") => Ok(AuthKind::Oidc),
         Some("both") => Ok(AuthKind::Both),
-        Some("dev" | "development") => Ok(AuthKind::Dev),
-        Some(_) => Err("AEGIS_AUTH must be password, oidc, both or dev".to_owned()),
+        Some("dev" | "development") => {
+            #[cfg(feature = "dev-auth")]
+            {
+                Ok(AuthKind::Dev)
+            }
+            #[cfg(not(feature = "dev-auth"))]
+            {
+                Err("development authentication is not enabled in this build; \
+                     set AEGIS_AUTH=password, oidc, or both"
+                    .to_owned())
+            }
+        }
+        Some(_) => Err("AEGIS_AUTH must be password, oidc, or both".to_owned()),
         None if var("AEGIS_OIDC_ISSUER").is_some() => Ok(AuthKind::Oidc),
-        None if var("AEGIS_DEV_AUTH").as_deref() == Some("1") => Ok(AuthKind::Dev),
+        None if var("AEGIS_DEV_AUTH").as_deref() == Some("1") => {
+            #[cfg(feature = "dev-auth")]
+            {
+                Ok(AuthKind::Dev)
+            }
+            #[cfg(not(feature = "dev-auth"))]
+            {
+                Err("AEGIS_DEV_AUTH is not enabled in this build; \
+                     set AEGIS_AUTH=password, oidc, or both"
+                    .to_owned())
+            }
+        }
         None => Err(
-            "no authentication is configured; set AEGIS_AUTH=password (test servers), \
-             AEGIS_OIDC_ISSUER (company login), or AEGIS_DEV_AUTH=1 (development)"
+            "no authentication is configured; set AEGIS_AUTH=password or \
+             AEGIS_OIDC_ISSUER (company login)"
                 .to_owned(),
         ),
     }
@@ -333,8 +360,8 @@ struct Setup {
 
 async fn run() -> Result<(), String> {
     let listen = listen_address()?;
-    let license = license()?;
     let kind = auth_kind()?;
+    let license = license()?;
 
     let methodologies = hosted_methodologies()?;
     let setup = Setup {
@@ -487,8 +514,17 @@ async fn start<S: ProjectStore>(
                 Some(accounts),
             )
         }
+        #[cfg(feature = "dev-auth")]
         AuthKind::Dev => {
-            tracing::warn!("development login: every caller is trusted. Development only.");
+            if !setup.listen.ip().is_loopback() {
+                return Err(format!(
+                    "development authentication may only bind to a loopback address (got {})",
+                    setup.listen
+                ));
+            }
+            tracing::warn!(
+                "development login: every caller is trusted. Loopback development only."
+            );
             service = service.with_event_log(EventLog::standalone(account_backend));
             (
                 Mode::Dev(DevAuthn),
