@@ -70,6 +70,8 @@ pub struct ValidatorConfig {
 /// What the server learns about the caller.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessClaims {
+    /// Verified token issuer (`iss`).
+    pub issuer: String,
     /// Stable identity: the `sub` claim.
     pub subject: String,
     /// Whether the admin rule matched.
@@ -192,6 +194,7 @@ impl<H: HttpClient> AccessTokenValidator<H> {
                     _ => false,
                 });
         Ok(AccessClaims {
+            issuer: self.config.issuer.clone(),
             subject,
             admin,
             jkt: claims.cnf.and_then(|c| c.jkt),

@@ -154,11 +154,12 @@ impl<S: ProjectStore> AegisService<S> {
     }
 
     async fn audit(&self, who: &Principal, kind: AuditKind, target: &str, detail: &str) {
+        let actor = who.audit_actor();
         match &self.events {
-            Some(log) => log.record(&who.subject, kind, target, detail).await,
+            Some(log) => log.record(&actor, kind, target, detail).await,
             // Without an event log the event goes to the server log.
             None => tracing::info!(
-                actor = %who.subject,
+                actor = %actor,
                 kind = kind.as_str(),
                 target,
                 detail,
@@ -386,7 +387,7 @@ impl<S: ProjectStore> pb::aegis_server::Aegis for AegisService<S> {
             .await?;
         let membership = ProjectMembership {
             project: meta.id,
-            member: format!("user:{}", who.subject),
+            member: who.qualified_member_key(),
             role: "project_owner".to_owned(),
         };
         if let Err(error) = self.registry.store().set_membership(&membership).await {

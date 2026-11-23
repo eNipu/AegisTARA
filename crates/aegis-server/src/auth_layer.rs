@@ -74,6 +74,8 @@ impl<H: HttpClient> Authn for OidcAuthn<H> {
             .map_err(|e| e.to_string())?;
         Ok(Principal {
             subject: claims.subject.into(),
+            issuer: Some(claims.issuer.into()),
+            user_id: None,
             admin: claims.admin,
             method: AuthMethod::Oidc,
             groups: Vec::new(),
@@ -130,6 +132,8 @@ impl Authn for DevAuthn {
             .ok_or_else(|| "missing development user".to_owned())?;
         Ok(Principal {
             subject: user.into(),
+            issuer: None,
+            user_id: None,
             admin: request.header(DEV_ADMIN_HEADER) == Some("1"),
             method: AuthMethod::Development,
             groups: Vec::new(),

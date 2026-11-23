@@ -145,7 +145,7 @@ impl Access {
             return Vec::new();
         };
         let mut found = Vec::new();
-        if let Some(role) = map.get(&format!("user:{}", who.subject)) {
+        if let Some(role) = map.get(&who.qualified_member_key()) {
             found.push(Arc::clone(role));
         }
         for group in &who.groups {
@@ -211,7 +211,7 @@ impl Member {
             return None;
         }
         let (kind, name) = raw.split_once(':')?;
-        if !matches!(kind, "user" | "group") || name.is_empty() {
+        if !matches!(kind, "uid" | "local" | "oidc" | "user" | "group") || name.is_empty() {
             return None;
         }
         if name.chars().any(char::is_control) {

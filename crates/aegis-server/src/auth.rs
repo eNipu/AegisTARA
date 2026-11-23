@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use tonic::{Request, Status};
 
+use crate::identity::UserId;
+
 /// How a caller proved who they are.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthMethod {
@@ -37,9 +39,15 @@ impl AuthMethod {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Principal {
     /// Stable subject: the identity provider's `sub` claim, the password
-    /// user name, or the development user name. Used as the audit actor and
-    /// the lease holder.
+    /// user name, or the development user name. Used as the display subject
+    /// and the lease holder.
     pub subject: Arc<str>,
+    /// Verified OIDC issuer URL (`iss`) for [`AuthMethod::Oidc`], or `None`
+    /// for password and development callers.
+    pub issuer: Option<Arc<str>>,
+    /// Stable internal user ID assigned by [`crate::identity::IdentityDirectory`],
+    /// when resolved.
+    pub user_id: Option<UserId>,
     /// May break other users' edit leases, manage users, verify audits.
     pub admin: bool,
     /// How the caller logged in.
@@ -55,6 +63,8 @@ impl Principal {
     pub fn user(subject: &str) -> Self {
         Principal {
             subject: subject.into(),
+            issuer: None,
+            user_id: None,
             admin: false,
             method: AuthMethod::Development,
             groups: Vec::new(),
@@ -66,9 +76,41 @@ impl Principal {
     pub fn admin(subject: &str) -> Self {
         Principal {
             subject: subject.into(),
+            issuer: None,
+            user_id: None,
             admin: true,
             method: AuthMethod::Development,
             groups: Vec::new(),
+        }
+    }
+
+    /// Qualified membership key for access checks. Never links local password
+    /// accounts and OIDC `(issuer, sub)` identities by equal bare strings.
+    #[must_use]
+    pub fn qualified_member_key(&self) -> String {
+        if let Some(uid) = self.user_id {
+            return uid.member_key();
+        }
+        match self.method {
+            AuthMethod::Password => format!("local:{}", self.subject),
+            AuthMethod::Oidc => format!(
+                "oidc:{}:{}",
+                self.issuer.as_deref().unwrap_or(""),
+                self.subject
+            ),
+            AuthMethod::Development => format!("user:{}", self.subject),
+        }
+    }
+
+    /// Actor string recorded on new audit events and ops. Uses the stable
+    /// internal `uid:<uuid>` when resolved; historical audit bytes are never
+    /// rewritten.
+    #[must_use]
+    pub fn audit_actor(&self) -> String {
+        if let Some(uid) = self.user_id {
+            uid.member_key()
+        } else {
+            self.subject.to_string()
         }
     }
 
@@ -115,6 +157,8 @@ pub fn dev_interceptor(mut request: Request<()>) -> Result<Request<()>, Status> 
         .is_some_and(|v| v.as_bytes() == b"1");
     request.extensions_mut().insert(Principal {
         subject: user.into(),
+        issuer: None,
+        user_id: None,
         admin,
         method: AuthMethod::Development,
         groups: Vec::new(),

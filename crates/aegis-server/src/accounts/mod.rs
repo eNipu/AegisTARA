@@ -1190,6 +1190,8 @@ impl Accounts {
         let user = state.users.get(&session.username).filter(|u| !u.disabled)?;
         Some(Principal {
             subject: user.username.as_str().into(),
+            issuer: None,
+            user_id: None,
             admin: user.admin,
             method: AuthMethod::Password,
             groups: Vec::new(),

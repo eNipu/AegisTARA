@@ -847,7 +847,7 @@ impl<S: ProjectStore> Actor<S> {
             }
             stored.push(StoredOp {
                 seq: self.seq + 1 + index as u64,
-                actor: who.subject.to_string(),
+                actor: who.audit_actor(),
                 timestamp_ms,
                 op: canonical,
             });
@@ -917,6 +917,7 @@ impl<S: ProjectStore> Actor<S> {
             .await
             .map_err(ServerError::Store)?;
         // `recent_ops` is newest-first; match the exact slice `base_seq + 1 ..= end_seq`.
+        let expected_actor = who.audit_actor();
         let mut matched = 0usize;
         for stored in recent.into_iter().rev() {
             if stored.seq <= base_seq || stored.seq > end_seq {
@@ -924,7 +925,7 @@ impl<S: ProjectStore> Actor<S> {
             }
             let expected_seq = base_seq + 1 + matched as u64;
             if stored.seq != expected_seq
-                || stored.actor != who.subject.as_ref()
+                || stored.actor != expected_actor
                 || stored.op != canonical[matched]
             {
                 return Ok(None);
