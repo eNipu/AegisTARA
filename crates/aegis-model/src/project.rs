@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::applicability::{Applicability, Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
-    CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
+    CeilingSource, ControlRule, ControlStatus, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
     SecurityControl, StepCeiling, StepMitigation,
 };
@@ -3549,12 +3549,16 @@ impl Project {
         let mut out = Vec::new();
         if let Some(mitigations) = entry.step_mitigations.get(node.index()) {
             for m in mitigations {
-                if let Some(control_id) = self.control_key(m.control) {
+                if let Some(ctrl) = self.controls.get(m.control)
+                    && ctrl.status.counts_for_residual()
+                    && let Some(control_id) = self.control_key(m.control)
+                {
                     out.push(StepCeiling {
                         control: m.control,
                         control_id,
                         feasibility: m.feasibility,
                         source: CeilingSource::StepMitigation,
+                        status: ctrl.status,
                     });
                 }
             }
@@ -3570,6 +3574,9 @@ impl Project {
                 let via_ref = self.item_ref(Some(via));
                 let owner_ref = owner.and_then(|o| self.item_ref(Some(o)));
                 for (ctrl_idx, ctrl_id, ctrl) in self.controls.iter() {
+                    if !ctrl.status.counts_for_residual() {
+                        continue;
+                    }
                     let Some(feasibility) = ctrl.rule_for(attack_type) else {
                         continue;
                     };
@@ -3582,6 +3589,7 @@ impl Project {
                                 target,
                                 attack_type,
                             },
+                            status: ctrl.status,
                         });
                     }
                     if let (Some(o_idx), Some(target)) = (owner, owner_ref)
@@ -3595,6 +3603,7 @@ impl Project {
                                 target,
                                 attack_type,
                             },
+                            status: ctrl.status,
                         });
                     }
                 }
@@ -3741,20 +3750,28 @@ impl Project {
             return false;
         }
         self.controls.iter().any(|(_, _, ctrl)| {
-            (ctrl.targets.contains(&via) || owner.is_some_and(|o| ctrl.targets.contains(&o)))
+            ctrl.status.counts_for_residual()
+                && (ctrl.targets.contains(&via) || owner.is_some_and(|o| ctrl.targets.contains(&o)))
                 && ctrl.rule_for(attack_type).is_some()
         })
     }
 
-    fn entry_residual_step_feasibility(
+    fn entry_step_feasibility_for(
         &self,
         entry: &TreeEntry,
         idx: NodeIdx,
+        residual: bool,
     ) -> Option<FeasibilityLevel> {
         let mut res = entry.effective_step_feasibility(&self.methodology, idx)?;
         if let Some(mitigations) = entry.step_mitigations.get(idx.index()) {
             for m in mitigations {
-                res = res.min(m.feasibility);
+                if self
+                    .controls
+                    .get(m.control)
+                    .is_some_and(|ctrl| ctrl.status.counts_for(residual))
+                {
+                    res = res.min(m.feasibility);
+                }
             }
         }
         if let (Some(via), Some(attack_type)) =
@@ -3765,8 +3782,9 @@ impl Project {
                 || owner.is_some_and(|o| self.item_control_count(o) > 0)
             {
                 for (_, _, ctrl) in self.controls.iter() {
-                    if (ctrl.targets.contains(&via)
-                        || owner.is_some_and(|o| ctrl.targets.contains(&o)))
+                    if ctrl.status.counts_for(residual)
+                        && (ctrl.targets.contains(&via)
+                            || owner.is_some_and(|o| ctrl.targets.contains(&o)))
                         && let Some(ceiling) = ctrl.rule_for(attack_type)
                     {
                         res = res.min(ceiling);
@@ -3775,6 +3793,14 @@ impl Project {
             }
         }
         Some(res)
+    }
+
+    fn entry_residual_step_feasibility(
+        &self,
+        entry: &TreeEntry,
+        idx: NodeIdx,
+    ) -> Option<FeasibilityLevel> {
+        self.entry_step_feasibility_for(entry, idx, true)
     }
 
     /// Evaluates attack tree `id` bottom-up using
@@ -3833,11 +3859,7 @@ impl Project {
         if app.node_excluded_at(id, idx) {
             return Some(Lifted::Excluded);
         }
-        let rating = if residual {
-            self.entry_residual_step_feasibility(entry, idx)
-        } else {
-            entry.effective_step_feasibility(&self.methodology, idx)
-        };
+        let rating = self.entry_step_feasibility_for(entry, idx, residual);
         rating.map(Lifted::Value)
     }
 
@@ -5863,9 +5885,14 @@ impl Project {
                         .attack_tree()
                         .and_then(|t_idx| self.trees.get(t_idx))
                         .is_some_and(|entry| {
-                            entry.step_mitigations.iter().any(|m| !m.is_empty())
-                                || (0..entry.tree.len())
-                                    .any(|i| self.entry_step_has_rule_ceiling(entry, i))
+                            entry.step_mitigations.iter().any(|ms| {
+                                ms.iter().any(|m| {
+                                    self.controls
+                                        .get(m.control)
+                                        .is_some_and(|c| c.status.counts_for_residual())
+                                })
+                            }) || (0..entry.tree.len())
+                                .any(|i| self.entry_step_has_rule_ceiling(entry, i))
                         });
                     if !has_mitigations {
                         findings.push(LintFinding::new(LintCode::ReduceTreatmentWithoutControls {
@@ -6044,6 +6071,9 @@ impl Project {
         // Build per-target set of kinds.
         let mut by_target: BTreeMap<ItemIdx, BTreeSet<ControlKind>> = BTreeMap::new();
         for (_idx, _id, control) in self.controls.iter() {
+            if !control.status.counts_for_residual() {
+                continue;
+            }
             if let Some(kind) = control.kind {
                 for &t in &control.targets {
                     by_target.entry(t).or_default().insert(kind);
@@ -6079,7 +6109,12 @@ impl Project {
 
     fn lint_goals(&self, findings: &mut Vec<LintFinding>) {
         for (idx, id, goal) in self.goals.iter() {
-            if goal.controls().is_empty() {
+            let has_active_control = goal.controls().iter().any(|&c_idx| {
+                self.controls
+                    .get(c_idx)
+                    .is_some_and(|c| c.status.counts_for_residual())
+            });
+            if !has_active_control {
                 findings.push(LintFinding::new(
                     LintCode::CybersecurityGoalWithoutControls { goal: id },
                 ));
@@ -6977,6 +7012,9 @@ impl Project {
             Op::SetControlKind { control, kind, .. } => {
                 self.check_set_control_kind(*control, *kind)?;
             }
+            Op::SetControlStatus { control, .. } => {
+                self.live_control(*control)?;
+            }
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -7533,6 +7571,11 @@ impl Project {
                 kind,
                 provenance,
             } => self.commit_set_control_kind(control, kind, provenance),
+            Op::SetControlStatus {
+                control,
+                status,
+                provenance,
+            } => self.commit_set_control_status(control, status, provenance),
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -10829,6 +10872,7 @@ impl Project {
             targets: Vec::new(),
             rules: Vec::new(),
             kind: None,
+            status: ControlStatus::default(),
             provenance,
         };
         self.controls.push(id, control, self.slot_limit).ok_or(
@@ -10946,6 +10990,22 @@ impl Project {
         Ok(Op::SetControlKind {
             control,
             kind: old,
+            provenance,
+        })
+    }
+
+    fn commit_set_control_status(
+        &mut self,
+        control: ControlId,
+        status: ControlStatus,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let c = self.control_mut(control)?;
+        let old = std::mem::replace(&mut c.status, status);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        Ok(Op::SetControlStatus {
+            control,
+            status: old,
             provenance,
         })
     }
@@ -12265,6 +12325,7 @@ impl Project {
         x.name == y.name
             && x.rules == y.rules
             && x.kind == y.kind
+            && x.status == y.status
             && x.provenance == y.provenance
             && x.targets.len() == y.targets.len()
             && x.targets
@@ -13070,6 +13131,7 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::UnapplyControl { .. }
         | Op::SetControlRule { .. }
         | Op::SetControlKind { .. }
+        | Op::SetControlStatus { .. }
         | Op::SetStepMitigation { .. }
         | Op::AddCybersecurityGoal { .. }
         | Op::RenameCybersecurityGoal { .. }
@@ -13517,19 +13579,45 @@ impl ProjectEvalCache {
             Op::SetStepFeasibility { tree, node, .. } | Op::SetStepFactor { tree, node, .. } => {
                 self.update_step(project, *tree, *node, true);
             }
-            Op::SetStepMitigation { tree, node, .. }
-            | Op::SetStepVia { tree, node, .. }
-            | Op::SetStepAttackType { tree, node, .. } => {
-                self.update_step(project, *tree, *node, false);
+            Op::SetStepMitigation {
+                tree,
+                node,
+                control,
+                ..
+            } => {
+                let include_inherent = project
+                    .security_control_idx(control)
+                    .and_then(|i| project.controls.get(i))
+                    .is_some_and(|c| c.status.counts_for_initial());
+                self.update_step(project, *tree, *node, include_inherent);
             }
-            Op::ApplyControl { target, .. } | Op::UnapplyControl { target, .. } => {
-                self.update_control_target(project, *target);
+            Op::SetStepVia { tree, node, .. } | Op::SetStepAttackType { tree, node, .. } => {
+                let include_inherent = project
+                    .controls
+                    .iter()
+                    .any(|(_, _, c)| c.status.counts_for_initial());
+                self.update_step(project, *tree, *node, include_inherent);
+            }
+            Op::ApplyControl {
+                control, target, ..
+            }
+            | Op::UnapplyControl {
+                control, target, ..
+            } => {
+                let include_inherent = project
+                    .security_control_idx(control)
+                    .and_then(|i| project.controls.get(i))
+                    .is_some_and(|c| c.status.counts_for_initial());
+                self.update_control_target(project, *target, include_inherent);
             }
             Op::SetControlRule {
                 control,
                 attack_type,
                 ..
             } => self.update_control_rule(project, *control, *attack_type),
+            Op::SetControlStatus { control, .. } => {
+                self.update_control_status(project, *control);
+            }
             Op::AddThreatScenario { id, .. } | Op::RemoveThreatScenario { id } => {
                 if let Some(threat_idx) = project.threat_scenario_idx(id) {
                     self.update_threat_added(project, threat_idx, *id);
@@ -14249,7 +14337,12 @@ impl ProjectEvalCache {
         self.update_tree_mode(project, tree_idx, entry, &[node_idx], true);
     }
 
-    fn update_control_target(&mut self, project: &Project, target: ItemRef) {
+    fn update_control_target(
+        &mut self,
+        project: &Project,
+        target: ItemRef,
+        include_inherent: bool,
+    ) {
         let Ok(target_idx) = project.item_idx(target) else {
             return;
         };
@@ -14264,6 +14357,9 @@ impl ProjectEvalCache {
                 .filter_map(|(i, _)| NodeIdx::try_from_usize(i))
                 .collect();
             if !dirty.is_empty() {
+                if include_inherent {
+                    self.update_tree_mode(project, tree_idx, entry, &dirty, false);
+                }
                 self.update_tree_mode(project, tree_idx, entry, &dirty, true);
             }
         }
@@ -14284,6 +14380,7 @@ impl ProjectEvalCache {
         if ctrl.targets.is_empty() {
             return;
         }
+        let include_inherent = ctrl.status.counts_for_initial();
         for (tree_idx, _, entry) in project.trees.iter() {
             let dirty: Vec<NodeIdx> = entry
                 .vias()
@@ -14297,6 +14394,44 @@ impl ProjectEvalCache {
                 .filter_map(|(i, _)| NodeIdx::try_from_usize(i))
                 .collect();
             if !dirty.is_empty() {
+                if include_inherent {
+                    self.update_tree_mode(project, tree_idx, entry, &dirty, false);
+                }
+                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+            }
+        }
+    }
+
+    fn update_control_status(&mut self, project: &Project, control: ControlId) {
+        let Some(ctrl_idx) = project.security_control_idx(&control) else {
+            return;
+        };
+        let Some(ctrl) = project.controls.get(ctrl_idx) else {
+            return;
+        };
+        for (tree_idx, _, entry) in project.trees.iter() {
+            let mut dirty = Vec::new();
+            for (i, mitigations) in entry.step_mitigations.iter().enumerate() {
+                let by_mit = mitigations.iter().any(|m| m.control == ctrl_idx);
+                let by_rule = !ctrl.targets.is_empty()
+                    && !ctrl.rules.is_empty()
+                    && entry.via_at(i).is_some_and(|via| {
+                        entry
+                            .attack_type_at(i)
+                            .is_some_and(|at| ctrl.rule_for(at).is_some())
+                            && (ctrl.targets.contains(&via)
+                                || project
+                                    .item_owner_component(via)
+                                    .is_some_and(|o| ctrl.targets.contains(&o)))
+                    });
+                if (by_mit || by_rule)
+                    && let Some(node_idx) = NodeIdx::try_from_usize(i)
+                {
+                    dirty.push(node_idx);
+                }
+            }
+            if !dirty.is_empty() {
+                self.update_tree_mode(project, tree_idx, entry, &dirty, false);
                 self.update_tree_mode(project, tree_idx, entry, &dirty, true);
             }
         }

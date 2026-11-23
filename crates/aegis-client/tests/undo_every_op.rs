@@ -229,6 +229,21 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
         kind: None,
         provenance: who(),
     });
+    go(Op::SetControlStatus {
+        control: ctrl,
+        status: aegis_model::ControlStatus::Implemented,
+        provenance: who(),
+    });
+    go(Op::SetControlStatus {
+        control: ctrl,
+        status: aegis_model::ControlStatus::Off,
+        provenance: who(),
+    });
+    go(Op::SetControlStatus {
+        control: ctrl,
+        status: aegis_model::ControlStatus::Planned,
+        provenance: who(),
+    });
     go(Op::RemoveSecurityControl { id: ctrl });
 
     // Attack tree nodes.

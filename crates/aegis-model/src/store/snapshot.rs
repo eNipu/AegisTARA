@@ -430,6 +430,8 @@ struct ControlView<'a> {
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     kind: Option<Required<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<&'static str>,
     #[serde(skip_serializing_if = "ControlTargetsByItem::is_empty")]
     targets: ControlTargetsByItem<'a>,
     #[serde(skip_serializing_if = "ControlRulesByKey::is_empty")]
@@ -723,6 +725,8 @@ impl Serialize for Controls<'_> {
                     ),
                     name: c.name(),
                     kind: c.kind().map(|k| Required(m.control_kind_key(k))),
+                    status: (c.status() != crate::ControlStatus::Planned)
+                        .then_some(c.status().as_str()),
                     targets: ControlTargetsByItem {
                         project: p,
                         control: c,
@@ -1293,6 +1297,15 @@ impl Project {
                 project.apply(Op::SetControlKind {
                     control: id,
                     kind: Some(kind.0),
+                    provenance: provenance.clone(),
+                })?;
+            }
+            if let Some(status) = c.status
+                && status.0 != crate::ControlStatus::Planned
+            {
+                project.apply(Op::SetControlStatus {
+                    control: id,
+                    status: status.0,
                     provenance: provenance.clone(),
                 })?;
             }

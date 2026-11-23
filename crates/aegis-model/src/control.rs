@@ -9,6 +9,94 @@ use crate::item::{ItemIdx, ItemRef};
 use crate::methodology::{AttackType, ControlKind, FeasibilityLevel};
 use crate::provenance::Provenance;
 
+/// Lifecycle status of a [`SecurityControl`] (CFG-10, D28).
+///
+/// Controls default to [`Planned`](Self::Planned) so pre-existing projects keep
+/// identical initial and residual risk numbers:
+///
+/// - [`Implemented`](Self::Implemented): already built into the item; counts in
+///   both **Initial** and **Residual** evaluations (mitigations, rules, and
+///   goal coverage).
+/// - [`Planned`](Self::Planned): proposed by the TARA; counts only in
+///   **Residual** evaluation (mitigations, rules, and goal coverage).
+/// - [`Off`](Self::Off): disabled / excluded; counts in neither evaluation nor
+///   goal coverage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ControlStatus {
+    /// Already present in the item; counts in both Initial and Residual risk.
+    Implemented,
+    /// Planned by this TARA; counts in Residual risk only (default).
+    #[default]
+    Planned,
+    /// Disabled; counts in neither Initial nor Residual risk.
+    Off,
+}
+
+impl ControlStatus {
+    /// All statuses in display order.
+    pub const ALL: [Self; 3] = [Self::Implemented, Self::Planned, Self::Off];
+
+    /// Stable wire/storage key (`"implemented"`, `"planned"`, `"off"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Implemented => "implemented",
+            Self::Planned => "planned",
+            Self::Off => "off",
+        }
+    }
+
+    /// Parses a wire key into a [`ControlStatus`].
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "implemented" => Some(Self::Implemented),
+            "planned" => Some(Self::Planned),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    /// Whether this control counts in the Initial (inherent) evaluation.
+    #[must_use]
+    pub const fn counts_for_initial(self) -> bool {
+        matches!(self, Self::Implemented)
+    }
+
+    /// Whether this control counts in the Residual evaluation and goal coverage.
+    #[must_use]
+    pub const fn counts_for_residual(self) -> bool {
+        matches!(self, Self::Implemented | Self::Planned)
+    }
+
+    /// Whether this control counts for the given evaluation mode (`false` = Initial,
+    /// `true` = Residual).
+    #[must_use]
+    pub const fn counts_for(self, residual: bool) -> bool {
+        if residual {
+            self.counts_for_residual()
+        } else {
+            self.counts_for_initial()
+        }
+    }
+
+    /// Human-readable English label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Implemented => "Implemented",
+            Self::Planned => "Planned",
+            Self::Off => "Off",
+        }
+    }
+}
+
+impl fmt::Display for ControlStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// Maximum number of [`StepMitigation`]s attached to one attack step.
 pub const MAX_STEP_MITIGATIONS: usize = 16;
 
@@ -235,6 +323,7 @@ pub struct StepCeiling {
     pub(crate) control_id: ControlId,
     pub(crate) feasibility: FeasibilityLevel,
     pub(crate) source: CeilingSource,
+    pub(crate) status: ControlStatus,
 }
 
 impl StepCeiling {
@@ -262,6 +351,13 @@ impl StepCeiling {
     #[must_use]
     pub const fn source(&self) -> CeilingSource {
         self.source
+    }
+
+    /// Returns the [`ControlStatus`] of the control imposing this ceiling (CFG-10).
+    /// Time O(1).
+    #[must_use]
+    pub const fn status(&self) -> ControlStatus {
+        self.status
     }
 }
 
@@ -364,6 +460,7 @@ pub struct SecurityControl {
     pub(crate) targets: Vec<ItemIdx>,
     pub(crate) rules: Vec<ControlRule>,
     pub(crate) kind: Option<ControlKind>,
+    pub(crate) status: ControlStatus,
     pub(crate) provenance: Provenance,
 }
 
@@ -424,6 +521,13 @@ impl SecurityControl {
     #[must_use]
     pub fn kind(&self) -> Option<ControlKind> {
         self.kind
+    }
+
+    /// Returns the lifecycle status of this control (CFG-10, D28). Defaults to
+    /// [`ControlStatus::Planned`]. Time O(1).
+    #[must_use]
+    pub const fn status(&self) -> ControlStatus {
+        self.status
     }
 
     /// Returns the control's [`ControlRule`]s, sorted by [`AttackType`]. Time O(1).

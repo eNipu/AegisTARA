@@ -1664,6 +1664,8 @@ pub struct ReducedByEntry {
     pub on: String,
     /// Feasibility label of the ceiling, for example `Low`.
     pub ceiling: String,
+    /// Lifecycle status of the control (`Implemented` or `Planned`).
+    pub status: aegis_model::ControlStatus,
 }
 
 /// The step that decides a risk after controls.
@@ -1726,6 +1728,7 @@ fn reduction(
                 aegis_model::CeilingSource::StepMitigation => String::new(),
             },
             ceiling: feasibility_label(m, c.feasibility()),
+            status: c.status(),
         });
     }
     let level_pos = |r: Result<&aegis_model::ThreatRisk, aegis_model::ModelError>| {
@@ -1767,10 +1770,16 @@ pub fn reduced_by_text(row: &RiskRow) -> Option<String> {
         row.reduced_by
             .iter()
             .map(|e| {
-                if e.on.is_empty() {
-                    e.name.clone()
+                let status_tag = if e.status == aegis_model::ControlStatus::Implemented {
+                    Some("Implemented")
                 } else {
-                    format!("{} ({})", e.name, e.on)
+                    None
+                };
+                match (e.on.is_empty(), status_tag) {
+                    (true, None) => e.name.clone(),
+                    (true, Some(st)) => format!("{} ({st})", e.name),
+                    (false, None) => format!("{} ({})", e.name, e.on),
+                    (false, Some(st)) => format!("{} ({}, {st})", e.name, e.on),
                 }
             })
             .collect::<Vec<_>>()
@@ -1939,6 +1948,8 @@ pub struct ControlRow {
     pub visual_id: String,
     /// Name.
     pub name: String,
+    /// Lifecycle status (`Implemented`, `Planned`, `Off`).
+    pub status: aegis_model::ControlStatus,
     /// Steps it is attached to.
     pub steps: usize,
     /// Goals it belongs to.
@@ -1957,6 +1968,8 @@ pub struct ControlDetail {
     pub visual_id: String,
     /// Name.
     pub name: String,
+    /// Lifecycle status (`Implemented`, `Planned`, `Off`).
+    pub status: aegis_model::ControlStatus,
     /// Components and interfaces this control is applied to (CFG-03).
     pub targets: Vec<LinkRow>,
     /// Attack-type feasibility ceiling rules (CFG-03).
@@ -2039,6 +2052,7 @@ pub fn control_rows(ws: &Workspace) -> Vec<ControlRow> {
             id,
             visual_id: project.security_control_visual_id(idx).unwrap_or_default(),
             name: c.name().to_owned(),
+            status: c.status(),
             steps: steps.get(&idx).copied().unwrap_or(0),
             goals: goals.get(&idx).copied().unwrap_or(0),
             lowers: lowers.get(&id).copied().unwrap_or(0),
@@ -2094,6 +2108,7 @@ pub fn control_detail(ws: &Workspace, id: ControlId) -> Option<ControlDetail> {
         id,
         visual_id: project.security_control_visual_id(idx).unwrap_or_default(),
         name: c.name().to_owned(),
+        status: c.status(),
         targets,
         rules,
         steps: control_uses(project, idx),

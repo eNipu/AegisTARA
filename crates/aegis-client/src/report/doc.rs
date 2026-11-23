@@ -1109,6 +1109,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
         b.push(table(
             &[
                 catalog.tr("control"),
+                "Status".to_owned(),
                 catalog.tr("attack-steps"),
                 catalog.tr("goals"),
                 catalog.tr("risks-lowered"),
@@ -1119,6 +1120,7 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 .map(|c| {
                     vec![
                         format!("{} · {}", c.visual_id, c.name),
+                        c.status.label().to_owned(),
                         c.steps.to_string(),
                         c.goals.to_string(),
                         c.lowers.to_string(),

@@ -205,7 +205,7 @@ Applicability (D27; architecture III.6):
 
 Control status (D28):
 
-- [ ] Control status (CFG-10, CFG-11): `ControlStatus { Implemented, Planned, Off }` with `Op::SetControlStatus`, old fixtures load as Planned with every saved number unchanged (a fixture test compares all risks before and after), initial counts Implemented controls and residual counts Implemented and Planned in mitigations, rules and goal coverage, a Status segmented control in the control table and inspector, "Initial" and "Residual" labels with their tooltips, explain-why naming the status, the diff and report; tests: three statuses × mitigation and rule ceilings, incremental cache property test, fixture numbers unchanged; can run beside 133 to 137, merged after 134 (140-control-status)
+- [x] Control status (CFG-10, CFG-11): `ControlStatus { Implemented, Planned, Off }` with `Op::SetControlStatus`, old fixtures load as Planned with every saved number unchanged (a fixture test compares all risks before and after), initial counts Implemented controls and residual counts Implemented and Planned in mitigations, rules and goal coverage, a Status segmented control in the control table and inspector, "Initial" and "Residual" labels with their tooltips, explain-why naming the status, the diff and report; tests: three statuses × mitigation and rule ceilings, incremental cache property test, fixture numbers unchanged; can run beside 133 to 137, merged after 134 (140-control-status)
 
 Shared building blocks (D29; architecture III.7):
 

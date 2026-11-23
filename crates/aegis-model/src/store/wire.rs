@@ -2003,12 +2003,27 @@ pub(super) struct ControlWire {
     pub(super) name: Name,
     #[serde(default, deserialize_with = "some")]
     pub(super) kind: Option<ControlKindKey>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) status: Option<ControlStatusWire>,
     #[serde(default)]
     pub(super) targets: ControlTargetsWire,
     #[serde(default)]
     pub(super) rules: ControlRulesWire,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
+}
+
+/// Wire representation of [`crate::ControlStatus`] (`"implemented"`,
+/// `"planned"`, `"off"`).
+pub(super) struct ControlStatusWire(pub(super) crate::ControlStatus);
+
+impl<'de> serde::Deserialize<'de> for ControlStatusWire {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        crate::ControlStatus::parse(&s)
+            .map(Self)
+            .ok_or_else(|| serde::de::Error::custom("unknown control status"))
+    }
 }
 
 /// A snapshot cybersecurity goal.
@@ -2411,6 +2426,12 @@ pub(super) enum OpWire {
         control: WireId<ControlId>,
         #[serde(deserialize_with = "Option::deserialize")]
         kind: Option<ControlKindKey>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetControlStatus {
+        control: WireId<ControlId>,
+        status: ControlStatusWire,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

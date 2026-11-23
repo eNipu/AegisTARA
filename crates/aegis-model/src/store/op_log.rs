@@ -322,6 +322,12 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetControlStatus {
+        control: Text<ControlId>,
+        status: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetStepMitigation {
         tree: Text<TreeId>,
         node: Text<NodeId>,
@@ -1172,6 +1178,15 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         } => OpView::SetControlKind {
             control: Text(*control),
             kind: kind.map(|k| Required(m.control_kind_key(k))),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetControlStatus {
+            control,
+            status,
+            provenance,
+        } => OpView::SetControlStatus {
+            control: Text(*control),
+            status: status.as_str(),
             provenance: ProvenanceView::of(provenance),
         },
         Op::SetStepMitigation {
@@ -2075,6 +2090,15 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         } => Op::SetControlKind {
             control: control.0,
             kind: kind.map(|k| k.0),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetControlStatus {
+            control,
+            status,
+            provenance,
+        } => Op::SetControlStatus {
+            control: control.0,
+            status: status.0,
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepMitigation {

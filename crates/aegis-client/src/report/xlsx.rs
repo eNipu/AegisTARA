@@ -863,6 +863,7 @@ pub fn report_workbook_xlsx_in(
     let mut controls = vec![vec![
         "ID".to_owned(),
         names.security_control.singular.to_string(),
+        "Status".to_owned(),
         "Attack steps".to_owned(),
         "Goals".to_owned(),
         "Risks lowered".to_owned(),
@@ -875,6 +876,7 @@ pub fn report_workbook_xlsx_in(
         controls.push(vec![
             c.visual_id,
             c.name,
+            c.status.label().to_owned(),
             c.steps.to_string(),
             c.goals.to_string(),
             c.lowers.to_string(),

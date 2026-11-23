@@ -273,7 +273,7 @@ pub use compat::{
     check_server_write_compatibility, format_engine_identity,
 };
 pub use control::{
-    CeilingSource, ControlRule, CybersecurityClaim, CybersecurityGoal, DecidingStep,
+    CeilingSource, ControlRule, ControlStatus, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
     SecurityControl, StepCeiling, StepMitigation,
 };

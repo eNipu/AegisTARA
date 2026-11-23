@@ -653,6 +653,13 @@ pub enum Edit {
         /// New name.
         name: String,
     },
+    /// Sets the lifecycle status of a security control (CFG-10, D28).
+    SetControlStatus {
+        /// The control.
+        control: ControlId,
+        /// New lifecycle status (`Implemented`, `Planned`, or `Off`).
+        status: aegis_model::ControlStatus,
+    },
     /// Applies a security control to a component or an interface (CFG-03).
     ApplyControl {
         /// The control.
@@ -2401,6 +2408,11 @@ impl Edit {
                 name: name(n)?,
                 provenance: p,
             }],
+            Edit::SetControlStatus { control, status } => vec![Op::SetControlStatus {
+                control: *control,
+                status: *status,
+                provenance: p,
+            }],
             Edit::ApplyControl { control, target } => {
                 let kind = project
                     .security_control_idx(control)
@@ -2598,6 +2610,13 @@ impl Edit {
                     ops.push(Op::SetControlKind {
                         control: *control,
                         kind: None,
+                        provenance: p.clone(),
+                    });
+                }
+                if ctrl.status() != aegis_model::ControlStatus::Planned {
+                    ops.push(Op::SetControlStatus {
+                        control: *control,
+                        status: aegis_model::ControlStatus::Planned,
                         provenance: p.clone(),
                     });
                 }

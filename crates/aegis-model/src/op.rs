@@ -75,6 +75,7 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `UnapplyControl` | `ApplyControl` with the old control provenance | O(log n + t) |
 /// | `SetControlRule` | the same with the old ceiling and control provenance | O(log n + r) |
 /// | `SetControlKind` | the same with the old kind and control provenance | O(log n) |
+/// | `SetControlStatus` | the same with the old status and control provenance | O(log n) |
 /// | `SetStepMitigation` | the same with the old feasibility and provenance | O(log n + log V + m) |
 /// | `AddCybersecurityGoal` | `RemoveCybersecurityGoal` | O(m log n + m log m) |
 /// | `RenameCybersecurityGoal` | the same with the old name and provenance | O(log n) |
@@ -601,6 +602,16 @@ pub enum Op {
         control: ControlId,
         /// A control kind of the project's methodology, or `None`.
         kind: Option<ControlKind>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Sets the lifecycle status ([`ControlStatus`](crate::ControlStatus)) of a
+    /// [`SecurityControl`](crate::SecurityControl) (CFG-10, D28).
+    SetControlStatus {
+        /// Existing security control.
+        control: ControlId,
+        /// New lifecycle status (`Implemented`, `Planned`, or `Off`).
+        status: crate::control::ControlStatus,
         /// Provenance of the change.
         provenance: Provenance,
     },
@@ -1153,6 +1164,7 @@ impl Op {
     /// assert_eq!(Op::RemoveAsset { id }.provenance(), None);
     /// ```
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub const fn provenance(&self) -> Option<&Provenance> {
         match self {
             Self::SetDescription { provenance, .. }
@@ -1192,6 +1204,7 @@ impl Op {
             | Self::UnapplyControl { provenance, .. }
             | Self::SetControlRule { provenance, .. }
             | Self::SetControlKind { provenance, .. }
+            | Self::SetControlStatus { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }
@@ -1316,6 +1329,7 @@ impl Op {
             | Self::UnapplyControl { provenance, .. }
             | Self::SetControlRule { provenance, .. }
             | Self::SetControlKind { provenance, .. }
+            | Self::SetControlStatus { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }
