@@ -14,7 +14,14 @@ item-scope = 分析の範囲
 section-figures = 図表
 section-risks = 6. リスクレジスタと対応
 section-problems = 9. 未解決の問題
+section-configuration = 構成と前提条件
 section-comparison = ベースラインとの比較
+report-configuration = 構成
+report-configuration-value = { $total } 件中 { $present } 件の条件が成立
+report-absent-conditions = 未成立の条件
+report-excluded = 除外された要素とステップ
+report-excluded-item = 要素またはステップ
+report-excluded-reason = 理由
 
 risks-by-level = リスクレベル別
 risk-level = リスクレベル
