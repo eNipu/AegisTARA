@@ -158,6 +158,12 @@ relation-tree-conditions = 攻撃ツリーの条件
 relation-goal-conditions = 目標の条件
 relation-claim-conditions = 主張の条件
 relation-step-conditions = ステップの条件
+assumption = 前提
+assumptions = 前提条件
+assumption-holds = 成立
+relation-claim-assumptions = 前提条件
+relation-assumption-conditions = 前提の条件
+relation-assumption-excludes = 成立時の除外対象
 
 # Party roles (job 145).
 party-us = 自社
@@ -370,3 +376,5 @@ inspector-rev-dataflow-interface = データフロー
 inspector-rev-interface-component = インターフェース
 inspector-rev-boundary-members = 信頼境界
 inspector-rev-conditions = 必要とする要素
+inspector-rev-claim-assumptions = クレーム
+inspector-rev-assumption-excludes = 前提により除外

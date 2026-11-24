@@ -982,3 +982,215 @@ fn removals_clear_condition_links_in_one_undo_step() {
         );
     }
 }
+
+/// L30 round-trips for assumption removals, claim removals with assumptions,
+/// tree/node removals on assumption-excluded targets, outline step moves, and
+/// `BranchStepToGate` with `transfer_ratings: true`.
+#[test]
+fn assumption_edits_removals_and_tree_moves_undo_exactly() {
+    use aegis_client::commands::Edit;
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let (as_id, cond, claim, party) = (
+        AssumptionId::new_v7(),
+        ConditionId::new_v7(),
+        ClaimId::new_v7(),
+        PartyId::new_v7(),
+    );
+    let (tree, root, gate_a, gate_b, step1, step2) = (
+        TreeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut at = AttackTree::new(root, Node::gate(GateKind::Or, "Root")).expect("root");
+    let r = at.root();
+    let ga = at
+        .add_child(r, gate_a, Node::gate(GateKind::And, "Gate A"))
+        .expect("ga");
+    let gb = at
+        .add_child(r, gate_b, Node::gate(GateKind::Or, "Gate B"))
+        .expect("gb");
+    at.add_child(ga, step1, Node::step("Step 1")).expect("s1");
+    at.add_child(gb, step2, Node::step("Step 2")).expect("s2");
+
+    let target_as = ElementRef::Assumption(as_id);
+    let target_claim = ElementRef::Claim(claim);
+    ws.apply(
+        vec![
+            Op::SetProjectLanguages {
+                langs: Arc::from([Arc::from("ja")]),
+                provenance: who(),
+            },
+            Op::AddCondition {
+                id: cond,
+                name: "Prod".into(),
+                description: "".into(),
+                present: true,
+                provenance: who(),
+            },
+            Op::AddParty {
+                id: party,
+                name: "Supplier".into(),
+                kind: PartyKind::Supplier,
+                provenance: who(),
+            },
+            Op::AddCybersecurityClaim {
+                id: claim,
+                name: "Locked".into(),
+                provenance: who(),
+            },
+            Op::LinkClaimParty {
+                claim,
+                party,
+                provenance: who(),
+            },
+            Op::NeedCondition {
+                element: target_claim,
+                condition: cond,
+                provenance: who(),
+            },
+            Op::SetDescription {
+                target: target_claim,
+                text: "Claim note".into(),
+                provenance: who(),
+            },
+            Op::AddAttackTree {
+                id: tree,
+                tree: at,
+                step_feasibility: vec![],
+                provenance: who(),
+            },
+            Op::AddAssumption {
+                id: as_id,
+                name: "Locked box".into(),
+                holds: true,
+                provenance: who(),
+            },
+            Op::LinkClaimAssumption {
+                claim,
+                assumption: as_id,
+                provenance: who(),
+            },
+            Op::NeedCondition {
+                element: target_as,
+                condition: cond,
+                provenance: who(),
+            },
+            Op::SetDescription {
+                target: target_as,
+                text: "Steel box".into(),
+                provenance: who(),
+            },
+            Op::SetDescriptionTranslation {
+                target: target_as,
+                lang: "ja".into(),
+                text: "鋼鉄製ボックス".into(),
+                provenance: who(),
+            },
+            Op::SetAssumptionExcludes {
+                id: as_id,
+                trees: vec![tree],
+                steps: vec![StepRef { tree, node: step1 }, StepRef { tree, node: step2 }],
+                provenance: who(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+
+    let run = |ws: &mut Workspace, edit: Edit| {
+        let ops = edit.to_ops(ws.project(), "alice", 2).expect("to_ops");
+        ws.apply(ops, Origin::Edit).expect("apply");
+    };
+
+    // 1. RemoveAssumption clears description, translation, condition, claim link, and excludes.
+    let before = ws.project().clone();
+    run(&mut ws, Edit::RemoveAssumption { assumption: as_id });
+    assert!(ws.project().assumption_idx(&as_id).is_none());
+    ws.undo().expect("undo RemoveAssumption");
+    assert!(*ws.project() == before, "RemoveAssumption undo mismatch");
+
+    // 2. RemoveClaim unlinks assumption, party, condition, and description.
+    run(&mut ws, Edit::RemoveClaim { claim });
+    assert!(ws.project().cybersecurity_claim_idx(&claim).is_none());
+    ws.undo().expect("undo RemoveClaim");
+    assert!(*ws.project() == before, "RemoveClaim undo mismatch");
+
+    // 3. RemoveTreeNode on an excluded step (and gate subtree) cleans up excludes cleanly.
+    run(&mut ws, Edit::RemoveTreeNode { tree, node: step1 });
+    ws.undo().expect("undo RemoveTreeNode");
+    assert!(*ws.project() == before, "RemoveTreeNode undo mismatch");
+
+    // 4. RemoveTree on a tree with excluded tree + multiple excluded steps.
+    run(&mut ws, Edit::RemoveTree { tree });
+    assert!(ws.project().attack_tree_idx(&tree).is_none());
+    ws.undo().expect("undo RemoveTree");
+    assert!(*ws.project() == before, "RemoveTree undo mismatch");
+
+    // 5. ReplaceTree moving excluded step1 under Gate B preserves its exclusion and undoes.
+    let moved_outline = "OR Root\n  AND Gate A\n  OR Gate B\n    - Step 1\n    - Step 2\n";
+    run(
+        &mut ws,
+        Edit::ReplaceTree {
+            tree,
+            outline: moved_outline.to_owned(),
+        },
+    );
+    let a = ws
+        .project()
+        .assumption(ws.project().assumption_idx(&as_id).expect("as"))
+        .expect("a");
+    assert!(a.excludes_steps().contains(&StepRef { tree, node: step1 }));
+    assert!(a.excludes_steps().contains(&StepRef { tree, node: step2 }));
+    ws.undo().expect("undo ReplaceTree move");
+    assert!(*ws.project() == before, "ReplaceTree move undo mismatch");
+
+    // 5b. ReplaceTree deleting step2 while moving step1 keeps step1 and drops step2 cleanly.
+    let drop_and_move = "OR Root\n  AND Gate A\n  OR Gate B\n    - Step 1\n";
+    run(
+        &mut ws,
+        Edit::ReplaceTree {
+            tree,
+            outline: drop_and_move.to_owned(),
+        },
+    );
+    let a = ws
+        .project()
+        .assumption(ws.project().assumption_idx(&as_id).expect("as"))
+        .expect("a");
+    assert!(a.excludes_steps().contains(&StepRef { tree, node: step1 }));
+    assert!(!a.excludes_steps().contains(&StepRef { tree, node: step2 }));
+    ws.undo().expect("undo ReplaceTree drop+move");
+    assert!(
+        *ws.project() == before,
+        "ReplaceTree drop+move undo mismatch"
+    );
+
+    // 6. BranchStepToGate transfers assumption exclusion from step1 onto the new child step.
+    let child_id = NodeId::new_v7();
+    run(
+        &mut ws,
+        Edit::BranchStepToGate {
+            tree,
+            node: step1,
+            id: child_id,
+            gate: GateKind::Or,
+            child_label: "Sub-step".into(),
+        },
+    );
+    let a = ws
+        .project()
+        .assumption(ws.project().assumption_idx(&as_id).expect("as"))
+        .expect("a");
+    assert!(!a.excludes_steps().contains(&StepRef { tree, node: step1 }));
+    assert!(a.excludes_steps().contains(&StepRef {
+        tree,
+        node: child_id
+    }));
+    assert!(a.excludes_steps().contains(&StepRef { tree, node: step2 }));
+    ws.undo().expect("undo BranchStepToGate");
+    assert!(*ws.project() == before, "BranchStepToGate undo mismatch");
+}

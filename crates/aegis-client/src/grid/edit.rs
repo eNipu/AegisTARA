@@ -93,6 +93,10 @@ pub(crate) fn target_exists(project: &Project, target: Selection) -> bool {
             .is_some(),
         Selection::Party(id) => p.party_idx(&id).and_then(|i| p.party(i)).is_some(),
         Selection::Condition(id) => p.condition_idx(&id).and_then(|i| p.condition(i)).is_some(),
+        Selection::Assumption(id) => p
+            .assumption_idx(&id)
+            .and_then(|i| p.assumption(i))
+            .is_some(),
     }
 }
 

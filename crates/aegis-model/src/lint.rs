@@ -12,8 +12,8 @@
 use std::fmt;
 
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, NodeId,
-    ThreatId, TreeId,
+    AssetId, AssumptionId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId,
+    GoalId, NodeId, ThreatId, TreeId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{ControlKind, Property};
@@ -279,6 +279,11 @@ pub enum LintCode {
         /// The unlinked cybersecurity claim.
         claim: ClaimId,
     },
+    /// An assumption in the project is not linked by any cybersecurity claim.
+    AssumptionWithoutClaim {
+        /// The unlinked assumption.
+        assumption: AssumptionId,
+    },
     /// The project has components defined, but an asset is not bound to any
     /// component.
     AssetUnbound {
@@ -362,6 +367,7 @@ impl LintCode {
             | Self::CybersecurityGoalWithoutControls { .. }
             | Self::CybersecurityGoalUnlinked { .. }
             | Self::CybersecurityClaimUnlinked { .. }
+            | Self::AssumptionWithoutClaim { .. }
             | Self::AssetUnbound { .. }
             | Self::BoundaryCrossingDataFlowWithoutThreat { .. }
             | Self::ComponentWithoutSystem { .. }
@@ -504,6 +510,9 @@ impl fmt::Display for LintCode {
                 f,
                 "cybersecurity claim {claim} is not linked to any threat scenario"
             ),
+            Self::AssumptionWithoutClaim { assumption } => {
+                write!(f, "assumption {assumption} has no cybersecurity claim")
+            }
             Self::AssetUnbound { asset } => {
                 write!(f, "asset {asset} is not bound to any component")
             }
@@ -680,6 +689,9 @@ mod tests {
             LintCode::CybersecurityGoalWithoutControls { goal },
             LintCode::CybersecurityGoalUnlinked { goal },
             LintCode::CybersecurityClaimUnlinked { claim },
+            LintCode::AssumptionWithoutClaim {
+                assumption: AssumptionId::new_v7(),
+            },
             LintCode::AssetUnbound { asset },
             LintCode::BoundaryCrossingDataFlowWithoutThreat { flow },
             LintCode::ComponentWithoutSystem {

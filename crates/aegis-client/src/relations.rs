@@ -37,6 +37,9 @@ impl RelationKey {
     pub const GOAL_CONDITIONS: Self = Self("goal-conditions");
     pub const CLAIM_CONDITIONS: Self = Self("claim-conditions");
     pub const STEP_CONDITIONS: Self = Self("step-conditions");
+    pub const CLAIM_ASSUMPTIONS: Self = Self("claim-assumptions");
+    pub const ASSUMPTION_CONDITIONS: Self = Self("assumption-conditions");
+    pub const ASSUMPTION_EXCLUDES: Self = Self("assumption-excludes");
     pub const CONTROL_TARGETS: Self = Self("control-targets");
     pub const STEP_VIA: Self = Self("step-via");
     pub const STEP_MITIGATIONS: Self = Self("step-mitigations");
@@ -66,9 +69,29 @@ pub enum ElementKind {
     Claim,
     Party,
     Condition,
+    Assumption,
 }
 
 impl ElementKind {
+    /// Every relation element kind.
+    pub const ALL: &'static [Self] = &[
+        Self::Component,
+        Self::Interface,
+        Self::DataFlow,
+        Self::TrustBoundary,
+        Self::Asset,
+        Self::Damage,
+        Self::Threat,
+        Self::Tree,
+        Self::Step,
+        Self::Control,
+        Self::Goal,
+        Self::Claim,
+        Self::Party,
+        Self::Condition,
+        Self::Assumption,
+    ];
+
     /// Maps each `Selection` variant (a `TreeNode` is a `Step`) to its kind.
     #[must_use]
     pub fn kind_of(s: Selection) -> Option<Self> {
@@ -87,6 +110,7 @@ impl ElementKind {
             Selection::Claim(_) => Self::Claim,
             Selection::Party(_) => Self::Party,
             Selection::Condition(_) => Self::Condition,
+            Selection::Assumption(_) => Self::Assumption,
         })
     }
 }
@@ -152,6 +176,9 @@ pub static RELATIONS: &[Relation] = &[
     rel(RelationKey::GOAL_CONDITIONS, ElementKind::Goal, CONDITION, "relation-goal-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
     rel(RelationKey::CLAIM_CONDITIONS, ElementKind::Claim, CONDITION, "relation-claim-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
     rel(RelationKey::STEP_CONDITIONS, ElementKind::Step, CONDITION, "relation-step-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::CLAIM_ASSUMPTIONS, ElementKind::Claim, &[ElementKind::Assumption], "relation-claim-assumptions", true, read_claim_assumptions, Some(link_claim_assumptions), Some(unlink_claim_assumptions)),
+    rel(RelationKey::ASSUMPTION_CONDITIONS, ElementKind::Assumption, CONDITION, "relation-assumption-conditions", true, read_conditions, Some(need_condition), Some(unneed_condition)),
+    rel(RelationKey::ASSUMPTION_EXCLUDES, ElementKind::Assumption, &[ElementKind::Tree, ElementKind::Step], "relation-assumption-excludes", true, read_assumption_excludes, Some(link_assumption_excludes), Some(unlink_assumption_excludes)),
 ];
 
 /// The registry row for `key`, or `None` if the key is unknown.
@@ -181,12 +208,13 @@ pub fn elements_of_kind(project: &Project, kind: ElementKind) -> Vec<Selection> 
         ElementKind::Damage => project.damage_scenarios().map(|(_, id, _)| Selection::Damage(id)).collect(),
         ElementKind::Threat => project.threat_scenarios().map(|(_, id, _)| Selection::Threat(id)).collect(),
         ElementKind::Tree => project.attack_trees().map(|(_, id, _)| Selection::Tree(id)).collect(),
-        ElementKind::Step => project.attack_trees().flat_map(|(_, id, t)| t.iter().map(move |(_, n, _)| Selection::TreeNode(id, n))).collect(),
+        ElementKind::Step => project.attack_trees().flat_map(|(_, id, t)| t.iter().filter(|(_, _, n)| n.gate_kind().is_none()).map(move |(_, n, _)| Selection::TreeNode(id, n))).collect(),
         ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
         ElementKind::Goal => project.cybersecurity_goals().map(|(_, id, _)| Selection::Goal(id)).collect(),
         ElementKind::Claim => project.cybersecurity_claims().map(|(_, id, _)| Selection::Claim(id)).collect(),
         ElementKind::Party => project.parties().map(|(_, id, _)| Selection::Party(id)).collect(),
         ElementKind::Condition => project.conditions().map(|(_, id, _)| Selection::Condition(id)).collect(),
+        ElementKind::Assumption => project.assumptions().map(|(_, id, _)| Selection::Assumption(id)).collect(),
         ElementKind::Component => project.components().map(|(_, id, _)| Selection::Component(id)).collect(),
         ElementKind::Interface => project.interfaces().map(|(_, id, _)| Selection::Interface(id)).collect(),
         ElementKind::DataFlow => project.data_flows().map(|(_, id, _)| Selection::DataFlow(id)).collect(),
@@ -324,6 +352,20 @@ fn read_claim_responsible(project: &Project, from: Selection) -> Vec<Selection> 
     project.cybersecurity_claim(idx).map_or_else(Vec::new, |c| c.responsible().iter().filter_map(|&p| project.party_id(p).map(Selection::Party)).collect())
 }
 #[rustfmt::skip]
+fn read_claim_assumptions(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::Claim(id) = from else { return Vec::new() };
+    let Some(idx) = project.cybersecurity_claim_idx(&id) else { return Vec::new() };
+    project.cybersecurity_claim(idx).map_or_else(Vec::new, |c| c.assumptions().iter().filter_map(|&a| project.assumption_id(a).map(Selection::Assumption)).collect())
+}
+#[rustfmt::skip]
+fn read_assumption_excludes(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::Assumption(id) = from else { return Vec::new() };
+    let Some(a) = project.assumption_idx(&id).and_then(|i| project.assumption(i)) else { return Vec::new() };
+    let trees = a.excludes_trees().iter().filter_map(|&t| project.attack_tree_id(t).map(Selection::Tree));
+    let steps = a.excludes_steps().iter().map(|s| Selection::TreeNode(s.tree, s.node));
+    trees.chain(steps).collect()
+}
+#[rustfmt::skip]
 fn read_control_targets(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::Control(id) = from else { return Vec::new() };
     project.security_control_idx(&id).map_or_else(Vec::new, |i| project.control_targets(i).filter_map(item_selection).collect())
@@ -379,6 +421,7 @@ fn condition_holder(s: Selection) -> Option<ConditionHolder> {
         Selection::Tree(id) => ConditionHolder::Element(E::Tree(id)),
         Selection::Goal(id) => ConditionHolder::Element(E::Goal(id)),
         Selection::Claim(id) => ConditionHolder::Element(E::Claim(id)),
+        Selection::Assumption(id) => ConditionHolder::Element(E::Assumption(id)),
         Selection::TreeNode(tree, node) => ConditionHolder::Step(tree, node),
         _ => return None,
     })
@@ -523,6 +566,22 @@ fn link_boundary_members(from: Selection, to: Selection) -> Option<Edit> {
 fn unlink_boundary_members(from: Selection, to: Selection) -> Option<Edit> {
     match (from, to) { (Selection::TrustBoundary(b), Selection::Component(c)) => Some(Edit::SetTrustBoundaryMember { boundary: b, component: c, member: false }), _ => None }
 }
+#[rustfmt::skip]
+fn link_claim_assumptions(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Claim(claim), Selection::Assumption(assumption)) => Some(Edit::LinkClaimAssumption { claim, assumption, linked: true }), _ => None }
+}
+#[rustfmt::skip]
+fn unlink_claim_assumptions(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Claim(claim), Selection::Assumption(assumption)) => Some(Edit::LinkClaimAssumption { claim, assumption, linked: false }), _ => None }
+}
+#[rustfmt::skip]
+fn link_assumption_excludes(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Assumption(assumption), target @ (Selection::Tree(_) | Selection::TreeNode(_, _))) => Some(Edit::SetAssumptionExclude { assumption, target, excluded: true }), _ => None }
+}
+#[rustfmt::skip]
+fn unlink_assumption_excludes(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Assumption(assumption), target @ (Selection::Tree(_) | Selection::TreeNode(_, _))) => Some(Edit::SetAssumptionExclude { assumption, target, excluded: false }), _ => None }
+}
 
 #[cfg(test)]
 mod tests {
@@ -561,6 +620,7 @@ mod tests {
             Selection::Claim(ClaimId::new_v7()),
             Selection::Party(PartyId::new_v7()),
             Selection::Condition(aegis_model::ConditionId::new_v7()),
+            Selection::Assumption(aegis_model::AssumptionId::new_v7()),
         ];
         for selection in selections {
             assert!(ElementKind::kind_of(selection).is_some(), "{selection:?}");

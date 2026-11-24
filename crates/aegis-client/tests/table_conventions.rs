@@ -308,7 +308,7 @@ fn only_inputs_are_editable() {
     );
     assert_eq!(
         editable(TableId::Claims),
-        ["name", "responsible", "conditions"]
+        ["name", "responsible", "assumptions", "conditions"]
     );
     assert_eq!(editable(TableId::Problems), [""; 0]);
 }

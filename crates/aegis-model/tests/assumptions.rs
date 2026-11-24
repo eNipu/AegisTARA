@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use aegis_model::{
     AssetId, AssumptionId, AssumptionIdx, AttackTree, ClaimId, ComponentId, ConditionId, DamageId,
-    ElementRef, EntityKind, FeasibilityLevel, GateKind, InterfaceId, ItemRef, Limit,
-    MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS, MAX_DESCRIPTION_CHARS,
-    MAX_NAME_BYTES, MAX_NAME_CHARS, Methodology, ModelError, Node, NodeId, Op, OpCodec,
-    OpLogReader, OpLogWriter, Project, ProjectDiff, ProjectEvalCache, Provenance, Reason,
-    RiskLevel, StepRef, StoreError, ThreatId, TreeId, VisualPrefix,
+    ElementRef, EntityKind, FeasibilityLevel, GateKind, InterfaceId, ItemRef, Limit, LintCode,
+    LintFinding, LintSeverity, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS,
+    MAX_DESCRIPTION_CHARS, MAX_NAME_BYTES, MAX_NAME_CHARS, Methodology, ModelError, Node, NodeId,
+    Op, OpCodec, OpLogReader, OpLogWriter, Project, ProjectDiff, ProjectEvalCache, Provenance,
+    Reason, RiskLevel, StepRef, StoreError, ThreatId, TreeId, VisualPrefix,
 };
 use proptest::prelude::*;
 use serde_json::{Value, json};
@@ -2484,4 +2484,61 @@ fn snapshot_and_workspace_round_trip_and_decode_limits() {
             .iter()
             .all(|f| f.path != "systems/main/assumptions.json")
     );
+}
+
+#[test]
+fn lint_assumption_without_claim_and_suppresses_unlinked_claim() {
+    let mut p = project();
+    let claim = ClaimId::new_v7();
+    let a1 = AssumptionId::new_v7();
+    let a2 = AssumptionId::new_v7();
+    let prov = who("alice", 1_700_000_000_000);
+
+    p.apply(Op::AddCybersecurityClaim {
+        id: claim,
+        name: "ECU physically secured".into(),
+        provenance: prov.clone(),
+    })
+    .expect("add claim");
+    add_assumption(&mut p, a1, "Locked housing", true);
+    add_assumption(&mut p, a2, "Tamper-evident seal", false);
+
+    let findings = p.lint();
+    let unlinked_claim = LintFinding::new(LintCode::CybersecurityClaimUnlinked { claim });
+    let unlinked_a1 = LintFinding::new(LintCode::AssumptionWithoutClaim { assumption: a1 });
+    let unlinked_a2 = LintFinding::new(LintCode::AssumptionWithoutClaim { assumption: a2 });
+    assert!(findings.contains(&unlinked_claim));
+    assert!(findings.contains(&unlinked_a1));
+    assert!(findings.contains(&unlinked_a2));
+    assert_eq!(unlinked_a1.severity(), LintSeverity::Warning);
+    assert!(
+        unlinked_a1
+            .code()
+            .to_string()
+            .contains("has no cybersecurity claim")
+    );
+
+    // Linking a1 clears both AssumptionWithoutClaim(a1) and CybersecurityClaimUnlinked(claim),
+    // while a2 still warns until linked.
+    p.apply(Op::LinkClaimAssumption {
+        claim,
+        assumption: a1,
+        provenance: prov.clone(),
+    })
+    .expect("link a1");
+    let after_link = p.lint();
+    assert!(!after_link.contains(&unlinked_claim));
+    assert!(!after_link.contains(&unlinked_a1));
+    assert!(after_link.contains(&unlinked_a2));
+
+    // Unlinking restores both warnings.
+    p.apply(Op::UnlinkClaimAssumption {
+        claim,
+        assumption: a1,
+        provenance: prov,
+    })
+    .expect("unlink a1");
+    let after_unlink = p.lint();
+    assert!(after_unlink.contains(&unlinked_claim));
+    assert!(after_unlink.contains(&unlinked_a1));
 }

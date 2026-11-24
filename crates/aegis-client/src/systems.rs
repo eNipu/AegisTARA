@@ -438,8 +438,8 @@ pub fn selection_systems(
         Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
         // Parties belong to the project, not to any item system.
         Selection::Party(_) => None,
-        // Conditions belong to the project, not to any item system.
-        Selection::Condition(_) => None,
+        // Conditions and assumptions belong to the project, not to any item system.
+        Selection::Condition(_) | Selection::Assumption(_) => None,
     }
 }
 

@@ -7,8 +7,8 @@ use aegis_client::commands::Edit;
 use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, DamageId, DataFlowId, GoalId, InterfaceId, Methodology, Op,
-    PartyId, PartyKind, Provenance, ThreatId, TrustBoundaryId,
+    AssetId, AssumptionId, ClaimId, ComponentId, DamageId, DataFlowId, GoalId, InterfaceId,
+    Methodology, Op, PartyId, PartyKind, Provenance, ThreatId, TrustBoundaryId,
 };
 
 fn apply(ws: &mut Workspace, edit: &Edit) {
@@ -264,4 +264,150 @@ fn party_link_ops_name_the_goal_or_claim() {
     for _ in 0..cases.len() {
         ws.undo().expect("undo");
     }
+}
+
+#[test]
+fn assumption_edits_name_action_and_target() {
+    let mut ws = workspace();
+    let (as_id, claim) = (AssumptionId::new_v7(), ClaimId::new_v7());
+    let (tree, root, step) = (
+        aegis_model::TreeId::new_v7(),
+        aegis_model::NodeId::new_v7(),
+        aegis_model::NodeId::new_v7(),
+    );
+    let mut at = aegis_model::AttackTree::new(
+        root,
+        aegis_model::Node::gate(aegis_model::GateKind::Or, "Tamper"),
+    )
+    .expect("tree");
+    at.add_child(at.root(), step, aegis_model::Node::step("Probe"))
+        .expect("step");
+    ws.apply(
+        vec![
+            Op::AddCybersecurityClaim {
+                id: claim,
+                name: "Locked box".into(),
+                provenance: Provenance::human("mira", 1),
+            },
+            Op::AddAttackTree {
+                id: tree,
+                tree: at,
+                step_feasibility: vec![],
+                provenance: Provenance::human("mira", 1),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+
+    apply(
+        &mut ws,
+        &Edit::AddAssumption {
+            id: as_id,
+            name: "Cabin locked".into(),
+            holds: true,
+        },
+    );
+    let l = ws.undo_label().expect("add label");
+    assert_eq!(l.imperative(), "add assumption 'Cabin locked'");
+    assert_eq!(
+        l.selection(ws.project()),
+        Some(Selection::Assumption(as_id))
+    );
+
+    apply(
+        &mut ws,
+        &Edit::RenameAssumption {
+            assumption: as_id,
+            name: "ECU locked".into(),
+        },
+    );
+    assert_eq!(
+        ws.undo_label().expect("rename").imperative(),
+        "rename assumption 'Cabin locked'"
+    );
+
+    apply(
+        &mut ws,
+        &Edit::SetAssumptionHolds {
+            assumption: as_id,
+            holds: false,
+        },
+    );
+    assert_eq!(
+        ws.undo_label().expect("off").imperative(),
+        "switch off assumption 'ECU locked'"
+    );
+    apply(
+        &mut ws,
+        &Edit::SetAssumptionHolds {
+            assumption: as_id,
+            holds: true,
+        },
+    );
+    assert_eq!(
+        ws.undo_label().expect("on").imperative(),
+        "switch on assumption 'ECU locked'"
+    );
+
+    apply(
+        &mut ws,
+        &Edit::SetAssumptionExclude {
+            assumption: as_id,
+            target: Selection::TreeNode(tree, step),
+            excluded: true,
+        },
+    );
+    assert_eq!(
+        ws.undo_label().expect("excl").imperative(),
+        "change exclusions of assumption 'ECU locked'"
+    );
+
+    apply(
+        &mut ws,
+        &Edit::LinkClaimAssumption {
+            claim,
+            assumption: as_id,
+            linked: true,
+        },
+    );
+    let link_lbl = ws.undo_label().expect("link");
+    assert_eq!(
+        link_lbl.imperative(),
+        "change assumptions of cybersecurity claim 'Locked box'"
+    );
+    assert_eq!(
+        link_lbl.selection(ws.project()),
+        Some(Selection::Claim(claim))
+    );
+
+    apply(
+        &mut ws,
+        &Edit::LinkClaimAssumption {
+            claim,
+            assumption: as_id,
+            linked: false,
+        },
+    );
+    let unlink_lbl = ws.undo_label().expect("unlink");
+    assert!(unlink_lbl.is_removal());
+    assert_eq!(
+        unlink_lbl.imperative(),
+        "unlink assumption from cybersecurity claim 'Locked box'"
+    );
+
+    apply(&mut ws, &Edit::RemoveAssumption { assumption: as_id });
+    let rm_lbl = ws.undo_label().expect("rm").clone();
+    assert!(rm_lbl.is_removal());
+    assert!(
+        rm_lbl
+            .imperative()
+            .starts_with("remove assumption 'ECU locked'")
+    );
+    assert_eq!(rm_lbl.selection(ws.project()), None);
+    ws.undo().expect("undo rm");
+    assert_eq!(
+        rm_lbl.selection(ws.project()),
+        Some(Selection::Assumption(as_id))
+    );
 }

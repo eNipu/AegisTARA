@@ -5841,6 +5841,7 @@ impl Project {
         self.lint_setting_conflicts(&mut findings);
         self.lint_goals(&mut findings);
         self.lint_claims(&mut findings);
+        self.lint_assumptions(&mut findings);
         self.lint_data_flows(&mut findings);
         self.lint_components(&mut findings);
         self.lint_systems(&mut findings);
@@ -6181,10 +6182,26 @@ impl Project {
     }
 
     fn lint_claims(&self, findings: &mut Vec<LintFinding>) {
-        for (idx, id, _claim) in self.claims.iter() {
-            if self.refs.claims.get(idx.index()).copied().unwrap_or(0) == 0 {
+        for (idx, id, claim) in self.claims.iter() {
+            if self.refs.claims.get(idx.index()).copied().unwrap_or(0) == 0
+                && claim.assumptions().is_empty()
+            {
                 findings.push(LintFinding::new(LintCode::CybersecurityClaimUnlinked {
                     claim: id,
+                }));
+            }
+        }
+    }
+
+    fn lint_assumptions(&self, findings: &mut Vec<LintFinding>) {
+        let mut linked = BTreeSet::new();
+        for (_, _, claim) in self.claims.iter() {
+            linked.extend(claim.assumptions().iter().copied());
+        }
+        for (idx, id, _assumption) in self.assumptions.iter() {
+            if !linked.contains(&idx) {
+                findings.push(LintFinding::new(LintCode::AssumptionWithoutClaim {
+                    assumption: id,
                 }));
             }
         }

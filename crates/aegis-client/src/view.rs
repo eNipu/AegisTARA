@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use aegis_canvas::{LayoutConfig, NodeKind, NodeStyle, Scene, Tone};
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementRef,
-    FeasibilityLevel, GateKind, GoalId, InterfaceId, ItemRef, Methodology, NodeId, NodeIdx,
-    PartyId, Project, SuggestionId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
+    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
+    ElementRef, FeasibilityLevel, GateKind, GoalId, InterfaceId, ItemRef, Methodology, NodeId,
+    NodeIdx, PartyId, Project, SuggestionId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
 };
 
 use aegis_proto as pb;
@@ -484,6 +484,12 @@ impl TableId {
                     RESPONSIBLE_C,
                     THREATS,
                     hidden(
+                        "assumptions",
+                        Links(RelationKey::CLAIM_ASSUMPTIONS),
+                        msg("assumptions"),
+                        160,
+                    ),
+                    hidden(
                         "conditions",
                         Links(RelationKey::CLAIM_CONDITIONS),
                         msg("conditions"),
@@ -687,6 +693,8 @@ pub enum Selection {
     Party(PartyId),
     /// An applicability condition (APL-01).
     Condition(aegis_model::ConditionId),
+    /// An applicability assumption.
+    Assumption(AssumptionId),
 }
 
 /// A user administration request (admins, password login).

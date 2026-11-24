@@ -10,8 +10,8 @@ use aegis_client::table::table_rows;
 use aegis_client::view::{ColumnKind, Page, PageGroup, Selection, TableId, UiState};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ConditionId, DamageId, ElementRef, GateKind, GoalId,
-    InterfaceId, Methodology, Node, NodeId, Op, Provenance, ThreatId, TreeId,
+    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, DamageId, ElementRef,
+    GateKind, GoalId, InterfaceId, Methodology, Node, NodeId, Op, Provenance, ThreatId, TreeId,
 };
 
 const NOW: u64 = 1_792_956_600_000;
@@ -574,4 +574,174 @@ fn remove_condition_detaches_all_eight_kinds_and_undoes_cleanly() {
         );
     }
     assert!(before.diff(fx.ws.project()).expect("diff").is_empty());
+}
+
+#[test]
+fn assumption_edits_unchanged_conditions_and_claims_column() {
+    let mut fx = fixture();
+    let catalog = Catalog::load(Language::En);
+    let vocab = pages::vocabulary(fx.ws.project().methodology());
+    let as_id = AssumptionId::new_v7();
+
+    let add = Edit::AddAssumption {
+        id: as_id,
+        name: "  Cabin locked  ".into(),
+        holds: true,
+    };
+    assert_eq!(add.created(), Some(Selection::Assumption(as_id)));
+    apply_edit(&mut fx.ws, add);
+    let a = fx
+        .ws
+        .project()
+        .assumption(fx.ws.project().assumption_idx(&as_id).expect("idx"))
+        .expect("assumption");
+    assert_eq!(a.name(), "Cabin locked");
+    assert!(a.holds());
+
+    // Unchanged no-ops emit empty op lists.
+    assert!(
+        Edit::RenameAssumption {
+            assumption: as_id,
+            name: " Cabin locked ".into(),
+        }
+        .to_ops(fx.ws.project(), "tester", NOW)
+        .expect("noop rename")
+        .is_empty()
+    );
+    assert!(
+        Edit::SetAssumptionHolds {
+            assumption: as_id,
+            holds: true,
+        }
+        .to_ops(fx.ws.project(), "tester", NOW)
+        .expect("noop holds")
+        .is_empty()
+    );
+    assert!(
+        Edit::SetAssumptionExclude {
+            assumption: as_id,
+            target: Selection::Tree(fx.tree),
+            excluded: false,
+        }
+        .to_ops(fx.ws.project(), "tester", NOW)
+        .expect("noop unexclude tree")
+        .is_empty()
+    );
+    assert!(
+        Edit::LinkClaimAssumption {
+            claim: fx.claim,
+            assumption: as_id,
+            linked: false,
+        }
+        .to_ops(fx.ws.project(), "tester", NOW)
+        .expect("noop unlink")
+        .is_empty()
+    );
+    assert!(
+        Edit::RemoveAssumption {
+            assumption: AssumptionId::new_v7(),
+        }
+        .to_ops(fx.ws.project(), "tester", NOW)
+        .expect("missing assumption removal is no-op")
+        .is_empty()
+    );
+
+    // Excludes (tree + step), condition link, claim link, and hidden Claims column chip.
+    apply_edit(
+        &mut fx.ws,
+        Edit::SetAssumptionExclude {
+            assumption: as_id,
+            target: Selection::Tree(fx.tree),
+            excluded: true,
+        },
+    );
+    apply_edit(
+        &mut fx.ws,
+        Edit::SetAssumptionExclude {
+            assumption: as_id,
+            target: Selection::TreeNode(fx.tree, fx.step_a),
+            excluded: true,
+        },
+    );
+    assert!(
+        Edit::SetAssumptionExclude {
+            assumption: as_id,
+            target: Selection::TreeNode(fx.tree, fx.step_a),
+            excluded: true,
+        }
+        .to_ops(fx.ws.project(), "tester", NOW)
+        .expect("noop exclude step")
+        .is_empty()
+    );
+    apply_edit(
+        &mut fx.ws,
+        Edit::SetConditionLink {
+            element: ElementRef::Assumption(as_id),
+            condition: fx.cf01,
+            linked: true,
+        },
+    );
+    apply_edit(
+        &mut fx.ws,
+        Edit::LinkClaimAssumption {
+            claim: fx.claim,
+            assumption: as_id,
+            linked: true,
+        },
+    );
+    assert!(
+        Edit::LinkClaimAssumption {
+            claim: fx.claim,
+            assumption: as_id,
+            linked: true,
+        }
+        .to_ops(fx.ws.project(), "tester", NOW)
+        .expect("noop link")
+        .is_empty()
+    );
+
+    let cfg = configuration_view(&fx.ws, &catalog);
+    let cf01_row = cfg.rows.iter().find(|r| r.id == fx.cf01).expect("cf01");
+    assert_eq!(cf01_row.needed_by_elements, 1);
+
+    let col_idx = TableId::Claims
+        .columns()
+        .iter()
+        .position(|c| c.key == "assumptions")
+        .expect("assumptions column");
+    let rows = table_rows(&fx.ws, TableId::Claims, &vocab, &catalog);
+    assert_eq!(rows[0].cells[col_idx].text, "");
+    assert_eq!(rows[0].cells[col_idx].chips.len(), 1);
+    assert_eq!(
+        rows[0].cells[col_idx].chips[0].target,
+        Selection::Assumption(as_id)
+    );
+
+    // RemoveCondition detaches assumption's condition and undoes cleanly.
+    let before_rm_cond = fx.ws.project().clone();
+    apply_edit(&mut fx.ws, Edit::RemoveCondition { condition: fx.cf01 });
+    assert!(
+        fx.ws
+            .project()
+            .condition_link_ids(ElementRef::Assumption(as_id))
+            .is_empty()
+    );
+    fx.ws.undo().expect("undo RemoveCondition");
+    assert!(
+        before_rm_cond
+            .diff(fx.ws.project())
+            .expect("diff")
+            .is_empty()
+    );
+
+    // Invalid target on SetAssumptionExclude is rejected.
+    assert_eq!(
+        Edit::SetAssumptionExclude {
+            assumption: as_id,
+            target: Selection::Asset(fx.asset),
+            excluded: true,
+        }
+        .to_ops(fx.ws.project(), "tester", NOW),
+        Err(EditError::UnknownChoice)
+    );
 }

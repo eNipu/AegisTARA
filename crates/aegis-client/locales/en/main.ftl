@@ -167,6 +167,12 @@ relation-tree-conditions = Tree conditions
 relation-goal-conditions = Goal conditions
 relation-claim-conditions = Claim conditions
 relation-step-conditions = Step conditions
+assumption = Assumption
+assumptions = Assumptions
+assumption-holds = Holds
+relation-claim-assumptions = Assumptions
+relation-assumption-conditions = Assumption conditions
+relation-assumption-excludes = Excluded while it holds
 
 # Party roles (job 145).
 party-us = Us
@@ -379,3 +385,5 @@ inspector-rev-dataflow-interface = Data flows
 inspector-rev-interface-component = Interfaces
 inspector-rev-boundary-members = Trust boundaries
 inspector-rev-conditions = Needed by
+inspector-rev-claim-assumptions = Claims
+inspector-rev-assumption-excludes = Excluded by assumptions

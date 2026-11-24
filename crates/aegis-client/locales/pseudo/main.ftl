@@ -159,6 +159,12 @@ relation-tree-conditions = ⟦Tréé çôñdîtîôñs␣⟧
 relation-goal-conditions = ⟦Gôâl çôñdîtîôñs␣⟧
 relation-claim-conditions = ⟦Çlâîm çôñdîtîôñs␣⟧
 relation-step-conditions = ⟦Stép çôñdîtîôñs␣⟧
+assumption = ⟦Âssûmptîôn␣⟧
+assumptions = ⟦Âssûmptîôns␣⟧
+assumption-holds = ⟦Hôlds␣⟧
+relation-claim-assumptions = ⟦Âssûmptîôns␣⟧
+relation-assumption-conditions = ⟦Âssûmptîôn côndîtîôns␣⟧
+relation-assumption-excludes = ⟦Éxclûdéd whîlé ît hôlds␣⟧
 
 # Party roles (job 145).
 party-us = ⟦Ûs␣⟧
@@ -371,3 +377,5 @@ inspector-rev-dataflow-interface = ⟦Dâtâ flôws␣⟧
 inspector-rev-interface-component = ⟦Întérfâcés␣⟧
 inspector-rev-boundary-members = ⟦Trûst bôûndârîés␣⟧
 inspector-rev-conditions = ⟦Néédéd bý␣⟧
+inspector-rev-claim-assumptions = ⟦Clâîms␣⟧
+inspector-rev-assumption-excludes = ⟦Éxclûdéd bý âssûmptîôns␣⟧
