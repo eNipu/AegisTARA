@@ -72,6 +72,7 @@ impl Label {
             Selection::Claim(id) => project.cybersecurity_claim_idx(&id).is_some(),
             Selection::Party(id) => project.party_idx(&id).is_some(),
             Selection::Condition(id) => project.condition_idx(&id).is_some(),
+            Selection::Assumption(id) => project.assumption_idx(&id).is_some(),
             Selection::Component(id) => project.component_idx(&id).is_some(),
             Selection::Interface(id) => project.interface_idx(&id).is_some(),
             Selection::DataFlow(id) => project.data_flow_idx(&id).is_some(),
@@ -297,6 +298,14 @@ fn target_of(op: &Op) -> Option<Selection> {
         Op::LinkClaimParty { claim, .. } | Op::UnlinkClaimParty { claim, .. } => {
             Selection::Claim(*claim)
         }
+        Op::LinkClaimAssumption { claim, .. } | Op::UnlinkClaimAssumption { claim, .. } => {
+            Selection::Claim(*claim)
+        }
+        Op::AddAssumption { id, .. }
+        | Op::RenameAssumption { id, .. }
+        | Op::SetAssumptionHolds { id, .. }
+        | Op::SetAssumptionExcludes { id, .. }
+        | Op::RemoveAssumption { id } => Selection::Assumption(*id),
         Op::AddComponent { id, .. }
         | Op::RenameComponent { id, .. }
         | Op::SetComponentParent { id, .. }
@@ -334,6 +343,7 @@ fn target_of(op: &Op) -> Option<Selection> {
                 ElementRef::Interface(id) => Selection::Interface(*id),
                 ElementRef::DataFlow(id) => Selection::DataFlow(*id),
                 ElementRef::TrustBoundary(id) => Selection::TrustBoundary(*id),
+                ElementRef::Assumption(id) => Selection::Assumption(*id),
                 _ => return None,
             }
         }
@@ -355,6 +365,7 @@ fn parts(op: &Op, p: &Project) -> Parts {
     let interface = |id: &_| name_of(p, &ElementRef::Interface(*id));
     let flow = |id: &_| name_of(p, &ElementRef::DataFlow(*id));
     let boundary = |id: &_| name_of(p, &ElementRef::TrustBoundary(*id));
+    let assumption = |id: &_| name_of(p, &ElementRef::Assumption(*id));
     let some = |n: &str| Some(n.to_owned());
     let condition = |id: &aegis_model::ConditionId| {
         p.condition_idx(id)
@@ -489,6 +500,12 @@ fn parts(op: &Op, p: &Project) -> Parts {
             "responsible party from cybersecurity claim",
             claim(c),
         ),
+        Op::LinkClaimAssumption { claim: c, .. } => {
+            ("change", "assumptions of cybersecurity claim", claim(c))
+        }
+        Op::UnlinkClaimAssumption { claim: c, .. } => {
+            ("unlink", "assumption from cybersecurity claim", claim(c))
+        }
         Op::RemoveCybersecurityClaim { id } => ("remove", "cybersecurity claim", claim(id)),
 
         Op::AddComponent { name, .. } => ("add", "component", some(name)),
@@ -519,6 +536,17 @@ fn parts(op: &Op, p: &Project) -> Parts {
             condition(id),
         ),
         Op::RemoveCondition { id } => ("remove", "condition", condition(id)),
+        Op::AddAssumption { name, .. } => ("add", "assumption", some(name)),
+        Op::RenameAssumption { id, .. } => ("rename", "assumption", assumption(id)),
+        Op::SetAssumptionHolds { id, holds, .. } => (
+            if *holds { "switch on" } else { "switch off" },
+            "assumption",
+            assumption(id),
+        ),
+        Op::SetAssumptionExcludes { id, .. } => {
+            ("change", "exclusions of assumption", assumption(id))
+        }
+        Op::RemoveAssumption { id } => ("remove", "assumption", assumption(id)),
         Op::NeedCondition { element, .. } => ("change", "conditions of", name_of(p, element)),
         Op::UnneedCondition { element, .. } => ("clear", "condition of", name_of(p, element)),
         Op::NeedStepCondition { condition: c, .. } => ("need", "condition on step", condition(c)),
@@ -548,6 +576,7 @@ fn name_of(p: &Project, e: &ElementRef) -> Option<String> {
         ElementRef::Interface(id) => p.interface(p.interface_idx(id)?)?.name(),
         ElementRef::DataFlow(id) => p.data_flow(p.data_flow_idx(id)?)?.name(),
         ElementRef::TrustBoundary(id) => p.trust_boundary(p.trust_boundary_idx(id)?)?.name(),
+        ElementRef::Assumption(id) => p.assumption(p.assumption_idx(id)?)?.name(),
         _ => return None,
     };
     Some(name.to_owned())

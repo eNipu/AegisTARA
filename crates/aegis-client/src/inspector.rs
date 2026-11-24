@@ -116,6 +116,8 @@ pub fn reverse_relation_label(key: RelationKey, catalog: &Catalog) -> String {
         RelationKey::DATAFLOW_INTERFACE => "inspector-rev-dataflow-interface",
         RelationKey::INTERFACE_COMPONENT => "inspector-rev-interface-component",
         RelationKey::BOUNDARY_MEMBERS => "inspector-rev-boundary-members",
+        RelationKey::CLAIM_ASSUMPTIONS => "inspector-rev-claim-assumptions",
+        RelationKey::ASSUMPTION_EXCLUDES => "inspector-rev-assumption-excludes",
         _ => "inspector-rev-conditions",
     };
     catalog.tr(id)
@@ -124,6 +126,7 @@ pub fn reverse_relation_label(key: RelationKey, catalog: &Catalog) -> String {
 pub(crate) fn reason_target(reason: Reason) -> Option<Selection> {
     match reason {
         Reason::ConditionOff(cid) => Some(Selection::Condition(cid)),
+        Reason::AssumptionHolds(aid) => Some(Selection::Assumption(aid)),
         Reason::OwnerExcluded(owner) => match owner {
             ElementRef::Asset(id) => Some(Selection::Asset(id)),
             ElementRef::Damage(id) => Some(Selection::Damage(id)),
@@ -136,6 +139,7 @@ pub(crate) fn reason_target(reason: Reason) -> Option<Selection> {
             ElementRef::Interface(id) => Some(Selection::Interface(id)),
             ElementRef::DataFlow(id) => Some(Selection::DataFlow(id)),
             ElementRef::TrustBoundary(id) => Some(Selection::TrustBoundary(id)),
+            ElementRef::Assumption(id) => Some(Selection::Assumption(id)),
             _ => None,
         },
         Reason::ViaExcluded(ItemRef::Component(cid)) => Some(Selection::Component(cid)),
@@ -160,6 +164,7 @@ fn exclusion_targets(project: &Project, sel: Selection) -> Vec<Selection> {
         Selection::Interface(id) => app.reasons(ElementRef::Interface(id)),
         Selection::DataFlow(id) => app.reasons(ElementRef::DataFlow(id)),
         Selection::TrustBoundary(id) => app.reasons(ElementRef::TrustBoundary(id)),
+        Selection::Assumption(id) => app.reasons(ElementRef::Assumption(id)),
     };
     reasons.iter().copied().filter_map(reason_target).collect()
 }
@@ -813,6 +818,18 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
                 None,
             ));
             (catalog.tr("condition"), pages::changed_text(c.provenance()))
+        }
+        Selection::Assumption(id) => {
+            let a = project.assumption(project.assumption_idx(&id)?)?;
+            fields.push(field(
+                catalog.tr("assumption-holds"),
+                catalog.tr(if a.holds() { "yes" } else { "no" }),
+                None,
+            ));
+            (
+                catalog.tr("assumption"),
+                pages::changed_text(a.provenance()),
+            )
         }
     };
 

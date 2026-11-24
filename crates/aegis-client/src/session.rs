@@ -2418,6 +2418,20 @@ impl<P: CredentialProvider> Actor<P> {
                 self.edit(&edit);
             }
             Command::BeginDraft(kind) => self.begin_draft(kind),
+            Command::CreateClaimFromAssumption(id) => {
+                if self
+                    .open
+                    .as_ref()
+                    .is_some_and(|o| o.ws.project().assumption_idx(&id).is_some())
+                    && self.can_edit()
+                {
+                    if let Some(open) = self.open.as_mut() {
+                        open.ui.selected_assumption = Some(id);
+                        open.ui.page = Page::Assumptions;
+                    }
+                    self.begin_draft(DraftKind::Claim);
+                }
+            }
             Command::CommitDraft { name, next } => self.commit_draft(&name, next),
             Command::CancelDraft => self.set_draft(None),
             Command::SetDraftAsset(asset) => {
@@ -2466,10 +2480,15 @@ impl<P: CredentialProvider> Actor<P> {
                 navigate,
             } => {
                 if let Some(open) = self.open.as_mut() {
+                    let prev_page = open.ui.page;
                     open.ui.draft = None;
+                    open.ui.draft_assumption = None;
                     pages::select(&mut open.ui, selection);
                     if navigate {
                         let page = pages::page_of(selection);
+                        if prev_page != page {
+                            open.find = None;
+                        }
                         self.show_page(page);
                     }
                 }
@@ -3026,6 +3045,8 @@ impl<P: CredentialProvider> Actor<P> {
             open.ui.draft_error = None;
             if draft.is_some() {
                 open.ui.draft_seq += 1;
+            } else {
+                open.ui.draft_assumption = None;
             }
             self.pump();
         }
@@ -3035,6 +3056,7 @@ impl<P: CredentialProvider> Actor<P> {
         if !self.can_edit() {
             return;
         }
+        let prev_page = self.open.as_ref().map(|o| o.ui.page);
         // The page opens first: leaving a page drops its draft.
         self.show_page(kind.page());
         if let Some(open) = self.open.as_mut() {
@@ -3052,6 +3074,11 @@ impl<P: CredentialProvider> Actor<P> {
             open.ui.draft_damage = open.ui.selected_damage;
             open.ui.draft_threat = open.ui.selected_threat;
             open.ui.draft_control = open.ui.selected_control;
+            open.ui.draft_assumption = (kind == DraftKind::Claim
+                && prev_page == Some(Page::Assumptions))
+            .then_some(open.ui.selected_assumption)
+            .flatten()
+            .filter(|id| open.ws.project().assumption_idx(id).is_some());
             let components = pages::component_rows(&open.ws);
             let only_component = match components.as_slice() {
                 [only] => Some(only.id),
@@ -3166,9 +3193,16 @@ impl<P: CredentialProvider> Actor<P> {
                     name,
                 },
             },
-            DraftKind::Claim => Edit::AddClaim {
-                id: ClaimId::new_v7(),
-                name,
+            DraftKind::Claim => match open.ui.draft_assumption {
+                Some(assumption) => Edit::AddClaimFor {
+                    id: ClaimId::new_v7(),
+                    name,
+                    assumption,
+                },
+                None => Edit::AddClaim {
+                    id: ClaimId::new_v7(),
+                    name,
+                },
             },
             DraftKind::Tree => Edit::NewTree {
                 id: TreeId::new_v7(),
@@ -3237,9 +3271,18 @@ impl<P: CredentialProvider> Actor<P> {
         };
         if open.ui.page != page {
             open.ui.draft = None;
+            open.ui.draft_assumption = None;
             open.find = None;
         }
         open.ui.page = page;
+        if page == Page::Assumptions {
+            let p = open.ws.project();
+            open.ui.selected_assumption = open
+                .ui
+                .selected_assumption
+                .filter(|id| p.assumption_idx(id).is_some())
+                .or_else(|| p.assumptions().next().map(|(_, id, _)| id));
+        }
         match page {
             Page::Versions => self.load_baselines(),
             Page::History => self.load_history(),
@@ -3546,6 +3589,7 @@ impl<P: CredentialProvider> Actor<P> {
                 draft_component: open.ui.draft_component,
                 draft_to: open.ui.draft_to,
                 draft_interface_kind: open.ui.draft_interface_kind,
+                draft_assumption: open.ui.draft_assumption,
                 draft_incomplete: open.ui.draft_incomplete(),
                 show_residual: open.ui.show_residual,
                 view_menu: crate::systems::view_menu(open.ws.project(), &open.ui.system_view),
@@ -3661,6 +3705,10 @@ fn page_data(open: &Open) -> PageData {
             d.claims = pages::claim_rows(ws);
             d.claim = ui.selected_claim.and_then(|id| pages::claim_detail(ws, id));
         }
+        Page::Assumptions => {
+            let catalog = crate::i18n::Catalog::load(crate::i18n::Language::En);
+            d.assumptions = Some(crate::assumptions::assumptions_view(ws, ui, &catalog));
+        }
         Page::Problems => d.problems = pages::problems(ws),
         Page::Versions
         | Page::History
@@ -3733,6 +3781,11 @@ fn find_rows(f: &crate::find::Find, p: &Project, page: Page, d: &mut PageData) -
                 row(&r.visual_id, &r.name, E::Claim(r.id))
             }),
         ]),
+        Page::Assumptions => d.assumptions.as_mut().map_or((0, 0), |v| {
+            keep(&mut v.rows, |r| {
+                row(&r.visual_id, &r.name, E::Assumption(r.id))
+            })
+        }),
         Page::Problems => keep(&mut d.problems, |r| f.hit(&[&r.visual_id, &r.text])),
         _ => (0, 0),
     }
@@ -3761,7 +3814,9 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
             let n = pages::page_count(p, page, open.baselines.len(), lint);
             match page {
                 Page::Overview | Page::Scope | Page::Reports | Page::History | Page::Admin => None,
-                Page::Item | Page::Configuration | Page::Versions => Some(n).filter(|n| *n > 0),
+                Page::Item | Page::Configuration | Page::Assumptions | Page::Versions => {
+                    Some(n).filter(|n| *n > 0)
+                }
                 _ => Some(n),
             }
         })

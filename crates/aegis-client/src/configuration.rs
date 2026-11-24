@@ -7,8 +7,8 @@ use crate::relations::{self, RelationKey};
 use crate::view::Selection;
 use crate::workspace::Workspace;
 
-/// The seven element-level condition relation keys.
-const ELEMENT_CONDITION_KEYS: [RelationKey; 7] = [
+/// The eight element-level condition relation keys.
+const ELEMENT_CONDITION_KEYS: [RelationKey; 8] = [
     RelationKey::ASSET_CONDITIONS,
     RelationKey::COMPONENT_CONDITIONS,
     RelationKey::INTERFACE_CONDITIONS,
@@ -16,6 +16,7 @@ const ELEMENT_CONDITION_KEYS: [RelationKey; 7] = [
     RelationKey::TREE_CONDITIONS,
     RelationKey::GOAL_CONDITIONS,
     RelationKey::CLAIM_CONDITIONS,
+    RelationKey::ASSUMPTION_CONDITIONS,
 ];
 
 /// One condition row on the Configuration page.
@@ -32,7 +33,7 @@ pub struct ConfigurationRow {
     /// Whether the condition is currently present.
     pub present: bool,
     /// Number of elements (assets, components, interfaces, threats, trees,
-    /// goals, claims) that need this condition.
+    /// goals, claims, assumptions) that need this condition.
     pub needed_by_elements: usize,
     /// Number of attack-tree steps that need this condition.
     pub needed_by_steps: usize,

@@ -2407,6 +2407,9 @@ pub fn selection_visual_id(project: &Project, s: Selection) -> String {
         Selection::Condition(id) => project
             .condition_idx(&id)
             .and_then(|i| project.condition_visual_id(i)),
+        Selection::Assumption(id) => project
+            .assumption_idx(&id)
+            .and_then(|i| project.assumption_visual_id(i)),
     }
     .unwrap_or_default()
 }
@@ -2471,6 +2474,10 @@ fn named(project: &Project, s: Selection) -> &str {
             .condition_idx(&id)
             .and_then(|i| project.condition(i))
             .map(aegis_model::Condition::name),
+        Selection::Assumption(id) => project
+            .assumption_idx(&id)
+            .and_then(|i| project.assumption(i))
+            .map(aegis_model::Assumption::name),
     }
     .unwrap_or("?")
 }
@@ -2852,6 +2859,15 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
                 ),
                 s,
             )
+        }
+        L::AssumptionWithoutClaim { assumption } => {
+            let s = Selection::Assumption(assumption);
+            let c = m
+                .element_names()
+                .cybersecurity_claim
+                .singular
+                .to_lowercase();
+            (format!("No {c} uses assumption {}.", q(s)), s)
         }
         L::AssetUnbound { asset } => {
             let s = Selection::Asset(asset);
@@ -3287,6 +3303,7 @@ pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize)
         }
         Page::Scope => 0,
         Page::Configuration => p.conditions().count(),
+        Page::Assumptions => p.assumptions().count(),
         Page::Damage => p.damage_scenario_count(),
         Page::Assets => p.asset_count(),
         Page::Threats | Page::Risks => p.threat_scenario_count(),
@@ -3317,6 +3334,7 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Control(_) => Page::Controls,
         Selection::Goal(_) | Selection::Claim(_) | Selection::Party(_) => Page::Goals,
         Selection::Condition(_) => Page::Configuration,
+        Selection::Assumption(_) => Page::Assumptions,
     }
 }
 
@@ -3347,6 +3365,10 @@ pub fn select(ui: &mut UiState, s: Selection) {
         Selection::Claim(id) => ui.selected_claim = Some(id),
         // Parties have no editor view of their own; selection stays on Goals.
         Selection::Party(_) => {}
+        Selection::Assumption(id) => {
+            ui.selected_assumption = Some(id);
+            ui.page = Page::Assumptions;
+        }
         Selection::Condition(id) => ui.selected_condition = Some(id),
     }
 }
@@ -3463,6 +3485,14 @@ pub fn palette_elements(ws: &Workspace) -> Vec<PaletteElement> {
             name: tb.name().to_owned(),
             kind: names.trust_boundary.singular.to_string(),
             target: Selection::TrustBoundary(id),
+        });
+    }
+    for (idx, id, a) in p.assumptions() {
+        out.push(PaletteElement {
+            visual_id: p.assumption_visual_id(idx).unwrap_or_default(),
+            name: a.name().to_owned(),
+            kind: "Assumption".to_owned(),
+            target: Selection::Assumption(id),
         });
     }
     out

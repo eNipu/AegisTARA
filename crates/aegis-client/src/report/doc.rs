@@ -20,9 +20,10 @@ use crate::commands::TREATMENTS;
 use crate::i18n::{Catalog, Language};
 use crate::outline::to_outline;
 use crate::pages::{self, RiskRow, treatment_label};
+use crate::relations::{self, RelationKey};
 use crate::systems::Scope;
 use crate::time::format_ms_lang;
-use crate::view::tree_scene;
+use crate::view::{Selection, tree_scene};
 use crate::workspace::Workspace;
 
 use super::ReportContext;
@@ -234,6 +235,7 @@ pub(crate) enum Described {
     Controls,
     Goals,
     Claims,
+    Assumptions,
 }
 
 /// `(name, text)` of the elements of a section that have a description, in
@@ -281,8 +283,61 @@ pub(crate) fn section_descriptions(
         Described::Claims => p
             .cybersecurity_claims()
             .for_each(|(_, id, x)| add(x.name(), ElementRef::Claim(id))),
+        Described::Assumptions => p
+            .assumptions()
+            .for_each(|(_, id, x)| add(x.name(), ElementRef::Assumption(id))),
     }
     out
+}
+
+pub(crate) struct AssumptionReportRow {
+    pub(crate) visual_id: String,
+    pub(crate) name: String,
+    pub(crate) holds: String,
+    pub(crate) claims: String,
+    pub(crate) conditions: String,
+    pub(crate) excludes: String,
+}
+
+fn format_links(p: &Project, sels: Vec<Selection>) -> String {
+    sels.into_iter()
+        .filter_map(|sel| {
+            let vis = pages::selection_visual_id(p, sel);
+            let name = crate::table::selection_label(p, sel);
+            match (vis.trim(), name.trim()) {
+                ("", "") => None,
+                (v, "") => Some(v.to_owned()),
+                ("", n) => Some(n.to_owned()),
+                (v, n) => Some(format!("{v} · {n}")),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub(crate) fn assumption_report_rows(p: &Project, catalog: &Catalog) -> Vec<AssumptionReportRow> {
+    p.assumptions()
+        .map(|(idx, id, a)| {
+            let sel = Selection::Assumption(id);
+            AssumptionReportRow {
+                visual_id: p.assumption_visual_id(idx).unwrap_or_default(),
+                name: a.name().to_owned(),
+                holds: catalog.tr(if a.holds() { "yes" } else { "no" }),
+                claims: format_links(
+                    p,
+                    relations::reverse_related(p, RelationKey::CLAIM_ASSUMPTIONS, sel),
+                ),
+                conditions: format_links(
+                    p,
+                    relations::related(p, RelationKey::ASSUMPTION_CONDITIONS, sel),
+                ),
+                excludes: format_links(
+                    p,
+                    relations::related(p, RelationKey::ASSUMPTION_EXCLUDES, sel),
+                ),
+            }
+        })
+        .collect()
 }
 
 /// The description text of one element, if it has any. For a non-English
@@ -543,6 +598,20 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                     absent.join(", "),
                 ]);
             }
+        }
+        if project.assumptions().next().is_some() {
+            let total = project.assumptions().count();
+            let holding = project.assumptions().filter(|(_, _, a)| a.holds()).count();
+            cover.push(vec![
+                catalog.tr("report-assumptions"),
+                catalog.tr_with(
+                    "report-assumptions-value",
+                    &[
+                        ("holding", &holding.to_string()),
+                        ("total", &total.to_string()),
+                    ],
+                ),
+            ]);
         }
         b.push(table(&[catalog.tr("field"), catalog.tr("value")], cover));
         if !branding.approvers.is_empty() {
@@ -1253,30 +1322,30 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
     }
 
     // ---- configuration and assumptions ----
-    if project.conditions().next().is_some() {
+    let has_conditions = project.conditions().next().is_some();
+    let has_assumptions = project.assumptions().next().is_some();
+    if has_conditions || has_assumptions {
         b.push(Heading(2, catalog.tr("section-configuration")));
-        b.push(Heading(3, catalog.tr("conditions")));
-        b.push(table(
-            &[
-                catalog.tr("id"),
-                catalog.tr("condition"),
-                catalog.tr("condition-present"),
-            ],
-            project
-                .conditions()
-                .map(|(idx, _, c)| {
-                    vec![
-                        project.condition_visual_id(idx).unwrap_or_default(),
-                        c.name().to_owned(),
-                        if c.present() {
-                            catalog.tr("yes")
-                        } else {
-                            catalog.tr("no")
-                        },
-                    ]
-                })
-                .collect(),
-        ));
+        if has_conditions {
+            b.push(Heading(3, catalog.tr("conditions")));
+            b.push(table(
+                &[
+                    catalog.tr("id"),
+                    catalog.tr("condition"),
+                    catalog.tr("condition-present"),
+                ],
+                project
+                    .conditions()
+                    .map(|(idx, _, c)| {
+                        vec![
+                            project.condition_visual_id(idx).unwrap_or_default(),
+                            c.name().to_owned(),
+                            catalog.tr(if c.present() { "yes" } else { "no" }),
+                        ]
+                    })
+                    .collect(),
+            ));
+        }
         b.push(Heading(3, catalog.tr("report-excluded")));
         b.push(table(
             &[
@@ -1288,6 +1357,28 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 .map(|(item, reason)| vec![item, reason])
                 .collect(),
         ));
+        if has_assumptions {
+            b.push(Heading(3, catalog.tr("assumptions")));
+            let rows = assumption_report_rows(project, &catalog)
+                .into_iter()
+                .map(|r| vec![r.visual_id, r.name, r.holds, r.claims, r.excludes])
+                .collect();
+            b.push(table(
+                &[
+                    catalog.tr("id"),
+                    catalog.tr("assumption"),
+                    catalog.tr("assumption-holds"),
+                    catalog.tr("claims"),
+                    catalog.tr("relation-assumption-excludes"),
+                ],
+                rows,
+            ));
+            desc_list(
+                &mut b,
+                &section_descriptions(ws, Described::Assumptions, lang),
+                &catalog,
+            );
+        }
     }
 
     // ---- comparison with a baseline (RPT-02 filter) ----
@@ -1369,4 +1460,69 @@ pub fn report_doc_with_options(
 #[must_use]
 pub fn report_doc(ws: &Workspace, ctx: &ReportContext) -> ReportDoc {
     report_doc_with_options(ws, ctx, &ReportOptions::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aegis_model::{AssumptionId, Methodology, Op, Provenance};
+
+    #[test]
+    fn assumption_only_doc_renders_across_en_ja_and_pseudo() {
+        let mut ws = Workspace::empty(Arc::new(Methodology::iso21434_r155().expect("builtin")));
+        let p = Provenance::human("tester", 1);
+        let (a0, a1) = (AssumptionId::new_v7(), AssumptionId::new_v7());
+        let ops = vec![
+            Op::AddAssumption {
+                id: a0,
+                name: "No JTAG".into(),
+                holds: true,
+                provenance: p.clone(),
+            },
+            Op::AddAssumption {
+                id: a1,
+                name: "Sealed".into(),
+                holds: false,
+                provenance: p.clone(),
+            },
+            Op::SetDescription {
+                target: ElementRef::Assumption(a0),
+                text: "Fuses blown".into(),
+                provenance: p,
+            },
+        ];
+        ws.apply(ops, crate::workspace::Origin::Edit)
+            .expect("setup");
+        let ctx = ReportContext {
+            project: "Brake".into(),
+            user: "tester".into(),
+            now_ms: 1_792_956_600_000,
+            seq: 1,
+            unsaved: false,
+        };
+        for lang in [Language::En, Language::Ja, Language::Pseudo] {
+            let cat = Catalog::load(lang);
+            let blocks = build(&ws, &ctx, &ReportOptions::default(), lang);
+            let expected = cat.tr_with(
+                "report-assumptions-value",
+                &[("holding", "1"), ("total", "2")],
+            );
+            assert!(blocks.iter().any(|b| matches!(b, Block::Table { rows, .. } if rows.contains(&vec![cat.tr("report-assumptions"), expected.clone()]))));
+            assert!(
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, Block::Heading(3, t) if t == &cat.tr("assumptions")))
+            );
+            assert!(
+                !blocks
+                    .iter()
+                    .any(|b| matches!(b, Block::Heading(3, t) if t == &cat.tr("conditions")))
+            );
+            assert!(
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, Block::Paragraph(t, Style::Normal) if t == "Fuses blown"))
+            );
+        }
+    }
 }

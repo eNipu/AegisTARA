@@ -22,8 +22,8 @@ use std::cmp::Ordering;
 use std::fmt;
 
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
-    InterfaceId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    ElementId, GoalId, InterfaceId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::methodology::{FeasibilityLevel, RiskLevel};
 
@@ -568,6 +568,8 @@ pub struct ProjectDiff {
     pub(crate) cybersecurity_claims: EntityDiff<ClaimId>,
     pub(crate) parties: EntityDiff<PartyId>,
     pub(crate) conditions: EntityDiff<ConditionId>,
+    /// Added, removed, and modified assumption IDs in canonical order.
+    pub assumptions: EntityDiff<AssumptionId>,
     pub(crate) elements: EntityDiff<ElementId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
     pub(crate) notes_changed: bool,
@@ -777,6 +779,12 @@ impl ProjectDiff {
         &self.conditions
     }
 
+    /// Returns the added, removed, and modified [`AssumptionId`]s in canonical order.
+    #[must_use]
+    pub fn assumptions(&self) -> &EntityDiff<AssumptionId> {
+        &self.assumptions
+    }
+
     /// Returns the added, removed, and modified [`ElementId`]s of generic
     /// elements in canonical order. Element changes add no risk delta.
     ///
@@ -849,6 +857,7 @@ impl ProjectDiff {
             && self.cybersecurity_claims.is_empty()
             && self.parties.is_empty()
             && self.conditions.is_empty()
+            && self.assumptions.is_empty()
             && self.elements.is_empty()
     }
 }

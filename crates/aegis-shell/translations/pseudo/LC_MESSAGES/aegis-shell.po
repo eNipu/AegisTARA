@@ -1576,3 +1576,6 @@ msgstr "⟦Scópé␣␣⟧"
 
 msgid "Configuration"
 msgstr "⟦Cónfígúrátíón␣␣⟧"
+
+msgid "Assumptions"
+msgstr "⟦Âssûmptîôns␣⟧"

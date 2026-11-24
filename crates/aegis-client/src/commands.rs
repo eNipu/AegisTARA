@@ -12,13 +12,16 @@
 //! goals first, and so on. An asset that threats target is not removed:
 //! the user decides what happens to those threats.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId,
-    ElementKind, GateKind, GoalId, InterfaceId, ItemRef, NodeId, Op, Project, PropertySet,
-    Provenance, RiskTreatment, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
+    ElementId, ElementKind, GateKind, GoalId, InterfaceId, ItemRef, NodeId, Op, Project,
+    PropertySet, Provenance, RiskTreatment, StepRef, ThreatId, TreeId, TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, ResolvedNote, parse_outline_annotated, resolve_notes};
+use crate::view::Selection;
 
 /// The treatment decisions, in the order the view offers them.
 pub const TREATMENTS: [RiskTreatment; 4] = [
@@ -841,6 +844,15 @@ pub enum Edit {
         /// Statement.
         name: String,
     },
+    /// Adds a cybersecurity claim linked to an assumption (UI-08).
+    AddClaimFor {
+        /// New ID.
+        id: ClaimId,
+        /// Statement.
+        name: String,
+        /// The assumption it references.
+        assumption: AssumptionId,
+    },
     /// Renames a cybersecurity claim.
     RenameClaim {
         /// The claim.
@@ -852,6 +864,36 @@ pub enum Edit {
     RemoveClaim {
         /// The claim.
         claim: ClaimId,
+    },
+    /// Adds an assumption (`holds` sets initial state).
+    AddAssumption {
+        id: AssumptionId,
+        name: String,
+        holds: bool,
+    },
+    /// Renames an assumption.
+    RenameAssumption {
+        assumption: AssumptionId,
+        name: String,
+    },
+    /// Switches whether an assumption holds.
+    SetAssumptionHolds {
+        assumption: AssumptionId,
+        holds: bool,
+    },
+    /// Removes an assumption, unlinking claims and clearing exclusions first.
+    RemoveAssumption { assumption: AssumptionId },
+    /// Adds or removes an excluded tree or step on an assumption.
+    SetAssumptionExclude {
+        assumption: AssumptionId,
+        target: Selection,
+        excluded: bool,
+    },
+    /// Links or unlinks an assumption on a cybersecurity claim.
+    LinkClaimAssumption {
+        claim: ClaimId,
+        assumption: AssumptionId,
+        linked: bool,
     },
 
     // ---- duplication (UI-09.2, UI-09.4) ----
@@ -1116,7 +1158,8 @@ fn condition_needers(
             project
                 .cybersecurity_claims()
                 .map(|(_, id, _)| E::Claim(id)),
-        );
+        )
+        .chain(project.assumptions().map(|(_, id, _)| E::Assumption(id)));
     elements
         .map(|e| (e, project.condition_link_ids(e)))
         .filter(|(_, l)| !l.is_empty())
@@ -1184,6 +1227,10 @@ fn clear_descriptions_before_removal(
     use aegis_model::ElementRef as E;
     let mut out = Vec::with_capacity(ops.len());
     let mut removed_nodes = std::collections::HashSet::new();
+    let mut excl: BTreeMap<AssumptionId, (BTreeSet<TreeId>, BTreeSet<StepRef>)> = project
+        .assumptions()
+        .map(|(_, id, a)| (id, assumption_excludes(project, a)))
+        .collect();
     for op in ops {
         let target = match &op {
             Op::RemoveComponent { id } => Some(E::Component(*id)),
@@ -1197,6 +1244,7 @@ fn clear_descriptions_before_removal(
             Op::RemoveSecurityControl { id } => Some(E::Control(*id)),
             Op::RemoveCybersecurityGoal { id } => Some(E::Goal(*id)),
             Op::RemoveCybersecurityClaim { id } => Some(E::Claim(*id)),
+            Op::RemoveAssumption { id } => Some(E::Assumption(*id)),
             _ => None,
         };
         // Condition links block removal (the inverse cannot restore them), so
@@ -1207,6 +1255,15 @@ fn clear_descriptions_before_removal(
         match &op {
             Op::RemoveTreeNode { tree, id, .. } => {
                 removed_nodes.insert((*tree, *id));
+                let s = StepRef {
+                    tree: *tree,
+                    node: *id,
+                };
+                for (&aid, (trees, steps)) in &mut excl {
+                    if steps.remove(&s) {
+                        out.push(set_excludes_op(aid, trees, steps, provenance));
+                    }
+                }
                 out.extend(unneed_step_conditions_ops(
                     project,
                     *tree,
@@ -1215,6 +1272,13 @@ fn clear_descriptions_before_removal(
                 ));
             }
             Op::RemoveAttackTree { id } => {
+                for (&aid, (trees, steps)) in &mut excl {
+                    let prev_steps = steps.len();
+                    steps.retain(|s| s.tree != *id);
+                    if trees.remove(id) || steps.len() != prev_steps {
+                        out.push(set_excludes_op(aid, trees, steps, provenance));
+                    }
+                }
                 // Nodes taken out one by one earlier in this edit are done.
                 out.extend(
                     unneed_step_conditions_ops(project, *id, None, provenance)
@@ -1224,6 +1288,23 @@ fn clear_descriptions_before_removal(
                                 if removed_nodes.contains(&(*tree, *node)))
                         }),
                 );
+            }
+            Op::AddAssumption { id, .. } => {
+                excl.entry(*id).or_default();
+            }
+            Op::SetAssumptionExcludes {
+                id, trees, steps, ..
+            } => {
+                excl.insert(
+                    *id,
+                    (
+                        trees.iter().copied().collect(),
+                        steps.iter().copied().collect(),
+                    ),
+                );
+            }
+            Op::RemoveAssumption { id } => {
+                excl.remove(id);
             }
             _ => {}
         }
@@ -1254,6 +1335,75 @@ fn name(text: &str) -> Result<std::sync::Arc<str>, EditError> {
     } else {
         Ok(t.into())
     }
+}
+
+fn assumption_excludes(
+    project: &Project,
+    a: &aegis_model::Assumption,
+) -> (BTreeSet<TreeId>, BTreeSet<StepRef>) {
+    let trees = a
+        .excludes_trees()
+        .iter()
+        .filter_map(|&t| project.attack_tree_id(t))
+        .collect();
+    (trees, a.excludes_steps().iter().copied().collect())
+}
+
+fn set_excludes_op(
+    id: AssumptionId,
+    trees: &BTreeSet<TreeId>,
+    steps: &BTreeSet<StepRef>,
+    p: &Provenance,
+) -> Op {
+    Op::SetAssumptionExcludes {
+        id,
+        trees: trees.iter().copied().collect(),
+        steps: steps.iter().copied().collect(),
+        provenance: p.clone(),
+    }
+}
+
+fn step_ref(project: &Project, tree: TreeId, node: NodeId) -> Result<StepRef, EditError> {
+    let idx = project.attack_tree_idx(&tree).ok_or(EditError::Missing)?;
+    let t = project.attack_tree(idx).ok_or(EditError::Missing)?;
+    let n_idx = t.idx_of(&node).ok_or(EditError::Missing)?;
+    if t.get(n_idx).is_some_and(|n| n.gate_kind().is_some()) {
+        return Err(EditError::UnknownChoice);
+    }
+    Ok(StepRef { tree, node })
+}
+
+fn set_member<T: Ord>(set: &mut BTreeSet<T>, value: T, present: bool) {
+    if present {
+        set.insert(value);
+    } else {
+        set.remove(&value);
+    }
+}
+
+fn set_assumption_exclude_ops(
+    project: &Project,
+    assumption: AssumptionId,
+    target: Selection,
+    excluded: bool,
+    p: Provenance,
+) -> Result<Vec<Op>, EditError> {
+    let idx = project
+        .assumption_idx(&assumption)
+        .ok_or(EditError::Missing)?;
+    let a = project.assumption(idx).ok_or(EditError::Missing)?;
+    let (mut trees, mut steps) = assumption_excludes(project, a);
+    match target {
+        Selection::Tree(tid) => {
+            project.attack_tree_idx(&tid).ok_or(EditError::Missing)?;
+            set_member(&mut trees, tid, excluded);
+        }
+        Selection::TreeNode(tree, node) => {
+            set_member(&mut steps, step_ref(project, tree, node)?, excluded);
+        }
+        _ => return Err(EditError::UnknownChoice),
+    }
+    Ok(vec![set_excludes_op(assumption, &trees, &steps, &p)])
 }
 
 /// The name a duplicated element gets (UI-09.2).
@@ -2853,6 +3003,27 @@ impl Edit {
                 name: name(n)?,
                 provenance: p,
             }],
+            Edit::AddClaimFor {
+                id,
+                name: n,
+                assumption,
+            } => {
+                project
+                    .assumption_idx(assumption)
+                    .ok_or(EditError::Missing)?;
+                vec![
+                    Op::AddCybersecurityClaim {
+                        id: *id,
+                        name: name(n)?,
+                        provenance: p.clone(),
+                    },
+                    Op::LinkClaimAssumption {
+                        claim: *id,
+                        assumption: *assumption,
+                        provenance: p,
+                    },
+                ]
+            }
             Edit::RenameClaim { claim, name: n } => vec![Op::RenameCybersecurityClaim {
                 id: *claim,
                 name: name(n)?,
@@ -2885,8 +3056,87 @@ impl Edit {
                             provenance: p.clone(),
                         }),
                 );
+                ops.extend(
+                    c.assumptions()
+                        .iter()
+                        .filter_map(|&i| project.assumption_id(i))
+                        .map(|assumption| Op::UnlinkClaimAssumption {
+                            claim: *claim,
+                            assumption,
+                            provenance: p.clone(),
+                        }),
+                );
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
+            }
+            Edit::AddAssumption { id, name: n, holds } => vec![Op::AddAssumption {
+                id: *id,
+                name: name(n)?,
+                holds: *holds,
+                provenance: p,
+            }],
+            Edit::RenameAssumption {
+                assumption,
+                name: n,
+            } => vec![Op::RenameAssumption {
+                id: *assumption,
+                name: name(n)?,
+                provenance: p,
+            }],
+            Edit::SetAssumptionHolds { assumption, holds } => vec![Op::SetAssumptionHolds {
+                id: *assumption,
+                holds: *holds,
+                provenance: p,
+            }],
+            Edit::RemoveAssumption { assumption } => {
+                let a_idx = project
+                    .assumption_idx(assumption)
+                    .ok_or(EditError::Missing)?;
+                let a = project.assumption(a_idx).ok_or(EditError::Missing)?;
+                let mut ops: Vec<Op> = project
+                    .cybersecurity_claims()
+                    .filter(|(_, _, c)| c.assumptions().contains(&a_idx))
+                    .map(|(_, claim, _)| Op::UnlinkClaimAssumption {
+                        claim,
+                        assumption: *assumption,
+                        provenance: p.clone(),
+                    })
+                    .collect();
+                if !a.excludes_trees().is_empty() || !a.excludes_steps().is_empty() {
+                    ops.push(Op::SetAssumptionExcludes {
+                        id: *assumption,
+                        trees: Vec::new(),
+                        steps: Vec::new(),
+                        provenance: p.clone(),
+                    });
+                }
+                ops.push(Op::RemoveAssumption { id: *assumption });
+                ops
+            }
+            Edit::SetAssumptionExclude {
+                assumption,
+                target,
+                excluded,
+            } => set_assumption_exclude_ops(project, *assumption, *target, *excluded, p)?,
+            Edit::LinkClaimAssumption {
+                claim,
+                assumption,
+                linked,
+            } => {
+                let (claim, assumption, provenance) = (*claim, *assumption, p);
+                vec![if *linked {
+                    Op::LinkClaimAssumption {
+                        claim,
+                        assumption,
+                        provenance,
+                    }
+                } else {
+                    Op::UnlinkClaimAssumption {
+                        claim,
+                        assumption,
+                        provenance,
+                    }
+                }]
             }
             Edit::DuplicateComponent { id, source, suffix } => {
                 let c = project
@@ -3055,6 +3305,11 @@ impl Edit {
     /// `to_ops` reports that error.
     fn unchanged(&self, project: &Project) -> bool {
         let m = project.methodology();
+        let assumption_of = |id: &AssumptionId| {
+            project
+                .assumption_idx(id)
+                .and_then(|i| project.assumption(i))
+        };
         let threat = |id: &ThreatId| {
             project
                 .threat_scenario_idx(id)
@@ -3157,6 +3412,34 @@ impl Edit {
                 .condition_idx(condition)
                 .and_then(|i| project.condition(i))
                 .is_some_and(|c| c.present() == *present),
+            Edit::RenameAssumption { assumption, name } => {
+                assumption_of(assumption).is_some_and(|a| a.name() == name.trim())
+            }
+            Edit::SetAssumptionHolds { assumption, holds } => {
+                assumption_of(assumption).is_some_and(|a| a.holds() == *holds)
+            }
+            Edit::SetAssumptionExclude {
+                assumption,
+                target,
+                excluded,
+            } => assumption_of(assumption).is_some_and(|a| match *target {
+                Selection::Tree(tid) => project
+                    .attack_tree_idx(&tid)
+                    .is_some_and(|i| a.excludes_trees().contains(&i) == *excluded),
+                Selection::TreeNode(tree, node) => step_ref(project, tree, node)
+                    .is_ok_and(|sr| a.excludes_steps().contains(&sr) == *excluded),
+                _ => false,
+            }),
+            Edit::LinkClaimAssumption {
+                claim,
+                assumption,
+                linked,
+            } => project
+                .cybersecurity_claim_idx(claim)
+                .and_then(|i| project.cybersecurity_claim(i))
+                .zip(project.assumption_idx(assumption))
+                .is_some_and(|(c, a_idx)| c.assumptions().contains(&a_idx) == *linked),
+            Edit::RemoveAssumption { assumption } => project.assumption_idx(assumption).is_none(),
             _ => false,
         }
     }
@@ -3238,7 +3521,8 @@ impl Edit {
             Edit::AddControl { id, .. } => Some(Selection::Control(*id)),
             Edit::AddGoal { id, .. } | Edit::AddGoalFor { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddCondition { id, .. } => Some(Selection::Condition(*id)),
-            Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),
+            Edit::AddAssumption { id, .. } => Some(Selection::Assumption(*id)),
+            Edit::AddClaim { id, .. } | Edit::AddClaimFor { id, .. } => Some(Selection::Claim(*id)),
             Edit::LinkGoalParty { goal, .. } => Some(Selection::Goal(*goal)),
             Edit::SetStepConditionLink { tree, node, .. } => {
                 Some(Selection::TreeNode(*tree, *node))
@@ -3283,6 +3567,8 @@ pub enum Command {
     /// Start a draft of a new element: the page opens, the inspector shows the
     /// draft form (UI-08). Nothing is sent to the server.
     BeginDraft(crate::view::DraftKind),
+    /// Start a claim draft from an assumption, pre-linked on commit (UI-08).
+    CreateClaimFromAssumption(aegis_model::AssumptionId),
     /// Create the element of the draft with this name as one edit. An empty
     /// name discards the draft and sends nothing. With `next`, a new draft
     /// starts at once. If the edit is refused, the draft stays.

@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use aegis_model::{AttackTree, GateKind, Node, NodeId, Op, Project, Provenance, TreeId};
+use aegis_model::{AttackTree, GateKind, Node, NodeId, Op, Project, Provenance, StepRef, TreeId};
 
 use crate::commands::EditError;
 
@@ -599,7 +599,52 @@ fn replace_shape_ops(
             ops.extend(restore_step_ops(project, tree, a, p));
         }
     }
+    // 7. Moved/renamed steps keep their assumption exclusions.
+    let is_step = |s: &Shape, n| s.info.get(&n).is_some_and(|(_, g)| g.is_none());
+    sync_excludes(project, tree, new, p, &mut ops, None, |a| {
+        a.excludes_steps().iter().any(|s| {
+            s.tree == tree
+                && added.contains(&s.node)
+                && is_step(old, s.node)
+                && is_step(new, s.node)
+        })
+    });
     Ok(ops)
+}
+
+fn sync_excludes(
+    project: &Project,
+    tree: TreeId,
+    new: &Shape,
+    p: &Provenance,
+    ops: &mut Vec<Op>,
+    remap: Option<(StepRef, StepRef)>,
+    keep_if: impl Fn(&aegis_model::Assumption) -> bool,
+) {
+    let keep = |s: StepRef| match remap {
+        Some((from, to)) if s == from => Some(to),
+        _ if s.tree != tree || new.info.get(&s.node).is_some_and(|(_, g)| g.is_none()) => Some(s),
+        _ => None,
+    };
+    for (_, id, a) in project.assumptions().filter(|(_, _, a)| keep_if(a)) {
+        let trees = a
+            .excludes_trees()
+            .iter()
+            .filter_map(|&t| project.attack_tree_id(t))
+            .collect();
+        let steps = a
+            .excludes_steps()
+            .iter()
+            .copied()
+            .filter_map(keep)
+            .collect();
+        ops.push(Op::SetAssumptionExcludes {
+            id,
+            trees,
+            steps,
+            provenance: p.clone(),
+        });
+    }
 }
 
 /// Converts a leaf step `step_node` into a gate of kind `gate_kind` (preserving
@@ -650,6 +695,25 @@ pub(crate) fn branch_step_ops(
     let mut ops = replace_shape_ops(project, tree, &old, &new, p)?;
     if transfer_ratings && child_kind.is_none() {
         ops.extend(transfer_step_ops(project, tree, step_node, child_id, p));
+        let (old_sr, new_sr) = (
+            StepRef {
+                tree,
+                node: step_node,
+            },
+            StepRef {
+                tree,
+                node: child_id,
+            },
+        );
+        sync_excludes(
+            project,
+            tree,
+            &new,
+            p,
+            &mut ops,
+            Some((old_sr, new_sr)),
+            |a| a.excludes_steps().contains(&old_sr),
+        );
     }
     Ok(ops)
 }

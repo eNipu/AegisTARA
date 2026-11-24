@@ -56,9 +56,9 @@ use crate::control::{
 };
 use crate::error::{PackError, StoreError};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
-    InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx, TrustBoundaryId,
-    VisualPrefix,
+    AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    ElementId, GoalId, InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx,
+    TrustBoundaryId, VisualPrefix,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -332,6 +332,9 @@ caps! {
     PartiesCap = crate::party::MAX_PARTIES, Limit::PARTIES;
     ConditionsCap = crate::applicability::MAX_CONDITIONS, Limit::CONDITIONS;
     ConditionLinksCap = crate::applicability::MAX_CONDITIONS_PER_ELEMENT, Limit::CONDITION_LINKS;
+    AssumptionsCap = crate::applicability::MAX_ASSUMPTIONS, Limit::ASSUMPTIONS;
+    AssumptionExcludesCap = crate::applicability::MAX_ASSUMPTION_EXCLUDES, Limit::ASSUMPTION_EXCLUDES;
+    ClaimAssumptionsCap = crate::applicability::MAX_CLAIM_ASSUMPTIONS, Limit::CLAIM_ASSUMPTIONS;
     BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
     ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
     ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
@@ -1437,6 +1440,7 @@ visual_kinds! {
     ClaimVisual = VisualPrefix::Claim;
     PartyVisual = VisualPrefix::Party;
     ConditionVisual = VisualPrefix::Condition;
+    AssumptionVisual = VisualPrefix::Assumption;
     ComponentVisual = VisualPrefix::Component;
     InterfaceVisual = VisualPrefix::Interface;
     DataFlowVisual = VisualPrefix::DataFlow;
@@ -1580,6 +1584,26 @@ pub(super) struct SnapshotWire {
     pub(super) condition_links: Vec<ConditionLinkWire>,
     #[serde(default)]
     pub(super) step_conditions: Vec<StepConditionWire>,
+    #[serde(default)]
+    pub(super) assumptions: BoundedVec<AssumptionWire, AssumptionsCap>,
+}
+
+/// A snapshot assumption (APL-04). `holds` is always written explicitly.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AssumptionWire {
+    pub(super) id: WireId<AssumptionId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<AssumptionVisual>>,
+    pub(super) name: Name,
+    #[serde(default)]
+    pub(super) holds: bool,
+    #[serde(default)]
+    pub(super) excludes_trees: BoundedVec<WireId<TreeId>, AssumptionExcludesCap>,
+    #[serde(default)]
+    pub(super) excludes_steps: BoundedVec<StepRefWire, AssumptionExcludesCap>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
 }
 
 /// A snapshot condition (APL-01). `present` is written only when false.
@@ -1671,6 +1695,14 @@ pub(super) struct ReviewMarkWire {
     pub(super) node: WireId<NodeId>,
 }
 
+/// An attack-tree step excluded by an assumption.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StepRefWire {
+    pub(super) tree: WireId<TreeId>,
+    pub(super) node: WireId<NodeId>,
+}
+
 /// What a description belongs to, as written: `{"kind":"asset","id":...}`
 /// or `{"kind":"project"}`.
 #[derive(serde::Deserialize)]
@@ -1684,6 +1716,7 @@ pub(super) enum TargetWire {
     Control { id: WireId<ControlId> },
     Goal { id: WireId<GoalId> },
     Claim { id: WireId<ClaimId> },
+    Assumption { id: WireId<AssumptionId> },
     Component { id: WireId<ComponentId> },
     Interface { id: WireId<InterfaceId> },
     DataFlow { id: WireId<DataFlowId> },
@@ -1704,6 +1737,7 @@ impl TargetWire {
             Self::Control { id } => E::Control(id.0),
             Self::Goal { id } => E::Goal(id.0),
             Self::Claim { id } => E::Claim(id.0),
+            Self::Assumption { id } => E::Assumption(id.0),
             Self::Component { id } => E::Component(id.0),
             Self::Interface { id } => E::Interface(id.0),
             Self::DataFlow { id } => E::DataFlow(id.0),
@@ -1726,6 +1760,7 @@ pub(super) enum TargetView {
     Control { id: Text<ControlId> },
     Goal { id: Text<GoalId> },
     Claim { id: Text<ClaimId> },
+    Assumption { id: Text<AssumptionId> },
     Component { id: Text<ComponentId> },
     Interface { id: Text<InterfaceId> },
     DataFlow { id: Text<DataFlowId> },
@@ -1746,6 +1781,7 @@ impl From<crate::description::ElementRef> for TargetView {
             E::Control(id) => Self::Control { id: Text(id) },
             E::Goal(id) => Self::Goal { id: Text(id) },
             E::Claim(id) => Self::Claim { id: Text(id) },
+            E::Assumption(id) => Self::Assumption { id: Text(id) },
             E::Component(id) => Self::Component { id: Text(id) },
             E::Interface(id) => Self::Interface { id: Text(id) },
             E::DataFlow(id) => Self::DataFlow { id: Text(id) },
@@ -2053,6 +2089,8 @@ pub(super) struct ClaimWire {
     pub(super) name: Name,
     #[serde(default)]
     pub(super) responsible: BoundedVec<WireId<PartyId>, ResponsibleCap>,
+    #[serde(default)]
+    pub(super) assumptions: BoundedVec<WireId<AssumptionId>, ClaimAssumptionsCap>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -2510,6 +2548,18 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    LinkClaimAssumption {
+        claim: WireId<ClaimId>,
+        assumption: WireId<AssumptionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkClaimAssumption {
+        claim: WireId<ClaimId>,
+        assumption: WireId<AssumptionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     RemoveCybersecurityClaim {
         id: WireId<ClaimId>,
     },
@@ -2557,6 +2607,35 @@ pub(super) enum OpWire {
     },
     RemoveCondition {
         id: WireId<ConditionId>,
+    },
+    AddAssumption {
+        id: WireId<AssumptionId>,
+        name: Name,
+        holds: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameAssumption {
+        id: WireId<AssumptionId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetAssumptionHolds {
+        id: WireId<AssumptionId>,
+        holds: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetAssumptionExcludes {
+        id: WireId<AssumptionId>,
+        trees: BoundedVec<WireId<TreeId>, AssumptionExcludesCap>,
+        steps: BoundedVec<StepRefWire, AssumptionExcludesCap>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveAssumption {
+        id: WireId<AssumptionId>,
     },
     NeedCondition {
         element: TargetWire,

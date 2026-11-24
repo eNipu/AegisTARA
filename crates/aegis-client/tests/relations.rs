@@ -14,9 +14,9 @@ use aegis_client::relations::{
 };
 use aegis_client::view::Selection;
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId, PartyIdx,
-    PartyKind, Project, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
+    DataFlowId, GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId,
+    PartyIdx, PartyKind, Project, Provenance, StepRef, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// `Selection` has no `Ord`, and the orphan rule forbids adding one here. This
@@ -42,6 +42,7 @@ impl Sel {
             Selection::Claim(_) => 11,
             Selection::Party(_) => 12,
             Selection::Condition(_) => 13,
+            Selection::Assumption(_) => 14,
         };
         let s = self.0;
         (rank, format!("{s:?}"))
@@ -327,6 +328,36 @@ fn project() -> Project {
             provenance: provenance.clone(),
         });
     }
+    let (as00, as01) = (AssumptionId::new_v7(), AssumptionId::new_v7());
+    for (id, name) in [(as00, "AS00"), (as01, "AS01")] {
+        ops.push(Op::AddAssumption {
+            id,
+            name: name.into(),
+            holds: true,
+            provenance: provenance.clone(),
+        });
+        ops.push(Op::LinkClaimAssumption {
+            claim,
+            assumption: id,
+            provenance: provenance.clone(),
+        });
+    }
+    for condition in conditions {
+        ops.push(Op::NeedCondition {
+            element: E::Assumption(as00),
+            condition,
+            provenance: provenance.clone(),
+        });
+    }
+    ops.push(Op::SetAssumptionExcludes {
+        id: as00,
+        trees: vec![tree_id],
+        steps: vec![StepRef {
+            tree: tree_id,
+            node: step,
+        }],
+        provenance,
+    });
 
     let mut project = Project::new(m);
     for op in ops {
@@ -351,8 +382,9 @@ fn sources_of(project: &Project, kind: ElementKind) -> Vec<Selection> {
         ElementKind::TrustBoundary => project.trust_boundaries().map(|(_, id, _)| Selection::TrustBoundary(id)).collect(),
         ElementKind::Step => project
             .attack_trees()
-            .flat_map(|(_, id, tree)| tree.iter().map(move |(_, node, _)| Selection::TreeNode(id, node)))
+            .flat_map(|(_, id, tree)| tree.iter().filter(|(_, _, n)| n.gate_kind().is_none()).map(move |(_, node, _)| Selection::TreeNode(id, node)))
             .collect(),
+        ElementKind::Assumption => project.assumptions().map(|(_, id, _)| Selection::Assumption(id)).collect(),
         _ => Vec::new(),
     }
 }
@@ -432,6 +464,24 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
                 out.insert((Sel(Selection::Claim(id)), Sel(Selection::Party(party))));
             }
         }
+        for &idx in claim.assumptions() {
+            if let Some(aid) = project.assumption_id(idx) {
+                out.insert((Sel(Selection::Claim(id)), Sel(Selection::Assumption(aid))));
+            }
+        }
+    }
+    for (_, id, a) in project.assumptions() {
+        for &t in a.excludes_trees() {
+            if let Some(tid) = project.attack_tree_id(t) {
+                out.insert((Sel(Selection::Assumption(id)), Sel(Selection::Tree(tid))));
+            }
+        }
+        for s in a.excludes_steps() {
+            out.insert((
+                Sel(Selection::Assumption(id)),
+                Sel(Selection::TreeNode(s.tree, s.node)),
+            ));
+        }
     }
 
     for (_, id, flow) in project.data_flows() {
@@ -488,6 +538,12 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
                 .cybersecurity_claims()
                 .map(|(_, id, _)| (Selection::Claim(id), aegis_model::ElementRef::Claim(id))),
         )
+        .chain(project.assumptions().map(|(_, id, _)| {
+            (
+                Selection::Assumption(id),
+                aegis_model::ElementRef::Assumption(id),
+            )
+        }))
         .collect();
     for (sel, element) in holders {
         for &i in project.condition_link_ids(element) {
@@ -640,6 +696,9 @@ fn keys_and_labels_are_valid() {
         (RelationKey::GOAL_CONDITIONS, "goal-conditions"),
         (RelationKey::CLAIM_CONDITIONS, "claim-conditions"),
         (RelationKey::STEP_CONDITIONS, "step-conditions"),
+        (RelationKey::CLAIM_ASSUMPTIONS, "claim-assumptions"),
+        (RelationKey::ASSUMPTION_CONDITIONS, "assumption-conditions"),
+        (RelationKey::ASSUMPTION_EXCLUDES, "assumption-excludes"),
     ];
     let keys: HashSet<RelationKey> = RELATIONS.iter().map(|row| row.key).collect();
     assert_eq!(keys.len(), RELATIONS.len(), "a relation key repeats");
@@ -708,6 +767,14 @@ fn new_keys_resolve_in_every_language() {
         "party-other",
         "condition",
         "condition-present",
+        "assumption",
+        "assumptions",
+        "assumption-holds",
+        "relation-claim-assumptions",
+        "relation-assumption-conditions",
+        "relation-assumption-excludes",
+        "inspector-rev-claim-assumptions",
+        "inspector-rev-assumption-excludes",
     ];
     for language in [Language::En, Language::Ja, Language::Pseudo] {
         let catalog = Catalog::load(language);
@@ -741,4 +808,19 @@ fn item_targets_offer_interfaces() {
         );
         assert!(offered.iter().any(|s| matches!(s, Selection::Component(_))));
     }
+}
+
+#[test]
+fn assumption_excludes_candidates_omit_gates() {
+    let project = project();
+    let offered = aegis_client::relations::candidates(&project, RelationKey::ASSUMPTION_EXCLUDES);
+    let (_, tid, tree) = project.attack_trees().next().expect("tree");
+    let root_id = tree.id_of(tree.root()).expect("root");
+    assert!(offered.contains(&Selection::Tree(tid)));
+    assert!(!offered.contains(&Selection::TreeNode(tid, root_id)));
+    assert!(
+        offered
+            .iter()
+            .any(|s| matches!(s, Selection::TreeNode(_, _)))
+    );
 }

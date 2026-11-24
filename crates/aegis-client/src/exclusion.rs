@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use aegis_model::{
-    ConditionId, Methodology, ModelError, NodeId, Op, Project, Reason, RiskLevel, ThreatId, TreeId,
+    AssumptionId, ConditionId, Methodology, ModelError, NodeId, Op, Project, Reason, RiskLevel,
+    ThreatId, TreeId,
 };
 
 use crate::inspector::reason_target;
@@ -55,7 +56,8 @@ pub(crate) fn threat_risk_not_applicable(ws: &Workspace, threat: ThreatId, resid
 
 /// Pairs `(item, reasons_text)` for every excluded element and every excluded
 /// attack-tree leaf step in `project`.
-pub(crate) fn excluded_entries(project: &Project) -> Vec<(String, String)> {
+#[must_use]
+pub fn excluded_entries(project: &Project) -> Vec<(String, String)> {
     let app = project.applicability();
     let mut out = Vec::new();
     for (eref, reasons) in app.excluded_elements() {
@@ -96,6 +98,11 @@ pub fn reasons_text(project: &Project, reasons: &[Reason]) -> String {
                     format!("Needs {who} (off)")
                 }
             }
+            Reason::AssumptionHolds(aid) => match named_target(project, Selection::Assumption(aid))
+            {
+                who if who.is_empty() => "An assumption holds".to_owned(),
+                who => format!("Assumption {who} holds"),
+            },
             Reason::OwnerExcluded(_) => {
                 let who = reason_target(reason)
                     .map(|sel| named_target(project, sel))
@@ -134,10 +141,16 @@ pub enum RiskState {
     NotApplicable,
 }
 
-/// Pre-edit snapshot for a condition switch, used to build the post-edit undo toast.
+#[derive(Clone, Copy, Debug)]
+enum SwitchTarget {
+    Condition(ConditionId),
+    Assumption(AssumptionId),
+}
+
+/// Pre-edit snapshot for a condition or assumption switch, used to build the post-edit undo toast.
 #[derive(Clone, Debug)]
 pub struct ConditionSnapshot {
-    condition: ConditionId,
+    target: SwitchTarget,
     excluded_steps: BTreeSet<(TreeId, NodeId)>,
     risks: Vec<(ThreatId, RiskState)>,
 }
@@ -175,13 +188,37 @@ fn risk_label(m: &Methodology, state: RiskState) -> &str {
     }
 }
 
+fn switch_lead(p: &Project, target: SwitchTarget) -> String {
+    match target {
+        SwitchTarget::Condition(id) => match p.condition_idx(&id).and_then(|i| p.condition(i)) {
+            Some(c) => {
+                let s = if c.present() { "on" } else { "off" };
+                let who = named_target(p, Selection::Condition(id));
+                format!("Condition '{who}' switched {s}")
+            }
+            None => "Condition switched".to_owned(),
+        },
+        SwitchTarget::Assumption(id) => match p.assumption_idx(&id).and_then(|i| p.assumption(i)) {
+            Some(a) => {
+                let who = named_target(p, Selection::Assumption(id));
+                if a.holds() {
+                    format!("Assumption '{who}' now holds")
+                } else {
+                    format!("Assumption '{who}' no longer holds")
+                }
+            }
+            None => "Assumption switched".to_owned(),
+        },
+    }
+}
+
 impl ConditionSnapshot {
-    /// Captures excluded steps and threat risks before applying `ops`, if `ops`
-    /// contains a condition switch (`Op::SetConditionPresent`).
+    /// Captures excluded steps and threat risks before a condition or assumption switch.
     #[must_use]
     pub fn capture(ws: &Workspace, ops: &[Op]) -> Option<Self> {
-        let condition = ops.iter().find_map(|op| match op {
-            Op::SetConditionPresent { id, .. } => Some(*id),
+        let target = ops.iter().find_map(|op| match op {
+            Op::SetConditionPresent { id, .. } => Some(SwitchTarget::Condition(*id)),
+            Op::SetAssumptionHolds { id, .. } => Some(SwitchTarget::Assumption(*id)),
             _ => None,
         })?;
         let project = ws.project();
@@ -191,7 +228,7 @@ impl ConditionSnapshot {
             .map(|(_, tid, _)| (tid, risk_state(ws, tid)))
             .collect();
         Some(Self {
-            condition,
+            target,
             excluded_steps,
             risks,
         })
@@ -203,17 +240,7 @@ impl ConditionSnapshot {
     pub fn toast(&self, ws: &Workspace) -> String {
         let project = ws.project();
         let m = project.methodology();
-        let lead = match project
-            .condition_idx(&self.condition)
-            .and_then(|i| project.condition(i))
-        {
-            Some(cond) => {
-                let state = if cond.present() { "on" } else { "off" };
-                let who = named_target(project, Selection::Condition(self.condition));
-                format!("Condition '{who}' switched {state}")
-            }
-            None => "Condition switched".to_owned(),
-        };
+        let lead = switch_lead(project, self.target);
 
         let after_steps = excluded_leaf_steps(project);
         let excluded = after_steps.difference(&self.excluded_steps).count();

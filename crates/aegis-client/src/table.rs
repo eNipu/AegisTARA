@@ -154,6 +154,7 @@ pub fn selection_label(p: &Project, sel: Selection) -> String {
         S::Claim(id) => elem_name!(p, id, cybersecurity_claim_idx, cybersecurity_claim),
         S::Party(id) => elem_name!(p, id, party_idx, party),
         S::Condition(id) => elem_name!(p, id, condition_idx, condition),
+        S::Assumption(id) => elem_name!(p, id, assumption_idx, assumption),
         S::Tree(id) => p
             .attack_tree_idx(&id)
             .and_then(|i| p.attack_tree(i))
@@ -180,6 +181,7 @@ pub(crate) fn selection_element_ref(sel: Selection) -> Option<ElementRef> {
         S::Control(id) => E::Control(id),
         S::Goal(id) => E::Goal(id),
         S::Claim(id) => E::Claim(id),
+        S::Assumption(id) => E::Assumption(id),
         S::Component(id) => E::Component(id),
         S::Interface(id) => E::Interface(id),
         S::DataFlow(id) => E::DataFlow(id),
@@ -231,7 +233,7 @@ pub(crate) fn selection_system_set(
         S::Control(id) => p.security_control_idx(&id).map(|i| u.control(i)),
         S::Goal(id) => p.cybersecurity_goal_idx(&id).map(|i| u.goal(i)),
         S::Claim(id) => p.cybersecurity_claim_idx(&id).map(|i| u.claim(i)),
-        S::Party(_) | S::Condition(_) => None,
+        S::Party(_) | S::Condition(_) | S::Assumption(_) => None,
     }
 }
 
@@ -423,6 +425,7 @@ pub fn table_rows_for_owner(
                 "name" => text(&r.name),
                 "responsible" => text(r.responsible.join(", ")),
                 "threats" => count(r.threats),
+                "assumptions" => text(String::new()),
                 "conditions" => text(String::new()),
                 _ => None,
             },

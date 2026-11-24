@@ -173,7 +173,7 @@ fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
         Selection::Control(_) => &names.security_control,
         Selection::Goal(_) => &names.cybersecurity_goal,
         Selection::Claim(_) => &names.cybersecurity_claim,
-        Selection::Party(_) | Selection::Condition(_) => return None,
+        Selection::Party(_) | Selection::Condition(_) | Selection::Assumption(_) => return None,
     };
     Some(n.singular.to_string())
 }

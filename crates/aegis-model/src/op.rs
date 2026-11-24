@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
+use crate::applicability::StepRef;
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
 use crate::description::ElementRef;
 use crate::element::{AttrValue, ElementKind, LinkTarget};
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
-    InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -731,6 +732,24 @@ pub enum Op {
         /// Provenance of removing the party from the responsible list.
         provenance: Provenance,
     },
+    /// Links an assumption to a cybersecurity claim (at most `MAX_CLAIM_ASSUMPTIONS`).
+    LinkClaimAssumption {
+        /// Existing cybersecurity claim.
+        claim: ClaimId,
+        /// Existing assumption, not yet linked on `claim`.
+        assumption: AssumptionId,
+        /// Provenance of linking the assumption.
+        provenance: Provenance,
+    },
+    /// Unlinks an assumption from a cybersecurity claim.
+    UnlinkClaimAssumption {
+        /// Existing cybersecurity claim.
+        claim: ClaimId,
+        /// An assumption linked on `claim`.
+        assumption: AssumptionId,
+        /// Provenance of unlinking the assumption.
+        provenance: Provenance,
+    },
     /// Removes a cybersecurity claim that no threat scenario references.
     RemoveCybersecurityClaim {
         /// Existing cybersecurity claim.
@@ -805,6 +824,51 @@ pub enum Op {
     RemoveCondition {
         /// Existing condition.
         id: ConditionId,
+    },
+    /// Adds an assumption to the project's assumption list.
+    AddAssumption {
+        /// Unused assumption ID.
+        id: AssumptionId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Whether the assumption currently holds.
+        holds: bool,
+        /// Provenance of the assumption creation.
+        provenance: Provenance,
+    },
+    /// Renames an assumption.
+    RenameAssumption {
+        /// Existing assumption.
+        id: AssumptionId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Sets whether an assumption holds.
+    SetAssumptionHolds {
+        /// Existing assumption.
+        id: AssumptionId,
+        /// Whether the assumption holds.
+        holds: bool,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Replaces an assumption's excluded attack trees and steps, sorted and deduplicated.
+    SetAssumptionExcludes {
+        /// Existing assumption.
+        id: AssumptionId,
+        /// Attack trees excluded while the assumption holds.
+        trees: Vec<TreeId>,
+        /// Attack-tree steps excluded while the assumption holds.
+        steps: Vec<StepRef>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Removes an assumption. The inverse restores all fields and provenance.
+    RemoveAssumption {
+        /// Existing assumption.
+        id: AssumptionId,
     },
     /// Records that an element needs a condition, capped at
     /// `MAX_CONDITIONS_PER_ELEMENT` and stored sorted by public ID.
@@ -1238,12 +1302,18 @@ impl Op {
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::LinkClaimParty { provenance, .. }
             | Self::UnlinkClaimParty { provenance, .. }
+            | Self::LinkClaimAssumption { provenance, .. }
+            | Self::UnlinkClaimAssumption { provenance, .. }
             | Self::AddParty { provenance, .. }
             | Self::RenameParty { provenance, .. }
             | Self::SetPartyKind { provenance, .. }
             | Self::AddCondition { provenance, .. }
             | Self::RenameCondition { provenance, .. }
             | Self::SetConditionPresent { provenance, .. }
+            | Self::AddAssumption { provenance, .. }
+            | Self::RenameAssumption { provenance, .. }
+            | Self::SetAssumptionHolds { provenance, .. }
+            | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
             | Self::UnneedCondition { provenance, .. }
             | Self::NeedStepCondition { provenance, .. }
@@ -1285,6 +1355,7 @@ impl Op {
             | Self::RemoveCybersecurityClaim { .. }
             | Self::RemoveParty { .. }
             | Self::RemoveCondition { .. }
+            | Self::RemoveAssumption { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }
@@ -1365,12 +1436,18 @@ impl Op {
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::LinkClaimParty { provenance, .. }
             | Self::UnlinkClaimParty { provenance, .. }
+            | Self::LinkClaimAssumption { provenance, .. }
+            | Self::UnlinkClaimAssumption { provenance, .. }
             | Self::AddParty { provenance, .. }
             | Self::RenameParty { provenance, .. }
             | Self::SetPartyKind { provenance, .. }
             | Self::AddCondition { provenance, .. }
             | Self::RenameCondition { provenance, .. }
             | Self::SetConditionPresent { provenance, .. }
+            | Self::AddAssumption { provenance, .. }
+            | Self::RenameAssumption { provenance, .. }
+            | Self::SetAssumptionHolds { provenance, .. }
+            | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
             | Self::UnneedCondition { provenance, .. }
             | Self::NeedStepCondition { provenance, .. }
@@ -1414,6 +1491,7 @@ impl Op {
             | Self::RemoveCybersecurityClaim { .. }
             | Self::RemoveParty { .. }
             | Self::RemoveCondition { .. }
+            | Self::RemoveAssumption { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }

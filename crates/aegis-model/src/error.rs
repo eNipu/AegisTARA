@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::control::RiskTreatment;
 use crate::description::ElementRef;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
-    InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    ElementId, GoalId, InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -57,6 +57,8 @@ pub enum EntityKind {
     CybersecurityGoal,
     /// A cybersecurity claim ([`CybersecurityClaim`](crate::CybersecurityClaim)).
     CybersecurityClaim,
+    /// An assumption ([`Assumption`](crate::Assumption)).
+    Assumption,
     /// An element of a generic kind ([`Element`](crate::Element)).
     Element,
 }
@@ -88,6 +90,7 @@ impl EntityKind {
             Self::SecurityControl => "security control",
             Self::CybersecurityGoal => "cybersecurity goal",
             Self::CybersecurityClaim => "cybersecurity claim",
+            Self::Assumption => "assumption",
             Self::Element => "element",
         }
     }
@@ -303,6 +306,9 @@ pub enum ModelError {
     /// ```
     #[error("condition {0} already exists in the project")]
     DuplicateConditionId(ConditionId),
+    /// An assumption with this ID already exists in the project.
+    #[error("assumption {0} already exists in the project")]
+    DuplicateAssumptionId(AssumptionId),
     /// An element with this ID already exists in the project.
     #[error("element {0} already exists in the project")]
     DuplicateElement(ElementId),
@@ -464,6 +470,9 @@ pub enum ModelError {
     /// ```
     #[error("condition {0} is not in the project")]
     UnknownCondition(ConditionId),
+    /// No assumption with this ID is in the project.
+    #[error("assumption {0} is not in the project")]
+    UnknownAssumption(AssumptionId),
     /// No element with this ID is in the project.
     #[error("element {0} is not in the project")]
     UnknownElement(ElementId),
@@ -645,6 +654,12 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// A project holds at most `max` assumptions.
+    #[error("project holds more than {max} assumptions")]
+    TooManyAssumptions {
+        /// The limit.
+        max: usize,
+    },
     /// The element does not need this condition.
     #[error("element {element:?} does not need condition {condition}")]
     ConditionNotLinked {
@@ -711,6 +726,50 @@ pub enum ModelError {
         elements: usize,
         /// How many steps need it.
         steps: usize,
+    },
+    /// An assumption cannot be removed while it still excludes trees or steps.
+    #[error("assumption {assumption} still excludes {excludes} tree(s) or step(s)")]
+    AssumptionHasExclusions {
+        /// The assumption.
+        assumption: AssumptionId,
+        /// How many trees and steps it excludes.
+        excludes: usize,
+    },
+    /// An assumption cannot be removed while cybersecurity claims reference it.
+    #[error("assumption {assumption} is referenced by {claims} cybersecurity claim(s)")]
+    AssumptionInUse {
+        /// The assumption still referenced.
+        assumption: AssumptionId,
+        /// How many claims reference it.
+        claims: usize,
+    },
+    /// An assumption would exclude more than `max` trees and steps combined.
+    #[error("assumption would exclude more than {max} trees and steps")]
+    TooManyAssumptionExcludes {
+        /// The combined limit.
+        max: usize,
+    },
+    /// A cybersecurity claim may reference at most `max` assumptions.
+    #[error("cybersecurity claim would reference more than {max} assumptions")]
+    TooManyClaimAssumptions {
+        /// The limit.
+        max: usize,
+    },
+    /// The cybersecurity claim already references this assumption.
+    #[error("cybersecurity claim {claim} already references assumption {assumption}")]
+    ClaimAssumptionAlreadyLinked {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The repeated assumption.
+        assumption: AssumptionId,
+    },
+    /// The cybersecurity claim does not reference this assumption.
+    #[error("cybersecurity claim {claim} does not reference assumption {assumption}")]
+    ClaimAssumptionNotLinked {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The missing assumption.
+        assumption: AssumptionId,
     },
     /// A non-empty provenance actor string contains only whitespace.
     ///
@@ -997,6 +1056,14 @@ pub enum ModelError {
         /// How many threats reference it.
         threats: u32,
     },
+    /// The attack tree cannot be removed while assumptions exclude it or its steps.
+    #[error("attack tree {tree} is excluded by {assumptions} assumption(s)")]
+    AttackTreeExcludedByAssumption {
+        /// The attack tree.
+        tree: TreeId,
+        /// How many assumptions exclude it or its steps.
+        assumptions: usize,
+    },
     /// The attack tree cannot be removed while steps in it still have a
     /// "through" item or an attack type; clear them first.
     #[error("attack tree {tree} still has {steps} step(s) with a through item or attack type")]
@@ -1157,6 +1224,15 @@ pub enum ModelError {
         claim: ClaimId,
         /// How many parties it lists.
         parties: usize,
+    },
+    /// The cybersecurity claim cannot be removed while it references
+    /// assumptions, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity claim {claim} still references {assumptions} assumption(s)")]
+    CybersecurityClaimHasAssumptions {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// How many assumptions it references.
+        assumptions: usize,
     },
     /// The threat scenario cannot be removed while it still references an
     /// attack tree; unlink the tree first.

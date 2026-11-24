@@ -13,9 +13,10 @@ use aegis_client::table::selection_exclusion;
 use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node,
-    NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
+    DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, ItemRef,
+    Methodology, Node, NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment, StepRef,
+    ThreatId, TreeId, TrustBoundaryId,
 };
 
 const NEW_KEYS: &[&str] = &[
@@ -48,6 +49,8 @@ const NEW_KEYS: &[&str] = &[
     "inspector-rev-interface-component",
     "inspector-rev-boundary-members",
     "inspector-rev-conditions",
+    "inspector-rev-claim-assumptions",
+    "inspector-rev-assumption-excludes",
 ];
 
 fn prov() -> Provenance {
@@ -836,4 +839,167 @@ fn inspector_view_populates_all_14_selection_kinds_relations_systems_and_exclusi
             "Threat inspector missing field {expected_label}"
         );
     }
+}
+
+#[test]
+fn assumption_inspector_relations_and_excluded_tree_step_causes() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let (as_id, claim, cond) = (
+        AssumptionId::new_v7(),
+        ClaimId::new_v7(),
+        ConditionId::new_v7(),
+    );
+    let (tree_id, root1) = (TreeId::new_v7(), NodeId::new_v7());
+    let (tree2_id, root2, step_excl) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut tree2 = AttackTree::new(root2, Node::gate(GateKind::Or, "Bypass lock")).expect("t2");
+    tree2
+        .add_child(tree2.root(), step_excl, Node::step("Pick lock"))
+        .expect("step_excl");
+
+    ws.apply(
+        vec![
+            Op::AddCondition {
+                id: cond,
+                name: "Locked enclosure".into(),
+                description: "".into(),
+                present: true,
+                provenance: prov(),
+            },
+            Op::AddCybersecurityClaim {
+                id: claim,
+                name: "Enclosure prevents physical probing".into(),
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tree_id,
+                tree: AttackTree::new(root1, Node::gate(GateKind::Or, "Tamper ECU")).expect("t1"),
+                step_feasibility: vec![],
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tree2_id,
+                tree: tree2,
+                step_feasibility: vec![],
+                provenance: prov(),
+            },
+            Op::AddAssumption {
+                id: as_id,
+                name: "ECU locked in steel box".into(),
+                holds: true,
+                provenance: prov(),
+            },
+            Op::LinkClaimAssumption {
+                claim,
+                assumption: as_id,
+                provenance: prov(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Assumption(as_id),
+                condition: cond,
+                provenance: prov(),
+            },
+            Op::SetAssumptionExcludes {
+                id: as_id,
+                trees: vec![tree_id],
+                steps: vec![StepRef {
+                    tree: tree2_id,
+                    node: step_excl,
+                }],
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+
+    let catalog = Catalog::load(Language::En);
+    let view = inspector_view(&ws, Selection::Assumption(as_id), &catalog).expect("assumption");
+    assert_eq!(view.kind, "Assumption");
+    assert!(
+        view.fields
+            .iter()
+            .any(|f| f.label == "Holds" && f.value == "yes")
+    );
+    assert!(view.relations.iter().any(|r| {
+        r.key == RelationKey::ASSUMPTION_EXCLUDES
+            && r.label == "Excluded while it holds"
+            && r.editable
+            && r.chips.iter().any(|c| c.target == Selection::Tree(tree_id))
+            && r.chips
+                .iter()
+                .any(|c| c.target == Selection::TreeNode(tree2_id, step_excl))
+    }));
+    assert!(view.relations.iter().any(|r| {
+        r.key == RelationKey::ASSUMPTION_CONDITIONS
+            && r.label == "Assumption conditions"
+            && r.editable
+            && r.chips
+                .iter()
+                .any(|c| c.target == Selection::Condition(cond))
+    }));
+    assert!(view.reverse_relations.iter().any(|r| {
+        r.key == RelationKey::CLAIM_ASSUMPTIONS
+            && r.label == "Claims"
+            && !r.editable
+            && r.chips.iter().any(|c| c.target == Selection::Claim(claim))
+    }));
+
+    for sel in [
+        Selection::Tree(tree_id),
+        Selection::TreeNode(tree2_id, step_excl),
+    ] {
+        let target_view = inspector_view(&ws, sel, &catalog).expect("excluded target");
+        assert!(target_view.reverse_relations.iter().any(|r| {
+            r.key == RelationKey::ASSUMPTION_EXCLUDES
+                && r.label == "Excluded by assumptions"
+                && !r.editable
+                && r.chips
+                    .iter()
+                    .any(|c| c.target == Selection::Assumption(as_id))
+        }));
+        assert_eq!(target_view.exclusion_causes.len(), 1);
+        assert_eq!(target_view.exclusion_causes[0].role, "Excluded by");
+        assert_eq!(
+            target_view.exclusion_causes[0].target,
+            Selection::Assumption(as_id)
+        );
+        assert_eq!(
+            target_view.primary_cause,
+            Some(Selection::Assumption(as_id))
+        );
+    }
+
+    // Conditioned off: assumption itself reports "Excluded by" -> Condition.
+    let ops = Edit::SetConditionPresent {
+        condition: cond,
+        present: false,
+    }
+    .to_ops(ws.project(), "tester", 1_792_956_600_001)
+    .expect("ops");
+    ws.apply(ops, Origin::Edit).expect("condition off");
+    let off_view = inspector_view(&ws, Selection::Assumption(as_id), &catalog).expect("off");
+    assert_eq!(off_view.exclusion_causes.len(), 1);
+    assert_eq!(off_view.exclusion_causes[0].role, "Excluded by");
+    assert_eq!(
+        off_view.exclusion_causes[0].target,
+        Selection::Condition(cond)
+    );
+    assert_eq!(off_view.primary_cause, Some(Selection::Condition(cond)));
+
+    // Holds = false shows "no".
+    let ops = Edit::SetAssumptionHolds {
+        assumption: as_id,
+        holds: false,
+    }
+    .to_ops(ws.project(), "tester", 1_792_956_600_002)
+    .expect("ops");
+    ws.apply(ops, Origin::Edit).expect("holds off");
+    let no_view = inspector_view(&ws, Selection::Assumption(as_id), &catalog).expect("no");
+    assert!(
+        no_view
+            .fields
+            .iter()
+            .any(|f| f.label == "Holds" && f.value == "no")
+    );
 }

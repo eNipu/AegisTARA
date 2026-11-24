@@ -168,7 +168,8 @@ fn layout_paths_are_exactly_the_written_ones() {
     }
     assert!(paths.contains("aegis.json") && paths.contains("shared/damage.json"));
     assert!(paths.iter().any(|p| p.starts_with("systems/main/trees/")));
-    let fixed = ["item", "assets", "threats"].map(|s| format!("systems/main/{s}.json"));
+    let fixed =
+        ["item", "assets", "threats", "assumptions"].map(|s| format!("systems/main/{s}.json"));
     assert!(paths.iter().any(|p| {
         let rest = p.strip_prefix("systems/main/").unwrap_or("/");
         !rest.contains('/') && rest.ends_with(".json") && !fixed.contains(p)
@@ -213,6 +214,7 @@ fn layout_covers_every_snapshot_key() {
         "security_controls",
         "cybersecurity_goals",
         "cybersecurity_claims",
+        "assumptions",
         "components",
         "interfaces",
         "data_flows",

@@ -112,7 +112,10 @@ pub fn inspect_methodology_pin(bytes: &[u8]) -> Result<MethodologyPin, crate::St
     })
 }
 
-use crate::applicability::{MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT};
+use crate::applicability::{
+    MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS,
+    MAX_CONDITIONS_PER_ELEMENT,
+};
 use crate::control::{
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS,
 };
@@ -376,10 +379,28 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A snapshot lists more than [`MAX_ASSUMPTIONS`](crate::MAX_ASSUMPTIONS)
+    /// assumptions.
+    Assumptions {
+        /// The cap, in items.
+        max: usize,
+    },
     /// An element or step needs more than
     /// [`MAX_CONDITIONS_PER_ELEMENT`](crate::MAX_CONDITIONS_PER_ELEMENT)
     /// conditions.
     ConditionLinks {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// An assumption excludes more than
+    /// [`MAX_ASSUMPTION_EXCLUDES`](crate::MAX_ASSUMPTION_EXCLUDES) trees and steps.
+    AssumptionExcludes {
+        /// The cap, in items.
+        max: usize,
+    },
+    /// A cybersecurity claim references more than
+    /// [`MAX_CLAIM_ASSUMPTIONS`](crate::MAX_CLAIM_ASSUMPTIONS) assumptions.
+    ClaimAssumptions {
         /// The cap, in items.
         max: usize,
     },
@@ -576,6 +597,15 @@ impl Limit {
     pub(crate) const CONDITION_LINKS: Limit = Limit::ConditionLinks {
         max: MAX_CONDITIONS_PER_ELEMENT,
     };
+    pub(crate) const ASSUMPTIONS: Limit = Limit::Assumptions {
+        max: MAX_ASSUMPTIONS,
+    };
+    pub(crate) const ASSUMPTION_EXCLUDES: Limit = Limit::AssumptionExcludes {
+        max: MAX_ASSUMPTION_EXCLUDES,
+    };
+    pub(crate) const CLAIM_ASSUMPTIONS: Limit = Limit::ClaimAssumptions {
+        max: MAX_CLAIM_ASSUMPTIONS,
+    };
     pub(crate) const CONTROL_TARGETS: Limit = Limit::ControlTargets {
         max: MAX_CONTROL_TARGETS,
     };
@@ -679,7 +709,14 @@ impl fmt::Display for Limit {
             Limit::Parties { max } => write!(f, "more than {max} parties"),
             Limit::Responsible { max } => write!(f, "more than {max} responsible parties"),
             Limit::Conditions { max } => write!(f, "more than {max} conditions"),
+            Limit::Assumptions { max } => write!(f, "more than {max} assumptions"),
             Limit::ConditionLinks { max } => write!(f, "more than {max} conditions on one element"),
+            Limit::AssumptionExcludes { max } => {
+                write!(f, "more than {max} assumption exclusions")
+            }
+            Limit::ClaimAssumptions { max } => {
+                write!(f, "more than {max} claim assumptions")
+            }
             Limit::ControlTargets { max } => {
                 write!(f, "more than {max} control targets")
             }

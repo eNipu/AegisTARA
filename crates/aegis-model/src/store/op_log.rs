@@ -15,11 +15,12 @@ use super::{
     Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES, MAX_NAME_BYTES,
     MAX_OP_RECORD_BYTES,
 };
+use crate::applicability::{MAX_ASSUMPTION_EXCLUDES, StepRef};
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
-    InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
@@ -400,6 +401,18 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    LinkClaimAssumption {
+        claim: Text<ClaimId>,
+        assumption: Text<AssumptionId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnlinkClaimAssumption {
+        claim: Text<ClaimId>,
+        assumption: Text<AssumptionId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     RemoveCybersecurityClaim {
         id: Text<ClaimId>,
     },
@@ -447,6 +460,35 @@ enum OpView<'a> {
     },
     RemoveCondition {
         id: Text<ConditionId>,
+    },
+    AddAssumption {
+        id: Text<AssumptionId>,
+        name: &'a str,
+        holds: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameAssumption {
+        id: Text<AssumptionId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetAssumptionHolds {
+        id: Text<AssumptionId>,
+        holds: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetAssumptionExcludes {
+        id: Text<AssumptionId>,
+        trees: Vec<Text<TreeId>>,
+        steps: Vec<StepRefView>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveAssumption {
+        id: Text<AssumptionId>,
     },
     NeedCondition {
         element: TargetView,
@@ -696,6 +738,13 @@ pub(super) enum AttrView<'a> {
     Text(&'a str),
 }
 
+/// One excluded attack-tree step as written to the op log.
+#[derive(Serialize)]
+struct StepRefView {
+    tree: Text<TreeId>,
+    node: Text<NodeId>,
+}
+
 impl<'a> AttrView<'a> {
     pub(super) fn of(v: &'a crate::element::AttrValue) -> AttrView<'a> {
         use crate::element::AttrValue as V;
@@ -758,6 +807,8 @@ fn within_caps(op: &Op) -> bool {
         | Op::AddParty { name, .. }
         | Op::RenameParty { name, .. }
         | Op::RenameCondition { name, .. }
+        | Op::AddAssumption { name, .. }
+        | Op::RenameAssumption { name, .. }
         | Op::AddElement { name, .. }
         | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
@@ -791,6 +842,9 @@ fn within_caps(op: &Op) -> bool {
             tree.len() <= MAX_TREE_OP_NODES
                 && step_feasibility.len() <= MAX_TREE_OP_NODES
                 && tree.iter().all(|(_, _, n)| name_ok(n.label()))
+        }
+        Op::SetAssumptionExcludes { trees, steps, .. } => {
+            trees.len().saturating_add(steps.len()) <= MAX_ASSUMPTION_EXCLUDES
         }
         _ => true,
     }
@@ -1309,6 +1363,24 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             party: Text(*party),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::LinkClaimAssumption {
+            claim,
+            assumption,
+            provenance,
+        } => OpView::LinkClaimAssumption {
+            claim: Text(*claim),
+            assumption: Text(*assumption),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnlinkClaimAssumption {
+            claim,
+            assumption,
+            provenance,
+        } => OpView::UnlinkClaimAssumption {
+            claim: Text(*claim),
+            assumption: Text(*assumption),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::RemoveCybersecurityClaim { id } => OpView::RemoveCybersecurityClaim { id: Text(*id) },
         Op::AddParty {
             id,
@@ -1372,6 +1444,53 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveCondition { id } => OpView::RemoveCondition { id: Text(*id) },
+        Op::AddAssumption {
+            id,
+            name,
+            holds,
+            provenance,
+        } => OpView::AddAssumption {
+            id: Text(*id),
+            name,
+            holds: *holds,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameAssumption {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameAssumption {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetAssumptionHolds {
+            id,
+            holds,
+            provenance,
+        } => OpView::SetAssumptionHolds {
+            id: Text(*id),
+            holds: *holds,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetAssumptionExcludes {
+            id,
+            trees,
+            steps,
+            provenance,
+        } => OpView::SetAssumptionExcludes {
+            id: Text(*id),
+            trees: trees.iter().copied().map(Text).collect(),
+            steps: steps
+                .iter()
+                .map(|s| StepRefView {
+                    tree: Text(s.tree),
+                    node: Text(s.node),
+                })
+                .collect(),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveAssumption { id } => OpView::RemoveAssumption { id: Text(*id) },
         Op::NeedCondition {
             element,
             condition,
@@ -2239,6 +2358,24 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             party: party.0,
             provenance: wire::unwrap_provenance(provenance),
         },
+        OpWire::LinkClaimAssumption {
+            claim,
+            assumption,
+            provenance,
+        } => Op::LinkClaimAssumption {
+            claim: claim.0,
+            assumption: assumption.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnlinkClaimAssumption {
+            claim,
+            assumption,
+            provenance,
+        } => Op::UnlinkClaimAssumption {
+            claim: claim.0,
+            assumption: assumption.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::RemoveCybersecurityClaim { id } => Op::RemoveCybersecurityClaim { id: id.0 },
         OpWire::AddParty {
             id,
@@ -2302,6 +2439,59 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveCondition { id } => Op::RemoveCondition { id: id.0 },
+        OpWire::AddAssumption {
+            id,
+            name,
+            holds,
+            provenance,
+        } => Op::AddAssumption {
+            id: id.0,
+            name: name.0,
+            holds,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameAssumption {
+            id,
+            name,
+            provenance,
+        } => Op::RenameAssumption {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetAssumptionHolds {
+            id,
+            holds,
+            provenance,
+        } => Op::SetAssumptionHolds {
+            id: id.0,
+            holds,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetAssumptionExcludes {
+            id,
+            trees,
+            steps,
+            provenance,
+        } => {
+            if trees.0.len().saturating_add(steps.0.len()) > MAX_ASSUMPTION_EXCLUDES {
+                return Err(StoreError::LimitExceeded(Limit::ASSUMPTION_EXCLUDES));
+            }
+            Op::SetAssumptionExcludes {
+                id: id.0,
+                trees: trees.0.into_iter().map(|t| t.0).collect(),
+                steps: steps
+                    .0
+                    .into_iter()
+                    .map(|s| StepRef {
+                        tree: s.tree.0,
+                        node: s.node.0,
+                    })
+                    .collect(),
+                provenance: wire::unwrap_provenance(provenance),
+            }
+        }
+        OpWire::RemoveAssumption { id } => Op::RemoveAssumption { id: id.0 },
         OpWire::NeedCondition {
             element,
             condition,
@@ -3255,6 +3445,20 @@ mod tests {
         assert!(within_caps(&ok));
         assert!(!within_caps(&long));
         assert!(within_caps(&Op::RemoveAsset { id }));
+        let tree = TreeId::new_v7();
+        let excl = Op::SetAssumptionExcludes {
+            id: AssumptionId::new_v7(),
+            trees: vec![tree; 130],
+            steps: vec![
+                StepRef {
+                    tree,
+                    node: NodeId::new_v7(),
+                };
+                127
+            ],
+            provenance: Provenance::default(),
+        };
+        assert!(!within_caps(&excl));
     }
 
     #[test]

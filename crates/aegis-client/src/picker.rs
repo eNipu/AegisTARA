@@ -375,6 +375,12 @@ impl MultiLinkPicker {
                 |i| project.condition(i),
                 |e| e.name().to_owned()
             ),
+            Selection::Assumption(id) => named!(
+                project.assumption_idx(&id),
+                |i| project.assumption_visual_id(i),
+                |i| project.assumption(i),
+                |e| e.name().to_owned()
+            ),
             Selection::Component(id) => named!(
                 project.component_idx(&id),
                 |i| project.component_visual_id(i),

@@ -466,7 +466,7 @@ fn independent_system_set(p: &Project, u: &SystemUse, s: Selection) -> Option<Sy
         Selection::Control(id) => p.security_control_idx(&id).map(|i| u.control(i)),
         Selection::Goal(id) => p.cybersecurity_goal_idx(&id).map(|i| u.goal(i)),
         Selection::Claim(id) => p.cybersecurity_claim_idx(&id).map(|i| u.claim(i)),
-        Selection::Party(_) | Selection::Condition(_) => None,
+        Selection::Party(_) | Selection::Condition(_) | Selection::Assumption(_) => None,
     }
 }
 
