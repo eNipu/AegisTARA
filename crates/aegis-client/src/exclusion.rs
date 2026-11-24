@@ -98,14 +98,11 @@ pub fn reasons_text(project: &Project, reasons: &[Reason]) -> String {
                     format!("Needs {who} (off)")
                 }
             }
-            Reason::AssumptionHolds(aid) => {
-                let who = named_target(project, Selection::Assumption(aid));
-                if who.is_empty() {
-                    "An assumption holds".to_owned()
-                } else {
-                    format!("Assumption {who} holds")
-                }
-            }
+            Reason::AssumptionHolds(aid) => match named_target(project, Selection::Assumption(aid))
+            {
+                who if who.is_empty() => "An assumption holds".to_owned(),
+                who => format!("Assumption {who} holds"),
+            },
             Reason::OwnerExcluded(_) => {
                 let who = reason_target(reason)
                     .map(|sel| named_target(project, sel))
@@ -191,10 +188,32 @@ fn risk_label(m: &Methodology, state: RiskState) -> &str {
     }
 }
 
+fn switch_lead(p: &Project, target: SwitchTarget) -> String {
+    match target {
+        SwitchTarget::Condition(id) => match p.condition_idx(&id).and_then(|i| p.condition(i)) {
+            Some(c) => {
+                let s = if c.present() { "on" } else { "off" };
+                let who = named_target(p, Selection::Condition(id));
+                format!("Condition '{who}' switched {s}")
+            }
+            None => "Condition switched".to_owned(),
+        },
+        SwitchTarget::Assumption(id) => match p.assumption_idx(&id).and_then(|i| p.assumption(i)) {
+            Some(a) => {
+                let who = named_target(p, Selection::Assumption(id));
+                if a.holds() {
+                    format!("Assumption '{who}' now holds")
+                } else {
+                    format!("Assumption '{who}' no longer holds")
+                }
+            }
+            None => "Assumption switched".to_owned(),
+        },
+    }
+}
+
 impl ConditionSnapshot {
-    /// Captures excluded steps and threat risks before applying `ops`, if `ops`
-    /// contains a condition or assumption switch (`Op::SetConditionPresent` or
-    /// `Op::SetAssumptionHolds`).
+    /// Captures excluded steps and threat risks before a condition or assumption switch.
     #[must_use]
     pub fn capture(ws: &Workspace, ops: &[Op]) -> Option<Self> {
         let target = ops.iter().find_map(|op| match op {
@@ -221,34 +240,7 @@ impl ConditionSnapshot {
     pub fn toast(&self, ws: &Workspace) -> String {
         let project = ws.project();
         let m = project.methodology();
-        let lead = match self.target {
-            SwitchTarget::Condition(cid) => project
-                .condition_idx(&cid)
-                .and_then(|i| project.condition(i))
-                .map_or_else(
-                    || "Condition switched".to_owned(),
-                    |c| {
-                        let s = if c.present() { "on" } else { "off" };
-                        let who = named_target(project, Selection::Condition(cid));
-                        format!("Condition '{who}' switched {s}")
-                    },
-                ),
-            SwitchTarget::Assumption(aid) => project
-                .assumption_idx(&aid)
-                .and_then(|i| project.assumption(i))
-                .map_or_else(
-                    || "Assumption switched".to_owned(),
-                    |a| {
-                        let s = if a.holds() {
-                            "now holds"
-                        } else {
-                            "no longer holds"
-                        };
-                        let who = named_target(project, Selection::Assumption(aid));
-                        format!("Assumption '{who}' {s}")
-                    },
-                ),
-        };
+        let lead = switch_lead(project, self.target);
 
         let after_steps = excluded_leaf_steps(project);
         let excluded = after_steps.difference(&self.excluded_steps).count();

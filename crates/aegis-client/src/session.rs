@@ -2422,17 +2422,15 @@ impl<P: CredentialProvider> Actor<P> {
                 if self
                     .open
                     .as_ref()
-                    .is_none_or(|o| o.ws.project().assumption_idx(&id).is_none())
-                    || !self.can_edit()
+                    .is_some_and(|o| o.ws.project().assumption_idx(&id).is_some())
+                    && self.can_edit()
                 {
-                    return;
+                    if let Some(open) = self.open.as_mut() {
+                        open.ui.selected_assumption = Some(id);
+                        open.ui.page = Page::Assumptions;
+                    }
+                    self.begin_draft(DraftKind::Claim);
                 }
-                self.begin_draft(DraftKind::Claim);
-                if let Some(open) = self.open.as_mut() {
-                    open.ui.selected_assumption = Some(id);
-                    open.ui.draft_assumption = Some(id);
-                }
-                self.pump();
             }
             Command::CommitDraft { name, next } => self.commit_draft(&name, next),
             Command::CancelDraft => self.set_draft(None),
@@ -3045,11 +3043,10 @@ impl<P: CredentialProvider> Actor<P> {
         if let Some(open) = self.open.as_mut() {
             open.ui.draft = draft;
             open.ui.draft_error = None;
-            if draft.is_none() {
-                open.ui.draft_assumption = None;
-            }
             if draft.is_some() {
                 open.ui.draft_seq += 1;
+            } else {
+                open.ui.draft_assumption = None;
             }
             self.pump();
         }
@@ -3129,11 +3126,10 @@ impl<P: CredentialProvider> Actor<P> {
             open.ui.draft_to,
             open.ui.draft_interface_kind,
         );
-        let (damage, threat, control, assumption) = (
+        let (damage, threat, control) = (
             open.ui.draft_damage,
             open.ui.draft_threat,
             open.ui.draft_control,
-            open.ui.draft_assumption,
         );
         let name = name.to_owned();
         let edit = match kind {
@@ -3197,7 +3193,7 @@ impl<P: CredentialProvider> Actor<P> {
                     name,
                 },
             },
-            DraftKind::Claim => match assumption {
+            DraftKind::Claim => match open.ui.draft_assumption {
                 Some(assumption) => Edit::AddClaimFor {
                     id: ClaimId::new_v7(),
                     name,
@@ -3279,14 +3275,13 @@ impl<P: CredentialProvider> Actor<P> {
             open.find = None;
         }
         open.ui.page = page;
-        if page == Page::Assumptions
-            && open
+        if page == Page::Assumptions {
+            let p = open.ws.project();
+            open.ui.selected_assumption = open
                 .ui
                 .selected_assumption
-                .is_none_or(|id| open.ws.project().assumption_idx(&id).is_none())
-        {
-            open.ui.selected_assumption =
-                open.ws.project().assumptions().next().map(|(_, id, _)| id);
+                .filter(|id| p.assumption_idx(id).is_some())
+                .or_else(|| p.assumptions().next().map(|(_, id, _)| id));
         }
         match page {
             Page::Versions => self.load_baselines(),

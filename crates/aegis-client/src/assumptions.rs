@@ -1,11 +1,7 @@
 //! Headless view model for [`crate::view::Page::Assumptions`] (job 136).
 
-use std::collections::BTreeSet;
+use aegis_model::{Applicability, AssumptionId, ElementRef, Project};
 
-use aegis_model::{Applicability, AssumptionId, ElementRef, Project, StepRef, TreeId};
-
-use crate::configuration::{ExcludedCounts, excluded_counts};
-use crate::exclusion::reasons_text;
 use crate::i18n::Catalog;
 use crate::pages::selection_visual_id;
 use crate::relations::{self, RelationKey};
@@ -67,10 +63,15 @@ pub struct AssumptionsView {
     pub rows: Vec<AssumptionRow>,
     pub selected: Option<AssumptionDetail>,
     pub explainer: String,
-    pub excluded: ExcludedCounts,
+    pub excluded: crate::configuration::ExcludedCounts,
 }
 
-fn to_links(project: &Project, items: Vec<Selection>) -> Vec<AssumptionLink> {
+fn links(p: &Project, key: RelationKey, sel: Selection, rev: bool) -> Vec<AssumptionLink> {
+    let items = if rev {
+        relations::reverse_related(p, key, sel)
+    } else {
+        relations::related(p, key, sel)
+    };
     items
         .into_iter()
         .filter_map(|selection| {
@@ -81,74 +82,62 @@ fn to_links(project: &Project, items: Vec<Selection>) -> Vec<AssumptionLink> {
             };
             Some(AssumptionLink {
                 id,
-                visual_id: selection_visual_id(project, selection),
-                name: selection_label(project, selection),
+                visual_id: selection_visual_id(p, selection),
+                name: selection_label(p, selection),
                 selection,
             })
         })
         .collect()
 }
 
-fn exclusion_of(
-    project: &Project,
-    app: &Applicability,
-    id: AssumptionId,
-) -> (bool, Option<String>) {
+fn exclusion_of(p: &Project, app: &Applicability, id: AssumptionId) -> (bool, Option<String>) {
     let excluded = app.is_excluded(ElementRef::Assumption(id));
     let reason = excluded
-        .then(|| reasons_text(project, app.reasons(ElementRef::Assumption(id))))
+        .then(|| crate::exclusion::reasons_text(p, app.reasons(ElementRef::Assumption(id))))
         .filter(|s| !s.is_empty());
     (excluded, reason)
 }
 
-fn detail(project: &Project, app: &Applicability, id: AssumptionId) -> Option<AssumptionDetail> {
-    let idx = project.assumption_idx(&id)?;
-    let a = project.assumption(idx)?;
-    let (excluded, excluded_reason) = exclusion_of(project, app, id);
+fn detail(p: &Project, app: &Applicability, id: AssumptionId) -> Option<AssumptionDetail> {
+    let idx = p.assumption_idx(&id)?;
+    let a = p.assumption(idx)?;
+    let (excluded, excluded_reason) = exclusion_of(p, app, id);
     let sel = Selection::Assumption(id);
-    let claims = to_links(
-        project,
-        relations::reverse_related(project, RelationKey::CLAIM_ASSUMPTIONS, sel),
-    );
-    let conditions = to_links(
-        project,
-        relations::related(project, RelationKey::ASSUMPTION_CONDITIONS, sel),
-    );
+    let claims = links(p, RelationKey::CLAIM_ASSUMPTIONS, sel, true);
+    let conditions = links(p, RelationKey::ASSUMPTION_CONDITIONS, sel, false);
     let push_ex = |target, is_tree| AssumptionExclude {
         target,
-        visual_id: selection_visual_id(project, target),
-        label: selection_label(project, target),
+        visual_id: selection_visual_id(p, target),
+        label: selection_label(p, target),
         is_tree,
     };
     let mut excludes = Vec::new();
-    let mut excluded_trees = BTreeSet::new();
+    let mut trees = std::collections::BTreeSet::new();
     for &t_idx in a.excludes_trees() {
-        if let Some(tid) = project.attack_tree_id(t_idx) {
-            excluded_trees.insert(tid);
+        if let Some(tid) = p.attack_tree_id(t_idx) {
+            trees.insert(tid);
             excludes.push(push_ex(Selection::Tree(tid), true));
         }
     }
-    let mut direct_steps: BTreeSet<StepRef> = BTreeSet::new();
+    let mut steps = std::collections::BTreeSet::new();
     for &sr in a.excludes_steps() {
-        direct_steps.insert(sr);
+        steps.insert(sr);
         excludes.push(push_ex(Selection::TreeNode(sr.tree, sr.node), false));
     }
-    let mut touched: BTreeSet<TreeId> = excluded_trees.clone();
-    touched.extend(direct_steps.iter().map(|s| s.tree));
-    let affected_threats = project
+    let affected_threats = p
         .threat_scenarios()
         .filter(|(_, _, t)| {
             t.attack_tree()
-                .and_then(|ti| project.attack_tree_id(ti))
-                .is_some_and(|tid| touched.contains(&tid))
+                .and_then(|ti| p.attack_tree_id(ti))
+                .is_some_and(|tid| trees.contains(&tid) || steps.iter().any(|s| s.tree == tid))
         })
         .count();
 
     Some(AssumptionDetail {
         id,
-        visual_id: project.assumption_visual_id(idx).unwrap_or_default(),
+        visual_id: p.assumption_visual_id(idx).unwrap_or_default(),
         name: a.name().to_owned(),
-        description: project
+        description: p
             .description(ElementRef::Assumption(id))
             .unwrap_or("")
             .to_owned(),
@@ -158,7 +147,7 @@ fn detail(project: &Project, app: &Applicability, id: AssumptionId) -> Option<As
         claims,
         conditions,
         excludes,
-        affects_count: excluded_trees.len() + direct_steps.len() + affected_threats,
+        affects_count: trees.len() + steps.len() + affected_threats,
         can_create_claim: true,
     })
 }
@@ -166,18 +155,18 @@ fn detail(project: &Project, app: &Applicability, id: AssumptionId) -> Option<As
 /// Builds the Assumptions page view model for `ws` and `ui` in `catalog`'s language.
 #[must_use]
 pub fn assumptions_view(ws: &Workspace, ui: &UiState, catalog: &Catalog) -> AssumptionsView {
-    let project = ws.project();
-    let app = project.applicability();
-    let rows = project
+    let p = ws.project();
+    let app = p.applicability();
+    let rows = p
         .assumptions()
         .map(|(idx, id, a)| {
-            let (excluded, excluded_reason) = exclusion_of(project, &app, id);
+            let (excluded, excluded_reason) = exclusion_of(p, &app, id);
             let target = Selection::Assumption(id);
             let claims =
-                relations::reverse_related(project, RelationKey::CLAIM_ASSUMPTIONS, target).len();
+                relations::reverse_related(p, RelationKey::CLAIM_ASSUMPTIONS, target).len();
             AssumptionRow {
                 id,
-                visual_id: project.assumption_visual_id(idx).unwrap_or_default(),
+                visual_id: p.assumption_visual_id(idx).unwrap_or_default(),
                 name: a.name().to_owned(),
                 holds: a.holds(),
                 claims,
@@ -187,15 +176,11 @@ pub fn assumptions_view(ws: &Workspace, ui: &UiState, catalog: &Catalog) -> Assu
             }
         })
         .collect();
-    let selected = ui
-        .selected_assumption
-        .and_then(|id| detail(project, &app, id));
-    let excluded = excluded_counts(project);
-    let total = excluded.elements + excluded.steps;
-    let explainer = if total == 0 {
-        catalog.tr("assumptions-explainer-none")
-    } else {
-        catalog.tr_with("assumptions-explainer", &[("n", &total.to_string())])
+    let selected = ui.selected_assumption.and_then(|id| detail(p, &app, id));
+    let excluded = crate::configuration::excluded_counts(p);
+    let explainer = match excluded.elements + excluded.steps {
+        0 => catalog.tr("assumptions-explainer-none"),
+        n => catalog.tr_with("assumptions-explainer", &[("n", &n.to_string())]),
     };
     AssumptionsView {
         rows,
