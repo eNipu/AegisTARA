@@ -2862,17 +2862,12 @@ pub fn problem(project: &Project, code: LintCode) -> ProblemRow {
         }
         L::AssumptionWithoutClaim { assumption } => {
             let s = Selection::Assumption(assumption);
-            (
-                format!(
-                    "No {} uses assumption {}.",
-                    m.element_names()
-                        .cybersecurity_claim
-                        .singular
-                        .to_lowercase(),
-                    q(s)
-                ),
-                s,
-            )
+            let c = m
+                .element_names()
+                .cybersecurity_claim
+                .singular
+                .to_lowercase();
+            (format!("No {c} uses assumption {}.", q(s)), s)
         }
         L::AssetUnbound { asset } => {
             let s = Selection::Asset(asset);
@@ -3366,7 +3361,7 @@ pub fn select(ui: &mut UiState, s: Selection) {
         Selection::Control(id) => ui.selected_control = Some(id),
         Selection::Goal(id) => ui.selected_goal = Some(id),
         Selection::Claim(id) => ui.selected_claim = Some(id),
-        // Parties have no editor view; assumptions get their page in 136e.
+        // Parties have no editor view of their own; selection stays on Goals.
         Selection::Party(_) | Selection::Assumption(_) => {}
         Selection::Condition(id) => ui.selected_condition = Some(id),
     }

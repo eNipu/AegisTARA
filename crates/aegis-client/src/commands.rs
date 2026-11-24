@@ -12,7 +12,7 @@
 //! goals first, and so on. An asset that threats target is not removed:
 //! the user decides what happens to those threats.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
@@ -1217,17 +1217,10 @@ fn clear_descriptions_before_removal(
 ) -> Vec<Op> {
     use aegis_model::ElementRef as E;
     let mut out = Vec::with_capacity(ops.len());
-    let mut removed_nodes = HashSet::new();
-    let mut excl: BTreeMap<AssumptionId, (Vec<TreeId>, BTreeSet<StepRef>)> = project
+    let mut removed_nodes = std::collections::HashSet::new();
+    let mut excl: BTreeMap<AssumptionId, (BTreeSet<TreeId>, BTreeSet<StepRef>)> = project
         .assumptions()
-        .map(|(_, id, a)| {
-            let trees = a
-                .excludes_trees()
-                .iter()
-                .filter_map(|&t| project.attack_tree_id(t))
-                .collect();
-            (id, (trees, a.excludes_steps().iter().copied().collect()))
-        })
+        .map(|(_, id, a)| (id, assumption_excludes(project, a)))
         .collect();
     for op in ops {
         let target = match &op {
@@ -1250,13 +1243,6 @@ fn clear_descriptions_before_removal(
         if let Some(target) = target {
             out.extend(unneed_conditions_ops(project, target, provenance));
         }
-        let excl_op =
-            |id, trees: &Vec<TreeId>, steps: &BTreeSet<StepRef>| Op::SetAssumptionExcludes {
-                id,
-                trees: trees.clone(),
-                steps: steps.iter().copied().collect(),
-                provenance: provenance.clone(),
-            };
         match &op {
             Op::RemoveTreeNode { tree, id, .. } => {
                 removed_nodes.insert((*tree, *id));
@@ -1266,7 +1252,7 @@ fn clear_descriptions_before_removal(
                 };
                 for (&aid, (trees, steps)) in &mut excl {
                     if steps.remove(&s) {
-                        out.push(excl_op(aid, trees, steps));
+                        out.push(set_excludes_op(aid, trees, steps, provenance));
                     }
                 }
                 out.extend(unneed_step_conditions_ops(
@@ -1278,11 +1264,10 @@ fn clear_descriptions_before_removal(
             }
             Op::RemoveAttackTree { id } => {
                 for (&aid, (trees, steps)) in &mut excl {
-                    let (pt, ps) = (trees.len(), steps.len());
-                    trees.retain(|&t| t != *id);
+                    let prev_steps = steps.len();
                     steps.retain(|s| s.tree != *id);
-                    if trees.len() != pt || steps.len() != ps {
-                        out.push(excl_op(aid, trees, steps));
+                    if trees.remove(id) || steps.len() != prev_steps {
+                        out.push(set_excludes_op(aid, trees, steps, provenance));
                     }
                 }
                 // Nodes taken out one by one earlier in this edit are done.
@@ -1301,7 +1286,13 @@ fn clear_descriptions_before_removal(
             Op::SetAssumptionExcludes {
                 id, trees, steps, ..
             } => {
-                excl.insert(*id, (trees.clone(), steps.iter().copied().collect()));
+                excl.insert(
+                    *id,
+                    (
+                        trees.iter().copied().collect(),
+                        steps.iter().copied().collect(),
+                    ),
+                );
             }
             Op::RemoveAssumption { id } => {
                 excl.remove(id);
@@ -1337,16 +1328,48 @@ fn name(text: &str) -> Result<std::sync::Arc<str>, EditError> {
     }
 }
 
+fn assumption_excludes(
+    project: &Project,
+    a: &aegis_model::Assumption,
+) -> (BTreeSet<TreeId>, BTreeSet<StepRef>) {
+    let trees = a
+        .excludes_trees()
+        .iter()
+        .filter_map(|&t| project.attack_tree_id(t))
+        .collect();
+    (trees, a.excludes_steps().iter().copied().collect())
+}
+
+fn set_excludes_op(
+    id: AssumptionId,
+    trees: &BTreeSet<TreeId>,
+    steps: &BTreeSet<StepRef>,
+    p: &Provenance,
+) -> Op {
+    Op::SetAssumptionExcludes {
+        id,
+        trees: trees.iter().copied().collect(),
+        steps: steps.iter().copied().collect(),
+        provenance: p.clone(),
+    }
+}
+
 fn step_ref(project: &Project, tree: TreeId, node: NodeId) -> Result<StepRef, EditError> {
-    let t = project
-        .attack_tree_idx(&tree)
-        .and_then(|i| project.attack_tree(i))
-        .ok_or(EditError::Missing)?;
+    let idx = project.attack_tree_idx(&tree).ok_or(EditError::Missing)?;
+    let t = project.attack_tree(idx).ok_or(EditError::Missing)?;
     let n_idx = t.idx_of(&node).ok_or(EditError::Missing)?;
     if t.get(n_idx).is_some_and(|n| n.gate_kind().is_some()) {
         return Err(EditError::UnknownChoice);
     }
     Ok(StepRef { tree, node })
+}
+
+fn set_member<T: Ord>(set: &mut BTreeSet<T>, value: T, present: bool) {
+    if present {
+        set.insert(value);
+    } else {
+        set.remove(&value);
+    }
 }
 
 fn set_assumption_exclude_ops(
@@ -1356,41 +1379,22 @@ fn set_assumption_exclude_ops(
     excluded: bool,
     p: Provenance,
 ) -> Result<Vec<Op>, EditError> {
-    let a = project
+    let idx = project
         .assumption_idx(&assumption)
-        .and_then(|i| project.assumption(i))
         .ok_or(EditError::Missing)?;
-    let mut trees: BTreeSet<TreeId> = a
-        .excludes_trees()
-        .iter()
-        .filter_map(|&i| project.attack_tree_id(i))
-        .collect();
-    let mut steps: BTreeSet<StepRef> = a.excludes_steps().iter().copied().collect();
+    let a = project.assumption(idx).ok_or(EditError::Missing)?;
+    let (mut trees, mut steps) = assumption_excludes(project, a);
     match target {
         Selection::Tree(tid) => {
             project.attack_tree_idx(&tid).ok_or(EditError::Missing)?;
-            let _ = if excluded {
-                trees.insert(tid)
-            } else {
-                trees.remove(&tid)
-            };
+            set_member(&mut trees, tid, excluded);
         }
         Selection::TreeNode(tree, node) => {
-            let sr = step_ref(project, tree, node)?;
-            let _ = if excluded {
-                steps.insert(sr)
-            } else {
-                steps.remove(&sr)
-            };
+            set_member(&mut steps, step_ref(project, tree, node)?, excluded);
         }
         _ => return Err(EditError::UnknownChoice),
     }
-    Ok(vec![Op::SetAssumptionExcludes {
-        id: assumption,
-        trees: trees.into_iter().collect(),
-        steps: steps.into_iter().collect(),
-        provenance: p,
-    }])
+    Ok(vec![set_excludes_op(assumption, &trees, &steps, &p)])
 }
 
 /// The name a duplicated element gets (UI-09.2).
@@ -3035,14 +3039,12 @@ impl Edit {
                 ops.push(Op::RemoveCybersecurityClaim { id: *claim });
                 ops
             }
-            Edit::AddAssumption { id, name: n, holds } => {
-                vec![Op::AddAssumption {
-                    id: *id,
-                    name: name(n)?,
-                    holds: *holds,
-                    provenance: p,
-                }]
-            }
+            Edit::AddAssumption { id, name: n, holds } => vec![Op::AddAssumption {
+                id: *id,
+                name: name(n)?,
+                holds: *holds,
+                provenance: p,
+            }],
             Edit::RenameAssumption {
                 assumption,
                 name: n,
@@ -3090,19 +3092,22 @@ impl Edit {
                 claim,
                 assumption,
                 linked,
-            } => vec![if *linked {
-                Op::LinkClaimAssumption {
-                    claim: *claim,
-                    assumption: *assumption,
-                    provenance: p,
-                }
-            } else {
-                Op::UnlinkClaimAssumption {
-                    claim: *claim,
-                    assumption: *assumption,
-                    provenance: p,
-                }
-            }],
+            } => {
+                let (claim, assumption, provenance) = (*claim, *assumption, p);
+                vec![if *linked {
+                    Op::LinkClaimAssumption {
+                        claim,
+                        assumption,
+                        provenance,
+                    }
+                } else {
+                    Op::UnlinkClaimAssumption {
+                        claim,
+                        assumption,
+                        provenance,
+                    }
+                }]
+            }
             Edit::DuplicateComponent { id, source, suffix } => {
                 let c = project
                     .component_idx(source)
@@ -3387,32 +3392,23 @@ impl Edit {
                 assumption,
                 target,
                 excluded,
-            } => {
-                let Some(a) = assumption_of(assumption) else {
-                    return false;
-                };
-                match *target {
-                    Selection::Tree(tid) => project
-                        .attack_tree_idx(&tid)
-                        .is_some_and(|i| a.excludes_trees().contains(&i) == *excluded),
-                    Selection::TreeNode(tree, node) => step_ref(project, tree, node)
-                        .is_ok_and(|sr| a.excludes_steps().contains(&sr) == *excluded),
-                    _ => false,
-                }
-            }
+            } => assumption_of(assumption).is_some_and(|a| match *target {
+                Selection::Tree(tid) => project
+                    .attack_tree_idx(&tid)
+                    .is_some_and(|i| a.excludes_trees().contains(&i) == *excluded),
+                Selection::TreeNode(tree, node) => step_ref(project, tree, node)
+                    .is_ok_and(|sr| a.excludes_steps().contains(&sr) == *excluded),
+                _ => false,
+            }),
             Edit::LinkClaimAssumption {
                 claim,
                 assumption,
                 linked,
-            } => {
-                let c = project
-                    .cybersecurity_claim_idx(claim)
-                    .and_then(|i| project.cybersecurity_claim(i));
-                match (c, project.assumption_idx(assumption)) {
-                    (Some(c), Some(a_idx)) => c.assumptions().contains(&a_idx) == *linked,
-                    _ => false,
-                }
-            }
+            } => project
+                .cybersecurity_claim_idx(claim)
+                .and_then(|i| project.cybersecurity_claim(i))
+                .zip(project.assumption_idx(assumption))
+                .is_some_and(|(c, a_idx)| c.assumptions().contains(&a_idx) == *linked),
             Edit::RemoveAssumption { assumption } => project.assumption_idx(assumption).is_none(),
             _ => false,
         }
@@ -3469,7 +3465,8 @@ impl Edit {
 
     /// The entity this edit creates, so the session can select it.
     #[must_use]
-    pub fn created(&self) -> Option<Selection> {
+    pub fn created(&self) -> Option<crate::view::Selection> {
+        use crate::view::Selection;
         match self {
             Edit::AddComponent { id, .. } => Some(Selection::Component(*id)),
             Edit::AddInterface { id, .. } => Some(Selection::Interface(*id)),

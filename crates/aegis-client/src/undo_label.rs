@@ -295,10 +295,12 @@ fn target_of(op: &Op) -> Option<Selection> {
         Op::AddCybersecurityClaim { id, .. }
         | Op::RenameCybersecurityClaim { id, .. }
         | Op::RemoveCybersecurityClaim { id } => Selection::Claim(*id),
-        Op::LinkClaimParty { claim, .. }
-        | Op::UnlinkClaimParty { claim, .. }
-        | Op::LinkClaimAssumption { claim, .. }
-        | Op::UnlinkClaimAssumption { claim, .. } => Selection::Claim(*claim),
+        Op::LinkClaimParty { claim, .. } | Op::UnlinkClaimParty { claim, .. } => {
+            Selection::Claim(*claim)
+        }
+        Op::LinkClaimAssumption { claim, .. } | Op::UnlinkClaimAssumption { claim, .. } => {
+            Selection::Claim(*claim)
+        }
         Op::AddAssumption { id, .. }
         | Op::RenameAssumption { id, .. }
         | Op::SetAssumptionHolds { id, .. }
