@@ -1,0 +1,127 @@
+{
+  "job": "136-assumptions",
+  "slices": [
+    {
+      "id": "136a",
+      "title": "Assumption entity, visual ID AS, ElementRef, lifecycle ops and codecs",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/*",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/systems.rs",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 640,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test assumptions",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "136b",
+      "title": "Assumption exclusions, claim links, and L30 removal guards",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/*",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/tests/undo_every_op.rs"
+      ],
+      "max_lines": 560,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test assumptions",
+        "cargo test --locked -p aegis-client --test undo_every_op"
+      ]
+    },
+    {
+      "id": "136c",
+      "title": "Snapshot and workspace persistence, applicability engine, and incremental cache",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/*",
+        "crates/aegis-model/tests/*"
+      ],
+      "max_lines": 460,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test assumptions",
+        "cargo test --locked -p aegis-model --test workspace",
+        "cargo test --locked -p aegis-model --test ops_properties"
+      ]
+    },
+    {
+      "id": "136d",
+      "title": "Lint AssumptionWithoutClaim, client relations, edits, inspector excludes and i18n",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-model/src/lint.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/src/*",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 580,
+      "new_deps": false,
+      "ci": ["crates/aegis-model", "crates/aegis-client", "crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test assumptions",
+        "cargo test --locked -p aegis-client --test relations",
+        "cargo test --locked -p aegis-client --test inspector_view",
+        "cargo test --locked -p aegis-client --test table_conventions"
+      ]
+    },
+    {
+      "id": "136e",
+      "title": "Assumptions page, headless Create claim draft, exclusion formatting and Slint nav sync",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/*",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-shell/ui/app.slint",
+        "crates/aegis-shell/translations/*",
+        "crates/aegis-shell/src/*",
+        "crates/aegis-shell/tests/*"
+      ],
+      "max_lines": 440,
+      "new_deps": false,
+      "ci": ["crates/aegis-client", "crates/aegis-shell", "crates/aegis-workbench"],
+      "checks": [
+        "cargo test --locked -p aegis-client --test assumptions",
+        "cargo test --locked -p aegis-client --test configuration",
+        "cargo test --locked -p aegis-shell --test nav_groups"
+      ]
+    },
+    {
+      "id": "136f",
+      "title": "Word and XLSX report integration for assumptions",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/report/*",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 280,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test assumptions",
+        "cargo test --locked -p aegis-client --test report_configuration"
+      ]
+    }
+  ]
+}

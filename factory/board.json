@@ -2939,6 +2939,84 @@
       ],
       "decision": "135d NEXT: planner \u2014 135a shifted Page::ALL indices, breaking aegis-shell/ui/app.slint (outside allow list)",
       "updated": "2026-11-23T13:34:13Z"
+    },
+    {
+      "id": "136-assumptions",
+      "title": "Assumptions (APL-04)",
+      "branch": "factory/136-assumptions",
+      "stage": "merged",
+      "slice": "136f",
+      "base": "f6f5f68cbfd031942cdcd514f181ad00f5257edc",
+      "reviews": {
+        "slice": "136f",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "136a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 622
+        },
+        {
+          "slice": "136b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 511
+        },
+        {
+          "slice": "136c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 243
+        },
+        {
+          "slice": "136d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 567
+        },
+        {
+          "slice": "136e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 435
+        },
+        {
+          "slice": "136f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 265
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-24T10:00:20Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
