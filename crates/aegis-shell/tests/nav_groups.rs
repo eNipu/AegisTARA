@@ -73,3 +73,80 @@ async fn groups_close_open_and_count_their_pages() {
     assert_eq!(open(&app), vec![true; PageGroup::ALL.len()]);
     save(&app.frame(), "nav-groups-open");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn attacker_profile_nav_dot_tracks_non_default_reset_and_undo() {
+    use aegis_model::{AttackFilter, ScalabilityFilter};
+
+    assert_eq!(Page::ALL.len(), 18);
+    assert_eq!(Page::ALL[9], Page::AttackerProfile);
+    assert_eq!(Page::AttackerProfile.group(), Some(PageGroup::Feasibility));
+
+    let server = TestServer::start().await;
+    let app = App::new(server.admin_session("root"), 1360, 860);
+    app.online().await;
+    app.window.invoke_create_project("Profile ECU".into());
+    app.until("open", |vm| vm.project.is_some()).await;
+    app.window.invoke_begin_edit();
+    app.until("editing", |vm| {
+        vm.project.as_ref().is_some_and(|p| p.mode == Mode::Editing)
+    })
+    .await;
+
+    let idx = Page::AttackerProfile.index();
+    let dots = |app: &App| -> Vec<bool> { app.window.get_nav_dots().iter().collect() };
+    let v = app.session.view();
+    assert_eq!(p(&v).nav_counts[idx], None);
+    assert_eq!(p(&v).nav_dots, vec![false; Page::ALL.len()]);
+    assert_eq!(dots(&app), vec![false; Page::ALL.len()]);
+
+    // Opening the Attacker profile page populates data.attacker_profile.
+    app.window.invoke_show_page(idx as i32);
+    let opened = app
+        .until("attacker profile page", |vm| {
+            p(vm).page == Page::AttackerProfile && p(vm).data.attacker_profile.is_some()
+        })
+        .await;
+    assert!(
+        opened
+            .project
+            .as_ref()
+            .expect("project")
+            .data
+            .attacker_profile
+            .as_ref()
+            .expect("view")
+            .is_default
+    );
+
+    // Non-default attacker profile lights up only Page::AttackerProfile's nav dot.
+    app.send(Command::Edit(Edit::SetAttackFilter {
+        filter: AttackFilter::default().with_scalability(ScalabilityFilter::ScaledOnly),
+    }));
+    app.until("dot on", |vm| p(vm).nav_dots[idx]).await;
+    app.frame();
+    let mut expected = vec![false; Page::ALL.len()];
+    expected[idx] = true;
+    assert_eq!(dots(&app), expected);
+
+    // Resetting back to default clears the dot.
+    app.send(Command::Edit(Edit::SetAttackFilter {
+        filter: AttackFilter::default(),
+    }));
+    app.until("dot off", |vm| !p(vm).nav_dots[idx]).await;
+    app.frame();
+    assert_eq!(dots(&app), vec![false; Page::ALL.len()]);
+
+    // Undo restores the non-default profile and lights the dot back up; second undo clears it.
+    app.window.invoke_undo();
+    app.until("dot restored by undo", |vm| p(vm).nav_dots[idx])
+        .await;
+    app.frame();
+    assert_eq!(dots(&app), expected);
+
+    app.window.invoke_undo();
+    app.until("dot cleared by second undo", |vm| !p(vm).nav_dots[idx])
+        .await;
+    app.frame();
+    assert_eq!(dots(&app), vec![false; Page::ALL.len()]);
+}

@@ -276,6 +276,8 @@ pub struct PageData {
     pub problems: Vec<ProblemRow>,
     /// Assumptions page (job 136).
     pub assumptions: Option<crate::assumptions::AssumptionsView>,
+    /// Attacker profile page (job 137).
+    pub attacker_profile: Option<crate::attacker_profile::AttackerProfileView>,
 }
 
 /// One baseline in the versions list.
@@ -480,6 +482,9 @@ pub struct ProjectView {
     /// Per page in `Page::ALL` order: a count for the sidebar, if the page
     /// has one (entities, open problems).
     pub nav_counts: Vec<Option<usize>>,
+    /// Per page in `Page::ALL` order: whether the sidebar shows an accent
+    /// dot (non-default attacker profile).
+    pub nav_dots: Vec<bool>,
     /// Blocking problems and warnings, for the status bar (job 130).
     pub problem_counts: (usize, usize),
     /// When the last edit reached the server in this session, if one did.

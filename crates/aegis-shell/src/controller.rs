@@ -3282,6 +3282,7 @@ impl Controller {
 
         let Some(project) = view.project.as_ref() else {
             w.set_has_project(false);
+            w.set_nav_dots(model(Vec::new()));
             w.set_draw(model(Vec::new()));
             w.set_draw_paths(model(Vec::new()));
             w.set_draw_rects(model(Vec::new()));
@@ -3438,6 +3439,9 @@ impl Controller {
                     .map(|c| c.map_or_else(SharedString::new, |n| s(&n.to_string())))
                     .collect(),
             ));
+        }
+        if prev_proj.is_none_or(|old| old.nav_dots != project.nav_dots) {
+            w.set_nav_dots(model(project.nav_dots.clone()));
         }
         if prev_proj.is_none_or(|old| !Arc::ptr_eq(&old.vocab, &project.vocab)) {
             self.apply_vocabulary(&w, project);

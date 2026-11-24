@@ -320,3 +320,453 @@ fn scalability_reset_eu_cra_excluded_counts_and_toast() {
         )
     );
 }
+
+fn report_ctx() -> aegis_client::report::ReportContext {
+    aegis_client::report::ReportContext {
+        project: "Profile Report".into(),
+        user: "Mira Chen".into(),
+        now_ms: 1_792_956_600_000,
+        seq: 9,
+        unsaved: false,
+    }
+}
+
+fn active_profile_workspace() -> (
+    Workspace,
+    Arc<Methodology>,
+    aegis_model::FeasibilityFactor,
+    aegis_model::FactorLevel,
+    ThreatId,
+    ThreatId,
+) {
+    let m = Arc::new(Methodology::iso21434_r155().expect("iso"));
+    let safety = m.impact_category("safety").expect("safety");
+    let severe = m.level(safety, "severe").expect("severe");
+    let spoofing = m.threat_category("spoofing").expect("spoofing");
+    let high = m.feasibility_level("high").expect("high");
+    let factor = m.feasibility_factor("equipment").expect("equipment");
+    let bespoke = m.factor_level(factor, "bespoke").expect("bespoke");
+
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let asset = AssetId::new_v7();
+    let dmg = DamageId::new_v7();
+    let (t_unscaled, t_scaled) = (ThreatId::new_v7(), ThreatId::new_v7());
+    let tree_id = TreeId::new_v7();
+    let (root_id, s_bespoke, s_std) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+
+    let mut tree = AttackTree::new(root_id, Node::gate(GateKind::Or, "Root")).expect("root");
+    tree.add_child(tree.root(), s_bespoke, Node::step("Bespoke probe"))
+        .expect("s_bespoke");
+    tree.add_child(tree.root(), s_std, Node::step("Standard bus tap"))
+        .expect("s_std");
+
+    ws.apply(
+        vec![
+            Op::AddAsset {
+                id: asset,
+                name: "ECU".into(),
+                properties: m.all_properties(),
+                provenance: prov(),
+            },
+            Op::AddDamageScenario {
+                id: dmg,
+                name: "Crash".into(),
+                impacts: vec![(safety, severe)],
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tree_id,
+                tree,
+                step_feasibility: vec![(s_bespoke, high), (s_std, high)],
+                provenance: prov(),
+            },
+            Op::SetStepFactor {
+                tree: tree_id,
+                node: s_bespoke,
+                factor,
+                level: Some(bespoke),
+                provenance: prov(),
+            },
+            Op::AddThreatScenario {
+                id: t_unscaled,
+                name: "Physical only".into(),
+                asset,
+                category: spoofing,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov(),
+            },
+            Op::SetThreatFeasibility {
+                threat: t_unscaled,
+                level: Some(high),
+                provenance: prov(),
+            },
+            Op::SetThreatScaling {
+                threat: t_unscaled,
+                scales: Some(false),
+                reason: "needs physical access".into(),
+                provenance: prov(),
+            },
+            Op::AddThreatScenario {
+                id: t_scaled,
+                name: "Remote attack".into(),
+                asset,
+                category: spoofing,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t_scaled,
+                tree: Some(tree_id),
+                provenance: prov(),
+            },
+            Op::SetAttackFilter {
+                filter: aegis_model::AttackFilter::default()
+                    .without(factor, bespoke)
+                    .with_scalability(ScalabilityFilter::ScaledOnly),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+
+    (ws, m, factor, bespoke, t_unscaled, t_scaled)
+}
+
+#[test]
+fn report_cover_method_html_pdf_and_xlsx_render_active_profile_in_en_and_ja() {
+    use aegis_client::excel::{SheetData, read_workbook};
+    use aegis_client::report::{
+        Block, ReportLanguage, ReportOptions, ReportProfile, Style, report_doc_with_options,
+        report_html_with_options, report_pdf_with_options, report_workbook_xlsx,
+        report_workbook_xlsx_in, risk_register_xlsx,
+    };
+
+    let (ws, m, factor, bespoke, _t_unscaled, _t_scaled) = active_profile_workspace();
+    assert_eq!(ws.project().conditions().count(), 0);
+    assert_eq!(ws.project().assumptions().count(), 0);
+    let ctx = report_ctx();
+
+    for (lang, r_lang) in [
+        (Language::En, ReportLanguage::English),
+        (Language::Ja, ReportLanguage::Japanese),
+    ] {
+        let cat = Catalog::load(lang);
+        let opts = ReportOptions {
+            profile: ReportProfile {
+                language: r_lang,
+                ..ReportProfile::default()
+            },
+            ..ReportOptions::default()
+        };
+
+        let doc = report_doc_with_options(&ws, &ctx, &opts);
+        let f_label = m
+            .feasibility_factor_label_for_lang(factor, lang.code())
+            .expect("factor label");
+        let l_label = m
+            .factor_level_label_for_lang(factor, bespoke, lang.code())
+            .expect("level label");
+        let scaled_label = cat.tr("attacker-profile-scalability-scaled");
+
+        // Cover table includes Attacker profile row with localized factor/level and scalability.
+        let cover_rows = doc
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Table { rows, .. } => Some(rows),
+                _ => None,
+            })
+            .expect("cover table");
+        let ap_row = cover_rows
+            .iter()
+            .find(|r| r[0] == cat.tr("report-attacker-profile"))
+            .expect("Attacker profile cover row");
+        assert!(ap_row[1].contains(f_label), "{:?}", ap_row);
+        assert!(ap_row[1].contains(l_label), "{:?}", ap_row);
+        assert!(ap_row[1].contains(&scaled_label), "{:?}", ap_row);
+
+        // Method heading(2) -> methodology line -> Attacker profile heading(3) -> table -> fallback Excluded.
+        let pos_method = doc
+            .blocks
+            .iter()
+            .position(|b| matches!(b, Block::Heading(2, t) if t == &cat.tr("section-method")))
+            .expect("Method heading");
+        assert!(matches!(
+            &doc.blocks[pos_method + 1],
+            Block::Paragraph(t, Style::Normal) if t.contains(m.key()) && t.contains(m.label_for_lang(lang.code()))
+        ));
+        assert!(matches!(
+            &doc.blocks[pos_method + 2],
+            Block::Heading(3, t) if t == &cat.tr("report-attacker-profile")
+        ));
+        let Block::Table { headers, rows } = &doc.blocks[pos_method + 3] else {
+            panic!("expected Attacker profile table");
+        };
+        assert_eq!(
+            headers,
+            &[
+                cat.tr("report-attacker-profile-factor"),
+                cat.tr("report-attacker-profile-allowed"),
+                cat.tr("report-attacker-profile-excluded"),
+            ]
+        );
+        assert_eq!(rows.len(), m.feasibility_factor_count() + 1);
+        let equip_row = rows.iter().find(|r| r[0] == f_label).expect("factor row");
+        assert!(
+            !equip_row[1].split(", ").any(|item| item == l_label),
+            "excluded level {l_label} should not be in allowed list: {}",
+            equip_row[1]
+        );
+        assert_eq!(equip_row[2], l_label);
+        let other_row = rows
+            .iter()
+            .find(|r| r[0] != f_label && r[0] != cat.tr("report-attacker-profile-scalability"))
+            .expect("other factor");
+        assert_eq!(other_row[1], cat.tr("report-attacker-profile-all-allowed"));
+        assert_eq!(
+            other_row[2],
+            cat.tr("report-attacker-profile-none-excluded")
+        );
+        assert_eq!(
+            rows.last().expect("scalability row"),
+            &vec![
+                cat.tr("report-attacker-profile-scalability"),
+                scaled_label.clone(),
+                String::new(),
+            ]
+        );
+
+        assert!(matches!(
+            &doc.blocks[pos_method + 4],
+            Block::Heading(3, t) if t == &cat.tr("report-excluded")
+        ));
+        let Block::Table {
+            headers: ex_headers,
+            rows: ex_rows,
+        } = &doc.blocks[pos_method + 5]
+        else {
+            panic!("expected excluded table");
+        };
+        assert_eq!(
+            ex_headers,
+            &[
+                cat.tr("report-excluded-item"),
+                cat.tr("report-excluded-reason")
+            ]
+        );
+        assert!(
+            ex_rows
+                .iter()
+                .any(|r| r[1].contains("Outside attacker profile")),
+            "missing factor exclusion in {ex_rows:?}"
+        );
+        assert!(
+            ex_rows.iter().any(|r| r[1].contains("Scalability")),
+            "missing scalability exclusion in {ex_rows:?}"
+        );
+
+        // HTML & PDF render cleanly.
+        let html = report_html_with_options(&ws, &ctx, &opts);
+        assert!(html.contains(&cat.tr("section-method")));
+        assert!(html.contains(&cat.tr("report-attacker-profile")));
+        assert!(html.contains(&scaled_label));
+        let pdf = report_pdf_with_options(&ws, &ctx, &opts).expect("pdf");
+        assert!(pdf.starts_with(b"%PDF-"));
+    }
+
+    // XLSX full workbook + standalone risk register (no conditions/assumptions, active profile).
+    let book = read_workbook(&report_workbook_xlsx(&ws)).expect("workbook");
+    let sheet = |name: &str| -> &SheetData {
+        book.sheets
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("missing sheet {name}"))
+    };
+    let ap_sheet = sheet("Attacker profile");
+    assert_eq!(ap_sheet.headers, vec!["Factor", "Allowed", "Excluded"]);
+    assert_eq!(ap_sheet.rows.len(), m.feasibility_factor_count() + 1);
+    assert_eq!(
+        ap_sheet.rows.last().expect("last").1,
+        vec![
+            "Scalability".to_owned(),
+            "Scalable only".to_owned(),
+            String::new(),
+        ]
+    );
+
+    // Overview counts stay aligned (Attacker profile sheet is not in Overview).
+    let overview = sheet("Overview");
+    assert!(
+        !overview
+            .rows
+            .iter()
+            .any(|(_, r)| r[0] == "Attacker profile"),
+        "Overview must not list Attacker profile sheet"
+    );
+    let scoped = read_workbook(&report_workbook_xlsx_in(
+        &ws,
+        &[],
+        &aegis_client::systems::SystemView::all(),
+    ))
+    .expect("scoped workbook");
+    assert_eq!(scoped.sheets.len(), book.sheets.len());
+
+    // Excluded and not applicable cells appear in Risk register and Threat scenarios.
+    let rr_only = read_workbook(&risk_register_xlsx(&ws, &ctx)).expect("rr only");
+    let rr_only_sheet = rr_only
+        .sheets
+        .iter()
+        .find(|s| s.name == "Risk register")
+        .expect("rr");
+    for s in [
+        sheet("Risk register"),
+        rr_only_sheet,
+        sheet("Threat scenarios"),
+    ] {
+        let name_col = s
+            .headers
+            .iter()
+            .position(|h| h == "Threat scenario")
+            .expect("name col");
+        let before_col = s
+            .headers
+            .iter()
+            .position(|h| h == "Risk before controls")
+            .expect("before col");
+        let after_col = s
+            .headers
+            .iter()
+            .position(|h| h == "Risk after controls")
+            .expect("after col");
+        let ex_col = s
+            .headers
+            .iter()
+            .position(|h| h == "Excluded")
+            .expect("excluded col");
+        let unscaled = &s
+            .rows
+            .iter()
+            .find(|(_, r)| r[name_col] == "Physical only")
+            .expect("unscaled row")
+            .1;
+        assert_eq!(unscaled[before_col], "not applicable");
+        assert_eq!(unscaled[after_col], "not applicable");
+        assert!(unscaled[ex_col].contains("Scalability"));
+        let scaled = &s
+            .rows
+            .iter()
+            .find(|(_, r)| r[name_col] == "Remote attack")
+            .expect("scaled row")
+            .1;
+        assert_ne!(scaled[before_col], "not applicable");
+        assert_eq!(scaled[ex_col], "");
+    }
+}
+
+#[test]
+fn report_method_handles_zero_factor_pack_and_conditions_without_duplicate_excluded() {
+    use aegis_client::report::{Block, report_doc};
+
+    // Zero-factor methodology pack (EU CRA) still emits non-empty Method table with Scalability row.
+    let cra = Arc::new(Methodology::eu_cra().expect("eu_cra"));
+    let mut cra_ws = Workspace::empty(cra);
+    let cra_edit = scalability_edit(cra_ws.project(), ScalabilityFilter::UnscaledOnly);
+    apply_edit(&mut cra_ws, &cra_edit);
+    let cra_doc = report_doc(&cra_ws, &report_ctx());
+    let pos = cra_doc
+        .blocks
+        .iter()
+        .position(|b| matches!(b, Block::Heading(3, t) if t == "Attacker profile"))
+        .expect("Attacker profile heading");
+    let Block::Table { rows, .. } = &cra_doc.blocks[pos + 1] else {
+        panic!("expected table");
+    };
+    assert_eq!(
+        rows,
+        &[vec![
+            "Scalability".to_owned(),
+            "Non-scalable only".to_owned(),
+            String::new(),
+        ]]
+    );
+
+    // When conditions exist, Method does NOT emit a second Excluded elements and steps table.
+    let (mut ws, _, _, _, _, _) = active_profile_workspace();
+    apply_edit(
+        &mut ws,
+        &Edit::AddCondition {
+            id: aegis_model::ConditionId::new_v7(),
+            name: "CAN bus".into(),
+        },
+    );
+    let doc = report_doc(&ws, &report_ctx());
+    let excluded_headings = doc
+        .blocks
+        .iter()
+        .filter(|b| matches!(b, Block::Heading(3, t) if t == "Excluded elements and steps"))
+        .count();
+    assert_eq!(excluded_headings, 1);
+}
+
+#[test]
+fn baseline_comparison_and_report_record_attacker_profile_changes() {
+    use aegis_client::report::{
+        Block, ReportFilters, ReportOptions, ReportProfile, report_doc_with_options,
+    };
+
+    let m = Arc::new(Methodology::iso21434_r155().expect("iso"));
+    let base = Workspace::empty(Arc::clone(&m));
+    let mut current = Workspace::empty(m);
+
+    // Same filter emits no Attacker profile changed line.
+    let same = pages::comparison(base.project(), "v1", current.project()).expect("comparison");
+    assert!(
+        !same
+            .lines
+            .iter()
+            .any(|l| l.text == "Attacker profile changed"),
+        "{:?}",
+        same.lines
+    );
+
+    let cur_edit = scalability_edit(current.project(), ScalabilityFilter::ScaledOnly);
+    apply_edit(&mut current, &cur_edit);
+    let cmp = pages::comparison(base.project(), "v1", current.project()).expect("comparison");
+    assert!(
+        cmp.lines
+            .iter()
+            .any(|l| { l.kind == "Changed" && l.text == "Attacker profile changed" })
+    );
+    assert!(cmp.summary.contains("1 changed"), "{}", cmp.summary);
+
+    let opts = ReportOptions {
+        baseline_project: Some(Arc::new(base.project().clone())),
+        profile: ReportProfile {
+            filters: ReportFilters {
+                baseline: Some("v1".to_owned()),
+                ..Default::default()
+            },
+            ..ReportProfile::default()
+        },
+    };
+    let doc = report_doc_with_options(&current, &report_ctx(), &opts);
+    let pos_cmp = doc
+        .blocks
+        .iter()
+        .position(|b| matches!(b, Block::Heading(2, t) if t == "Comparison with baseline"))
+        .expect("comparison heading");
+    let pos_method = doc
+        .blocks
+        .iter()
+        .position(|b| matches!(b, Block::Heading(2, t) if t == "Method"))
+        .expect("method heading");
+    assert!(pos_method < pos_cmp);
+    assert!(
+        doc.blocks[pos_cmp..]
+            .iter()
+            .any(|b| matches!(b, Block::Table { rows, .. } if rows.iter().any(|r| r == &vec!["Changed".to_owned(), "Attacker profile changed".to_owned()])))
+    );
+}

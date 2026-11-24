@@ -109,6 +109,8 @@ pub enum Page {
     Configuration,
     /// Applicability assumptions and exclusions (job 136).
     Assumptions,
+    /// Attacker capability profile and scalability filter (job 137).
+    AttackerProfile,
 }
 
 /// The group of pages a page sits in on the sidebar: the phases of
@@ -526,7 +528,7 @@ pub enum PageLayout {
 impl Page {
     /// Every page, in menu and sidebar order: the analysis in the order of
     /// its phases, item definition first (UI-13).
-    pub const ALL: [Page; 17] = [
+    pub const ALL: [Page; 18] = [
         Page::Overview,
         Page::Item,
         Page::Scope,
@@ -536,6 +538,7 @@ impl Page {
         Page::Assets,
         Page::Threats,
         Page::Trees,
+        Page::AttackerProfile,
         Page::Risks,
         Page::Controls,
         Page::Goals,
@@ -556,7 +559,7 @@ impl Page {
             }
             Page::Damage => PageGroup::Impact,
             Page::Assets | Page::Threats => PageGroup::AssetsThreats,
-            Page::Trees => PageGroup::Feasibility,
+            Page::Trees | Page::AttackerProfile => PageGroup::Feasibility,
             Page::Risks | Page::Controls | Page::Goals => PageGroup::Risk,
             Page::Reports => PageGroup::Outputs,
             Page::Problems | Page::Versions | Page::History | Page::Admin => PageGroup::Project,
@@ -599,6 +602,7 @@ impl Page {
             Page::Assets => "assets",
             Page::Threats => "threats",
             Page::Trees => "trees",
+            Page::AttackerProfile => "attacker-profile",
             Page::Risks => "risks",
             Page::Controls => "controls",
             Page::Goals => "goals",
@@ -631,7 +635,8 @@ impl Page {
             | Page::Item
             | Page::Scope
             | Page::Configuration
-            | Page::Assumptions => &[],
+            | Page::Assumptions
+            | Page::AttackerProfile => &[],
         }
     }
 
@@ -666,6 +671,7 @@ impl Page {
             Page::Scope => "Description and scope",
             Page::Configuration => "Configuration",
             Page::Assumptions => "Assumptions",
+            Page::AttackerProfile => "Attacker profile",
         }
     }
 }
@@ -1138,6 +1144,7 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
             }
         }
         Page::Configuration
+        | Page::AttackerProfile
         | Page::Problems
         | Page::Versions
         | Page::History
