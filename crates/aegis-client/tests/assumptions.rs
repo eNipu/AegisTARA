@@ -1137,3 +1137,578 @@ fn exclusion_reasons_entries_and_assumption_switch_toasts() {
         "Assumption switched: 0 steps excluded, 0 included, no risk moved"
     );
 }
+
+fn report_ctx() -> aegis_client::report::ReportContext {
+    aegis_client::report::ReportContext {
+        project: "Brake".into(),
+        user: "Mira".into(),
+        now_ms: 1_792_956_600_000,
+        seq: 3,
+        unsaved: false,
+    }
+}
+
+fn xlsx_sheet<'a>(
+    book: &'a aegis_client::excel::WorkbookData,
+    name: &str,
+) -> &'a aegis_client::excel::SheetData {
+    book.sheets
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("no sheet {name}"))
+}
+
+fn xlsx_col(s: &aegis_client::excel::SheetData, header: &str) -> usize {
+    s.headers
+        .iter()
+        .position(|h| h == header)
+        .unwrap_or_else(|| panic!("no column {header} in {}", s.name))
+}
+
+#[test]
+fn report_doc_and_xlsx_surface_assumptions_across_locales_and_mixed_configs() {
+    use aegis_client::report::{
+        Block, ReportLanguage, ReportOptions, ReportProfile, Style, report_doc,
+        report_doc_with_options, report_html, report_pdf, report_workbook_xlsx, risk_register_xlsx,
+    };
+    use aegis_model::{ComponentId, InterfaceId};
+
+    let m = Arc::new(Methodology::iso21434_r155().expect("methodology"));
+    let integrity = m.property("integrity").expect("integrity");
+    let authenticity = m.property("authenticity").expect("authenticity");
+    let safety = m
+        .impact_category("safety")
+        .or_else(|| m.impact_category("safety-health"))
+        .expect("safety");
+    let severe = m.level(safety, "severe").expect("severe");
+    let spoofing = m.threat_category("spoofing").expect("spoofing");
+    let high = m.feasibility_level("high").expect("high");
+
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let comp = ComponentId::new_v7();
+    let iface = InterfaceId::new_v7();
+    let asset = AssetId::new_v7();
+    let dmg = DamageId::new_v7();
+    let tree0_id = TreeId::new_v7();
+    let s0 = NodeId::new_v7();
+    let mut tree0 =
+        AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "Tree 0")).expect("r0");
+    tree0
+        .add_child(tree0.root(), s0, Node::step("Debug tap"))
+        .expect("s0");
+    let tree1_id = TreeId::new_v7();
+    let s1 = NodeId::new_v7();
+    let mut tree1 =
+        AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "Tree 1")).expect("r1");
+    tree1
+        .add_child(tree1.root(), s1, Node::step("Bus spoof"))
+        .expect("s1");
+    let t0 = ThreatId::new_v7();
+    let t1 = ThreatId::new_v7();
+    let cl0 = ClaimId::new_v7();
+    let as0 = AssumptionId::new_v7();
+    let as1 = AssumptionId::new_v7();
+
+    ws.apply(
+        vec![
+            Op::AddComponent {
+                id: comp,
+                name: "ECU".into(),
+                parent: None,
+                provenance: prov(),
+            },
+            Op::AddAsset {
+                id: asset,
+                name: "Firmware".into(),
+                properties: [integrity, authenticity].into_iter().collect(),
+                provenance: prov(),
+            },
+            Op::AddDamageScenario {
+                id: dmg,
+                name: "Loss of braking".into(),
+                impacts: vec![(safety, severe)],
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tree0_id,
+                tree: tree0,
+                step_feasibility: vec![(s0, high)],
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tree1_id,
+                tree: tree1,
+                step_feasibility: vec![(s1, high)],
+                provenance: prov(),
+            },
+            Op::AddThreatScenario {
+                id: t0,
+                name: "JTAG dump".into(),
+                asset,
+                category: spoofing,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t0,
+                tree: Some(tree0_id),
+                provenance: prov(),
+            },
+            Op::AddThreatScenario {
+                id: t1,
+                name: "CAN spoof".into(),
+                asset,
+                category: spoofing,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t1,
+                tree: Some(tree1_id),
+                provenance: prov(),
+            },
+            Op::AddCybersecurityClaim {
+                id: cl0,
+                name: "Debug port absent".into(),
+                provenance: prov(),
+            },
+            Op::AddAssumption {
+                id: as0,
+                name: "Debug fused".into(),
+                holds: true,
+                provenance: prov(),
+            },
+            Op::AddAssumption {
+                id: as1,
+                name: "Case potted".into(),
+                holds: false,
+                provenance: prov(),
+            },
+            Op::LinkClaimAssumption {
+                claim: cl0,
+                assumption: as0,
+                provenance: prov(),
+            },
+            Op::SetAssumptionExcludes {
+                id: as0,
+                trees: vec![tree0_id],
+                steps: vec![aegis_model::StepRef {
+                    tree: tree0_id,
+                    node: s0,
+                }],
+                provenance: prov(),
+            },
+            Op::SetDescription {
+                target: ElementRef::Assumption(as0),
+                text: "Blown at EOL".into(),
+                provenance: prov(),
+            },
+            Op::SetDescriptionTranslation {
+                target: ElementRef::Assumption(as0),
+                lang: "ja".into(),
+                text: "出荷時ヒューズ切断".into(),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+    apply_edit(
+        &mut ws,
+        Edit::AddInterface {
+            id: iface,
+            name: "JTAG".into(),
+            component: comp,
+            kind: 0,
+        },
+    );
+
+    let ctx = report_ctx();
+
+    // 1a. Assumption-only Word report (English).
+    let doc_en = report_doc(&ws, &ctx);
+    let cover_en = doc_en
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("cover");
+    assert!(!cover_en.iter().any(|r| r[0] == "Configuration"));
+    assert!(
+        cover_en.contains(&vec![
+            "Assumptions".to_owned(),
+            "1 of 2 assumptions hold".to_owned()
+        ]),
+        "missing assumption cover row: {cover_en:?}"
+    );
+    let pos_cfg = doc_en
+        .blocks
+        .iter()
+        .position(|b| matches!(b, Block::Heading(2, t) if t == "Configuration and assumptions"))
+        .expect("Configuration and assumptions");
+    assert!(
+        !doc_en
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::Heading(3, t) if t == "Conditions"))
+    );
+    assert!(matches!(
+        &doc_en.blocks[pos_cfg + 1],
+        Block::Heading(3, t) if t == "Excluded elements and steps"
+    ));
+    let Block::Table { rows: ex_rows, .. } = &doc_en.blocks[pos_cfg + 2] else {
+        panic!("expected excluded table");
+    };
+    assert!(
+        ex_rows
+            .iter()
+            .any(|r| r[1].contains("Assumption AS00 Debug fused holds")),
+        "missing holding-assumption exclusion: {ex_rows:?}"
+    );
+    assert!(matches!(
+        &doc_en.blocks[pos_cfg + 3],
+        Block::Heading(3, t) if t == "Assumptions"
+    ));
+    let Block::Table {
+        headers: as_headers,
+        rows: as_rows,
+    } = &doc_en.blocks[pos_cfg + 4]
+    else {
+        panic!("expected Assumptions table");
+    };
+    assert_eq!(
+        as_headers,
+        &[
+            "ID",
+            "Assumption",
+            "Holds",
+            "Claims",
+            "Excluded while it holds",
+        ]
+    );
+    assert_eq!(as_rows.len(), 2);
+    assert_eq!(as_rows[0][0], "AS00");
+    assert_eq!(as_rows[0][1], "Debug fused");
+    assert_eq!(as_rows[0][2], "yes");
+    assert_eq!(as_rows[0][3], "CL00 · Debug port absent");
+    assert!(as_rows[0][4].contains("Tree 0") && as_rows[0][4].contains("Debug tap"));
+    assert_eq!(as_rows[1], vec!["AS01", "Case potted", "no", "", ""]);
+    assert!(matches!(
+        &doc_en.blocks[pos_cfg + 5],
+        Block::Heading(3, t) if t == "Descriptions"
+    ));
+    assert!(matches!(
+        &doc_en.blocks[pos_cfg + 6],
+        Block::Paragraph(t, Style::Muted) if t == "AS00 · Debug fused"
+    ));
+    assert!(matches!(
+        &doc_en.blocks[pos_cfg + 7],
+        Block::Paragraph(t, Style::Normal) if t == "Blown at EOL"
+    ));
+
+    let html = report_html(&ws, &ctx);
+    assert!(html.contains("1 of 2 assumptions hold"));
+    assert!(html.contains("Blown at EOL"));
+    let pdf = report_pdf(&ws, &ctx).expect("pdf");
+    assert!(pdf.starts_with(b"%PDF-"));
+
+    // 1b. Assumption-only Word report (Japanese) + Pseudo catalog check.
+    let doc_ja = report_doc_with_options(
+        &ws,
+        &ctx,
+        &ReportOptions {
+            profile: ReportProfile {
+                language: ReportLanguage::Japanese,
+                ..ReportProfile::default()
+            },
+            baseline_project: None,
+        },
+    );
+    let cover_ja = doc_ja
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("cover ja");
+    assert!(cover_ja.contains(&vec![
+        "前提条件".to_owned(),
+        "2 件の前提条件のうち 1 件が成立".to_owned()
+    ]));
+    assert!(
+        doc_ja
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::Heading(2, t) if t == "構成と前提条件"))
+    );
+    assert!(
+        doc_ja
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::Paragraph(t, Style::Normal) if t == "出荷時ヒューズ切断"))
+    );
+    let pseudo = Catalog::load(Language::Pseudo);
+    assert_eq!(pseudo.tr("report-assumptions"), "⟦Âssûmptîôns␣⟧");
+    assert_eq!(
+        pseudo.tr_with(
+            "report-assumptions-value",
+            &[("holding", "1"), ("total", "2")]
+        ),
+        "⟦1 ôf 2 âssûmptîôns hôld␣⟧"
+    );
+
+    // 1c. Assumption-only XLSX workbook (no conditions).
+    let book_only = aegis_client::excel::read_workbook(&report_workbook_xlsx(&ws)).expect("xlsx");
+    assert!(!book_only.sheets.iter().any(|s| s.name == "Conditions"));
+    let as_sheet = xlsx_sheet(&book_only, "Assumptions");
+    assert_eq!(
+        as_sheet.headers,
+        vec![
+            "ID",
+            "Assumption",
+            "Holds",
+            "Claims",
+            "Conditions",
+            "Excluded while it holds",
+        ]
+    );
+    assert_eq!(as_sheet.rows[0].1[2], "yes");
+    assert_eq!(as_sheet.rows[0].1[3], "CL00 · Debug port absent");
+    assert_eq!(as_sheet.rows[0].1[4], "");
+    assert!(as_sheet.rows[0].1[5].contains("Debug tap"));
+    assert_eq!(as_sheet.rows[1].1[2], "no");
+
+    // Excluded column appears on Item/Asset/Risk sheets via holding assumption alone.
+    for name in [
+        "Risk register",
+        "Threat scenarios",
+        "Assets",
+        "Components",
+        "Interfaces",
+    ] {
+        assert!(
+            xlsx_sheet(&book_only, name)
+                .headers
+                .iter()
+                .any(|h| h == "Excluded"),
+            "missing Excluded column on {name}"
+        );
+    }
+    let rr_only = aegis_client::excel::read_workbook(&risk_register_xlsx(&ws, &ctx)).expect("rr");
+    for rr in [
+        xlsx_sheet(&book_only, "Risk register"),
+        xlsx_sheet(&rr_only, "Risk register"),
+    ] {
+        let name_col = xlsx_col(rr, "Threat scenario");
+        let before_col = xlsx_col(rr, "Risk before controls");
+        let after_col = xlsx_col(rr, "Risk after controls");
+        let _ex_col = xlsx_col(rr, "Excluded");
+        let r0 = rr
+            .rows
+            .iter()
+            .map(|(_, r)| r.as_slice())
+            .find(|r| r[name_col] == "JTAG dump")
+            .expect("t0");
+        assert_eq!(r0[before_col], "not applicable");
+        assert_eq!(r0[after_col], "not applicable");
+        let r1 = rr
+            .rows
+            .iter()
+            .map(|(_, r)| r.as_slice())
+            .find(|r| r[name_col] == "CAN spoof")
+            .expect("t1");
+        assert_ne!(r1[before_col], "not applicable");
+        assert_ne!(r1[after_col], "not applicable");
+    }
+
+    // 2. Mixed project (both conditions and assumptions).
+    let cf0 = ConditionId::new_v7();
+    ws.apply(
+        vec![
+            Op::AddCondition {
+                id: cf0,
+                name: "Ethernet".into(),
+                description: "".into(),
+                present: false,
+                provenance: prov(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Assumption(as0),
+                condition: cf0,
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("add condition");
+    let doc_mixed = report_doc(&ws, &ctx);
+    let cover_mixed = doc_mixed
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("mixed cover");
+    assert!(cover_mixed.contains(&vec![
+        "Configuration".to_owned(),
+        "0 of 1 conditions present".to_owned()
+    ]));
+    assert!(cover_mixed.contains(&vec![
+        "Assumptions".to_owned(),
+        "1 of 2 assumptions hold".to_owned()
+    ]));
+    let pos_mix = doc_mixed
+        .blocks
+        .iter()
+        .position(|b| matches!(b, Block::Heading(2, t) if t == "Configuration and assumptions"))
+        .expect("mixed config");
+    assert!(matches!(
+        &doc_mixed.blocks[pos_mix + 1],
+        Block::Heading(3, t) if t == "Conditions"
+    ));
+    assert!(matches!(
+        &doc_mixed.blocks[pos_mix + 3],
+        Block::Heading(3, t) if t == "Excluded elements and steps"
+    ));
+    assert!(matches!(
+        &doc_mixed.blocks[pos_mix + 5],
+        Block::Heading(3, t) if t == "Assumptions"
+    ));
+    let book_mixed =
+        aegis_client::excel::read_workbook(&report_workbook_xlsx(&ws)).expect("mixed xlsx");
+    assert!(book_mixed.sheets.iter().any(|s| s.name == "Conditions"));
+    let as_mix = xlsx_sheet(&book_mixed, "Assumptions");
+    assert_eq!(as_mix.rows[0].1[4], "CF00 · Ethernet");
+}
+
+#[test]
+fn xlsx_formula_injection_on_assumptions_and_links_is_escaped() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("methodology"));
+    let mut ws = Workspace::empty(m);
+    let cf0 = ConditionId::new_v7();
+    let cl0 = ClaimId::new_v7();
+    let tree_id = TreeId::new_v7();
+    let step_id = NodeId::new_v7();
+    let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "-1")).expect("r");
+    tree.add_child(tree.root(), step_id, Node::step("@foo"))
+        .expect("step");
+    let as_eq = AssumptionId::new_v7();
+    let as_plus = AssumptionId::new_v7();
+    let as_minus = AssumptionId::new_v7();
+    let as_at = AssumptionId::new_v7();
+
+    ws.apply(
+        vec![
+            Op::AddCondition {
+                id: cf0,
+                name: "-1 & <cond>".into(),
+                description: "".into(),
+                present: true,
+                provenance: prov(),
+            },
+            Op::AddCybersecurityClaim {
+                id: cl0,
+                name: "+sum".into(),
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tree_id,
+                tree,
+                step_feasibility: vec![],
+                provenance: prov(),
+            },
+            Op::AddAssumption {
+                id: as_eq,
+                name: "=cmd".into(),
+                holds: true,
+                provenance: prov(),
+            },
+            Op::AddAssumption {
+                id: as_plus,
+                name: "+sum".into(),
+                holds: false,
+                provenance: prov(),
+            },
+            Op::AddAssumption {
+                id: as_minus,
+                name: "-1".into(),
+                holds: false,
+                provenance: prov(),
+            },
+            Op::AddAssumption {
+                id: as_at,
+                name: "@foo".into(),
+                holds: false,
+                provenance: prov(),
+            },
+            Op::LinkClaimAssumption {
+                claim: cl0,
+                assumption: as_eq,
+                provenance: prov(),
+            },
+            Op::NeedCondition {
+                element: ElementRef::Assumption(as_eq),
+                condition: cf0,
+                provenance: prov(),
+            },
+            Op::SetAssumptionExcludes {
+                id: as_eq,
+                trees: vec![tree_id],
+                steps: vec![aegis_model::StepRef {
+                    tree: tree_id,
+                    node: step_id,
+                }],
+                provenance: prov(),
+            },
+            Op::SetDescription {
+                target: ElementRef::Assumption(as_eq),
+                text: "=cmd <xml> &".into(),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+
+    let bytes = aegis_client::report::report_workbook_xlsx(&ws);
+    let book = aegis_client::excel::read_workbook(&bytes).expect("reads");
+    let sheet = xlsx_sheet(&book, "Assumptions");
+    let name_col = xlsx_col(sheet, "Assumption");
+    let claims_col = xlsx_col(sheet, "Claims");
+    let cond_col = xlsx_col(sheet, "Conditions");
+    let excl_col = xlsx_col(sheet, "Excluded while it holds");
+    assert_eq!(sheet.rows[0].1[name_col], "'=cmd");
+    assert_eq!(sheet.rows[1].1[name_col], "'+sum");
+    assert_eq!(sheet.rows[2].1[name_col], "'-1");
+    assert_eq!(sheet.rows[3].1[name_col], "'@foo");
+    assert!(sheet.rows[0].1[claims_col].contains("+sum"));
+    assert!(sheet.rows[0].1[cond_col].contains("-1 & <cond>"));
+    assert!(sheet.rows[0].1[excl_col].contains("@foo"));
+    for (_, row) in &sheet.rows {
+        for cell in row {
+            assert!(
+                !cell.starts_with(['=', '+', '-', '@']),
+                "unguarded cell: {cell:?}"
+            );
+        }
+    }
+    let raw_xml = String::from_utf8_lossy(&bytes);
+    for guarded in [
+        "<t>'=cmd</t>",
+        "<t>'+sum</t>",
+        "<t>'-1</t>",
+        "<t>'@foo</t>",
+        "&amp; &lt;cond&gt;",
+    ] {
+        assert!(raw_xml.contains(guarded), "missing {guarded} in xml");
+    }
+    let html = aegis_client::report::report_html(&ws, &report_ctx());
+    assert!(html.contains("=cmd &lt;xml&gt; &amp;"));
+    assert!(!html.contains("<xml>"));
+}

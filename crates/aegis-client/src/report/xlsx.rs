@@ -362,12 +362,12 @@ fn excluded_cell(p: &Project, app: Option<&Applicability>, eref: ElementRef) -> 
 
 fn risk_cell(
     ws: &Workspace,
-    has_conditions: bool,
+    has_applicability: bool,
     threat: ThreatId,
     residual: bool,
     view: Option<&crate::view::RiskView>,
 ) -> String {
-    if has_conditions && crate::exclusion::threat_risk_not_applicable(ws, threat, residual) {
+    if has_applicability && crate::exclusion::threat_risk_not_applicable(ws, threat, residual) {
         "not applicable".to_owned()
     } else {
         view.map_or_else(|| "not rated".to_owned(), |x| x.label.clone())
@@ -377,7 +377,9 @@ fn risk_cell(
 fn risk_register_sheet(ws: &Workspace, sys: &Rows<'_>) -> Sheet {
     let p = ws.project();
     let has_conditions = p.conditions().next().is_some();
-    let app = has_conditions.then(|| p.applicability());
+    let has_assumptions = p.assumptions().next().is_some();
+    let has_applicability = has_conditions || has_assumptions;
+    let app = has_applicability.then(|| p.applicability());
     let names = p.methodology().element_names();
     let mut header = vec![
         "ID".to_owned(),
@@ -392,7 +394,7 @@ fn risk_register_sheet(ws: &Workspace, sys: &Rows<'_>) -> Sheet {
         "Treatment".to_owned(),
         "Goal or claim".to_owned(),
     ];
-    if has_conditions {
+    if has_applicability {
         header.push("Excluded".to_owned());
     }
     let mut rows = vec![header];
@@ -409,8 +411,8 @@ fn risk_register_sheet(ws: &Workspace, sys: &Rows<'_>) -> Sheet {
             r.damage,
             r.impact,
             r.feasibility,
-            risk_cell(ws, has_conditions, r.id, false, r.inherent.as_ref()),
-            risk_cell(ws, has_conditions, r.id, true, r.residual.as_ref()),
+            risk_cell(ws, has_applicability, r.id, false, r.inherent.as_ref()),
+            risk_cell(ws, has_applicability, r.id, true, r.residual.as_ref()),
             reduced,
             r.treatment,
             r.backing,
@@ -459,7 +461,9 @@ pub fn report_workbook_xlsx_in(
 ) -> Vec<u8> {
     let p = ws.project();
     let has_conditions = p.conditions().next().is_some();
-    let app = has_conditions.then(|| p.applicability());
+    let has_assumptions = p.assumptions().next().is_some();
+    let has_applicability = has_conditions || has_assumptions;
+    let app = has_applicability.then(|| p.applicability());
     let sys = Rows::new(p, view);
     let names = p.methodology().element_names();
     let vocab = pages::vocabulary(p.methodology());
@@ -527,7 +531,7 @@ pub fn report_workbook_xlsx_in(
             names.interface.plural.to_string(),
             names.asset.plural.to_string(),
         ]];
-        if has_conditions {
+        if has_applicability {
             comps[0].push("Excluded".to_owned());
         }
         sys.head(&mut comps);
@@ -561,7 +565,7 @@ pub fn report_workbook_xlsx_in(
             "Kind".to_owned(),
             names.data_flow.plural.to_string(),
         ]];
-        if has_conditions {
+        if has_applicability {
             ifaces[0].push("Excluded".to_owned());
         }
         sys.head(&mut ifaces);
@@ -661,7 +665,7 @@ pub fn report_workbook_xlsx_in(
     let mut assets = vec![vec!["ID".to_owned(), names.asset.singular.to_string()]];
     assets[0].extend(vocab.properties.iter().cloned());
     assets[0].push("Threats".to_owned());
-    if has_conditions {
+    if has_applicability {
         assets[0].push("Excluded".to_owned());
     }
     sys.head(&mut assets);
@@ -744,7 +748,7 @@ pub fn report_workbook_xlsx_in(
         "Reduced by".to_owned(),
         "Treatment".to_owned(),
     ]];
-    if has_conditions {
+    if has_applicability {
         threats[0].push("Excluded".to_owned());
     }
     sys.head(&mut threats);
@@ -781,8 +785,8 @@ pub fn report_workbook_xlsx_in(
             .to_owned(),
             t.as_ref()
                 .map_or_else(String::new, |t| t.scaling_reason.clone()),
-            risk_cell(ws, has_conditions, r.id, false, r.inherent.as_ref()),
-            risk_cell(ws, has_conditions, r.id, true, r.residual.as_ref()),
+            risk_cell(ws, has_applicability, r.id, false, r.inherent.as_ref()),
+            risk_cell(ws, has_applicability, r.id, true, r.residual.as_ref()),
             reduced,
             r.treatment,
         ];
@@ -993,6 +997,31 @@ pub fn report_workbook_xlsx_in(
         sheets.push(Sheet {
             name: "Conditions".to_owned(),
             rows: cond_rows,
+        });
+    }
+    if has_assumptions {
+        let catalog = crate::i18n::Catalog::load(crate::i18n::Language::En);
+        let mut rows = vec![vec![
+            catalog.tr("id"),
+            catalog.tr("assumption"),
+            catalog.tr("assumption-holds"),
+            catalog.tr("claims"),
+            catalog.tr("conditions"),
+            catalog.tr("relation-assumption-excludes"),
+        ]];
+        for r in super::doc::assumption_report_rows(p, &catalog) {
+            rows.push(vec![
+                r.visual_id,
+                r.name,
+                r.holds,
+                r.claims,
+                r.conditions,
+                r.excludes,
+            ]);
+        }
+        sheets.push(Sheet {
+            name: catalog.tr("assumptions"),
+            rows,
         });
     }
 
