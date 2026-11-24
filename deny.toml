@@ -71,8 +71,9 @@ exceptions = [
 ]
 
 [licenses.private]
-# Our own `publish = false` crates carry a proprietary license ref; skip them
-# rather than putting any license ref on the allow list (ADR 0003).
+# Our own `publish = false` crates carry the repository's own license
+# (PolyForm-Noncommercial-1.0.0, ADR 0076); skip them rather than putting any
+# license ref on the allow list (ADR 0003).
 ignore = true
 
 [advisories]
