@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 description = "UI-free model for the AegisTARA UI toolkit spike: pack, tree, feasibility math, layout, undo."
-license = "LicenseRef-Proprietary"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

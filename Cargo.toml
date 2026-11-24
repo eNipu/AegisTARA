@@ -12,7 +12,7 @@ exclude = ["spikes", "tools", "crates/aegis-model/fuzz"]
 edition = "2024"
 rust-version = "1.99.1"
 publish = false
-license = "LicenseRef-Proprietary"
+license = "PolyForm-Noncommercial-1.0.0"
 
 # One version per dependency for the whole product (standards Q7). A crate
 # opts in with `name.workspace = true`.

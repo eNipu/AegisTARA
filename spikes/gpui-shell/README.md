@@ -102,7 +102,7 @@ cargo metadata --format-version 1 --manifest-path spikes/gpui-shell/Cargo.toml \
 | 2 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | 2 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | 1 | 0BSD OR MIT OR Apache-2.0 |
-| 1 | LicenseRef-Proprietary (this spike) |
+| 1 | PolyForm-Noncommercial-1.0.0 (this spike) |
 | 1 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | 1 | (Apache-2.0 OR MIT) AND BSD-3-Clause |
 | 1 | Apache-2.0 / MIT |

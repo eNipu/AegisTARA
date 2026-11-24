@@ -3,7 +3,7 @@ name = "aegis-spike-gpui-shell"
 version = "0.1.0"
 edition = "2024"
 publish = false
-license = "LicenseRef-Proprietary"
+license = "PolyForm-Noncommercial-1.0.0"
 description = "AegisTARA shell toolkit spike: workbench docks, tree, inspector and editor with GPUI"
 
 # Own root: a worktree sits inside the main checkout, whose root Cargo would find.

@@ -86,7 +86,8 @@ future workspace members) may omit it.
 
 ## Decision 3: private crates are ignored
 
-Our own crates are `publish = false` with `license = "LicenseRef-Proprietary"`.
+Our own crates are `publish = false` with the repository's own license
+(`PolyForm-Noncommercial-1.0.0` since ADR 0076; `LicenseRef-Proprietary` before).
 Adding `LicenseRef-Proprietary` to the allow list would also let any third
 party crate with that string through. `[licenses.private] ignore = true` skips
 only unpublished crates in the graph, which are ours, and keeps the allow list

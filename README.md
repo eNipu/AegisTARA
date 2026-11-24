@@ -8,6 +8,19 @@ A learning project: a Threat Analysis and Risk Assessment (TARA) tool, written f
 - Visual attack trees with feasibility scoring, explain-why for every number, versions and baselines, and executive reports.
 - AI features are planned in the backlog.
 
+## License
+
+This repository is public for viewing, evaluation, and noncommercial use under
+the [PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX:
+`PolyForm-Noncommercial-1.0.0`): anyone may read, study, modify, and share the
+code for any noncommercial purpose. Any commercial use — selling it, offering
+it as a hosted service, or shipping it inside a commercial product — requires
+a separate written commercial license from the author (open an issue or email
+tokhandaker@outlook.com). The author, as copyright holder, is not bound by
+this license and grants commercial rights case by case; the product's own
+signed license files (`crates/aegis-license`) are that mechanism. Decision
+record: [docs/adr/0076-repository-license.md](docs/adr/0076-repository-license.md).
+
 ## Status
 
 The deterministic core, the server, password and OIDC login, the canvas

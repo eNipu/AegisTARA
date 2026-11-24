@@ -32,7 +32,7 @@ members = ["."]
 edition = "2024"
 rust-version = "1.99.1"
 publish = false
-license = "LicenseRef-Proprietary"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
