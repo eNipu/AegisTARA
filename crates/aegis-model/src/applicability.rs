@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use crate::description::ElementRef;
 use crate::eval::{Applicable, AttributeDomain, Lifted, evaluate};
-use crate::id::{ConditionId, ConditionIdx, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx};
+use crate::id::{
+    AssumptionId, ConditionId, ConditionIdx, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx,
+};
 use crate::item::{Component, ItemRef, MAX_COMPONENT_DEPTH};
 use crate::project::Project;
 use crate::provenance::Provenance;
@@ -163,6 +165,8 @@ impl Condition {
 pub enum Reason {
     /// Any element or step: it needs this condition and the condition is off.
     ConditionOff(ConditionId),
+    /// A tree or step: an assumption that excludes it currently holds.
+    AssumptionHolds(AssumptionId),
     /// A child component, interface, asset, threat or tree: its owner is
     /// excluded (the parent component, component, asset or threat).
     OwnerExcluded(ElementRef),
@@ -437,7 +441,9 @@ impl Project {
     /// ```
     #[must_use]
     pub fn applicability(&self) -> Applicability {
-        if self.conditions().all(|(_, _, c)| c.present()) {
+        if self.conditions().all(|(_, _, c)| c.present())
+            && self.assumptions().all(|(_, _, a)| !a.holds())
+        {
             return Applicability::default();
         }
         let off = |list: &[_]| -> Vec<Reason> {
@@ -452,10 +458,38 @@ impl Project {
                 push(&mut elements, e, r);
             }
         }
+        let mut step_assumptions: BTreeMap<TreeId, BTreeMap<NodeId, Vec<AssumptionId>>> =
+            BTreeMap::new();
+        for (_, aid, a) in self.assumptions() {
+            if !a.holds() || elements.contains_key(&ElementRef::Assumption(aid)) {
+                continue;
+            }
+            for &t_idx in a.excludes_trees() {
+                if let Some(tree_id) = self.attack_tree_id(t_idx) {
+                    push(
+                        &mut elements,
+                        ElementRef::Tree(tree_id),
+                        Reason::AssumptionHolds(aid),
+                    );
+                }
+            }
+            for sr in a.excludes_steps() {
+                step_assumptions
+                    .entry(sr.tree)
+                    .or_default()
+                    .entry(sr.node)
+                    .or_default()
+                    .push(aid);
+            }
+        }
+        for list in elements.values_mut() {
+            list.sort_unstable();
+            list.dedup();
+        }
         self.propagate_owners(&mut elements);
         let mut trees = BTreeMap::new();
         for (t, id, tree) in self.attack_trees() {
-            if let Some(x) = self.tree_exclusions(t, tree, &elements, &off) {
+            if let Some(x) = self.tree_exclusions(t, id, tree, &elements, &off, &step_assumptions) {
                 if x.excluded
                     .get(tree.root().index())
                     .copied()
@@ -538,14 +572,17 @@ impl Project {
     fn tree_exclusions(
         &self,
         t: TreeIdx,
+        tree_id: TreeId,
         tree: &AttackTree,
         ex: &BTreeMap<ElementRef, Vec<Reason>>,
         off: &impl Fn(&[ConditionIdx]) -> Vec<Reason>,
+        step_assumptions: &BTreeMap<TreeId, BTreeMap<NodeId, Vec<AssumptionId>>>,
     ) -> Option<TreeExclusions> {
         let mut out = TreeExclusions {
             nodes: BTreeMap::new(),
             excluded: vec![false; tree.len()],
         };
+        let tree_steps = step_assumptions.get(&tree_id);
         for (n, nid, node) in tree.iter() {
             if node.gate_kind().is_some() {
                 continue;
@@ -559,6 +596,9 @@ impl Project {
                 if ex.contains_key(&owner) {
                     reasons.push(Reason::ViaExcluded(via));
                 }
+            }
+            if let Some(aids) = tree_steps.and_then(|nodes| nodes.get(&nid)) {
+                reasons.extend(aids.iter().copied().map(Reason::AssumptionHolds));
             }
             if !reasons.is_empty() {
                 reasons.sort_unstable();

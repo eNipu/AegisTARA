@@ -13,12 +13,13 @@ use super::wire::{
     RiskTreatmentWire, SnapshotWire, StepAttackTypeByNode, StepFactorsByNode,
     StepFeasibilityByNode, StepMitigationsByNode, StepViaByNode, TargetView, Text, VisualDisplay,
 };
+use crate::applicability::{MAX_ASSUMPTION_EXCLUDES, StepRef};
 use crate::element::{AttrValue, ElementKind};
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ConditionId, ConditionIdx, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, NodeId, PartyId, PartyIdx, ThreatId, TreeId, TrustBoundaryId,
-    VisualPrefix,
+    AssetId, AssumptionId, AssumptionIdx, ClaimId, ComponentId, ConditionId, ConditionIdx,
+    ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId, NodeId, PartyId, PartyIdx,
+    ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
 };
 use crate::methodology::Methodology;
 use crate::op::Op;
@@ -66,6 +67,8 @@ struct SnapshotView<'a> {
     condition_links: Vec<ConditionLinkView>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     step_conditions: Vec<StepConditionView>,
+    #[serde(skip_serializing_if = "Assumptions::is_empty")]
+    assumptions: Assumptions<'a>,
 }
 
 struct Conditions<'a>(&'a Project);
@@ -136,6 +139,72 @@ fn condition_ids(p: &Project, list: &[ConditionIdx]) -> Vec<Text<ConditionId>> {
     list.iter()
         .filter_map(|&i| p.condition_id(i).map(Text))
         .collect()
+}
+
+struct Assumptions<'a>(&'a Project);
+
+impl Assumptions<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.assumptions().next().is_none()
+    }
+}
+
+#[derive(Serialize)]
+struct StepRefView {
+    tree: Text<TreeId>,
+    node: Text<NodeId>,
+}
+
+#[derive(Serialize)]
+struct AssumptionView<'a> {
+    id: Text<AssumptionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
+    name: &'a str,
+    holds: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    excludes_trees: Vec<Text<TreeId>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    excludes_steps: Vec<StepRefView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
+}
+
+impl Serialize for Assumptions<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let p = self.0;
+        s.collect_seq(p.assumptions().enumerate().map(|(pos, (idx, id, a))| {
+            let mut excludes_trees: Vec<TreeId> = a
+                .excludes_trees()
+                .iter()
+                .filter_map(|&t| p.attack_tree_id(t))
+                .collect();
+            excludes_trees.sort_unstable();
+            let excludes_trees = excludes_trees.into_iter().map(Text).collect();
+            let mut excludes_steps: Vec<StepRef> = a.excludes_steps().to_vec();
+            excludes_steps.sort_unstable();
+            let excludes_steps = excludes_steps
+                .into_iter()
+                .map(|sr| StepRefView {
+                    tree: Text(sr.tree),
+                    node: Text(sr.node),
+                })
+                .collect();
+            AssumptionView {
+                id: Text(id),
+                visual_id: VisualDisplay::non_default(
+                    VisualPrefix::Assumption,
+                    p.assumption_visual_num(idx),
+                    pos,
+                ),
+                name: a.name(),
+                holds: a.holds(),
+                excludes_trees,
+                excludes_steps,
+                provenance: ProvenanceView::of(a.provenance()),
+            }
+        }))
+    }
 }
 
 /// What every entity view needs.
@@ -463,6 +532,8 @@ struct ClaimView<'a> {
     name: &'a str,
     #[serde(skip_serializing_if = "LinkedParties::is_empty")]
     responsible: LinkedParties<'a>,
+    #[serde(skip_serializing_if = "LinkedClaimAssumptions::is_empty")]
+    assumptions: LinkedClaimAssumptions<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -559,6 +630,18 @@ struct LinkedParties<'a> {
 }
 
 impl LinkedParties<'_> {
+    fn is_empty(&self) -> bool {
+        self.links.is_empty()
+    }
+}
+
+/// A claim's linked assumptions as public IDs, in stored (ID) order.
+struct LinkedClaimAssumptions<'a> {
+    p: &'a Project,
+    links: &'a [AssumptionIdx],
+}
+
+impl LinkedClaimAssumptions<'_> {
     fn is_empty(&self) -> bool {
         self.links.is_empty()
     }
@@ -795,6 +878,10 @@ impl Serialize for Claims<'_> {
                         p,
                         links: cl.responsible(),
                     },
+                    assumptions: LinkedClaimAssumptions {
+                        p,
+                        links: cl.assumptions(),
+                    },
                     provenance: ProvenanceView::of(cl.provenance()),
                 }),
         )
@@ -958,6 +1045,16 @@ impl Serialize for LinkedParties<'_> {
     }
 }
 
+impl Serialize for LinkedClaimAssumptions<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.links
+                .iter()
+                .map(|&idx| Required(self.p.assumption_id(idx).map(Text))),
+        )
+    }
+}
+
 impl Serialize for LinkedBoundaryComponents<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_seq(
@@ -1087,6 +1184,7 @@ impl Project {
                     conditions: condition_ids(self, list),
                 })
                 .collect(),
+            assumptions: Assumptions(self),
         };
         f(&view)
     }
@@ -1364,6 +1462,7 @@ impl Project {
                 })?;
             }
         }
+        let mut pending_claim_assumptions = Vec::new();
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, cl) in snapshot.cybersecurity_claims.into_iter().enumerate() {
             let vis = claim_visual(cl.visual_id, pos, &mut used, &mut next_vis)?;
@@ -1381,6 +1480,9 @@ impl Project {
                     party: party.0,
                     provenance: provenance.clone(),
                 })?;
+            }
+            for assumption in cl.assumptions.0 {
+                pending_claim_assumptions.push((id, assumption.0, provenance.clone()));
             }
         }
         // Marks go on with their tree, under the tree's own provenance.
@@ -1504,6 +1606,50 @@ impl Project {
                 provenance: wire::unwrap_provenance(c.provenance),
             })?;
             project.set_condition_loaded_visual(&id, vis, next_vis);
+        }
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, a) in snapshot.assumptions.0.into_iter().enumerate() {
+            if a.excludes_trees
+                .0
+                .len()
+                .saturating_add(a.excludes_steps.0.len())
+                > MAX_ASSUMPTION_EXCLUDES
+            {
+                return Err(StoreError::LimitExceeded(Limit::ASSUMPTION_EXCLUDES));
+            }
+            let vis = claim_visual(a.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = a.id.0;
+            let provenance = wire::unwrap_provenance(a.provenance);
+            project.apply(Op::AddAssumption {
+                id,
+                name: a.name.0,
+                holds: a.holds,
+                provenance: provenance.clone(),
+            })?;
+            project.set_assumption_loaded_visual(&id, vis, next_vis);
+            if !a.excludes_trees.0.is_empty() || !a.excludes_steps.0.is_empty() {
+                project.apply(Op::SetAssumptionExcludes {
+                    id,
+                    trees: a.excludes_trees.0.into_iter().map(|t| t.0).collect(),
+                    steps: a
+                        .excludes_steps
+                        .0
+                        .into_iter()
+                        .map(|s| StepRef {
+                            tree: s.tree.0,
+                            node: s.node.0,
+                        })
+                        .collect(),
+                    provenance,
+                })?;
+            }
+        }
+        for (claim, assumption, provenance) in pending_claim_assumptions {
+            project.apply(Op::LinkClaimAssumption {
+                claim,
+                assumption,
+                provenance,
+            })?;
         }
         for link in snapshot.condition_links {
             let element = link.target.into_ref();

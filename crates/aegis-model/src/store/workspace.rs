@@ -51,6 +51,11 @@ const LAYOUT: &[(&str, &str, &[&str])] = &[
         "threats",
         &["threat_scenarios"],
     ),
+    (
+        "systems/main/assumptions.json",
+        "assumptions",
+        &["assumptions"],
+    ),
 ];
 
 const TREES_KEY: &str = "attack_trees";
@@ -335,6 +340,7 @@ fn blame(err: &StoreError, trees: &[(&str, &[u8])], elements: &[(&str, &[u8])]) 
         ModelError::DuplicateInterface(_) => "interfaces",
         ModelError::DuplicateDataFlow(_) => "data_flows",
         ModelError::DuplicateTrustBoundary(_) => "trust_boundaries",
+        ModelError::DuplicateAssumptionId(_) => "assumptions",
         _ => return "aegis.json".to_owned(),
     };
     file_of_key(key).to_owned()

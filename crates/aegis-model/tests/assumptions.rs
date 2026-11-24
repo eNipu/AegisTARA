@@ -6,12 +6,15 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssumptionId, AssumptionIdx, AttackTree, ClaimId, ConditionId, ElementRef, EntityKind,
-    GateKind, Limit, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS,
-    MAX_DESCRIPTION_CHARS, MAX_NAME_BYTES, MAX_NAME_CHARS, Methodology, ModelError, Node, NodeId,
-    Op, OpCodec, OpLogReader, OpLogWriter, Project, ProjectDiff, ProjectEvalCache, Provenance,
-    StepRef, StoreError, TreeId, VisualPrefix,
+    AssetId, AssumptionId, AssumptionIdx, AttackTree, ClaimId, ComponentId, ConditionId, DamageId,
+    ElementRef, EntityKind, FeasibilityLevel, GateKind, InterfaceId, ItemRef, Limit,
+    MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS, MAX_DESCRIPTION_CHARS,
+    MAX_NAME_BYTES, MAX_NAME_CHARS, Methodology, ModelError, Node, NodeId, Op, OpCodec,
+    OpLogReader, OpLogWriter, Project, ProjectDiff, ProjectEvalCache, Provenance, Reason,
+    RiskLevel, StepRef, StoreError, ThreatId, TreeId, VisualPrefix,
 };
+use proptest::prelude::*;
+use serde_json::{Value, json};
 
 fn project() -> Project {
     Project::new(Arc::new(Methodology::iso21434_r155().expect("builtin")))
@@ -1334,4 +1337,1151 @@ fn op_log_round_trips_excludes_and_claim_assumption_ops() {
         .map(|r| r.expect("record").op)
         .collect();
     assert_eq!(decoded, ops);
+}
+
+fn feas(m: &Methodology, key: &str) -> FeasibilityLevel {
+    m.feasibility_level(key).expect("feasibility level")
+}
+
+fn risk(m: &Methodology, key: &str) -> RiskLevel {
+    m.risk_level(key).expect("risk level")
+}
+
+fn saved_bytes(p: &Project) -> Vec<u8> {
+    let mut out = Vec::new();
+    p.save(&mut out).expect("save");
+    out
+}
+
+fn setup_asset_and_severe_damage(p: &mut Project) -> (AssetId, DamageId) {
+    let m = Arc::clone(p.methodology());
+    let asset = AssetId::new_v7();
+    let damage = DamageId::new_v7();
+    let safety = m.impact_category("safety").expect("safety");
+    let severe = m.level(safety, "severe").expect("severe");
+    p.apply(Op::AddAsset {
+        id: asset,
+        name: "Brake ECU".into(),
+        properties: m.all_properties(),
+        provenance: who("alice", 1),
+    })
+    .expect("asset");
+    p.apply(Op::AddDamageScenario {
+        id: damage,
+        name: "Unintended braking".into(),
+        impacts: vec![(safety, severe)],
+        provenance: who("alice", 1),
+    })
+    .expect("damage");
+    (asset, damage)
+}
+
+fn add_threat(p: &mut Project, asset: AssetId, damage: DamageId, tree: TreeId) -> ThreatId {
+    let category = p
+        .methodology()
+        .threat_categories()
+        .next()
+        .expect("threat category");
+    let threat = ThreatId::new_v7();
+    p.apply(Op::AddThreatScenario {
+        id: threat,
+        name: "Inject brake command".into(),
+        asset,
+        category,
+        catalog_refs: vec![],
+        damages: vec![damage],
+        provenance: who("alice", 2),
+    })
+    .expect("threat");
+    p.apply(Op::SetThreatAttackTree {
+        threat,
+        tree: Some(tree),
+        provenance: who("alice", 2),
+    })
+    .expect("link tree");
+    threat
+}
+
+fn add_rated_tree(
+    p: &mut Project,
+    kind: GateKind,
+    step_ratings: &[(&str, &str)],
+) -> (TreeId, NodeId, Vec<NodeId>) {
+    let m = Arc::clone(p.methodology());
+    let tid = TreeId::new_v7();
+    let root = NodeId::new_v7();
+    let mut tree = AttackTree::new(root, Node::gate(kind, "Root")).expect("root");
+    let mut step_ids = Vec::with_capacity(step_ratings.len());
+    let mut rated = Vec::with_capacity(step_ratings.len());
+    for &(label, level) in step_ratings {
+        let sid = NodeId::new_v7();
+        tree.add_child(tree.root(), sid, Node::step(label))
+            .expect("step");
+        step_ids.push(sid);
+        rated.push((sid, feas(&m, level)));
+    }
+    p.apply(Op::AddAttackTree {
+        id: tid,
+        tree,
+        step_feasibility: rated,
+        provenance: who("alice", 2),
+    })
+    .expect("add tree");
+    (tid, root, step_ids)
+}
+
+#[test]
+fn holds_toggles_exclude_steps_and_trees_and_lower_or_eliminate_risk() {
+    let mut p = project();
+    let m = Arc::clone(p.methodology());
+    let (asset, damage) = setup_asset_and_severe_damage(&mut p);
+
+    // Part (a): OR(cheap=high, hard=low) over safety=severe.
+    // Unexcluded: high feasibility + severe safety => r5.
+    // Cheap excluded: low feasibility + severe safety => r3.
+    let (t_or, _root_or, steps_or) = add_rated_tree(
+        &mut p,
+        GateKind::Or,
+        &[("Easy port", "high"), ("Hard chip", "low")],
+    );
+    let (s_cheap, s_hard) = (steps_or[0], steps_or[1]);
+    let th_or = add_threat(&mut p, asset, damage, t_or);
+
+    let a_step = AssumptionId::new_v7();
+    add_assumption(&mut p, a_step, "Debug port fused", false);
+    p.apply(Op::SetAssumptionExcludes {
+        id: a_step,
+        trees: vec![],
+        steps: vec![StepRef {
+            tree: t_or,
+            node: s_cheap,
+        }],
+        provenance: who("alice", 3),
+    })
+    .expect("excludes");
+
+    let mut cache = ProjectEvalCache::new(&p);
+    let check_or =
+        |p: &Project, cache: &ProjectEvalCache, want_f: &str, want_r: &str, excluded: bool| {
+            let app = p.applicability();
+            assert_eq!(app.is_node_excluded(t_or, s_cheap), excluded);
+            assert!(!app.is_node_excluded(t_or, s_hard));
+            assert!(!app.is_excluded(ElementRef::Tree(t_or)));
+            if excluded {
+                assert_eq!(
+                    app.node_reasons(t_or, s_cheap),
+                    &[Reason::AssumptionHolds(a_step)]
+                );
+            } else {
+                assert!(app.is_empty());
+            }
+            let wf = feas(&m, want_f);
+            let wr = risk(&m, want_r);
+            let eval = p.evaluate_tree(t_or).expect("tree eval");
+            assert_eq!(eval.root_value(), &wf);
+            assert_eq!(
+                eval.get(
+                    p.attack_tree(p.attack_tree_idx(&t_or).expect("t"))
+                        .expect("e")
+                        .idx_of(&s_cheap)
+                        .expect("s")
+                )
+                .is_some(),
+                !excluded
+            );
+            let r = p.evaluate_risk(th_or).expect("risk");
+            assert_eq!(r.feasibility(), wf);
+            assert_eq!(r.max_risk(), Some(wr));
+            assert_eq!(cache, &ProjectEvalCache::new(p));
+            assert_eq!(cache.evaluate_risk(p, th_or).expect("cached"), &r);
+        };
+
+    check_or(&p, &cache, "high", "r5", false);
+
+    p.apply_cached(
+        Op::SetAssumptionHolds {
+            id: a_step,
+            holds: true,
+            provenance: who("alice", 4),
+        },
+        &mut cache,
+    )
+    .expect("enable");
+    check_or(&p, &cache, "low", "r3", true);
+
+    p.apply_cached(
+        Op::SetAssumptionHolds {
+            id: a_step,
+            holds: false,
+            provenance: who("alice", 5),
+        },
+        &mut cache,
+    )
+    .expect("disable");
+    check_or(&p, &cache, "high", "r5", false);
+
+    p.apply_cached(
+        Op::SetAssumptionHolds {
+            id: a_step,
+            holds: true,
+            provenance: who("alice", 6),
+        },
+        &mut cache,
+    )
+    .expect("re-enable");
+    check_or(&p, &cache, "low", "r3", true);
+
+    // Part (b1): AND gate where excluding one step collapses the sole path -> AllPathsExcluded.
+    let (t_and, root_and, steps_and) = add_rated_tree(
+        &mut p,
+        GateKind::And,
+        &[("Physical tap", "high"), ("Decode key", "medium")],
+    );
+    let th_and = add_threat(&mut p, asset, damage, t_and);
+    let a_and = AssumptionId::new_v7();
+    add_assumption(&mut p, a_and, "Locked harness", true);
+    p.apply_cached(
+        Op::SetAssumptionExcludes {
+            id: a_and,
+            trees: vec![],
+            steps: vec![StepRef {
+                tree: t_and,
+                node: steps_and[0],
+            }],
+            provenance: who("alice", 7),
+        },
+        &mut cache,
+    )
+    .expect("and exclude");
+
+    let app = p.applicability();
+    assert_eq!(
+        app.node_reasons(t_and, steps_and[0]),
+        &[Reason::AssumptionHolds(a_and)]
+    );
+    assert_eq!(
+        app.node_reasons(t_and, root_and),
+        &[Reason::AllPathsExcluded]
+    );
+    assert_eq!(
+        app.reasons(ElementRef::Tree(t_and)),
+        &[Reason::AllPathsExcluded]
+    );
+    assert!(!app.is_excluded(ElementRef::Threat(th_and)));
+    assert_eq!(
+        p.evaluate_tree(t_and),
+        Err(ModelError::TreeNotApplicable(t_and))
+    );
+    assert_eq!(
+        p.evaluate_threat(th_and),
+        Err(ModelError::TreeNotApplicable(t_and))
+    );
+    assert_eq!(
+        p.evaluate_risk(th_and),
+        Err(ModelError::ThreatNotApplicable(th_and))
+    );
+    assert_eq!(
+        p.evaluate_residual_risk(th_and),
+        Err(ModelError::ThreatNotApplicable(th_and))
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+    assert_eq!(
+        cache.evaluate_risk(&p, th_and).cloned(),
+        Err(ModelError::ThreatNotApplicable(th_and))
+    );
+
+    // Part (b2): Whole-tree exclusion via excludes_trees (plus an overlapping step exclusion).
+    let (t_whole, _root_whole, steps_whole) =
+        add_rated_tree(&mut p, GateKind::Or, &[("Bypass", "medium")]);
+    let th_whole = add_threat(&mut p, asset, damage, t_whole);
+    let a_tree = AssumptionId::new_v7();
+    add_assumption(&mut p, a_tree, "Module absent", true);
+    p.apply_cached(
+        Op::SetAssumptionExcludes {
+            id: a_tree,
+            trees: vec![t_whole],
+            steps: vec![StepRef {
+                tree: t_whole,
+                node: steps_whole[0],
+            }],
+            provenance: who("alice", 8),
+        },
+        &mut cache,
+    )
+    .expect("whole tree exclude");
+    let app = p.applicability();
+    assert_eq!(
+        app.node_reasons(t_whole, steps_whole[0]),
+        &[Reason::AssumptionHolds(a_tree)]
+    );
+    assert_eq!(
+        app.reasons(ElementRef::Tree(t_whole)),
+        &[Reason::AssumptionHolds(a_tree), Reason::AllPathsExcluded]
+    );
+    assert!(!app.is_excluded(ElementRef::Threat(th_whole)));
+    assert_eq!(
+        p.evaluate_tree(t_whole),
+        Err(ModelError::TreeNotApplicable(t_whole))
+    );
+    assert_eq!(
+        p.evaluate_risk(th_whole),
+        Err(ModelError::ThreatNotApplicable(th_whole))
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+
+    p.apply_cached(
+        Op::SetAssumptionHolds {
+            id: a_tree,
+            holds: false,
+            provenance: who("alice", 9),
+        },
+        &mut cache,
+    )
+    .expect("turn off whole tree assumption");
+    assert_eq!(
+        p.evaluate_tree(t_whole).expect("ok").root_value(),
+        &feas(&m, "medium")
+    );
+    assert_eq!(
+        p.evaluate_risk(th_whole).expect("ok").max_risk(),
+        Some(risk(&m, "r4"))
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+}
+
+#[test]
+fn off_condition_on_assumption_switches_it_off_and_back_on() {
+    let mut p = project();
+    let m = Arc::clone(p.methodology());
+    let (asset, damage) = setup_asset_and_severe_damage(&mut p);
+
+    let (t_step, _, steps_a) =
+        add_rated_tree(&mut p, GateKind::Or, &[("Easy", "high"), ("Hard", "low")]);
+    let th_step = add_threat(&mut p, asset, damage, t_step);
+    let (t_tree, _, _) = add_rated_tree(&mut p, GateKind::Or, &[("Direct", "medium")]);
+    let th_tree = add_threat(&mut p, asset, damage, t_tree);
+
+    let a = AssumptionId::new_v7();
+    add_assumption(&mut p, a, "Active only in normal mode", true);
+    p.apply(Op::SetAssumptionExcludes {
+        id: a,
+        trees: vec![t_tree],
+        steps: vec![StepRef {
+            tree: t_step,
+            node: steps_a[0],
+        }],
+        provenance: who("alice", 3),
+    })
+    .expect("excludes");
+
+    let cond = ConditionId::new_v7();
+    p.apply(Op::AddCondition {
+        id: cond,
+        name: "Normal mode".into(),
+        description: "".into(),
+        present: false,
+        provenance: who("alice", 4),
+    })
+    .expect("cond");
+    p.apply(Op::NeedCondition {
+        element: ElementRef::Assumption(a),
+        condition: cond,
+        provenance: who("alice", 5),
+    })
+    .expect("link cond to assumption");
+
+    let mut cache = ProjectEvalCache::new(&p);
+
+    // Condition is off -> assumption is switched off despite holds == true.
+    let app = p.applicability();
+    assert_eq!(
+        app.reasons(ElementRef::Assumption(a)),
+        &[Reason::ConditionOff(cond)]
+    );
+    assert!(!app.is_excluded(ElementRef::Tree(t_tree)));
+    assert!(app.reasons(ElementRef::Tree(t_tree)).is_empty());
+    assert!(!app.is_node_excluded(t_step, steps_a[0]));
+    assert!(app.node_reasons(t_step, steps_a[0]).is_empty());
+    assert_eq!(
+        p.evaluate_risk(th_step).expect("r5").max_risk(),
+        Some(risk(&m, "r5"))
+    );
+    assert_eq!(
+        p.evaluate_risk(th_tree).expect("r4").max_risk(),
+        Some(risk(&m, "r4"))
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+
+    // Turn condition on -> assumption re-activates Reason::AssumptionHolds.
+    p.apply_cached(
+        Op::SetConditionPresent {
+            id: cond,
+            present: true,
+            provenance: who("alice", 6),
+        },
+        &mut cache,
+    )
+    .expect("cond on");
+    let app = p.applicability();
+    assert!(!app.is_excluded(ElementRef::Assumption(a)));
+    assert_eq!(
+        app.reasons(ElementRef::Tree(t_tree)),
+        &[Reason::AssumptionHolds(a)]
+    );
+    assert_eq!(
+        app.node_reasons(t_step, steps_a[0]),
+        &[Reason::AssumptionHolds(a)]
+    );
+    assert_eq!(
+        p.evaluate_risk(th_step).expect("r3").max_risk(),
+        Some(risk(&m, "r3"))
+    );
+    assert_eq!(
+        p.evaluate_risk(th_tree),
+        Err(ModelError::ThreatNotApplicable(th_tree))
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+}
+
+#[derive(Clone)]
+struct CacheFixture {
+    p: Project,
+    trees: Vec<TreeId>,
+    threats: Vec<ThreatId>,
+    steps: Vec<(TreeId, NodeId)>,
+    conditions: Vec<ConditionId>,
+    assumptions: Vec<AssumptionId>,
+    asset2: AssetId,
+    ctrl: aegis_model::ControlId,
+}
+
+fn cache_fixture() -> CacheFixture {
+    let mut p = project();
+    let m = Arc::clone(p.methodology());
+    let (k1, k2) = (ComponentId::new_v7(), ComponentId::new_v7());
+    p.apply(Op::AddComponent {
+        id: k1,
+        name: "ECU".into(),
+        parent: None,
+        provenance: who("alice", 1),
+    })
+    .expect("k1");
+    p.apply(Op::AddComponent {
+        id: k2,
+        name: "Sub".into(),
+        parent: Some(k1),
+        provenance: who("alice", 1),
+    })
+    .expect("k2");
+    let iface = InterfaceId::new_v7();
+    let ikind = m.interface_kinds().next().expect("ikind");
+    p.apply(Op::AddInterface {
+        id: iface,
+        name: "CAN".into(),
+        component: k2,
+        kind: ikind,
+        provenance: who("alice", 1),
+    })
+    .expect("iface");
+    let (asset1, damage) = setup_asset_and_severe_damage(&mut p);
+    p.apply(Op::SetAssetComponent {
+        asset: asset1,
+        component: Some(k2),
+        provenance: who("alice", 1),
+    })
+    .expect("bind");
+    let asset2 = AssetId::new_v7();
+    p.apply(Op::AddAsset {
+        id: asset2,
+        name: "Key".into(),
+        properties: m.all_properties(),
+        provenance: who("alice", 1),
+    })
+    .expect("asset2");
+
+    // t1: OR(AND(s11, s12), s13); t2: AND(OR(s21, s22), s23); t3: SeqAnd(s31, OR(s32, s33)).
+    let (s11, s12, s13) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut t1 = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "r1")).expect("t1");
+    let g1 = t1
+        .add_child(t1.root(), NodeId::new_v7(), Node::gate(GateKind::And, "g1"))
+        .expect("g1");
+    t1.add_child(g1, s11, Node::step("s11")).expect("s11");
+    t1.add_child(g1, s12, Node::step("s12")).expect("s12");
+    t1.add_child(t1.root(), s13, Node::step("s13"))
+        .expect("s13");
+
+    let (s21, s22, s23) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut t2 = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::And, "r2")).expect("t2");
+    let g2 = t2
+        .add_child(t2.root(), NodeId::new_v7(), Node::gate(GateKind::Or, "g2"))
+        .expect("g2");
+    t2.add_child(g2, s21, Node::step("s21")).expect("s21");
+    t2.add_child(g2, s22, Node::step("s22")).expect("s22");
+    t2.add_child(t2.root(), s23, Node::step("s23"))
+        .expect("s23");
+
+    let (s31, s32, s33) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut t3 = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::SeqAnd, "r3")).expect("t3");
+    t3.add_child(t3.root(), s31, Node::step("s31"))
+        .expect("s31");
+    let g3 = t3
+        .add_child(t3.root(), NodeId::new_v7(), Node::gate(GateKind::Or, "g3"))
+        .expect("g3");
+    t3.add_child(g3, s32, Node::step("s32")).expect("s32");
+    t3.add_child(g3, s33, Node::step("s33")).expect("s33");
+
+    let (tid1, tid2, tid3) = (TreeId::new_v7(), TreeId::new_v7(), TreeId::new_v7());
+    for (tid, tree, rated) in [
+        (
+            tid1,
+            t1,
+            vec![
+                (s11, feas(&m, "high")),
+                (s12, feas(&m, "medium")),
+                (s13, feas(&m, "high")),
+            ],
+        ),
+        (
+            tid2,
+            t2,
+            vec![
+                (s21, feas(&m, "medium")),
+                (s22, feas(&m, "low")),
+                (s23, feas(&m, "high")),
+            ],
+        ),
+        (
+            tid3,
+            t3,
+            vec![
+                (s31, feas(&m, "high")),
+                (s32, feas(&m, "low")),
+                (s33, feas(&m, "very-low")),
+            ],
+        ),
+    ] {
+        p.apply(Op::AddAttackTree {
+            id: tid,
+            tree,
+            step_feasibility: rated,
+            provenance: who("alice", 2),
+        })
+        .expect("tree");
+    }
+    p.apply(Op::SetStepVia {
+        tree: tid1,
+        node: s11,
+        via: Some(ItemRef::Component(k1)),
+        provenance: who("alice", 2),
+    })
+    .expect("via1");
+    p.apply(Op::SetStepVia {
+        tree: tid2,
+        node: s22,
+        via: Some(ItemRef::Interface(iface)),
+        provenance: who("alice", 2),
+    })
+    .expect("via2");
+    p.apply(Op::SetStepVia {
+        tree: tid3,
+        node: s33,
+        via: Some(ItemRef::Component(k2)),
+        provenance: who("alice", 2),
+    })
+    .expect("via3");
+
+    let ctrl = aegis_model::ControlId::new_v7();
+    p.apply(Op::AddSecurityControl {
+        id: ctrl,
+        name: "HSM".into(),
+        provenance: who("alice", 2),
+    })
+    .expect("ctrl");
+    p.apply(Op::SetStepMitigation {
+        tree: tid1,
+        node: s13,
+        control: ctrl,
+        feasibility: Some(feas(&m, "very-low")),
+        provenance: who("alice", 2),
+    })
+    .expect("mit");
+
+    let threats = vec![
+        add_threat(&mut p, asset1, damage, tid1),
+        add_threat(&mut p, asset1, damage, tid2),
+        add_threat(&mut p, asset2, damage, tid3),
+        add_threat(&mut p, asset2, damage, tid1),
+    ];
+
+    let mut conditions = Vec::new();
+    for i in 0..3 {
+        let cid = ConditionId::new_v7();
+        p.apply(Op::AddCondition {
+            id: cid,
+            name: format!("C{i}").into(),
+            description: "".into(),
+            present: i != 0,
+            provenance: who("alice", 3),
+        })
+        .expect("cond");
+        conditions.push(cid);
+    }
+
+    let mut assumptions = Vec::new();
+    for i in 0..3 {
+        let aid = AssumptionId::new_v7();
+        add_assumption(&mut p, aid, &format!("A{i}"), i != 1);
+        assumptions.push(aid);
+    }
+    p.apply(Op::NeedCondition {
+        element: ElementRef::Assumption(assumptions[0]),
+        condition: conditions[0],
+        provenance: who("alice", 4),
+    })
+    .expect("need a0");
+    p.apply(Op::NeedCondition {
+        element: ElementRef::Component(k1),
+        condition: conditions[1],
+        provenance: who("alice", 4),
+    })
+    .expect("need k1");
+    p.apply(Op::NeedStepCondition {
+        tree: tid2,
+        node: s23,
+        condition: conditions[2],
+        provenance: who("alice", 4),
+    })
+    .expect("need s23");
+    p.apply(Op::SetAssumptionExcludes {
+        id: assumptions[0],
+        trees: vec![],
+        steps: vec![StepRef {
+            tree: tid1,
+            node: s13,
+        }],
+        provenance: who("alice", 4),
+    })
+    .expect("excl a0");
+
+    CacheFixture {
+        p,
+        trees: vec![tid1, tid2, tid3],
+        threats,
+        steps: vec![
+            (tid1, s11),
+            (tid1, s12),
+            (tid1, s13),
+            (tid2, s21),
+            (tid2, s22),
+            (tid2, s23),
+            (tid3, s31),
+            (tid3, s32),
+            (tid3, s33),
+        ],
+        conditions,
+        assumptions,
+        asset2,
+        ctrl,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CacheEdit {
+    Holds(usize, bool),
+    CondPresent(usize, bool),
+    Excludes(usize, usize),
+    ToggleAssumptionCond(usize, usize),
+    ToggleAssetCond(usize),
+    RateStep(usize, usize),
+    MitigateStep(usize, bool),
+    ThreatTree(usize, Option<usize>),
+}
+
+fn cache_edit_strategy() -> impl Strategy<Value = Vec<CacheEdit>> {
+    let one = prop_oneof![
+        (0..3usize, any::<bool>()).prop_map(|(a, h)| CacheEdit::Holds(a, h)),
+        (0..3usize, any::<bool>()).prop_map(|(c, v)| CacheEdit::CondPresent(c, v)),
+        (0..3usize, 0..5usize).prop_map(|(a, p)| CacheEdit::Excludes(a, p)),
+        (0..3usize, 0..3usize).prop_map(|(a, c)| CacheEdit::ToggleAssumptionCond(a, c)),
+        (0..3usize).prop_map(CacheEdit::ToggleAssetCond),
+        (0..9usize, 0..4usize).prop_map(|(s, l)| CacheEdit::RateStep(s, l)),
+        (0..9usize, any::<bool>()).prop_map(|(s, on)| CacheEdit::MitigateStep(s, on)),
+        (0..4usize, prop::option::of(0..3usize)).prop_map(|(t, tr)| CacheEdit::ThreatTree(t, tr)),
+    ];
+    prop::collection::vec(one, 1..20)
+}
+
+fn build_cache_op(f: &CacheFixture, edit: CacheEdit) -> Op {
+    let levels = ["very-low", "low", "medium", "high"];
+    match edit {
+        CacheEdit::Holds(a, holds) => Op::SetAssumptionHolds {
+            id: f.assumptions[a],
+            holds,
+            provenance: who("bob", 10),
+        },
+        CacheEdit::CondPresent(c, present) => Op::SetConditionPresent {
+            id: f.conditions[c],
+            present,
+            provenance: who("bob", 11),
+        },
+        CacheEdit::Excludes(a, preset) => {
+            let sr = |i: usize| StepRef {
+                tree: f.steps[i].0,
+                node: f.steps[i].1,
+            };
+            let (trees, steps) = match preset {
+                0 => (vec![], vec![]),
+                1 => (vec![f.trees[1]], vec![]),
+                2 => (vec![], vec![sr(2), sr(4)]),
+                3 => (vec![f.trees[2]], vec![sr(0), sr(7)]),
+                _ => (vec![f.trees[0]], vec![sr(3)]),
+            };
+            Op::SetAssumptionExcludes {
+                id: f.assumptions[a],
+                trees,
+                steps,
+                provenance: who("bob", 12),
+            }
+        }
+        CacheEdit::ToggleAssumptionCond(a, c) => {
+            let element = ElementRef::Assumption(f.assumptions[a]);
+            let condition = f.conditions[c];
+            let need = Op::NeedCondition {
+                element,
+                condition,
+                provenance: who("bob", 13),
+            };
+            if f.p.validate(&need).is_ok() {
+                need
+            } else {
+                Op::UnneedCondition {
+                    element,
+                    condition,
+                    provenance: who("bob", 13),
+                }
+            }
+        }
+        CacheEdit::ToggleAssetCond(c) => {
+            let element = ElementRef::Asset(f.asset2);
+            let condition = f.conditions[c];
+            let need = Op::NeedCondition {
+                element,
+                condition,
+                provenance: who("bob", 14),
+            };
+            if f.p.validate(&need).is_ok() {
+                need
+            } else {
+                Op::UnneedCondition {
+                    element,
+                    condition,
+                    provenance: who("bob", 14),
+                }
+            }
+        }
+        CacheEdit::RateStep(s, l) => Op::SetStepFeasibility {
+            tree: f.steps[s].0,
+            node: f.steps[s].1,
+            level: Some(feas(f.p.methodology(), levels[l])),
+            provenance: who("bob", 15),
+        },
+        CacheEdit::MitigateStep(s, on) => Op::SetStepMitigation {
+            tree: f.steps[s].0,
+            node: f.steps[s].1,
+            control: f.ctrl,
+            feasibility: on.then(|| feas(f.p.methodology(), "very-low")),
+            provenance: who("bob", 16),
+        },
+        CacheEdit::ThreatTree(t, tr) => Op::SetThreatAttackTree {
+            threat: f.threats[t],
+            tree: tr.map(|i| f.trees[i]),
+            provenance: who("bob", 17),
+        },
+    }
+}
+
+fn assert_cache_matches_project(
+    f: &CacheFixture,
+    cache: &ProjectEvalCache,
+) -> Result<(), TestCaseError> {
+    prop_assert_eq!(cache, &ProjectEvalCache::new(&f.p));
+    prop_assert_eq!(cache.applicability(), &f.p.applicability());
+    for &t in &f.trees {
+        prop_assert_eq!(cache.evaluate_tree(&f.p, t).cloned(), f.p.evaluate_tree(t));
+        prop_assert_eq!(
+            cache.evaluate_residual_tree(&f.p, t).cloned(),
+            f.p.evaluate_residual_tree(t)
+        );
+    }
+    for &th in &f.threats {
+        prop_assert_eq!(
+            cache.evaluate_risk(&f.p, th).cloned(),
+            f.p.evaluate_risk(th)
+        );
+        prop_assert_eq!(
+            cache.evaluate_residual_risk(&f.p, th).cloned(),
+            f.p.evaluate_residual_risk(th)
+        );
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn shuffled_assumption_edits_match_fresh_eval(edits in cache_edit_strategy()) {
+        let mut f = cache_fixture();
+        let start_p = f.p.clone();
+        let mut cache = ProjectEvalCache::new(&f.p);
+        let start_cache = cache.clone();
+        let mut inverses = Vec::with_capacity(edits.len());
+        for edit in edits {
+            let op = build_cache_op(&f, edit);
+            let inv = f
+                .p
+                .apply_cached(op, &mut cache)
+                .map_err(|e| TestCaseError::fail(e.to_string()))?;
+            inverses.push(inv);
+            assert_cache_matches_project(&f, &cache)?;
+        }
+        for inv in inverses.into_iter().rev() {
+            f.p.apply_cached(inv, &mut cache)
+                .map_err(|e| TestCaseError::fail(e.to_string()))?;
+            assert_cache_matches_project(&f, &cache)?;
+        }
+        prop_assert_eq!(&f.p, &start_p);
+        prop_assert_eq!(&cache, &start_cache);
+    }
+
+    #[test]
+    fn assumption_and_condition_switch_order_does_not_matter(
+        (seq_a, seq_b) in (
+            prop::collection::vec(any::<bool>(), 3),
+            prop::collection::vec(any::<bool>(), 3),
+            prop::collection::vec(0..5usize, 3),
+        )
+            .prop_flat_map(|(conds, holds, excludes)| {
+                let ops: Vec<CacheEdit> = conds
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, v)| CacheEdit::CondPresent(i, v))
+                    .chain(holds.into_iter().enumerate().map(|(i, h)| CacheEdit::Holds(i, h)))
+                    .chain(excludes.into_iter().enumerate().map(|(i, p)| CacheEdit::Excludes(i, p)))
+                    .collect();
+                (Just(ops.clone()).prop_shuffle(), Just(ops).prop_shuffle())
+            })
+    ) {
+        let base = cache_fixture();
+        let mut results = Vec::new();
+        for seq in [seq_a, seq_b] {
+            let mut f = base.clone();
+            let mut cache = ProjectEvalCache::new(&f.p);
+            for edit in seq {
+                let op = build_cache_op(&f, edit);
+                f.p.apply_cached(op, &mut cache)
+                    .map_err(|e| TestCaseError::fail(e.to_string()))?;
+            }
+            assert_cache_matches_project(&f, &cache)?;
+            results.push((cache, f.p.applicability()));
+        }
+        prop_assert_eq!(&results[0], &results[1]);
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn snapshot_and_workspace_round_trip_and_decode_limits() {
+    let mut p = project();
+    let m = Arc::clone(p.methodology());
+    let (t1, _, steps1) = add_rated_tree(&mut p, GateKind::Or, &[("S1", "high"), ("S2", "low")]);
+    let (t2, _, steps2) = add_rated_tree(&mut p, GateKind::Or, &[("S3", "medium")]);
+    let claim = ClaimId::new_v7();
+    add_claim(&mut p, claim, "Enclosure claim");
+    let cond = ConditionId::new_v7();
+    p.apply(Op::AddCondition {
+        id: cond,
+        name: "Production".into(),
+        description: "".into(),
+        present: true,
+        provenance: who("alice", 1),
+    })
+    .expect("cond");
+    p.apply(Op::SetProjectLanguages {
+        langs: Arc::from([Arc::from("ja")]),
+        provenance: who("alice", 1),
+    })
+    .expect("langs");
+
+    // 102 assumptions so AS101 tests visual numbers past 100 and removing AS00 tests gaps.
+    let mut assumptions = Vec::with_capacity(102);
+    for i in 0..102 {
+        let id = AssumptionId::new_v7();
+        p.apply(Op::AddAssumption {
+            id,
+            name: format!("Assumption {i}").into(),
+            holds: i % 2 == 0,
+            provenance: who("alice", 10 + i as u64),
+        })
+        .expect("add");
+        assumptions.push(id);
+    }
+    p.apply(Op::RemoveAssumption { id: assumptions[0] })
+        .expect("gap");
+
+    // Unsorted trees/steps and descending claim links must sort canonically.
+    let a_first = assumptions[1];
+    let a_last = assumptions[101];
+    p.apply(Op::SetAssumptionExcludes {
+        id: a_first,
+        trees: vec![t2, t1],
+        steps: vec![
+            StepRef {
+                tree: t2,
+                node: steps2[0],
+            },
+            StepRef {
+                tree: t1,
+                node: steps1[1],
+            },
+            StepRef {
+                tree: t1,
+                node: steps1[0],
+            },
+        ],
+        provenance: who("bob", 200),
+    })
+    .expect("excludes");
+    for aid in [a_last, a_first] {
+        p.apply(Op::LinkClaimAssumption {
+            claim,
+            assumption: aid,
+            provenance: who("bob", 201),
+        })
+        .expect("link claim");
+    }
+    p.apply(Op::NeedCondition {
+        element: ElementRef::Assumption(a_last),
+        condition: cond,
+        provenance: who("bob", 202),
+    })
+    .expect("need cond");
+    p.apply(Op::SetDescription {
+        target: ElementRef::Assumption(a_last),
+        text: "Requires seal".into(),
+        provenance: who("bob", 203),
+    })
+    .expect("desc");
+    p.apply(Op::SetDescriptionTranslation {
+        target: ElementRef::Assumption(a_last),
+        lang: "ja".into(),
+        text: "封印が必要".into(),
+        provenance: who("bob", 204),
+    })
+    .expect("trans");
+
+    // Snapshot round-trip byte-for-byte.
+    let bytes = saved_bytes(&p);
+    let snap_text = std::str::from_utf8(&bytes).expect("utf8");
+    assert!(snap_text.contains("\"assumptions\""));
+    assert!(snap_text.contains("\"holds\":true"));
+    assert!(snap_text.contains("\"holds\":false"));
+    let loaded = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("load");
+    assert_eq!(loaded, p);
+    assert_eq!(saved_bytes(&loaded), bytes);
+    assert_eq!(
+        loaded
+            .assumption_visual_id(loaded.assumption_idx(&a_last).expect("idx"))
+            .as_deref(),
+        Some("AS101")
+    );
+
+    // Workspace round-trip in forward and reversed file order.
+    let mut files = p.to_workspace_files().expect("ws files");
+    let ws_assumptions = files
+        .iter()
+        .find(|f| f.path == "systems/main/assumptions.json")
+        .expect("systems/main/assumptions.json");
+    let ws_assumptions_json: Value =
+        serde_json::from_slice(&ws_assumptions.bytes).expect("assumptions json");
+    assert_eq!(ws_assumptions_json["kind"], "assumptions");
+    let arr = ws_assumptions_json["assumptions"]
+        .as_array()
+        .expect("array");
+    assert_eq!(arr.len(), 101);
+    assert!(arr.iter().any(|entry| entry["holds"] == json!(true)));
+    assert!(arr.iter().any(|entry| entry["holds"] == json!(false)));
+    let ws_claims = files
+        .iter()
+        .find(|f| f.path == "shared/claims.json")
+        .expect("claims");
+    let ws_claims_json: Value = serde_json::from_slice(&ws_claims.bytes).expect("claims json");
+    assert_eq!(
+        ws_claims_json["cybersecurity_claims"][0]["assumptions"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    files.reverse();
+    let ws_back = Project::from_workspace_files(
+        files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())),
+        Arc::clone(&m),
+    )
+    .expect("ws load");
+    assert_eq!(ws_back, p);
+    assert_eq!(
+        ws_back.to_workspace_files().expect("ws"),
+        p.to_workspace_files().expect("ws2")
+    );
+
+    // #[serde(default)] omitting "holds" decodes as false, then saves explicitly as false.
+    let default_id = AssumptionId::new_v7();
+    let omitted_holds = json!({
+        "format": "aegis-project",
+        "version": 1,
+        "methodology": {
+            "key": m.key(),
+            "version": m.version(),
+            "digest": m.pack_digest(),
+        },
+        "assets": [],
+        "damage_scenarios": [],
+        "threat_scenarios": [],
+        "assumptions": [{
+            "id": default_id.to_string(),
+            "name": "Omitted holds"
+        }]
+    });
+    let omitted_bytes = serde_json::to_vec(&omitted_holds).expect("json");
+    let omitted_proj =
+        Project::load(omitted_bytes.as_slice(), Arc::clone(&m)).expect("load omitted holds");
+    let idx = omitted_proj.assumption_idx(&default_id).expect("idx");
+    assert!(!omitted_proj.assumption(idx).expect("a").holds());
+    assert!(omitted_proj.applicability().is_empty());
+    assert!(
+        std::str::from_utf8(&saved_bytes(&omitted_proj))
+            .expect("utf8")
+            .contains("\"holds\":false")
+    );
+
+    // L09 bounded decode limits (at cap succeeds, cap + 1 returns exact StoreError::LimitExceeded).
+    let base_snap = || {
+        json!({
+            "format": "aegis-project",
+            "version": 1,
+            "methodology": {"key": m.key(), "version": m.version()},
+            "assets": [],
+            "damage_scenarios": [],
+            "threat_scenarios": [],
+        })
+    };
+    let make_assumptions = |count: usize| -> Vec<Value> {
+        (0..count)
+            .map(|i| {
+                json!({
+                    "id": AssumptionId::new_v7().to_string(),
+                    "name": format!("A{i}"),
+                })
+            })
+            .collect()
+    };
+
+    // 1. 256 assumptions passes; 257 -> Limit::Assumptions.
+    let mut s = base_snap();
+    s["assumptions"] = json!(make_assumptions(MAX_ASSUMPTIONS));
+    Project::load(s.to_string().as_bytes(), Arc::clone(&m)).expect("256 assumptions ok");
+    s["assumptions"] = json!(make_assumptions(MAX_ASSUMPTIONS + 1));
+    assert!(matches!(
+        Project::load(s.to_string().as_bytes(), Arc::clone(&m)),
+        Err(StoreError::LimitExceeded(Limit::Assumptions {
+            max: MAX_ASSUMPTIONS
+        }))
+    ));
+
+    // 2. 64 claim assumptions passes; 65 -> Limit::ClaimAssumptions.
+    let mut s = base_snap();
+    let max_a = make_assumptions(MAX_CLAIM_ASSUMPTIONS);
+    let max_a_ids: Vec<Value> = max_a.iter().map(|v| v["id"].clone()).collect();
+    s["assumptions"] = json!(max_a);
+    s["cybersecurity_claims"] = json!([{
+        "id": ClaimId::new_v7().to_string(),
+        "name": "C",
+        "assumptions": max_a_ids,
+    }]);
+    Project::load(s.to_string().as_bytes(), Arc::clone(&m)).expect("64 claim assumptions ok");
+    let over_a = make_assumptions(MAX_CLAIM_ASSUMPTIONS + 1);
+    let over_a_ids: Vec<Value> = over_a.iter().map(|v| v["id"].clone()).collect();
+    s["assumptions"] = json!(over_a);
+    s["cybersecurity_claims"] = json!([{
+        "id": ClaimId::new_v7().to_string(),
+        "name": "C",
+        "assumptions": over_a_ids,
+    }]);
+    assert!(matches!(
+        Project::load(s.to_string().as_bytes(), Arc::clone(&m)),
+        Err(StoreError::LimitExceeded(Limit::ClaimAssumptions {
+            max: MAX_CLAIM_ASSUMPTIONS
+        }))
+    ));
+
+    // 3. 130 live trees + 126 live steps (= 256) passes; 130 + 127 (= 257 > 256 combined) -> Limit::AssumptionExcludes.
+    let mut tree_ids = Vec::with_capacity(130);
+    let mut tree_wires = Vec::with_capacity(130);
+    let mut step_wires = Vec::with_capacity(127);
+    for i in 0..130 {
+        let tid = TreeId::new_v7();
+        let rid = NodeId::new_v7();
+        let sid = NodeId::new_v7();
+        tree_ids.push(json!(tid.to_string()));
+        tree_wires.push(json!({
+            "id": tid.to_string(),
+            "nodes": [
+                {"id": rid.to_string(), "label": "R", "gate": "or", "children": [sid.to_string()]},
+                {"id": sid.to_string(), "label": "S"}
+            ],
+            "step_feasibility": {}
+        }));
+        if i < 127 {
+            step_wires.push(json!({"tree": tid.to_string(), "node": sid.to_string()}));
+        }
+    }
+    let mut s = base_snap();
+    s["attack_trees"] = json!(tree_wires);
+    s["assumptions"] = json!([{
+        "id": AssumptionId::new_v7().to_string(),
+        "name": "Combined",
+        "holds": true,
+        "excludes_trees": tree_ids,
+        "excludes_steps": step_wires[..126],
+    }]);
+    Project::load(s.to_string().as_bytes(), Arc::clone(&m)).expect("130 + 126 = 256 ok");
+    s["assumptions"] = json!([{
+        "id": AssumptionId::new_v7().to_string(),
+        "name": "Combined",
+        "holds": true,
+        "excludes_trees": tree_ids,
+        "excludes_steps": step_wires,
+    }]);
+    assert!(matches!(
+        Project::load(s.to_string().as_bytes(), Arc::clone(&m)),
+        Err(StoreError::LimitExceeded(Limit::AssumptionExcludes {
+            max: MAX_ASSUMPTION_EXCLUDES
+        }))
+    ));
+
+    // Confirm legacy project-v1.json fixture loads cleanly with 0 assumptions and emits no assumptions workspace file.
+    let v1_bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/project-v1.json"
+    ))
+    .expect("v1 fixture");
+    let v1_proj = Project::load(v1_bytes.as_slice(), m).expect("v1 load");
+    assert_eq!(v1_proj.assumptions().count(), 0);
+    assert!(
+        v1_proj
+            .to_workspace_files()
+            .expect("v1 ws")
+            .iter()
+            .all(|f| f.path != "systems/main/assumptions.json")
+    );
 }

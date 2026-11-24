@@ -332,7 +332,9 @@ caps! {
     PartiesCap = crate::party::MAX_PARTIES, Limit::PARTIES;
     ConditionsCap = crate::applicability::MAX_CONDITIONS, Limit::CONDITIONS;
     ConditionLinksCap = crate::applicability::MAX_CONDITIONS_PER_ELEMENT, Limit::CONDITION_LINKS;
+    AssumptionsCap = crate::applicability::MAX_ASSUMPTIONS, Limit::ASSUMPTIONS;
     AssumptionExcludesCap = crate::applicability::MAX_ASSUMPTION_EXCLUDES, Limit::ASSUMPTION_EXCLUDES;
+    ClaimAssumptionsCap = crate::applicability::MAX_CLAIM_ASSUMPTIONS, Limit::CLAIM_ASSUMPTIONS;
     BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
     ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
     ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
@@ -1438,6 +1440,7 @@ visual_kinds! {
     ClaimVisual = VisualPrefix::Claim;
     PartyVisual = VisualPrefix::Party;
     ConditionVisual = VisualPrefix::Condition;
+    AssumptionVisual = VisualPrefix::Assumption;
     ComponentVisual = VisualPrefix::Component;
     InterfaceVisual = VisualPrefix::Interface;
     DataFlowVisual = VisualPrefix::DataFlow;
@@ -1581,6 +1584,26 @@ pub(super) struct SnapshotWire {
     pub(super) condition_links: Vec<ConditionLinkWire>,
     #[serde(default)]
     pub(super) step_conditions: Vec<StepConditionWire>,
+    #[serde(default)]
+    pub(super) assumptions: BoundedVec<AssumptionWire, AssumptionsCap>,
+}
+
+/// A snapshot assumption (APL-04). `holds` is always written explicitly.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AssumptionWire {
+    pub(super) id: WireId<AssumptionId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<AssumptionVisual>>,
+    pub(super) name: Name,
+    #[serde(default)]
+    pub(super) holds: bool,
+    #[serde(default)]
+    pub(super) excludes_trees: BoundedVec<WireId<TreeId>, AssumptionExcludesCap>,
+    #[serde(default)]
+    pub(super) excludes_steps: BoundedVec<StepRefWire, AssumptionExcludesCap>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
 }
 
 /// A snapshot condition (APL-01). `present` is written only when false.
@@ -2066,6 +2089,8 @@ pub(super) struct ClaimWire {
     pub(super) name: Name,
     #[serde(default)]
     pub(super) responsible: BoundedVec<WireId<PartyId>, ResponsibleCap>,
+    #[serde(default)]
+    pub(super) assumptions: BoundedVec<WireId<AssumptionId>, ClaimAssumptionsCap>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }

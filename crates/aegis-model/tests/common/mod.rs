@@ -496,6 +496,10 @@ pub fn condition_id(n: u64) -> ConditionId {
     ConditionId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn assumption_id(n: u64) -> aegis_model::AssumptionId {
+    aegis_model::AssumptionId::from_uuid(v7(n)).expect("v7")
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -2867,6 +2871,69 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: p_human.clone(),
         },
     );
+
+    // Assumptions (136c): exercise add, rename, excludes, claim link, holds toggle, and cleanup.
+    let assumption = assumption_id(15);
+    ok(
+        &mut p,
+        Op::AddAssumption {
+            id: assumption,
+            name: "Enclosure is tamper sealed".into(),
+            holds: true,
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::RenameAssumption {
+            id: assumption,
+            name: "Enclosure tamper switch active".into(),
+            provenance: p_ai.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetAssumptionExcludes {
+            id: assumption,
+            trees: vec![tree],
+            steps: vec![aegis_model::StepRef { tree, node: s1 }],
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::LinkClaimAssumption {
+            claim,
+            assumption,
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetAssumptionHolds {
+            id: assumption,
+            holds: false,
+            provenance: p_import.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::UnlinkClaimAssumption {
+            claim,
+            assumption,
+            provenance: p_import.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetAssumptionExcludes {
+            id: assumption,
+            trees: vec![],
+            steps: vec![],
+            provenance: p_human.clone(),
+        },
+    );
+    ok(&mut p, Op::RemoveAssumption { id: assumption });
 
     // Applicability conditions (133a): exercise every condition op in this
     // walk and undo it immediately. These ops are not recorded because this
