@@ -7,7 +7,7 @@ use aegis_client::inspector::inspector_view;
 use aegis_client::pages;
 use aegis_client::relations::{self, RelationKey};
 use aegis_client::table::table_rows;
-use aegis_client::view::{ColumnKind, Page, PageGroup, Selection, TableId, UiState};
+use aegis_client::view::{ColumnKind, Page, PageGroup, PageLayout, Selection, TableId, UiState};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, DamageId, ElementRef,
@@ -297,7 +297,7 @@ fn condition_edits_apply_undo_and_validate() {
 #[test]
 fn configuration_page_metadata_and_selection() {
     let fx = fixture();
-    assert_eq!(Page::ALL.len(), 16);
+    assert_eq!(Page::ALL.len(), 17);
     assert_eq!(Page::Configuration.group(), Some(PageGroup::ItemDefinition));
     assert_eq!(Page::Configuration.key(), "configuration");
     assert_eq!(Page::Configuration.label(), "Configuration");
@@ -307,10 +307,26 @@ fn configuration_page_metadata_and_selection() {
         Page::Configuration
     );
 
+    assert_eq!(Page::ALL[4], Page::Assumptions);
+    assert_eq!(Page::Assumptions.group(), Some(PageGroup::ItemDefinition));
+    assert_eq!(Page::Assumptions.key(), "assumptions");
+    assert_eq!(Page::Assumptions.label(), "Assumptions");
+    assert!(Page::Assumptions.tables().is_empty());
+    assert_eq!(Page::Assumptions.layout(), PageLayout::Custom);
+    let as_id = AssumptionId::new_v7();
+    assert_eq!(
+        pages::page_of(Selection::Assumption(as_id)),
+        Page::Assumptions
+    );
+
     let mut ui = UiState::default();
     assert_eq!(ui.selected_condition, None);
     pages::select(&mut ui, Selection::Condition(fx.cf00));
     assert_eq!(ui.selected_condition, Some(fx.cf00));
+    assert_eq!(ui.selected_assumption, None);
+    pages::select(&mut ui, Selection::Assumption(as_id));
+    assert_eq!(ui.selected_assumption, Some(as_id));
+    assert_eq!(ui.page, Page::Assumptions);
 }
 
 #[test]

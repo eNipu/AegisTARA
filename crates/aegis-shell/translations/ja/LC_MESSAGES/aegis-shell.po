@@ -1576,3 +1576,6 @@ msgstr "範囲"
 
 msgid "Configuration"
 msgstr "構成"
+
+msgid "Assumptions"
+msgstr "前提条件"

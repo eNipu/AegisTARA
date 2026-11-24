@@ -274,6 +274,8 @@ pub struct PageData {
     pub claim: Option<GoalDetail<aegis_model::ClaimId>>,
     /// Problems page (and the overview's counts).
     pub problems: Vec<ProblemRow>,
+    /// Assumptions page (job 136).
+    pub assumptions: Option<crate::assumptions::AssumptionsView>,
 }
 
 /// One baseline in the versions list.
@@ -425,6 +427,8 @@ pub struct ProjectView {
     pub draft_to: Option<aegis_model::ComponentId>,
     /// The kind of an interface draft.
     pub draft_interface_kind: Option<usize>,
+    /// The assumption a claim draft is linked to.
+    pub draft_assumption: Option<aegis_model::AssumptionId>,
     /// A required field of the draft has no value yet (UI-08.2).
     pub draft_incomplete: bool,
     /// What undo would undo, as "remove asset 'Brake ECU'" (UI-10.2).

@@ -173,6 +173,8 @@ assumption-holds = Holds
 relation-claim-assumptions = Assumptions
 relation-assumption-conditions = Assumption conditions
 relation-assumption-excludes = Excluded while it holds
+assumptions-explainer = Marking an assumption as holding excludes the trees and steps linked to it. { $n } excluded.
+assumptions-explainer-none = Marking an assumption as holding excludes the trees and steps linked to it. Nothing is excluded.
 
 # Party roles (job 145).
 party-us = Us

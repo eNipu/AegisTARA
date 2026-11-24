@@ -165,6 +165,8 @@ assumption-holds = ⟦Hôlds␣⟧
 relation-claim-assumptions = ⟦Âssûmptîôns␣⟧
 relation-assumption-conditions = ⟦Âssûmptîôn côndîtîôns␣⟧
 relation-assumption-excludes = ⟦Éxclûdéd whîlé ît hôlds␣⟧
+assumptions-explainer = ⟦Mârkîng ân âssûmptîôn âs hôldîng éxclûdés thé tréés ând stéps lînkéd tô ît. { $n } éxclûdéd.␣⟧
+assumptions-explainer-none = ⟦Mârkîng ân âssûmptîôn âs hôldîng éxclûdés thé tréés ând stéps lînkéd tô ît. Nôthîng îs éxclûdéd.␣⟧
 
 # Party roles (job 145).
 party-us = ⟦Ûs␣⟧

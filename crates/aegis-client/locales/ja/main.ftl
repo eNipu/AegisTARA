@@ -164,6 +164,8 @@ assumption-holds = 成立
 relation-claim-assumptions = 前提条件
 relation-assumption-conditions = 前提の条件
 relation-assumption-excludes = 成立時の除外対象
+assumptions-explainer = 前提条件を成立にすると、紐づく攻撃ツリーと攻撃ステップが対象外になります。{ $n } 件が対象外。
+assumptions-explainer-none = 前提条件を成立にすると、紐づく攻撃ツリーと攻撃ステップが対象外になります。対象外はありません。
 
 # Party roles (job 145).
 party-us = 自社

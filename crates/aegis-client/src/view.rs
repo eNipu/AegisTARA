@@ -107,6 +107,8 @@ pub enum Page {
     Scope,
     /// Configuration conditions and applicability (job 135).
     Configuration,
+    /// Applicability assumptions and exclusions (job 136).
+    Assumptions,
 }
 
 /// The group of pages a page sits in on the sidebar: the phases of
@@ -524,11 +526,12 @@ pub enum PageLayout {
 impl Page {
     /// Every page, in menu and sidebar order: the analysis in the order of
     /// its phases, item definition first (UI-13).
-    pub const ALL: [Page; 16] = [
+    pub const ALL: [Page; 17] = [
         Page::Overview,
         Page::Item,
         Page::Scope,
         Page::Configuration,
+        Page::Assumptions,
         Page::Damage,
         Page::Assets,
         Page::Threats,
@@ -548,7 +551,9 @@ impl Page {
     pub fn group(self) -> Option<PageGroup> {
         Some(match self {
             Page::Overview => return None,
-            Page::Item | Page::Scope | Page::Configuration => PageGroup::ItemDefinition,
+            Page::Item | Page::Scope | Page::Configuration | Page::Assumptions => {
+                PageGroup::ItemDefinition
+            }
             Page::Damage => PageGroup::Impact,
             Page::Assets | Page::Threats => PageGroup::AssetsThreats,
             Page::Trees => PageGroup::Feasibility,
@@ -589,6 +594,7 @@ impl Page {
             Page::Item => "item",
             Page::Scope => "scope",
             Page::Configuration => "configuration",
+            Page::Assumptions => "assumptions",
             Page::Damage => "damage",
             Page::Assets => "assets",
             Page::Threats => "threats",
@@ -624,7 +630,8 @@ impl Page {
             | Page::Admin
             | Page::Item
             | Page::Scope
-            | Page::Configuration => &[],
+            | Page::Configuration
+            | Page::Assumptions => &[],
         }
     }
 
@@ -658,6 +665,7 @@ impl Page {
             Page::Item => "Item definition",
             Page::Scope => "Description and scope",
             Page::Configuration => "Configuration",
+            Page::Assumptions => "Assumptions",
         }
     }
 }
@@ -919,6 +927,10 @@ pub struct UiState {
     pub selected_trust_boundary: Option<TrustBoundaryId>,
     /// The selected condition on the Configuration page.
     pub selected_condition: Option<aegis_model::ConditionId>,
+    /// The assumption a claim draft is linked to (row-action context, UI-08).
+    pub draft_assumption: Option<aegis_model::AssumptionId>,
+    /// The selected assumption on the Assumptions page.
+    pub selected_assumption: Option<aegis_model::AssumptionId>,
 }
 
 /// Converts an [`ElementRef`] to the wire target string used by figure
@@ -1113,6 +1125,15 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
                     "trust-boundary",
                     project.trust_boundary_idx(&id).is_some(),
                     E::TrustBoundary(id),
+                );
+            }
+        }
+        Page::Assumptions => {
+            if let Some(id) = ui.selected_assumption {
+                push(
+                    "assumption",
+                    project.assumption_idx(&id).is_some(),
+                    E::Assumption(id),
                 );
             }
         }

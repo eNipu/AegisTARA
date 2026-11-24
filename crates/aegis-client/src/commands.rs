@@ -844,6 +844,15 @@ pub enum Edit {
         /// Statement.
         name: String,
     },
+    /// Adds a cybersecurity claim linked to an assumption (UI-08).
+    AddClaimFor {
+        /// New ID.
+        id: ClaimId,
+        /// Statement.
+        name: String,
+        /// The assumption it references.
+        assumption: AssumptionId,
+    },
     /// Renames a cybersecurity claim.
     RenameClaim {
         /// The claim.
@@ -2994,6 +3003,27 @@ impl Edit {
                 name: name(n)?,
                 provenance: p,
             }],
+            Edit::AddClaimFor {
+                id,
+                name: n,
+                assumption,
+            } => {
+                project
+                    .assumption_idx(assumption)
+                    .ok_or(EditError::Missing)?;
+                vec![
+                    Op::AddCybersecurityClaim {
+                        id: *id,
+                        name: name(n)?,
+                        provenance: p.clone(),
+                    },
+                    Op::LinkClaimAssumption {
+                        claim: *id,
+                        assumption: *assumption,
+                        provenance: p,
+                    },
+                ]
+            }
             Edit::RenameClaim { claim, name: n } => vec![Op::RenameCybersecurityClaim {
                 id: *claim,
                 name: name(n)?,
@@ -3492,7 +3522,7 @@ impl Edit {
             Edit::AddGoal { id, .. } | Edit::AddGoalFor { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddCondition { id, .. } => Some(Selection::Condition(*id)),
             Edit::AddAssumption { id, .. } => Some(Selection::Assumption(*id)),
-            Edit::AddClaim { id, .. } => Some(Selection::Claim(*id)),
+            Edit::AddClaim { id, .. } | Edit::AddClaimFor { id, .. } => Some(Selection::Claim(*id)),
             Edit::LinkGoalParty { goal, .. } => Some(Selection::Goal(*goal)),
             Edit::SetStepConditionLink { tree, node, .. } => {
                 Some(Selection::TreeNode(*tree, *node))
@@ -3537,6 +3567,8 @@ pub enum Command {
     /// Start a draft of a new element: the page opens, the inspector shows the
     /// draft form (UI-08). Nothing is sent to the server.
     BeginDraft(crate::view::DraftKind),
+    /// Start a claim draft from an assumption, pre-linked on commit (UI-08).
+    CreateClaimFromAssumption(aegis_model::AssumptionId),
     /// Create the element of the draft with this name as one edit. An empty
     /// name discards the draft and sends nothing. With `next`, a new draft
     /// starts at once. If the edit is refused, the draft stays.

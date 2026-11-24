@@ -3303,6 +3303,7 @@ pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize)
         }
         Page::Scope => 0,
         Page::Configuration => p.conditions().count(),
+        Page::Assumptions => p.assumptions().count(),
         Page::Damage => p.damage_scenario_count(),
         Page::Assets => p.asset_count(),
         Page::Threats | Page::Risks => p.threat_scenario_count(),
@@ -3332,7 +3333,8 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Tree(_) | Selection::TreeNode(_, _) => Page::Trees,
         Selection::Control(_) => Page::Controls,
         Selection::Goal(_) | Selection::Claim(_) | Selection::Party(_) => Page::Goals,
-        Selection::Condition(_) | Selection::Assumption(_) => Page::Configuration,
+        Selection::Condition(_) => Page::Configuration,
+        Selection::Assumption(_) => Page::Assumptions,
     }
 }
 
@@ -3362,7 +3364,11 @@ pub fn select(ui: &mut UiState, s: Selection) {
         Selection::Goal(id) => ui.selected_goal = Some(id),
         Selection::Claim(id) => ui.selected_claim = Some(id),
         // Parties have no editor view of their own; selection stays on Goals.
-        Selection::Party(_) | Selection::Assumption(_) => {}
+        Selection::Party(_) => {}
+        Selection::Assumption(id) => {
+            ui.selected_assumption = Some(id);
+            ui.page = Page::Assumptions;
+        }
         Selection::Condition(id) => ui.selected_condition = Some(id),
     }
 }

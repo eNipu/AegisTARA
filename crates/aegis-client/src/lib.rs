@@ -1,5 +1,6 @@
 //! Client core. No UI toolkit.
 #![forbid(unsafe_code)]
+pub mod assumptions;
 pub mod audit;
 pub mod combined;
 pub mod command_table;
