@@ -930,6 +930,7 @@ pub fn element_ref_to_target(target: ElementRef) -> String {
         ElementRef::Control(id) => format!("control:{id}"),
         ElementRef::Goal(id) => format!("goal:{id}"),
         ElementRef::Claim(id) => format!("claim:{id}"),
+        ElementRef::Assumption(id) => format!("assumption:{id}"),
         ElementRef::ItemDescription => "item_description".to_owned(),
         ElementRef::ItemScope => "item_scope".to_owned(),
     }
@@ -959,6 +960,7 @@ pub fn target_to_element_ref(target: &str) -> Option<ElementRef> {
         "control" | "security_control" => Some(ElementRef::Control(uuid_str.parse().ok()?)),
         "goal" | "cybersecurity_goal" => Some(ElementRef::Goal(uuid_str.parse().ok()?)),
         "claim" | "cybersecurity_claim" => Some(ElementRef::Claim(uuid_str.parse().ok()?)),
+        "assumption" => Some(ElementRef::Assumption(uuid_str.parse().ok()?)),
         _ => None,
     }
 }

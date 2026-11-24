@@ -643,6 +643,14 @@ entity_ids! {
 }
 
 entity_ids! {
+    /// Arena index of an [`Assumption`](crate::Assumption) in a [`Project`](crate::Project).
+    pub struct AssumptionIdx;
+    index_example {}
+    /// Stable public ID of an [`Assumption`](crate::Assumption): an RFC 9562 version 7 UUID.
+    pub struct AssumptionId;
+}
+
+entity_ids! {
     /// Internal index of a cybersecurity claim in a [`Project`](crate::Project)
     /// arena.
     ///
@@ -1090,10 +1098,10 @@ impl fmt::Display for ElementId {
 /// Fixed human-readable prefix for an element kind's visual ID (FND-06).
 ///
 /// Every numbered element kind has a short uppercase prefix (`A`, `D`, `T`,
-/// `AT`, `SC`, `G`, `CF`, `CL`, `P`, `C`, `IF`, `DF`, `TB`). Combined with a 0-based
-/// sequence number zero-padded to at least two digits (`00`..`99`, growing
-/// to `100`+), it forms a stable human-readable visual ID such as `A00`,
-/// `T01`, or `DF12`.
+/// `AT`, `SC`, `G`, `CF`, `AS`, `CL`, `P`, `C`, `IF`, `DF`, `TB`). Combined
+/// with a 0-based sequence number zero-padded to at least two digits (`00`..`99`,
+/// growing to `100`+), it forms a stable human-readable visual ID such as
+/// `A00`, `T01`, or `DF12`.
 ///
 /// ```
 /// use aegis_model::{VisualPrefix, format_visual_id};
@@ -1125,6 +1133,8 @@ pub enum VisualPrefix {
     Goal,
     /// Applicability condition (`CF00`, `CF01`, ...).
     Condition,
+    /// Applicability assumption (`AS00`, `AS01`, ...).
+    Assumption,
     /// Cybersecurity claim (`CL00`, `CL01`, ...).
     Claim,
     /// Party (`P00`, `P01`, ...).
@@ -1141,7 +1151,7 @@ pub enum VisualPrefix {
 
 impl VisualPrefix {
     /// The uppercase ASCII prefix string (`"A"`, `"D"`, `"T"`, `"AT"`,
-    /// `"SC"`, `"G"`, `"CF"`, `"CL"`, `"P"`, `"C"`, `"IF"`, `"DF"`, `"TB"`).
+    /// `"SC"`, `"G"`, `"CF"`, `"AS"`, `"CL"`, `"P"`, `"C"`, `"IF"`, `"DF"`, `"TB"`).
     /// Time O(1).
     ///
     /// ```
@@ -1161,6 +1171,7 @@ impl VisualPrefix {
             Self::Control => "SC",
             Self::Goal => "G",
             Self::Condition => "CF",
+            Self::Assumption => "AS",
             Self::Claim => "CL",
             Self::Party => "P",
             Self::Component => "C",

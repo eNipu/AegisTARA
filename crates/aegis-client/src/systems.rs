@@ -459,7 +459,7 @@ fn element_selection(r: aegis_model::ElementRef) -> Option<Selection> {
         R::Control(id) => Some(Selection::Control(id)),
         R::Goal(id) => Some(Selection::Goal(id)),
         R::Claim(id) => Some(Selection::Claim(id)),
-        R::Project | R::ItemDescription | R::ItemScope => None,
+        R::Project | R::ItemDescription | R::ItemScope | R::Assumption(_) => None,
     }
 }
 

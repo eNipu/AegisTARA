@@ -264,7 +264,8 @@ mod tree;
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use applicability::{
-    Applicability, Condition, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, Reason,
+    Applicability, Assumption, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
+    MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, Reason, StepRef,
 };
 pub use asset::{Asset, PropertySet};
 pub use compat::{
@@ -295,10 +296,11 @@ pub use eval::{
     MinTime, TreeEvalCache, evaluate,
 };
 pub use id::{
-    AssetId, AssetIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx, ConditionId, ConditionIdx,
-    ControlId, ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx, ElementId, GoalId,
-    GoalIdx, InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx, SuggestionId, ThreatId,
-    ThreatIdx, TreeId, TreeIdx, TrustBoundaryId, TrustBoundaryIdx, VisualPrefix, format_visual_id,
+    AssetId, AssetIdx, AssumptionId, AssumptionIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx,
+    ConditionId, ConditionIdx, ControlId, ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx,
+    ElementId, GoalId, GoalIdx, InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx,
+    SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId, TrustBoundaryIdx,
+    VisualPrefix, format_visual_id,
 };
 pub use item::{
     Component, DataFlow, Interface, ItemRef, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS,

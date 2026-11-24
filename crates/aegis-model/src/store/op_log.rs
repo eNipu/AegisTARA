@@ -18,8 +18,8 @@ use super::{
 use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
-    AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId, ElementId, GoalId,
-    InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
@@ -448,6 +448,28 @@ enum OpView<'a> {
     RemoveCondition {
         id: Text<ConditionId>,
     },
+    AddAssumption {
+        id: Text<AssumptionId>,
+        name: &'a str,
+        holds: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameAssumption {
+        id: Text<AssumptionId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetAssumptionHolds {
+        id: Text<AssumptionId>,
+        holds: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveAssumption {
+        id: Text<AssumptionId>,
+    },
     NeedCondition {
         element: TargetView,
         condition: Text<ConditionId>,
@@ -758,6 +780,8 @@ fn within_caps(op: &Op) -> bool {
         | Op::AddParty { name, .. }
         | Op::RenameParty { name, .. }
         | Op::RenameCondition { name, .. }
+        | Op::AddAssumption { name, .. }
+        | Op::RenameAssumption { name, .. }
         | Op::AddElement { name, .. }
         | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
@@ -1372,6 +1396,36 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveCondition { id } => OpView::RemoveCondition { id: Text(*id) },
+        Op::AddAssumption {
+            id,
+            name,
+            holds,
+            provenance,
+        } => OpView::AddAssumption {
+            id: Text(*id),
+            name,
+            holds: *holds,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameAssumption {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameAssumption {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetAssumptionHolds {
+            id,
+            holds,
+            provenance,
+        } => OpView::SetAssumptionHolds {
+            id: Text(*id),
+            holds: *holds,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveAssumption { id } => OpView::RemoveAssumption { id: Text(*id) },
         Op::NeedCondition {
             element,
             condition,
@@ -2302,6 +2356,36 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveCondition { id } => Op::RemoveCondition { id: id.0 },
+        OpWire::AddAssumption {
+            id,
+            name,
+            holds,
+            provenance,
+        } => Op::AddAssumption {
+            id: id.0,
+            name: name.0,
+            holds,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameAssumption {
+            id,
+            name,
+            provenance,
+        } => Op::RenameAssumption {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetAssumptionHolds {
+            id,
+            holds,
+            provenance,
+        } => Op::SetAssumptionHolds {
+            id: id.0,
+            holds,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveAssumption { id } => Op::RemoveAssumption { id: id.0 },
         OpWire::NeedCondition {
             element,
             condition,

@@ -18,10 +18,10 @@ use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
-    DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, LinkTarget,
-    Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId, TreeId,
-    TrustBoundaryId,
+    AssetId, AssumptionId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId,
+    DamageId, DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId,
+    LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId,
+    TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -703,6 +703,78 @@ fn walk_conditions(seen: &mut BTreeSet<String>) {
     apply_undo_redo(&mut ws, seen, Op::RemoveCondition { id });
 }
 
+fn walk_assumptions(seen: &mut BTreeSet<String>) {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(m);
+    let (id, cond) = (AssumptionId::new_v7(), ConditionId::new_v7());
+    let target = ElementRef::Assumption(id);
+    for op in [
+        Op::AddCondition {
+            id: cond,
+            name: "Production mode".into(),
+            description: "".into(),
+            present: true,
+            provenance: who(),
+        },
+        Op::AddAssumption {
+            id,
+            name: "ECU physically secured".into(),
+            holds: true,
+            provenance: who(),
+        },
+        Op::RenameAssumption {
+            id,
+            name: "ECU inside locked cabin".into(),
+            provenance: who(),
+        },
+        Op::SetAssumptionHolds {
+            id,
+            holds: false,
+            provenance: who(),
+        },
+        Op::SetProjectLanguages {
+            langs: Arc::from([Arc::from("ja")]),
+            provenance: who(),
+        },
+        Op::SetDescription {
+            target,
+            text: "Mounted inside locked enclosure.".into(),
+            provenance: who(),
+        },
+        Op::SetDescriptionTranslation {
+            target,
+            lang: "ja".into(),
+            text: "ロックされた筐体内に設置。".into(),
+            provenance: who(),
+        },
+        Op::NeedCondition {
+            element: target,
+            condition: cond,
+            provenance: who(),
+        },
+        Op::UnneedCondition {
+            element: target,
+            condition: cond,
+            provenance: who(),
+        },
+        Op::SetDescriptionTranslation {
+            target,
+            lang: "ja".into(),
+            text: "".into(),
+            provenance: who(),
+        },
+        Op::SetDescription {
+            target,
+            text: "".into(),
+            provenance: who(),
+        },
+        Op::RemoveAssumption { id },
+        Op::RemoveCondition { id: cond },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+}
+
 #[test]
 fn every_op_kind_is_undone_and_redone_exactly() {
     let m = common::second();
@@ -715,6 +787,7 @@ fn every_op_kind_is_undone_and_redone_exactly() {
     walk_elements(&mut seen);
     walk_parties(&mut seen);
     walk_conditions(&mut seen);
+    walk_assumptions(&mut seen);
     assert_eq!(seen, declared_variants(), "an Op variant is not exercised");
 }
 

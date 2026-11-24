@@ -27,6 +27,67 @@ pub const MAX_CONDITIONS: usize = 256;
 /// Maximum number of conditions one element or step may need (job 133).
 pub const MAX_CONDITIONS_PER_ELEMENT: usize = 16;
 
+/// Maximum number of live assumptions in one project.
+pub const MAX_ASSUMPTIONS: usize = 256;
+
+/// Maximum number of trees and steps one assumption may exclude.
+pub const MAX_ASSUMPTION_EXCLUDES: usize = 256;
+
+/// Maximum number of assumptions one cybersecurity claim may reference.
+pub const MAX_CLAIM_ASSUMPTIONS: usize = 64;
+
+/// Stable public reference to one attack-tree step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StepRef {
+    /// The attack tree containing the step.
+    pub tree: TreeId,
+    /// The step node inside `tree`.
+    pub node: NodeId,
+}
+
+/// An applicability assumption in a [`Project`](crate::Project), changed only
+/// through [`Project::apply`](crate::Project::apply).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Assumption {
+    pub(crate) name: Arc<str>,
+    pub(crate) holds: bool,
+    pub(crate) excludes_trees: Vec<TreeIdx>,
+    pub(crate) excludes_steps: Vec<StepRef>,
+    pub(crate) provenance: Provenance,
+}
+
+impl Assumption {
+    /// The assumption's name. Time O(1).
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether the assumption currently holds. Time O(1).
+    #[must_use]
+    pub fn holds(&self) -> bool {
+        self.holds
+    }
+
+    /// Attack-tree indices excluded while this assumption holds. Time O(1).
+    #[must_use]
+    pub fn excludes_trees(&self) -> &[TreeIdx] {
+        &self.excludes_trees
+    }
+
+    /// Attack-tree steps excluded while this assumption holds. Time O(1).
+    #[must_use]
+    pub fn excludes_steps(&self) -> &[StepRef] {
+        &self.excludes_steps
+    }
+
+    /// Provenance of the last change to this assumption. Time O(1).
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
+}
+
 /// A condition in a [`Project`](crate::Project), changed only through
 /// [`Project::apply`](crate::Project::apply).
 ///
