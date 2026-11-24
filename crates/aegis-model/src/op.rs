@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::applicability::StepRef;
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
 use crate::description::ElementRef;
@@ -731,6 +732,24 @@ pub enum Op {
         /// Provenance of removing the party from the responsible list.
         provenance: Provenance,
     },
+    /// Links an assumption to a cybersecurity claim (at most `MAX_CLAIM_ASSUMPTIONS`).
+    LinkClaimAssumption {
+        /// Existing cybersecurity claim.
+        claim: ClaimId,
+        /// Existing assumption, not yet linked on `claim`.
+        assumption: AssumptionId,
+        /// Provenance of linking the assumption.
+        provenance: Provenance,
+    },
+    /// Unlinks an assumption from a cybersecurity claim.
+    UnlinkClaimAssumption {
+        /// Existing cybersecurity claim.
+        claim: ClaimId,
+        /// An assumption linked on `claim`.
+        assumption: AssumptionId,
+        /// Provenance of unlinking the assumption.
+        provenance: Provenance,
+    },
     /// Removes a cybersecurity claim that no threat scenario references.
     RemoveCybersecurityClaim {
         /// Existing cybersecurity claim.
@@ -832,6 +851,17 @@ pub enum Op {
         id: AssumptionId,
         /// Whether the assumption holds.
         holds: bool,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Replaces an assumption's excluded attack trees and steps, sorted and deduplicated.
+    SetAssumptionExcludes {
+        /// Existing assumption.
+        id: AssumptionId,
+        /// Attack trees excluded while the assumption holds.
+        trees: Vec<TreeId>,
+        /// Attack-tree steps excluded while the assumption holds.
+        steps: Vec<StepRef>,
         /// Provenance of the change.
         provenance: Provenance,
     },
@@ -1272,6 +1302,8 @@ impl Op {
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::LinkClaimParty { provenance, .. }
             | Self::UnlinkClaimParty { provenance, .. }
+            | Self::LinkClaimAssumption { provenance, .. }
+            | Self::UnlinkClaimAssumption { provenance, .. }
             | Self::AddParty { provenance, .. }
             | Self::RenameParty { provenance, .. }
             | Self::SetPartyKind { provenance, .. }
@@ -1281,6 +1313,7 @@ impl Op {
             | Self::AddAssumption { provenance, .. }
             | Self::RenameAssumption { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
+            | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
             | Self::UnneedCondition { provenance, .. }
             | Self::NeedStepCondition { provenance, .. }
@@ -1403,6 +1436,8 @@ impl Op {
             | Self::RenameCybersecurityClaim { provenance, .. }
             | Self::LinkClaimParty { provenance, .. }
             | Self::UnlinkClaimParty { provenance, .. }
+            | Self::LinkClaimAssumption { provenance, .. }
+            | Self::UnlinkClaimAssumption { provenance, .. }
             | Self::AddParty { provenance, .. }
             | Self::RenameParty { provenance, .. }
             | Self::SetPartyKind { provenance, .. }
@@ -1412,6 +1447,7 @@ impl Op {
             | Self::AddAssumption { provenance, .. }
             | Self::RenameAssumption { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
+            | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
             | Self::UnneedCondition { provenance, .. }
             | Self::NeedStepCondition { provenance, .. }

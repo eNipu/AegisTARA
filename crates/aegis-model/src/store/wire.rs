@@ -332,6 +332,7 @@ caps! {
     PartiesCap = crate::party::MAX_PARTIES, Limit::PARTIES;
     ConditionsCap = crate::applicability::MAX_CONDITIONS, Limit::CONDITIONS;
     ConditionLinksCap = crate::applicability::MAX_CONDITIONS_PER_ELEMENT, Limit::CONDITION_LINKS;
+    AssumptionExcludesCap = crate::applicability::MAX_ASSUMPTION_EXCLUDES, Limit::ASSUMPTION_EXCLUDES;
     BoundaryMembersCap = crate::item::MAX_TRUST_BOUNDARY_MEMBERS, Limit::TRUST_BOUNDARY_MEMBERS;
     ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
     ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
@@ -1671,6 +1672,14 @@ pub(super) struct ReviewMarkWire {
     pub(super) node: WireId<NodeId>,
 }
 
+/// An attack-tree step excluded by an assumption.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StepRefWire {
+    pub(super) tree: WireId<TreeId>,
+    pub(super) node: WireId<NodeId>,
+}
+
 /// What a description belongs to, as written: `{"kind":"asset","id":...}`
 /// or `{"kind":"project"}`.
 #[derive(serde::Deserialize)]
@@ -2514,6 +2523,18 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    LinkClaimAssumption {
+        claim: WireId<ClaimId>,
+        assumption: WireId<AssumptionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    UnlinkClaimAssumption {
+        claim: WireId<ClaimId>,
+        assumption: WireId<AssumptionId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     RemoveCybersecurityClaim {
         id: WireId<ClaimId>,
     },
@@ -2578,6 +2599,13 @@ pub(super) enum OpWire {
     SetAssumptionHolds {
         id: WireId<AssumptionId>,
         holds: bool,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetAssumptionExcludes {
+        id: WireId<AssumptionId>,
+        trees: BoundedVec<WireId<TreeId>, AssumptionExcludesCap>,
+        steps: BoundedVec<StepRefWire, AssumptionExcludesCap>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

@@ -6,10 +6,11 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssumptionId, AssumptionIdx, ConditionId, ElementRef, EntityKind, MAX_ASSUMPTIONS,
-    MAX_DESCRIPTION_CHARS, MAX_NAME_BYTES, MAX_NAME_CHARS, Methodology, ModelError, Op, OpCodec,
-    OpLogReader, OpLogWriter, Project, ProjectDiff, ProjectEvalCache, Provenance, StoreError,
-    VisualPrefix,
+    AssumptionId, AssumptionIdx, AttackTree, ClaimId, ConditionId, ElementRef, EntityKind,
+    GateKind, Limit, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS,
+    MAX_DESCRIPTION_CHARS, MAX_NAME_BYTES, MAX_NAME_CHARS, Methodology, ModelError, Node, NodeId,
+    Op, OpCodec, OpLogReader, OpLogWriter, Project, ProjectDiff, ProjectEvalCache, Provenance,
+    StepRef, StoreError, TreeId, VisualPrefix,
 };
 
 fn project() -> Project {
@@ -648,4 +649,689 @@ fn op_log_round_trips_every_assumption_op_and_target() {
         }),
         Err(StoreError::UnencodableOp)
     ));
+}
+
+fn add_claim(p: &mut Project, id: ClaimId, name: &str) {
+    p.apply(Op::AddCybersecurityClaim {
+        id,
+        name: name.into(),
+        provenance: who("alice", 1),
+    })
+    .expect("add claim");
+}
+
+fn add_tree_with_steps(
+    p: &mut Project,
+    tree_id: TreeId,
+    step_count: usize,
+) -> (NodeId, Vec<NodeId>) {
+    let root = NodeId::new_v7();
+    let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Root")).expect("tree");
+    let mut steps = Vec::with_capacity(step_count);
+    for i in 0..step_count {
+        let s = NodeId::new_v7();
+        tree.add_child(tree.root(), s, Node::step(format!("Step {i}")))
+            .expect("step");
+        steps.push(s);
+    }
+    p.apply(Op::AddAttackTree {
+        id: tree_id,
+        tree,
+        step_feasibility: vec![],
+        provenance: who("alice", 1),
+    })
+    .expect("add tree");
+    (root, steps)
+}
+
+#[test]
+fn set_assumption_excludes_sorts_dedups_and_keeps_step_ref_stable() {
+    let mut p = project();
+    let a = AssumptionId::new_v7();
+    add_assumption(&mut p, a, "ECU locked", true);
+
+    let t1 = TreeId::new_v7();
+    let t2 = TreeId::new_v7();
+    let (root1, steps1) = add_tree_with_steps(&mut p, t1, 2);
+    let (_root2, _steps2) = add_tree_with_steps(&mut p, t2, 1);
+    let (s1, s2) = (steps1[0], steps1[1]);
+
+    // Gate target fails with NotAStep.
+    assert_eq!(
+        p.apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![],
+            steps: vec![StepRef {
+                tree: t1,
+                node: root1,
+            }],
+            provenance: who("alice", 2),
+        }),
+        Err(ModelError::NotAStep {
+            tree: t1,
+            node: root1,
+        })
+    );
+
+    // Unknown tree / unknown node fail cleanly.
+    let missing_tree = TreeId::new_v7();
+    assert_eq!(
+        p.apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![missing_tree],
+            steps: vec![],
+            provenance: who("alice", 2),
+        }),
+        Err(ModelError::UnknownAttackTree(missing_tree))
+    );
+
+    // Unsorted + duplicate trees and steps are sorted and deduplicated on store and inverse.
+    let sr2 = StepRef { tree: t1, node: s2 };
+    let mut sorted_trees = vec![t1, t2];
+    sorted_trees.sort();
+    let mut cache = ProjectEvalCache::new(&p);
+    let p_first = who("alice", 10);
+    let inv1 = p
+        .apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![t2, t1, t2],
+            steps: vec![sr2, sr2],
+            provenance: p_first.clone(),
+        })
+        .expect("set excludes");
+    cache.update(&p, &inv1);
+    assert_eq!(
+        inv1,
+        Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![],
+            steps: vec![],
+            provenance: who("alice", 1_700_000_000_000),
+        }
+    );
+
+    let ai = p.assumption_idx(&a).expect("idx");
+    let got = p.assumption(ai).expect("assumption");
+    let expected_tree_idxs: Vec<_> = sorted_trees
+        .iter()
+        .map(|t| p.attack_tree_idx(t).expect("tree idx"))
+        .collect();
+    assert_eq!(got.excludes_trees(), expected_tree_idxs.as_slice());
+    assert_eq!(got.excludes_steps(), &[sr2]);
+
+    // Removing sibling step s1 compacts NodeIdx in t1; StepRef for s2 remains pinned to s2.
+    let before_rm_s1 = p.clone();
+    let inv_rm_s1 = p
+        .apply(Op::RemoveTreeNode {
+            tree: t1,
+            id: s1,
+            provenance: who("bob", 11),
+        })
+        .expect("remove sibling s1");
+    assert_eq!(p.assumption(ai).expect("a").excludes_steps(), &[sr2]);
+    assert_eq!(
+        p.apply(Op::RemoveTreeNode {
+            tree: t1,
+            id: s2,
+            provenance: who("bob", 12),
+        }),
+        Err(ModelError::NodeIsRated(s2))
+    );
+    p.apply(inv_rm_s1).expect("undo remove s1");
+    assert_eq!(p, before_rm_s1);
+
+    // ProjectDiff tracks SetAssumptionExcludes under diff.assumptions.
+    let diff = before_rm_s1.diff(&p).expect("diff");
+    assert!(diff.is_empty());
+    let mut after = p.clone();
+    after
+        .apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![],
+            steps: vec![],
+            provenance: who("carol", 20),
+        })
+        .expect("clear");
+    let diff2 = p.diff(&after).expect("diff2");
+    assert_eq!(diff2.assumptions().modified(), &[a]);
+
+    // Undo SetAssumptionExcludes restores exact prior state & provenance.
+    let before_replace = p.clone();
+    let inv2 = p
+        .apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![],
+            steps: vec![],
+            provenance: who("carol", 20),
+        })
+        .expect("clear");
+    assert_eq!(
+        inv2,
+        Op::SetAssumptionExcludes {
+            id: a,
+            trees: sorted_trees,
+            steps: vec![sr2],
+            provenance: p_first,
+        }
+    );
+    p.apply(inv2).expect("undo clear");
+    assert_eq!(p, before_replace);
+}
+
+#[test]
+fn combined_excludes_cap_enforced_in_model_and_codec() {
+    let mut p = project();
+    let a = AssumptionId::new_v7();
+    add_assumption(&mut p, a, "Combined cap", true);
+
+    // 130 live trees, each with 1 live step (staying well under MAX_TREE_OP_NODES = 32 per tree).
+    let mut trees = Vec::with_capacity(130);
+    let mut steps = Vec::with_capacity(127);
+    for i in 0..130 {
+        let tid = TreeId::new_v7();
+        let (_, tree_steps) = add_tree_with_steps(&mut p, tid, 1);
+        trees.push(tid);
+        if i < 127 {
+            steps.push(StepRef {
+                tree: tid,
+                node: tree_steps[0],
+            });
+        }
+    }
+
+    // Exactly 130 + 126 = 256 succeeds in model and op log.
+    let ok_op = Op::SetAssumptionExcludes {
+        id: a,
+        trees: trees.clone(),
+        steps: steps[..126].to_vec(),
+        provenance: who("alice", 2),
+    };
+    let before = p.clone();
+    let inv = p.apply(ok_op.clone()).expect("256 excludes allowed");
+    p.apply(inv).expect("undo 256");
+    assert_eq!(p, before);
+    let ok_codec = OpCodec::new(Arc::clone(p.methodology()));
+    let ok_bytes = ok_codec.encode(&ok_op).expect("encode 256");
+    assert_eq!(ok_codec.decode(&ok_bytes).expect("decode 256"), ok_op);
+
+    // 130 + 127 = 257 (each list individually <= 256) fails ONLY due to combined cap.
+    let over_op = Op::SetAssumptionExcludes {
+        id: a,
+        trees: trees.clone(),
+        steps: steps.clone(),
+        provenance: who("alice", 3),
+    };
+    assert_eq!(
+        p.apply(over_op.clone()),
+        Err(ModelError::TooManyAssumptionExcludes {
+            max: MAX_ASSUMPTION_EXCLUDES
+        })
+    );
+
+    // OpLogWriter::append refuses it via within_caps.
+    let m = Arc::clone(p.methodology());
+    let mut buf = Vec::new();
+    let mut w = OpLogWriter::create(&mut buf, Arc::clone(&m)).expect("writer");
+    assert!(matches!(w.append(&over_op), Err(StoreError::UnencodableOp)));
+    drop(w);
+
+    // Craft a valid-JSON op-log line with 130 trees + 127 steps and verify OpLogReader + OpCodec reject it.
+    let tree_json: Vec<String> = trees.iter().map(|t| format!("\"{t}\"")).collect();
+    let step_json: Vec<String> = steps
+        .iter()
+        .map(|s| format!("{{\"tree\":\"{}\",\"node\":\"{}\"}}", s.tree, s.node))
+        .collect();
+    let op_json = format!(
+        "{{\"op\":\"set_assumption_excludes\",\"id\":\"{a}\",\"trees\":[{}],\"steps\":[{}]}}",
+        tree_json.join(","),
+        step_json.join(",")
+    );
+    let codec = OpCodec::new(Arc::clone(&m));
+    assert!(matches!(
+        codec.decode(op_json.as_bytes()),
+        Err(StoreError::LimitExceeded(Limit::AssumptionExcludes {
+            max: MAX_ASSUMPTION_EXCLUDES
+        }))
+    ));
+
+    let mut raw_log = Vec::new();
+    let lw = OpLogWriter::create(&mut raw_log, Arc::clone(&m)).expect("header");
+    drop(lw);
+    raw_log.extend_from_slice(format!("{{\"seq\":1,\"op\":{op_json}}}\n").as_bytes());
+    let mut reader = OpLogReader::open(raw_log.as_slice(), m).expect("open");
+    let first = reader.next().expect("record 1");
+    assert!(matches!(
+        first,
+        Err(StoreError::LimitExceeded(Limit::AssumptionExcludes {
+            max: MAX_ASSUMPTION_EXCLUDES
+        }))
+    ));
+}
+
+#[test]
+fn claim_assumption_links_caps_equality_and_diff() {
+    let mut p = project();
+    let claim = ClaimId::new_v7();
+    add_claim(&mut p, claim, "Locked enclosure");
+
+    let a1 = AssumptionId::new_v7();
+    add_assumption(&mut p, a1, "A1", true);
+
+    assert_eq!(
+        p.apply(Op::UnlinkClaimAssumption {
+            claim,
+            assumption: a1,
+            provenance: who("alice", 2),
+        }),
+        Err(ModelError::ClaimAssumptionNotLinked {
+            claim,
+            assumption: a1
+        })
+    );
+
+    let before_link = p.clone();
+    let inv_link = p
+        .apply(Op::LinkClaimAssumption {
+            claim,
+            assumption: a1,
+            provenance: who("alice", 3),
+        })
+        .expect("link");
+    assert_eq!(
+        inv_link,
+        Op::UnlinkClaimAssumption {
+            claim,
+            assumption: a1,
+            provenance: who("alice", 1),
+        }
+    );
+    assert_eq!(
+        p.apply(Op::LinkClaimAssumption {
+            claim,
+            assumption: a1,
+            provenance: who("alice", 4),
+        }),
+        Err(ModelError::ClaimAssumptionAlreadyLinked {
+            claim,
+            assumption: a1
+        })
+    );
+    let diff_linked = before_link.diff(&p).expect("diff");
+    assert_eq!(diff_linked.cybersecurity_claims().modified(), &[claim]);
+
+    let after_link = p.clone();
+    let inv_unlink = p
+        .apply(Op::UnlinkClaimAssumption {
+            claim,
+            assumption: a1,
+            provenance: who("bob", 5),
+        })
+        .expect("unlink");
+    assert_eq!(
+        inv_unlink,
+        Op::LinkClaimAssumption {
+            claim,
+            assumption: a1,
+            provenance: who("alice", 3),
+        }
+    );
+    assert_eq!(
+        after_link
+            .diff(&p)
+            .expect("diff unlink")
+            .cybersecurity_claims()
+            .modified(),
+        &[claim]
+    );
+    p.apply(inv_unlink).expect("undo unlink");
+    assert_eq!(p, after_link);
+    p.apply(inv_link).expect("undo link");
+    assert_eq!(p, before_link);
+
+    // L29: Project::eq compares claim.assumptions by public ID across distinct slot layouts.
+    let mut p2 = project();
+    let filler = AssumptionId::new_v7();
+    add_assumption(&mut p2, filler, "Filler", false);
+    add_assumption(&mut p2, a1, "A1", true);
+    p2.apply(Op::RemoveAssumption { id: filler })
+        .expect("remove filler");
+    add_claim(&mut p2, claim, "Locked enclosure");
+    let mut p1 = project();
+    add_assumption(&mut p1, a1, "A1", true);
+    add_claim(&mut p1, claim, "Locked enclosure");
+    p1.apply(Op::LinkClaimAssumption {
+        claim,
+        assumption: a1,
+        provenance: who("alice", 10),
+    })
+    .expect("link p1");
+    assert_ne!(p1, p2);
+    p2.apply(Op::LinkClaimAssumption {
+        claim,
+        assumption: a1,
+        provenance: who("alice", 10),
+    })
+    .expect("link p2");
+    assert_eq!(p1, p2);
+
+    // Cap at MAX_CLAIM_ASSUMPTIONS = 64.
+    let mut p_cap = project();
+    add_claim(&mut p_cap, claim, "Cap claim");
+    let mut added = Vec::new();
+    for _ in 0..MAX_CLAIM_ASSUMPTIONS {
+        let aid = AssumptionId::new_v7();
+        add_assumption(&mut p_cap, aid, "A", true);
+        p_cap
+            .apply(Op::LinkClaimAssumption {
+                claim,
+                assumption: aid,
+                provenance: who("alice", 1),
+            })
+            .expect("link within cap");
+        added.push(aid);
+    }
+    let ci = p_cap.cybersecurity_claim_idx(&claim).expect("claim idx");
+    let stored_ids: Vec<_> = p_cap
+        .cybersecurity_claim(ci)
+        .expect("claim")
+        .assumptions()
+        .iter()
+        .map(|&idx| p_cap.assumption_id(idx).expect("id"))
+        .collect();
+    added.sort();
+    assert_eq!(stored_ids, added);
+
+    let extra = AssumptionId::new_v7();
+    add_assumption(&mut p_cap, extra, "Extra", true);
+    assert_eq!(
+        p_cap.apply(Op::LinkClaimAssumption {
+            claim,
+            assumption: extra,
+            provenance: who("alice", 2),
+        }),
+        Err(ModelError::TooManyClaimAssumptions {
+            max: MAX_CLAIM_ASSUMPTIONS
+        })
+    );
+}
+
+#[test]
+fn l15_blank_actor_rejected_for_all_three_new_ops() {
+    let mut p = project();
+    let a = AssumptionId::new_v7();
+    let claim = ClaimId::new_v7();
+    let tree = TreeId::new_v7();
+    add_assumption(&mut p, a, "A", true);
+    add_claim(&mut p, claim, "C");
+    let (_, steps) = add_tree_with_steps(&mut p, tree, 1);
+
+    assert_eq!(
+        p.apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![tree],
+            steps: vec![StepRef {
+                tree,
+                node: steps[0]
+            }],
+            provenance: Provenance::human("   ", 1),
+        }),
+        Err(ModelError::EmptyActor)
+    );
+    assert_eq!(
+        p.apply(Op::LinkClaimAssumption {
+            claim,
+            assumption: a,
+            provenance: Provenance::human("\t", 2),
+        }),
+        Err(ModelError::EmptyActor)
+    );
+
+    // Link validly first so UnlinkClaimAssumption fails ONLY due to blank actor (L09 + L15).
+    p.apply(Op::LinkClaimAssumption {
+        claim,
+        assumption: a,
+        provenance: who("alice", 3),
+    })
+    .expect("link");
+    assert_eq!(
+        p.apply(Op::UnlinkClaimAssumption {
+            claim,
+            assumption: a,
+            provenance: Provenance::human(" \n ", 4),
+        }),
+        Err(ModelError::EmptyActor)
+    );
+}
+
+#[test]
+fn l09_single_guard_isolation_and_l30_undo_round_trip() {
+    let mut p = project();
+    let a = AssumptionId::new_v7();
+    let claim = ClaimId::new_v7();
+    let tree_only = TreeId::new_v7();
+    let tree_step = TreeId::new_v7();
+    add_assumption(&mut p, a, "ECU locked", true);
+    add_claim(&mut p, claim, "Locked enclosure");
+    let (_, steps_only) = add_tree_with_steps(&mut p, tree_only, 1);
+    let (_, steps_step) = add_tree_with_steps(&mut p, tree_step, 1);
+    let step = steps_step[0];
+    let baseline = p.clone();
+
+    // 1. RemoveAssumption with ONLY a claim link -> AssumptionInUse.
+    let u_link = p
+        .apply(Op::LinkClaimAssumption {
+            claim,
+            assumption: a,
+            provenance: who("alice", 2),
+        })
+        .expect("link");
+    assert_eq!(
+        p.apply(Op::RemoveAssumption { id: a }),
+        Err(ModelError::AssumptionInUse {
+            assumption: a,
+            claims: 1
+        })
+    );
+    // 2. RemoveCybersecurityClaim with ONLY an assumption link -> CybersecurityClaimHasAssumptions.
+    assert_eq!(
+        p.apply(Op::RemoveCybersecurityClaim { id: claim }),
+        Err(ModelError::CybersecurityClaimHasAssumptions {
+            claim,
+            assumptions: 1
+        })
+    );
+    p.apply(u_link).expect("unlink");
+    assert_eq!(p, baseline);
+
+    // 3. RemoveAssumption with ONLY excludes -> AssumptionHasExclusions.
+    //    RemoveAttackTree with ONLY a tree exclude -> AttackTreeExcludedByAssumption.
+    let u_excl_tree = p
+        .apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![tree_only],
+            steps: vec![],
+            provenance: who("alice", 3),
+        })
+        .expect("excl tree");
+    assert_eq!(
+        p.apply(Op::RemoveAssumption { id: a }),
+        Err(ModelError::AssumptionHasExclusions {
+            assumption: a,
+            excludes: 1
+        })
+    );
+    assert_eq!(
+        p.apply(Op::RemoveAttackTree { id: tree_only }),
+        Err(ModelError::AttackTreeExcludedByAssumption {
+            tree: tree_only,
+            assumptions: 1
+        })
+    );
+    p.apply(u_excl_tree).expect("undo excl tree");
+    assert_eq!(p, baseline);
+
+    // 4. RemoveAttackTree with ONLY a step exclude -> AttackTreeExcludedByAssumption.
+    //    RemoveTreeNode on unrated, unlinked, undescribed step whose ONLY blocker is excludes_steps -> NodeIsRated.
+    let u_excl_step = p
+        .apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![],
+            steps: vec![StepRef {
+                tree: tree_step,
+                node: step,
+            }],
+            provenance: who("alice", 4),
+        })
+        .expect("excl step");
+    assert_eq!(
+        p.apply(Op::RemoveAttackTree { id: tree_step }),
+        Err(ModelError::AttackTreeExcludedByAssumption {
+            tree: tree_step,
+            assumptions: 1
+        })
+    );
+    assert_eq!(
+        p.apply(Op::RemoveTreeNode {
+            tree: tree_step,
+            id: step,
+            provenance: who("alice", 5),
+        }),
+        Err(ModelError::NodeIsRated(step))
+    );
+    p.apply(u_excl_step).expect("undo excl step");
+    assert_eq!(p, baseline);
+
+    // L30 full-Project undo equality across linking, excluding, clearing, removing all entities, and undoing step-by-step.
+    let s_only = steps_only[0];
+    let mut undos = Vec::new();
+    undos.push(
+        p.apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![tree_only],
+            steps: vec![StepRef {
+                tree: tree_step,
+                node: step,
+            }],
+            provenance: who("alice", 10),
+        })
+        .expect("set excl"),
+    );
+    undos.push(
+        p.apply(Op::LinkClaimAssumption {
+            claim,
+            assumption: a,
+            provenance: who("alice", 11),
+        })
+        .expect("link"),
+    );
+    let armed = p.clone();
+    undos.push(
+        p.apply(Op::UnlinkClaimAssumption {
+            claim,
+            assumption: a,
+            provenance: who("bob", 12),
+        })
+        .expect("unlink"),
+    );
+    undos.push(
+        p.apply(Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![],
+            steps: vec![],
+            provenance: who("bob", 13),
+        })
+        .expect("clear excl"),
+    );
+    undos.push(
+        p.apply(Op::RemoveAssumption { id: a })
+            .expect("remove assumption"),
+    );
+    undos.push(
+        p.apply(Op::RemoveCybersecurityClaim { id: claim })
+            .expect("remove claim"),
+    );
+    undos.push(
+        p.apply(Op::RemoveTreeNode {
+            tree: tree_step,
+            id: step,
+            provenance: who("bob", 14),
+        })
+        .expect("remove step"),
+    );
+    undos.push(
+        p.apply(Op::RemoveTreeNode {
+            tree: tree_only,
+            id: s_only,
+            provenance: who("bob", 15),
+        })
+        .expect("remove s_only"),
+    );
+    undos.push(
+        p.apply(Op::RemoveAttackTree { id: tree_step })
+            .expect("remove tree_step"),
+    );
+    undos.push(
+        p.apply(Op::RemoveAttackTree { id: tree_only })
+            .expect("remove tree_only"),
+    );
+
+    // Undo the removals + clears back to `armed`, then undo the initial link + excludes back to `baseline`.
+    for idx in (2..undos.len()).rev() {
+        p.apply(undos[idx].clone()).expect("undo back to armed");
+    }
+    assert_eq!(p, armed);
+    p.apply(undos[1].clone()).expect("undo link");
+    p.apply(undos[0].clone()).expect("undo excl");
+    assert_eq!(p, baseline);
+}
+
+#[test]
+fn op_log_round_trips_excludes_and_claim_assumption_ops() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let (a, claim, t1, t2, n1) = (
+        AssumptionId::new_v7(),
+        ClaimId::new_v7(),
+        TreeId::new_v7(),
+        TreeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let prov = who("alice", 99);
+    let ops = vec![
+        Op::SetAssumptionExcludes {
+            id: a,
+            trees: vec![t1, t2],
+            steps: vec![StepRef { tree: t1, node: n1 }],
+            provenance: prov.clone(),
+        },
+        Op::LinkClaimAssumption {
+            claim,
+            assumption: a,
+            provenance: prov.clone(),
+        },
+        Op::UnlinkClaimAssumption {
+            claim,
+            assumption: a,
+            provenance: prov,
+        },
+    ];
+    let codec = OpCodec::new(Arc::clone(&m));
+    for op in &ops {
+        assert_eq!(
+            codec
+                .decode(&codec.encode(op).expect("encode"))
+                .expect("decode"),
+            *op
+        );
+    }
+    let mut log = Vec::new();
+    let mut w = OpLogWriter::create(&mut log, Arc::clone(&m)).expect("writer");
+    for op in &ops {
+        w.append(op).expect("append");
+    }
+    drop(w);
+    let decoded: Vec<_> = OpLogReader::open(log.as_slice(), m)
+        .expect("open")
+        .map(|r| r.expect("record").op)
+        .collect();
+    assert_eq!(decoded, ops);
 }

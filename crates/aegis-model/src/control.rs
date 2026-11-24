@@ -4,7 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::{ControlId, ControlIdx, NodeId, NodeIdx, PartyIdx, TreeIdx};
+use crate::id::{AssumptionIdx, ControlId, ControlIdx, NodeId, NodeIdx, PartyIdx, TreeIdx};
 use crate::item::{ItemIdx, ItemRef};
 use crate::methodology::{AttackType, ControlKind, FeasibilityLevel};
 use crate::provenance::Provenance;
@@ -1047,6 +1047,8 @@ pub struct CybersecurityClaim {
     pub(crate) name: Arc<str>,
     /// Sorted by `PartyId`, unique, at most 16 parties.
     pub(crate) responsible: Vec<PartyIdx>,
+    /// Sorted by `AssumptionId`, unique, at most `MAX_CLAIM_ASSUMPTIONS`.
+    pub(crate) assumptions: Vec<AssumptionIdx>,
     pub(crate) provenance: Provenance,
 }
 
@@ -1081,6 +1083,13 @@ impl CybersecurityClaim {
     #[must_use]
     pub fn responsible(&self) -> &[PartyIdx] {
         &self.responsible
+    }
+
+    /// Returns the assumptions referenced by this claim, sorted by
+    /// [`AssumptionId`](crate::AssumptionId) and unique. Time O(1).
+    #[must_use]
+    pub fn assumptions(&self) -> &[AssumptionIdx] {
+        &self.assumptions
     }
 
     /// Returns the provenance of the last [`Op`](crate::Op) that created or

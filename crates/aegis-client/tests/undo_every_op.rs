@@ -20,8 +20,8 @@ use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId,
     DamageId, DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId,
-    LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, ThreatId,
-    TreeId, TrustBoundaryId,
+    LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, StepRef,
+    ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -706,7 +706,12 @@ fn walk_conditions(seen: &mut BTreeSet<String>) {
 fn walk_assumptions(seen: &mut BTreeSet<String>) {
     let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
     let mut ws = Workspace::empty(m);
-    let (id, cond) = (AssumptionId::new_v7(), ConditionId::new_v7());
+    let (id, cond, claim) = (
+        AssumptionId::new_v7(),
+        ConditionId::new_v7(),
+        ClaimId::new_v7(),
+    );
+    let (tree, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
     let target = ElementRef::Assumption(id);
     for op in [
         Op::AddCondition {
@@ -714,6 +719,26 @@ fn walk_assumptions(seen: &mut BTreeSet<String>) {
             name: "Production mode".into(),
             description: "".into(),
             present: true,
+            provenance: who(),
+        },
+        Op::AddCybersecurityClaim {
+            id: claim,
+            name: "Locked enclosure".into(),
+            provenance: who(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
+            step_feasibility: vec![],
+            provenance: who(),
+        },
+        Op::AddTreeNode {
+            tree,
+            parent: root,
+            id: step,
+            node: Node::step("Bypass lock"),
+            index: 1,
+            position: 0,
             provenance: who(),
         },
         Op::AddAssumption {
@@ -730,6 +755,17 @@ fn walk_assumptions(seen: &mut BTreeSet<String>) {
         Op::SetAssumptionHolds {
             id,
             holds: false,
+            provenance: who(),
+        },
+        Op::SetAssumptionExcludes {
+            id,
+            trees: vec![tree],
+            steps: vec![StepRef { tree, node: step }],
+            provenance: who(),
+        },
+        Op::LinkClaimAssumption {
+            claim,
+            assumption: id,
             provenance: who(),
         },
         Op::SetProjectLanguages {
@@ -757,6 +793,17 @@ fn walk_assumptions(seen: &mut BTreeSet<String>) {
             condition: cond,
             provenance: who(),
         },
+        Op::UnlinkClaimAssumption {
+            claim,
+            assumption: id,
+            provenance: who(),
+        },
+        Op::SetAssumptionExcludes {
+            id,
+            trees: vec![],
+            steps: vec![],
+            provenance: who(),
+        },
         Op::SetDescriptionTranslation {
             target,
             lang: "ja".into(),
@@ -769,6 +816,13 @@ fn walk_assumptions(seen: &mut BTreeSet<String>) {
             provenance: who(),
         },
         Op::RemoveAssumption { id },
+        Op::RemoveTreeNode {
+            tree,
+            id: step,
+            provenance: who(),
+        },
+        Op::RemoveAttackTree { id: tree },
+        Op::RemoveCybersecurityClaim { id: claim },
         Op::RemoveCondition { id: cond },
     ] {
         apply_undo_redo(&mut ws, seen, op);

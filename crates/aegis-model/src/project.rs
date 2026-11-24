@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::applicability::{
-    Applicability, Assumption, Condition, MAX_ASSUMPTIONS, MAX_CONDITIONS,
-    MAX_CONDITIONS_PER_ELEMENT,
+    Applicability, Assumption, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
+    MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, StepRef,
 };
 use crate::asset::{Asset, PropertySet};
 use crate::control::{
@@ -7133,6 +7133,16 @@ impl Project {
             Op::UnlinkClaimParty { claim, party, .. } => {
                 self.check_claim_party(*claim, *party, false)?;
             }
+            Op::LinkClaimAssumption {
+                claim,
+                assumption,
+                provenance,
+            } => return self.check_claim_assumption(*claim, *assumption, true, provenance),
+            Op::UnlinkClaimAssumption {
+                claim,
+                assumption,
+                provenance,
+            } => return self.check_claim_assumption(*claim, *assumption, false, provenance),
             Op::RemoveCybersecurityClaim { id } => return self.check_remove_claim(*id),
             Op::AddParty {
                 id,
@@ -7187,6 +7197,12 @@ impl Project {
             Op::SetAssumptionHolds { id, provenance, .. } => {
                 return self.check_set_assumption_holds(*id, provenance);
             }
+            Op::SetAssumptionExcludes {
+                id,
+                trees,
+                steps,
+                provenance,
+            } => return self.check_set_assumption_excludes(*id, trees, steps, provenance),
             Op::RemoveAssumption { id } => return self.check_remove_assumption(*id),
             Op::NeedCondition {
                 element,
@@ -7731,6 +7747,16 @@ impl Project {
                 party,
                 provenance,
             } => self.commit_claim_party(claim, party, provenance, false),
+            Op::LinkClaimAssumption {
+                claim,
+                assumption,
+                provenance,
+            } => self.commit_claim_assumption(claim, assumption, provenance, true),
+            Op::UnlinkClaimAssumption {
+                claim,
+                assumption,
+                provenance,
+            } => self.commit_claim_assumption(claim, assumption, provenance, false),
             Op::RemoveCybersecurityClaim { id } => self.commit_remove_claim(id),
             Op::AddParty {
                 id,
@@ -7783,6 +7809,12 @@ impl Project {
                 holds,
                 provenance,
             } => self.commit_set_assumption_holds(id, holds, provenance),
+            Op::SetAssumptionExcludes {
+                id,
+                trees,
+                steps,
+                provenance,
+            } => self.commit_set_assumption_excludes(id, trees, steps, provenance),
             Op::RemoveAssumption { id } => self.commit_remove_assumption(id),
             Op::NeedCondition {
                 element,
@@ -8463,6 +8495,15 @@ impl Project {
             .binary_search_by(|&p| self.party_key(p).cmp(&Some(party)))
     }
 
+    fn find_claim_assumption(
+        &self,
+        c: &CybersecurityClaim,
+        assumption: AssumptionId,
+    ) -> Result<usize, usize> {
+        c.assumptions
+            .binary_search_by(|&a| self.assumptions.id(a).cmp(&Some(assumption)))
+    }
+
     /// How many live threats on `a` violate `p`. O(log p).
     fn asset_property_refs(&self, a: AssetIdx, p: Property) -> u32 {
         self.refs.property(a, p)
@@ -8576,7 +8617,12 @@ impl Project {
                 .is_some_and(|m| !m.is_empty())
             || entry.via_at(idx.index()).is_some()
             || entry.attack_type_at(idx.index()).is_some()
-            || !entry.condition_at(idx.index()).is_empty();
+            || !entry.condition_at(idx.index()).is_empty()
+            || self.assumptions.iter().any(|(_, _, a)| {
+                a.excludes_steps
+                    .binary_search(&StepRef { tree, node: id })
+                    .is_ok()
+            });
         if rated {
             return Err(ModelError::NodeIsRated(id));
         }
@@ -9517,6 +9563,19 @@ impl Project {
                 mitigations,
             });
         }
+        let assumptions = self
+            .assumptions
+            .iter()
+            .filter(|(_, _, a)| {
+                a.excludes_trees.contains(&idx) || a.excludes_steps.iter().any(|s| s.tree == id)
+            })
+            .count();
+        if assumptions > 0 {
+            return Err(ModelError::AttackTreeExcludedByAssumption {
+                tree: id,
+                assumptions,
+            });
+        }
         Ok(())
     }
 
@@ -9741,6 +9800,27 @@ impl Project {
         }
     }
 
+    fn check_claim_assumption(
+        &self,
+        claim: ClaimId,
+        assumption: AssumptionId,
+        link: bool,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let c = self.live_claim_ref(claim)?;
+        self.live_assumption(assumption)?;
+        match (link, self.find_claim_assumption(c, assumption).is_ok()) {
+            (true, true) => Err(ModelError::ClaimAssumptionAlreadyLinked { claim, assumption }),
+            (true, false) if c.assumptions.len() >= MAX_CLAIM_ASSUMPTIONS => {
+                Err(ModelError::TooManyClaimAssumptions {
+                    max: MAX_CLAIM_ASSUMPTIONS,
+                })
+            }
+            (false, false) => Err(ModelError::ClaimAssumptionNotLinked { claim, assumption }),
+            _ => check_provenance(provenance),
+        }
+    }
+
     fn check_remove_goal(&self, id: GoalId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Goal(id), EntityKind::CybersecurityGoal)?;
         self.require_no_conditions(ElementRef::Goal(id))?;
@@ -9785,9 +9865,17 @@ impl Project {
         if threats > 0 {
             return Err(ModelError::CybersecurityClaimInUse { claim: id, threats });
         }
-        let parties = self.live_claim_ref(id)?.responsible.len();
+        let claim_ref = self.live_claim_ref(id)?;
+        let parties = claim_ref.responsible.len();
         if parties > 0 {
             return Err(ModelError::CybersecurityClaimHasParties { claim: id, parties });
+        }
+        let assumptions = claim_ref.assumptions.len();
+        if assumptions > 0 {
+            return Err(ModelError::CybersecurityClaimHasAssumptions {
+                claim: id,
+                assumptions,
+            });
         }
         Ok(())
     }
@@ -9873,10 +9961,43 @@ impl Project {
         check_provenance(provenance)
     }
 
+    fn check_set_assumption_excludes(
+        &self,
+        id: AssumptionId,
+        trees: &[TreeId],
+        steps: &[StepRef],
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        self.live_assumption(id)?;
+        if trees.len().saturating_add(steps.len()) > MAX_ASSUMPTION_EXCLUDES {
+            return Err(ModelError::TooManyAssumptionExcludes {
+                max: MAX_ASSUMPTION_EXCLUDES,
+            });
+        }
+        for &tree in trees {
+            self.live_tree(tree)?;
+        }
+        for &step in steps {
+            self.step_slot(step.tree, step.node)?;
+        }
+        check_provenance(provenance)
+    }
+
     fn check_remove_assumption(&self, id: AssumptionId) -> Result<(), ModelError> {
-        let (_, a) = self.live_assumption(id)?;
+        let (idx, a) = self.live_assumption(id)?;
         self.require_no_description(ElementRef::Assumption(id), EntityKind::Assumption)?;
         self.require_no_conditions(ElementRef::Assumption(id))?;
+        let claims = self
+            .claims
+            .iter()
+            .filter(|(_, _, c)| c.assumptions.contains(&idx))
+            .count();
+        if claims > 0 {
+            return Err(ModelError::AssumptionInUse {
+                assumption: id,
+                claims,
+            });
+        }
         let excludes = a.excludes_trees.len() + a.excludes_steps.len();
         if excludes > 0 {
             return Err(ModelError::AssumptionHasExclusions {
@@ -11496,6 +11617,7 @@ impl Project {
         let claim = CybersecurityClaim {
             name,
             responsible: Vec::new(),
+            assumptions: Vec::new(),
             provenance,
         };
         self.claims.push(id, claim, self.slot_limit).ok_or(
@@ -11554,6 +11676,40 @@ impl Project {
             }
             (true, Ok(_)) => Err(ModelError::DuplicateClaimParty { claim, party }),
             (false, Err(_)) => Err(ModelError::ClaimPartyNotLinked { claim, party }),
+        }
+    }
+
+    fn commit_claim_assumption(
+        &mut self,
+        claim: ClaimId,
+        assumption: AssumptionId,
+        provenance: Provenance,
+        link: bool,
+    ) -> Result<Op, ModelError> {
+        let a = self.live_assumption(assumption)?.0;
+        let found = self.find_claim_assumption(self.live_claim_ref(claim)?, assumption);
+        let c = self.claim_mut(claim)?;
+        match (link, found) {
+            (true, Err(pos)) => {
+                c.assumptions.insert(pos, a);
+                let provenance = std::mem::replace(&mut c.provenance, provenance);
+                Ok(Op::UnlinkClaimAssumption {
+                    claim,
+                    assumption,
+                    provenance,
+                })
+            }
+            (false, Ok(pos)) => {
+                c.assumptions.remove(pos);
+                let provenance = std::mem::replace(&mut c.provenance, provenance);
+                Ok(Op::LinkClaimAssumption {
+                    claim,
+                    assumption,
+                    provenance,
+                })
+            }
+            (true, Ok(_)) => Err(ModelError::ClaimAssumptionAlreadyLinked { claim, assumption }),
+            (false, Err(_)) => Err(ModelError::ClaimAssumptionNotLinked { claim, assumption }),
         }
     }
 
@@ -11768,6 +11924,40 @@ impl Project {
         Ok(Op::SetAssumptionHolds {
             id,
             holds,
+            provenance,
+        })
+    }
+
+    fn commit_set_assumption_excludes(
+        &mut self,
+        id: AssumptionId,
+        mut trees: Vec<TreeId>,
+        mut steps: Vec<StepRef>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        trees.sort_unstable();
+        trees.dedup();
+        let new_trees = trees
+            .into_iter()
+            .map(|t| self.live_tree(t).map(|(idx, _)| idx))
+            .collect::<Result<Vec<_>, _>>()?;
+        steps.sort_unstable();
+        steps.dedup();
+        let old_trees = self
+            .live_assumption(id)?
+            .1
+            .excludes_trees
+            .iter()
+            .map(|&idx| self.trees.id(idx).ok_or(ModelError::UnknownAssumption(id)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let a = self.assumption_mut(id)?;
+        a.excludes_trees = new_trees;
+        let steps = std::mem::replace(&mut a.excludes_steps, steps);
+        let provenance = std::mem::replace(&mut a.provenance, provenance);
+        Ok(Op::SetAssumptionExcludes {
+            id,
+            trees: old_trees,
+            steps,
             provenance,
         })
     }
@@ -12719,7 +12909,7 @@ impl Project {
     }
 
     /// Compares two claims from two projects by content, with responsible-party
-    /// references resolved to public IDs. O(p).
+    /// and assumption references resolved to public IDs. O(p + a).
     fn same_claim(&self, x: &CybersecurityClaim, other: &Project, y: &CybersecurityClaim) -> bool {
         x.name == y.name
             && x.provenance == y.provenance
@@ -12728,6 +12918,11 @@ impl Project {
                 .iter()
                 .zip(&y.responsible)
                 .all(|(&a, &b)| self.party_key(a) == other.party_key(b))
+            && x.assumptions.len() == y.assumptions.len()
+            && x.assumptions
+                .iter()
+                .zip(&y.assumptions)
+                .all(|(&a, &b)| self.assumptions.id(a) == other.assumptions.id(b))
     }
 
     /// Compares two assumptions from two projects by content, resolving
@@ -12787,6 +12982,21 @@ impl Project {
                 || !a.excludes_steps.windows(2).all(|w| w[0] < w[1])
             {
                 return Err(format!("assumption {id} has invalid exclusions"));
+            }
+            for &StepRef { tree, node } in &a.excludes_steps {
+                let Ok((_, entry)) = self.live_tree(tree) else {
+                    return Err(format!("assumption {id} excludes dead tree {tree}"));
+                };
+                let Some(nidx) = entry.tree.idx_of(&node) else {
+                    return Err(format!(
+                        "assumption {id} excludes missing node {node} in tree {tree}"
+                    ));
+                };
+                if !matches!(entry.tree.get(nidx), Some(Node::Step { .. })) {
+                    return Err(format!(
+                        "assumption {id} excludes non-step {node} in tree {tree}"
+                    ));
+                }
             }
         }
         Ok(())
@@ -13051,6 +13261,20 @@ impl Project {
             check_name(EntityKind::CybersecurityClaim, &c.name)
                 .map_err(|e| format!("claim {id}: {e}"))?;
             check_provenance(&c.provenance).map_err(|e| format!("claim {id}: {e}"))?;
+            if c.assumptions.len() > MAX_CLAIM_ASSUMPTIONS {
+                return Err(format!("claim {id} has too many assumptions"));
+            }
+            let akeys: Vec<_> = c
+                .assumptions
+                .iter()
+                .map(|&a| self.assumptions.id(a))
+                .collect();
+            if akeys.iter().any(Option::is_none) {
+                return Err(format!("claim {id} links a dead assumption slot"));
+            }
+            if !akeys.windows(2).all(|w| w[0] < w[1]) {
+                return Err(format!("claim {id} assumptions not sorted and unique"));
+            }
         }
         Ok((
             control_goals,
@@ -13484,6 +13708,7 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::SetConditionPresent { .. }
         | Op::RemoveCondition { .. }
         | Op::SetAssumptionHolds { .. }
+        | Op::SetAssumptionExcludes { .. }
         | Op::NeedCondition { .. }
         | Op::UnneedCondition { .. }
         | Op::NeedStepCondition { .. }
@@ -13553,6 +13778,8 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::RenameCybersecurityClaim { .. }
         | Op::LinkClaimParty { .. }
         | Op::UnlinkClaimParty { .. }
+        | Op::LinkClaimAssumption { .. }
+        | Op::UnlinkClaimAssumption { .. }
         | Op::AddParty { .. }
         | Op::RenameParty { .. }
         | Op::SetPartyKind { .. }
@@ -13933,6 +14160,8 @@ impl ProjectEvalCache {
             | Op::RenameCybersecurityClaim { .. }
             | Op::LinkClaimParty { .. }
             | Op::UnlinkClaimParty { .. }
+            | Op::LinkClaimAssumption { .. }
+            | Op::UnlinkClaimAssumption { .. }
             | Op::RemoveCybersecurityClaim { .. }
             | Op::AddParty { .. }
             | Op::RenameParty { .. }
@@ -13945,6 +14174,7 @@ impl ProjectEvalCache {
             | Op::AddAssumption { .. }
             | Op::RenameAssumption { .. }
             | Op::SetAssumptionHolds { .. }
+            | Op::SetAssumptionExcludes { .. }
             | Op::RemoveAssumption { .. }
             | Op::NeedCondition { .. }
             | Op::UnneedCondition { .. }

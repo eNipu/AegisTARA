@@ -743,6 +743,34 @@ pub enum ModelError {
         /// How many claims reference it.
         claims: usize,
     },
+    /// An assumption would exclude more than `max` trees and steps combined.
+    #[error("assumption would exclude more than {max} trees and steps")]
+    TooManyAssumptionExcludes {
+        /// The combined limit.
+        max: usize,
+    },
+    /// A cybersecurity claim may reference at most `max` assumptions.
+    #[error("cybersecurity claim would reference more than {max} assumptions")]
+    TooManyClaimAssumptions {
+        /// The limit.
+        max: usize,
+    },
+    /// The cybersecurity claim already references this assumption.
+    #[error("cybersecurity claim {claim} already references assumption {assumption}")]
+    ClaimAssumptionAlreadyLinked {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The repeated assumption.
+        assumption: AssumptionId,
+    },
+    /// The cybersecurity claim does not reference this assumption.
+    #[error("cybersecurity claim {claim} does not reference assumption {assumption}")]
+    ClaimAssumptionNotLinked {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// The missing assumption.
+        assumption: AssumptionId,
+    },
     /// A non-empty provenance actor string contains only whitespace.
     ///
     /// Carries no actor text so user or customer identifiers never appear in
@@ -1028,6 +1056,14 @@ pub enum ModelError {
         /// How many threats reference it.
         threats: u32,
     },
+    /// The attack tree cannot be removed while assumptions exclude it or its steps.
+    #[error("attack tree {tree} is excluded by {assumptions} assumption(s)")]
+    AttackTreeExcludedByAssumption {
+        /// The attack tree.
+        tree: TreeId,
+        /// How many assumptions exclude it or its steps.
+        assumptions: usize,
+    },
     /// The attack tree cannot be removed while steps in it still have a
     /// "through" item or an attack type; clear them first.
     #[error("attack tree {tree} still has {steps} step(s) with a through item or attack type")]
@@ -1188,6 +1224,15 @@ pub enum ModelError {
         claim: ClaimId,
         /// How many parties it lists.
         parties: usize,
+    },
+    /// The cybersecurity claim cannot be removed while it references
+    /// assumptions, because its inverse could not restore them; unlink them first.
+    #[error("cybersecurity claim {claim} still references {assumptions} assumption(s)")]
+    CybersecurityClaimHasAssumptions {
+        /// The cybersecurity claim.
+        claim: ClaimId,
+        /// How many assumptions it references.
+        assumptions: usize,
     },
     /// The threat scenario cannot be removed while it still references an
     /// attack tree; unlink the tree first.
