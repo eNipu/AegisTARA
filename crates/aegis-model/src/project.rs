@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::applicability::{
-    Applicability, Assumption, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
+    Applicability, Assumption, AttackFilter, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
     MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, StepRef,
 };
 use crate::asset::{Asset, PropertySet};
@@ -663,6 +663,8 @@ pub struct Project {
     review_marks: std::collections::BTreeSet<(TreeId, NodeId)>,
     /// The languages descriptions are translated into, and who set them.
     languages: (Arc<[Arc<str>]>, Provenance),
+    /// Project-level attacker capability filter, and who set it.
+    attack_filter: (AttackFilter, Provenance),
     /// Elements of the generic kinds (job 205).
     pub(crate) elements: crate::element::ElementStore,
 }
@@ -814,6 +816,7 @@ impl Project {
             description_bytes: 0,
             review_marks: std::collections::BTreeSet::new(),
             languages: (Arc::from([]), Provenance::default()),
+            attack_filter: (AttackFilter::default(), Provenance::default()),
             elements: crate::element::ElementStore::default(),
         }
     }
@@ -6435,6 +6438,7 @@ impl Project {
             notes_changed: false,
             item_text_changed: false,
             languages_changed: self.languages() != other.languages(),
+            attack_filter_changed: self.attack_filter() != other.attack_filter(),
         };
         self.merge_description_changes(other, &mut diff);
         self.merge_condition_link_changes(other, &mut diff);
@@ -6893,6 +6897,9 @@ impl Project {
                     }
                 }
                 check_provenance(provenance)?;
+            }
+            Op::SetAttackFilter { filter, provenance } => {
+                return self.check_set_attack_filter(filter, provenance);
             }
             Op::SetReviewMark {
                 tree,
@@ -7455,6 +7462,11 @@ impl Project {
                 let (langs, provenance) =
                     std::mem::replace(&mut self.languages, (langs, provenance));
                 Ok(Op::SetProjectLanguages { langs, provenance })
+            }
+            Op::SetAttackFilter { filter, provenance } => {
+                let (filter, provenance) =
+                    std::mem::replace(&mut self.attack_filter, (filter, provenance));
+                Ok(Op::SetAttackFilter { filter, provenance })
             }
             Op::SetReviewMark {
                 tree,
@@ -9036,6 +9048,28 @@ impl Project {
     #[must_use]
     pub fn languages(&self) -> &[Arc<str>] {
         &self.languages.0
+    }
+
+    /// The project's attacker capability filter. Time O(1).
+    #[must_use]
+    pub fn attack_filter(&self) -> &AttackFilter {
+        &self.attack_filter.0
+    }
+
+    /// Provenance of the last change to [`attack_filter`](Self::attack_filter).
+    /// Time O(1).
+    #[must_use]
+    pub fn attack_filter_provenance(&self) -> &Provenance {
+        &self.attack_filter.1
+    }
+
+    fn check_set_attack_filter(
+        &self,
+        filter: &AttackFilter,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        self.methodology.check_attack_filter(filter)?;
+        check_provenance(provenance)
     }
 
     /// Every step marked as needing review, in ID order. Time O(1) to start.
@@ -12741,6 +12775,7 @@ impl PartialEq for Project {
             && self.descriptions == other.descriptions
             && self.review_marks == other.review_marks
             && self.languages() == other.languages()
+            && self.attack_filter() == other.attack_filter()
             && self.elements.same_live(&other.elements)
             && self.assets.len() == other.assets.len()
             && self.damages.len() == other.damages.len()
@@ -13067,6 +13102,9 @@ impl Project {
         arena_invariants("assumption", &self.assumptions)?;
         self.condition_invariants()?;
         self.assumption_invariants()?;
+        self.methodology
+            .check_attack_filter(&self.attack_filter.0)
+            .map_err(|e| e.to_string())?;
         let (control_goals, component_assets, component_controls, interface_controls) =
             self.entity_invariants()?;
         let (
@@ -13754,6 +13792,7 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::SetDescription { .. }
         | Op::SetDescriptionTranslation { .. }
         | Op::SetProjectLanguages { .. }
+        | Op::SetAttackFilter { .. }
         | Op::RenameTreeNode { .. }
         | Op::AddAsset { .. }
         | Op::RenameAsset { .. }
@@ -14142,6 +14181,7 @@ impl ProjectEvalCache {
             Op::SetDescription { .. }
             | Op::SetDescriptionTranslation { .. }
             | Op::SetProjectLanguages { .. }
+            | Op::SetAttackFilter { .. }
             | Op::SetReviewMark { .. }
             | Op::RenameTreeNode { .. }
             | Op::AddAsset { .. }

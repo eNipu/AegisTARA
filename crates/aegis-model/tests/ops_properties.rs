@@ -500,11 +500,11 @@ fn check_diff_pair(
     Ok(())
 }
 
-/// Runs 256 sequences with a fixed seed and merges their statistics.
+/// Runs 2048 sequences with a fixed seed and merges their statistics.
 fn coverage(m: &std::sync::Arc<aegis_model::Methodology>) -> Stats {
     let config = Config {
         failure_persistence: None,
-        ..Config::with_cases(512)
+        ..Config::with_cases(2048)
     };
     let mut runner = TestRunner::new_with_rng(
         config,
@@ -539,8 +539,8 @@ fn ops_generator_covers_every_op_and_most_errors() {
         assert!((0.2..0.9).contains(&share), "valid share {share}");
         // The second pack declares no interface kinds or attack types, so it
         // has no interface to add or remove and no control rule to set.
-        // Job 133 adds the eight condition ops.
-        let kinds = if m.interface_kind_count() > 0 { 72 } else { 69 };
+        // Job 133 adds the eight condition ops; job 137 adds SetAttackFilter.
+        let kinds = if m.interface_kind_count() > 0 { 74 } else { 71 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",

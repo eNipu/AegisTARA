@@ -554,6 +554,7 @@ impl ThreatRiskDelta {
 /// # }
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ProjectDiff {
     pub(crate) components: EntityDiff<ComponentId>,
     pub(crate) interfaces: EntityDiff<InterfaceId>,
@@ -575,6 +576,7 @@ pub struct ProjectDiff {
     pub(crate) notes_changed: bool,
     pub(crate) item_text_changed: bool,
     pub(crate) languages_changed: bool,
+    pub(crate) attack_filter_changed: bool,
 }
 
 impl ProjectDiff {
@@ -614,6 +616,18 @@ impl ProjectDiff {
     #[must_use]
     pub fn languages_changed(&self) -> bool {
         self.languages_changed
+    }
+
+    /// Whether the project's attacker capability filter differs. Time O(1).
+    ///
+    /// ```
+    /// use aegis_model::ProjectDiff;
+    ///
+    /// assert!(!ProjectDiff::default().attack_filter_changed());
+    /// ```
+    #[must_use]
+    pub fn attack_filter_changed(&self) -> bool {
+        self.attack_filter_changed
     }
 
     /// Returns the added, removed, and modified [`ComponentId`]s in canonical
@@ -859,6 +873,7 @@ impl ProjectDiff {
             && self.conditions.is_empty()
             && self.assumptions.is_empty()
             && self.elements.is_empty()
+            && !self.attack_filter_changed
     }
 }
 

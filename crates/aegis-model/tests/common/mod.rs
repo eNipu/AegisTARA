@@ -567,7 +567,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..83,
+        0u8..84,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -1688,6 +1688,16 @@ impl Gen {
                     .filter(|(_, _, c)| c.target_count() > 0)
                     .map(|(_, id, _)| id)
                     .collect();
+                if with_targets.is_empty()
+                    && p.security_control_count() > 0
+                    && !s.c.is_multiple_of(3)
+                {
+                    return Op::ApplyControl {
+                        control: self.control(p, s.a),
+                        target: self.item(p, s.b, s.c),
+                        provenance,
+                    };
+                }
                 let control = match nth(with_targets, s.a) {
                     Some(id) if !s.c.is_multiple_of(3) => id,
                     _ => self.control(p, s.a),
@@ -2055,6 +2065,42 @@ impl Gen {
                     condition,
                     provenance,
                 }
+            }
+            82 => {
+                let mut filter = aegis_model::AttackFilter::default();
+                let scalability = match s.bits % 4 {
+                    1 => aegis_model::ScalabilityFilter::ScaledOnly,
+                    2 => aegis_model::ScalabilityFilter::UnscaledOnly,
+                    _ => aegis_model::ScalabilityFilter::Any,
+                };
+                filter.set_scalability(scalability);
+                let n_factors = self.m.feasibility_factor_count();
+                if s.b.is_multiple_of(16) {
+                    let f = self
+                        .wide
+                        .feasibility_factors()
+                        .nth(n_factors)
+                        .expect("wide factor");
+                    let l = self.wide.factor_levels(f).next().expect("wide level");
+                    filter.exclude(f, l);
+                } else if n_factors > 0 {
+                    for (i, &x) in s.list.iter().enumerate() {
+                        let fi = usize::from(x) % n_factors;
+                        let f = self.m.feasibility_factors().nth(fi).expect("factor");
+                        let nl = self.m.factor_level_count(f);
+                        let li = usize::from(s.b.wrapping_add(u16::try_from(i).unwrap_or(0))) % nl;
+                        let l = self.m.factor_levels(f).nth(li).expect("level");
+                        filter.exclude(f, l);
+                    }
+                    if s.c.is_multiple_of(16) {
+                        let f = self.m.feasibility_factors().next().expect("factor");
+                        let wf = self.wide.feasibility_factors().next().expect("wide factor");
+                        let nl = self.m.factor_level_count(f);
+                        let l = self.wide.factor_levels(wf).nth(nl).expect("wide level");
+                        filter.exclude(f, l);
+                    }
+                }
+                Op::SetAttackFilter { filter, provenance }
             }
             _ => Op::SetComponentSystem {
                 id: self.component(p, s.a),
@@ -2871,6 +2917,17 @@ pub fn second_every_op(m: Arc<Methodology>) {
             provenance: p_human.clone(),
         },
     );
+    let exp_f = m.feasibility_factors().next().expect("factor");
+    let exp_l = m.factor_levels(exp_f).next().expect("factor level");
+    ok(
+        &mut p,
+        Op::SetAttackFilter {
+            filter: aegis_model::AttackFilter::default()
+                .without(exp_f, exp_l)
+                .with_scalability(aegis_model::ScalabilityFilter::ScaledOnly),
+            provenance: p_human.clone(),
+        },
+    );
 
     // Assumptions (136c): exercise add, rename, excludes, claim link, holds toggle, and cleanup.
     let assumption = assumption_id(15);
@@ -3423,6 +3480,13 @@ pub fn second_every_op(m: Arc<Methodology>) {
             threat: sniff,
             scales: None,
             reason: "".into(),
+            provenance: Provenance::default(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetAttackFilter {
+            filter: aegis_model::AttackFilter::default(),
             provenance: Provenance::default(),
         },
     );

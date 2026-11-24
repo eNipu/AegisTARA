@@ -264,8 +264,9 @@ mod tree;
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use applicability::{
-    Applicability, Assumption, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
-    MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, Reason, StepRef,
+    Applicability, Assumption, AttackFilter, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
+    MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, Reason, ScalabilityFilter,
+    StepRef,
 };
 pub use asset::{Asset, PropertySet};
 pub use compat::{

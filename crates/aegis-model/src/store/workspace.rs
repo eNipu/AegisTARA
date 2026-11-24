@@ -27,7 +27,11 @@ pub struct WorkspaceFile {
 
 /// Fixed files: path, `kind`, and the snapshot keys each one holds.
 const LAYOUT: &[(&str, &str, &[&str])] = &[
-    ("aegis.json", "workspace", &["methodology", "languages"]),
+    (
+        "aegis.json",
+        "workspace",
+        &["methodology", "languages", "attack_filter"],
+    ),
     ("descriptions.json", "descriptions", &["descriptions"]),
     ("review-marks.json", "review-marks", &["review_marks"]),
     ("shared/damage.json", "damage", &["damage_scenarios"]),

@@ -49,6 +49,7 @@ use serde::de::{self, Deserialize, DeserializeSeed, Deserializer, MapAccess, Seq
 use serde::ser::{self, Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use super::{Limit, MAX_KEY_BYTES, VocabKind};
+use crate::applicability::{AttackFilter, ScalabilityFilter};
 use crate::asset::PropertySet;
 use crate::control::{
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
@@ -64,7 +65,7 @@ use crate::item::ItemRef;
 use crate::methodology::{
     AttackType, CatalogRef, CatalogScheme, ControlKind, FactorLevel, FeasibilityFactor,
     FeasibilityLevel, ImpactCategory, InterfaceKind, Level, MAX_FEASIBILITY_FACTORS,
-    MAX_IMPACT_CATEGORIES, MAX_PROPERTIES, Methodology, Property, ThreatCategory,
+    MAX_IMPACT_CATEGORIES, MAX_LEVELS, MAX_PROPERTIES, Methodology, Property, ThreatCategory,
 };
 use crate::provenance::{Provenance, ProvenanceSource};
 use crate::tree::{AttackTree, GateKind, MAX_ATTACK_TREE_NODES, Node, WireNodeParts};
@@ -1076,6 +1077,169 @@ impl<'de> Deserialize<'de> for NodeFactors {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum ScalabilityWire {
+    #[default]
+    Any,
+    ScaledOnly,
+    UnscaledOnly,
+}
+
+impl From<ScalabilityFilter> for ScalabilityWire {
+    fn from(s: ScalabilityFilter) -> Self {
+        match s {
+            ScalabilityFilter::Any => Self::Any,
+            ScalabilityFilter::ScaledOnly => Self::ScaledOnly,
+            ScalabilityFilter::UnscaledOnly => Self::UnscaledOnly,
+        }
+    }
+}
+
+impl From<ScalabilityWire> for ScalabilityFilter {
+    fn from(s: ScalabilityWire) -> Self {
+        match s {
+            ScalabilityWire::Any => Self::Any,
+            ScalabilityWire::ScaledOnly => Self::ScaledOnly,
+            ScalabilityWire::UnscaledOnly => Self::UnscaledOnly,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ExcludedLevelsWire(AttackFilter);
+
+struct LevelListSeed<'a> {
+    m: &'a Methodology,
+    factor: Option<FeasibilityFactor>,
+    filter: &'a mut AttackFilter,
+    pending: &'a mut Option<Fault>,
+}
+
+impl<'de> DeserializeSeed<'de> for LevelListSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        struct V<'a>(LevelListSeed<'a>);
+        impl<'de> Visitor<'de> for V<'_> {
+            type Value = ();
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a list of factor level keys")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+                let mut seen_levels = 0u16;
+                let mut count = 0usize;
+                while let Some(found) = seq.next_element_seed(WithStr::new(|s: &str| {
+                    check_key_len(s)?;
+                    Ok(self.0.factor.and_then(|f| {
+                        note_unknown(
+                            self.0.m.factor_level(f, s),
+                            VocabKind::FactorLevel,
+                            s,
+                            self.0.pending,
+                        )
+                    }))
+                }))? {
+                    count += 1;
+                    if count > MAX_LEVELS {
+                        return Err(raise(Fault::Limit(Limit::LEVELS)));
+                    }
+                    if let (Some(f), Some(l)) = (self.0.factor, found) {
+                        let bit = u32::try_from(l.index())
+                            .ok()
+                            .and_then(|i| 1u16.checked_shl(i))
+                            .unwrap_or(0);
+                        if bit == 0 || seen_levels & bit != 0 {
+                            return Err(raise(Fault::Duplicate));
+                        }
+                        seen_levels |= bit;
+                        self.0.filter.exclude(f, l);
+                    }
+                }
+                Ok(())
+            }
+        }
+        d.deserialize_seq(V(self))
+    }
+}
+
+impl<'de> Deserialize<'de> for ExcludedLevelsWire {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = ExcludedLevelsWire;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map from feasibility factor key to level keys")
+            }
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<ExcludedLevelsWire, A::Error> {
+                let m = context().map_err(raise)?;
+                let mut filter = AttackFilter::default();
+                let mut seen = 0u16;
+                let mut count = 0usize;
+                let mut pending = None;
+                while let Some(factor) = map.next_key_seed(WithStr::new(|s: &str| {
+                    check_key_len(s)?;
+                    Ok(note_unknown(
+                        m.feasibility_factor(s),
+                        VocabKind::FeasibilityFactor,
+                        s,
+                        &mut pending,
+                    ))
+                }))? {
+                    count += 1;
+                    if count > MAX_FEASIBILITY_FACTORS {
+                        return Err(raise(Fault::Limit(Limit::FEASIBILITY_FACTORS)));
+                    }
+                    if let Some(f) = factor {
+                        let bit = u32::try_from(f.index())
+                            .ok()
+                            .and_then(|i| 1u16.checked_shl(i))
+                            .unwrap_or(0);
+                        if bit == 0 || seen & bit != 0 {
+                            return Err(raise(Fault::Duplicate));
+                        }
+                        seen |= bit;
+                    }
+                    map.next_value_seed(LevelListSeed {
+                        m: &m,
+                        factor,
+                        filter: &mut filter,
+                        pending: &mut pending,
+                    })?;
+                }
+                match pending {
+                    Some(fault) => Err(raise(fault)),
+                    None => Ok(ExcludedLevelsWire(filter)),
+                }
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AttackFilterRaw {
+    excluded: ExcludedLevelsWire,
+    scalability: ScalabilityWire,
+}
+
+/// An attacker capability filter, resolved against the methodology on decode.
+#[derive(Default)]
+pub(super) struct AttackFilterWire(pub(super) AttackFilter);
+
+impl<'de> Deserialize<'de> for AttackFilterWire {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = AttackFilterRaw::deserialize(d)?;
+        let mut filter = raw.excluded.0;
+        filter.set_scalability(raw.scalability.into());
+        Ok(AttackFilterWire(filter))
+    }
+}
+
 /// Step factor ratings across an attack tree given as an object from step
 /// `NodeId` to [`NodeFactors`]: at most 32 entries
 /// ([`MAX_ATTACK_TREE_NODES`]), no node ID repeated.
@@ -1576,6 +1740,8 @@ pub(super) struct SnapshotWire {
     pub(super) review_marks: Vec<ReviewMarkWire>,
     #[serde(default)]
     pub(super) languages: Vec<LangText>,
+    #[serde(default)]
+    pub(super) attack_filter: AttackFilterWire,
     #[serde(default)]
     pub(super) elements: ElementsByKind,
     #[serde(default)]
@@ -2263,6 +2429,11 @@ pub(super) enum OpWire {
     },
     SetProjectLanguages {
         langs: Vec<LangText>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetAttackFilter {
+        filter: AttackFilterWire,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
@@ -3353,6 +3524,107 @@ impl Serialize for StepFactorsForNode<'_> {
             return Err(ser::Error::custom("factor rating not in the methodology"));
         }
         map.end()
+    }
+}
+
+pub(super) struct AttackFilterView<'a> {
+    pub(super) m: &'a Methodology,
+    pub(super) order: &'a KeyOrder,
+    pub(super) filter: AttackFilter,
+}
+
+impl AttackFilterView<'_> {
+    pub(super) fn is_default(&self) -> bool {
+        self.filter.is_default()
+    }
+}
+
+impl Serialize for AttackFilterView<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let total_bits: u32 = (0..MAX_FEASIBILITY_FACTORS)
+            .map(|fi| self.filter.excluded_mask(fi).count_ones())
+            .sum();
+        let has_excluded = self.filter.has_excluded_levels();
+        let has_scalability = self.filter.scalability().is_active();
+        let mut excluded_factors: Vec<(FeasibilityFactor, Vec<FactorLevel>)> = Vec::new();
+        if has_excluded {
+            let mut written_bits = 0u32;
+            for &f in &self.order.feasibility_factors {
+                let mut levels: Vec<FactorLevel> = self
+                    .m
+                    .factor_levels(f)
+                    .filter(|&l| self.filter.is_excluded(f, l))
+                    .collect();
+                if !levels.is_empty() {
+                    levels.sort_by_key(|&l| self.m.factor_level_key(f, l));
+                    for _ in &levels {
+                        written_bits += 1;
+                    }
+                    excluded_factors.push((f, levels));
+                }
+            }
+            if written_bits != total_bits {
+                return Err(ser::Error::custom(
+                    "attack filter index not in the methodology",
+                ));
+            }
+        }
+        let fields = usize::from(has_excluded) + usize::from(has_scalability);
+        let mut st = s.serialize_struct("AttackFilter", fields)?;
+        if has_excluded {
+            st.serialize_field(
+                "excluded",
+                &ExcludedFactorsView {
+                    m: self.m,
+                    factors: &excluded_factors,
+                },
+            )?;
+        }
+        if has_scalability {
+            st.serialize_field(
+                "scalability",
+                &ScalabilityWire::from(self.filter.scalability()),
+            )?;
+        }
+        st.end()
+    }
+}
+
+struct ExcludedFactorsView<'a> {
+    m: &'a Methodology,
+    factors: &'a [(FeasibilityFactor, Vec<FactorLevel>)],
+}
+
+impl Serialize for ExcludedFactorsView<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut map = s.serialize_map(Some(self.factors.len()))?;
+        for (f, levels) in self.factors {
+            map.serialize_entry(
+                &Required(self.m.feasibility_factor_key(*f)),
+                &ExcludedLevelsList {
+                    m: self.m,
+                    factor: *f,
+                    levels,
+                },
+            )?;
+        }
+        map.end()
+    }
+}
+
+struct ExcludedLevelsList<'a> {
+    m: &'a Methodology,
+    factor: FeasibilityFactor,
+    levels: &'a [FactorLevel],
+}
+
+impl Serialize for ExcludedLevelsList<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(
+            self.levels
+                .iter()
+                .map(|&l| Required(self.m.factor_level_key(self.factor, l))),
+        )
     }
 }
 

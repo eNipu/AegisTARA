@@ -15,6 +15,7 @@ use crate::id::{
     AssumptionId, ConditionId, ConditionIdx, NodeId, NodeIdx, ThreatId, TreeId, TreeIdx,
 };
 use crate::item::{Component, ItemRef, MAX_COMPONENT_DEPTH};
+use crate::methodology::{FactorLevel, FeasibilityFactor, MAX_FEASIBILITY_FACTORS, MAX_LEVELS};
 use crate::project::Project;
 use crate::provenance::Provenance;
 use crate::tree::AttackTree;
@@ -37,6 +38,171 @@ pub const MAX_ASSUMPTION_EXCLUDES: usize = 256;
 
 /// Maximum number of assumptions one cybersecurity claim may reference.
 pub const MAX_CLAIM_ASSUMPTIONS: usize = 64;
+
+/// Filter on threat scenario scalability (`Op::SetThreatScaling`), used
+/// inside [`AttackFilter`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ScalabilityFilter {
+    /// Include all threats regardless of scaling rating.
+    #[default]
+    Any,
+    /// Exclude threats explicitly rated as not scaling (`Some(false)`).
+    ScaledOnly,
+    /// Exclude threats explicitly rated as scaling (`Some(true)`).
+    UnscaledOnly,
+}
+
+impl ScalabilityFilter {
+    /// Whether a threat with scaling rating `scales` passes this filter.
+    /// Unrated threats (`None`) are always kept. Time O(1).
+    #[must_use]
+    pub const fn allows(self, scales: Option<bool>) -> bool {
+        match self {
+            Self::Any => true,
+            Self::ScaledOnly => !matches!(scales, Some(false)),
+            Self::UnscaledOnly => !matches!(scales, Some(true)),
+        }
+    }
+
+    /// Whether this filter restricts scalability (`!matches!(self, Self::Any)`).
+    /// Time O(1).
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        !matches!(self, Self::Any)
+    }
+}
+
+/// Project-level attacker capability filter: excluded attack-potential factor
+/// levels and threat scalability restriction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct AttackFilter {
+    excluded: [u16; MAX_FEASIBILITY_FACTORS],
+    scalability: ScalabilityFilter,
+}
+
+fn level_bit(level: FactorLevel) -> u16 {
+    if level.index() >= MAX_LEVELS {
+        return 0;
+    }
+    u32::try_from(level.index())
+        .ok()
+        .and_then(|s| 1u16.checked_shl(s))
+        .unwrap_or(0)
+}
+
+impl AttackFilter {
+    /// Whether no factor levels are excluded and scalability is unfiltered.
+    /// Time O(F).
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        !self.has_excluded_levels() && !self.scalability.is_active()
+    }
+
+    /// Whether any attack-potential factor level is excluded. Time O(F).
+    #[must_use]
+    pub const fn has_excluded_levels(&self) -> bool {
+        let mut i = 0;
+        while i < MAX_FEASIBILITY_FACTORS {
+            if self.excluded[i] != 0 {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// The threat scalability filter. Time O(1).
+    #[must_use]
+    pub const fn scalability(&self) -> ScalabilityFilter {
+        self.scalability
+    }
+
+    /// Whether a threat with scaling rating `scales` passes the scalability
+    /// filter. Time O(1).
+    #[must_use]
+    pub const fn allows_scalability(&self, scales: Option<bool>) -> bool {
+        self.scalability.allows(scales)
+    }
+
+    /// Whether `level` of `factor` is excluded. Out-of-range indices return
+    /// `false`. Time O(1).
+    #[must_use]
+    pub fn is_excluded(&self, factor: FeasibilityFactor, level: FactorLevel) -> bool {
+        self.excluded
+            .get(factor.index())
+            .is_some_and(|&m| (m & level_bit(level)) != 0)
+    }
+
+    /// Whether `level` of `factor` is allowed (not excluded). Time O(1).
+    #[must_use]
+    pub fn allows(&self, factor: FeasibilityFactor, level: FactorLevel) -> bool {
+        !self.is_excluded(factor, level)
+    }
+
+    /// Marks `level` of `factor` as excluded. Out-of-range indices are
+    /// ignored. Time O(1).
+    pub fn exclude(&mut self, factor: FeasibilityFactor, level: FactorLevel) {
+        self.set_excluded(factor, level, true);
+    }
+
+    /// Marks `level` of `factor` as included. Out-of-range indices are ignored.
+    /// Time O(1).
+    pub fn include(&mut self, factor: FeasibilityFactor, level: FactorLevel) {
+        self.set_excluded(factor, level, false);
+    }
+
+    /// Sets whether `level` of `factor` is excluded. Time O(1).
+    pub fn set_excluded(&mut self, factor: FeasibilityFactor, level: FactorLevel, excluded: bool) {
+        if let Some(slot) = self.excluded.get_mut(factor.index()) {
+            let bit = level_bit(level);
+            if excluded {
+                *slot |= bit;
+            } else {
+                *slot &= !bit;
+            }
+        }
+    }
+
+    /// Sets the scalability filter. Time O(1).
+    pub fn set_scalability(&mut self, scalability: ScalabilityFilter) {
+        self.scalability = scalability;
+    }
+
+    /// Returns a copy with `level` of `factor` excluded. Time O(1).
+    #[must_use]
+    pub fn without(mut self, factor: FeasibilityFactor, level: FactorLevel) -> Self {
+        self.exclude(factor, level);
+        self
+    }
+
+    /// Returns a copy with `level` of `factor` toggled. Time O(1).
+    #[must_use]
+    pub fn with_toggled(mut self, factor: FeasibilityFactor, level: FactorLevel) -> Self {
+        let next = !self.is_excluded(factor, level);
+        self.set_excluded(factor, level, next);
+        self
+    }
+
+    /// Returns a copy with all levels of `factor` included. Time O(1).
+    #[must_use]
+    pub fn with_factor_included(mut self, factor: FeasibilityFactor) -> Self {
+        if let Some(slot) = self.excluded.get_mut(factor.index()) {
+            *slot = 0;
+        }
+        self
+    }
+
+    /// Returns a copy with `scalability` set. Time O(1).
+    #[must_use]
+    pub const fn with_scalability(mut self, scalability: ScalabilityFilter) -> Self {
+        self.scalability = scalability;
+        self
+    }
+
+    pub(crate) fn excluded_mask(&self, fi: usize) -> u16 {
+        self.excluded.get(fi).copied().unwrap_or(0)
+    }
+}
 
 /// Stable public reference to one attack-tree step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

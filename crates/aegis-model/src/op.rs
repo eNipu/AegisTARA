@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::applicability::StepRef;
+use crate::applicability::{AttackFilter, StepRef};
 use crate::asset::PropertySet;
 use crate::control::RiskTreatment;
 use crate::description::ElementRef;
@@ -38,6 +38,7 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `SetDescription` | the same with the old text and provenance (empty text clears) | O(log n + text) |
 /// | `SetReviewMark` | the same with the old mark and tree provenance | O(log n) |
 /// | `SetProjectLanguages` | the same with the old list and provenance | O(l) |
+/// | `SetAttackFilter` | the same with the old filter and provenance | O(1) |
 /// | `AddTreeNode` | `RemoveTreeNode` with the old tree provenance | O(V + E) |
 /// | `RemoveTreeNode` | `AddTreeNode` with the node, its place and the old tree provenance | O(V + E) |
 /// | `LinkTreeNode` | `UnlinkTreeNode` with the old tree provenance | O(k + d + e) |
@@ -187,6 +188,13 @@ pub enum Op {
     SetProjectLanguages {
         /// The language tags, for example `["ja"]`.
         langs: Arc<[Arc<str>]>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Sets the project-level attacker capability filter.
+    SetAttackFilter {
+        /// Excluded attack-potential factor levels and scalability restriction.
+        filter: AttackFilter,
         /// Provenance of the change.
         provenance: Provenance,
     },
@@ -1257,6 +1265,7 @@ impl Op {
             | Self::SetDescriptionTranslation { provenance, .. }
             | Self::SetReviewMark { provenance, .. }
             | Self::SetProjectLanguages { provenance, .. }
+            | Self::SetAttackFilter { provenance, .. }
             | Self::AddTreeNode { provenance, .. }
             | Self::RemoveTreeNode { provenance, .. }
             | Self::LinkTreeNode { provenance, .. }
@@ -1391,6 +1400,7 @@ impl Op {
             | Self::SetDescriptionTranslation { provenance, .. }
             | Self::SetReviewMark { provenance, .. }
             | Self::SetProjectLanguages { provenance, .. }
+            | Self::SetAttackFilter { provenance, .. }
             | Self::AddTreeNode { provenance, .. }
             | Self::RemoveTreeNode { provenance, .. }
             | Self::LinkTreeNode { provenance, .. }
