@@ -1,0 +1,11 @@
+Commit: 86c0746 Add AttackFilter model, SetAttackFilter op, diff, and persistence (137a)
+Files: crates/aegis-model/src/applicability.rs, crates/aegis-model/src/diff.rs, crates/aegis-model/src/lib.rs, crates/aegis-model/src/methodology/mod.rs, crates/aegis-model/src/op.rs, crates/aegis-model/src/project.rs, crates/aegis-model/src/store/op_log.rs, crates/aegis-model/src/store/snapshot.rs, crates/aegis-model/src/store/wire.rs, crates/aegis-model/src/store/workspace.rs, crates/aegis-model/tests/common/mod.rs, crates/aegis-model/tests/ops_properties.rs, crates/aegis-model/tests/attacker_profile.rs
+Done when:
+1. `AttackFilter` and `ScalabilityFilter` validate per methodology and round-trip through `Op::SetAttackFilter` — `cargo test --locked -p aegis-model --test attacker_profile --test ops_properties --test store --test store_properties --test workspace --test workspace_properties` -> `attacker_profile`: `5 passed; 0 failed`
+2. Property tests generate `Op::SetAttackFilter` across `74 / 71` kinds and verify diff/undo/replay/snapshot/workspace equivalence — `cargo test --locked -p aegis-model --test attacker_profile --test ops_properties --test store --test store_properties --test workspace --test workspace_properties` -> `ops_properties`: `11 passed; 0 failed`, `store`: `23 passed; 0 failed; 1 ignored` (`regenerate_golden_fixtures`), `store_properties`: `8 passed; 0 failed`, `workspace`: `19 passed; 0 failed`, `workspace_properties`: `2 passed; 0 failed`
+3. `crates/aegis-model` passes full gate with zero clippy warnings — `scripts/ci.sh crates/aegis-model` -> `ok aegis-model fmt`, `ok aegis-model clippy`, `ok aegis-model test` (`all steps passed in 1 crate(s)`)
+Notes:
+- Applied updated step 6 in `crates/aegis-model/tests/common/mod.rs` (arm `55` fallback seeding of `Op::ApplyControl` when `with_targets.is_empty() && p.security_control_count() > 0 && !s.c.is_multiple_of(3)`) and `crates/aegis-model/tests/ops_properties.rs` (`Config::with_cases(2048)` and `kinds = if m.interface_kind_count() > 0 { 74 } else { 71 }`).
+- `ProjectDiff` has `#[allow(clippy::struct_excessive_bools)]` due to adding `pub(crate) attack_filter_changed: bool` (4 `bool` fields).
+- Source diff (`crates/aegis-model/src/`): `586` insertions, `14` deletions across 10 files (within `max_lines: 620`).
+NEXT: reviewer

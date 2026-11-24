@@ -3017,6 +3017,54 @@
       ],
       "decision": null,
       "updated": "2026-11-24T10:00:20Z"
+    },
+    {
+      "id": "137-attacker-profile",
+      "title": "Attacker profile (APL-05)",
+      "branch": "factory/137-attacker-profile",
+      "stage": "merged",
+      "slice": "137c",
+      "base": "8ed9e95e596798f0e8ddf12484fe068f4a5d8162",
+      "reviews": {
+        "slice": "137c",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "137a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 600
+        },
+        {
+          "slice": "137b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 283
+        },
+        {
+          "slice": "137c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "gemini",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 257
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-24T17:28:33Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"

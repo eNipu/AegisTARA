@@ -1,0 +1,35 @@
+# EGM Spec Audit: 137-attacker-profile
+
+Audited `spec.md`, `plan.json`, and `prompts/137{a,b,c}.md` via `egm-codebase-details` and `egm-implementation-readiness`.
+
+## Architectural contradictions
+None on domain or UI architecture (`D27`, `D30`, `D32`, `D37` all match).
+- Note on `D41` (400-line slice guideline): `137a` (`540`) and `137b` (`510`) exceed 400 lines per the `L14` store/ops precedent while remaining under the 600-line factory cap (or may be split into 4 slices if helpful to give `137b`/`137c` headroom).
+
+## Blocking defects
+
+### 1. Codebase symbol, line-ref, and API mismatches (`egm-codebase-details`)
+- **`137a.md` (`SnapshotView` vs `ProjectView`)**: Lines 18 and 65 cite `ProjectView` in `crates/aegis-model/src/store/snapshot.rs`. The struct in `snapshot.rs` (`lines 50-72, 1150-1188`) is `SnapshotView` (`ProjectView` is in `aegis-client/src/state.rs`). Also check `workspace.rs` (`from_workspace_files` starts at line 393) and ensure `ProjectDiff::is_empty` (`diff.rs:766-788`) includes `|| self.attack_filter_changed`.
+- **`137b.md` (`self.threat_scenarios()` vs `self.threats()`)**: Line 31 calls `self.threats()`, which does not exist (`Project::threats` is private); use `self.threat_scenarios()`.
+- **`137b.md` (`Op::SetThreatScaling` in `may_change_applicability` & `ProjectEvalCache`)**: `project.rs:13722` `may_change_applicability` is a `const fn` and does not currently handle `Op::SetThreatScaling`. Both `Op::SetAttackFilter` AND `Op::SetThreatScaling` must trigger applicability recomputation in `may_change_applicability` (keep `const` with a `while` loop or drop `const` if needed), and `ProjectEvalCache::apply_applicability_change` (`project.rs:14138`) must handle `Reason::Scalability` updates on threats when `structure_tree(op)` is `None`.
+- **`137b.md` (`feasibility_factor_label_for_lang` / `factor_level_label_for_lang`)**: Verify whether `Methodology::feasibility_factor_label_for_lang` and `factor_level_label_for_lang` already exist in `crates/aegis-model/src/methodology/mod.rs`. If they do not exist, add `crates/aegis-model/src/methodology/mod.rs` to `137b.allow` (or define them in `137a`) rather than assuming they exist.
+- **`137c.md` (`page_descriptions` invalid call)**: `137c.md:28` instructs `push("attacker-profile", ...)` in `view.rs:1130-1155`. `page_descriptions(ws, ui) -> Vec<DescriptionView>` takes `(kind: &'static str, live: bool, target: ElementRef)` for entity descriptions; `Page::AttackerProfile` must instead go in the empty `_ => {}` / `Page::Configuration | ... => {}` arm (`view.rs:1140-1145`).
+- **`137c.md` (`page_from_key` non-existent)**: `137c.md:23,62` cites `page_from_key` in `crates/aegis-shell/src/shortcuts.rs:255-285`. The function at lines `258-273` is `pub fn page_for(id: &str) -> Option<Page>` and only maps `SHORTCUTS` `table()` IDs (`palette_entries` iterates `Page::ALL` dynamically). Remove the bogus `page_from_key` instruction (or check whether `shortcuts.rs` needs any change at all).
+
+### 2. Model validation, L15, L09, and persistence ambiguities (`137a.md`)
+- **L15 blank-actor `Provenance` rejection**: Explicitly require `check_provenance(&by)` in `Project::check_set_attack_filter` and add a blank-actor rejection test in `crates/aegis-model/tests/attacker_profile.rs`.
+- **Validation vs `normalize()` order**: Clarify that `check_set_attack_filter` validates raw `filter.excluded` BEFORE `normalize()` (rejecting out-of-range `(fi, li)` via `check_feasibility_factor` / `check_factor_level` and `> 64` entries with exact `ModelError` variants), while `normalize()` only sorts and deduplicates valid pairs.
+- **Snapshot/workspace decode caps & L09 tests**: State the exact `StoreError` / `Limit` constant for `> 64` excluded entries and invalid indices during `snapshot.rs` / `workspace.rs` decode, and add single-guard L09 tests for both `Op` and `Store` boundaries (`64` ok, `65` fails with exact error).
+- **Empty-pack `ops_properties.rs` (`common/mod.rs` arm 82)**: `second()` has `feasibility_factor_count() == 0`; ensure generator arm 82 emits valid `ScalabilityFilter`-only `Op::SetAttackFilter` when `factor_count == 0` so `kinds` reaches `70`.
+
+### 3. Client view, `Edit`, `Command`, `ConditionSnapshot`, and property tests (`137b.md`)
+- **Exact `Command`, `Edit`, `AttackerProfileView`, and `undo_label` specs**: Specify exact `Command` variants (`ToggleAttackLevel`, `SelectAllAttackLevel`, `ResetAttackFilter` or exact signatures), exact toggle semantics for `SelectAllAttackLevel(col)` (e.g., if all factors have level `col` allowed, exclude all; otherwise allow all in column `col`), `unchanged()` semantics for `Edit::SetAttackFilter` (no-op when normalized filter equals current filter), exact `undo_label.rs` strings + trilingual Fluent keys, and exact struct fields on `AttackerProfileView` / factor / chip types (handling `feasibility_factor_count() == 0` cleanly).
+- **`ConditionSnapshot` toast**: Specify exact `SwitchTarget` extension in `exclusion.rs` and toast text (including reset to default).
+- **L20 & independent-oracle tests**: Test every factor in the pack individually (proving each excludes only steps rated on that factor and never unrated steps), test `Op::SetThreatScaling` + `Op::SetAttackFilter` interleaved with conditions/assumptions/tree ops in the `ProjectEvalCache` random-edit property test against fresh `Project::applicability()`, and state the concrete reference project size for the 5 ms edit budget test.
+
+### 4. Sidebar dot, `doc.rs`, `xlsx.rs`, `aegis-workbench`, and `max_lines` caps (`137c.md` + `plan.json`)
+- **Sidebar dot wiring**: Name the exact existing field or new field on `NavItem` / `NavEntry` (`view.rs`) and exact Slint model property (`app.slint`) + how `controller.rs` / `pages.rs` updates it when `!attack_filter.is_default()`.
+- **Report `doc.rs` & `report_configuration.rs` compatibility**: Specify exact Fluent keys and strings across `locales/{en,ja,pseudo}/main.ftl` for the cover row and Method section addition; ensure when `attack_filter.is_default()` (or specify clearly when shown vs hidden), existing `report_*.rs` and `report_configuration.rs` block-index tests remain intact! Check whether `report/diff.rs` (if touched) or `pages::comparison_in` handles baseline diff and verify `allow` lists match.
+- **`xlsx.rs` `has_applicability` guard**: Update `has_applicability` in both `risk_register_sheet` (`xlsx.rs:379-380`) and `report_workbook_xlsx_in` (`xlsx.rs:461-462,977`) to also check `!p.attack_filter().is_default()`, plus any `Attacker profile` sheet/summary row without pushing to `counts` if not desired there.
+- **L20 tests for `137c`**: Verify `SelectAllAttackLevel` for EVERY column, sidebar dot `true` while non-default and `false` after reset/undo, and `en` + `ja` report previews (active vs default).
+- **`max_lines` headroom**: `137a` (`540`), `137b` (`510`), and `137c` (`400`) have tight headroom (locales, `.slint`, `.po`, and inline `#[cfg(test)]` all count toward `max_lines` in `verify.py`). Raise caps appropriately (`<= 580`, or split `137c` UI/sidebar from `137d` reports) after verifying the exact files in `allow`.

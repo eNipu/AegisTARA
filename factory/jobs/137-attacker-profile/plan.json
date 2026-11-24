@@ -1,0 +1,86 @@
+{
+  "job": "137-attacker-profile",
+  "slices": [
+    {
+      "id": "137a",
+      "title": "AttackFilter model, Op::SetAttackFilter, diff, and persistence",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/methodology/mod.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/diff.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/src/store/*",
+        "crates/aegis-model/tests/*"
+      ],
+      "max_lines": 620,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test attacker_profile --test ops_properties --test store --test store_properties --test workspace --test workspace_properties"
+      ]
+    },
+    {
+      "id": "137b",
+      "title": "Applicability exclusion reasons, cache recheck, client edits, and AttackerProfileView",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/applicability.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/benches/applicability.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/exclusion.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/src/attacker_profile.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 480,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model",
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test attacker_profile --test applicability_cache --test threat_scaling",
+        "cargo bench --locked -p aegis-model --bench applicability -- --test",
+        "cargo test --locked -p aegis-client --test attacker_profile --test excluded_reasons --test condition_toast --test undo_every_op --test undo_labels"
+      ]
+    },
+    {
+      "id": "137c",
+      "title": "Page::AttackerProfile, sidebar dot, baseline diff, and report cover/method/XLSX",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/state.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/src/report/doc.rs",
+        "crates/aegis-client/src/report/xlsx.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-shell/ui/app.slint",
+        "crates/aegis-shell/src/controller.rs",
+        "crates/aegis-shell/translations/*",
+        "crates/aegis-shell/tests/*"
+      ],
+      "max_lines": 460,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test attacker_profile --test configuration --test report_configuration --test report_builder --test combined",
+        "cargo test --locked -p aegis-shell --test nav_groups --test standalone --test ui --test i18n"
+      ]
+    }
+  ]
+}
