@@ -6,7 +6,7 @@ mod common;
 
 use aegis_model::{
     AttackTree, ConditionId, ElementRef, GateKind, ItemRef, Node, NodeId, Op, Project,
-    ProjectEvalCache, Provenance, ThreatId, TreeId,
+    ProjectEvalCache, Provenance, ScalabilityFilter, ThreatId, TreeId,
 };
 use common::{accepted, asset_id, builtin, cat, component_id, condition_id, damage_id, feas};
 use common::{interface_id, lvl, node_id, seeds, threat_id, tree_id};
@@ -404,5 +404,236 @@ proptest! {
             p.apply_cached(inv, &mut cache).map_err(|e| TestCaseError::fail(e.to_string()))?;
             prop_assert_eq!(cache.applicability(), &p.applicability());
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MixedEdit {
+    Filter {
+        factor: usize,
+        level: usize,
+        exclude: bool,
+        scalability: u8,
+    },
+    ThreatScaling {
+        threat: usize,
+        scales: Option<bool>,
+    },
+    StepFactor {
+        step: usize,
+        factor: usize,
+        level: Option<usize>,
+    },
+    ConditionPresent(usize, bool),
+    AssumptionHolds(bool),
+    ToggleExtraNode,
+    FlipGate(u8),
+}
+
+fn mixed_edits() -> impl Strategy<Value = Vec<MixedEdit>> {
+    let one = prop_oneof![
+        (0..5usize, 0..5usize, any::<bool>(), 0..3u8).prop_map(|(factor, level, exclude, s)| {
+            MixedEdit::Filter {
+                factor,
+                level,
+                exclude,
+                scalability: s,
+            }
+        }),
+        (
+            0..5usize,
+            prop_oneof![Just(None), Just(Some(true)), Just(Some(false))]
+        )
+            .prop_map(|(threat, scales)| MixedEdit::ThreatScaling { threat, scales }),
+        (
+            0..9usize,
+            0..5usize,
+            prop_oneof![Just(None), (0..5usize).prop_map(Some)],
+        )
+            .prop_map(|(step, factor, level)| MixedEdit::StepFactor {
+                step,
+                factor,
+                level,
+            }),
+        (0..6usize, any::<bool>()).prop_map(|(c, v)| MixedEdit::ConditionPresent(c, v)),
+        any::<bool>().prop_map(MixedEdit::AssumptionHolds),
+        Just(MixedEdit::ToggleExtraNode),
+        (0..3u8).prop_map(MixedEdit::FlipGate),
+    ];
+    prop::collection::vec(one, 1..28)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn mixed_attacker_profile_scaling_conditions_assumptions_and_tree_edits(
+        edits in mixed_edits()
+    ) {
+        let mut f = fixture().map_err(|e| TestCaseError::fail(e.to_string()))?;
+        let m = f.p.methodology().clone();
+        let factors: Vec<_> = m.feasibility_factors().collect();
+        let assumption = common::assumption_id(1);
+        let extra_node = node_id(999);
+        let tx = tree_id(1);
+        let gate_x = node_id(14);
+        let direct_threat = threat_id(5);
+        let cat = m.threat_categories().next().expect("cat");
+        let high = feas(&m, "high");
+        f.p.apply(Op::AddAssumption {
+            id: assumption,
+            name: "Sealed".into(),
+            holds: false,
+            provenance: prov(),
+        }).map_err(|e| TestCaseError::fail(e.to_string()))?;
+        f.p.apply(Op::SetAssumptionExcludes {
+            id: assumption,
+            trees: vec![tree_id(3)],
+            steps: vec![aegis_model::StepRef { tree: tree_id(2), node: node_id(21) }],
+            provenance: prov(),
+        }).map_err(|e| TestCaseError::fail(e.to_string()))?;
+        f.p.apply(Op::AddThreatScenario {
+            id: direct_threat,
+            name: "Direct".into(),
+            asset: asset_id(1),
+            category: cat,
+            catalog_refs: vec![],
+            damages: vec![damage_id(1)],
+            provenance: prov(),
+        }).map_err(|e| TestCaseError::fail(e.to_string()))?;
+        f.p.apply(Op::SetThreatFeasibility {
+            threat: direct_threat,
+            level: Some(high),
+            provenance: prov(),
+        }).map_err(|e| TestCaseError::fail(e.to_string()))?;
+        f.threats.push(direct_threat);
+
+        let steps = [
+            (tree_id(1), node_id(11)),
+            (tree_id(1), node_id(12)),
+            (tree_id(1), node_id(13)),
+            (tree_id(2), node_id(21)),
+            (tree_id(2), node_id(22)),
+            (tree_id(2), node_id(23)),
+            (tree_id(3), node_id(31)),
+            (tree_id(3), node_id(32)),
+            (tree_id(3), node_id(33)),
+        ];
+
+        let mut cache = ProjectEvalCache::new(&f.p);
+        let start = cache.clone();
+        let mut inverses = Vec::new();
+        let mut extra_present = false;
+
+        for edit in edits {
+            let op = match edit {
+                MixedEdit::Filter {
+                    factor,
+                    level,
+                    exclude,
+                    scalability,
+                } => {
+                    let mut next = *f.p.attack_filter();
+                    let fac = factors[factor % factors.len()];
+                    let lcount = m.factor_level_count(fac);
+                    let lvl = m.factor_levels(fac).nth(level % lcount).expect("level");
+                    next.set_excluded(fac, lvl, exclude);
+                    next.set_scalability(match scalability {
+                        0 => ScalabilityFilter::Any,
+                        1 => ScalabilityFilter::ScaledOnly,
+                        _ => ScalabilityFilter::UnscaledOnly,
+                    });
+                    Op::SetAttackFilter {
+                        filter: next,
+                        provenance: prov(),
+                    }
+                }
+                MixedEdit::ThreatScaling { threat, scales } => Op::SetThreatScaling {
+                    threat: f.threats[threat % f.threats.len()],
+                    scales,
+                    reason: if scales.is_some() { "checked".into() } else { "".into() },
+                    provenance: prov(),
+                },
+                MixedEdit::StepFactor { step, factor, level } => {
+                    let (tree, node) = steps[step % steps.len()];
+                    let fac = factors[factor % factors.len()];
+                    let lcount = m.factor_level_count(fac);
+                    let lvl = level.map(|i| m.factor_levels(fac).nth(i % lcount).expect("level"));
+                    Op::SetStepFactor {
+                        tree,
+                        node,
+                        factor: fac,
+                        level: lvl,
+                        provenance: prov(),
+                    }
+                }
+                MixedEdit::ConditionPresent(c, v) => switch(f.conditions[c], v),
+                MixedEdit::AssumptionHolds(holds) => Op::SetAssumptionHolds {
+                    id: assumption,
+                    holds,
+                    provenance: prov(),
+                },
+                MixedEdit::ToggleExtraNode => {
+                    if extra_present {
+                        extra_present = false;
+                        Op::RemoveTreeNode {
+                            tree: tx,
+                            id: extra_node,
+                            provenance: prov(),
+                        }
+                    } else {
+                        extra_present = true;
+                        let t = f.p.attack_tree(f.p.attack_tree_idx(&tx).expect("tx")).expect("t");
+                        let g_idx = t.idx_of(&gate_x).expect("gx");
+                        Op::AddTreeNode {
+                            tree: tx,
+                            parent: gate_x,
+                            id: extra_node,
+                            node: Node::step("extra"),
+                            index: u32::try_from(t.len()).expect("idx"),
+                            position: u32::try_from(t.children(g_idx).len()).expect("pos"),
+                            provenance: prov(),
+                        }
+                    }
+                }
+                MixedEdit::FlipGate(k) => Op::SetTreeNodeGate {
+                    tree: tx,
+                    id: gate_x,
+                    gate: match k {
+                        0 => GateKind::Or,
+                        1 => GateKind::And,
+                        _ => GateKind::SeqAnd,
+                    },
+                    provenance: prov(),
+                },
+            };
+            let inv = f
+                .p
+                .apply_cached(op, &mut cache)
+                .map_err(|e| TestCaseError::fail(e.to_string()))?;
+            inverses.push(inv);
+            assert_full(&f, &cache)?;
+            prop_assert_eq!(cache.applicability(), &f.p.applicability());
+            for &t in &f.threats {
+                prop_assert_eq!(
+                    cache.evaluate_residual_risk(&f.p, t).cloned(),
+                    f.p.evaluate_residual_risk(t)
+                );
+            }
+        }
+
+        for inv in inverses.into_iter().rev() {
+            f.p.apply_cached(inv, &mut cache)
+                .map_err(|e| TestCaseError::fail(e.to_string()))?;
+            assert_full(&f, &cache)?;
+            prop_assert_eq!(cache.applicability(), &f.p.applicability());
+            for &t in &f.threats {
+                prop_assert_eq!(
+                    cache.evaluate_residual_risk(&f.p, t).cloned(),
+                    f.p.evaluate_residual_risk(t)
+                );
+            }
+        }
+        prop_assert_eq!(&cache, &start);
     }
 }

@@ -6,13 +6,17 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackFilter, Limit, MAX_ACTOR_BYTES, MAX_FEASIBILITY_FACTORS, MAX_NAME_CHARS, Methodology,
-    ModelError, Op, OpCodec, OpLogReader, OpLogWriter, Project, Provenance, ScalabilityFilter,
-    StoreError, VocabKind,
+    AttackFilter, AttackTree, ControlId, ElementRef, GateKind, Limit, MAX_ACTOR_BYTES,
+    MAX_FEASIBILITY_FACTORS, MAX_NAME_CHARS, Methodology, ModelError, Node, Op, OpCodec,
+    OpLogReader, OpLogWriter, Project, ProjectEvalCache, Provenance, Reason, ScalabilityFilter,
+    StoreError, TreeId, VocabKind,
 };
 use serde_json::Value;
 
-use common::{builtin, reordered, second, second_def, wide};
+use common::{
+    asset_id, builtin, cat, damage_id, feas, lvl, node_id, reordered, second, second_def,
+    threat_id, tree_id, wide,
+};
 
 const MAX_LEVELS: usize = 16;
 
@@ -605,4 +609,545 @@ fn l09_single_guard_decode_limits_and_errors() {
         }
         other => panic!("expected InWorkspace for aegis.json, got {other:?}"),
     }
+}
+
+#[test]
+fn each_factor_excludes_only_rated_steps() {
+    let m = builtin();
+    let factors: Vec<_> = m.feasibility_factors().collect();
+    assert_eq!(factors.len(), 5);
+    let safety = cat(&m, "safety");
+    let severe = lvl(&m, safety, "severe");
+    let tcat = m.threat_categories().next().expect("cat");
+    let high = feas(&m, "high");
+    let med = feas(&m, "medium");
+    let low = feas(&m, "low");
+    let vlow = feas(&m, "very-low");
+    let prov = Provenance::human("alice", 100);
+
+    for (fi, &factor) in factors.iter().enumerate() {
+        let excluded_level = m.factor_levels(factor).last().expect("excluded level");
+        let other_factor = factors[(fi + 1) % factors.len()];
+        let other_level = m.factor_levels(other_factor).next().expect("other level");
+
+        let mut p = Project::new(Arc::clone(&m));
+        let (asset, dmg, ctrl) = (asset_id(1), damage_id(1), ControlId::new_v7());
+        let (t1_id, t2_id) = (threat_id(1), threat_id(2));
+        let (tr1, tr2) = (tree_id(1), tree_id(2));
+        let (r1, g_and, s_rated, s_sibling, s_unrated) =
+            (node_id(1), node_id(2), node_id(3), node_id(4), node_id(5));
+        let (r2, s_only) = (node_id(6), node_id(7));
+
+        let mut tree1 = AttackTree::new(r1, Node::gate(GateKind::Or, "root1")).expect("r1");
+        let and_idx = tree1
+            .add_child(tree1.root(), g_and, Node::gate(GateKind::And, "and"))
+            .expect("and");
+        tree1
+            .add_child(and_idx, s_rated, Node::step("rated on factor"))
+            .expect("s_rated");
+        tree1
+            .add_child(and_idx, s_sibling, Node::step("sibling on other"))
+            .expect("s_sibling");
+        tree1
+            .add_child(tree1.root(), s_unrated, Node::step("unrated on factor"))
+            .expect("s_unrated");
+
+        let mut tree2 = AttackTree::new(r2, Node::gate(GateKind::Or, "root2")).expect("r2");
+        tree2
+            .add_child(tree2.root(), s_only, Node::step("only path"))
+            .expect("s_only");
+
+        for op in [
+            Op::AddAsset {
+                id: asset,
+                name: "ECU".into(),
+                properties: m.all_properties(),
+                provenance: prov.clone(),
+            },
+            Op::AddDamageScenario {
+                id: dmg,
+                name: "Crash".into(),
+                impacts: vec![(safety, severe)],
+                provenance: prov.clone(),
+            },
+            Op::AddSecurityControl {
+                id: ctrl,
+                name: "SecOC".into(),
+                provenance: prov.clone(),
+            },
+            Op::AddAttackTree {
+                id: tr1,
+                tree: tree1,
+                step_feasibility: vec![(s_rated, high), (s_sibling, med), (s_unrated, low)],
+                provenance: prov.clone(),
+            },
+            Op::SetStepMitigation {
+                tree: tr1,
+                node: s_unrated,
+                control: ctrl,
+                feasibility: Some(vlow),
+                provenance: prov.clone(),
+            },
+            Op::SetStepFactor {
+                tree: tr1,
+                node: s_rated,
+                factor,
+                level: Some(excluded_level),
+                provenance: prov.clone(),
+            },
+            Op::SetStepFactor {
+                tree: tr1,
+                node: s_sibling,
+                factor: other_factor,
+                level: Some(other_level),
+                provenance: prov.clone(),
+            },
+            Op::SetStepFactor {
+                tree: tr1,
+                node: s_unrated,
+                factor: other_factor,
+                level: Some(other_level),
+                provenance: prov.clone(),
+            },
+            Op::AddAttackTree {
+                id: tr2,
+                tree: tree2,
+                step_feasibility: vec![(s_only, high)],
+                provenance: prov.clone(),
+            },
+            Op::SetStepFactor {
+                tree: tr2,
+                node: s_only,
+                factor,
+                level: Some(excluded_level),
+                provenance: prov.clone(),
+            },
+            Op::AddThreatScenario {
+                id: t1_id,
+                name: "T1".into(),
+                asset,
+                category: tcat,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov.clone(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t1_id,
+                tree: Some(tr1),
+                provenance: prov.clone(),
+            },
+            Op::AddThreatScenario {
+                id: t2_id,
+                name: "T2".into(),
+                asset,
+                category: tcat,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov.clone(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t2_id,
+                tree: Some(tr2),
+                provenance: prov.clone(),
+            },
+        ] {
+            p.apply(op).expect("setup");
+        }
+
+        let mut cache = ProjectEvalCache::new(&p);
+        p.apply_cached(
+            Op::SetAttackFilter {
+                filter: AttackFilter::default().without(factor, excluded_level),
+                provenance: prov.clone(),
+            },
+            &mut cache,
+        )
+        .expect("set filter");
+
+        let app = p.applicability();
+        assert_eq!(cache.applicability(), &app);
+        assert_eq!(cache, ProjectEvalCache::new(&p));
+
+        assert_eq!(
+            app.node_reasons(tr1, s_rated),
+            &[Reason::OutsideProfile {
+                factor,
+                level: excluded_level
+            }]
+        );
+        assert!(!app.is_node_excluded(tr1, s_sibling));
+        assert!(!app.is_node_excluded(tr1, s_unrated));
+        assert_eq!(app.node_reasons(tr1, g_and), &[Reason::AllPathsExcluded]);
+        assert!(!app.is_node_excluded(tr1, r1));
+        assert!(!app.is_excluded(ElementRef::Tree(tr1)));
+
+        assert_eq!(
+            app.node_reasons(tr2, s_only),
+            &[Reason::OutsideProfile {
+                factor,
+                level: excluded_level
+            }]
+        );
+        assert_eq!(app.node_reasons(tr2, r2), &[Reason::AllPathsExcluded]);
+        assert_eq!(
+            app.reasons(ElementRef::Tree(tr2)),
+            &[Reason::AllPathsExcluded]
+        );
+
+        assert_eq!(
+            cache.evaluate_tree(&p, tr1).expect("tr1").root_value(),
+            &low
+        );
+        assert_eq!(
+            cache
+                .evaluate_residual_tree(&p, tr1)
+                .expect("tr1 res")
+                .root_value(),
+            &vlow
+        );
+        assert_eq!(
+            cache.evaluate_risk(&p, t1_id).cloned(),
+            p.evaluate_risk(t1_id)
+        );
+        assert_eq!(
+            cache.evaluate_residual_risk(&p, t1_id).cloned(),
+            p.evaluate_residual_risk(t1_id)
+        );
+        assert_eq!(
+            cache.evaluate_risk(&p, t2_id).cloned(),
+            Err(ModelError::ThreatNotApplicable(t2_id))
+        );
+        assert_eq!(
+            p.evaluate_risk(t2_id),
+            Err(ModelError::ThreatNotApplicable(t2_id))
+        );
+        assert_eq!(
+            p.evaluate_residual_risk(t2_id),
+            Err(ModelError::ThreatNotApplicable(t2_id))
+        );
+
+        // Even with every level of `factor` excluded, the step unrated on `factor` remains included.
+        let mut all_off = AttackFilter::default();
+        for l in m.factor_levels(factor) {
+            all_off.exclude(factor, l);
+        }
+        p.apply_cached(
+            Op::SetAttackFilter {
+                filter: all_off,
+                provenance: prov.clone(),
+            },
+            &mut cache,
+        )
+        .expect("all off");
+        assert!(!p.applicability().is_node_excluded(tr1, s_unrated));
+        assert_eq!(cache, ProjectEvalCache::new(&p));
+    }
+}
+
+#[test]
+fn scalability_uses_threat_scaling() {
+    let m = builtin();
+    let safety = cat(&m, "safety");
+    let severe = lvl(&m, safety, "severe");
+    let tcat = m.threat_categories().next().expect("cat");
+    let high = feas(&m, "high");
+    let prov = Provenance::human("alice", 100);
+
+    let mut p = Project::new(Arc::clone(&m));
+    let (asset, dmg) = (asset_id(1), damage_id(1));
+    p.apply(Op::AddAsset {
+        id: asset,
+        name: "ECU".into(),
+        properties: m.all_properties(),
+        provenance: prov.clone(),
+    })
+    .expect("asset");
+    p.apply(Op::AddDamageScenario {
+        id: dmg,
+        name: "Crash".into(),
+        impacts: vec![(safety, severe)],
+        provenance: prov.clone(),
+    })
+    .expect("dmg");
+
+    let mut make_tree = |n: u64| {
+        let tid = tree_id(n);
+        let step = node_id(n * 10);
+        p.apply(Op::AddAttackTree {
+            id: tid,
+            tree: AttackTree::new(step, Node::step("s")).expect("tree"),
+            step_feasibility: vec![(step, high)],
+            provenance: prov.clone(),
+        })
+        .expect("add tree");
+        tid
+    };
+    let (tr_scaled, tr_unscaled, tr_unrated, tr_shared) =
+        (make_tree(1), make_tree(2), make_tree(3), make_tree(4));
+
+    let mut make_threat = |n: u64, tree: Option<TreeId>, scales: Option<bool>| {
+        let id = threat_id(n);
+        p.apply(Op::AddThreatScenario {
+            id,
+            name: format!("T{n}").into(),
+            asset,
+            category: tcat,
+            catalog_refs: vec![],
+            damages: vec![dmg],
+            provenance: prov.clone(),
+        })
+        .expect("add threat");
+        if let Some(tr) = tree {
+            p.apply(Op::SetThreatAttackTree {
+                threat: id,
+                tree: Some(tr),
+                provenance: prov.clone(),
+            })
+            .expect("link tree");
+        } else {
+            p.apply(Op::SetThreatFeasibility {
+                threat: id,
+                level: Some(high),
+                provenance: prov.clone(),
+            })
+            .expect("direct feas");
+        }
+        if scales.is_some() {
+            p.apply(Op::SetThreatScaling {
+                threat: id,
+                scales,
+                reason: "assessed".into(),
+                provenance: prov.clone(),
+            })
+            .expect("set scaling");
+        }
+        id
+    };
+
+    let t_scaled = make_threat(1, Some(tr_scaled), Some(true));
+    let t_unscaled = make_threat(2, Some(tr_unscaled), Some(false));
+    let t_unrated = make_threat(3, Some(tr_unrated), None);
+    let t_shared_scaled = make_threat(4, Some(tr_shared), Some(true));
+    let t_shared_unscaled = make_threat(5, Some(tr_shared), Some(false));
+    let t_direct_scaled = make_threat(6, None, Some(true));
+    let t_direct_unscaled = make_threat(7, None, Some(false));
+    let t_direct_unrated = make_threat(8, None, None);
+
+    let mut cache = ProjectEvalCache::new(&p);
+    assert!(p.applicability().is_empty());
+
+    // ScaledOnly excludes ONLY Some(false), never None.
+    p.apply_cached(
+        Op::SetAttackFilter {
+            filter: AttackFilter::default().with_scalability(ScalabilityFilter::ScaledOnly),
+            provenance: prov.clone(),
+        },
+        &mut cache,
+    )
+    .expect("scaled only");
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+    assert_eq!(cache.applicability(), &p.applicability());
+    let app = p.applicability();
+    assert!(!app.is_excluded(ElementRef::Threat(t_scaled)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_unrated)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_shared_scaled)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_direct_scaled)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_direct_unrated)));
+    assert!(!app.is_excluded(ElementRef::Tree(tr_shared)));
+    for excluded in [t_unscaled, t_shared_unscaled, t_direct_unscaled] {
+        assert_eq!(
+            app.reasons(ElementRef::Threat(excluded)),
+            &[Reason::Scalability]
+        );
+        assert_eq!(
+            cache.evaluate_risk(&p, excluded).cloned(),
+            Err(ModelError::ThreatNotApplicable(excluded))
+        );
+        assert_eq!(
+            cache.evaluate_residual_risk(&p, excluded).cloned(),
+            Err(ModelError::ThreatNotApplicable(excluded))
+        );
+    }
+    assert_eq!(
+        app.reasons(ElementRef::Tree(tr_unscaled)),
+        &[Reason::OwnerExcluded(ElementRef::Threat(t_unscaled))]
+    );
+    assert!(cache.evaluate_risk(&p, t_direct_unrated).is_ok());
+
+    // UnscaledOnly excludes ONLY Some(true), never None.
+    p.apply_cached(
+        Op::SetAttackFilter {
+            filter: AttackFilter::default().with_scalability(ScalabilityFilter::UnscaledOnly),
+            provenance: prov.clone(),
+        },
+        &mut cache,
+    )
+    .expect("unscaled only");
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+    assert_eq!(cache.applicability(), &p.applicability());
+    let app = p.applicability();
+    assert!(!app.is_excluded(ElementRef::Threat(t_unscaled)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_unrated)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_shared_unscaled)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_direct_unscaled)));
+    assert!(!app.is_excluded(ElementRef::Threat(t_direct_unrated)));
+    assert!(!app.is_excluded(ElementRef::Tree(tr_shared)));
+    for excluded in [t_scaled, t_shared_scaled, t_direct_scaled] {
+        assert_eq!(
+            app.reasons(ElementRef::Threat(excluded)),
+            &[Reason::Scalability]
+        );
+        assert_eq!(
+            cache.evaluate_risk(&p, excluded).cloned(),
+            Err(ModelError::ThreatNotApplicable(excluded))
+        );
+    }
+    assert_eq!(
+        app.reasons(ElementRef::Tree(tr_scaled)),
+        &[Reason::OwnerExcluded(ElementRef::Threat(t_scaled))]
+    );
+
+    // Direct-feasibility threat updates cleanly when SetThreatScaling changes while active.
+    p.apply_cached(
+        Op::SetThreatScaling {
+            threat: t_direct_unscaled,
+            scales: Some(true),
+            reason: "now scales".into(),
+            provenance: prov.clone(),
+        },
+        &mut cache,
+    )
+    .expect("flip direct");
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+    assert_eq!(
+        cache.evaluate_risk(&p, t_direct_unscaled).cloned(),
+        Err(ModelError::ThreatNotApplicable(t_direct_unscaled))
+    );
+    p.apply_cached(
+        Op::SetThreatScaling {
+            threat: t_direct_unscaled,
+            scales: None,
+            reason: "".into(),
+            provenance: prov,
+        },
+        &mut cache,
+    )
+    .expect("clear direct");
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+    assert!(cache.evaluate_risk(&p, t_direct_unscaled).is_ok());
+}
+
+#[test]
+fn default_filter_skips_applicability_and_bounds_cache_recomputes() {
+    let m = builtin();
+    let safety = cat(&m, "safety");
+    let severe = lvl(&m, safety, "severe");
+    let tcat = m.threat_categories().next().expect("cat");
+    let low = feas(&m, "low");
+    let prov = Provenance::human("alice", 100);
+    let mut p = Project::new(Arc::clone(&m));
+    let (asset, dmg, tr, threat) = (asset_id(1), damage_id(1), tree_id(1), threat_id(1));
+    let (r, g1, g2, s1) = (node_id(1), node_id(2), node_id(3), node_id(4));
+    let depth: u64 = 4;
+
+    let mut tree = AttackTree::new(r, Node::gate(GateKind::Or, "r")).expect("r");
+    let i1 = tree
+        .add_child(tree.root(), g1, Node::gate(GateKind::And, "g1"))
+        .expect("g1");
+    let i2 = tree
+        .add_child(i1, g2, Node::gate(GateKind::Or, "g2"))
+        .expect("g2");
+    tree.add_child(i2, s1, Node::step("s1")).expect("s1");
+
+    for op in [
+        Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: prov.clone(),
+        },
+        Op::AddDamageScenario {
+            id: dmg,
+            name: "Crash".into(),
+            impacts: vec![(safety, severe)],
+            provenance: prov.clone(),
+        },
+        Op::AddAttackTree {
+            id: tr,
+            tree,
+            step_feasibility: vec![(s1, low)],
+            provenance: prov.clone(),
+        },
+        Op::AddThreatScenario {
+            id: threat,
+            name: "T".into(),
+            asset,
+            category: tcat,
+            catalog_refs: vec![],
+            damages: vec![dmg],
+            provenance: prov.clone(),
+        },
+        Op::SetThreatAttackTree {
+            threat,
+            tree: Some(tr),
+            provenance: prov.clone(),
+        },
+    ] {
+        p.apply(op).expect("setup");
+    }
+
+    let mut cache = ProjectEvalCache::new(&p);
+    cache.reset_counters();
+    p.apply_cached(
+        Op::SetThreatScaling {
+            threat,
+            scales: Some(false),
+            reason: "local".into(),
+            provenance: prov.clone(),
+        },
+        &mut cache,
+    )
+    .expect("scaling");
+    assert_eq!(cache.recomputed_nodes(), 0);
+    assert_eq!(cache.recomputed_threats(), 0);
+    assert!(cache.applicability().is_empty());
+
+    let factors: Vec<_> = m.feasibility_factors().collect();
+    let f0 = factors[0];
+    let l0 = m.factor_levels(f0).next().expect("l0");
+    cache.reset_counters();
+    p.apply_cached(
+        Op::SetStepFactor {
+            tree: tr,
+            node: s1,
+            factor: f0,
+            level: Some(l0),
+            provenance: prov.clone(),
+        },
+        &mut cache,
+    )
+    .expect("set single factor");
+    assert!(cache.recomputed_nodes() <= depth);
+    assert_eq!(cache.recomputed_threats(), 0);
+    assert!(cache.applicability().is_empty());
+
+    // Rating all remaining factors shifts feasibility along depth 4 (inherent + residual <= 2 * depth).
+    for &f in &factors[1..] {
+        let l = m.factor_levels(f).last().expect("level");
+        cache.reset_counters();
+        p.apply_cached(
+            Op::SetStepFactor {
+                tree: tr,
+                node: s1,
+                factor: f,
+                level: Some(l),
+                provenance: prov.clone(),
+            },
+            &mut cache,
+        )
+        .expect("set factor");
+        assert!(cache.recomputed_nodes() <= depth * 2);
+        assert!(cache.applicability().is_empty());
+    }
+    assert_eq!(cache, ProjectEvalCache::new(&p));
 }

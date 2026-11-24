@@ -13757,7 +13757,7 @@ fn not_applicable_threat(e: ModelError, id: ThreatId) -> ModelError {
 /// Whether `op` can change [`Project::applicability`]. Exhaustive, so a new
 /// op kind forces a decision. Time O(1).
 #[allow(clippy::too_many_lines)] // one line per op kind
-const fn may_change_applicability(op: &Op) -> bool {
+const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
     match op {
         Op::AddCondition { .. }
         | Op::SetConditionPresent { .. }
@@ -13787,12 +13787,14 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::UnlinkTreeNode { .. }
         | Op::SetTreeNodeGate { .. }
         | Op::RemoveCybersecurityGoal { .. }
-        | Op::RemoveCybersecurityClaim { .. } => true,
+        | Op::RemoveCybersecurityClaim { .. }
+        | Op::SetAttackFilter { .. } => true,
+        Op::SetThreatScaling { .. } => filter.scalability().is_active(),
+        Op::SetStepFactor { .. } => filter.has_excluded_levels(),
         Op::SetReviewMark { .. }
         | Op::SetDescription { .. }
         | Op::SetDescriptionTranslation { .. }
         | Op::SetProjectLanguages { .. }
-        | Op::SetAttackFilter { .. }
         | Op::RenameTreeNode { .. }
         | Op::AddAsset { .. }
         | Op::RenameAsset { .. }
@@ -13808,7 +13810,6 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::LinkDamage { .. }
         | Op::UnlinkDamage { .. }
         | Op::SetStepFeasibility { .. }
-        | Op::SetStepFactor { .. }
         | Op::SetStepAttackType { .. }
         | Op::AddAssumption { .. }
         | Op::RenameAssumption { .. }
@@ -13848,7 +13849,6 @@ const fn may_change_applicability(op: &Op) -> bool {
         | Op::SetImpactRationale { .. }
         | Op::SetFeasibilityRationale { .. }
         | Op::SetDamageLinkRationale { .. }
-        | Op::SetThreatScaling { .. }
         | Op::RenameComponent { .. }
         | Op::SetComponentSystem { .. }
         | Op::RenameInterface { .. }
@@ -14171,7 +14171,7 @@ impl ProjectEvalCache {
             self.rebuild(project);
             return;
         }
-        if may_change_applicability(op) {
+        if may_change_applicability(op, project.attack_filter()) {
             let next = project.applicability();
             if next != self.applicability {
                 self.apply_applicability_change(project, next, structure_tree(op));

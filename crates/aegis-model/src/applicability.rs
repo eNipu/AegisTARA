@@ -338,6 +338,17 @@ pub enum Reason {
     OwnerExcluded(ElementRef),
     /// A step: the component or interface it goes through is excluded.
     ViaExcluded(ItemRef),
+    /// A step: one of its rated attack-potential factor levels is excluded by
+    /// the project's attacker profile filter.
+    OutsideProfile {
+        /// The feasibility factor whose level is excluded.
+        factor: FeasibilityFactor,
+        /// The excluded level assigned to the step.
+        level: FactorLevel,
+    },
+    /// A threat scenario: its explicit scaling rating is excluded by the
+    /// project's attacker profile filter.
+    Scalability,
     /// A gate, or a tree through its root: no path through it applies.
     AllPathsExcluded,
 }
@@ -609,6 +620,7 @@ impl Project {
     pub fn applicability(&self) -> Applicability {
         if self.conditions().all(|(_, _, c)| c.present())
             && self.assumptions().all(|(_, _, a)| !a.holds())
+            && self.attack_filter().is_default()
         {
             return Applicability::default();
         }
@@ -646,6 +658,13 @@ impl Project {
                     .entry(sr.node)
                     .or_default()
                     .push(aid);
+            }
+        }
+        if self.attack_filter().scalability().is_active() {
+            for (_, tid, t) in self.threat_scenarios() {
+                if !self.attack_filter().allows_scalability(t.scales()) {
+                    push(&mut elements, ElementRef::Threat(tid), Reason::Scalability);
+                }
             }
         }
         for list in elements.values_mut() {
@@ -744,10 +763,9 @@ impl Project {
         off: &impl Fn(&[ConditionIdx]) -> Vec<Reason>,
         step_assumptions: &BTreeMap<TreeId, BTreeMap<NodeId, Vec<AssumptionId>>>,
     ) -> Option<TreeExclusions> {
-        let mut out = TreeExclusions {
-            nodes: BTreeMap::new(),
-            excluded: vec![false; tree.len()],
-        };
+        let mut nodes: BTreeMap<NodeId, Vec<Reason>> = BTreeMap::new();
+        let mut excluded: Vec<bool> = Vec::new();
+        let check_factors = self.attack_filter().has_excluded_levels();
         let tree_steps = step_assumptions.get(&tree_id);
         for (n, nid, node) in tree.iter() {
             if node.gate_kind().is_some() {
@@ -766,18 +784,29 @@ impl Project {
             if let Some(aids) = tree_steps.and_then(|nodes| nodes.get(&nid)) {
                 reasons.extend(aids.iter().copied().map(Reason::AssumptionHolds));
             }
+            if check_factors {
+                for (factor, level) in self.step_factors(t, n) {
+                    if self.attack_filter().is_excluded(factor, level) {
+                        reasons.push(Reason::OutsideProfile { factor, level });
+                    }
+                }
+            }
             if !reasons.is_empty() {
                 reasons.sort_unstable();
                 reasons.dedup();
-                out.nodes.insert(nid, reasons);
-                if let Some(slot) = out.excluded.get_mut(n.index()) {
+                nodes.insert(nid, reasons);
+                if excluded.is_empty() {
+                    excluded.resize(tree.len(), false);
+                }
+                if let Some(slot) = excluded.get_mut(n.index()) {
                     *slot = true;
                 }
             }
         }
-        if out.nodes.is_empty() {
+        if nodes.is_empty() {
             return None;
         }
+        let mut out = TreeExclusions { nodes, excluded };
         let leaf = |i: NodeIdx| {
             let excluded = out.excluded.get(i.index()).copied().unwrap_or(false);
             Some(if excluded {

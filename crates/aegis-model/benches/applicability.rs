@@ -19,8 +19,8 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    AssetId, AttackTree, ConditionId, DamageId, GateKind, Methodology, Node, NodeId, Op, Project,
-    ProjectEvalCache, Provenance, ThreatId, TreeId,
+    AssetId, AttackFilter, AttackTree, ConditionId, DamageId, GateKind, Methodology, Node, NodeId,
+    Op, Project, ProjectEvalCache, Provenance, ThreatId, TreeId,
 };
 use divan::{Bencher, black_box};
 
@@ -36,6 +36,7 @@ struct Fixture {
     conditions: Vec<ConditionId>,
     /// A step of the first tree that needs no condition.
     free_step: (TreeId, NodeId),
+    steps: Vec<(TreeId, NodeId)>,
 }
 
 fn apply(project: &mut Project, op: Op) {
@@ -169,11 +170,13 @@ fn fixture() -> Fixture {
         );
     }
     let cache = project.eval_cache();
+    let free_step = steps[1];
     Fixture {
         project,
         cache,
         conditions,
-        free_step: steps[1],
+        free_step,
+        steps,
     }
 }
 
@@ -218,6 +221,67 @@ fn rating_edit_with_condition_off(bencher: Bencher) {
         let op = Op::SetStepFeasibility {
             tree,
             node,
+            level: Some(levels[turn]),
+            provenance: Provenance::default(),
+        };
+        black_box(f.project.apply_cached(op, &mut f.cache).expect("applies"));
+    });
+}
+
+#[divan::bench(sample_count = 50)]
+fn set_attack_filter(bencher: Bencher) {
+    let mut f = fixture();
+    let m = Arc::clone(f.project.methodology());
+    let factor = m.feasibility_factors().next().expect("factor");
+    let levels: Vec<_> = m.factor_levels(factor).collect();
+    let excluded_level = levels[0];
+    let allowed_count = levels.len() - 1;
+    for (n, &(tree, node)) in f.steps.iter().enumerate() {
+        let level = if n.is_multiple_of(100) {
+            excluded_level
+        } else {
+            levels[1 + (n % allowed_count)]
+        };
+        apply(
+            &mut f.project,
+            Op::SetStepFactor {
+                tree,
+                node,
+                factor,
+                level: Some(level),
+                provenance: Provenance::default(),
+            },
+        );
+    }
+    f.cache = f.project.eval_cache();
+    let active = AttackFilter::default().without(factor, excluded_level);
+    let default = AttackFilter::default();
+    let mut on = false;
+    bencher.bench_local(|| {
+        on = !on;
+        let filter = if on { active } else { default };
+        let op = Op::SetAttackFilter {
+            filter,
+            provenance: Provenance::default(),
+        };
+        black_box(f.project.apply_cached(op, &mut f.cache).expect("applies"));
+    });
+}
+
+#[divan::bench(sample_count = 50)]
+fn rating_edit_with_default_filter(bencher: Bencher) {
+    let mut f = fixture();
+    let m = Arc::clone(f.project.methodology());
+    let factor = m.feasibility_factors().next().expect("factor");
+    let levels: Vec<_> = m.factor_levels(factor).collect();
+    let (tree, node) = f.free_step;
+    let mut turn = 0;
+    bencher.bench_local(|| {
+        turn ^= 1;
+        let op = Op::SetStepFactor {
+            tree,
+            node,
+            factor,
             level: Some(levels[turn]),
             provenance: Provenance::default(),
         };

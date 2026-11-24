@@ -411,3 +411,41 @@ fn assumption_edits_name_action_and_target() {
         Some(Selection::Assumption(as_id))
     );
 }
+
+#[test]
+fn attacker_profile_undo_labels() {
+    use aegis_model::{AttackFilter, ScalabilityFilter};
+
+    let mut ws = workspace();
+    let m = ws.project().methodology().clone();
+    let f0 = m.feasibility_factors().next().expect("factor");
+    let l0 = m.factor_levels(f0).next().expect("level");
+
+    let custom = AttackFilter::default()
+        .without(f0, l0)
+        .with_scalability(ScalabilityFilter::ScaledOnly);
+    apply(&mut ws, &Edit::SetAttackFilter { filter: custom });
+    let change_lbl = ws.undo_label().expect("change label").clone();
+    assert_eq!(change_lbl.imperative(), "change attacker profile");
+    assert_eq!(change_lbl.past(), "Attacker profile changed");
+
+    apply(
+        &mut ws,
+        &Edit::SetAttackFilter {
+            filter: AttackFilter::default(),
+        },
+    );
+    let reset_lbl = ws.undo_label().expect("reset label").clone();
+    assert_eq!(reset_lbl.imperative(), "reset attacker profile");
+    assert_eq!(reset_lbl.past(), "Attacker profile reset");
+
+    ws.undo().expect("undo reset");
+    assert_eq!(
+        ws.redo_label().expect("redo reset").imperative(),
+        "reset attacker profile"
+    );
+    assert_eq!(
+        ws.undo_label().expect("undo change").imperative(),
+        "change attacker profile"
+    );
+}

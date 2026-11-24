@@ -462,11 +462,13 @@ fn asset_out(p: &Project, id: AssetId) -> bool {
 }
 
 fn threat_out(p: &Project, id: ThreatId) -> bool {
-    let asset = p
+    let info = p
         .threat_scenarios()
         .find(|(_, t, _)| *t == id)
-        .and_then(|(_, _, t)| p.asset_id(t.asset()));
-    own_off(p, ElementRef::Threat(id)) || asset.is_some_and(|a| asset_out(p, a))
+        .map(|(_, _, t)| (p.asset_id(t.asset()), t.scales()));
+    let asset = info.and_then(|(a, _)| a);
+    let scales_out = info.is_some_and(|(_, s)| !p.attack_filter().allows_scalability(s));
+    own_off(p, ElementRef::Threat(id)) || scales_out || asset.is_some_and(|a| asset_out(p, a))
 }
 
 fn step_out(p: &Project, t: TreeIdx, tid: TreeId, n: NodeIdx, nid: NodeId) -> bool {
@@ -478,7 +480,10 @@ fn step_out(p: &Project, t: TreeIdx, tid: TreeId, n: NodeIdx, nid: NodeId) -> bo
         ItemRef::Component(c) => comp_out(p, c),
         ItemRef::Interface(i) => iface_out(p, i),
     });
-    own || via
+    let profile = p.attack_filter().has_excluded_levels()
+        && p.step_factors(t, n)
+            .any(|(f, l)| p.attack_filter().is_excluded(f, l));
+    own || via || profile
 }
 
 /// Naive recursion over gates; `true` means excluded.

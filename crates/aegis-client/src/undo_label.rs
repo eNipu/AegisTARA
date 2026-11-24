@@ -116,6 +116,7 @@ impl Label {
             "unapply" => "unapplied",
             "unlink" => "unlinked",
             "rate" => "rated",
+            "reset" => "reset",
             _ => "changed",
         };
         if self.count > 0 {
@@ -557,6 +558,15 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::SetDescriptionTranslation { target, .. } => {
             ("change", "description translation of", name_of(p, target))
         }
+        Op::SetAttackFilter { filter, .. } => (
+            if filter.is_default() {
+                "reset"
+            } else {
+                "change"
+            },
+            "attacker profile",
+            None,
+        ),
         _ => ("change", "project", None),
     }
 }

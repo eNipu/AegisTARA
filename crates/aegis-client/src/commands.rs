@@ -896,6 +896,12 @@ pub enum Edit {
         linked: bool,
     },
 
+    /// Sets the project-wide attacker profile filter.
+    SetAttackFilter {
+        /// The new attacker profile filter.
+        filter: aegis_model::AttackFilter,
+    },
+
     // ---- duplication (UI-09.2, UI-09.4) ----
     /// Duplicates an element, cloning its own scalar fields with a fresh id
     /// and the name with the given suffix after it ("copy" in English). Cross-links (members, damages, controls,
@@ -2280,6 +2286,10 @@ impl Edit {
                 reason: reason.trim().into(),
                 provenance: p,
             }],
+            Edit::SetAttackFilter { filter } => vec![Op::SetAttackFilter {
+                filter: *filter,
+                provenance: p,
+            }],
             Edit::RemoveThreat { threat } => {
                 let t = project
                     .threat_scenario_idx(threat)
@@ -3440,6 +3450,7 @@ impl Edit {
                 .zip(project.assumption_idx(assumption))
                 .is_some_and(|(c, a_idx)| c.assumptions().contains(&a_idx) == *linked),
             Edit::RemoveAssumption { assumption } => project.assumption_idx(assumption).is_none(),
+            Edit::SetAttackFilter { filter } => project.attack_filter() == filter,
             _ => false,
         }
     }

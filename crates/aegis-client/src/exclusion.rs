@@ -123,6 +123,13 @@ pub fn reasons_text(project: &Project, reasons: &[Reason]) -> String {
                     format!("Via {who} is excluded")
                 }
             }
+            Reason::OutsideProfile { factor, level } => {
+                let m = project.methodology();
+                let f = m.feasibility_factor_label(factor).unwrap_or("factor");
+                let l = m.factor_level_label(factor, level).unwrap_or("level");
+                format!("Outside attacker profile: {f} = {l}")
+            }
+            Reason::Scalability => "Scalability filter excludes this threat".to_owned(),
             Reason::AllPathsExcluded => "Every attack path is excluded".to_owned(),
             _ => "Excluded".to_owned(),
         })
@@ -145,6 +152,7 @@ pub enum RiskState {
 enum SwitchTarget {
     Condition(ConditionId),
     Assumption(AssumptionId),
+    AttackFilter,
 }
 
 /// Pre-edit snapshot for a condition or assumption switch, used to build the post-edit undo toast.
@@ -209,6 +217,13 @@ fn switch_lead(p: &Project, target: SwitchTarget) -> String {
             }
             None => "Assumption switched".to_owned(),
         },
+        SwitchTarget::AttackFilter => {
+            if p.attack_filter().is_default() {
+                "Attacker profile reset to default".to_owned()
+            } else {
+                "Attacker profile updated".to_owned()
+            }
+        }
     }
 }
 
@@ -219,6 +234,7 @@ impl ConditionSnapshot {
         let target = ops.iter().find_map(|op| match op {
             Op::SetConditionPresent { id, .. } => Some(SwitchTarget::Condition(*id)),
             Op::SetAssumptionHolds { id, .. } => Some(SwitchTarget::Assumption(*id)),
+            Op::SetAttackFilter { .. } => Some(SwitchTarget::AttackFilter),
             _ => None,
         })?;
         let project = ws.project();
