@@ -378,7 +378,7 @@ fn risk_register_sheet(ws: &Workspace, sys: &Rows<'_>) -> Sheet {
     let p = ws.project();
     let has_conditions = p.conditions().next().is_some();
     let has_assumptions = p.assumptions().next().is_some();
-    let has_applicability = has_conditions || has_assumptions;
+    let has_applicability = has_conditions || has_assumptions || !p.attack_filter().is_default();
     let app = has_applicability.then(|| p.applicability());
     let names = p.methodology().element_names();
     let mut header = vec![
@@ -462,7 +462,7 @@ pub fn report_workbook_xlsx_in(
     let p = ws.project();
     let has_conditions = p.conditions().next().is_some();
     let has_assumptions = p.assumptions().next().is_some();
-    let has_applicability = has_conditions || has_assumptions;
+    let has_applicability = has_conditions || has_assumptions || !p.attack_filter().is_default();
     let app = has_applicability.then(|| p.applicability());
     let sys = Rows::new(p, view);
     let names = p.methodology().element_names();
@@ -1021,6 +1021,17 @@ pub fn report_workbook_xlsx_in(
         }
         sheets.push(Sheet {
             name: catalog.tr("assumptions"),
+            rows,
+        });
+    }
+    if !p.attack_filter().is_default() {
+        let catalog = crate::i18n::Catalog::load(crate::i18n::Language::En);
+        let (headers, body) = super::doc::attacker_profile_table(p, &catalog);
+        let mut rows = Vec::with_capacity(1 + body.len());
+        rows.push(headers);
+        rows.extend(body);
+        sheets.push(Sheet {
+            name: catalog.tr("report-attacker-profile"),
             rows,
         });
     }

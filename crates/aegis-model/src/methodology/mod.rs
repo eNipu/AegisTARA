@@ -3907,6 +3907,38 @@ impl Methodology {
         }
     }
 
+    /// Checks that every excluded factor and level in `filter` belongs to
+    /// this methodology. Time O(F * L).
+    pub(crate) fn check_attack_filter(
+        &self,
+        filter: &crate::applicability::AttackFilter,
+    ) -> Result<(), ModelError> {
+        for fi in 0..MAX_FEASIBILITY_FACTORS {
+            let mask = filter.excluded_mask(fi);
+            if mask == 0 {
+                continue;
+            }
+            let Ok(fi_u8) = u8::try_from(fi) else {
+                continue;
+            };
+            let factor = FeasibilityFactor(fi_u8);
+            self.check_feasibility_factor(factor)?;
+            for li in 0..MAX_LEVELS {
+                let bit = u32::try_from(li)
+                    .ok()
+                    .and_then(|s| 1u16.checked_shl(s))
+                    .unwrap_or(0);
+                if (mask & bit) != 0 {
+                    let Ok(li_u8) = u8::try_from(li) else {
+                        continue;
+                    };
+                    self.check_factor_level(factor, FactorLevel(li_u8))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn category_data(&self, cat: ImpactCategory) -> Option<&CategoryData> {
         self.impact_categories.get(cat.index())
     }

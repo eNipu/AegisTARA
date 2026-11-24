@@ -28,14 +28,15 @@ global Pages {
     out property <int> assets: 6;
     out property <int> threats: 7;
     out property <int> trees: 8;
-    out property <int> risks: 9;
-    out property <int> controls: 10;
-    out property <int> goals: 11;
-    out property <int> reports: 12;
-    out property <int> problems: 13;
-    out property <int> versions: 14;
-    out property <int> history: 15;
-    out property <int> admin: 16;
+    out property <int> attacker-profile: 9;
+    out property <int> risks: 10;
+    out property <int> controls: 11;
+    out property <int> goals: 12;
+    out property <int> reports: 13;
+    out property <int> problems: 14;
+    out property <int> versions: 15;
+    out property <int> history: 16;
+    out property <int> admin: 17;
 }
 
 // One sidebar entry: its page is its position; `group` is its position in
@@ -516,6 +517,7 @@ in property <string> redo-label;
     default-font-size: Theme.font-body;
     // One entry per page: a count shown in the sidebar, or empty.
     in property <[string]> nav-counts;
+    in property <[bool]> nav-dots;
     // Sidebar groups (UI-13): open or closed, and the number of elements on
     // a phase group's pages, shown while it is closed.
     in property <[bool]> nav-group-open: [true, true, true, true, true, true, true];
@@ -535,6 +537,7 @@ in property <string> redo-label;
         { label: @tr("Assets"), icon: @image-url("icons/box.svg"), group: 2 },
         { label: @tr("Threat scenarios"), icon: @image-url("icons/swords.svg"), group: 2 },
         { label: @tr("Attack trees"), icon: @image-url("icons/network.svg"), group: 3 },
+        { label: @tr("Attacker profile"), icon: @image-url("icons/user-cog.svg"), group: 3 },
         { label: @tr("Risks and treatment"), icon: @image-url("icons/gauge.svg"), group: 4 },
         { label: @tr("Security controls"), icon: @image-url("icons/shield-check.svg"), group: 4 },
         { label: @tr("Goals and claims"), icon: @image-url("icons/target.svg"), group: 4 },
@@ -1889,6 +1892,13 @@ callback set-threat-scaling-reason(string);
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                     overflow: elide;
+                                }
+                                if root.nav-dots[i]: Rectangle {
+                                    width: 6px;
+                                    height: 6px;
+                                    border-radius: 3px;
+                                    background: Theme.accent;
+                                    y: 15px;
                                 }
                                 Text {
                                     text: root.nav-counts[i];

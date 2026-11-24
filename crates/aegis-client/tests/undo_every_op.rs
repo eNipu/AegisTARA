@@ -1194,3 +1194,58 @@ fn assumption_edits_removals_and_tree_moves_undo_exactly() {
     ws.undo().expect("undo BranchStepToGate");
     assert!(*ws.project() == before, "BranchStepToGate undo mismatch");
 }
+
+#[test]
+fn set_attack_filter_op_and_edit_undo_redo() {
+    use aegis_client::commands::Edit;
+    use aegis_model::{AttackFilter, ScalabilityFilter};
+
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let f0 = m.feasibility_factors().next().expect("factor");
+    let l0 = m.factor_levels(f0).next().expect("level");
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let initial = ws.project().clone();
+
+    let non_default = AttackFilter::default()
+        .without(f0, l0)
+        .with_scalability(ScalabilityFilter::ScaledOnly);
+
+    // Raw Op::SetAttackFilter (change + reset).
+    for filter in [non_default, AttackFilter::default()] {
+        let before = ws.project().clone();
+        ws.apply(
+            vec![Op::SetAttackFilter {
+                filter,
+                provenance: who(),
+            }],
+            Origin::Edit,
+        )
+        .expect("apply op");
+        let after = ws.project().clone();
+        ws.undo().expect("undo op");
+        assert!(*ws.project() == before);
+        ws.redo().expect("redo op");
+        assert!(*ws.project() == after);
+    }
+    assert!(*ws.project() == initial);
+
+    // Edit::SetAttackFilter (change + reset).
+    for edit in [
+        Edit::SetAttackFilter {
+            filter: non_default,
+        },
+        Edit::SetAttackFilter {
+            filter: AttackFilter::default(),
+        },
+    ] {
+        let before = ws.project().clone();
+        let ops = edit.to_ops(ws.project(), "alice", 1).expect("to_ops");
+        ws.apply(ops, Origin::Edit).expect("apply edit");
+        let after = ws.project().clone();
+        ws.undo().expect("undo edit");
+        assert!(*ws.project() == before);
+        ws.redo().expect("redo edit");
+        assert!(*ws.project() == after);
+    }
+    assert!(*ws.project() == initial);
+}

@@ -6,10 +6,10 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::wire::{
-    self, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, GateKindWire, HeaderView, HeaderWire,
-    Ids, ImpactsInOrder, ItemView, KeyOrder, MethodologyView, NodesView, OpWire, PropertyKeys,
-    ProvenanceView, RecordWire, Required, RiskTreatmentWire, StepFeasibilityInOrder, TargetView,
-    Text,
+    self, AttackFilterView, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, GateKindWire,
+    HeaderView, HeaderWire, Ids, ImpactsInOrder, ItemView, KeyOrder, MethodologyView, NodesView,
+    OpWire, PropertyKeys, ProvenanceView, RecordWire, Required, RiskTreatmentWire,
+    StepFeasibilityInOrder, TargetView, Text,
 };
 use super::{
     Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES, MAX_NAME_BYTES,
@@ -129,6 +129,11 @@ enum OpView<'a> {
     },
     SetProjectLanguages {
         langs: Vec<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    SetAttackFilter {
+        filter: AttackFilterView<'a>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
@@ -846,6 +851,7 @@ fn within_caps(op: &Op) -> bool {
         Op::SetAssumptionExcludes { trees, steps, .. } => {
             trees.len().saturating_add(steps.len()) <= MAX_ASSUMPTION_EXCLUDES
         }
+        Op::SetAttackFilter { provenance, .. } => provenance.actor().len() <= MAX_ACTOR_BYTES,
         _ => true,
     }
 }
@@ -964,6 +970,14 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         },
         Op::SetProjectLanguages { langs, provenance } => OpView::SetProjectLanguages {
             langs: langs.iter().map(|l| &**l).collect(),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetAttackFilter { filter, provenance } => OpView::SetAttackFilter {
+            filter: AttackFilterView {
+                m,
+                order,
+                filter: *filter,
+            },
             provenance: ProvenanceView::of(provenance),
         },
         Op::AddAsset {
@@ -1959,6 +1973,10 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         },
         OpWire::SetProjectLanguages { langs, provenance } => Op::SetProjectLanguages {
             langs: langs.into_iter().map(|l| l.0).collect(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetAttackFilter { filter, provenance } => Op::SetAttackFilter {
+            filter: filter.0,
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::AddAsset {

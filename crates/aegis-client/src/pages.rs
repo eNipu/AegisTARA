@@ -3308,6 +3308,7 @@ pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize)
         Page::Assets => p.asset_count(),
         Page::Threats | Page::Risks => p.threat_scenario_count(),
         Page::Trees => p.attack_tree_count(),
+        Page::AttackerProfile => 0,
         Page::Controls => p.security_control_count(),
         Page::Goals => p.cybersecurity_goal_count() + p.cybersecurity_claim_count(),
         Page::Reports => 0,
@@ -3786,6 +3787,9 @@ pub fn comparison_in(
             ),
             show,
         );
+    }
+    if diff.attack_filter_changed() {
+        push("Changed", "Attacker profile changed".to_owned(), true);
     }
     let count = |k: &str| lines.iter().filter(|l| l.kind == k).count();
     let mut summary = match (lines.is_empty(), hidden) {

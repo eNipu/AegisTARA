@@ -1579,3 +1579,6 @@ msgstr "構成"
 
 msgid "Assumptions"
 msgstr "前提条件"
+
+msgid "Attacker profile"
+msgstr "攻撃者プロファイル"

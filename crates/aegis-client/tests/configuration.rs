@@ -297,7 +297,13 @@ fn condition_edits_apply_undo_and_validate() {
 #[test]
 fn configuration_page_metadata_and_selection() {
     let fx = fixture();
-    assert_eq!(Page::ALL.len(), 17);
+    assert_eq!(Page::ALL.len(), 18);
+    assert_eq!(Page::ALL[9], Page::AttackerProfile);
+    assert_eq!(Page::AttackerProfile.group(), Some(PageGroup::Feasibility));
+    assert_eq!(Page::AttackerProfile.key(), "attacker-profile");
+    assert_eq!(Page::AttackerProfile.label(), "Attacker profile");
+    assert!(Page::AttackerProfile.tables().is_empty());
+    assert_eq!(Page::AttackerProfile.layout(), PageLayout::Custom);
     assert_eq!(Page::Configuration.group(), Some(PageGroup::ItemDefinition));
     assert_eq!(Page::Configuration.key(), "configuration");
     assert_eq!(Page::Configuration.label(), "Configuration");

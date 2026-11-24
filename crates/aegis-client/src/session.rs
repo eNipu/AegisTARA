@@ -3538,6 +3538,7 @@ impl<P: CredentialProvider> Actor<P> {
                 history: open.history.clone(),
                 last_export: open.last_export.clone(),
                 nav_counts: nav_counts(open),
+                nav_dots: nav_dots(open),
                 problem_counts: open.cached_lint_count.unwrap_or_default(),
                 saved_ms: open.saved_ms,
                 find,
@@ -3709,6 +3710,10 @@ fn page_data(open: &Open) -> PageData {
             let catalog = crate::i18n::Catalog::load(crate::i18n::Language::En);
             d.assumptions = Some(crate::assumptions::assumptions_view(ws, ui, &catalog));
         }
+        Page::AttackerProfile => {
+            let catalog = crate::i18n::Catalog::load(crate::i18n::Language::En);
+            d.attacker_profile = Some(crate::attacker_profile::attacker_profile_view(ws, &catalog));
+        }
         Page::Problems => d.problems = pages::problems(ws),
         Page::Versions
         | Page::History
@@ -3813,13 +3818,27 @@ fn nav_counts(open: &Open) -> Vec<Option<usize>> {
         .map(|&page| {
             let n = pages::page_count(p, page, open.baselines.len(), lint);
             match page {
-                Page::Overview | Page::Scope | Page::Reports | Page::History | Page::Admin => None,
+                Page::Overview
+                | Page::Scope
+                | Page::AttackerProfile
+                | Page::Reports
+                | Page::History
+                | Page::Admin => None,
                 Page::Item | Page::Configuration | Page::Assumptions | Page::Versions => {
                     Some(n).filter(|n| *n > 0)
                 }
                 _ => Some(n),
             }
         })
+        .collect()
+}
+
+/// The sidebar accent dots, in `Page::ALL` order. Time O(1).
+fn nav_dots(open: &Open) -> Vec<bool> {
+    let non_default = !open.ws.project().attack_filter().is_default();
+    Page::ALL
+        .iter()
+        .map(|&page| page == Page::AttackerProfile && non_default)
         .collect()
 }
 

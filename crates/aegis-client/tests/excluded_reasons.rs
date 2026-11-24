@@ -11,8 +11,9 @@ use aegis_client::table::{selection_exclusion, table_rows};
 use aegis_client::view::{Selection, TableId};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AttackTree, ComponentId, ConditionId, DamageId, ElementRef, GateKind, InterfaceId,
-    ItemRef, Methodology, Node, NodeId, Op, Provenance, Reason, ThreatId, TreeId,
+    AssetId, AttackFilter, AttackTree, ComponentId, ConditionId, DamageId, ElementRef, GateKind,
+    InterfaceId, ItemRef, Methodology, Node, NodeId, Op, Provenance, Reason, ScalabilityFilter,
+    ThreatId, TreeId,
 };
 
 fn prov() -> Provenance {
@@ -276,5 +277,188 @@ fn exclusion_reasons_match_expected_phrases_and_agree_across_table_and_inspector
             row.excluded_reason, view.excluded_reason,
             "table and inspector must show the exact same exclusion text for {sel:?}"
         );
+    }
+}
+
+#[test]
+fn outside_profile_and_scalability_reasons_and_fluent_keys() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("methodology"));
+    let safety = m
+        .impact_category("safety")
+        .or_else(|| m.impact_category("safety-health"))
+        .expect("safety");
+    let severe = m.level(safety, "severe").expect("severe");
+    let spoofing = m.threat_category("spoofing").expect("spoofing");
+    let factor = m.feasibility_factor("equipment").expect("equipment");
+    let level = m.factor_level(factor, "bespoke").expect("bespoke");
+    let f_label = m.feasibility_factor_label(factor).expect("f_label");
+    let l_label = m.factor_level_label(factor, level).expect("l_label");
+
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let asset = AssetId::new_v7();
+    let dmg = DamageId::new_v7();
+    let t_unscaled = ThreatId::new_v7();
+    let t_kept = ThreatId::new_v7();
+    let tr_owned = TreeId::new_v7();
+    let tr_steps = TreeId::new_v7();
+    let (r1, s1) = (NodeId::new_v7(), NodeId::new_v7());
+    let (r2, s2, s3) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+
+    let mut tree1 = AttackTree::new(r1, Node::gate(GateKind::Or, "R1")).expect("r1");
+    tree1
+        .add_child(tree1.root(), s1, Node::step("S1"))
+        .expect("s1");
+    let mut tree2 = AttackTree::new(r2, Node::gate(GateKind::Or, "R2")).expect("r2");
+    tree2
+        .add_child(tree2.root(), s2, Node::step("S2"))
+        .expect("s2");
+    tree2
+        .add_child(tree2.root(), s3, Node::step("S3"))
+        .expect("s3");
+
+    ws.apply(
+        vec![
+            Op::AddAsset {
+                id: asset,
+                name: "ECU".into(),
+                properties: m.all_properties(),
+                provenance: prov(),
+            },
+            Op::AddDamageScenario {
+                id: dmg,
+                name: "Crash".into(),
+                impacts: vec![(safety, severe)],
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tr_owned,
+                tree: tree1,
+                step_feasibility: vec![],
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tr_steps,
+                tree: tree2,
+                step_feasibility: vec![],
+                provenance: prov(),
+            },
+            Op::SetStepFactor {
+                tree: tr_steps,
+                node: s2,
+                factor,
+                level: Some(level),
+                provenance: prov(),
+            },
+            Op::AddThreatScenario {
+                id: t_unscaled,
+                name: "Physical bypass".into(),
+                asset,
+                category: spoofing,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t_unscaled,
+                tree: Some(tr_owned),
+                provenance: prov(),
+            },
+            Op::SetThreatScaling {
+                threat: t_unscaled,
+                scales: Some(false),
+                reason: "per car".into(),
+                provenance: prov(),
+            },
+            Op::AddThreatScenario {
+                id: t_kept,
+                name: "Remote spoof".into(),
+                asset,
+                category: spoofing,
+                catalog_refs: vec![],
+                damages: vec![dmg],
+                provenance: prov(),
+            },
+            Op::SetThreatAttackTree {
+                threat: t_kept,
+                tree: Some(tr_steps),
+                provenance: prov(),
+            },
+            Op::SetAttackFilter {
+                filter: AttackFilter::default()
+                    .without(factor, level)
+                    .with_scalability(ScalabilityFilter::ScaledOnly),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+
+    let project = ws.project();
+    assert_eq!(
+        reasons_text(project, &[Reason::OutsideProfile { factor, level }]),
+        format!("Outside attacker profile: {f_label} = {l_label}")
+    );
+    assert_eq!(
+        reasons_text(project, &[Reason::Scalability]),
+        "Scalability filter excludes this threat"
+    );
+
+    assert_eq!(
+        selection_exclusion(project, Selection::TreeNode(tr_steps, s2)),
+        (
+            true,
+            Some(format!("Outside attacker profile: {f_label} = {l_label}"))
+        )
+    );
+    assert_eq!(
+        selection_exclusion(project, Selection::TreeNode(tr_steps, s3)),
+        (false, None)
+    );
+    assert_eq!(
+        selection_exclusion(project, Selection::Threat(t_unscaled)),
+        (
+            true,
+            Some("Scalability filter excludes this threat".to_owned())
+        )
+    );
+
+    let catalog = Catalog::load(Language::En);
+    let vocab = pages::vocabulary(project.methodology());
+    for table_id in [TableId::Threats, TableId::Risks] {
+        let rows = table_rows(&ws, table_id, &vocab, &catalog);
+        let row = rows
+            .iter()
+            .find(|r| r.target == Some(Selection::Threat(t_unscaled)))
+            .expect("row");
+        let view = inspector_view(&ws, Selection::Threat(t_unscaled), &catalog).expect("view");
+        assert!(row.excluded);
+        assert_eq!(
+            row.excluded_reason.as_deref(),
+            Some("Scalability filter excludes this threat")
+        );
+        assert_eq!(row.excluded_reason, view.excluded_reason);
+    }
+
+    for lang in [Language::En, Language::Ja, Language::Pseudo] {
+        let cat = Catalog::load(lang);
+        for key in [
+            "attacker-profile-scalability-any",
+            "attacker-profile-scalability-scaled",
+            "attacker-profile-scalability-unscaled",
+            "attacker-profile-explainer-none",
+        ] {
+            let val = cat.tr(key);
+            assert!(
+                !val.starts_with('['),
+                "missing key {key} in {lang:?}: {val}"
+            );
+        }
+        let with_n = cat.tr_with("attacker-profile-explainer", &[("n", "3")]);
+        assert!(
+            !with_n.starts_with('[') && with_n.contains('3'),
+            "bad explainer in {lang:?}: {with_n}"
+        );
+        assert!(!with_n.contains('\u{2068}') && !with_n.contains('\u{2069}'));
     }
 }

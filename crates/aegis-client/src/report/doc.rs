@@ -384,6 +384,111 @@ pub(crate) fn methodology_line_lang(project: &Project, lang: &str) -> String {
     )
 }
 
+fn scalability_key(scalability: aegis_model::ScalabilityFilter) -> &'static str {
+    match scalability {
+        aegis_model::ScalabilityFilter::Any => "attacker-profile-scalability-any",
+        aegis_model::ScalabilityFilter::ScaledOnly => "attacker-profile-scalability-scaled",
+        aegis_model::ScalabilityFilter::UnscaledOnly => "attacker-profile-scalability-unscaled",
+    }
+}
+
+fn attacker_profile_cover_summary(p: &Project, catalog: &Catalog) -> String {
+    let m = p.methodology();
+    let lang = catalog.language().code();
+    let filter = p.attack_filter();
+    let mut parts = Vec::new();
+    let mut factor_parts = Vec::new();
+    for factor in m.feasibility_factors() {
+        let excluded: Vec<String> = m
+            .factor_levels(factor)
+            .filter(|&level| !filter.allows(factor, level))
+            .map(|level| {
+                m.factor_level_label_for_lang(factor, level, lang)
+                    .or_else(|| m.factor_level_key(factor, level))
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
+        if !excluded.is_empty() {
+            let f_label = m
+                .feasibility_factor_label_for_lang(factor, lang)
+                .or_else(|| m.feasibility_factor_key(factor))
+                .unwrap_or_default();
+            factor_parts.push(format!("{f_label}: {}", excluded.join(", ")));
+        }
+    }
+    if !factor_parts.is_empty() {
+        parts.push(format!(
+            "{}: {}",
+            catalog.tr("report-attacker-profile-excluded"),
+            factor_parts.join("; ")
+        ));
+    }
+    if filter.scalability().is_active() {
+        parts.push(format!(
+            "{}: {}",
+            catalog.tr("report-attacker-profile-scalability"),
+            catalog.tr(scalability_key(filter.scalability()))
+        ));
+    }
+    parts.join("; ")
+}
+
+pub(crate) fn attacker_profile_table(
+    p: &Project,
+    catalog: &Catalog,
+) -> (Vec<String>, Vec<Vec<String>>) {
+    let m = p.methodology();
+    let lang = catalog.language().code();
+    let filter = p.attack_filter();
+    let headers = vec![
+        catalog.tr("report-attacker-profile-factor"),
+        catalog.tr("report-attacker-profile-allowed"),
+        catalog.tr("report-attacker-profile-excluded"),
+    ];
+    let mut rows = Vec::new();
+    for factor in m.feasibility_factors() {
+        let f_label = m
+            .feasibility_factor_label_for_lang(factor, lang)
+            .or_else(|| m.feasibility_factor_key(factor))
+            .unwrap_or_default()
+            .to_owned();
+        let mut allowed = Vec::new();
+        let mut excluded = Vec::new();
+        for level in m.factor_levels(factor) {
+            let label = m
+                .factor_level_label_for_lang(factor, level, lang)
+                .or_else(|| m.factor_level_key(factor, level))
+                .unwrap_or_default()
+                .to_owned();
+            if filter.allows(factor, level) {
+                allowed.push(label);
+            } else {
+                excluded.push(label);
+            }
+        }
+        let allowed_cell = if excluded.is_empty() {
+            catalog.tr("report-attacker-profile-all-allowed")
+        } else if allowed.is_empty() {
+            catalog.tr("report-attacker-profile-none-excluded")
+        } else {
+            allowed.join(", ")
+        };
+        let excluded_cell = if excluded.is_empty() {
+            catalog.tr("report-attacker-profile-none-excluded")
+        } else {
+            excluded.join(", ")
+        };
+        rows.push(vec![f_label, allowed_cell, excluded_cell]);
+    }
+    rows.push(vec![
+        catalog.tr("report-attacker-profile-scalability"),
+        catalog.tr(scalability_key(filter.scalability())),
+        String::new(),
+    ]);
+    (headers, rows)
+}
+
 fn push_target_figures(b: &mut Vec<Block>, figures: &[FigureAttachment], target: ElementRef) {
     for f in figures {
         if f.data.is_empty() {
@@ -611,6 +716,12 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                         ("total", &total.to_string()),
                     ],
                 ),
+            ]);
+        }
+        if !project.attack_filter().is_default() {
+            cover.push(vec![
+                catalog.tr("report-attacker-profile"),
+                attacker_profile_cover_summary(project, &catalog),
             ]);
         }
         b.push(table(&[catalog.tr("field"), catalog.tr("value")], cover));
@@ -1378,6 +1489,34 @@ fn build(ws: &Workspace, ctx: &ReportContext, opts: &ReportOptions, lang: Langua
                 &section_descriptions(ws, Described::Assumptions, lang),
                 &catalog,
             );
+        }
+    }
+
+    // ---- method and attacker profile (137c) ----
+    if !project.attack_filter().is_default() {
+        b.push(Heading(2, catalog.tr("section-method")));
+        b.push(Paragraph(
+            methodology_line_lang(project, lang.code()),
+            Style::Normal,
+        ));
+        b.push(Heading(3, catalog.tr("report-attacker-profile")));
+        let (headers, rows) = attacker_profile_table(project, &catalog);
+        b.push(table(&headers, rows));
+        if !has_conditions && !has_assumptions {
+            let excluded = crate::exclusion::excluded_entries(project);
+            if !excluded.is_empty() {
+                b.push(Heading(3, catalog.tr("report-excluded")));
+                b.push(table(
+                    &[
+                        catalog.tr("report-excluded-item"),
+                        catalog.tr("report-excluded-reason"),
+                    ],
+                    excluded
+                        .into_iter()
+                        .map(|(item, reason)| vec![item, reason])
+                        .collect(),
+                ));
+            }
         }
     }
 

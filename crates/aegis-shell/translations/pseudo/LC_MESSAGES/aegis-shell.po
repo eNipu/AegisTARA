@@ -1579,3 +1579,6 @@ msgstr "⟦Cónfígúrátíón␣␣⟧"
 
 msgid "Assumptions"
 msgstr "⟦Âssûmptîôns␣⟧"
+
+msgid "Attacker profile"
+msgstr "⟦Âttâckér prôfîlé␣⟧"

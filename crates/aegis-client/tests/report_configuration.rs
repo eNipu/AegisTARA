@@ -355,14 +355,21 @@ fn no_conditions_omits_configuration_and_excluded_columns() {
     let cover = cover_rows(&doc);
     assert!(!cover.iter().any(|r| r[0] == "Configuration"));
     assert!(!cover.iter().any(|r| r[0] == "Absent conditions"));
+    assert!(!cover.iter().any(|r| r[0] == "Attacker profile"));
     assert!(
         !doc.blocks
             .iter()
             .any(|b| matches!(b, Block::Heading(2, t) if t == "Configuration and assumptions"))
     );
+    assert!(
+        !doc.blocks
+            .iter()
+            .any(|b| matches!(b, Block::Heading(2, t) if t == "Method"))
+    );
 
     let book = read_workbook(&report_workbook_xlsx(&ws)).expect("reads workbook");
     assert!(!book.sheets.iter().any(|s| s.name == "Conditions"));
+    assert!(!book.sheets.iter().any(|s| s.name == "Attacker profile"));
     for name in [
         "Risk register",
         "Assets",

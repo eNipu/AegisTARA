@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize, Serializer};
 use super::MAX_PROJECT_FILE_BYTES;
 use super::op_log::{AttrView, LinkView};
 use super::wire::{
-    self, CappedReader, CatalogRefsByKey, ControlRulesByKey, ControlTargetsByItem, FORMAT_VERSION,
-    ImpactsByKey, KeyOrder, MethodologyView, NodesView, PropertyKeys, ProvenanceView, Required,
-    RiskTreatmentWire, SnapshotWire, StepAttackTypeByNode, StepFactorsByNode,
-    StepFeasibilityByNode, StepMitigationsByNode, StepViaByNode, TargetView, Text, VisualDisplay,
+    self, AttackFilterView, CappedReader, CatalogRefsByKey, ControlRulesByKey,
+    ControlTargetsByItem, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView, NodesView,
+    PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire, StepAttackTypeByNode,
+    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, StepViaByNode, TargetView,
+    Text, VisualDisplay,
 };
 use crate::applicability::{MAX_ASSUMPTION_EXCLUDES, StepRef};
 use crate::element::{AttrValue, ElementKind};
@@ -57,6 +58,8 @@ struct SnapshotView<'a> {
     review_marks: ReviewMarks<'a>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     languages: Vec<&'a str>,
+    #[serde(skip_serializing_if = "AttackFilterView::is_default")]
+    attack_filter: AttackFilterView<'a>,
     #[serde(skip_serializing_if = "Elements::is_empty")]
     elements: Elements<'a>,
     #[serde(skip_serializing_if = "Parties::is_empty")]
@@ -1165,6 +1168,11 @@ impl Project {
             descriptions: Descriptions(self),
             review_marks: ReviewMarks(self),
             languages: self.languages().iter().map(|l| &**l).collect(),
+            attack_filter: AttackFilterView {
+                m,
+                order: &order,
+                filter: *self.attack_filter(),
+            },
             elements: Elements(self),
             parties: Parties(self),
             conditions: Conditions(self),
@@ -1592,6 +1600,12 @@ impl Project {
             langs: snapshot.languages.into_iter().map(|l| l.0).collect(),
             provenance: crate::provenance::Provenance::default(),
         })?;
+        if !snapshot.attack_filter.0.is_default() {
+            project.apply(Op::SetAttackFilter {
+                filter: snapshot.attack_filter.0,
+                provenance: crate::provenance::Provenance::default(),
+            })?;
+        }
         // Conditions and their links: every element and step exists by now.
         // Links carry no provenance of their own, so replay uses the default.
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
