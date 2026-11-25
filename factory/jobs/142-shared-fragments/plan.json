@@ -1,0 +1,88 @@
+{
+  "job": "142-shared-fragments",
+  "slices": [
+    {
+      "id": "142a",
+      "title": "Immutable tree roles with TT visual IDs and persistence",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/*",
+        "crates/aegis-model/src/store/*",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-model/benches/*",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/library.rs",
+        "crates/aegis-client/src/sample.rs",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-server/tests/*",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test store --test workspace --test ops_properties"
+      ]
+    },
+    {
+      "id": "142b",
+      "title": "UseFragment and UnuseFragment with cycle, depth, role and removal guards",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/*",
+        "crates/aegis-model/src/store/*",
+        "crates/aegis-model/tests/*"
+      ],
+      "max_lines": 700,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties --test store --test workspace"
+      ]
+    },
+    {
+      "id": "142c",
+      "title": "Evaluate through fragments, explain-why and incremental cache",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/*",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-model/benches/*"
+      ],
+      "max_lines": 700,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties"
+      ]
+    },
+    {
+      "id": "142d",
+      "title": "Canvas badge, in-place expansion, Open fragment and fragments tab",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/*",
+        "crates/aegis-client/src/grid/*",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-canvas/src/*",
+        "crates/aegis-canvas/tests/*",
+        "crates/aegis-workbench/src/app/*",
+        "crates/aegis-workbench/tests/*",
+        "crates/aegis-shell/ui/app.slint",
+        "crates/aegis-shell/translations/*",
+        "crates/aegis-shell/tests/*"
+      ],
+      "max_lines": 700,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test shared_fragments --test undo_every_op"
+      ]
+    }
+  ]
+}
