@@ -140,6 +140,7 @@ pub(crate) fn reason_target(reason: Reason) -> Option<Selection> {
             ElementRef::DataFlow(id) => Some(Selection::DataFlow(id)),
             ElementRef::TrustBoundary(id) => Some(Selection::TrustBoundary(id)),
             ElementRef::Assumption(id) => Some(Selection::Assumption(id)),
+            ElementRef::SharedStep(_) => None,
             _ => None,
         },
         Reason::ViaExcluded(ItemRef::Component(cid)) => Some(Selection::Component(cid)),

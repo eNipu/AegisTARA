@@ -2546,32 +2546,48 @@ pub(super) enum OpWire {
         provenance: Option<ProvenanceWire>,
     },
     SetStepFeasibility {
-        tree: WireId<TreeId>,
-        node: WireId<NodeId>,
+        #[serde(default)]
+        tree: Option<WireId<TreeId>>,
+        #[serde(default)]
+        node: Option<WireId<NodeId>>,
+        #[serde(default)]
+        shared_step: Option<WireId<SharedStepId>>,
         #[serde(deserialize_with = "Option::deserialize")]
         level: Option<FeasibilityLevelKey>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
     SetStepVia {
-        tree: WireId<TreeId>,
-        node: WireId<NodeId>,
+        #[serde(default)]
+        tree: Option<WireId<TreeId>>,
+        #[serde(default)]
+        node: Option<WireId<NodeId>>,
+        #[serde(default)]
+        shared_step: Option<WireId<SharedStepId>>,
         #[serde(deserialize_with = "Option::deserialize")]
         via: Option<ItemWire>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
     SetStepAttackType {
-        tree: WireId<TreeId>,
-        node: WireId<NodeId>,
+        #[serde(default)]
+        tree: Option<WireId<TreeId>>,
+        #[serde(default)]
+        node: Option<WireId<NodeId>>,
+        #[serde(default)]
+        shared_step: Option<WireId<SharedStepId>>,
         #[serde(deserialize_with = "Option::deserialize")]
         attack_type: Option<AttackTypeKey>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
     SetStepFactor {
-        tree: WireId<TreeId>,
-        node: WireId<NodeId>,
+        #[serde(default)]
+        tree: Option<WireId<TreeId>>,
+        #[serde(default)]
+        node: Option<WireId<NodeId>>,
+        #[serde(default)]
+        shared_step: Option<WireId<SharedStepId>>,
         factor: FeasibilityFactorKey,
         #[serde(deserialize_with = "Option::deserialize")]
         level: Option<Key>,

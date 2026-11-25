@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use aegis_model::{
     AssetId, AttackTree, DamageId, GateKind, LintCode, Methodology, ModelError, Node, NodeId, Op,
-    OpCodec, OpLogReader, OpLogWriter, Project, Provenance, ThreatId, TreeId,
+    OpCodec, OpLogReader, OpLogWriter, Project, Provenance, StepTarget, ThreatId, TreeId,
 };
 
 struct Fx {
@@ -146,8 +146,7 @@ fn a_marked_step_and_a_tree_with_marks_cannot_be_removed() {
     // Clear the rating first, as for any step that has one.
     fx.project
         .apply(Op::SetStepFeasibility {
-            tree: fx.tree,
-            node: fx.step,
+            target: StepTarget::Step(fx.tree, fx.step),
             level: None,
             provenance: Provenance::default(),
         })

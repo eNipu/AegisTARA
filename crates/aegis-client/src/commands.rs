@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
     ElementId, ElementKind, GateKind, GoalId, InterfaceId, ItemRef, NodeId, Op, Project,
-    PropertySet, Provenance, RiskTreatment, StepRef, ThreatId, TreeId, TrustBoundaryId,
+    PropertySet, Provenance, RiskTreatment, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, ResolvedNote, parse_outline_annotated, resolve_notes};
@@ -1095,8 +1095,10 @@ pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) ->
         .steps_via(item)
         .filter_map(|(t_idx, n_idx)| {
             Some(Op::SetStepVia {
-                tree: project.attack_tree_id(t_idx)?,
-                node: project.attack_tree(t_idx)?.id_of(n_idx)?,
+                target: StepTarget::Step(
+                    project.attack_tree_id(t_idx)?,
+                    project.attack_tree(t_idx)?.id_of(n_idx)?,
+                ),
                 via: None,
                 provenance: p.clone(),
             })
@@ -1462,16 +1464,14 @@ fn note_ops(
         });
         if cur_via != *via {
             ops.push(Op::SetStepVia {
-                tree,
-                node: *node,
+                target: StepTarget::Step(tree, *node),
                 via: *via,
                 provenance: p.clone(),
             });
         }
         if cur_type != *attack_type {
             ops.push(Op::SetStepAttackType {
-                tree,
-                node: *node,
+                target: StepTarget::Step(tree, *node),
                 attack_type: *attack_type,
                 provenance: p.clone(),
             });
@@ -1589,14 +1589,12 @@ impl Edit {
                 provenance: p,
             }],
             Edit::SetStepFeasibility { tree, node, level } => vec![Op::SetStepFeasibility {
-                tree: *tree,
-                node: *node,
+                target: StepTarget::Step(*tree, *node),
                 level: feasibility(project, *level)?,
                 provenance: p,
             }],
             Edit::SetStepVia { tree, node, via } => vec![Op::SetStepVia {
-                tree: *tree,
-                node: *node,
+                target: StepTarget::Step(*tree, *node),
                 via: *via,
                 provenance: p,
             }],
@@ -1605,8 +1603,7 @@ impl Edit {
                 node,
                 attack_type,
             } => vec![Op::SetStepAttackType {
-                tree: *tree,
-                node: *node,
+                target: StepTarget::Step(*tree, *node),
                 attack_type: attack_type
                     .map(|i| m.attack_types().nth(i).ok_or(EditError::UnknownChoice))
                     .transpose()?,
@@ -1631,8 +1628,7 @@ impl Edit {
                     None => None,
                 };
                 vec![Op::SetStepFactor {
-                    tree: *tree,
-                    node: *node,
+                    target: StepTarget::Step(*tree, *node),
                     factor: f,
                     level,
                     provenance: p,

@@ -15,7 +15,9 @@ mod common;
 
 use std::sync::Arc;
 
-use aegis_model::{Methodology, MethodologyDef, ModelError, Op, Project, PropertySet, Provenance};
+use aegis_model::{
+    Methodology, MethodologyDef, ModelError, Op, Project, PropertySet, Provenance, StepTarget,
+};
 use common::{
     asset_id, builtin, cat, cref, damage_id, prop, props, scheme, second, second_def, threat_cat,
     threat_id,
@@ -244,8 +246,7 @@ fn second_methodology_rejects_foreign_indices() {
     rejects(
         &mut p,
         Op::SetStepFeasibility {
-            tree,
-            node: step,
+            target: StepTarget::Step(tree, step),
             level: Some(f5),
             provenance: Provenance::default(),
         },
@@ -257,8 +258,7 @@ fn second_methodology_rejects_foreign_indices() {
     rejects(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: step,
+            target: StepTarget::Step(tree, step),
             factor: factor4,
             level: None,
             provenance: Provenance::default(),
@@ -273,8 +273,7 @@ fn second_methodology_rejects_foreign_indices() {
     rejects(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: step,
+            target: StepTarget::Step(tree, step),
             factor: exp,
             level: Some(flvl3),
             provenance: Provenance::default(),
@@ -287,8 +286,7 @@ fn second_methodology_rejects_foreign_indices() {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: step,
+            target: StepTarget::Step(tree, step),
             factor: skill,
             level: Some(flvl3),
             provenance: Provenance::default(),

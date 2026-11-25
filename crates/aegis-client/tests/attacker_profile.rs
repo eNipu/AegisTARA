@@ -14,7 +14,7 @@ use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, AttackTree, DamageId, GateKind, Methodology, Node, NodeId, Op, Provenance,
-    ScalabilityFilter, ThreatId, TreeId,
+    ScalabilityFilter, StepTarget, ThreatId, TreeId,
 };
 
 fn prov() -> Provenance {
@@ -212,8 +212,7 @@ fn scalability_reset_eu_cra_excluded_counts_and_toast() {
                 provenance: prov(),
             },
             Op::SetStepFactor {
-                tree: tr2,
-                node: s2,
+                target: StepTarget::Step(tr2, s2),
                 factor,
                 level: Some(bespoke),
                 provenance: prov(),
@@ -381,8 +380,7 @@ fn active_profile_workspace() -> (
                 provenance: prov(),
             },
             Op::SetStepFactor {
-                tree: tree_id,
-                node: s_bespoke,
+                target: StepTarget::Step(tree_id, s_bespoke),
                 factor,
                 level: Some(bespoke),
                 provenance: prov(),

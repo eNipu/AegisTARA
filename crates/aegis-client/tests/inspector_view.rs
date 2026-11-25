@@ -16,7 +16,7 @@ use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
     DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, ItemRef,
     Methodology, Node, NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment, StepRef,
-    ThreatId, TreeId, TrustBoundaryId,
+    StepTarget, ThreatId, TreeId, TrustBoundaryId,
 };
 
 const NEW_KEYS: &[&str] = &[
@@ -453,14 +453,12 @@ fn inspector_view_populates_all_14_selection_kinds_relations_systems_and_exclusi
                 provenance: prov(),
             },
             Op::SetStepVia {
-                tree: tree_id,
-                node: step_via_iface,
+                target: StepTarget::Step(tree_id, step_via_iface),
                 via: Some(ItemRef::Interface(iface_a)),
                 provenance: prov(),
             },
             Op::SetStepAttackType {
-                tree: tree_id,
-                node: step_via_iface,
+                target: StepTarget::Step(tree_id, step_via_iface),
                 attack_type: Some(attack_type),
                 provenance: prov(),
             },

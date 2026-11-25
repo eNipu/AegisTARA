@@ -5,7 +5,7 @@ use std::sync::Arc;
 use aegis_model::{
     AssetId, AttackTree, ComponentId, ControlId, ControlStatus, DamageId, GoalId, ItemRef,
     LintCode, Methodology, Node, NodeId, Op, OpCodec, Project, ProjectEvalCache, Provenance,
-    RiskTreatment, ThreatId, TreeId,
+    RiskTreatment, StepTarget, ThreatId, TreeId,
 };
 
 fn build_fixture() -> (
@@ -78,15 +78,13 @@ fn build_fixture() -> (
     })
     .expect("add tree");
     p.apply(Op::SetStepVia {
-        tree: tree_id,
-        node: step,
+        target: StepTarget::Step(tree_id, step),
         via: Some(ItemRef::Component(comp)),
         provenance: Provenance::default(),
     })
     .expect("via");
     p.apply(Op::SetStepAttackType {
-        tree: tree_id,
-        node: step,
+        target: StepTarget::Step(tree_id, step),
         attack_type: Some(phys),
         provenance: Provenance::default(),
     })

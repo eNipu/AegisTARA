@@ -266,6 +266,7 @@ pub enum CeilingSource {
 /// ```
 /// use std::sync::Arc;
 /// use aegis_model::{
+///     StepTarget,
 ///     AttackTree, CeilingSource, ComponentId, ControlId, ItemRef, Methodology, Node, NodeId, Op,
 ///     Project, Provenance, TreeId,
 /// };
@@ -299,11 +300,11 @@ pub enum CeilingSource {
 ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
 /// })?;
 /// project.apply(Op::SetStepVia {
-///     tree: tree_id, node: step, via: Some(ItemRef::Component(comp)),
+///     target: aegis_model::StepTarget::Step(tree_id, step), via: Some(ItemRef::Component(comp)),
 ///     provenance: Provenance::default(),
 /// })?;
 /// project.apply(Op::SetStepAttackType {
-///     tree: tree_id, node: step, attack_type: Some(phys), provenance: Provenance::default(),
+///     target: aegis_model::StepTarget::Step(tree_id, step), attack_type: Some(phys), provenance: Provenance::default(),
 /// })?;
 /// let t_idx = project.attack_tree_idx(&tree_id).ok_or("no tree")?;
 /// let ceilings = project.step_ceilings(t_idx, root_idx);

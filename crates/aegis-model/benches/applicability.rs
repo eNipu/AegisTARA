@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use aegis_model::{
     AssetId, AttackFilter, AttackTree, ConditionId, DamageId, GateKind, Methodology, Node, NodeId,
-    Op, Project, ProjectEvalCache, Provenance, ThreatId, TreeId,
+    Op, Project, ProjectEvalCache, Provenance, StepTarget, ThreatId, TreeId,
 };
 use divan::{Bencher, black_box};
 
@@ -117,8 +117,7 @@ fn fixture() -> Fixture {
             apply(
                 &mut project,
                 Op::SetStepFeasibility {
-                    tree,
-                    node: id,
+                    target: StepTarget::Step(tree, id),
                     level: Some(low),
                     provenance: p.clone(),
                 },
@@ -219,8 +218,7 @@ fn rating_edit_with_condition_off(bencher: Bencher) {
     bencher.bench_local(|| {
         turn ^= 1;
         let op = Op::SetStepFeasibility {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             level: Some(levels[turn]),
             provenance: Provenance::default(),
         };
@@ -245,8 +243,7 @@ fn set_attack_filter(bencher: Bencher) {
         apply(
             &mut f.project,
             Op::SetStepFactor {
-                tree,
-                node,
+                target: StepTarget::Step(tree, node),
                 factor,
                 level: Some(level),
                 provenance: Provenance::default(),
@@ -279,8 +276,7 @@ fn rating_edit_with_default_filter(bencher: Bencher) {
     bencher.bench_local(|| {
         turn ^= 1;
         let op = Op::SetStepFactor {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             factor,
             level: Some(levels[turn]),
             provenance: Provenance::default(),

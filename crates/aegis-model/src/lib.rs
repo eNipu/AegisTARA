@@ -320,7 +320,7 @@ pub use methodology::{
     MethodologyDef, PackTranslationDef, PotentialBand, PotentialBandDef, Property, PropertyDef,
     RiskLevel, SegmentDef, ThreatCategory, ThreatCategoryDef,
 };
-pub use op::Op;
+pub use op::{Op, StepTarget};
 pub use party::{MAX_PARTIES, MAX_RESPONSIBLE, Party, PartyKind};
 pub use paths::{AttackPath, AttackPaths, ChokePoint};
 pub use project::{MAX_NAME_CHARS, Project, ProjectEvalCache};

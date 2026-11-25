@@ -9,7 +9,7 @@ use super::wire::{
     self, AttackFilterView, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, GateKindWire,
     HeaderView, HeaderWire, Ids, ImpactsInOrder, ItemView, KeyOrder, MethodologyView, NodesView,
     OpWire, PropertyKeys, ProvenanceView, RecordWire, Required, RiskTreatmentWire,
-    StepFeasibilityInOrder, TargetView, Text,
+    StepFeasibilityInOrder, TargetView, Text, WireId,
 };
 use super::{
     Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES, MAX_NAME_BYTES,
@@ -25,7 +25,7 @@ use crate::id::{
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
-use crate::op::Op;
+use crate::op::{Op, StepTarget};
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_TREE_OP_NODES;
 
@@ -240,29 +240,45 @@ enum OpView<'a> {
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepFeasibility {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         level: Option<Required<&'a str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepVia {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         via: Option<ItemView>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepAttackType {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         attack_type: Option<Required<&'a str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepFactor {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         factor: Required<&'a str>,
         level: Option<Required<&'a str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -874,6 +890,19 @@ fn within_caps(op: &Op) -> bool {
     }
 }
 
+type StepTargetView = (
+    Option<Text<TreeId>>,
+    Option<Text<NodeId>>,
+    Option<Text<SharedStepId>>,
+);
+
+fn step_target_view(target: StepTarget) -> StepTargetView {
+    match target {
+        StepTarget::Step(tree, node) => (Some(Text(tree)), Some(Text(node)), None),
+        StepTarget::Shared(id) => (None, None, Some(Text(id))),
+    }
+}
+
 /// Builds the borrowed view of `op`. Index-to-key lookups happen while it
 /// is serialized. Time O(1).
 #[allow(clippy::too_many_lines)]
@@ -1150,51 +1179,63 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::SetStepFeasibility {
-            tree,
-            node,
+            target,
             level,
             provenance,
-        } => OpView::SetStepFeasibility {
-            tree: Text(*tree),
-            node: Text(*node),
-            level: level.map(|l| Required(m.feasibility_level_key(l))),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepFeasibility {
+                tree,
+                node,
+                shared_step,
+                level: level.map(|l| Required(m.feasibility_level_key(l))),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetStepVia {
-            tree,
-            node,
+            target,
             via,
             provenance,
-        } => OpView::SetStepVia {
-            tree: Text(*tree),
-            node: Text(*node),
-            via: via.map(ItemView::of),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepVia {
+                tree,
+                node,
+                shared_step,
+                via: via.map(ItemView::of),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetStepAttackType {
-            tree,
-            node,
+            target,
             attack_type,
             provenance,
-        } => OpView::SetStepAttackType {
-            tree: Text(*tree),
-            node: Text(*node),
-            attack_type: attack_type.map(|t| Required(m.attack_type_key(t))),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepAttackType {
+                tree,
+                node,
+                shared_step,
+                attack_type: attack_type.map(|t| Required(m.attack_type_key(t))),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetStepFactor {
-            tree,
-            node,
+            target,
             factor,
             level,
             provenance,
-        } => OpView::SetStepFactor {
-            tree: Text(*tree),
-            node: Text(*node),
-            factor: Required(m.feasibility_factor_key(*factor)),
-            level: level.map(|l| Required(m.factor_level_key(*factor, l))),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepFactor {
+                tree,
+                node,
+                shared_step,
+                factor: Required(m.feasibility_factor_key(*factor)),
+                level: level.map(|l| Required(m.factor_level_key(*factor, l))),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetThreatFeasibility {
             threat,
             level,
@@ -1893,11 +1934,24 @@ fn encode_record(
 // Decoding.
 // ---------------------------------------------------------------------------
 
+fn step_target_from_wire(
+    tree: Option<WireId<TreeId>>,
+    node: Option<WireId<NodeId>>,
+    shared_step: Option<WireId<SharedStepId>>,
+    line: u64,
+) -> Result<StepTarget, StoreError> {
+    match (tree, node, shared_step) {
+        (Some(tree), Some(node), None) => Ok(StepTarget::Step(tree.0, node.0)),
+        (None, None, Some(shared_step)) => Ok(StepTarget::Shared(shared_step.0)),
+        _ => Err(StoreError::Decode { line, column: 0 }),
+    }
+}
+
 /// Turns a decoded op into an `Op` of `m`. Vocabulary was resolved while
 /// decoding; only a `SetImpact` level is resolved here, against its
 /// category. Lists keep their order. Time O(k).
 #[allow(clippy::too_many_lines)]
-fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
+fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError> {
     Ok(match w {
         OpWire::AddTreeNode {
             tree,
@@ -2167,45 +2221,45 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         OpWire::SetStepFeasibility {
             tree,
             node,
+            shared_step,
             level,
             provenance,
         } => Op::SetStepFeasibility {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             level: level.map(|l| l.0),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepVia {
             tree,
             node,
+            shared_step,
             via,
             provenance,
         } => Op::SetStepVia {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             via: via.map(wire::ItemWire::unwrap_item),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepAttackType {
             tree,
             node,
+            shared_step,
             attack_type,
             provenance,
         } => Op::SetStepAttackType {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             attack_type: attack_type.map(|t| t.0),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepFactor {
             tree,
             node,
+            shared_step,
             factor,
             level,
             provenance,
         } => Op::SetStepFactor {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             factor: factor.0,
             level: level
                 .as_ref()
@@ -3242,7 +3296,7 @@ impl OpCodec {
             return Err(StoreError::LimitExceeded(Limit::OP_RECORD));
         }
         let wire: OpWire = wire::from_slice(&self.m, bytes, Some(1))?;
-        op_from_wire(&self.m, wire)
+        op_from_wire(&self.m, wire, 1)
     }
 }
 
@@ -3420,7 +3474,7 @@ impl<R: BufRead> OpLogReader<R> {
                 found: record.seq,
             });
         }
-        let op = op_from_wire(&self.m, record.op)?;
+        let op = op_from_wire(&self.m, record.op, line)?;
         self.last_seq = record.seq;
         Ok(Some(LoggedOp {
             seq: record.seq,

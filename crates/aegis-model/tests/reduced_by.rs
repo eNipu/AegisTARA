@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use aegis_model::{
     AttackTree, CeilingSource, ComponentId, ControlId, FeasibilityLevel, GateKind, InterfaceId,
-    ItemRef, Methodology, Node, NodeId, Op, Project, Provenance, TreeId,
+    ItemRef, Methodology, Node, NodeId, Op, Project, Provenance, StepTarget, TreeId,
 };
 
 fn methodology() -> Arc<Methodology> {
@@ -77,8 +77,7 @@ fn route(project: &mut Project, tree: TreeId, node: NodeId, via: ItemRef, m: &Me
     ap(
         project,
         Op::SetStepVia {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             via: Some(via),
             provenance: Provenance::default(),
         },
@@ -86,8 +85,7 @@ fn route(project: &mut Project, tree: TreeId, node: NodeId, via: ItemRef, m: &Me
     ap(
         project,
         Op::SetStepAttackType {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             attack_type: m.attack_type("debug-access"),
             provenance: Provenance::default(),
         },

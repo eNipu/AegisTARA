@@ -41,7 +41,7 @@ use crate::methodology::{
     FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Methodology, Property, RiskLevel,
     ThreatCategory,
 };
-use crate::op::Op;
+use crate::op::{Op, StepTarget};
 use crate::party::{MAX_PARTIES, MAX_RESPONSIBLE, Party, PartyKind};
 use crate::paths::{AttackPath, ChokePoint};
 use crate::provenance::Provenance;
@@ -418,6 +418,31 @@ struct RefCounts {
 fn bump(v: &mut [u32], i: Option<usize>, up: bool) {
     if let Some(c) = i.and_then(|i| v.get_mut(i)) {
         *c = step(*c, up);
+    }
+}
+
+/// Sets or clears one factor, allocating a full row on the first rating and
+/// collapsing it again when the last rating is cleared.
+fn set_factor_slot(
+    row: &mut Box<[Option<FactorLevel>]>,
+    factor_count: usize,
+    factor: FeasibilityFactor,
+    level: Option<FactorLevel>,
+) -> Result<Option<FactorLevel>, ModelError> {
+    if let Some(new_level) = level {
+        if row.is_empty() {
+            *row = vec![None; factor_count].into_boxed_slice();
+        }
+        Ok(row
+            .get_mut(factor.index())
+            .ok_or(ModelError::UnknownFeasibilityFactor(factor))?
+            .replace(new_level))
+    } else {
+        let old = row.get_mut(factor.index()).and_then(Option::take);
+        if row.iter().all(Option::is_none) {
+            *row = Box::default();
+        }
+        Ok(old)
     }
 }
 
@@ -1419,7 +1444,7 @@ impl Project {
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
     /// let bespoke = m.factor_level(eq, "bespoke").ok_or("no level")?;
     /// project.apply(Op::SetStepFactor {
-    ///     tree: tree_id, node: step, factor: eq, level: Some(bespoke),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), factor: eq, level: Some(bespoke),
     ///     provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
@@ -1464,7 +1489,7 @@ impl Project {
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
     /// let bespoke = m.factor_level(eq, "bespoke").ok_or("no level")?;
     /// project.apply(Op::SetStepFactor {
-    ///     tree: tree_id, node: step, factor: eq, level: Some(bespoke),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), factor: eq, level: Some(bespoke),
     ///     provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
@@ -1525,7 +1550,7 @@ impl Project {
     ///     let f = m.feasibility_factor(f_key).ok_or("no factor")?;
     ///     let l = m.factor_level(f, l_key).ok_or("no level")?;
     ///     project.apply(Op::SetStepFactor {
-    ///         tree: tree_id, node: step, factor: f, level: Some(l),
+    ///         target: aegis_model::StepTarget::Step(tree_id, step), factor: f, level: Some(l),
     ///         provenance: Provenance::default(),
     ///     })?;
     /// }
@@ -3483,7 +3508,7 @@ impl Project {
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
-    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(ecu)),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), via: Some(ItemRef::Component(ecu)),
     ///     provenance: Provenance::default(),
     /// })?;
     /// let tree_idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
@@ -3625,10 +3650,10 @@ impl Project {
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
-    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(ecu)), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), via: Some(ItemRef::Component(ecu)), provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepAttackType {
-    ///     tree: tree_id, node: step, attack_type: Some(spoof), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), attack_type: Some(spoof), provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepMitigation {
     ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(med), provenance: Provenance::default(),
@@ -3769,11 +3794,11 @@ impl Project {
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
-    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(comp)),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), via: Some(ItemRef::Component(comp)),
     ///     provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepAttackType {
-    ///     tree: tree_id, node: step, attack_type: Some(phys), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), attack_type: Some(phys), provenance: Provenance::default(),
     /// })?;
     /// let t_idx = project.attack_tree_idx(&tree_id).ok_or("no tree")?;
     /// let residual = project.evaluate_residual_tree(tree_id)?;
@@ -5773,7 +5798,7 @@ impl Project {
     /// let mut cache = project.eval_cache();
     /// project.apply_cached(
     ///     Op::SetStepFeasibility {
-    ///         tree: tree_id, node: step, level: Some(low), provenance: Provenance::default(),
+    ///         target: aegis_model::StepTarget::Step(tree_id, step), level: Some(low), provenance: Provenance::default(),
     ///     },
     ///     &mut cache,
     /// )?;
@@ -7118,25 +7143,58 @@ impl Project {
                 step_feasibility,
                 provenance,
             } => return self.check_add_tree(*id, tree, step_feasibility, provenance),
-            Op::SetStepFeasibility {
-                tree, node, level, ..
-            } => self.check_set_step_feasibility(*tree, *node, *level)?,
-            Op::SetStepVia {
-                tree, node, via, ..
-            } => self.check_set_step_via(*tree, *node, *via)?,
+            Op::SetStepFeasibility { target, level, .. } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.check_set_step_feasibility(*tree, *node, *level)?;
+                }
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    if let Some(level) = level {
+                        self.methodology.check_feasibility_level(*level)?;
+                    }
+                }
+            },
+            Op::SetStepVia { target, via, .. } => match target {
+                StepTarget::Step(tree, node) => self.check_set_step_via(*tree, *node, *via)?,
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    if let Some(item) = via {
+                        self.item_idx(*item)?;
+                    }
+                }
+            },
             Op::SetStepAttackType {
-                tree,
-                node,
+                target,
                 attack_type,
                 ..
-            } => self.check_set_step_attack_type(*tree, *node, *attack_type)?,
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.check_set_step_attack_type(*tree, *node, *attack_type)?;
+                }
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    if let Some(t) = attack_type {
+                        self.methodology.check_attack_type(*t)?;
+                    }
+                }
+            },
             Op::SetStepFactor {
-                tree,
-                node,
+                target,
                 factor,
                 level,
                 ..
-            } => self.check_set_step_factor(*tree, *node, *factor, *level)?,
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.check_set_step_factor(*tree, *node, *factor, *level)?;
+                }
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    match level {
+                        Some(level) => self.methodology.check_factor_level(*factor, *level)?,
+                        None => self.methodology.check_feasibility_factor(*factor)?,
+                    }
+                }
+            },
             Op::SetThreatFeasibility { threat, level, .. } => {
                 self.check_set_threat_feasibility(*threat, *level)?;
             }
@@ -7712,30 +7770,52 @@ impl Project {
                 provenance,
             } => self.commit_add_tree(id, tree, step_feasibility, provenance),
             Op::SetStepFeasibility {
-                tree,
-                node,
+                target,
                 level,
                 provenance,
-            } => self.commit_set_step_feasibility(tree, node, level, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_feasibility(tree, node, level, provenance)
+                }
+                StepTarget::Shared(id) => {
+                    self.commit_set_shared_step_feasibility(id, level, provenance)
+                }
+            },
             Op::SetStepVia {
-                tree,
-                node,
+                target,
                 via,
                 provenance,
-            } => self.commit_set_step_via(tree, node, via, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_via(tree, node, via, provenance)
+                }
+                StepTarget::Shared(id) => self.commit_set_shared_step_via(id, via, provenance),
+            },
             Op::SetStepAttackType {
-                tree,
-                node,
+                target,
                 attack_type,
                 provenance,
-            } => self.commit_set_step_attack_type(tree, node, attack_type, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_attack_type(tree, node, attack_type, provenance)
+                }
+                StepTarget::Shared(id) => {
+                    self.commit_set_shared_step_attack_type(id, attack_type, provenance)
+                }
+            },
             Op::SetStepFactor {
-                tree,
-                node,
+                target,
                 factor,
                 level,
                 provenance,
-            } => self.commit_set_step_factor(tree, node, factor, level, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_factor(tree, node, factor, level, provenance)
+                }
+                StepTarget::Shared(id) => {
+                    self.commit_set_shared_step_factor(id, factor, level, provenance)
+                }
+            },
             Op::SetThreatFeasibility {
                 threat,
                 level,
@@ -8454,6 +8534,13 @@ impl Project {
             .ok_or(ModelError::UnknownSharedStep(id))
     }
 
+    fn shared_step_mut(&mut self, id: SharedStepId) -> Result<&mut SharedStep, ModelError> {
+        let idx = self.live_shared_step(id)?.0;
+        self.shared_steps
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownSharedStep(id))
+    }
+
     fn live_component(&self, id: ComponentId) -> Result<(ComponentIdx, &Component), ModelError> {
         let idx = self.component_index(id)?;
         let c = self
@@ -8559,7 +8646,11 @@ impl Project {
             .iter()
             .flat_map(|(_, _, e)| e.vias())
             .filter(|(_, v)| *v == item)
-            .count();
+            .count()
+            + self
+                .shared_steps()
+                .filter(|(_, _, step)| step.via() == Some(item))
+                .count();
         u32::try_from(n).unwrap_or(u32::MAX)
     }
 
@@ -11222,8 +11313,23 @@ impl Project {
         let level = std::mem::replace(slot, level);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepFeasibility {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            level,
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_feasibility(
+        &mut self,
+        id: SharedStepId,
+        level: Option<FeasibilityLevel>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let shared = self.shared_step_mut(id)?;
+        let level = std::mem::replace(&mut shared.feasibility, level);
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepFeasibility {
+            target: StepTarget::Shared(id),
             level,
             provenance,
         })
@@ -11245,8 +11351,24 @@ impl Project {
         let old = entry.set_link(node_idx.index(), new, |l| &mut l.via);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepVia {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            via: self.item_ref(old),
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_via(
+        &mut self,
+        id: SharedStepId,
+        via: Option<ItemRef>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let new = via.map(|item| self.item_idx(item)).transpose()?;
+        let shared = self.shared_step_mut(id)?;
+        let old = std::mem::replace(&mut shared.via, new);
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepVia {
+            target: StepTarget::Shared(id),
             via: self.item_ref(old),
             provenance,
         })
@@ -11267,8 +11389,23 @@ impl Project {
         let attack_type = entry.set_link(node_idx.index(), attack_type, |l| &mut l.attack_type);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepAttackType {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            attack_type,
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_attack_type(
+        &mut self,
+        id: SharedStepId,
+        attack_type: Option<AttackType>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let shared = self.shared_step_mut(id)?;
+        let attack_type = std::mem::replace(&mut shared.attack_type, attack_type);
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepAttackType {
+            target: StepTarget::Shared(id),
             attack_type,
             provenance,
         })
@@ -11292,25 +11429,29 @@ impl Project {
             .step_factors
             .get_mut(node_idx.index())
             .ok_or(ModelError::UnknownTreeNode { tree, node })?;
-        let old = if let Some(new_l) = level {
-            if row.is_empty() {
-                *row = vec![None; factor_count].into_boxed_slice();
-            }
-            let slot = row
-                .get_mut(factor.index())
-                .ok_or(ModelError::UnknownFeasibilityFactor(factor))?;
-            slot.replace(new_l)
-        } else {
-            let old = row.get_mut(factor.index()).and_then(Option::take);
-            if row.iter().all(Option::is_none) {
-                *row = Box::default();
-            }
-            old
-        };
+        let old = set_factor_slot(row, factor_count, factor, level)?;
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepFactor {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            factor,
+            level: old,
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_factor(
+        &mut self,
+        id: SharedStepId,
+        factor: FeasibilityFactor,
+        level: Option<FactorLevel>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let factor_count = self.methodology.feasibility_factor_count();
+        let shared = self.shared_step_mut(id)?;
+        let old = set_factor_slot(&mut shared.factors, factor_count, factor, level)?;
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepFactor {
+            target: StepTarget::Shared(id),
             factor,
             level: old,
             provenance,
@@ -14420,7 +14561,7 @@ impl ProjectEvalCache {
     ///
     /// let mut cache = ProjectEvalCache::new(&project);
     /// let inv = project.apply(Op::SetStepFeasibility {
-    ///     tree: tree_id, node: step, level: Some(low), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), level: Some(low), provenance: Provenance::default(),
     /// })?;
     /// cache.update(&project, &inv);
     /// assert_eq!(cache.evaluate_risk(&project, threat)?, &project.evaluate_risk(threat)?);
@@ -14546,8 +14687,10 @@ impl ProjectEvalCache {
             | Op::LinkTreeNode { tree, .. }
             | Op::UnlinkTreeNode { tree, .. }
             | Op::SetTreeNodeGate { tree, .. } => self.update_tree_structure(project, *tree),
-            Op::SetStepFeasibility { tree, node, .. } | Op::SetStepFactor { tree, node, .. } => {
-                self.update_step(project, *tree, *node, true);
+            Op::SetStepFeasibility { target, .. } | Op::SetStepFactor { target, .. } => {
+                if let StepTarget::Step(tree, node) = target {
+                    self.update_step(project, *tree, *node, true);
+                }
             }
             Op::SetStepMitigation {
                 tree,
@@ -14561,12 +14704,14 @@ impl ProjectEvalCache {
                     .is_some_and(|c| c.status.counts_for_initial());
                 self.update_step(project, *tree, *node, include_inherent);
             }
-            Op::SetStepVia { tree, node, .. } | Op::SetStepAttackType { tree, node, .. } => {
-                let include_inherent = project
-                    .controls
-                    .iter()
-                    .any(|(_, _, c)| c.status.counts_for_initial());
-                self.update_step(project, *tree, *node, include_inherent);
+            Op::SetStepVia { target, .. } | Op::SetStepAttackType { target, .. } => {
+                if let StepTarget::Step(tree, node) = target {
+                    let include_inherent = project
+                        .controls
+                        .iter()
+                        .any(|(_, _, c)| c.status.counts_for_initial());
+                    self.update_step(project, *tree, *node, include_inherent);
+                }
             }
             Op::ApplyControl {
                 control, target, ..
@@ -16157,8 +16302,7 @@ mod tests {
         let le_1w = testkit::factor_lvl(&meth, et, "le-1w");
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: testkit::tree_id(99),
-                node: s1_id,
+                target: StepTarget::Step(testkit::tree_id(99), s1_id),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -16167,8 +16311,7 @@ mod tests {
         );
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: testkit::node_id(99),
+                target: StepTarget::Step(tr, testkit::node_id(99)),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -16180,8 +16323,7 @@ mod tests {
         );
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: root_id,
+                target: StepTarget::Step(tr, root_id),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -16194,8 +16336,7 @@ mod tests {
         let bad_factor = FeasibilityFactor::new(9);
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: bad_factor,
                 level: None,
                 provenance: Provenance::default(),
@@ -16205,8 +16346,7 @@ mod tests {
         let bad_level = FactorLevel::new(9);
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: et,
                 level: Some(bad_level),
                 provenance: Provenance::default(),
@@ -16221,8 +16361,7 @@ mod tests {
         // Partial factor rating: AttackTreeStepIncompleteFactors + AttackTreeStepUnrated.
         let undo_et = proj
             .apply(Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -16274,8 +16413,7 @@ mod tests {
             let fac = testkit::factor(&meth, fk);
             let lvl = testkit::factor_lvl(&meth, fac, lk);
             proj.apply(Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: fac,
                 level: Some(lvl),
                 provenance: Provenance::default(),
@@ -16307,8 +16445,7 @@ mod tests {
         // and triggers RedundantStepFeasibility.
         let before_coarse = proj.clone();
         proj.apply(Op::SetStepFeasibility {
-            tree: tr,
-            node: s1_id,
+            target: StepTarget::Step(tr, s1_id),
             level: Some(low),
             provenance: Provenance::default(),
         })

@@ -23,7 +23,7 @@ use crate::id::{
     ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
 };
 use crate::methodology::Methodology;
-use crate::op::Op;
+use crate::op::{Op, StepTarget};
 use crate::project::Project;
 use crate::store::Limit;
 
@@ -1511,8 +1511,7 @@ impl Project {
             for (node, factors) in tr.step_factors.0 {
                 for (factor, level) in factors {
                     project.apply(Op::SetStepFactor {
-                        tree: id,
-                        node,
+                        target: StepTarget::Step(id, node),
                         factor,
                         level: Some(level),
                         provenance: provenance.clone(),
@@ -1532,16 +1531,14 @@ impl Project {
             }
             for (node, via) in tr.step_via.into_iter().flat_map(|v| v.0) {
                 project.apply(Op::SetStepVia {
-                    tree: id,
-                    node,
+                    target: StepTarget::Step(id, node),
                     via: Some(via.unwrap_item()),
                     provenance: provenance.clone(),
                 })?;
             }
             for (node, attack_type) in tr.step_attack_type.into_iter().flat_map(|v| v.0) {
                 project.apply(Op::SetStepAttackType {
-                    tree: id,
-                    node,
+                    target: StepTarget::Step(id, node),
                     attack_type: Some(attack_type.0),
                     provenance: provenance.clone(),
                 })?;

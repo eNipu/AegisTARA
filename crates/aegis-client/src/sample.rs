@@ -9,7 +9,7 @@
 
 use aegis_model::{
     AssetId, AttackTree, ControlId, DamageId, GateKind, Methodology, Node, NodeId, Op, Provenance,
-    ThreatId, TreeId,
+    StepTarget, ThreatId, TreeId,
 };
 
 /// Builds the example as ops. Returns `None` if `m` lacks a vocabulary the
@@ -173,8 +173,7 @@ pub fn sample_ops(m: &Methodology, actor: &str, now_ms: u64) -> Option<Vec<Op>> 
         ] {
             let f = m.feasibility_factor(factor)?;
             ops.push(Op::SetStepFactor {
-                tree: tree_id,
-                node: downgrade,
+                target: StepTarget::Step(tree_id, downgrade),
                 factor: f,
                 level: Some(m.factor_level(f, level)?),
                 provenance: p.clone(),
@@ -182,8 +181,7 @@ pub fn sample_ops(m: &Methodology, actor: &str, now_ms: u64) -> Option<Vec<Op>> 
         }
     } else {
         ops.push(Op::SetStepFeasibility {
-            tree: tree_id,
-            node: downgrade,
+            target: StepTarget::Step(tree_id, downgrade),
             level: Some(medium),
             provenance: p.clone(),
         });

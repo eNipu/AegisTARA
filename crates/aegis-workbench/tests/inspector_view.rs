@@ -15,7 +15,7 @@ use aegis_client::view::{Selection, TableId};
 use aegis_model::{
     AssetId, AttackTree, ComponentId, ConditionId, ControlId, DamageId, ElementId, ElementKind,
     ElementRef, GateKind, GoalId, ItemRef, Methodology, Node, NodeId, Op, Project, Provenance,
-    RiskTreatment, ThreatId, TreeId,
+    RiskTreatment, StepTarget, ThreatId, TreeId,
 };
 use aegis_workbench::app::{InspectorPanel, Workbench, apply_appearance, bind_all};
 use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
@@ -135,8 +135,7 @@ fn build_fixture() -> Fixture {
             provenance: prov(),
         },
         Op::SetStepVia {
-            tree: tree_id,
-            node: step_deciding,
+            target: StepTarget::Step(tree_id, step_deciding),
             via: Some(ItemRef::Component(comp)),
             provenance: prov(),
         },

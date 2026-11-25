@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use aegis_model::{
     AttackTree, ElementRef, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter,
-    PartyKind, Project, Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
+    PartyKind, Project, Provenance, ProvenanceSource, RiskTreatment, StepTarget, StoreError,
+    VocabKind,
 };
 use common::{
     SENTINEL, asset_id, builtin, cat, claim_id, component_id, condition_id, control_id, cref,
@@ -395,15 +396,13 @@ fn save_is_deterministic() {
             },
             Op::RemoveAttackTree { id: tr2 },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "knowledge"),
                 level: Some(factor_lvl(&m, factor(&m, "knowledge"), "public")),
                 provenance: p_tree.clone(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "elapsed-time"),
                 level: Some(factor_lvl(&m, factor(&m, "elapsed-time"), "le-1w")),
                 provenance: p_tree.clone(),
@@ -428,28 +427,24 @@ fn save_is_deterministic() {
                 provenance: Provenance::default(),
             },
             Op::SetStepFeasibility {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 level: Some(feas(&m, "low")),
                 provenance: Provenance::default(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "elapsed-time"),
                 level: Some(factor_lvl(&m, factor(&m, "elapsed-time"), "le-1w")),
                 provenance: Provenance::default(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "knowledge"),
                 level: Some(factor_lvl(&m, factor(&m, "knowledge"), "public")),
                 provenance: Provenance::default(),
             },
             Op::SetStepFeasibility {
-                tree: tr1,
-                node: s2,
+                target: StepTarget::Step(tr1, s2),
                 level: Some(feas(&m, "high")),
                 provenance: p_tree,
             },
@@ -604,28 +599,24 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             provenance: Provenance::human("alice", 700),
         },
         Op::SetStepFeasibility {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             level: Some(feas(m, "probable")),
             provenance: Provenance::ai("tara-assist", 800),
         },
         Op::SetStepFactor {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             factor: factor(m, "exposure"),
             level: Some(factor_lvl(m, factor(m, "exposure"), "local")),
             provenance: Provenance::human("alice", 810),
         },
         Op::SetStepFactor {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             factor: factor(m, "skill"),
             level: Some(factor_lvl(m, factor(m, "skill"), "expert")),
             provenance: Provenance::human("alice", 820),
         },
         Op::SetStepFactor {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             factor: factor(m, "resources"),
             level: Some(factor_lvl(m, factor(m, "resources"), "standard")),
             provenance: Provenance::human("alice", 830),
@@ -1486,8 +1477,7 @@ fn attack_trees_and_provenance_round_trip_and_evaluate() {
             provenance: Provenance::ai("tara-assist", 1_700_000_000_300),
         },
         Op::SetStepFeasibility {
-            tree: tr1,
-            node: s3,
+            target: StepTarget::Step(tr1, s3),
             level: Some(feas(&m, "low")),
             provenance: Provenance::human("bob", 1_700_000_000_400),
         },

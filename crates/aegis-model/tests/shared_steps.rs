@@ -4,14 +4,15 @@
 use std::sync::Arc;
 
 use aegis_model::{
-    ElementRef, EntityKind, MAX_DESCRIPTION_CHARS, MAX_NAME_BYTES, MAX_SHARED_STEPS, ModelError,
-    Op, OpCodec, OpLogReader, OpLogWriter, Project, ProjectDiff, Provenance, SharedStepId,
-    SharedStepIdx, StoreError, VisualPrefix,
+    ComponentId, ElementRef, EntityKind, InterfaceId, ItemRef, MAX_DESCRIPTION_CHARS,
+    MAX_NAME_BYTES, MAX_SHARED_STEPS, ModelError, Op, OpCodec, OpLogReader, OpLogWriter, Project,
+    ProjectDiff, Provenance, SharedStepId, SharedStepIdx, StepTarget, StoreError, VisualPrefix,
 };
+use serde_json::{Value, json};
 
 mod common;
 
-use common::{builtin, shared_step_id};
+use common::{builtin, node_id, shared_step_id, tree_id};
 
 fn project() -> Project {
     Project::new(builtin())
@@ -28,6 +29,98 @@ fn add(p: &mut Project, id: SharedStepId, name: &str) {
         provenance: who("alice", 10),
     })
     .expect("add shared step");
+}
+
+fn shared_with_items() -> (Project, SharedStepId, ComponentId, InterfaceId) {
+    let mut p = project();
+    let (shared, component, interface) = (
+        SharedStepId::new_v7(),
+        ComponentId::new_v7(),
+        InterfaceId::new_v7(),
+    );
+    add(&mut p, shared, "Inject frame");
+    let m = Arc::clone(p.methodology());
+    let kind = m.interface_kind("debug").expect("interface kind");
+    p.apply(Op::AddComponent {
+        id: component,
+        name: "Gateway".into(),
+        parent: None,
+        provenance: who("alice", 11),
+    })
+    .expect("add component");
+    p.apply(Op::AddInterface {
+        id: interface,
+        name: "Debug port".into(),
+        component,
+        kind,
+        provenance: who("alice", 12),
+    })
+    .expect("add interface");
+    (p, shared, component, interface)
+}
+
+fn rating_ops(
+    p: &Project,
+    id: SharedStepId,
+    via: Option<ItemRef>,
+    provenance: Provenance,
+) -> [Op; 4] {
+    let m = p.methodology();
+    let factor = m.feasibility_factors().next().expect("factor");
+    let level = m.factor_levels(factor).next().expect("factor level");
+    let target = StepTarget::Shared(id);
+    [
+        Op::SetStepFeasibility {
+            target,
+            level: Some(m.feasibility_level("high").expect("feasibility")),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepFactor {
+            target,
+            factor,
+            level: Some(level),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepVia {
+            target,
+            via,
+            provenance: provenance.clone(),
+        },
+        Op::SetStepAttackType {
+            target,
+            attack_type: m.attack_type("debug-access"),
+            provenance,
+        },
+    ]
+}
+
+fn clear_rating_ops(id: SharedStepId, provenance: Provenance) -> [Op; 4] {
+    let m = builtin();
+    let factor = m.feasibility_factors().next().expect("factor");
+    let target = StepTarget::Shared(id);
+    [
+        Op::SetStepFeasibility {
+            target,
+            level: None,
+            provenance: provenance.clone(),
+        },
+        Op::SetStepFactor {
+            target,
+            factor,
+            level: None,
+            provenance: provenance.clone(),
+        },
+        Op::SetStepVia {
+            target,
+            via: None,
+            provenance: provenance.clone(),
+        },
+        Op::SetStepAttackType {
+            target,
+            attack_type: None,
+            provenance,
+        },
+    ]
 }
 
 #[test]
@@ -391,4 +484,217 @@ fn lifecycle_and_description_ops_round_trip_through_the_op_log() {
     ] {
         assert!(matches!(writer.append(&op), Err(StoreError::UnencodableOp)));
     }
+}
+
+#[test]
+fn shared_rating_ops_have_exact_inverses_and_compact_factors() {
+    let (mut p, id, component, _) = shared_with_items();
+    let ops = rating_ops(&p, id, Some(ItemRef::Component(component)), who("bob", 20));
+    let clears = clear_rating_ops(id, who("alice", 10));
+    for (op, expected_inverse) in ops.into_iter().zip(clears) {
+        let is_factor = matches!(op, Op::SetStepFactor { .. });
+        let before = p.clone();
+        let inverse = p.apply(op).expect("shared rating");
+        assert_eq!(inverse, expected_inverse);
+        if is_factor {
+            let idx = p.shared_step_idx(&id).expect("shared step");
+            let step = p.shared_step(idx).expect("shared step");
+            assert_eq!(
+                step.factor_slice().len(),
+                p.methodology().feasibility_factor_count()
+            );
+        }
+        p.apply(inverse).expect("undo shared rating");
+        assert_eq!(p, before);
+        if is_factor {
+            let idx = p.shared_step_idx(&id).expect("shared step");
+            assert!(
+                p.shared_step(idx)
+                    .expect("shared step")
+                    .factor_slice()
+                    .is_empty()
+            );
+        }
+    }
+    p.apply(Op::RemoveSharedStep { id })
+        .expect("all ratings cleared");
+}
+
+#[test]
+fn shared_rating_ops_reject_blank_actors_and_unknown_ids() {
+    let (mut p, id, component, _) = shared_with_items();
+    let unknown = SharedStepId::new_v7();
+    let known = rating_ops(&p, id, Some(ItemRef::Component(component)), who("bob", 20));
+    let missing = rating_ops(
+        &p,
+        unknown,
+        Some(ItemRef::Component(component)),
+        who("bob", 20),
+    );
+    for (op, missing) in known.into_iter().zip(missing) {
+        assert_eq!(
+            p.apply(op.with_provenance(who("   ", 1))),
+            Err(ModelError::EmptyActor)
+        );
+        assert_eq!(
+            p.apply(missing),
+            Err(ModelError::UnknownSharedStep(unknown))
+        );
+    }
+}
+
+#[test]
+fn each_shared_rating_field_blocks_removal_in_isolation() {
+    let (base, id, component, _) = shared_with_items();
+    for op in rating_ops(
+        &base,
+        id,
+        Some(ItemRef::Component(component)),
+        who("bob", 20),
+    ) {
+        let mut p = base.clone();
+        let before = p.clone();
+        let inverse = p.apply(op).expect("shared rating");
+        assert_eq!(
+            p.apply(Op::RemoveSharedStep { id }),
+            Err(ModelError::SharedStepIsRated(id))
+        );
+        p.apply(inverse).expect("clear shared rating");
+        assert_eq!(p, before);
+        let idx = p.shared_step_idx(&id).expect("shared step");
+        assert!(
+            p.shared_step(idx)
+                .expect("shared step")
+                .factor_slice()
+                .is_empty()
+        );
+        p.apply(Op::RemoveSharedStep { id })
+            .expect("unrated shared step removes");
+    }
+}
+
+#[test]
+fn shared_via_blocks_component_and_interface_removal() {
+    let (mut p, id, component, interface) = shared_with_items();
+    let target = StepTarget::Shared(id);
+    let undo = p
+        .apply(Op::SetStepVia {
+            target,
+            via: Some(ItemRef::Interface(interface)),
+            provenance: who("bob", 21),
+        })
+        .expect("interface via");
+    assert_eq!(
+        p.apply(Op::RemoveInterface { id: interface }),
+        Err(ModelError::InterfaceHasSteps {
+            interface,
+            steps: 1,
+        })
+    );
+    p.apply(undo).expect("clear interface via");
+    p.apply(Op::RemoveInterface { id: interface })
+        .expect("remove unreferenced interface");
+    let undo = p
+        .apply(Op::SetStepVia {
+            target,
+            via: Some(ItemRef::Component(component)),
+            provenance: who("bob", 20),
+        })
+        .expect("component via");
+    assert_eq!(
+        p.apply(Op::RemoveComponent { id: component }),
+        Err(ModelError::ComponentHasSteps {
+            component,
+            steps: 1,
+        })
+    );
+    p.apply(undo).expect("clear component via");
+}
+
+#[test]
+fn rating_wire_preserves_v1_steps_and_round_trips_shared_targets() {
+    let m = builtin();
+    let codec = OpCodec::new(Arc::clone(&m));
+    let tree = tree_id(1);
+    let node = node_id(2);
+    let prov = who("alice", 42);
+    let step_op = Op::SetStepFeasibility {
+        target: StepTarget::Step(tree, node),
+        level: Some(m.feasibility_level("high").expect("feasibility")),
+        provenance: prov.clone(),
+    };
+    let v1 = format!(
+        r#"{{"op":"set_step_feasibility","tree":"{tree}","node":"{node}","level":"high","provenance":{{"actor":"alice","timestamp_ms":42,"source":"human"}}}}"#
+    );
+    assert_eq!(codec.decode(v1.as_bytes()).expect("v1 decode"), step_op);
+    assert_eq!(codec.encode(&step_op).expect("v1 encode"), v1.as_bytes());
+
+    let (p, id, component, _) = shared_with_items();
+    let ops = rating_ops(&p, id, Some(ItemRef::Component(component)), prov);
+    for op in &ops {
+        let bytes = codec.encode(op).expect("shared encode");
+        let value: Value = serde_json::from_slice(&bytes).expect("shared JSON");
+        assert_eq!(value["shared_step"], id.to_string());
+        assert!(value.get("tree").is_none());
+        assert!(value.get("node").is_none());
+        assert_eq!(codec.decode(&bytes).expect("shared decode"), *op);
+    }
+
+    let mut log = Vec::new();
+    let mut writer = OpLogWriter::create(&mut log, Arc::clone(&m)).expect("writer");
+    for op in &ops {
+        writer.append(op).expect("append shared rating");
+    }
+    drop(writer);
+    let decoded: Vec<_> = OpLogReader::open(log.as_slice(), Arc::clone(&m))
+        .expect("reader")
+        .map(|record| record.expect("record").op)
+        .collect();
+    assert_eq!(decoded, ops);
+
+    let invalid_targets = [
+        [false, false, false],
+        [true, false, false],
+        [false, true, false],
+        [true, false, true],
+        [false, true, true],
+        [true, true, true],
+    ];
+    for op in &ops {
+        let valid: Value =
+            serde_json::from_slice(&codec.encode(op).expect("encode")).expect("valid JSON");
+        for [has_tree, has_node, has_shared] in invalid_targets {
+            let mut bad = valid.clone();
+            bad.as_object_mut()
+                .expect("op object")
+                .remove("shared_step");
+            if has_tree {
+                bad["tree"] = json!(tree.to_string());
+            }
+            if has_node {
+                bad["node"] = json!(node.to_string());
+            }
+            if has_shared {
+                bad["shared_step"] = json!(id.to_string());
+            }
+            let bytes = serde_json::to_vec(&bad).expect("bad JSON");
+            assert!(matches!(
+                codec.decode(&bytes),
+                Err(StoreError::Decode { line: 1, column: 0 })
+            ));
+        }
+    }
+
+    let bad = json!({"seq": 1, "op": {
+        "op": "set_step_feasibility", "level": "high"
+    }});
+    let mut bytes = OpLogWriter::create(Vec::new(), Arc::clone(&m))
+        .expect("header")
+        .into_inner()
+        .expect("log");
+    bytes.extend(serde_json::to_vec(&bad).expect("record"));
+    bytes.push(b'\n');
+    let mut reader = OpLogReader::open(bytes.as_slice(), m).expect("reader");
+    let error = reader.next().expect("record").expect_err("invalid target");
+    assert!(matches!(error, StoreError::Decode { line: 2, column: 0 }));
 }

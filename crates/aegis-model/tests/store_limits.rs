@@ -14,8 +14,8 @@ use aegis_model::{
     MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS,
     MAX_NAME_CHARS, MAX_OP_RECORD_BYTES, MAX_PARTIES, MAX_PROJECT_FILE_BYTES, MAX_RESPONSIBLE,
     MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology, MethodologyDef, Node, Op, OpLogReader,
-    PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef, StoreError,
-    ThreatCategoryDef,
+    PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef, StepTarget,
+    StoreError, ThreatCategoryDef,
 };
 use common::{
     asset_id, builtin, claim_id, condition_id, control_id, damage_id, goal_id, node_id, party_id,
@@ -906,8 +906,7 @@ fn limits_admit_every_valid_project() {
         for f in m.feasibility_factors() {
             let fl = m.factor_levels(f).last().expect("factor level");
             ops.push(Op::SetStepFactor {
-                tree: tree_id(1),
-                node: sid,
+                target: StepTarget::Step(tree_id(1), sid),
                 factor: f,
                 level: Some(fl),
                 provenance: max_prov.clone(),

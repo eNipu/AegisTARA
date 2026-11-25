@@ -18,7 +18,7 @@ use aegis_model::{
     GateKind, GoalId, ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef,
     Methodology, MethodologyDef, Node, NodeId, Op, PartyId, PartyKind, PotentialBandDef, Project,
     Property, PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment,
-    SegmentDef, SharedStepId, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    SegmentDef, SharedStepId, StepTarget, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -801,6 +801,14 @@ impl Gen {
         }
     }
 
+    fn rating_target(&mut self, p: &Project, sel: u16, tree: TreeId, node: NodeId) -> StepTarget {
+        if sel.is_multiple_of(4) {
+            StepTarget::Shared(self.shared_step(p, sel))
+        } else {
+            StepTarget::Step(tree, node)
+        }
+    }
+
     /// An element a condition link may name, of each supported kind in turn.
     fn condition_target(&mut self, p: &Project, kind: u16, sel: u16) -> aegis_model::ElementRef {
         match kind % 7 {
@@ -1401,8 +1409,7 @@ impl Gen {
                     None => node_id(self.fresh()),
                 };
                 Op::SetStepFeasibility {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     level: (!s.c.is_multiple_of(5)).then(|| self.feasibility_level(s.c)),
                     provenance,
                 }
@@ -1461,8 +1468,7 @@ impl Gen {
                 let level = (!s.bits.is_multiple_of(5))
                     .then(|| self.factor_level(factor, (s.bits >> 8) as u16));
                 Op::SetStepFactor {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     factor,
                     level,
                     provenance,
@@ -1669,8 +1675,7 @@ impl Gen {
             52 => {
                 let (tree, node) = self.step_node(p, s.a, s.b);
                 Op::SetStepVia {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     via: (!s.c.is_multiple_of(5)).then(|| self.item(p, s.c, s.bits as u16)),
                     provenance,
                 }
@@ -1683,8 +1688,7 @@ impl Gen {
                     s.c.is_multiple_of(4)
                 };
                 Op::SetStepAttackType {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     attack_type: some.then(|| self.attack_type(s.c)),
                     provenance,
                 }
@@ -2774,8 +2778,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             level: Some(feas(&m, "probable")),
             provenance: p_ai.clone(),
         },
@@ -2786,8 +2789,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             level: None,
             provenance: p_human.clone(),
         },
@@ -2795,8 +2797,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             factor: f_exp,
             level: Some(factor_lvl(&m, f_exp, "local")),
             provenance: p_human.clone(),
@@ -2805,8 +2806,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             factor: f_skill,
             level: Some(factor_lvl(&m, f_skill, "specialist")),
             provenance: p_ai.clone(),
@@ -2815,8 +2815,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             factor: f_res,
             level: Some(factor_lvl(&m, f_res, "standard")),
             provenance: p_human.clone(),
@@ -3284,8 +3283,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         ok(
             &mut p,
             Op::SetStepFactor {
-                tree,
-                node: s2,
+                target: StepTarget::Step(tree, s2),
                 factor: f,
                 level: None,
                 provenance: Provenance::default(),
@@ -3332,8 +3330,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepVia {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             via: Some(ItemRef::Component(ecu)),
             provenance: p_human.clone(),
         },
@@ -3341,8 +3338,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepAttackType {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             attack_type: None,
             provenance: p_ai.clone(),
         },
@@ -3358,8 +3354,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepVia {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             via: None,
             provenance: Provenance::default(),
         },

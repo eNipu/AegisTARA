@@ -25,7 +25,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use aegis_model::{AttackTree, GateKind, Node, NodeId, Op, Project, Provenance, StepRef, TreeId};
+use aegis_model::{
+    AttackTree, GateKind, Node, NodeId, Op, Project, Provenance, StepRef, StepTarget, TreeId,
+};
 
 use crate::commands::EditError;
 
@@ -179,8 +181,7 @@ pub(crate) fn clear_step_ops(
     }
     if project.step_feasibility(t_idx, idx).is_some() {
         ops.push(Op::SetStepFeasibility {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             level: None,
             provenance: p.clone(),
         });
@@ -188,8 +189,7 @@ pub(crate) fn clear_step_ops(
     for factor in m.feasibility_factors() {
         if project.step_factor(t_idx, idx, factor).is_some() {
             ops.push(Op::SetStepFactor {
-                tree,
-                node,
+                target: StepTarget::Step(tree, node),
                 factor,
                 level: None,
                 provenance: p.clone(),
@@ -209,16 +209,14 @@ pub(crate) fn clear_step_ops(
     }
     if project.step_via(t_idx, idx).is_some() {
         ops.push(Op::SetStepVia {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             via: None,
             provenance: p.clone(),
         });
     }
     if project.step_attack_type(t_idx, idx).is_some() {
         ops.push(Op::SetStepAttackType {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             attack_type: None,
             provenance: p.clone(),
         });
@@ -253,8 +251,7 @@ pub(crate) fn transfer_step_ops(
     let mut ops = Vec::new();
     if let Some(level) = project.step_feasibility(t_idx, idx) {
         ops.push(Op::SetStepFeasibility {
-            tree,
-            node: to_node,
+            target: StepTarget::Step(tree, to_node),
             level: Some(level),
             provenance: p.clone(),
         });
@@ -262,8 +259,7 @@ pub(crate) fn transfer_step_ops(
     for factor in m.feasibility_factors() {
         if let Some(level) = project.step_factor(t_idx, idx, factor) {
             ops.push(Op::SetStepFactor {
-                tree,
-                node: to_node,
+                target: StepTarget::Step(tree, to_node),
                 factor,
                 level: Some(level),
                 provenance: p.clone(),
@@ -283,16 +279,14 @@ pub(crate) fn transfer_step_ops(
     }
     if let Some(via) = project.step_via(t_idx, idx) {
         ops.push(Op::SetStepVia {
-            tree,
-            node: to_node,
+            target: StepTarget::Step(tree, to_node),
             via: Some(via),
             provenance: p.clone(),
         });
     }
     if let Some(attack_type) = project.step_attack_type(t_idx, idx) {
         ops.push(Op::SetStepAttackType {
-            tree,
-            node: to_node,
+            target: StepTarget::Step(tree, to_node),
             attack_type: Some(attack_type),
             provenance: p.clone(),
         });

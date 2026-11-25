@@ -21,6 +21,15 @@ use crate::party::PartyKind;
 use crate::provenance::Provenance;
 use crate::tree::{AttackTree, GateKind, Node};
 
+/// The entity whose step rating an operation changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StepTarget {
+    /// A step node in an attack tree.
+    Step(TreeId, NodeId),
+    /// A reusable shared step.
+    Shared(SharedStepId),
+}
+
 /// One change to a [`Project`](crate::Project).
 ///
 /// Entities are named by public ID; vocabulary by the typed indices of the
@@ -449,31 +458,27 @@ pub enum Op {
         provenance: Provenance,
     },
     /// Sets or clears (`None` = unrated) the feasibility rating of one
-    /// step node in an attack tree.
+    /// tree step or shared step.
     SetStepFeasibility {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to rate.
+        target: StepTarget,
         /// The new feasibility rating, or `None` for unrated.
         level: Option<FeasibilityLevel>,
         /// Provenance of the step feasibility change.
         provenance: Provenance,
     },
     /// Sets or clears (`None` = unrated) the rating of one attack potential
-    /// factor on one step node in an attack tree.
+    /// factor on one tree step or shared step.
     ///
     /// When every factor in the methodology's attack potential vocabulary is
-    /// rated on `node`, [`Project::step_attack_potential`](crate::Project::step_attack_potential)
+    /// rated on the target, [`Project::step_attack_potential`](crate::Project::step_attack_potential)
     /// resolves the step's score, band, and feasibility, and
     /// [`Project::effective_step_feasibility`](crate::Project::effective_step_feasibility)
     /// prefers that resolved feasibility over any direct
     /// [`Op::SetStepFeasibility`] rating.
     SetStepFactor {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to rate.
+        target: StepTarget,
         /// The attack potential factor.
         factor: FeasibilityFactor,
         /// The new factor rating, or `None` for unrated.
@@ -481,26 +486,22 @@ pub enum Op {
         /// Provenance of the step factor change.
         provenance: Provenance,
     },
-    /// Sets or clears (`None`) the component or interface one attack step
-    /// goes through (CFG-01). Steps only; a gate is rejected with
+    /// Sets or clears (`None`) the component or interface one tree or shared
+    /// step goes through (CFG-01). Tree steps only; a gate is rejected with
     /// [`ModelError::NotAStep`](crate::ModelError::NotAStep).
     SetStepVia {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to change.
+        target: StepTarget,
         /// The live component or interface, or `None` for nothing.
         via: Option<ItemRef>,
         /// Provenance of the change.
         provenance: Provenance,
     },
-    /// Sets or clears (`None`) the pack-defined attack type of one attack
-    /// step (CFG-02). Steps only.
+    /// Sets or clears (`None`) the pack-defined attack type of one tree or
+    /// shared step (CFG-02). Tree steps only.
     SetStepAttackType {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to change.
+        target: StepTarget,
         /// The attack type in the project's methodology, or `None`.
         attack_type: Option<AttackType>,
         /// Provenance of the change.

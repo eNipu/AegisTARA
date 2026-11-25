@@ -16,7 +16,8 @@ use aegis_client::view::Selection;
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
     DataFlowId, GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId,
-    PartyIdx, PartyKind, Project, Provenance, StepRef, ThreatId, TreeId, TrustBoundaryId,
+    PartyIdx, PartyKind, Project, Provenance, StepRef, StepTarget, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 
 /// `Selection` has no `Ord`, and the orphan rule forbids adding one here. This
@@ -180,8 +181,7 @@ fn project() -> Project {
             provenance: provenance.clone(),
         },
         Op::SetStepVia {
-            tree: tree_id,
-            node: step,
+            target: StepTarget::Step(tree_id, step),
             via: Some(ItemRef::Interface(iface)),
             provenance: provenance.clone(),
         },

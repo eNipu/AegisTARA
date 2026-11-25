@@ -12,7 +12,7 @@ use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::library::LibraryPack;
 use aegis_model::{
     AttackTree, GateKind, LintCode, Methodology, Node, NodeId, Op, Project, ProvenanceSource,
-    ThreatId, TreeId,
+    StepTarget, ThreatId, TreeId,
 };
 
 fn pack() -> Arc<LibraryPack> {
@@ -271,8 +271,7 @@ fn a_fragment_replaces_a_step_at_its_place() {
         .expect("level");
     ws.apply(
         vec![Op::SetStepFeasibility {
-            tree,
-            node: leaf,
+            target: StepTarget::Step(tree, leaf),
             level: Some(low),
             provenance: aegis_model::Provenance::default(),
         }],

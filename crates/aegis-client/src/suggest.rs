@@ -19,8 +19,8 @@ use std::sync::OnceLock;
 
 use aegis_model::{
     Citation, ElementRef, FeasibilityLevel, GateKind, GhostPreview, Methodology, Node, NodeId,
-    NodeIdx, Op, Provenance, SuggestionBranch, SuggestionError, SuggestionId, SuggestionItem,
-    ThreatId,
+    NodeIdx, Op, Provenance, StepTarget, SuggestionBranch, SuggestionError, SuggestionId,
+    SuggestionItem, ThreatId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -680,8 +680,7 @@ pub fn suggest_tree_nodes(
         }];
         if let Some(level) = feas_level {
             ops.push(Op::SetStepFeasibility {
-                tree: tree_id,
-                node: step_id,
+                target: StepTarget::Step(tree_id, step_id),
                 level: Some(level),
                 provenance: Provenance::default(),
             });

@@ -5,7 +5,7 @@ mod common;
 
 use aegis_model::{
     AssetId, AttackTree, ConditionId, Derivation, ElementRef, GateKind, ModelError, Node, NodeId,
-    NodeIdx, Op, Project, ProjectEvalCache, Provenance, ThreatId, TreeId,
+    NodeIdx, Op, Project, ProjectEvalCache, Provenance, StepTarget, ThreatId, TreeId,
 };
 use common::{asset_id, builtin, cat, condition_id, control_id, damage_id, feas, goal_id, lvl};
 use common::{node_id, threat_id, tree_id};
@@ -435,8 +435,7 @@ fn cached_rating_change_keeps_exclusions() -> Res {
     for (n, level) in [(2, medium), (1, fx.level("low"))] {
         fx.p.apply_cached(
             Op::SetStepFeasibility {
-                tree: t,
-                node: node_id(n),
+                target: StepTarget::Step(t, node_id(n)),
                 level: Some(level),
                 provenance: prov(),
             },

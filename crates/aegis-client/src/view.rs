@@ -957,6 +957,7 @@ pub fn element_ref_to_target(target: ElementRef) -> String {
         ElementRef::Goal(id) => format!("goal:{id}"),
         ElementRef::Claim(id) => format!("claim:{id}"),
         ElementRef::Assumption(id) => format!("assumption:{id}"),
+        ElementRef::SharedStep(id) => format!("shared_step:{id}"),
         ElementRef::ItemDescription => "item_description".to_owned(),
         ElementRef::ItemScope => "item_scope".to_owned(),
     }
@@ -987,6 +988,7 @@ pub fn target_to_element_ref(target: &str) -> Option<ElementRef> {
         "goal" | "cybersecurity_goal" => Some(ElementRef::Goal(uuid_str.parse().ok()?)),
         "claim" | "cybersecurity_claim" => Some(ElementRef::Claim(uuid_str.parse().ok()?)),
         "assumption" => Some(ElementRef::Assumption(uuid_str.parse().ok()?)),
+        "shared_step" => Some(ElementRef::SharedStep(uuid_str.parse().ok()?)),
         _ => None,
     }
 }

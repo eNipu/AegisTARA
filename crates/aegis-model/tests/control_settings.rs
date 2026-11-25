@@ -26,7 +26,7 @@ use aegis_model::{
     AssetId, AttackTree, AttackType, CeilingSource, ComponentId, ControlId, ControlRule, DamageId,
     FeasibilityLevel, GateKind, InterfaceId, ItemRef, LintCode, MAX_CONTROL_TARGETS, Methodology,
     ModelError, Node, NodeId, Op, OpCodec, OpLogReader, OpLogWriter, Project, ProjectEvalCache,
-    Provenance, RiskTreatment, ThreatId, TreeId,
+    Provenance, RiskTreatment, StepTarget, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 
@@ -141,62 +141,52 @@ fn reach_fixture() -> ReachFx {
             provenance: Provenance::default(),
         },
         Op::SetStepVia {
-            tree,
-            node: s_ecu,
+            target: StepTarget::Step(tree, s_ecu),
             via: Some(ItemRef::Component(ecu)),
             provenance: Provenance::default(),
         },
         Op::SetStepVia {
-            tree,
-            node: s_jtag,
+            target: StepTarget::Step(tree, s_jtag),
             via: Some(ItemRef::Interface(jtag)),
             provenance: Provenance::default(),
         },
         Op::SetStepVia {
-            tree,
-            node: s_can,
+            target: StepTarget::Step(tree, s_can),
             via: Some(ItemRef::Interface(can)),
             provenance: Provenance::default(),
         },
         Op::SetStepVia {
-            tree,
-            node: s_sub,
+            target: StepTarget::Step(tree, s_sub),
             via: Some(ItemRef::Component(sub_ecu)),
             provenance: Provenance::default(),
         },
         Op::SetStepVia {
-            tree,
-            node: s_spi,
+            target: StepTarget::Step(tree, s_spi),
             via: Some(ItemRef::Interface(spi)),
             provenance: Provenance::default(),
         },
         Op::SetStepAttackType {
-            tree,
-            node: s_ecu,
+            target: StepTarget::Step(tree, s_ecu),
             attack_type: Some(t_debug),
             provenance: Provenance::default(),
         },
         Op::SetStepAttackType {
-            tree,
-            node: s_jtag,
+            target: StepTarget::Step(tree, s_jtag),
             attack_type: Some(t_debug),
             provenance: Provenance::default(),
         },
         Op::SetStepAttackType {
-            tree,
-            node: s_can,
+            target: StepTarget::Step(tree, s_can),
             attack_type: Some(t_inject),
             provenance: Provenance::default(),
         },
         Op::SetStepAttackType {
-            tree,
-            node: s_sub,
+            target: StepTarget::Step(tree, s_sub),
             attack_type: Some(t_debug),
             provenance: Provenance::default(),
         },
         Op::SetStepAttackType {
-            tree,
-            node: s_spi,
+            target: StepTarget::Step(tree, s_spi),
             attack_type: Some(t_debug),
             provenance: Provenance::default(),
         },
@@ -597,8 +587,7 @@ fn removal_blockers_and_caps_are_enforced() {
     // Clear step via on jtag so only the control blocks removing jtag.
     fx.project
         .apply(Op::SetStepVia {
-            tree: fx.tree,
-            node: fx.s_jtag,
+            target: StepTarget::Step(fx.tree, fx.s_jtag),
             via: None,
             provenance: Provenance::default(),
         })
@@ -622,8 +611,7 @@ fn removal_blockers_and_caps_are_enforced() {
     for n in [fx.s_sub, fx.s_spi] {
         fx.project
             .apply(Op::SetStepVia {
-                tree: fx.tree,
-                node: n,
+                target: StepTarget::Step(fx.tree, n),
                 via: None,
                 provenance: Provenance::default(),
             })
@@ -814,8 +802,7 @@ fn a_step_with_only_a_through_item_or_only_a_type_is_flagged_when_rules_exist() 
     };
     let set_type = |p: &mut Project, tree, node, attack_type| {
         p.apply(Op::SetStepAttackType {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             attack_type,
             provenance: Provenance::default(),
         })
@@ -823,8 +810,7 @@ fn a_step_with_only_a_through_item_or_only_a_type_is_flagged_when_rules_exist() 
     };
     let set_via = |p: &mut Project, tree, node, via| {
         p.apply(Op::SetStepVia {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             via,
             provenance: Provenance::default(),
         })
@@ -1224,16 +1210,14 @@ proptest! {
         for (s_i, &step_id) in steps.iter().enumerate() {
             if let Some(v_i) = case.via[s_i] {
                 ops.push(Op::SetStepVia {
-                    tree,
-                    node: step_id,
+                    target: StepTarget::Step(tree, step_id),
                     via: Some(targets[v_i]),
                     provenance: Provenance::default(),
                 });
             }
             if let Some(t_i) = case.attack_type[s_i] {
                 ops.push(Op::SetStepAttackType {
-                    tree,
-                    node: step_id,
+                    target: StepTarget::Step(tree, step_id),
                     attack_type: Some(a_types[t_i]),
                     provenance: Provenance::default(),
                 });

@@ -9,7 +9,7 @@ use aegis_model::{
     AttackFilter, AttackTree, ControlId, ElementRef, GateKind, Limit, MAX_ACTOR_BYTES,
     MAX_FEASIBILITY_FACTORS, MAX_NAME_CHARS, Methodology, ModelError, Node, Op, OpCodec,
     OpLogReader, OpLogWriter, Project, ProjectEvalCache, Provenance, Reason, ScalabilityFilter,
-    StoreError, TreeId, VocabKind,
+    StepTarget, StoreError, TreeId, VocabKind,
 };
 use serde_json::Value;
 
@@ -689,22 +689,19 @@ fn each_factor_excludes_only_rated_steps() {
                 provenance: prov.clone(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s_rated,
+                target: StepTarget::Step(tr1, s_rated),
                 factor,
                 level: Some(excluded_level),
                 provenance: prov.clone(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s_sibling,
+                target: StepTarget::Step(tr1, s_sibling),
                 factor: other_factor,
                 level: Some(other_level),
                 provenance: prov.clone(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s_unrated,
+                target: StepTarget::Step(tr1, s_unrated),
                 factor: other_factor,
                 level: Some(other_level),
                 provenance: prov.clone(),
@@ -716,8 +713,7 @@ fn each_factor_excludes_only_rated_steps() {
                 provenance: prov.clone(),
             },
             Op::SetStepFactor {
-                tree: tr2,
-                node: s_only,
+                target: StepTarget::Step(tr2, s_only),
                 factor,
                 level: Some(excluded_level),
                 provenance: prov.clone(),
@@ -1118,8 +1114,7 @@ fn default_filter_skips_applicability_and_bounds_cache_recomputes() {
     cache.reset_counters();
     p.apply_cached(
         Op::SetStepFactor {
-            tree: tr,
-            node: s1,
+            target: StepTarget::Step(tr, s1),
             factor: f0,
             level: Some(l0),
             provenance: prov.clone(),
@@ -1137,8 +1132,7 @@ fn default_filter_skips_applicability_and_bounds_cache_recomputes() {
         cache.reset_counters();
         p.apply_cached(
             Op::SetStepFactor {
-                tree: tr,
-                node: s1,
+                target: StepTarget::Step(tr, s1),
                 factor: f,
                 level: Some(l),
                 provenance: prov.clone(),
