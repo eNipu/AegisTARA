@@ -718,6 +718,45 @@ fn missing_shared_targets_are_errors_not_noops() {
 }
 
 #[test]
+fn unuse_shared_step_preserves_rating_fields_and_undoes_exactly() {
+    let (mut ws, tree, node, shared, _) = linked_workspace(0);
+    let shared_idx = ws.project().shared_step_idx(&shared).expect("shared");
+    let factor = ws
+        .project()
+        .methodology()
+        .feasibility_factors()
+        .next()
+        .expect("factor");
+    let step = ws.project().shared_step(shared_idx).expect("shared");
+    let expected = (
+        step.feasibility(),
+        step.factor(factor),
+        ws.project().shared_step_via(shared_idx),
+        step.attack_type(),
+    );
+    let edit = Edit::UnuseSharedStep { tree, node };
+    exact_undo(&mut ws, edit.clone());
+    apply(&mut ws, edit);
+    let t = ws.project().attack_tree_idx(&tree).expect("tree");
+    let n = ws
+        .project()
+        .attack_tree(t)
+        .expect("tree")
+        .idx_of(&node)
+        .expect("node");
+    assert_eq!(ws.project().step_shared(t, n), None);
+    assert_eq!(
+        (
+            ws.project().step_feasibility(t, n),
+            ws.project().step_factor(t, n, factor),
+            ws.project().step_via(t, n),
+            ws.project().step_attack_type(t, n),
+        ),
+        expected
+    );
+}
+
+#[test]
 fn shared_step_selection_exposes_both_forward_relations() {
     let (ws, _, _, shared, _component) = linked_workspace(1);
     let view = inspector_view(

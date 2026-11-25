@@ -3793,9 +3793,7 @@ impl Edit {
                 node,
                 shared_step,
             } => linked_shared_step(project, *tree, *node) == Some(*shared_step),
-            Edit::UnuseSharedStep { tree, node } => {
-                linked_shared_step(project, *tree, *node).is_some()
-            }
+            Edit::UnuseSharedStep { .. } => false,
             Edit::SetSharedStepFeasibility { shared_step, level } => {
                 shared(shared_step).is_some_and(|s| s.feasibility() == *level)
             }
