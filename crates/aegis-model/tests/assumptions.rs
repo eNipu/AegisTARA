@@ -678,6 +678,7 @@ fn add_tree_with_steps(
         steps.push(s);
     }
     p.apply(Op::AddAttackTree {
+        role: Default::default(),
         id: tree_id,
         tree,
         step_feasibility: vec![],
@@ -1421,6 +1422,7 @@ fn add_rated_tree(
         rated.push((sid, feas(&m, level)));
     }
     p.apply(Op::AddAttackTree {
+        role: Default::default(),
         id: tid,
         tree,
         step_feasibility: rated,
@@ -1861,6 +1863,7 @@ fn cache_fixture() -> CacheFixture {
         ),
     ] {
         p.apply(Op::AddAttackTree {
+            role: Default::default(),
             id: tid,
             tree,
             step_feasibility: rated,

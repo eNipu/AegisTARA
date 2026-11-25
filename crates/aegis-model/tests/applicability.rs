@@ -146,6 +146,7 @@ impl Fx {
             t.add_child(t.root(), *s, Node::step("s")).expect("step");
         }
         self.apply(Op::AddAttackTree {
+            role: Default::default(),
             id,
             tree: t,
             step_feasibility: vec![],
@@ -388,6 +389,7 @@ fn a_nested_gate_excludes_only_itself_when_the_root_stays_live() {
     t.add_child(t.root(), NodeId::new_v7(), Node::step("live"))
         .expect("step");
     f.apply(Op::AddAttackTree {
+        role: Default::default(),
         id: tree,
         tree: t,
         step_feasibility: vec![],

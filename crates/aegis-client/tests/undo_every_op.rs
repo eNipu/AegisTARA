@@ -250,6 +250,7 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
     // Attack tree nodes.
     let t = AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree");
     go(Op::AddAttackTree {
+        role: Default::default(),
         id: tree,
         tree: t,
         step_feasibility: vec![],
@@ -636,6 +637,7 @@ fn walk_conditions(seen: &mut BTreeSet<String>) {
             provenance: who(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
             step_feasibility: vec![],
@@ -728,6 +730,7 @@ fn walk_assumptions(seen: &mut BTreeSet<String>) {
             provenance: who(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
             step_feasibility: vec![],
@@ -849,6 +852,7 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
             provenance: who(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(node, Node::step("Inject frame")).expect("tree"),
             step_feasibility: Vec::new(),
@@ -1043,6 +1047,7 @@ fn removals_clear_condition_links_in_one_undo_step() {
                 provenance: who(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree,
                 tree: at,
                 step_feasibility: vec![],
@@ -1155,6 +1160,7 @@ fn assumption_edits_removals_and_tree_moves_undo_exactly() {
                 provenance: who(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree,
                 tree: at,
                 step_feasibility: vec![],

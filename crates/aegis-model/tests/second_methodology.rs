@@ -231,6 +231,7 @@ fn second_methodology_rejects_foreign_indices() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: aegis_model::AttackTree::new(step, aegis_model::Node::step("Step"))
                 .expect("step"),

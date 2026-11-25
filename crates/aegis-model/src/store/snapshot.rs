@@ -500,6 +500,8 @@ struct ThreatView<'a> {
 #[derive(Serialize)]
 struct TreeView<'a> {
     id: Text<TreeId>,
+    #[serde(skip_serializing_if = "crate::TreeRole::is_threat")]
+    role: crate::TreeRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     visual_id: Option<Text<VisualDisplay>>,
     nodes: NodesView<'a>,
@@ -785,8 +787,12 @@ impl Serialize for Trees<'_> {
                 .enumerate()
                 .map(|(pos, (tree_idx, id, tree))| TreeView {
                     id: Text(id),
+                    // `attack_trees` yields live slots only, so the role is present.
+                    role: p.attack_tree_role(tree_idx).unwrap_or_default(),
                     visual_id: VisualDisplay::non_default(
-                        VisualPrefix::Tree,
+                        p.attack_tree_role(tree_idx)
+                            .unwrap_or_default()
+                            .visual_prefix(),
                         p.attack_tree_visual_num(tree_idx),
                         pos,
                     ),
@@ -1595,11 +1601,20 @@ impl Project {
                 .collect();
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, tr) in snapshot.attack_trees.into_iter().enumerate() {
-            let vis = claim_visual(tr.visual_id, pos, &mut used, &mut next_vis)?;
+            if tr.visual_id.as_ref().is_some_and(|v| v.1 != tr.role) {
+                return Err(StoreError::InvalidId);
+            }
+            let vis = claim_visual_num(tr.visual_id.map(|v| v.0), pos, &mut used, &mut next_vis)?;
             let provenance = wire::unwrap_provenance(tr.provenance);
             let id = tr.id.0;
             // A snapshot may hold a bigger tree than one op can carry.
-            project.load_attack_tree(id, tr.nodes.0, tr.step_feasibility.0, provenance.clone())?;
+            project.load_attack_tree(
+                id,
+                tr.role,
+                tr.nodes.0,
+                tr.step_feasibility.0,
+                provenance.clone(),
+            )?;
             project.set_tree_loaded_visual(&id, vis, next_vis);
             for (node, factors) in tr.step_factors.0 {
                 for (factor, level) in factors {
@@ -1818,8 +1833,17 @@ fn claim_visual<K>(
     used: &mut std::collections::BTreeSet<u32>,
     next: &mut u32,
 ) -> Result<u32, StoreError> {
+    claim_visual_num(wire.map(|v| v.0), pos, used, next)
+}
+
+fn claim_visual_num(
+    wire: Option<u32>,
+    pos: usize,
+    used: &mut std::collections::BTreeSet<u32>,
+    next: &mut u32,
+) -> Result<u32, StoreError> {
     let vis = match wire {
-        Some(v) => v.0,
+        Some(v) => v,
         None => u32::try_from(pos).map_err(|_| StoreError::InvalidId)?,
     };
     if !used.insert(vis) {

@@ -343,6 +343,7 @@ pub fn insert_ops(
             let tree =
                 aegis_model::AttackTree::new(root, root_node).map_err(|_| EditError::EmptyName)?;
             b.ops.push(Op::AddAttackTree {
+                role: Default::default(),
                 id: *id,
                 tree,
                 step_feasibility: Vec::new(),

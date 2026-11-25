@@ -610,24 +610,28 @@ fn assumptions_view_rows_strict_selection_affects_count_and_conditioned_off() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree0_id,
                 tree: tree0,
                 step_feasibility: vec![],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree1_id,
                 tree: tree1,
                 step_feasibility: vec![],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree2_id,
                 tree: tree2,
                 step_feasibility: vec![],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree3_id,
                 tree: tree3,
                 step_feasibility: vec![],
@@ -916,18 +920,21 @@ fn exclusion_reasons_entries_and_assumption_switch_toasts() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree0_id,
                 tree: tree0,
                 step_feasibility: vec![(s0_high, high), (s0_low, low)],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree1_id,
                 tree: tree1,
                 step_feasibility: vec![(s1, high)],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree2_id,
                 tree: tree2,
                 step_feasibility: vec![(s2, high)],
@@ -1230,12 +1237,14 @@ fn report_doc_and_xlsx_surface_assumptions_across_locales_and_mixed_configs() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree0_id,
                 tree: tree0,
                 step_feasibility: vec![(s0, high)],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree1_id,
                 tree: tree1,
                 step_feasibility: vec![(s1, high)],
@@ -1618,6 +1627,7 @@ fn xlsx_formula_injection_on_assumptions_and_links_is_escaped() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![],

@@ -38,6 +38,7 @@ fn add_threat_with_single_cond_step(
     ws.apply(
         vec![
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(step, high)],
@@ -134,6 +135,7 @@ fn condition_switch_toast_reports_step_counts_and_moved_risks() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree0_id,
                 tree: tree0,
                 step_feasibility: vec![(step0_always, high), (step0_cond, high)],

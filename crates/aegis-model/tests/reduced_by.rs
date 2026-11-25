@@ -129,6 +129,7 @@ fn or_tree(
     ap(
         project,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id,
             tree,
             step_feasibility: vec![(a, a_level), (b, b_level)],
@@ -144,6 +145,7 @@ fn one_step_tree(project: &mut Project, rated: FeasibilityLevel) -> (TreeId, Nod
     ap(
         project,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id,
             tree,
             step_feasibility: vec![(step, rated)],

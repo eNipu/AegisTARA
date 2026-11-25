@@ -443,7 +443,7 @@ impl Applicability {
     /// let (t, root, step, cf) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7(), ConditionId::new_v7());
     /// let mut tree = AttackTree::new(root, Node::gate(GateKind::And, "root"))?;
     /// tree.add_child(tree.root(), step, Node::step("open"))?;
-    /// p.apply(Op::AddAttackTree { id: t, tree, step_feasibility: vec![], provenance: prov.clone() })?;
+    /// p.apply(Op::AddAttackTree { role: Default::default(), id: t, tree, step_feasibility: vec![], provenance: prov.clone() })?;
     /// p.apply(Op::AddCondition {
     ///     id: cf, name: "Option fitted".into(), description: "".into(), present: false, provenance: prov.clone(),
     /// })?;

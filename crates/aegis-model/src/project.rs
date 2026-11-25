@@ -9,7 +9,7 @@ use crate::applicability::{
     MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, StepRef,
 };
 use crate::asset::{Asset, PropertySet};
-use crate::blocks::{MAX_SHARED_STEPS, SharedStep};
+use crate::blocks::{MAX_SHARED_STEPS, SharedStep, TreeRole};
 use crate::control::{
     CeilingSource, ControlRule, ControlStatus, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
@@ -187,6 +187,7 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
 /// step mitigations, and provenance. Gate slots are always `None` and empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeEntry {
+    role: TreeRole,
     tree: AttackTree,
     step_feasibility: Vec<Option<FeasibilityLevel>>,
     step_factors: Vec<Box<[Option<FactorLevel>]>>,
@@ -1272,6 +1273,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1298,6 +1300,7 @@ impl Project {
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// let prov = Provenance::ai("tara-assistant", 1_700_000_000_000);
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id,
     ///     tree,
     ///     step_feasibility: vec![],
@@ -1341,6 +1344,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1380,6 +1384,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// assert_eq!(project.attack_trees().map(|(_, id, _)| id).collect::<Vec<_>>(), [id]);
@@ -1406,6 +1411,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![(step, level)], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1481,6 +1487,7 @@ impl Project {
     /// let level = m.feasibility_level("high").ok_or("no level")?;
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![(step, level)], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1508,6 +1515,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Extract key"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
@@ -1550,6 +1558,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Extract key"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
@@ -1622,6 +1631,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Glitch boot ROM"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// for (f_key, l_key) in [
@@ -1675,6 +1685,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -2999,6 +3010,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -3022,6 +3034,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -3031,8 +3044,17 @@ impl Project {
     /// ```
     #[must_use]
     pub fn attack_tree_visual_id(&self, idx: TreeIdx) -> Option<String> {
-        self.attack_tree_visual_num(idx)
-            .map(|n| VisualPrefix::Tree.format(n))
+        self.attack_tree_visual_num(idx).map(|n| {
+            self.trees
+                .get(idx)
+                .map(|e| e.role.visual_prefix().format(n))
+        })?
+    }
+
+    /// A live tree's immutable role, or `None` for a missing slot. Time O(1).
+    #[must_use]
+    pub fn attack_tree_role(&self, idx: TreeIdx) -> Option<TreeRole> {
+        self.trees.get(idx).map(|entry| entry.role)
     }
 
     /// Returns a live security control's 0-based visual sequence number in
@@ -3562,6 +3584,7 @@ impl Project {
     /// let root = tree.root();
     /// let low = m.feasibility_level("low").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, low)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -3600,6 +3623,7 @@ impl Project {
     /// let (tree_id, step) = (TreeId::new_v7(), NodeId::new_v7());
     /// let tree = AttackTree::new(step, Node::step("Flash firmware"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
@@ -3675,6 +3699,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Extract key"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -3746,6 +3771,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Inject frame"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
@@ -3890,6 +3916,7 @@ impl Project {
     /// })?;
     /// let tree = AttackTree::new(step, Node::step("Dump flash"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
@@ -4096,6 +4123,7 @@ impl Project {
     /// let low = m.feasibility_level("low").ok_or("no level")?;
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id,
     ///     tree,
     ///     step_feasibility: vec![(s1, low), (s2, high)],
@@ -4230,6 +4258,7 @@ impl Project {
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -4303,6 +4332,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4360,6 +4390,7 @@ impl Project {
     /// tree.add_child(tree.root(), ota, Node::step("Via OTA update"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(obd, high), (ota, med)],
@@ -4426,6 +4457,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay frame"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4507,6 +4539,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4557,6 +4590,7 @@ impl Project {
     /// let low = m.feasibility_level("low").ok_or("no level")?;
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id,
     ///     tree,
     ///     step_feasibility: vec![(s1, low), (s2, high)],
@@ -4611,6 +4645,7 @@ impl Project {
     /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(obd, high), (ota, med)],
@@ -4674,6 +4709,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Step"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -4738,6 +4774,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4805,6 +4842,7 @@ impl Project {
     /// tree.add_child(i_or, z, Node::step("Z"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(x, high), (y, med), (z, med)],
@@ -4857,6 +4895,7 @@ impl Project {
     /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -4919,6 +4958,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Step"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -4983,6 +5023,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -5044,6 +5085,7 @@ impl Project {
     /// tree.add_child(tree.root(), y, Node::step("Y"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(x, high), (y, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5088,6 +5130,7 @@ impl Project {
     /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5150,6 +5193,7 @@ impl Project {
     /// let root_idx = tree.root();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5211,6 +5255,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Replay"))?;
     /// let root_idx = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5277,6 +5322,7 @@ impl Project {
     /// tree.add_child(tree.root(), s2, Node::step("Dominant"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(s1, low), (s2, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5326,6 +5372,7 @@ impl Project {
     /// tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5404,6 +5451,7 @@ impl Project {
     /// tree.add_child(tree.root(), s2, Node::step("Easy"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(s1, med), (s2, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5468,6 +5516,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -5857,6 +5906,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -5920,6 +5970,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -7293,6 +7344,7 @@ impl Project {
                 tree,
                 step_feasibility,
                 provenance,
+                ..
             } => return self.check_add_tree(*id, tree, step_feasibility, provenance),
             Op::SetStepFeasibility { target, level, .. } => match target {
                 StepTarget::Step(tree, node) => {
@@ -7926,11 +7978,12 @@ impl Project {
             } => self.commit_link(threat, damage, provenance, false),
             Op::RemoveThreatScenario { id } => self.commit_remove_threat(id),
             Op::AddAttackTree {
+                role,
                 id,
                 tree,
                 step_feasibility,
                 provenance,
-            } => self.commit_add_tree(id, tree, step_feasibility, provenance),
+            } => self.commit_add_tree(id, role, tree, step_feasibility, provenance),
             Op::SetStepFeasibility {
                 target,
                 level,
@@ -9763,6 +9816,7 @@ impl Project {
     pub(crate) fn load_attack_tree(
         &mut self,
         id: TreeId,
+        role: TreeRole,
         tree: AttackTree,
         step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
         provenance: Provenance,
@@ -9774,7 +9828,7 @@ impl Project {
             &provenance,
             MAX_ATTACK_TREE_NODES,
         )?;
-        self.commit_add_tree(id, tree, step_feasibility, provenance)
+        self.commit_add_tree(id, role, tree, step_feasibility, provenance)
             .map(|_| ())
     }
 
@@ -11495,6 +11549,7 @@ impl Project {
     fn commit_add_tree(
         &mut self,
         id: TreeId,
+        role: TreeRole,
         tree: AttackTree,
         step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
         provenance: Provenance,
@@ -11512,6 +11567,7 @@ impl Project {
         let step_factors = vec![Box::default(); tree.len()];
         let step_mitigations = vec![Box::default(); tree.len()];
         let entry = TreeEntry {
+            role,
             tree,
             step_feasibility: slots,
             step_factors,
@@ -11760,6 +11816,7 @@ impl Project {
             .filter_map(|((_, node_id, _), &level)| level.map(|l| (node_id, l)))
             .collect();
         Ok(Op::AddAttackTree {
+            role: entry.role,
             id,
             tree: entry.tree,
             step_feasibility,
@@ -13488,7 +13545,8 @@ impl Project {
     /// Compares two trees from two projects by content, with control
     /// references resolved to public IDs. O(V + M).
     fn same_tree(&self, x: &TreeEntry, other: &Project, y: &TreeEntry) -> bool {
-        x.tree == y.tree
+        x.role == y.role
+            && x.tree == y.tree
             && x.step_feasibility == y.step_feasibility
             && x.step_factors == y.step_factors
             && (0..x.tree.len()).all(|i| {
@@ -14675,6 +14733,7 @@ struct CachedThreatEval {
 /// tree.add_child(tree.root(), s2, Node::step("Path B"))?;
 /// let tree_id = TreeId::new_v7();
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id,
 ///     tree,
 ///     step_feasibility: vec![(s1, high), (s2, med)],
@@ -14883,6 +14942,7 @@ impl ProjectEvalCache {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15112,6 +15172,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15160,6 +15221,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15226,6 +15288,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15290,6 +15353,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15427,6 +15491,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -16674,6 +16739,7 @@ mod tests {
         tree.add_child(tree.root(), s2_id, crate::tree::Node::step("Step 2"))
             .expect("s2");
         proj.apply(Op::AddAttackTree {
+            role: crate::TreeRole::default(),
             id: tr,
             tree,
             step_feasibility: vec![(s2_id, high)],
@@ -16918,6 +16984,7 @@ mod tests {
         tree.add_child(tree.root(), s1_id, crate::tree::Node::step("Step 1"))
             .expect("s1");
         p.apply(Op::AddAttackTree {
+            role: crate::TreeRole::default(),
             id: tr,
             tree,
             step_feasibility: vec![],

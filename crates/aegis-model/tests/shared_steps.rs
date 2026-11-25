@@ -127,6 +127,7 @@ fn clear_rating_ops(id: SharedStepId, provenance: Provenance) -> [Op; 4] {
 
 fn add_tree(p: &mut Project, tree: TreeId, nodes: AttackTree) {
     p.apply(Op::AddAttackTree {
+        role: Default::default(),
         id: tree,
         tree: nodes,
         step_feasibility: Vec::new(),

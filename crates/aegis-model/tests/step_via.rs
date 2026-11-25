@@ -52,6 +52,7 @@ fn fixture() -> Fx {
             provenance: Provenance::default(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: t,
             step_feasibility: vec![],
@@ -165,6 +166,7 @@ fn an_attack_type_of_another_methodology_is_rejected() {
     let (tree, root) = (TreeId::new_v7(), NodeId::new_v7());
     project
         .apply(Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::step("Step")).expect("tree"),
             step_feasibility: vec![],

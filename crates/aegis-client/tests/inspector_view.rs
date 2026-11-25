@@ -158,6 +158,7 @@ fn primary_cause_resolves_threat_tree_gate_step_damage_and_condition() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(step_easy, high), (step_hard, low)],
@@ -458,6 +459,7 @@ fn inspector_view_populates_all_14_selection_kinds_relations_systems_and_exclusi
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(step_via_iface, high), (step_excluded, high)],
@@ -881,12 +883,14 @@ fn assumption_inspector_relations_and_excluded_tree_step_causes() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree: AttackTree::new(root1, Node::gate(GateKind::Or, "Tamper ECU")).expect("t1"),
                 step_feasibility: vec![],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree2_id,
                 tree: tree2,
                 step_feasibility: vec![],
@@ -1064,6 +1068,7 @@ fn shared_step_selection_has_visual_id_ratings_and_forward_relations() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: Vec::new(),

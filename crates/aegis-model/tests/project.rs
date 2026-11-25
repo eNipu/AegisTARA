@@ -372,6 +372,7 @@ fn fixture(name: &str) -> (Project, Fx) {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.tree1,
             tree: tree1,
             step_feasibility: vec![(fx.tree1_step, feas(&m, "medium"))],
@@ -390,6 +391,7 @@ fn fixture(name: &str) -> (Project, Fx) {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.tree_free,
             tree: tree_free,
             step_feasibility: vec![(fx.tree_free_step, feas(&m, "low"))],
@@ -720,6 +722,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         (
             p.clone(),
             Op::AddAttackTree {
+                role: Default::default(),
                 id: fx.tree1,
                 tree: AttackTree::new(fx.fresh_node, Node::step(n())).expect("step"),
                 step_feasibility: vec![],
@@ -768,6 +771,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         (
             p.clone(),
             Op::AddAttackTree {
+                role: Default::default(),
                 id: fx.fresh_tree,
                 tree: AttackTree::new(fx.fresh_node, Node::step(n())).expect("step"),
                 step_feasibility: vec![
@@ -792,6 +796,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
                         .expect("step");
                 }
                 Op::AddAttackTree {
+                    role: Default::default(),
                     id: fx.fresh_tree,
                     tree: big_tree,
                     step_feasibility: vec![],
@@ -1337,6 +1342,7 @@ fn inverse_round_trip() {
         },
         Op::RemoveThreatScenario { id: fx.t1 },
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.fresh_tree,
             tree: AttackTree::new(fx.fresh_node, Node::step("new")).expect("step"),
             step_feasibility: vec![(fx.fresh_node, feas(&m, "high"))],
@@ -1664,6 +1670,7 @@ fn errors_never_contain_names() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: empty_tree_id,
             tree: empty_tree,
             step_feasibility: vec![],
@@ -1802,6 +1809,7 @@ fn threat_attack_tree_integrity_and_validation() {
     rejects(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.fresh_tree,
             tree: step_tree.clone(),
             step_feasibility: vec![
@@ -1823,6 +1831,7 @@ fn threat_attack_tree_integrity_and_validation() {
     rejects(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.fresh_tree,
             tree: step_tree,
             step_feasibility: vec![(fx.fresh_node, bad_flvl)],
@@ -1834,6 +1843,7 @@ fn threat_attack_tree_integrity_and_validation() {
     rejects(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.fresh_tree,
             tree: blank_tree,
             step_feasibility: vec![],
@@ -1847,6 +1857,7 @@ fn threat_attack_tree_integrity_and_validation() {
     rejects(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.fresh_tree,
             tree: long_tree,
             step_feasibility: vec![],
@@ -1874,6 +1885,7 @@ fn threat_attack_tree_integrity_and_validation() {
     rejects(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.fresh_tree,
             tree: tree33,
             step_feasibility: vec![],
@@ -1887,6 +1899,7 @@ fn threat_attack_tree_integrity_and_validation() {
     let undo32 = ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: fx.fresh_tree,
             tree: tree32,
             step_feasibility: vec![],
@@ -1985,6 +1998,7 @@ fn evaluate_threat_feasibility_and_why_path() {
         ok(
             &mut p,
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(sa_id, f3), (shared_id, f2), (sb_id, f1)],
@@ -2262,6 +2276,7 @@ fn provenance_lifecycle_and_undo_redo_across_every_op() {
     record(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id,
             tree: AttackTree::new(step_id, Node::step("Step")).expect("step"),
             step_feasibility: vec![(step_id, feas(&m, "low"))],
@@ -2675,6 +2690,7 @@ fn specific_model_error_messages() {
         ),
         (
             Op::AddAttackTree {
+                role: Default::default(),
                 id: fx.fresh_tree,
                 tree: AttackTree::new(fx.fresh_node, Node::step(" ")).expect("step"),
                 step_feasibility: vec![],
@@ -2686,6 +2702,7 @@ fn specific_model_error_messages() {
         ),
         (
             Op::AddAttackTree {
+                role: Default::default(),
                 id: fx.fresh_tree,
                 tree: AttackTree::new(fx.fresh_node, Node::step(long.to_string())).expect("step"),
                 step_feasibility: vec![],
@@ -2821,6 +2838,7 @@ fn evaluate_risk_across_damages_and_explain_why() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr,
             tree: tree.clone(),
             step_feasibility: vec![
@@ -3206,6 +3224,7 @@ fn security_controls_risk_treatment_and_residual_risk() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr,
             tree: tree.clone(),
             step_feasibility: vec![
@@ -3555,6 +3574,7 @@ fn lint_all_rules_and_resolutions() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr1,
             tree,
             step_feasibility: vec![(s_rated, feas(&m, "high"))],
@@ -3660,6 +3680,7 @@ fn lint_all_rules_and_resolutions() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr1,
             tree: fixed_tree,
             step_feasibility: vec![(s_unrated, feas(&m, "low")), (s_rated, feas(&m, "high"))],
@@ -3869,6 +3890,7 @@ fn lint_never_contains_names_or_actors() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr_unlinked,
             tree: tree1,
             step_feasibility: vec![(s_redundant, feas(&m, "medium"))],
@@ -3909,6 +3931,7 @@ fn lint_never_contains_names_or_actors() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr_linked,
             tree: tree2,
             step_feasibility: vec![],
@@ -4241,6 +4264,7 @@ fn top_k_inherent_and_residual_paths_on_project() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr,
             tree,
             step_feasibility: vec![(n_prep, high), (n_obd, high), (n_ota, med), (n_phys, low)],
@@ -4410,6 +4434,7 @@ fn project_diff_tracks_structural_changes_and_risk_deltas() {
     ok(
         &mut base,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr1,
             tree,
             step_feasibility: vec![(n_step, high)],
@@ -5033,6 +5058,7 @@ fn project_eval_cache_incremental_updates_and_counters() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr1,
             tree: tree1,
             step_feasibility: vec![
@@ -5046,6 +5072,7 @@ fn project_eval_cache_incremental_updates_and_counters() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr2,
             tree: tree2,
             step_feasibility: vec![(s20, feas(&m, "low"))],
@@ -5306,6 +5333,7 @@ fn choke_points_and_hitting_set_on_project() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr,
             tree,
             step_feasibility: vec![(n_shared, high), (n_obd, high), (n_ota, med), (n_phys, low)],
@@ -5522,6 +5550,7 @@ fn sensitivity_and_tipping_points_on_project() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr,
             tree,
             step_feasibility: vec![(n_s1, med), (n_s2, high)],

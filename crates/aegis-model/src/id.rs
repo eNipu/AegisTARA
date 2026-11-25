@@ -487,6 +487,7 @@ entity_ids! {
         /// let id = TreeId::new_v7();
         /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Pick lock"))?;
         /// project.apply(Op::AddAttackTree {
+        ///     role: Default::default(),
         ///     id,
         ///     tree,
         ///     step_feasibility: vec![],
@@ -1135,6 +1136,8 @@ pub enum VisualPrefix {
     Threat,
     /// Attack tree (`AT00`, `AT01`, ...).
     Tree,
+    /// Shared fragment (`TT00`, `TT01`, ...).
+    Fragment,
     /// Security control (`SC00`, `SC01`, ...).
     Control,
     /// Cybersecurity goal (`G00`, `G01`, ...).
@@ -1178,6 +1181,7 @@ impl VisualPrefix {
             Self::Damage => "D",
             Self::Threat => "T",
             Self::Tree => "AT",
+            Self::Fragment => "TT",
             Self::Control => "SC",
             Self::Goal => "G",
             Self::Condition => "CF",

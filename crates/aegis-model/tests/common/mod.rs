@@ -560,6 +560,7 @@ pub fn linked_shared_project() -> (Project, SharedStepId, TreeId, NodeId) {
             provenance: provenance.clone(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(node, Node::step("Linked step")).expect("tree"),
             step_feasibility: vec![],
@@ -1505,6 +1506,11 @@ impl Gen {
                     ],
                 };
                 Op::AddAttackTree {
+                    role: if s.b.is_multiple_of(4) {
+                        aegis_model::TreeRole::Fragment
+                    } else {
+                        aegis_model::TreeRole::Threat
+                    },
                     id: if s.a.is_multiple_of(12) {
                         self.tree(p, s.b)
                     } else {
@@ -2936,6 +2942,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: attack_tree,
             step_feasibility: vec![(s1, feas(&m, "remote")), (s2, feas(&m, "occasional"))],

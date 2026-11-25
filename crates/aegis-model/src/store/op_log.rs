@@ -233,6 +233,8 @@ enum OpView<'a> {
         id: Text<ThreatId>,
     },
     AddAttackTree {
+        #[serde(skip_serializing_if = "crate::TreeRole::is_threat")]
+        role: crate::TreeRole,
         id: Text<TreeId>,
         nodes: NodesView<'a>,
         step_feasibility: StepFeasibilityInOrder<'a>,
@@ -1178,11 +1180,13 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         },
         Op::RemoveThreatScenario { id } => OpView::RemoveThreatScenario { id: Text(*id) },
         Op::AddAttackTree {
+            role,
             id,
             tree,
             step_feasibility,
             provenance,
         } => OpView::AddAttackTree {
+            role: *role,
             id: Text(*id),
             nodes: NodesView(tree),
             step_feasibility: StepFeasibilityInOrder {
@@ -2241,11 +2245,13 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
         },
         OpWire::RemoveThreatScenario { id } => Op::RemoveThreatScenario { id: id.0 },
         OpWire::AddAttackTree {
+            role,
             id,
             nodes,
             step_feasibility,
             provenance,
         } => Op::AddAttackTree {
+            role,
             id: id.0,
             tree: nodes.0,
             step_feasibility: step_feasibility.0,

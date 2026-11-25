@@ -270,7 +270,7 @@ pub use applicability::{
     StepRef,
 };
 pub use asset::{Asset, PropertySet};
-pub use blocks::{MAX_SHARED_STEPS, SharedStep};
+pub use blocks::{MAX_SHARED_STEPS, SharedStep, TreeRole};
 pub use compat::{
     ClientContract, CompatibilityError, ENGINE_SEMANTICS_VERSION, EngineContract, FORMAT_VERSION,
     MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, check_client_compatibility,

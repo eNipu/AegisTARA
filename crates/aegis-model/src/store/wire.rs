@@ -1609,7 +1609,6 @@ visual_kinds! {
     AssetVisual = VisualPrefix::Asset;
     DamageVisual = VisualPrefix::Damage;
     ThreatVisual = VisualPrefix::Threat;
-    TreeVisual = VisualPrefix::Tree;
     ControlVisual = VisualPrefix::Control;
     GoalVisual = VisualPrefix::Goal;
     ClaimVisual = VisualPrefix::Claim;
@@ -1626,6 +1625,21 @@ visual_kinds! {
 /// A visual ID decoded from its canonical text (`A00`, `T01`, `DF12`, ...).
 /// Anything else is [`StoreError::InvalidId`]. Time O(1).
 pub(super) struct WireVisual<K>(pub(super) u32, PhantomData<K>);
+
+/// A tree ID retains its prefix so loading can check it against the role.
+pub(super) struct TreeVisualId(pub(super) u32, pub(super) crate::TreeRole);
+
+impl<'de> Deserialize<'de> for TreeVisualId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            [crate::TreeRole::Threat, crate::TreeRole::Fragment]
+                .into_iter()
+                .find_map(|role| role.visual_prefix().parse_num(s).map(|n| Self(n, role)))
+                .ok_or(Fault::InvalidId)
+        })
+        .deserialize(d)
+    }
+}
 
 impl<'de, K: VisualKind> Deserialize<'de> for WireVisual<K> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -2113,8 +2127,10 @@ pub(super) struct StepSharedEntry {
 #[serde(deny_unknown_fields)]
 pub(super) struct TreeWire {
     pub(super) id: WireId<TreeId>,
+    #[serde(default)]
+    pub(super) role: crate::TreeRole,
     #[serde(default, deserialize_with = "some")]
-    pub(super) visual_id: Option<WireVisual<TreeVisual>>,
+    pub(super) visual_id: Option<TreeVisualId>,
     pub(super) nodes: NodesWire,
     pub(super) step_feasibility: StepFeasibility,
     #[serde(default)]
@@ -2583,6 +2599,8 @@ pub(super) enum OpWire {
         id: WireId<ThreatId>,
     },
     AddAttackTree {
+        #[serde(default)]
+        role: crate::TreeRole,
         id: WireId<TreeId>,
         nodes: NodesWire,
         step_feasibility: StepFeasibility,

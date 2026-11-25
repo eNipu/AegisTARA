@@ -83,6 +83,7 @@ fn add_tree(p: &mut Project, t: u64, tree: AttackTree) -> Res<TreeId> {
         .collect();
     let id = tree_id(t);
     p.apply(Op::AddAttackTree {
+        role: Default::default(),
         id,
         tree,
         step_feasibility: rated,

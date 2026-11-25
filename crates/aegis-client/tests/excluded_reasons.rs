@@ -121,6 +121,7 @@ fn exclusion_reasons_match_expected_phrases_and_agree_across_table_and_inspector
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree1_id,
                 tree: tree1,
                 step_feasibility: Vec::new(),
@@ -157,6 +158,7 @@ fn exclusion_reasons_match_expected_phrases_and_agree_across_table_and_inspector
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree2_id,
                 tree: tree2,
                 step_feasibility: Vec::new(),
@@ -329,12 +331,14 @@ fn outside_profile_and_scalability_reasons_and_fluent_keys() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr_owned,
                 tree: tree1,
                 step_feasibility: vec![],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr_steps,
                 tree: tree2,
                 step_feasibility: vec![],

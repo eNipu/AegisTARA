@@ -71,6 +71,7 @@ fn fixture(nodes: usize) -> Fixture {
             provenance: p.clone(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
             step_feasibility: vec![],

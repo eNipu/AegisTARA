@@ -6,6 +6,35 @@ use crate::item::ItemIdx;
 use crate::methodology::{AttackType, FactorLevel, FeasibilityFactor, FeasibilityLevel};
 use crate::provenance::Provenance;
 
+/// A tree's immutable purpose, chosen when it is added to a project.
+/// Legacy trees without a stored role are threat trees.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TreeRole {
+    /// A tree that realizes a threat scenario.
+    #[default]
+    Threat,
+    /// A reusable technical attack tree.
+    Fragment,
+}
+
+impl TreeRole {
+    /// The stable visual ID prefix for this role. Time O(1).
+    #[must_use]
+    pub const fn visual_prefix(self) -> crate::VisualPrefix {
+        match self {
+            Self::Threat => crate::VisualPrefix::Tree,
+            Self::Fragment => crate::VisualPrefix::Fragment,
+        }
+    }
+
+    // By reference because serde's `skip_serializing_if` passes `&T`.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub(crate) fn is_threat(&self) -> bool {
+        *self == Self::Threat
+    }
+}
+
 /// Maximum number of shared steps in one project.
 pub const MAX_SHARED_STEPS: usize = 4_096;
 

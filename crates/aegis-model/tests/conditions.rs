@@ -446,6 +446,7 @@ fn linked_project(
     at.add_child(at.root(), step, Node::step("Step"))
         .expect("step");
     p.apply(Op::AddAttackTree {
+        role: Default::default(),
         id: tree,
         tree: at,
         step_feasibility: vec![],
@@ -833,6 +834,7 @@ fn links_are_sorted_unique_and_compared_by_public_id() {
         })
         .expect("asset");
         p.apply(Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: at.clone(),
             step_feasibility: vec![],

@@ -59,6 +59,7 @@ fn fixture() -> Fx {
             provenance: Provenance::default(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
             step_feasibility: vec![],
@@ -525,6 +526,7 @@ fn trees_grow_to_the_node_cap_by_small_ops_and_not_one_node_more() {
     }
     assert_eq!(big.len(), MAX_TREE_OP_NODES + 1);
     let add_big = Op::AddAttackTree {
+        role: Default::default(),
         id: TreeId::new_v7(),
         tree: big,
         step_feasibility: vec![],

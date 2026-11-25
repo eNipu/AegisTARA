@@ -107,6 +107,7 @@ pub fn sample_ops(m: &Methodology, actor: &str, now_ms: u64) -> Option<Vec<Op>> 
             provenance: p.clone(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id,
             tree,
             step_feasibility: vec![

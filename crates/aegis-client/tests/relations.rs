@@ -177,6 +177,7 @@ fn project() -> Project {
             provenance: provenance.clone(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id,
             tree,
             step_feasibility: vec![],

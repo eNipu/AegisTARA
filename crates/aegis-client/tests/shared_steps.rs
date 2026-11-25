@@ -78,6 +78,7 @@ fn add_tree(ws: &mut Workspace, tree: AttackTree) -> TreeId {
     let id = TreeId::new_v7();
     ws.apply(
         vec![Op::AddAttackTree {
+            role: Default::default(),
             id,
             tree,
             step_feasibility: Vec::new(),

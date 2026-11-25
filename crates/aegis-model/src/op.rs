@@ -450,6 +450,8 @@ pub enum Op {
     /// Adds an attack tree with optional initial step feasibility ratings.
     /// Steps not listed are unrated (`None`).
     AddAttackTree {
+        /// Immutable purpose of the tree and its visual ID prefix.
+        role: crate::TreeRole,
         /// Unused attack tree ID.
         id: TreeId,
         /// The attack tree DAG.

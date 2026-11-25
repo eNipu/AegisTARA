@@ -104,6 +104,7 @@ fn fixture() -> Fixture {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(step_a, high), (step_b, high)],

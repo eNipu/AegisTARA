@@ -2702,6 +2702,7 @@ impl Edit {
                 )
                 .map_err(|_| EditError::EmptyName)?;
                 let mut ops = vec![Op::AddAttackTree {
+                    role: Default::default(),
                     id: *id,
                     tree,
                     step_feasibility: Vec::new(),
