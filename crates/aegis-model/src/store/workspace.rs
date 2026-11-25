@@ -35,6 +35,7 @@ const LAYOUT: &[(&str, &str, &[&str])] = &[
     ("descriptions.json", "descriptions", &["descriptions"]),
     ("review-marks.json", "review-marks", &["review_marks"]),
     ("shared/damage.json", "damage", &["damage_scenarios"]),
+    ("shared/steps.json", "shared-steps", &["shared_steps"]),
     ("shared/controls.json", "controls", &["security_controls"]),
     ("shared/goals.json", "goals", &["cybersecurity_goals"]),
     ("shared/claims.json", "claims", &["cybersecurity_claims"]),
@@ -332,6 +333,14 @@ fn blame(err: &StoreError, trees: &[(&str, &[u8])], elements: &[(&str, &[u8])]) 
     let key = match model {
         ModelError::DuplicateAttackTree(id) => return tree_file_with(&id.to_string(), trees),
         ModelError::DuplicateId(id) => return tree_file_with(&id.to_string(), trees),
+        ModelError::NodeUsesSharedStep { tree, .. } => {
+            return tree_file_with(&tree.to_string(), trees);
+        }
+        ModelError::DuplicateSharedStep(_)
+        | ModelError::UnknownSharedStep(_)
+        | ModelError::SharedStepInUse { .. }
+        | ModelError::SharedStepIsRated(_)
+        | ModelError::TooManySharedSteps { .. } => "shared_steps",
         ModelError::UnknownAsset(_)
         | ModelError::UnknownDamageScenario(_)
         | ModelError::DuplicateThreatScenario(_) => "threat_scenarios",

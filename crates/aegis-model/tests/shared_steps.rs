@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 mod common;
 
-use common::{builtin, node_id, shared_step_id, tree_id};
+use common::{builtin, node_id, save, second, shared_step_id, tree_id};
 
 fn project() -> Project {
     Project::new(builtin())
@@ -1885,4 +1885,162 @@ fn tree_equality_resolves_shared_links_by_public_id_not_slot_layout() {
         left.diff(&different).unwrap().attack_trees().modified(),
         [tree]
     );
+}
+
+#[test]
+fn sparse_shared_visual_ids_survive_out_of_order_ids_and_deleted_gaps() {
+    let m = builtin();
+    let (first, removed, last) = (shared_step_id(20), shared_step_id(10), shared_step_id(30));
+    let mut p = project();
+    add(&mut p, last, "First created");
+    add(&mut p, removed, "Removed");
+    add(&mut p, first, "Last created");
+    p.apply(Op::RemoveSharedStep { id: removed })
+        .expect("remove visual gap");
+    let visual = |p: &Project, id| {
+        p.shared_step_idx(&id)
+            .and_then(|idx| p.shared_step_visual_id(idx))
+    };
+    assert_eq!(visual(&p, first).as_deref(), Some("L02"));
+    assert_eq!(visual(&p, last).as_deref(), Some("L00"));
+
+    let bytes = save(&p);
+    let text = String::from_utf8(bytes.clone()).expect("utf8");
+    assert!(text.contains(r#""visual_id":"L00""#));
+    assert!(text.contains(r#""visual_id":"L02""#));
+    assert!(!text.contains(r#""visual_id":"L01""#));
+    let mut loaded = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("loads");
+    assert_eq!(loaded, p);
+    assert_eq!(save(&loaded), bytes);
+    assert_eq!(visual(&loaded, first).as_deref(), Some("L02"));
+    assert_eq!(visual(&loaded, last).as_deref(), Some("L00"));
+    let next = shared_step_id(40);
+    add(&mut loaded, next, "After load");
+    assert_eq!(visual(&loaded, next).as_deref(), Some("L03"));
+
+    let files = p.to_workspace_files().expect("workspace");
+    let steps = files
+        .iter()
+        .find(|f| f.path == "shared/steps.json")
+        .expect("shared steps file");
+    let text = std::str::from_utf8(&steps.bytes).expect("utf8");
+    assert!(text.contains(r#""visual_id": "L00""#));
+    assert!(text.contains(r#""visual_id": "L02""#));
+    assert!(!text.contains(r#""visual_id": "L01""#));
+    let mut loaded = Project::from_workspace_files(
+        files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())),
+        Arc::clone(&m),
+    )
+    .expect("workspace loads");
+    assert_eq!(loaded, p);
+    assert_eq!(visual(&loaded, first).as_deref(), Some("L02"));
+    assert_eq!(visual(&loaded, last).as_deref(), Some("L00"));
+    add(&mut loaded, next, "After workspace load");
+    assert_eq!(visual(&loaded, next).as_deref(), Some("L03"));
+}
+
+#[test]
+fn shared_visual_overrides_reject_duplicates_and_invalid_ids() {
+    let m = builtin();
+    let mut p = project();
+    add(&mut p, shared_step_id(1), "One");
+    add(&mut p, shared_step_id(2), "Two");
+    let value: Value = serde_json::from_slice(&save(&p)).expect("json");
+    let mut duplicate = value.clone();
+    duplicate["shared_steps"][0]["visual_id"] = json!("L00");
+    duplicate["shared_steps"][1]["visual_id"] = json!("L00");
+    assert!(matches!(
+        Project::load(
+            serde_json::to_vec(&duplicate).expect("json").as_slice(),
+            Arc::clone(&m)
+        ),
+        Err(StoreError::DuplicateEntry)
+    ));
+    for bad in ["A00", "L1"] {
+        let mut invalid = value.clone();
+        invalid["shared_steps"][0]["visual_id"] = json!(bad);
+        assert!(matches!(
+            Project::load(
+                serde_json::to_vec(&invalid).expect("json").as_slice(),
+                Arc::clone(&m)
+            ),
+            Err(StoreError::InvalidId)
+        ));
+    }
+}
+
+#[test]
+fn shared_factor_maps_use_canonical_key_order_and_reject_duplicates() {
+    let m = second();
+    let shared = shared_step_id(50);
+    let mut p = Project::new(Arc::clone(&m));
+    add(&mut p, shared, "Factors");
+    for (factor_key, level_key) in [
+        ("exposure", "open"),
+        ("skill", "specialist"),
+        ("resources", "standard"),
+    ] {
+        let factor = m.feasibility_factor(factor_key).expect("factor");
+        let level = m.factor_level(factor, level_key).expect("level");
+        p.apply(Op::SetStepFactor {
+            target: StepTarget::Shared(shared),
+            factor,
+            level: Some(level),
+            provenance: who("alice", 11),
+        })
+        .expect("rate factor");
+    }
+    let bytes = save(&p);
+    let text = String::from_utf8(bytes.clone()).expect("utf8");
+    assert!(
+        text.contains(
+            r#""factors":{"exposure":"open","resources":"standard","skill":"specialist"}"#
+        )
+    );
+    let duplicate = text.replacen(
+        r#""skill":"specialist""#,
+        r#""skill":"specialist","exposure":"open""#,
+        1,
+    );
+    assert!(matches!(
+        Project::load(duplicate.as_bytes(), Arc::clone(&m)),
+        Err(StoreError::DuplicateEntry)
+    ));
+    let loaded = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("loads");
+    assert_eq!(loaded, p);
+    assert_eq!(save(&loaded), bytes);
+}
+
+#[test]
+fn shared_links_serialize_in_node_id_order() {
+    let m = builtin();
+    let shared = shared_step_id(60);
+    let tree = tree_id(61);
+    let root = node_id(100);
+    let later = node_id(30);
+    let earlier = node_id(20);
+    let mut p = project();
+    add(&mut p, shared, "Shared");
+    let mut nodes = AttackTree::new(root, Node::gate(GateKind::Or, "Root")).expect("root");
+    nodes
+        .add_child(nodes.root(), later, Node::step("Later ID"))
+        .expect("later");
+    nodes
+        .add_child(nodes.root(), earlier, Node::step("Earlier ID"))
+        .expect("earlier");
+    add_tree(&mut p, tree, nodes);
+    use_shared(&mut p, tree, later, shared);
+    use_shared(&mut p, tree, earlier, shared);
+    let bytes = save(&p);
+    let value: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(
+        value["attack_trees"][0]["step_shared"],
+        json!([
+            {"node": earlier.to_string(), "shared_step": shared.to_string()},
+            {"node": later.to_string(), "shared_step": shared.to_string()},
+        ])
+    );
+    let loaded = Project::load(bytes.as_slice(), Arc::clone(&m)).expect("loads");
+    assert_eq!(loaded, p);
+    assert_eq!(save(&loaded), bytes);
 }

@@ -2347,9 +2347,12 @@ impl Project {
     /// Returns a live shared step's visual ID (`L00`, `L01`, ...).
     #[must_use]
     pub fn shared_step_visual_id(&self, idx: SharedStepIdx) -> Option<String> {
-        self.shared_steps
-            .visual_num(idx)
+        self.shared_step_visual_num(idx)
             .map(|n| VisualPrefix::SharedStep.format(n))
+    }
+
+    pub(crate) fn shared_step_visual_num(&self, idx: SharedStepIdx) -> Option<u32> {
+        self.shared_steps.visual_num(idx)
     }
 
     /// The number of live shared steps. Time O(1).
@@ -3468,6 +3471,10 @@ impl Project {
 
     pub(crate) fn set_party_loaded_visual(&mut self, id: &PartyId, vis: u32, next: u32) {
         self.parties.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_shared_step_loaded_visual(&mut self, id: &SharedStepId, vis: u32, next: u32) {
+        self.shared_steps.set_loaded_visual(id, vis, next);
     }
 
     /// The public ID of the condition at `idx`. Time O(1).

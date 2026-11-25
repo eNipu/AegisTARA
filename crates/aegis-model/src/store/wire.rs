@@ -332,6 +332,7 @@ caps! {
     ResponsibleCap = crate::party::MAX_RESPONSIBLE, Limit::RESPONSIBLE;
     PartiesCap = crate::party::MAX_PARTIES, Limit::PARTIES;
     ConditionsCap = crate::applicability::MAX_CONDITIONS, Limit::CONDITIONS;
+    SharedStepsCap = crate::blocks::MAX_SHARED_STEPS, Limit::SHARED_STEPS;
     ConditionLinksCap = crate::applicability::MAX_CONDITIONS_PER_ELEMENT, Limit::CONDITION_LINKS;
     AssumptionsCap = crate::applicability::MAX_ASSUMPTIONS, Limit::ASSUMPTIONS;
     AssumptionExcludesCap = crate::applicability::MAX_ASSUMPTION_EXCLUDES, Limit::ASSUMPTION_EXCLUDES;
@@ -1077,6 +1078,16 @@ impl<'de> Deserialize<'de> for NodeFactors {
     }
 }
 
+/// Factor ratings for one shared step, using the same strict map visitor as
+/// an attack-tree node.
+pub(super) struct StepFactorRatings(pub(super) Vec<(FeasibilityFactor, FactorLevel)>);
+
+impl<'de> Deserialize<'de> for StepFactorRatings {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        NodeFactors::deserialize(d).map(|ratings| Self(ratings.0))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum ScalabilityWire {
@@ -1605,6 +1616,7 @@ visual_kinds! {
     PartyVisual = VisualPrefix::Party;
     ConditionVisual = VisualPrefix::Condition;
     AssumptionVisual = VisualPrefix::Assumption;
+    SharedStepVisual = VisualPrefix::SharedStep;
     ComponentVisual = VisualPrefix::Component;
     InterfaceVisual = VisualPrefix::Interface;
     DataFlowVisual = VisualPrefix::DataFlow;
@@ -1747,11 +1759,33 @@ pub(super) struct SnapshotWire {
     #[serde(default)]
     pub(super) conditions: BoundedVec<ConditionWire, ConditionsCap>,
     #[serde(default)]
+    pub(super) shared_steps: BoundedVec<SharedStepWire, SharedStepsCap>,
+    #[serde(default)]
     pub(super) condition_links: Vec<ConditionLinkWire>,
     #[serde(default)]
     pub(super) step_conditions: Vec<StepConditionWire>,
     #[serde(default)]
     pub(super) assumptions: BoundedVec<AssumptionWire, AssumptionsCap>,
+}
+
+/// A reusable attack step in a snapshot.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SharedStepWire {
+    pub(super) id: WireId<SharedStepId>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) visual_id: Option<WireVisual<SharedStepVisual>>,
+    pub(super) name: Name,
+    #[serde(default)]
+    pub(super) feasibility: Option<FeasibilityLevelKey>,
+    #[serde(default)]
+    pub(super) factors: Option<StepFactorRatings>,
+    #[serde(default)]
+    pub(super) via: Option<ItemWire>,
+    #[serde(default)]
+    pub(super) attack_type: Option<AttackTypeKey>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) provenance: Option<ProvenanceWire>,
 }
 
 /// A snapshot assumption (APL-04). `holds` is always written explicitly.
@@ -2066,6 +2100,14 @@ pub(super) struct ThreatWire {
     pub(super) provenance: Option<ProvenanceWire>,
 }
 
+/// One attack-tree node's shared-step link.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StepSharedEntry {
+    pub(super) node: WireId<NodeId>,
+    pub(super) shared_step: WireId<SharedStepId>,
+}
+
 /// A snapshot attack tree.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2084,6 +2126,8 @@ pub(super) struct TreeWire {
     pub(super) step_via: Option<Box<StepValues<ItemWire>>>,
     #[serde(default, deserialize_with = "some")]
     pub(super) step_attack_type: Option<Box<StepValues<AttackTypeKey>>>,
+    #[serde(default)]
+    pub(super) step_shared: BoundedVec<StepSharedEntry, AttackTreeNodesCap>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -3502,7 +3546,7 @@ impl Serialize for StepFeasibilityByNode<'_> {
         let m = self.project.methodology();
         let mut map = s.serialize_map(None)?;
         for (node_idx, node_id, _) in self.tree.iter() {
-            if let Some(level) = self.project.step_feasibility(self.tree_idx, node_idx) {
+            if let Some(level) = self.project.own_step_feasibility(self.tree_idx, node_idx) {
                 map.serialize_entry(&Text(node_id), &Required(m.feasibility_level_key(level)))?;
             }
         }
@@ -3524,7 +3568,7 @@ impl StepFactorsByNode<'_> {
     pub(super) fn is_empty(&self) -> bool {
         self.tree.iter().all(|(node_idx, _, _)| {
             self.project
-                .step_factor_slice(self.tree_idx, node_idx)
+                .own_step_factor_slice(self.tree_idx, node_idx)
                 .is_empty()
         })
     }
@@ -3534,7 +3578,7 @@ impl Serialize for StepFactorsByNode<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut map = s.serialize_map(None)?;
         for (node_idx, node_id, _) in self.tree.iter() {
-            let factors = self.project.step_factor_slice(self.tree_idx, node_idx);
+            let factors = self.project.own_step_factor_slice(self.tree_idx, node_idx);
             if !factors.is_empty() {
                 map.serialize_entry(
                     &Text(node_id),
@@ -3550,10 +3594,20 @@ impl Serialize for StepFactorsByNode<'_> {
     }
 }
 
-struct StepFactorsForNode<'a> {
+pub(super) struct StepFactorsForNode<'a> {
     m: &'a Methodology,
     order: &'a KeyOrder,
     factors: &'a [Option<FactorLevel>],
+}
+
+impl<'a> StepFactorsForNode<'a> {
+    pub(super) fn new(
+        m: &'a Methodology,
+        order: &'a KeyOrder,
+        factors: &'a [Option<FactorLevel>],
+    ) -> Self {
+        Self { m, order, factors }
+    }
 }
 
 impl Serialize for StepFactorsForNode<'_> {
@@ -3746,9 +3800,11 @@ pub(super) struct StepViaByNode<'a> {
 
 impl StepViaByNode<'_> {
     pub(super) fn is_empty(&self) -> bool {
-        self.tree
-            .iter()
-            .all(|(n, _, _)| self.project.step_via(self.tree_idx, n).is_none())
+        self.tree.iter().all(|(n, _, _)| {
+            self.project
+                .item_ref(self.project.own_step_via(self.tree_idx, n))
+                .is_none()
+        })
     }
 }
 
@@ -3756,7 +3812,10 @@ impl Serialize for StepViaByNode<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut map = s.serialize_map(None)?;
         for (node_idx, node_id, _) in self.tree.iter() {
-            if let Some(item) = self.project.step_via(self.tree_idx, node_idx) {
+            if let Some(item) = self
+                .project
+                .item_ref(self.project.own_step_via(self.tree_idx, node_idx))
+            {
                 map.serialize_entry(&Text(node_id), &ItemView::of(item))?;
             }
         }
@@ -3774,9 +3833,11 @@ pub(super) struct StepAttackTypeByNode<'a> {
 
 impl StepAttackTypeByNode<'_> {
     pub(super) fn is_empty(&self) -> bool {
-        self.tree
-            .iter()
-            .all(|(n, _, _)| self.project.step_attack_type(self.tree_idx, n).is_none())
+        self.tree.iter().all(|(n, _, _)| {
+            self.project
+                .own_step_attack_type(self.tree_idx, n)
+                .is_none()
+        })
     }
 }
 
@@ -3785,11 +3846,55 @@ impl Serialize for StepAttackTypeByNode<'_> {
         let m = self.project.methodology();
         let mut map = s.serialize_map(None)?;
         for (node_idx, node_id, _) in self.tree.iter() {
-            if let Some(t) = self.project.step_attack_type(self.tree_idx, node_idx) {
+            if let Some(t) = self.project.own_step_attack_type(self.tree_idx, node_idx) {
                 map.serialize_entry(&Text(node_id), &Required(m.attack_type_key(t)))?;
             }
         }
         map.end()
+    }
+}
+
+#[derive(serde::Serialize)]
+struct StepSharedLinkView {
+    node: Text<NodeId>,
+    shared_step: Text<SharedStepId>,
+}
+
+/// A stored attack tree's shared-step links in `NodeId` order. O(V log V).
+pub(super) struct StepSharedByNode<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) tree_idx: TreeIdx,
+    pub(super) tree: &'a AttackTree,
+}
+
+impl StepSharedByNode<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.tree
+            .iter()
+            .all(|(node, _, _)| self.project.step_shared(self.tree_idx, node).is_none())
+    }
+}
+
+impl Serialize for StepSharedByNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut links: Vec<_> = self
+            .tree
+            .iter()
+            .filter_map(|(node_idx, node_id, _)| {
+                self.project
+                    .step_shared_id(self.tree_idx, node_idx)
+                    .map(|shared_step| (node_id, shared_step))
+            })
+            .collect();
+        links.sort_unstable_by_key(|&(node, _)| node);
+        s.collect_seq(
+            links
+                .into_iter()
+                .map(|(node, shared_step)| StepSharedLinkView {
+                    node: Text(node),
+                    shared_step: Text(shared_step),
+                }),
+        )
     }
 }
 

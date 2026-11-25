@@ -14,11 +14,12 @@ use std::sync::Arc;
 use aegis_model::{
     AssetId, AttackPotentialDef, AttackTree, AttackType, CatalogRef, CatalogScheme,
     CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
-    ElementId, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel,
-    GateKind, GoalId, ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef,
-    Methodology, MethodologyDef, Node, NodeId, Op, PartyId, PartyKind, PotentialBandDef, Project,
-    Property, PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment,
-    SegmentDef, SharedStepId, StepTarget, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    ElementId, ElementRef, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor,
+    FeasibilityLevel, GateKind, GoalId, ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef,
+    Level, LevelDef, Methodology, MethodologyDef, Node, NodeId, Op, PartyId, PartyKind,
+    PotentialBandDef, Project, Property, PropertyDef, PropertySet, Provenance, ProvenanceSource,
+    RiskLevel, RiskTreatment, SegmentDef, SharedStepId, StepTarget, ThreatCategory,
+    ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -502,6 +503,94 @@ pub fn assumption_id(n: u64) -> aegis_model::AssumptionId {
 
 pub fn shared_step_id(n: u64) -> SharedStepId {
     SharedStepId::from_uuid(v7(n)).expect("v7")
+}
+
+/// A fully rated shared step linked into a one-node tree, with a description
+/// and translation. Exercises every persisted shared-step field.
+pub fn linked_shared_project() -> (Project, SharedStepId, TreeId, NodeId) {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let shared = shared_step_id(9_001);
+    let component = component_id(9_002);
+    let interface = interface_id(9_003);
+    let tree = tree_id(9_004);
+    let node = node_id(9_005);
+    let provenance = Provenance::human("alice", 42);
+    let factor = m.feasibility_factors().next().expect("factor");
+    let level = m.factor_levels(factor).last().expect("factor level");
+    let attack_type = m.attack_types().next().expect("attack type");
+    let ops = [
+        Op::AddSharedStep {
+            id: shared,
+            name: "Inject frame".into(),
+            provenance: provenance.clone(),
+        },
+        Op::AddComponent {
+            id: component,
+            name: "Gateway".into(),
+            parent: None,
+            provenance: provenance.clone(),
+        },
+        Op::AddInterface {
+            id: interface,
+            name: "Debug port".into(),
+            component,
+            kind: m.interface_kind("debug").expect("interface kind"),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: Some(m.feasibility_level("high").expect("feasibility")),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Shared(shared),
+            factor,
+            level: Some(level),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Shared(shared),
+            via: Some(ItemRef::Interface(interface)),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepAttackType {
+            target: StepTarget::Shared(shared),
+            attack_type: Some(attack_type),
+            provenance: provenance.clone(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(node, Node::step("Linked step")).expect("tree"),
+            step_feasibility: vec![],
+            provenance: provenance.clone(),
+        },
+        Op::UseSharedStep {
+            tree,
+            node,
+            step: shared,
+            provenance: provenance.clone(),
+        },
+        Op::SetDescription {
+            target: ElementRef::SharedStep(shared),
+            text: "Reusable diagnostic access".into(),
+            provenance: provenance.clone(),
+        },
+        Op::SetDescriptionTranslation {
+            target: ElementRef::SharedStep(shared),
+            lang: "ja".into(),
+            text: "共有の診断アクセス".into(),
+            provenance: provenance.clone(),
+        },
+        Op::SetProjectLanguages {
+            langs: vec![Arc::from("ja")].into(),
+            provenance,
+        },
+    ];
+    for op in ops {
+        p.apply(op).expect("linked shared project");
+    }
+    (p, shared, tree, node)
 }
 
 // ---------------------------------------------------------------------------
