@@ -436,8 +436,9 @@ pub fn selection_systems(
         Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
         Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
         Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
+        Selection::SharedStep(id) => Some(usage.shared_step(project.shared_step_idx(&id)?)),
         Selection::Party(_) => None,
-        Selection::Condition(_) | Selection::Assumption(_) | Selection::SharedStep(_) => None,
+        Selection::Condition(_) | Selection::Assumption(_) => None,
     }
 }
 

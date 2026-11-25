@@ -297,8 +297,17 @@ fn condition_edits_apply_undo_and_validate() {
 #[test]
 fn configuration_page_metadata_and_selection() {
     let fx = fixture();
-    assert_eq!(Page::ALL.len(), 18);
-    assert_eq!(Page::ALL[9], Page::AttackerProfile);
+    assert_eq!(Page::ALL.len(), 19);
+    assert_eq!(Page::ALL[9], Page::SharedBlocks);
+    assert_eq!(Page::ALL[10], Page::AttackerProfile);
+    assert_eq!(Page::SharedBlocks.group(), Some(PageGroup::Feasibility));
+    assert_eq!(Page::SharedBlocks.key(), "shared-blocks");
+    assert_eq!(Page::SharedBlocks.label(), "Shared building blocks");
+    assert_eq!(Page::SharedBlocks.tables(), [TableId::SharedSteps]);
+    assert_eq!(
+        Page::SharedBlocks.layout(),
+        PageLayout::Table(TableId::SharedSteps.columns())
+    );
     assert_eq!(Page::AttackerProfile.group(), Some(PageGroup::Feasibility));
     assert_eq!(Page::AttackerProfile.key(), "attacker-profile");
     assert_eq!(Page::AttackerProfile.label(), "Attacker profile");

@@ -411,6 +411,7 @@ impl Workbench {
             TableId::Goals => self.names.cybersecurity_goal.plural.to_string().into(),
             TableId::Claims => self.names.cybersecurity_claim.plural.to_string().into(),
             TableId::Problems => self.catalog.tr("explorer-problems").into(),
+            TableId::SharedSteps => self.catalog.tr("page-shared-blocks").into(),
         }
     }
 

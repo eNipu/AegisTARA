@@ -147,6 +147,9 @@ msgstr "⟦Áttáck tréé ón thé cánvás (SVG)␣␣⟧"
 msgid "Attack trees"
 msgstr "⟦Áttáck tréés␣␣⟧"
 
+msgid "Shared building blocks"
+msgstr "⟦Shâréd bûîldîng blôcks␣␣⟧"
+
 msgid "Baseline"
 msgstr "⟦Básélíné␣␣⟧"
 

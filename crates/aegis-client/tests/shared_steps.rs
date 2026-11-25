@@ -1,15 +1,22 @@
-//! Shared-step client edits, cleanup, inspector routing, and exact undo (141e).
+//! Shared-step client edits, cleanup, inspector routing, table/grid UI, and exact undo (141e, 141f).
 
 use std::sync::Arc;
 
 use aegis_client::commands::{Edit, EditError};
+use aegis_client::explorer::Owner;
+use aegis_client::grid::{
+    CellEditorKind, CellInput, GridSelection, add_row_edit, cell_editor, delete_rows_edit,
+    edit_cell, fill_down, paste_tsv,
+};
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::inspector::inspector_view;
+use aegis_client::pages::{self, vocabulary};
 use aegis_client::relations::RelationKey;
-use aegis_client::view::Selection;
+use aegis_client::table::{selection_label, table_rows, table_rows_for_owner};
+use aegis_client::view::{Page, PageGroup, Selection, TableId, UiState, page_descriptions};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AttackTree, AttackType, ComponentId, ElementRef, FactorLevel, FeasibilityFactor,
+    AttackTree, AttackType, ComponentId, ElementId, ElementRef, FactorLevel, FeasibilityFactor,
     FeasibilityLevel, GateKind, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, Project,
     Provenance, SharedStepId, StepTarget, TreeId,
 };
@@ -38,6 +45,18 @@ fn exact_undo(ws: &mut Workspace, edit: Edit) {
 
 fn empty() -> Workspace {
     Workspace::empty(Arc::new(Methodology::iso21434_r155().expect("builtin")))
+}
+
+fn add_system(ws: &mut Workspace, name: &str) -> ElementId {
+    let id = ElementId::new_v7();
+    apply(
+        ws,
+        Edit::AddSystem {
+            id,
+            name: name.into(),
+        },
+    );
+    id
 }
 
 fn add_component(ws: &mut Workspace, name: &str) -> ComponentId {
@@ -778,4 +797,275 @@ fn shared_step_selection_exposes_both_forward_relations() {
         .find(|r| r.key == RelationKey::SHARED_STEP_USED_IN)
         .expect("used in");
     assert_eq!(used.chips.len(), 2);
+}
+
+#[test]
+fn shared_blocks_page_table_and_description_select_the_shared_step() {
+    let (ws, _, _, shared, component) = linked_workspace(1);
+    assert_eq!(Page::SharedBlocks.index(), 9);
+    assert_eq!(Page::SharedBlocks.group(), Some(PageGroup::Feasibility));
+    assert_eq!(Page::SharedBlocks.tables(), [TableId::SharedSteps]);
+    assert_eq!(
+        TableId::SharedSteps
+            .columns()
+            .iter()
+            .map(|c| c.key)
+            .collect::<Vec<_>>(),
+        ["id", "name", "feasibility", "via", "attack-type", "used-in"]
+    );
+
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+    let rows = table_rows(&ws, TableId::SharedSteps, &vocab, &catalog);
+    let row = rows
+        .iter()
+        .find(|r| r.target == Some(Selection::SharedStep(shared)))
+        .expect("shared table row");
+    assert_eq!(row.cells[0].text, "L00");
+    assert_eq!(
+        row.cells[3].chips[0].target,
+        Selection::Component(component)
+    );
+    assert_eq!(row.cells[5].chips.len(), 2);
+    assert!(
+        row.cells[5]
+            .chips
+            .iter()
+            .all(|chip| matches!(chip.target, Selection::TreeNode(_, _)))
+    );
+
+    let mut ui = UiState::default();
+    pages::select(&mut ui, Selection::SharedStep(shared));
+    assert_eq!(ui.page, Page::SharedBlocks);
+    assert_eq!(ui.selected_shared_step, Some(shared));
+    let descriptions = page_descriptions(&ws, &ui);
+    assert_eq!(descriptions.len(), 1);
+    assert_eq!(descriptions[0].target, ElementRef::SharedStep(shared));
+    assert_eq!(descriptions[0].kind, "shared-step");
+    assert!(
+        pages::palette_elements(&ws)
+            .iter()
+            .any(|e| e.target == Selection::SharedStep(shared))
+    );
+}
+
+#[test]
+fn shared_step_owner_filtering_uses_system_usage() {
+    let mut ws = empty();
+    let brake = add_system(&mut ws, "Brake");
+    let adas = add_system(&mut ws, "ADAS");
+    let caliper = add_component(&mut ws, "Caliper");
+    let camera = add_component(&mut ws, "Camera");
+    for (component, system) in [(caliper, brake), (camera, adas)] {
+        apply(
+            &mut ws,
+            Edit::MoveToSystem {
+                components: vec![component],
+                system: Some(system),
+            },
+        );
+    }
+    let shared_brake = SharedStepId::new_v7();
+    let shared_adas = SharedStepId::new_v7();
+    for (id, name, component) in [
+        (shared_brake, "Replay brake frame", caliper),
+        (shared_adas, "Blind the camera", camera),
+    ] {
+        apply(
+            &mut ws,
+            Edit::AddSharedStep {
+                id,
+                name: name.into(),
+            },
+        );
+        apply(
+            &mut ws,
+            Edit::SetSharedStepVia {
+                shared_step: id,
+                via: Some(ItemRef::Component(component)),
+            },
+        );
+    }
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+    let targets = |owner| {
+        table_rows_for_owner(&ws, TableId::SharedSteps, owner, &vocab, &catalog)
+            .into_iter()
+            .map(|r| r.target)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        targets(Owner::Project),
+        vec![
+            Some(Selection::SharedStep(shared_brake)),
+            Some(Selection::SharedStep(shared_adas))
+        ]
+    );
+    assert_eq!(
+        targets(Owner::System(brake)),
+        vec![Some(Selection::SharedStep(shared_brake))]
+    );
+    assert_eq!(
+        targets(Owner::System(adas)),
+        vec![Some(Selection::SharedStep(shared_adas))]
+    );
+    assert!(targets(Owner::Unassigned).is_empty());
+}
+
+#[test]
+fn shared_steps_grid_add_edit_fill_paste_and_delete_are_undoable() {
+    let mut ws = empty();
+    let component = add_component(&mut ws, "Gateway");
+    let (add, first) = add_row_edit(
+        ws.project(),
+        TableId::SharedSteps,
+        Owner::Project,
+        "Reusable request",
+    )
+    .expect("add shared row");
+    assert!(matches!(add, Edit::AddSharedStep { .. }));
+    assert!(matches!(first, Selection::SharedStep(_)));
+    apply(&mut ws, add);
+    let (add, second) = add_row_edit(
+        ws.project(),
+        TableId::SharedSteps,
+        Owner::Project,
+        "Second request",
+    )
+    .expect("add second shared row");
+    apply(&mut ws, add);
+
+    let catalog = Catalog::load(Language::En);
+    let vocab = vocabulary(ws.project().methodology());
+    let col = |key| {
+        *TableId::SharedSteps
+            .columns()
+            .iter()
+            .find(|c| c.key == key)
+            .expect("shared column")
+    };
+    assert!(matches!(
+        cell_editor(
+            ws.project(),
+            TableId::SharedSteps,
+            Some(first),
+            &col("name"),
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::Text { .. }
+    ));
+    assert!(matches!(
+        cell_editor(
+            ws.project(),
+            TableId::SharedSteps,
+            Some(first),
+            &col("via"),
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::LinkPicker {
+            relation: RelationKey::SHARED_STEP_VIA
+        }
+    ));
+    assert_eq!(
+        cell_editor(
+            ws.project(),
+            TableId::SharedSteps,
+            Some(first),
+            &col("used-in"),
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::ReadOnly
+    );
+    for edit in [
+        edit_cell(
+            ws.project(),
+            TableId::SharedSteps,
+            first,
+            &col("name"),
+            &CellInput::Text("Renamed request".into()),
+        )
+        .expect("rename shared"),
+        edit_cell(
+            ws.project(),
+            TableId::SharedSteps,
+            first,
+            &col("feasibility"),
+            &CellInput::SingleChoice(Some(0)),
+        )
+        .expect("rate shared"),
+        edit_cell(
+            ws.project(),
+            TableId::SharedSteps,
+            first,
+            &col("attack-type"),
+            &CellInput::SingleChoice(Some(0)),
+        )
+        .expect("type shared"),
+    ] {
+        apply(&mut ws, edit);
+    }
+
+    let rows = table_rows(&ws, TableId::SharedSteps, &vocab, &catalog);
+    let src = rows
+        .iter()
+        .position(|r| r.target == Some(first))
+        .expect("source row");
+    let dst = rows
+        .iter()
+        .position(|r| r.target == Some(second))
+        .expect("destination row");
+    let mut selection = GridSelection::single(src, 2);
+    selection.extend_to(dst, 2);
+    let columns = TableId::SharedSteps.columns();
+    let fill = fill_down(
+        ws.project(),
+        TableId::SharedSteps,
+        &rows,
+        &columns.iter().collect::<Vec<_>>(),
+        selection,
+    )
+    .expect("fill shared rating");
+    apply(&mut ws, fill);
+
+    let tsv = format!(
+        "\tPasted shared\t{}\t{}\t{}\t",
+        vocab.feasibility[0],
+        selection_label(ws.project(), Selection::Component(component)),
+        vocab.attack_types[0]
+    );
+    let rows = table_rows(&ws, TableId::SharedSteps, &vocab, &catalog);
+    let paste = paste_tsv(
+        ws.project(),
+        TableId::SharedSteps,
+        Owner::Project,
+        &rows,
+        &columns.iter().collect::<Vec<_>>(),
+        rows.len(),
+        0,
+        &tsv,
+        &vocab,
+        &catalog,
+    )
+    .expect("paste shared row");
+    apply(&mut ws, paste);
+    let (idx, id, pasted) = ws
+        .project()
+        .shared_steps()
+        .find(|(_, _, step)| step.name() == "Pasted shared")
+        .expect("pasted shared row");
+    let m = ws.project().methodology();
+    assert_eq!(
+        pasted.feasibility(),
+        Some(m.feasibility_levels().next().unwrap().0)
+    );
+    assert_eq!(pasted.attack_type(), Some(m.attack_types().next().unwrap()));
+    assert_eq!(
+        ws.project().shared_step_via(idx),
+        Some(ItemRef::Component(component))
+    );
+    let delete = delete_rows_edit(&[Selection::SharedStep(id)]).expect("delete shared row");
+    exact_undo(&mut ws, delete);
 }

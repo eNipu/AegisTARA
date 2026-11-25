@@ -53,6 +53,7 @@ pub enum Folder {
     GoalsAndClaims,
     Goals,
     Claims,
+    SharedSteps,
     Problems,
 }
 
@@ -162,6 +163,7 @@ fn collect(p: &Project, u: &SystemUse) -> Items {
         Controls: security_controls, security_control_visual_id, Control, control;
         Goals: cybersecurity_goals, cybersecurity_goal_visual_id, Goal, goal;
         Claims: cybersecurity_claims, cybersecurity_claim_visual_id, Claim, claim;
+        SharedSteps: shared_steps, shared_step_visual_id, SharedStep, shared_step;
     );
     let trees = p.attack_trees().map(|(i, id, t)| Item {
         sel: Selection::Tree(id),
@@ -201,7 +203,7 @@ fn none(_: SystemSet) -> bool {
 }
 
 /// The project-level folders and their parent folder (`None`: the root).
-const PROJECT_TREE: [(Folder, Option<Folder>); 9] = [
+const PROJECT_TREE: [(Folder, Option<Folder>); 10] = [
     (F::Overview, None),
     (F::ProjectDefinition, None),
     (F::Parties, Some(F::ProjectDefinition)),
@@ -210,12 +212,13 @@ const PROJECT_TREE: [(Folder, Option<Folder>); 9] = [
     (F::Controls, Some(F::SharedAnalysis)),
     (F::Goals, Some(F::SharedAnalysis)),
     (F::Claims, Some(F::SharedAnalysis)),
+    (F::SharedSteps, Some(F::SharedAnalysis)),
     (F::Systems, None),
 ];
 
 /// The folders of a system and of "Not in a system", and their parent
 /// folder (`None`: the owner's node).
-const OWNER_TREE: [(Folder, Option<Folder>); 13] = [
+const OWNER_TREE: [(Folder, Option<Folder>); 14] = [
     (F::ItemDefinition, None),
     (F::Components, Some(F::ItemDefinition)),
     (F::Interfaces, Some(F::ItemDefinition)),
@@ -225,6 +228,7 @@ const OWNER_TREE: [(Folder, Option<Folder>); 13] = [
     (F::Damage, None),
     (F::Threats, None),
     (F::Trees, None),
+    (F::SharedSteps, None),
     (F::Controls, None),
     (F::Risks, None),
     (F::GoalsAndClaims, None),
@@ -255,6 +259,7 @@ fn label(f: Folder, n: &ElementNamesDef, c: &Catalog) -> String {
         F::Controls => plural(&n.security_control),
         F::Goals => plural(&n.cybersecurity_goal),
         F::Claims => plural(&n.cybersecurity_claim),
+        F::SharedSteps => c.tr("folder-shared-steps"),
     }
 }
 
@@ -306,7 +311,14 @@ impl ExplorerIndex {
                 &|s| s.intersects(set),
             );
         }
-        let shared = [F::Damage, F::Controls, F::Goals, F::Claims, F::Parties];
+        let shared = [
+            F::Damage,
+            F::Controls,
+            F::Goals,
+            F::Claims,
+            F::SharedSteps,
+            F::Parties,
+        ];
         let unassigned = items.iter().filter(|(f, _)| !shared.contains(f));
         if unassigned
             .flat_map(|(_, list)| list)
@@ -358,8 +370,11 @@ impl ExplorerIndex {
         for &(f, up) in tree {
             let key = ExplorerKey::Folder(o, f);
             self.add(key, up.map_or(at, |u| ExplorerKey::Folder(o, u)), label(f));
-            let linked =
-                o != Owner::Project && matches!(f, F::Damage | F::Controls | F::GoalsAndClaims);
+            let linked = o != Owner::Project
+                && matches!(
+                    f,
+                    F::Damage | F::Controls | F::GoalsAndClaims | F::SharedSteps
+                );
             let member = if linked && o == Owner::Unassigned {
                 &none
             } else {
@@ -423,7 +438,7 @@ impl ExplorerIndex {
                     touched = usage.ids(set).map(Owner::System).collect();
                     let linked = match f {
                         F::Goals | F::Claims => Some(F::GoalsAndClaims),
-                        F::Damage | F::Controls => Some(f),
+                        F::Damage | F::Controls | F::SharedSteps => Some(f),
                         _ => None,
                     };
                     if let Some(sf) = linked {

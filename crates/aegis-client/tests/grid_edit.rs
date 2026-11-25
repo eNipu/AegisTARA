@@ -20,8 +20,8 @@ use aegis_client::undo_label::Label;
 use aegis_client::view::{ColumnSpec, Selection, TableId};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, ComponentId, ConditionId, DamageId, ElementId, ElementRef, Methodology, Op, PartyId,
-    PartyKind, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
+    AssetId, ComponentId, ConditionId, DamageId, ElementId, ElementRef, ItemRef, Methodology, Op,
+    PartyId, PartyKind, Project, PropertySet, Provenance, RiskTreatment, ThreatId,
 };
 
 const ACTOR: &str = "mira";
@@ -437,6 +437,11 @@ fn add_and_delete_row_edits_cover_all_editable_tables_with_exact_undo() {
         (TableId::Controls, Owner::Project, "SecOC MAC"),
         (TableId::Goals, Owner::Project, "Ensure Integrity"),
         (TableId::Claims, Owner::Project, "Gateway Isolated"),
+        (
+            TableId::SharedSteps,
+            Owner::Project,
+            "Replay diagnostic request",
+        ),
     ];
 
     let mut created_for_delete = Vec::new();
@@ -455,6 +460,7 @@ fn add_and_delete_row_edits_cover_all_editable_tables_with_exact_undo() {
             TableId::Controls => assert!(matches!(sel, Selection::Control(_))),
             TableId::Goals => assert!(matches!(sel, Selection::Goal(_))),
             TableId::Claims => assert!(matches!(sel, Selection::Claim(_))),
+            TableId::SharedSteps => assert!(matches!(sel, Selection::SharedStep(_))),
             TableId::Assets | TableId::Problems => unreachable!(),
         }
         apply_edit(&mut ws, &edit);
@@ -657,7 +663,7 @@ fn add_claim(ws: &mut Workspace, name: &str) -> Selection {
 }
 
 #[test]
-fn cell_editor_and_inline_edit_cover_all_seven_editable_tables() {
+fn cell_editor_and_inline_edit_cover_all_eight_editable_tables() {
     let mut ws = empty_workspace();
     let catalog = Catalog::load(Language::En);
     let vocab = vocabulary(ws.project().methodology());
@@ -670,6 +676,14 @@ fn cell_editor_and_inline_edit_cover_all_seven_editable_tables() {
     let sel_control = add_control(&mut ws, "SecOC");
     let sel_goal = add_goal(&mut ws, "Protect Braking");
     let sel_claim = add_claim(&mut ws, "Gateway Isolated");
+    let (add_shared, sel_shared) = add_row_edit(
+        ws.project(),
+        TableId::SharedSteps,
+        Owner::Project,
+        "Reusable request",
+    )
+    .expect("add shared row");
+    apply_edit(&mut ws, &add_shared);
 
     let Selection::Damage(damage_id) = sel_damage else {
         unreachable!()
@@ -681,6 +695,9 @@ fn cell_editor_and_inline_edit_cover_all_seven_editable_tables() {
         unreachable!()
     };
     let Selection::Claim(claim_id) = sel_claim else {
+        unreachable!()
+    };
+    let Selection::SharedStep(shared_id) = sel_shared else {
         unreachable!()
     };
 
@@ -1251,6 +1268,113 @@ fn cell_editor_and_inline_edit_cover_all_seven_editable_tables() {
         CellEditorKind::LinkPicker {
             relation: RelationKey::CLAIM_RESPONSIBLE
         }
+    );
+
+    // 8. Shared steps: name, feasibility, attack type, via; Used in stays read-only.
+    let shared_name_col = col_by_key(TableId::SharedSteps, "name");
+    assert_eq!(
+        cell_editor(
+            ws.project(),
+            TableId::SharedSteps,
+            Some(sel_shared),
+            shared_name_col,
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::Text {
+            current: "Reusable request".into()
+        }
+    );
+    let before = save_bytes(&ws);
+    let edit = edit_cell(
+        ws.project(),
+        TableId::SharedSteps,
+        sel_shared,
+        shared_name_col,
+        &CellInput::Text("Replay diagnostic request".into()),
+    )
+    .expect("rename shared step");
+    assert!(matches!(
+        edit,
+        Edit::RenameSharedStep { shared_step, .. } if shared_step == shared_id
+    ));
+    apply_edit(&mut ws, &edit);
+    ws.undo().expect("undo rename shared step");
+    assert_eq!(save_bytes(&ws), before);
+
+    for (key, input, expected) in [
+        (
+            "feasibility",
+            CellInput::SingleChoice(Some(0)),
+            Edit::SetSharedStepFeasibility {
+                shared_step: shared_id,
+                level: Some(
+                    ws.project()
+                        .methodology()
+                        .feasibility_levels()
+                        .next()
+                        .unwrap()
+                        .0,
+                ),
+            },
+        ),
+        (
+            "attack-type",
+            CellInput::SingleChoice(Some(0)),
+            Edit::SetSharedStepAttackType {
+                shared_step: shared_id,
+                attack_type: Some(ws.project().methodology().attack_types().next().unwrap()),
+            },
+        ),
+    ] {
+        let column = col_by_key(TableId::SharedSteps, key);
+        assert!(matches!(
+            cell_editor(
+                ws.project(),
+                TableId::SharedSteps,
+                Some(sel_shared),
+                column,
+                &vocab,
+                &catalog
+            ),
+            CellEditorKind::SingleChoice {
+                allow_clear: true,
+                ..
+            }
+        ));
+        let edit = edit_cell(
+            ws.project(),
+            TableId::SharedSteps,
+            sel_shared,
+            column,
+            &input,
+        )
+        .expect("edit shared rating");
+        assert_eq!(edit, expected);
+    }
+    assert_eq!(
+        cell_editor(
+            ws.project(),
+            TableId::SharedSteps,
+            Some(sel_shared),
+            col_by_key(TableId::SharedSteps, "via"),
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::LinkPicker {
+            relation: RelationKey::SHARED_STEP_VIA
+        }
+    );
+    assert_eq!(
+        cell_editor(
+            ws.project(),
+            TableId::SharedSteps,
+            Some(sel_shared),
+            col_by_key(TableId::SharedSteps, "used-in"),
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::ReadOnly
     );
 }
 
@@ -2556,7 +2680,7 @@ fn selection_label_and_selection_exclusion_report_live_and_excluded_state() {
 }
 
 #[test]
-fn paste_tsv_updates_and_appends_across_all_seven_editable_tables_with_exact_undo() {
+fn paste_tsv_updates_and_appends_across_all_eight_editable_tables_with_exact_undo() {
     let mut ws = empty_workspace();
     let catalog = Catalog::load(Language::En);
     let vocab = vocabulary(ws.project().methodology());
@@ -2592,6 +2716,16 @@ fn paste_tsv_updates_and_appends_across_all_seven_editable_tables_with_exact_und
     let Selection::Claim(claim1) = add_claim(&mut ws, "Gateway Isolated") else {
         unreachable!()
     };
+    let (add_shared, Selection::SharedStep(shared1)) = add_row_edit(
+        ws.project(),
+        TableId::SharedSteps,
+        Owner::Project,
+        "Reusable request",
+    )
+    .expect("add shared row") else {
+        unreachable!()
+    };
+    apply_edit(&mut ws, &add_shared);
 
     // 1. Assets: update existing row 0 (name, component, properties) + append new row + skip blank row.
     {
@@ -2910,6 +3044,62 @@ fn paste_tsv_updates_and_appends_across_all_seven_editable_tables_with_exact_und
         );
 
         ws.undo().expect("undo claims paste");
+        assert_eq!(save_bytes(&ws), before);
+    }
+
+    // 8. Shared steps: update ratings and via, append a rated row, ignore Used in.
+    {
+        let before = save_bytes(&ws);
+        let rows = table_rows(&ws, TableId::SharedSteps, &vocab, &catalog);
+        let cols = all_cols(TableId::SharedSteps);
+        let tsv = format!(
+            "L00\tRenamed shared\t{}\tGateway ECU\t{}\tignored\n\
+             \tPasted shared\t{}\tBrake ECU\t{}\t",
+            vocab.feasibility[0],
+            vocab.attack_types[0],
+            vocab.feasibility[1],
+            vocab.attack_types[1]
+        );
+        let edit = paste_tsv(
+            ws.project(),
+            TableId::SharedSteps,
+            Owner::Project,
+            &rows,
+            &cols,
+            0,
+            0,
+            &tsv,
+            &vocab,
+            &catalog,
+        )
+        .expect("paste shared steps");
+        apply_edit(&mut ws, &edit);
+
+        let p = ws.project();
+        let m = p.methodology();
+        let idx = p.shared_step_idx(&shared1).expect("shared row");
+        let shared = p.shared_step(idx).expect("shared slot");
+        assert_eq!(shared.name(), "Renamed shared");
+        assert_eq!(
+            shared.feasibility(),
+            Some(m.feasibility_levels().next().unwrap().0)
+        );
+        assert_eq!(shared.attack_type(), Some(m.attack_types().next().unwrap()));
+        assert_eq!(p.shared_step_via(idx), Some(ItemRef::Component(comp1)));
+        let (_, _, appended) = p
+            .shared_steps()
+            .find(|(_, _, step)| step.name() == "Pasted shared")
+            .expect("appended shared row");
+        assert_eq!(
+            appended.feasibility(),
+            Some(m.feasibility_levels().nth(1).unwrap().0)
+        );
+        assert_eq!(
+            appended.attack_type(),
+            Some(m.attack_types().nth(1).unwrap())
+        );
+
+        ws.undo().expect("undo shared-step paste");
         assert_eq!(save_bytes(&ws), before);
     }
 }

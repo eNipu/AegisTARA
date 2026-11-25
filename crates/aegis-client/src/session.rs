@@ -3283,6 +3283,14 @@ impl<P: CredentialProvider> Actor<P> {
                 .filter(|id| p.assumption_idx(id).is_some())
                 .or_else(|| p.assumptions().next().map(|(_, id, _)| id));
         }
+        if page == Page::SharedBlocks {
+            let p = open.ws.project();
+            open.ui.selected_shared_step = open
+                .ui
+                .selected_shared_step
+                .filter(|id| p.shared_step_idx(id).is_some())
+                .or_else(|| p.shared_steps().next().map(|(_, id, _)| id));
+        }
         match page {
             Page::Versions => self.load_baselines(),
             Page::History => self.load_history(),
@@ -3720,7 +3728,8 @@ fn page_data(open: &Open) -> PageData {
         | Page::Reports
         | Page::Admin
         | Page::Scope
-        | Page::Configuration => {}
+        | Page::Configuration
+        | Page::SharedBlocks => {}
     }
     crate::systems::filter_page(ws.project(), &ui.system_view, ui.page, &mut d);
     d
@@ -3777,6 +3786,19 @@ fn find_rows(f: &crate::find::Find, p: &Project, page: Page, d: &mut PageData) -
             row(&r.visual_id, &r.threat, E::Threat(r.id))
         }),
         Page::Trees => keep(&mut d.trees, |r| row(&r.visual_id, &r.title, E::Tree(r.id))),
+        Page::SharedBlocks => p
+            .shared_steps()
+            .fold((0, 0), |(shown, total), (idx, id, s)| {
+                (
+                    shown
+                        + usize::from(f.hit(&[
+                            &p.shared_step_visual_id(idx).unwrap_or_default(),
+                            s.name(),
+                            described(p, E::SharedStep(id)),
+                        ])),
+                    total + 1,
+                )
+            }),
         Page::Controls => keep(&mut d.controls, |r| {
             row(&r.visual_id, &r.name, E::Control(r.id))
         }),

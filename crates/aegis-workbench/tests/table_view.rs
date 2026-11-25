@@ -18,13 +18,13 @@ use aegis_client::table_filter::ColumnFilter;
 use aegis_client::view::{ColumnKind, Selection, TableId};
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ConditionId, ElementId, ElementRef, GoalId, Methodology, Op,
-    PartyId, PartyKind, Project, Provenance,
+    PartyId, PartyKind, Project, Provenance, SharedStepId,
 };
 use aegis_workbench::app::{Workbench, apply_appearance, bind_all};
 use aegis_workbench::sample::workbench_sample;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 
-const TABLE_FOLDERS: [(TableId, Folder); 8] = [
+const TABLE_FOLDERS: [(TableId, Folder); 9] = [
     (TableId::Assets, Folder::Assets),
     (TableId::Damage, Folder::Damage),
     (TableId::Threats, Folder::Threats),
@@ -33,6 +33,7 @@ const TABLE_FOLDERS: [(TableId, Folder); 8] = [
     (TableId::Goals, Folder::Goals),
     (TableId::Claims, Folder::Claims),
     (TableId::Problems, Folder::Problems),
+    (TableId::SharedSteps, Folder::SharedSteps),
 ];
 
 fn open_workbench(
@@ -53,7 +54,7 @@ fn open_workbench(
     (catalog, wb, vcx)
 }
 
-fn fixture_all_eight_tables() -> Project {
+fn fixture_all_nine_tables() -> Project {
     let mut project = workbench_sample().project().clone();
     let prov = Provenance::human("tester", 1);
     let first_asset = project
@@ -75,6 +76,11 @@ fn fixture_all_eight_tables() -> Project {
         Op::AddCybersecurityClaim {
             id: claim,
             name: "Workshop physical access is controlled".into(),
+            provenance: prov.clone(),
+        },
+        Op::AddSharedStep {
+            id: SharedStepId::new_v7(),
+            name: "Replay a diagnostic request".into(),
             provenance: prov.clone(),
         },
         Op::AddParty {
@@ -102,9 +108,9 @@ fn fixture_all_eight_tables() -> Project {
 }
 
 #[gpui::test]
-fn all_eight_project_tables_open_and_match_client_rows(cx: &mut TestAppContext) {
+fn all_nine_project_tables_open_and_match_client_rows(cx: &mut TestAppContext) {
     let (catalog, wb, vcx) = open_workbench(cx, None);
-    let project = fixture_all_eight_tables();
+    let project = fixture_all_nine_tables();
     wb.update_in(vcx, |w, window, cx| {
         w.show_project(project, "All tables fixture", None, window, cx);
     });
@@ -335,7 +341,7 @@ fn column_visibility_persists_across_workbench_reopen_and_protects_id(cx: &mut T
 #[gpui::test]
 fn link_chip_navigation_opens_target_tab_and_updates_inspector(cx: &mut TestAppContext) {
     let (_catalog, wb, vcx) = open_workbench(cx, None);
-    let project = fixture_all_eight_tables();
+    let project = fixture_all_nine_tables();
     wb.update_in(vcx, |w, window, cx| {
         w.show_project(project, "Link chip fixture", None, window, cx);
     });
@@ -398,7 +404,7 @@ fn link_chip_navigation_opens_target_tab_and_updates_inspector(cx: &mut TestAppC
 #[gpui::test]
 fn excluded_asset_row_shows_reason_and_renders_in_light_and_dark_themes(cx: &mut TestAppContext) {
     let (_catalog, wb, vcx) = open_workbench(cx, None);
-    let project = fixture_all_eight_tables();
+    let project = fixture_all_nine_tables();
     wb.update_in(vcx, |w, window, cx| {
         w.show_project(project, "Excluded row fixture", None, window, cx);
     });

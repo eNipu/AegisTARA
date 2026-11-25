@@ -86,6 +86,8 @@ pub enum Page {
     Threats,
     /// Attack trees on the canvas.
     Trees,
+    /// Reusable attack-tree building blocks.
+    SharedBlocks,
     /// The risk register and treatment decisions.
     Risks,
     /// Security controls.
@@ -221,7 +223,10 @@ impl ColumnKind {
     /// Whether a cell of this kind can be edited in place.
     #[must_use]
     pub fn editable(self) -> bool {
-        !matches!(self, Self::Id | Self::Computed)
+        !matches!(
+            self,
+            Self::Id | Self::Computed | Self::Links(RelationKey::SHARED_STEP_USED_IN)
+        )
     }
 }
 
@@ -358,11 +363,13 @@ pub enum TableId {
     Claims,
     /// Lint findings.
     Problems,
+    /// Reusable attack-tree steps.
+    SharedSteps,
 }
 
 impl TableId {
     /// Every table.
-    pub const ALL: [TableId; 8] = [
+    pub const ALL: [TableId; 9] = [
         TableId::Assets,
         TableId::Damage,
         TableId::Threats,
@@ -371,6 +378,7 @@ impl TableId {
         TableId::Goals,
         TableId::Claims,
         TableId::Problems,
+        TableId::SharedSteps,
     ];
 
     /// The table's columns, in default order. Columns whose number depends
@@ -511,6 +519,27 @@ impl TableId {
                 ];
                 C
             }
+            TableId::SharedSteps => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    col("name", ColumnKind::Name, msg("shared-step"), 240),
+                    col("feasibility", Rating, msg("feasibility"), 120),
+                    col(
+                        "via",
+                        Links(RelationKey::SHARED_STEP_VIA),
+                        msg("through"),
+                        150,
+                    ),
+                    col("attack-type", Rating, msg("attack-type"), 140),
+                    col(
+                        "used-in",
+                        Links(RelationKey::SHARED_STEP_USED_IN),
+                        msg("inspector-used-in"),
+                        180,
+                    ),
+                ];
+                C
+            }
         }
     }
 }
@@ -529,7 +558,7 @@ pub enum PageLayout {
 impl Page {
     /// Every page, in menu and sidebar order: the analysis in the order of
     /// its phases, item definition first (UI-13).
-    pub const ALL: [Page; 18] = [
+    pub const ALL: [Page; 19] = [
         Page::Overview,
         Page::Item,
         Page::Scope,
@@ -539,6 +568,7 @@ impl Page {
         Page::Assets,
         Page::Threats,
         Page::Trees,
+        Page::SharedBlocks,
         Page::AttackerProfile,
         Page::Risks,
         Page::Controls,
@@ -560,7 +590,7 @@ impl Page {
             }
             Page::Damage => PageGroup::Impact,
             Page::Assets | Page::Threats => PageGroup::AssetsThreats,
-            Page::Trees | Page::AttackerProfile => PageGroup::Feasibility,
+            Page::Trees | Page::SharedBlocks | Page::AttackerProfile => PageGroup::Feasibility,
             Page::Risks | Page::Controls | Page::Goals => PageGroup::Risk,
             Page::Reports => PageGroup::Outputs,
             Page::Problems | Page::Versions | Page::History | Page::Admin => PageGroup::Project,
@@ -603,6 +633,7 @@ impl Page {
             Page::Assets => "assets",
             Page::Threats => "threats",
             Page::Trees => "trees",
+            Page::SharedBlocks => "shared-blocks",
             Page::AttackerProfile => "attacker-profile",
             Page::Risks => "risks",
             Page::Controls => "controls",
@@ -627,6 +658,7 @@ impl Page {
             Page::Controls => &[TableId::Controls],
             Page::Goals => &[TableId::Goals, TableId::Claims],
             Page::Problems => &[TableId::Problems],
+            Page::SharedBlocks => &[TableId::SharedSteps],
             Page::Overview
             | Page::Trees
             | Page::Versions
@@ -660,6 +692,7 @@ impl Page {
             Page::Damage => "Damage scenarios",
             Page::Threats => "Threat scenarios",
             Page::Trees => "Attack trees",
+            Page::SharedBlocks => "Shared building blocks",
             Page::Risks => "Risks and treatment",
             Page::Controls => "Security controls",
             Page::Goals => "Goals and claims",
@@ -912,6 +945,8 @@ pub struct UiState {
     pub selected_tree: Option<TreeId>,
     /// The selected node of the tree on the canvas.
     pub selected_node: Option<NodeId>,
+    /// The selected reusable attack-tree step.
+    pub selected_shared_step: Option<SharedStepId>,
     /// Show the residual evaluation instead of the inherent one.
     pub show_residual: bool,
     /// The systems on show (SYS-03). A display choice: never an op.
@@ -1082,6 +1117,15 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
         Page::Trees => {
             if let Some(id) = shown_tree(ws, ui) {
                 push("tree", true, E::Tree(id));
+            }
+        }
+        Page::SharedBlocks => {
+            if let Some(id) = ui.selected_shared_step {
+                push(
+                    "shared-step",
+                    project.shared_step_idx(&id).is_some(),
+                    E::SharedStep(id),
+                );
             }
         }
         Page::Controls => {

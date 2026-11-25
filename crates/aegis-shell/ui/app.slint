@@ -28,15 +28,16 @@ global Pages {
     out property <int> assets: 6;
     out property <int> threats: 7;
     out property <int> trees: 8;
-    out property <int> attacker-profile: 9;
-    out property <int> risks: 10;
-    out property <int> controls: 11;
-    out property <int> goals: 12;
-    out property <int> reports: 13;
-    out property <int> problems: 14;
-    out property <int> versions: 15;
-    out property <int> history: 16;
-    out property <int> admin: 17;
+    out property <int> shared-blocks: 9;
+    out property <int> attacker-profile: 10;
+    out property <int> risks: 11;
+    out property <int> controls: 12;
+    out property <int> goals: 13;
+    out property <int> reports: 14;
+    out property <int> problems: 15;
+    out property <int> versions: 16;
+    out property <int> history: 17;
+    out property <int> admin: 18;
 }
 
 // One sidebar entry: its page is its position; `group` is its position in
@@ -537,6 +538,7 @@ in property <string> redo-label;
         { label: @tr("Assets"), icon: @image-url("icons/box.svg"), group: 2 },
         { label: @tr("Threat scenarios"), icon: @image-url("icons/swords.svg"), group: 2 },
         { label: @tr("Attack trees"), icon: @image-url("icons/network.svg"), group: 3 },
+        { label: @tr("Shared building blocks"), icon: @image-url("icons/workflow.svg"), group: 3 },
         { label: @tr("Attacker profile"), icon: @image-url("icons/user-cog.svg"), group: 3 },
         { label: @tr("Risks and treatment"), icon: @image-url("icons/gauge.svg"), group: 4 },
         { label: @tr("Security controls"), icon: @image-url("icons/shield-check.svg"), group: 4 },

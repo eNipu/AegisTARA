@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use std::ops::RangeInclusive;
 
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ControlId, DamageId, ElementId, GoalId, Project, ThreatId,
+    AssetId, ClaimId, ComponentId, ControlId, DamageId, ElementId, GoalId, Project, SharedStepId,
+    ThreatId,
 };
 
 use crate::commands::Edit;
@@ -313,6 +314,10 @@ pub fn add_row_edit(
             let id = ClaimId::new_v7();
             Ok((Edit::AddClaim { id, name }, Selection::Claim(id)))
         }
+        TableId::SharedSteps => {
+            let id = SharedStepId::new_v7();
+            Ok((Edit::AddSharedStep { id, name }, Selection::SharedStep(id)))
+        }
         TableId::Problems => Err(GridError::NotEditable),
     }
 }
@@ -338,6 +343,7 @@ pub fn delete_rows_edit(targets: &[Selection]) -> Option<Edit> {
             Selection::Control(control) => Edit::RemoveControl { control },
             Selection::Goal(goal) => Edit::RemoveGoal { goal },
             Selection::Claim(claim) => Edit::RemoveClaim { claim },
+            Selection::SharedStep(shared_step) => Edit::RemoveSharedStep { shared_step },
             _ => continue,
         };
         edits.push(edit);

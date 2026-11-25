@@ -3,7 +3,10 @@
 
 use std::collections::HashSet;
 
-use aegis_model::{AssetId, ClaimId, ControlId, DamageId, GoalId, PartyId, Project, ThreatId};
+use aegis_model::{
+    AssetId, ClaimId, ControlId, DamageId, GoalId, ItemRef, PartyId, Project, SharedStepId,
+    ThreatId,
+};
 
 use crate::commands::{Edit, TREATMENTS};
 use crate::explorer::Owner;
@@ -223,6 +226,7 @@ impl PasteCtx<'_> {
                         linked: true,
                     }));
             }
+            TableId::SharedSteps => self.append_shared_step(&cells, name, row)?,
             TableId::Problems => return Err(GridError::NotEditable),
         }
         Ok(true)
@@ -339,6 +343,51 @@ impl PasteCtx<'_> {
         Ok(())
     }
 
+    fn append_shared_step(
+        &mut self,
+        cells: &[(&str, &str)],
+        name: String,
+        row: usize,
+    ) -> Result<(), GridError> {
+        let id = SharedStepId::new_v7();
+        self.edits.push(Edit::AddSharedStep { id, name });
+        if let Some(ix) = cell_val(cells, "feasibility")
+            .map(|raw| self.parse_feasibility(raw, row, "feasibility"))
+            .transpose()?
+            .flatten()
+            && let Some((level, _, _)) = self.project.methodology().feasibility_levels().nth(ix)
+        {
+            self.edits.push(Edit::SetSharedStepFeasibility {
+                shared_step: id,
+                level: Some(level),
+            });
+        }
+        if let Some(ix) = cell_val(cells, "attack-type")
+            .map(|raw| self.parse_attack_type(raw, row, "attack-type"))
+            .transpose()?
+            .flatten()
+            && let Some(attack_type) = self.project.methodology().attack_types().nth(ix)
+        {
+            self.edits.push(Edit::SetSharedStepAttackType {
+                shared_step: id,
+                attack_type: Some(attack_type),
+            });
+        }
+        let via = match self.single_link(RelationKey::SHARED_STEP_VIA, "via", cells, row)? {
+            Some(Selection::Component(id)) => Some(ItemRef::Component(id)),
+            Some(Selection::Interface(id)) => Some(ItemRef::Interface(id)),
+            Some(_) => return Err(unknown_link(row, "via", "")),
+            None => None,
+        };
+        if let Some(via) = via {
+            self.edits.push(Edit::SetSharedStepVia {
+                shared_step: id,
+                via: Some(via),
+            });
+        }
+        Ok(())
+    }
+
     fn single_link(
         &self,
         rel_key: RelationKey,
@@ -385,6 +434,12 @@ impl PasteCtx<'_> {
             )),
             (TableId::Risks, "treatment") => Ok(CellInput::SingleChoice(
                 self.parse_treatment(raw, row, col)?,
+            )),
+            (TableId::SharedSteps, "feasibility") => Ok(CellInput::SingleChoice(
+                self.parse_feasibility(raw, row, col)?,
+            )),
+            (TableId::SharedSteps, "attack-type") => Ok(CellInput::SingleChoice(
+                self.parse_attack_type(raw, row, col)?,
             )),
             _ => Err(GridError::ReadOnlyColumn),
         }
@@ -482,6 +537,56 @@ impl PasteCtx<'_> {
             .take(TREATMENTS.len())
             .position(|l| eq_ci(tok, l))
             .or_else(|| CANONICAL_TREATMENTS.iter().position(|&n| eq_ci(tok, n)))
+            .map(Some)
+            .ok_or_else(|| unknown_rating(row, col, tok))
+    }
+
+    fn parse_feasibility(
+        &self,
+        raw: &str,
+        row: usize,
+        col: &str,
+    ) -> Result<Option<usize>, GridError> {
+        let tok = raw.trim();
+        if tok.is_empty() {
+            return Ok(None);
+        }
+        let m = self.project.methodology();
+        self.vocab
+            .feasibility
+            .iter()
+            .position(|label| eq_ci(tok, label))
+            .or_else(|| {
+                m.feasibility_levels().position(|(level, _, _)| {
+                    m.feasibility_level_label(level)
+                        .is_some_and(|label| eq_ci(tok, label))
+                })
+            })
+            .map(Some)
+            .ok_or_else(|| unknown_rating(row, col, tok))
+    }
+
+    fn parse_attack_type(
+        &self,
+        raw: &str,
+        row: usize,
+        col: &str,
+    ) -> Result<Option<usize>, GridError> {
+        let tok = raw.trim();
+        if tok.is_empty() {
+            return Ok(None);
+        }
+        let m = self.project.methodology();
+        self.vocab
+            .attack_types
+            .iter()
+            .position(|label| eq_ci(tok, label))
+            .or_else(|| {
+                m.attack_types().position(|attack| {
+                    m.attack_type_label(attack)
+                        .is_some_and(|label| eq_ci(tok, label))
+                })
+            })
             .map(Some)
             .ok_or_else(|| unknown_rating(row, col, tok))
     }

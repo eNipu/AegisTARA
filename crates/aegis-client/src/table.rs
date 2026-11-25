@@ -62,6 +62,7 @@ pub fn table_key(table: TableId) -> &'static str {
         TableId::Goals => "goals",
         TableId::Claims => "claims",
         TableId::Problems => "problems",
+        TableId::SharedSteps => "shared-steps",
     }
 }
 
@@ -77,6 +78,7 @@ pub fn table_for_folder(folder: Folder) -> Option<TableId> {
         Folder::Goals => Some(TableId::Goals),
         Folder::Claims => Some(TableId::Claims),
         Folder::Problems => Some(TableId::Problems),
+        Folder::SharedSteps => Some(TableId::SharedSteps),
         _ => None,
     }
 }
@@ -91,6 +93,7 @@ pub fn table_source_json(project: &Project, table: TableId) -> String {
         TableId::Controls => ("shared/controls.json", "controls"),
         TableId::Goals => ("shared/goals.json", "goals"),
         TableId::Claims => ("shared/claims.json", "claims"),
+        TableId::SharedSteps => ("shared/steps.json", "shared-steps"),
         TableId::Problems => return "{}\n".to_owned(),
     };
     if let Ok(files) = project.to_workspace_files()
@@ -98,8 +101,13 @@ pub fn table_source_json(project: &Project, table: TableId) -> String {
     {
         return String::from_utf8_lossy(&file.bytes).into_owned();
     }
+    let field = if kind == "shared-steps" {
+        "shared_steps"
+    } else {
+        "items"
+    };
     format!(
-        "{{\n  \"format\": \"aegis-workspace\",\n  \"version\": 1,\n  \"kind\": \"{kind}\",\n  \"items\": []\n}}\n"
+        "{{\n  \"format\": \"aegis-workspace\",\n  \"version\": 1,\n  \"kind\": \"{kind}\",\n  \"{field}\": []\n}}\n"
     )
 }
 
@@ -238,7 +246,7 @@ pub(crate) fn selection_system_set(
         S::Control(id) => p.security_control_idx(&id).map(|i| u.control(i)),
         S::Goal(id) => p.cybersecurity_goal_idx(&id).map(|i| u.goal(i)),
         S::Claim(id) => p.cybersecurity_claim_idx(&id).map(|i| u.claim(i)),
-        S::SharedStep(id) => p.shared_step_idx(&id).map(|_| SystemSet::default()),
+        S::SharedStep(id) => p.shared_step_idx(&id).map(|i| u.shared_step(i)),
         S::Party(_) | S::Condition(_) | S::Assumption(_) => None,
     }
 }
@@ -258,7 +266,10 @@ fn matches_owner(
         Some(s) => set.intersects(s),
         None => {
             set.is_empty()
-                && !matches!(sel, S::Damage(_) | S::Control(_) | S::Goal(_) | S::Claim(_))
+                && !matches!(
+                    sel,
+                    S::Damage(_) | S::Control(_) | S::Goal(_) | S::Claim(_) | S::SharedStep(_)
+                )
         }
     }
 }
@@ -447,6 +458,38 @@ pub fn table_rows_for_owner(
                 _ => None,
             },
         ),
+        TableId::SharedSteps => {
+            let project = ws.project();
+            let m = project.methodology();
+            let shared: Vec<_> = project.shared_steps().collect();
+            let feasibility = |level: Option<aegis_model::FeasibilityLevel>| {
+                level
+                    .and_then(|level| m.feasibility_levels().position(|(l, _, _)| l == level))
+                    .and_then(|i| vocab.feasibility.get(i))
+                    .cloned()
+                    .unwrap_or_else(unrated)
+            };
+            let attack_type = |attack: Option<aegis_model::AttackType>| {
+                attack
+                    .and_then(|attack| m.attack_types().position(|a| a == attack))
+                    .and_then(|i| vocab.attack_types.get(i))
+                    .cloned()
+                    .unwrap_or_else(unrated)
+            };
+            build(
+                table,
+                &shared,
+                |(_, id, _)| Some(Selection::SharedStep(*id)),
+                |(idx, _, step), key| match key {
+                    "id" => text(project.shared_step_visual_id(*idx).unwrap_or_default()),
+                    "name" => text(step.name()),
+                    "feasibility" => text(feasibility(step.feasibility())),
+                    "via" | "used-in" => text(String::new()),
+                    "attack-type" => text(attack_type(step.attack_type())),
+                    _ => None,
+                },
+            )
+        }
     };
     let project = ws.project();
     if owner != Owner::Project {

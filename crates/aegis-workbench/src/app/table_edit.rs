@@ -31,6 +31,7 @@ fn folder_for(table: TableId) -> Folder {
         TableId::Goals => Folder::Goals,
         TableId::Claims => Folder::Claims,
         TableId::Problems => Folder::Problems,
+        TableId::SharedSteps => Folder::SharedSteps,
     }
 }
 
@@ -280,6 +281,7 @@ impl TableTab {
             TableId::Controls => &n.security_control.singular,
             TableId::Goals => &n.cybersecurity_goal.singular,
             TableId::Claims => &n.cybersecurity_claim.singular,
+            TableId::SharedSteps => "shared step",
             TableId::Problems => return Err(GridError::NotEditable),
         };
         grid::add_row_edit(project, self.table, self.owner, format!("New {singular}"))

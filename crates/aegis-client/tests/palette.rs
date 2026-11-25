@@ -10,7 +10,7 @@ use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     ClaimId, ComponentId, DataFlowId, GoalId, InterfaceId, Methodology, ModelError, Op, Provenance,
-    TrustBoundaryId,
+    SharedStepId, TrustBoundaryId,
 };
 
 /// The sample project plus a component (with an interface), a second
@@ -81,6 +81,11 @@ fn fixture() -> Result<Workspace, ModelError> {
             name: "Remote access risk is shared with the OEM".into(),
             provenance: prov(),
         },
+        Op::AddSharedStep {
+            id: SharedStepId::new_v7(),
+            name: "Replay a diagnostic request".into(),
+            provenance: prov(),
+        },
         Op::AddCatalogRef {
             threat,
             catalog_ref,
@@ -120,6 +125,9 @@ fn every_element_is_first_for_its_visual_id() -> Result<(), ModelError> {
     for (i, id, _) in p.attack_trees() {
         expected.push((vid(p.attack_tree_visual_id(i)), Selection::Tree(id)));
     }
+    for (i, id, _) in p.shared_steps() {
+        expected.push((vid(p.shared_step_visual_id(i)), Selection::SharedStep(id)));
+    }
     for (i, id, _) in p.security_controls() {
         expected.push((vid(p.security_control_visual_id(i)), Selection::Control(id)));
     }
@@ -147,7 +155,7 @@ fn every_element_is_first_for_its_visual_id() -> Result<(), ModelError> {
             Selection::TrustBoundary(id),
         ));
     }
-    assert_eq!(expected.len(), 14, "fixture covers every kind");
+    assert_eq!(expected.len(), 15, "fixture covers every kind");
     for (visual_id, target) in expected {
         let hits = search(&all, &visual_id, 5);
         let first = hits.first().expect("a hit");
