@@ -3070,18 +3070,29 @@
       "id": "141-shared-steps",
       "title": "Shared steps (BLK-01)",
       "branch": "factory/141-shared-steps",
-      "stage": "build",
-      "slice": "141a",
-      "base": "e3d83d84624236ea905e2b10438e62df7563e2d5",
+      "stage": "merged",
+      "slice": "141f",
+      "base": "fc50d6b49fff2e2c10bb59fd7019b93f585b94e1",
       "reviews": {
-        "slice": "141a",
-        "gate": "pending",
-        "review": "pending",
+        "slice": "141f",
+        "gate": "PASS",
+        "review": "PASS",
         "owner": "auto"
       },
-      "history": [],
-      "decision": null,
-      "updated": "2026-11-24T22:21:09Z"
+      "history": [
+        {
+          "slice": "141f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "opencode",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 421
+        }
+      ],
+      "decision": "Completed BLK-01. Slices 141a-141c used an integrated model sequence because persistence lands in 141d; 141d, 141e and 141f gates pass and full workspace CI passes. Slint is nav-only for SharedBlocks; GPUI renders the table.",
+      "updated": "2026-11-25T03:27:24Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
